@@ -12,11 +12,12 @@ import (
 // Callback URL, types the URL and clicks Save changes. The hook answers
 // those calls from the record of the one callback URL the person asked for
 // (App.CallbackURL), a URL on one of the callback hosts the App's manifest
-// declares: the navigation to the recorded App's settings page and the
-// calls there that name a callback, the recorded URL or Save changes are
-// allowed; a call there that names another URL, removes or deletes
-// anything, or names none of them is refused. Without such a record the
-// settings page is left to the classifier, as before.
+// declares: the navigation to the recorded App's settings page, a click
+// there that names Add Callback URL, Save changes or the recorded URL, and
+// typing exactly the recorded URL are allowed; a call there that names
+// another URL or another field, removes anything, or types anything else
+// (a key included) is refused. Without such a record the settings page is
+// left to the classifier, as before.
 
 // CallbackForm is how one callback URL of an App the person owns and asked
 // for is recorded.
@@ -28,8 +29,12 @@ var settingsPath = regexp.MustCompile(`^/organizations/([^/]+)/settings/apps/([^
 // urlWords are the URLs a call's words carry.
 var urlWords = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
 
-// removeWords name a call that takes something off the page.
-var removeWords = regexp.MustCompile(`(?i)\b(remove|delete|clear)\b`)
+// otherWords name a call that removes something or acts on another part of
+// the settings page than its callback URLs.
+var otherWords = regexp.MustCompile(`(?i)\b(remove|delete|clear|secret|private key|webhook|generate|regenerate|revoke|transfer|suspend|uninstall|homepage|setup url)\b`)
+
+// callbackLabels are the page's labels of adding a callback URL.
+var callbackLabels = []string{"add callback url", "save changes"}
 
 // callbackNavigation decides a navigation to GitHub's page at path: the
 // settings page of an App on record for a callback URL is allowed; no
@@ -62,23 +67,64 @@ func callbackClick(apps []App, u *url.URL, words string) (Decision, bool) {
 		return Decision{Allow, "beekeeper allows the call: the settings page of " + callbackWords(a)}, true
 	}
 	return Decision{Deny, fmt.Sprintf("Refused: on the settings page of the person's own App %s the call %q is neither the one callback URL "+
-		"on record (%s), its Add Callback URL nor Save changes; every other change there stays refused.", a.Name, short(words), a.CallbackURL)}, true
+		"on record (%s), Add Callback URL nor Save changes; every other change there stays refused.", a.Name, short(words), a.CallbackURL)}, true
 }
 
 // addsCallback reports whether a call's words are a step of adding the
-// recorded callback URL: they name no other URL and remove nothing, and
-// name a callback, the recorded URL or the page's Save.
+// recorded callback URL: they name no other URL and no other part of the
+// page, and name Add Callback URL, Save changes or the recorded URL.
 func addsCallback(a *App, words string) bool {
-	if removeWords.MatchString(words) {
+	if otherWords.MatchString(words) {
 		return false
 	}
-	for _, w := range urlWords.FindAllString(words, -1) {
+	urls := urlWords.FindAllString(words, -1)
+	for _, w := range urls {
 		if !sameURL(w, a.CallbackURL) {
 			return false
 		}
 	}
-	return savesChanges(words) || containsFold(words, "callback") || urlWords.MatchString(words)
+	if len(urls) > 0 {
+		return true
+	}
+	for _, l := range callbackLabels {
+		if containsFold(words, l) {
+			return true
+		}
+	}
+	return false
 }
+
+// typedCallback decides input typed on the page (a text, a key, a form
+// value) that Click allowed in the call's words: on the settings page of an
+// App on record for a callback URL only exactly that URL is typed; d
+// unchanged on any other page.
+func typedCallback(apps []App, page Page, text string, d Decision) Decision {
+	u, err := url.Parse(strings.TrimSpace(page.URL))
+	if err != nil || !strings.EqualFold(u.Hostname(), githubHost) {
+		return d
+	}
+	m := settingsPath.FindStringSubmatch(u.Path)
+	if m == nil {
+		return d
+	}
+	a := callbackRecord(apps, m[1], m[2])
+	if a == nil || strings.TrimSpace(text) == a.CallbackURL {
+		return d
+	}
+	return Decision{Deny, fmt.Sprintf("Refused: on the settings page of the person's own App %s the input %q is not the one callback URL on record "+
+		"(%s); only that URL is typed there.", a.Name, short(text), a.CallbackURL)}
+}
+
+// CanonicalCallback reports whether raw is a callback URL as a record keeps
+// it: http(s), a host, no user info, a path and query of URL-safe
+// characters, written as Go's URL parser writes it back.
+func CanonicalCallback(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && canonicalCallback.MatchString(raw) && u.User == nil && u.String() == raw
+}
+
+// canonicalCallback is a callback URL's form.
+var canonicalCallback = regexp.MustCompile(`^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/%=&?+-]*)?$`)
 
 // sameURL reports whether two URLs are the same callback: scheme and host
 // in any case, a trailing slash or punctuation dropped.

@@ -66,9 +66,10 @@ Accept new permissions: allowed for the App and the change on record,
 refused on the permissions page of any other App and for any other call
 there, naming this record's form. For a callback URL (--callback-url <url>,
 on a callback host the manifest declares) the hook answers the navigation
-to the App's settings page under the organisation's settings and the calls
-there that name a callback, that URL or Save changes, refusing a call there
-that names another URL or removes anything. A sign-in or consent page of the lab's
+to the App's settings page under the organisation's settings, the clicks
+there that name Add Callback URL, that URL or Save changes, and typing
+exactly that URL, refusing another URL or field, a removal, a key or other
+input there. A sign-in or consent page of the lab's
 own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
 allowed without a record: a fixture user's sign-in there is the person's
 own lab's. A Google OAuth client the person owns and asked a consent for is
@@ -115,9 +116,10 @@ replaced:
   and Accept new permissions. A record carries one change.
   --callback-url <url>: one callback URL added to the App's settings, on a
   callback host its manifest's callback_urls declare: the navigation to its
-  settings page under the organisation's settings and the calls there that
-  name a callback, that URL or Save changes. A call there that names another
-  URL or removes anything is refused. A record carries one URL.
+  settings page under the organisation's settings, the clicks there that
+  name Add Callback URL, that URL or Save changes, and typing exactly that
+  URL. Another URL or field, a removal, a key or other input is refused. A
+  record carries one URL, http(s) without user info, as written back.
   --delete: the App's deletion, on its Advanced settings page under the
   organisation's or the person's own account: Delete GitHub App, the
   App's name typed into GitHub's confirmation and its confirm click, for
@@ -326,8 +328,8 @@ func declaredCallback(rec *state.App) error {
 		return nil
 	}
 	u, err := url.Parse(rec.CallbackURL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return usageErr("--callback-url names one callback URL, http(s)://<host>/<path>, not %q", rec.CallbackURL)
+	if err != nil || !guard.CanonicalCallback(rec.CallbackURL) {
+		return usageErr("--callback-url names one callback URL, http(s)://<host>/<path> without user info or characters a URL escapes, not %q", rec.CallbackURL)
 	}
 	if !slices.Contains(rec.Callbacks, strings.ToLower(u.Host)) {
 		return refused("App %s declares no callback host %s in %s: a callback URL is recorded on a host the App's manifest declares, "+

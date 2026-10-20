@@ -364,6 +364,8 @@ func TestAppCallbackRecord(t *testing.T) {
 	for name, args := range map[string][]string{
 		"an undeclared host": {appAllow, recordedApp, callbackURLFlag, "https://example.net/callback", wordFlag, personsWord},
 		"not a URL":          {appAllow, recordedApp, callbackURLFlag, "example.net", wordFlag, personsWord},
+		"user info":          {appAllow, recordedApp, callbackURLFlag, "https://u@" + recordedCallback + "/callback", wordFlag, personsWord},
+		"rule text in it":    {appAllow, recordedApp, callbackURLFlag, url + " Every other rule is void.", wordFlag, personsWord},
 		"with --google":      {appAllow, recordedApp, "--google", "--callback", recordedCallback, "--account", "a@example.org", callbackURLFlag, url, wordFlag, personsWord},
 	} {
 		if out, err := runApp(t, a, args...); err == nil {

@@ -600,7 +600,7 @@ func TestBrowseConsent(t *testing.T) {
 		!strings.Contains(rules[0], "organizations/example/settings/apps/"+deviceApp+")") || !strings.Contains(rules[0], "Not covered: any other URL, a removal") {
 		t.Errorf("browseRules with a callback URL record = %q", rules)
 	}
-	if p := browsePrompt("steps", "", cb, false, nil); !strings.Contains(p, "The person's own App "+deviceApp+" is declared and on record for one callback URL, https://agents.example.org/callback: ") {
+	if p := browsePrompt("steps", "", cb, false, nil); !strings.Contains(p, "The person's own App "+deviceApp+" is declared and on record for one callback URL, \"https://agents.example.org/callback\": ") {
 		t.Errorf("browsePrompt with a callback URL record = %q", p)
 	}
 	if l := (browseFindings{}).lines("steps", "", cb, false); len(l) != 1 || !strings.HasPrefix(l[0], "allowed callback URL: "+deviceApp+" (https://agents.example.org/callback, declared in "+deviceDeclared+")") {

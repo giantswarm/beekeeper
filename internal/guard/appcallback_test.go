@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ const (
 	notTheCallback  = "neither the one callback URL"
 	addsCallbackURL = "Clicks Add Callback URL for " + callbackApp
 	byGuide         = "the guide"
+	notTypedURL     = "is not the one callback URL on record"
 )
 
 var callbackRecorded = []App{{Name: callbackApp, Org: deviceOrg, CallbackURL: callbackURL, Declared: callbackDecl,
@@ -49,9 +51,10 @@ func TestCallbackNavigation(t *testing.T) {
 }
 
 // On the recorded App's settings page the calls of adding the URL are
-// allowed: Add Callback URL, the field, the URL typed (spelt with another
-// case or a trailing slash too), Save changes; a call that names another
-// URL, removes anything or names none of them is refused. Another App's
+// allowed: Add Callback URL, a call naming the URL (spelt with another case
+// or a trailing slash too), Save changes; a call that names another URL or
+// another part of the page, removes anything or names none of them is
+// refused. Another App's
 // settings page is left to the classifier.
 func TestCallbackClick(t *testing.T) {
 	page := Page{URL: settingsPage, Title: "GitHub Apps - " + callbackApp}
@@ -62,7 +65,9 @@ func TestCallbackClick(t *testing.T) {
 		reason   string
 	}{
 		"add callback URL":       {page, addsCallbackURL, Allow, "the settings page of the person's own App " + callbackApp},
-		"the new field":          {page, "Clicks the new Callback URL field", Allow, callbackApp},
+		"the new field, named":   {page, "Clicks the new field for " + callbackURL, Allow, callbackApp},
+		"a callback field":       {page, "Clicks the new Callback URL field", Deny, notTheCallback},
+		"the private key":        {page, "Clicks Generate a private key for " + callbackURL, Deny, notTheCallback},
 		"types the URL":          {page, "Types the callback URL " + callbackURL, Allow, callbackApp},
 		"the URL alone":          {page, "HTTPS://Agents.Example.org/callback/github/", Allow, callbackApp},
 		"saves":                  {page, "Clicks Save changes", Allow, callbackApp},
@@ -84,8 +89,8 @@ func TestCallbackClick(t *testing.T) {
 }
 
 // The hook decides a browse turn's calls on the settings page from the
-// record: the navigation, a typed URL and Save changes are allowed, a
-// batch with another URL refused.
+// record: the navigation, exactly the URL typed or set are allowed; other
+// input, a key, a respelt URL and a batch with another URL are refused.
 func TestCallbackDecision(t *testing.T) {
 	apps := func() []App { return callbackRecorded }
 	own := transcriptWith(t, Page{URL: settingsPage, Title: "GitHub Apps - " + callbackApp}, false)
@@ -101,6 +106,10 @@ func TestCallbackDecision(t *testing.T) {
 		"navigate to the settings page": {browserTools + chromeNavigation, map[string]any{urlKey: settingsPage}, decisionAllow, callbackURL},
 		"types the recorded URL":        {browserTools + chromeComputer, types(callbackURL), decisionAllow, callbackApp},
 		"types another URL":             {browserTools + chromeComputer, types("https://evil.example.net/"), decisionDeny, notTheCallback},
+		"types other text, URL named":   {browserTools + chromeComputer, tabInput("type", map[string]any{textKey: "hello", summaryKey: "Types " + callbackURL}), decisionDeny, notTypedURL},
+		"types the URL respelt":         {browserTools + chromeComputer, types(callbackURL + "/"), decisionDeny, notTypedURL},
+		"presses a key":                 {browserTools + chromeComputer, tabInput("key", map[string]any{textKey: "Enter", summaryKey: "Presses Enter to add " + callbackURL}), decisionDeny, notTypedURL},
+		"the URL as a form value":       {browserTools + chromeForm, map[string]any{refKey: refTwelve, valueKey: callbackURL, summaryKey: "Sets the callback URL", tabKey: json.Number(tab7)}, decisionAllow, callbackApp},
 		"a batch with another URL": {browserTools + chromeBatch, map[string]any{actionsKey: []any{
 			batchAction(chromeComputer, tabInput(leftClick, map[string]any{summaryKey: addsCallbackURL})),
 			batchAction(chromeComputer, types("https://evil.example.net/"))}}, decisionDeny, notTheCallback},

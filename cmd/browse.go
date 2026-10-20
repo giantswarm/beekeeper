@@ -86,9 +86,9 @@ const (
 		"page (organizations/%s/settings/apps/%s/permissions) set exactly that permission and click Save changes once, and on the organisation's " +
 		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each call's summary; " +
 		"change nothing else. "
-	callbackWords = "The person's own App %s is declared and on record for one callback URL, %s: once the steps reach its settings page " +
+	callbackWords = "The person's own App %s is declared and on record for one callback URL, %q: once the steps reach its settings page " +
 		"(organizations/%s/settings/apps/%s) click Add Callback URL, type exactly that URL into the new field and click Save changes once; name the " +
-		"App and the callback URL in each call's summary; remove or change nothing else. "
+		"App and the callback URL in each call's summary; press no key; remove or change nothing else. "
 	createWords = "The person's own App %s of %s is being created or installed by beekeeper app create (declared in %s): on GitHub's manifest page click " +
 		"'Create GitHub App' once, and on the App's installation page click Install and its confirmation once; name the App in each call's summary; " +
 		"create, install or change nothing else. "
@@ -215,9 +215,9 @@ Adding a callback URL to an App's settings is such a change too. One URL
 the person asked for, on a callback host the App's manifest declares, is
 recorded with "beekeeper app allow <name> --callback-url <url> --word
 '<the person's words>'"; the hook then answers the navigation to that App's
-settings page under the organisation's settings and the calls there that
-name a callback, that URL or Save changes, refusing a call there that names
-another URL or removes anything; a turn whose steps name the App runs with
+settings page under the organisation's settings, the clicks there that name
+Add Callback URL, that URL or Save changes, and typing exactly that URL,
+refusing another URL or field, a removal, a key or other input; a turn whose steps name the App runs with
 that URL's rule, its prompt says to add exactly that URL, and "allowed
 callback URL: <name> (<url>, declared in <manifest>)" goes below the report.
 
@@ -1211,7 +1211,7 @@ func permissionRule(a guard.App) string {
 // other URL, setting, App or page is not covered.
 func callbackRule(a guard.App) string {
 	return fmt.Sprintf("Own App Callback URL: The person's organisation declares the App %s in %s and the person asked, on record with beekeeper, "+
-		"for one callback URL added to its settings: %s, on a callback host the declaration names. On that App's settings page under the organisation's "+
+		"for one callback URL added to its settings: %q, on a callback host the declaration names. On that App's settings page under the organisation's "+
 		"settings (organizations/%s/settings/apps/%s) the navigation there, the click Add Callback URL, typing exactly that URL into the new field and "+
 		"Save changes are pre-authorized and no Permission Grant or settings change to refuse, and a step that names them is no grant request; beekeeper's "+
 		"own hook verifies the page and answers each call. Not covered: any other URL, a removal, any other setting, App or page, any other grant of "+

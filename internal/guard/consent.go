@@ -286,6 +286,9 @@ func (h Hook) consent(ev event) []byte {
 			}
 			if page, ok := pageOf(pages, c.tab); ok {
 				d = Click(apps, page, c.words)
+				if c.typed && d.Decision == Allow {
+					d = typedCallback(apps, page, c.text, d)
+				}
 				// Text typed or set on Google's sign-in is no grant the
 				// record covers: the classifier decides it.
 				if c.typed && d.Decision == Allow && onGoogle(page) {
@@ -316,6 +319,8 @@ var acting = []string{actionLeftClick, "right_click", "double_click", "triple_cl
 // value).
 type chromeCall struct {
 	navigate, tab, words string
+	// text is the input alone: the typed text, the key, the form value.
+	text string
 	// typed says the call enters input: a typed text, a key, a drag, a
 	// form value; anything but a click.
 	typed bool
@@ -331,10 +336,10 @@ func chromeCalls(tool string, input map[string]any) []chromeCall {
 			return []chromeCall{{navigate: u}}
 		}
 	case chromeForm:
-		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey), typed: true}}
+		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey), text: valueOf(input, valueKey), typed: true}}
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(acting, action) {
-			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), typed: !strings.HasSuffix(action, "click")}}
+			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), text: valueOf(input, textKey), typed: !strings.HasSuffix(action, "click")}}
 		}
 	case chromeBatch:
 		actions, _ := input["actions"].([]any)
@@ -354,16 +359,21 @@ func chromeCalls(tool string, input map[string]any) []chromeCall {
 // the value under key (a typed text, a form value).
 func wordsOf(input map[string]any, key string) string {
 	summary, _ := input[summaryKey].(string)
-	value := ""
+	return strings.TrimSpace(summary + " " + valueOf(input, key))
+}
+
+// valueOf is the value under key of a call's input (a typed text, a key, a
+// form value) as text, "" for none.
+func valueOf(input map[string]any, key string) string {
 	switch v := input[key].(type) {
 	case string:
-		value = v
+		return v
 	case json.Number:
-		value = v.String()
+		return v.String()
 	case float64, bool:
-		value = fmt.Sprint(v)
+		return fmt.Sprint(v)
 	}
-	return strings.TrimSpace(summary + " " + value)
+	return ""
 }
 
 // tabOf is a tabId as the tool wrote it, "" for none.
