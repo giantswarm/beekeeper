@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	ruleDate  = "date"
-	ruleUntil = "until-ships"
+	ruleDate    = "date"
+	ruleUntil   = "until-ships"
+	ruleClobber = "clobber"
 )
 
 func TestLintRefusesStaleLines(t *testing.T) {
@@ -71,5 +72,45 @@ func TestLintFSWalksMarkdown(t *testing.T) {
 	// A file named directly is linted whatever its extension.
 	if got, _ := LintFS(fsys, "skills/a/notes.txt", ""); len(got) != 1 || got[0].Rule != ruleDate {
 		t.Errorf("LintFS(file) = %+v", got)
+	}
+}
+
+func TestLintRefusesClobberingExamples(t *testing.T) {
+	for _, doc := range []string{
+		"Capture them apart (`devctl pr merge o/r 1 >out.json 2>gate.log`).",
+		"Write the list: `gh pr list --repo o/r > prs.txt`.",
+		"Keep the log: `make test 2> \"$log\"`.",
+		"Save it: `cat > <file>`.",
+		"```bash\nsed 's|a|b|' unit.service > ~/.config/systemd/user/unit.service\n```",
+		"```\ncat >/tmp/bk.yaml <<EOF\n```",
+	} {
+		got, err := Lint("skill.md", strings.NewReader(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].Rule != ruleClobber || got[0].Why == "" {
+			t.Errorf("Lint(%q) = %+v, want one %s finding", doc, got, ruleClobber)
+		}
+	}
+}
+
+func TestLintPassesSafeRedirects(t *testing.T) {
+	for _, doc := range []string{
+		"Capture them apart (`devctl pr merge o/r 1 >|out.json 2>|gate.log`).",
+		"Never `cmd 2>&1`; quiet it with `cmd >/dev/null 2>&1` or `cmd > /dev/null`.",
+		"Append with `echo x >> notes.log`, compare with `test \"$n\" -gt 0` or `n > 0`.",
+		"The report is `beekeeper agents idle --done --report \"<report>\"` to `<owner/repo>`.",
+		"A count above the floor > 3 goes to the supervisor -> the guide => the person.",
+		"`tee >(gzip >|log.gz)`, a `map[string]int` and `x >= y` are fine.",
+		"```go\nif a > b {\n```",
+		"```bash\nkubectl get pods >| pods.txt\n```",
+	} {
+		got, err := Lint("skill.md", strings.NewReader(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Errorf("Lint(%q) = %+v, want none", doc, got)
+		}
 	}
 }

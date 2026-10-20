@@ -49,7 +49,7 @@ Try a change against the live machine without touching the real state: point a s
 configuration at a scratch state directory.
 
 ```bash
-cat > /tmp/bk.yaml <<EOF
+cat >| /tmp/bk.yaml <<EOF
 stateDir: /tmp/bk-state
 resources: [kind-1, kind-2]
 EOF

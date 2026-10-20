@@ -1,6 +1,7 @@
 // Package brieflint finds what makes a skill or a brief go stale: dates,
-// waits on something to ship, notes on a release that fixed something, and
-// a role's run where the role's name belongs. Skills and briefs say the
+// waits on something to ship, notes on a release that fixed something,
+// a role's run where the role's name belongs, and a shell example whose
+// bare > a rerun under noclobber refuses. Skills and briefs say the
 // current state; their history lives in the issues and the changelog.
 package brieflint
 
@@ -45,17 +46,75 @@ var rules = []rule{
 		regexp.MustCompile(`\b(Supervisor|Guide) run \d+\b`)},
 }
 
+// clobber is the rule on a shell example's redirect: a bare > into a file
+// fails on a rerun under noclobber (zsh's included), the command never
+// runs, and the first run's file is read back as this run's output.
+const (
+	clobberRule = "clobber"
+	clobberWhy  = "a bare > into a file fails on a rerun under noclobber: write >| or a fresh name per attempt"
+)
+
+var (
+	// fence opens or closes a fenced code block; its info string names the language.
+	fence = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)")
+	// codeSpan is one inline code span.
+	codeSpan = regexp.MustCompile("`+[^`]+`+")
+	// placeholder is a <word> to fill in, which closes with > and is no redirect.
+	placeholder = regexp.MustCompile(`<[^<>\s][^<>]*[^<>\s]>|<[^<>\s]>`)
+	// redirect is a > into a target: not >>, >|, >&, >=, -> or =>.
+	redirect = regexp.MustCompile(`(?:^|[^<>=&|\-])[0-9]?>[ \t]*([^\s>|&=;)` + "`" + `]+)`)
+	// shellFences are the info strings whose blocks are shell examples.
+	shellFences = map[string]bool{"": true, "sh": true, "bash": true, "zsh": true, "shell": true, "console": true}
+)
+
+// clobbers says whether shell code redirects with a bare > into a file.
+func clobbers(code string) bool {
+	for _, m := range redirect.FindAllStringSubmatch(placeholder.ReplaceAllString(code, "P"), -1) {
+		t := strings.TrimLeft(m[1], `"'`)
+		switch {
+		case strings.HasPrefix(t, "/dev/"), strings.HasPrefix(t, "("), t == "" || t[0] >= '0' && t[0] <= '9':
+			// A device, a process substitution, a comparison with a number.
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // Lint reads one file's lines and returns what the rules refuse in them.
+// The clobber rule reads only shell examples: inline code spans and fenced
+// blocks without a language or with a shell's.
 func Lint(name string, r io.Reader) ([]Finding, error) {
 	var out []Finding
+	var inFence, shellFence bool
+	var fenceMark string
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
+		add := func(rule, why string) {
+			out = append(out, Finding{Path: name, Line: n, Rule: rule, Why: why, Text: strings.TrimSpace(line)})
+		}
 		for _, ru := range rules {
 			if ru.re.MatchString(line) {
-				out = append(out, Finding{Path: name, Line: n, Rule: ru.name, Why: ru.why, Text: strings.TrimSpace(line)})
+				add(ru.name, ru.why)
 			}
+		}
+		var code string
+		switch m := fence.FindStringSubmatch(line); {
+		case m != nil && !inFence:
+			inFence, fenceMark, shellFence = true, m[1], shellFences[strings.ToLower(m[2])]
+			continue
+		case m != nil && strings.HasPrefix(m[1], fenceMark) && m[2] == "":
+			inFence = false
+			continue
+		case inFence && shellFence:
+			code = line
+		case !inFence:
+			code = strings.Join(codeSpan.FindAllString(line, -1), " ")
+		}
+		if clobbers(code) {
+			add(clobberRule, clobberWhy)
 		}
 	}
 	return out, sc.Err()
