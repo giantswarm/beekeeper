@@ -669,24 +669,21 @@ func holderRole(st *state.State, name string) string {
 }
 
 // relayAddress is where a message to rl goes: its holder's roleAddress,
-// except in the relay window: from the successor's start, for window, while
-// the successor's CLI takes no message (its headless first turn ending, its
-// desktop CLI not up yet), the outgoing holder the relay relieved gets it
-// while its own CLI does. Only the relay's From, never an older relieved run.
+// never a run a relay relieved, which status no longer counts as the
+// holder. In the relay window, from the successor's start for window, a
+// message while the successor's CLI runs without a peer socket (its
+// headless first turn, its desktop CLI coming up) is refused with when to
+// send again: by name nothing answers it, and its desktop session id would
+// start a second CLI beside it.
 func relayAddress(r state.Role, rl role, sessions []*claude.Session, sock func(pid int) string, now time.Time, window time.Duration) (string, error) {
 	rel := r.Relay
-	if r.Holder != nil && rel != nil && !rel.Taken.IsZero() && rel.To.Is(r.Holder.Party) && now.Sub(rel.Taken) < window &&
-		!reachable(sessions, r.Holder.Party, sock) && reachable(sessions, rel.From, sock) {
-		return roleAddress(&state.Supervisor{Party: rel.From}, rl, sessions, sock)
+	if r.Holder != nil && rel != nil && !rel.Taken.IsZero() && rel.To.Is(r.Holder.Party) && now.Sub(rel.Taken) < window {
+		if s, ok := claude.Live(sessions, r.Holder.Party); ok && sock(s.PID) == "" {
+			return "", fmt.Errorf("the %s is %q since %s, whose CLI %d takes no message yet (its first turn runs headless, or the desktop is warming its CLI): send again in a minute; the relieved %q gets none",
+				rl.name, r.Holder.Name, clock(now, rel.Taken), s.PID, rel.From.Name)
+		}
 	}
 	return roleAddress(r.Holder, rl, sessions, sock)
-}
-
-// reachable reports whether p's CLI runs and takes messages: its peer
-// socket is there.
-func reachable(sessions []*claude.Session, p state.Party, sock func(pid int) string) bool {
-	s, ok := claude.Live(sessions, p)
-	return ok && sock(s.PID) != ""
 }
 
 // roleAddress is where a message to rl's holder goes: the name its running

@@ -437,21 +437,10 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		}
 		a.say("ended session %s: %sits CLI %d and %d processes it left stopped", ag.Session, how, h.session.PID, n-1)
 	}
-	// A start or wake unit of the old session still in its turn, or a
-	// reopen unit of it, would show it in the desktop and warm a CLI of it
-	// again. The turns' units go first: their stop-posts start reopen units.
-	stop := func(u string) {
-		if err := plat.Launcher.Stop(ctx, u); err != nil {
-			a.say("stopping %s of session %s: %v", u, ag.Session, err)
-			return
-		}
-		a.say("stopped %s of session %s, so the desktop does not reopen it", u, ag.Session)
-	}
-	for _, u := range turningUnits(ctx, ag.Session) {
-		stop(u)
-	}
-	for _, u := range reopenUnits(ctx, ag.Session) {
-		stop(u)
+	// A CLI of the old session the desktop warms later anyway, the watch
+	// stops (stopRevived).
+	for _, l := range stopUnits(ctx, ag.Session) {
+		a.say("%s", l)
 	}
 	a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
 	took := time.Since(began)
