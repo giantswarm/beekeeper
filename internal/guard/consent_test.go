@@ -28,6 +28,7 @@ const (
 	otherAppPage      = "https://github.com/login/oauth/authorize?client_id=Iv1.ffffffffffffffff&redirect_uri=https%3A%2F%2F" + ownCallback + "%2Fcallback%2Fgithub&response_type=code"
 	otherCallbackPage = "https://github.com/login/oauth/authorize?client_id=" + ownClientID + "&redirect_uri=https%3A%2F%2Fexample.org%2Fcallback%2Fgithub&response_type=code"
 	labDexPage        = "https://dex.127.0.0.1.nip.io/dex/auth/local?req=abc"
+	lab2AuthorizePage = "https://github-bearer.lab2.127.0.0.2.nip.io/login/oauth/authorize?client_id=lab&response_type=code"
 	applicationsPage  = "https://github.com/settings/applications"
 	lanConsentPage    = "http://192.168.1.20:5556/dex/approval?req=abc&hmac=x"
 	authorizePage     = "https://login.example.org/common/oauth2/v2.0/authorize?client_id=x&response_type=code"
@@ -61,28 +62,30 @@ func TestConsent(t *testing.T) {
 		decision string
 		reason   string
 	}{
-		"own App and host":                 {Page{URL: ownPage, Title: ownTitle}, recorded, Allow, "the person's own App " + ownApp + " (callback " + ownCallback + "), declared in " + ownDeclared + ", on record since 2026-10-10 by the guide: your agent has to do this"},
-		"own App, its other declared host": {Page{URL: strings.Replace(ownPage, ownCallback, ownCallback+"%3A8443", 1), Title: ownTitle}, recorded, Allow, "(callback " + ownCallback + ":8443), declared in"},
-		"own App, the id redacted":         {Page{URL: redactedPage, Title: ownTitle}, recorded, Allow, "the person's own App " + ownApp},
-		"own App by id, title unknown":     {Page{URL: ownPage, Title: ""}, recorded, Allow, ownApp},
-		"other App":                        {Page{URL: otherAppPage, Title: otherTitle}, recorded, Deny, `GitHub's consent page of client id Iv1.ffffffffffffffff (callback ` + ownCallback + `) names an App beekeeper has no record of`},
-		"other App, the id redacted":       {Page{URL: redactedPage, Title: otherTitle}, recorded, Deny, `GitHub's consent page "` + otherTitle + `" (callback ` + ownCallback + `)`},
-		"other callback host":              {Page{URL: otherCallbackPage, Title: ownTitle}, recorded, Deny, "(callback example.org)"},
-		"no record at all":                 {Page{URL: ownPage, Title: ownTitle}, []App{}, Deny, AllowForm},
-		"other page":                       {Page{URL: applicationsPage, Title: applicationsTitle}, recorded, "", ""},
-		"the portal":                       {Page{URL: "https://portal.example.org/agents", Title: "Agents"}, recorded, "", ""},
-		"lab Dex sign-in":                  {Page{URL: labDexPage, Title: "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
-		"lab Dex approval on localhost":    {Page{URL: "https://localhost:32000/dex/approval?req=abc", Title: grantAccess}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
-		"lab portal sign-in":               {Page{URL: "https://" + ownCallback + "/connect/github", Title: "Connect"}, nil, Allow, "loopback host"},
-		"Dex on another host":              {Page{URL: "https://dex.example.org/dex/approval?req=abc", Title: grantAccess}, recorded, Deny, `"` + grantAccess + `" is a consent page (an OAuth grant) on dex.example.org`},
-		"a consent on a LAN host":          {Page{URL: lanConsentPage, Title: grantAccess}, recorded, Deny, "on 192.168.1.20:5556, neither the consent page of an App on record"},
-		"a consent path, no title":         {Page{URL: "https://idp.example.org/oauth2/consent?challenge=c", Title: ""}, recorded, Deny, "/oauth2/consent is a consent page"},
-		"a grant title on any path":        {Page{URL: "https://apps.example.org/connect", Title: "Authorize example-tool"}, recorded, Deny, AllowForm},
-		"another GitHub's consent page":    {Page{URL: "https://github.example.org/login/oauth/authorize?client_id=x&redirect_uri=https%3A%2F%2Fexample.org", Title: ""}, recorded, Deny, "on github.example.org"},
-		"an IdP's authorization page":      {Page{URL: authorizePage, Title: idpSignIn}, recorded, Deny, "on login.example.org"},
-		"Dex's sign-in on another host":    {Page{URL: dexAuthPage, Title: dexSignIn}, recorded, Deny, "on dex.example.org"},
-		"a lab page that is no sign-in":    {Page{URL: "https://backstage.127.0.0.1.nip.io/catalog", Title: "Catalog"}, recorded, "", ""},
-		"no URL":                           {Page{URL: "", Title: ""}, recorded, "", ""},
+		"own App and host":                   {Page{URL: ownPage, Title: ownTitle}, recorded, Allow, "the person's own App " + ownApp + " (callback " + ownCallback + "), declared in " + ownDeclared + ", on record since 2026-10-10 by the guide: your agent has to do this"},
+		"own App, its other declared host":   {Page{URL: strings.Replace(ownPage, ownCallback, ownCallback+"%3A8443", 1), Title: ownTitle}, recorded, Allow, "(callback " + ownCallback + ":8443), declared in"},
+		"own App, the id redacted":           {Page{URL: redactedPage, Title: ownTitle}, recorded, Allow, "the person's own App " + ownApp},
+		"own App by id, title unknown":       {Page{URL: ownPage, Title: ""}, recorded, Allow, ownApp},
+		"other App":                          {Page{URL: otherAppPage, Title: otherTitle}, recorded, Deny, `GitHub's consent page of client id Iv1.ffffffffffffffff (callback ` + ownCallback + `) names an App beekeeper has no record of`},
+		"other App, the id redacted":         {Page{URL: redactedPage, Title: otherTitle}, recorded, Deny, `GitHub's consent page "` + otherTitle + `" (callback ` + ownCallback + `)`},
+		"other callback host":                {Page{URL: otherCallbackPage, Title: ownTitle}, recorded, Deny, "(callback example.org)"},
+		"no record at all":                   {Page{URL: ownPage, Title: ownTitle}, []App{}, Deny, AllowForm},
+		"other page":                         {Page{URL: applicationsPage, Title: applicationsTitle}, recorded, "", ""},
+		"the portal":                         {Page{URL: "https://portal.example.org/agents", Title: "Agents"}, recorded, "", ""},
+		"lab Dex sign-in":                    {Page{URL: labDexPage, Title: "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
+		"lab Dex approval on localhost":      {Page{URL: "https://localhost:32000/dex/approval?req=abc", Title: grantAccess}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
+		"lab portal sign-in":                 {Page{URL: "https://" + ownCallback + "/connect/github", Title: "Connect"}, nil, Allow, "loopback host"},
+		"second lab's authorize page":        {Page{URL: lab2AuthorizePage, Title: "Authorize agentlab"}, nil, Allow, "github-bearer.lab2.127.0.0.2.nip.io is the lab's own identity provider on a loopback host"},
+		"a consent on a non-loopback nip.io": {Page{URL: "https://dex.10.0.0.2.nip.io/dex/approval?req=abc", Title: grantAccess}, recorded, Deny, "on dex.10.0.0.2.nip.io, neither the consent page of an App on record"},
+		"Dex on another host":                {Page{URL: "https://dex.example.org/dex/approval?req=abc", Title: grantAccess}, recorded, Deny, `"` + grantAccess + `" is a consent page (an OAuth grant) on dex.example.org`},
+		"a consent on a LAN host":            {Page{URL: lanConsentPage, Title: grantAccess}, recorded, Deny, "on 192.168.1.20:5556, neither the consent page of an App on record"},
+		"a consent path, no title":           {Page{URL: "https://idp.example.org/oauth2/consent?challenge=c", Title: ""}, recorded, Deny, "/oauth2/consent is a consent page"},
+		"a grant title on any path":          {Page{URL: "https://apps.example.org/connect", Title: "Authorize example-tool"}, recorded, Deny, AllowForm},
+		"another GitHub's consent page":      {Page{URL: "https://github.example.org/login/oauth/authorize?client_id=x&redirect_uri=https%3A%2F%2Fexample.org", Title: ""}, recorded, Deny, "on github.example.org"},
+		"an IdP's authorization page":        {Page{URL: authorizePage, Title: idpSignIn}, recorded, Deny, "on login.example.org"},
+		"Dex's sign-in on another host":      {Page{URL: dexAuthPage, Title: dexSignIn}, recorded, Deny, "on dex.example.org"},
+		"a lab page that is no sign-in":      {Page{URL: "https://backstage.127.0.0.1.nip.io/catalog", Title: "Catalog"}, recorded, "", ""},
+		"no URL":                             {Page{URL: "", Title: ""}, recorded, "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := Click(tc.apps, tc.page, clicksAuthorize)
@@ -246,5 +249,35 @@ func TestLastPageReadsTheTail(t *testing.T) {
 	p, ok := lastPage(path, tab7)
 	if !ok || p.URL != redactedPage || p.Title != ownTitle {
 		t.Errorf("lastPage of a long transcript = %+v, %v", p, ok)
+	}
+}
+
+// Every agentlab binds a loopback address of its own, so a host is the
+// machine's by the address it names, not by a list of labs.
+func TestLoopback(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost":                           true,
+		"dex.localhost":                       true,
+		"127.0.0.1":                           true,
+		"127.0.0.2":                           true,
+		"::1":                                 true,
+		"[::1]":                               true,
+		"dex.127.0.0.1.nip.io":                true,
+		"github-bearer.lab2.127.0.0.2.nip.io": true,
+		"Dex.LAB3.127.0.0.3.nip.io.":          true,
+		"backstage-127-0-0-2.nip.io":          true,
+		"127.0.0.2.nip.io":                    true,
+		"dex.10.0.0.2.nip.io":                 false,
+		"dex.192.168.1.20.nip.io":             false,
+		"dex.127.0.0.1.nip.io.example.org":    false,
+		"dex.127.0.0.1.example.org":           false,
+		"127.0.0.1.example.org":               false,
+		"my-localhost.example.org":            false,
+		"10.0.0.1":                            false,
+		"":                                    false,
+	} {
+		if got := Loopback(host); got != want {
+			t.Errorf("Loopback(%q) = %v, want %v", host, got, want)
+		}
 	}
 }

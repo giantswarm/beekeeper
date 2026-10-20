@@ -97,9 +97,13 @@ type priorityGH struct {
 	ranked map[int]int // issue → rank
 	// labelled are the ranked epics the team label finds, issue → rank:
 	// those with another Team are missing from the Team's query.
-	labelled  map[int]int
-	kind      string // the Kind of the issue set reads
-	offBoard  bool   // the issue's projectItems name no item of the board
+	labelled map[int]int
+	kind     string // the Kind of the issue set reads
+	offBoard bool   // the issue's projectItems name no item of the board
+	// hidden are the ranked epics the first read of the list leaves out, as
+	// the board's search can: every later read names them.
+	hidden    map[int]bool
+	listReads int
 	mutations []string
 	queries   []string
 }
@@ -121,9 +125,13 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 	switch {
 	case strings.Contains(q, "clearProjectV2ItemFieldValue"):
 		f.mutations = append(f.mutations, vars["i"]+" cleared")
+		f.write(vars["i"], 0)
 		return []byte(`{"data":{"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":"x"}}}}`), nil
 	case strings.Contains(q, "updateProjectV2ItemFieldValue"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
+		v := 0
+		_, _ = fmt.Sscan(vars["v"], &v)
+		f.write(vars["i"], v)
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"x"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(priorityMetaJSON), nil
@@ -136,8 +144,12 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 		default:
 			f.t.Errorf("priority query %q", vars["q"])
 		}
+		f.listReads++
 		var nodes []string
 		for _, n := range slices.Sorted(maps.Keys(ranked)) {
+			if f.hidden[n] && f.listReads <= 2 {
+				continue
+			}
 			nodes = append(nodes, fmt.Sprintf(`{"id":"I%d","status":{"name":"In Progress ⛏️"},"kind":{"name":"Epic 🎯"},"priority":{"number":%d,"updatedAt":"2026-10-12T11:31:09Z","creator":{"login":"teemow"}},"team":{"name":%q,"updatedAt":"2026-10-16T06:53:56Z","creator":{"login":"giantswarm-project-automation"}},"content":%s}`, n, ranked[n], team, issue(n, "")))
 		}
 		// An epic without a rank is no entry.
@@ -154,6 +166,21 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 	}
 	f.t.Fatalf("unexpected request %v", args)
 	return nil, nil
+}
+
+// write sets the rank of the item I<n>, 0 its clear, where the reads find it.
+func (f *priorityGH) write(item string, rank int) {
+	n := 0
+	_, _ = fmt.Sscanf(item, "I%d", &n)
+	m := f.ranked
+	if _, ok := f.labelled[n]; ok {
+		m = f.labelled
+	}
+	if rank == 0 {
+		delete(m, n)
+		return
+	}
+	m[n] = rank
 }
 
 func priorityClient(f *priorityGH) *Client {
@@ -209,7 +236,7 @@ func TestSetPriorityInsertsAndRenumbers(t *testing.T) {
 		{"unset of an unranked epic writes nothing", issue5, 0, 0, 0, listOf123, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &priorityGH{t: t, ranked: map[int]int{1: 1, 2: 2, 3: 3}, kind: "Epic 🎯"}
+			f := &priorityGH{t: t, ranked: map[int]int{1: 1, 2: 2, 3: 3}, kind: epic}
 			p, err := priorityClient(f).SetPriority(context.Background(), tc.ref, tc.rank)
 			if err != nil {
 				t.Fatal(err)
@@ -238,10 +265,61 @@ func TestSetPriorityRefusesWhatIsNoEpic(t *testing.T) {
 
 func TestSetPriorityNeverAddsAnEpicOutsideTheOrganisation(t *testing.T) {
 	// An add would be an unexpected request: the refusal comes first.
-	f := &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: "Epic 🎯", offBoard: true}
+	f := &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: epic, offBoard: true}
 	_, err := priorityClient(f).SetPriority(context.Background(), labIssue7, 1)
 	var r *Refusal
 	if !errors.As(err, &r) || r.Reason != foreignRefusal || len(f.mutations) != 0 {
 		t.Errorf("SetPriority of a foreign epic = %v, mutations %v", err, f.mutations)
+	}
+}
+
+func TestSetPriorityShiftsOnlyTheEpicsAtAndBelowItsRank(t *testing.T) {
+	// The board's first read of the list leaves out the epics at 1, 4 and 9;
+	// renumbering the rest gave duplicates and moved epics up.
+	before := []int{38343, 36700, 38388, 37365, 38449, 38450, 38451, 38452, 37946, 37947, 938, 38157, 38118, 38453}
+	f := &priorityGH{t: t, ranked: map[int]int{}, kind: epic, hidden: map[int]bool{38343: true, 37365: true, 37946: true}}
+	for i, n := range before {
+		f.ranked[n] = i + 1
+	}
+	p, err := priorityClient(f).SetPriority(context.Background(), "o/r#38688", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := slices.Insert(slices.Clone(before), 7, 38688)
+	want := make([]string, len(after))
+	for i, n := range after {
+		want[i] = fmt.Sprintf("%d o/r#%d", i+1, n)
+		if f.ranked[n] != i+1 {
+			t.Errorf("the board ranks o/r#%d %d; want %d", n, f.ranked[n], i+1)
+		}
+	}
+	if p.From != 0 || p.To != 8 || listText(p.List) != strings.Join(want, ", ") {
+		t.Errorf("SetPriority = %d→%d [%s]; want 0→8 [%s]", p.From, p.To, listText(p.List), strings.Join(want, ", "))
+	}
+	for _, m := range f.mutations {
+		var n, r int
+		_, _ = fmt.Sscanf(m, "I%d=%d", &n, &r)
+		if i := slices.Index(before, n); i >= 0 && i < 7 {
+			t.Errorf("an epic above rank 8 was written: %s", m)
+		}
+	}
+}
+
+func TestSetPriorityInTurnRepairsDuplicateRanks(t *testing.T) {
+	// The board after the partial read: two epics at 1, at 4 and at 9.
+	f := &priorityGH{t: t, kind: epic, ranked: map[int]int{
+		36700: 1, 38343: 1, 38388: 2, 38449: 3, 37365: 4, 38450: 4, 38451: 5, 38452: 6,
+		37947: 7, 38688: 8, 37946: 9, 938: 9, 38157: 10, 38118: 11, 38453: 12,
+	}}
+	order := []int{38343, 36700, 38388, 37365, 38449, 38450, 38451, 38688, 38452, 37946, 37947, 938, 38157, 38118, 38453}
+	for i, n := range order {
+		if _, err := priorityClient(f).SetPriority(context.Background(), fmt.Sprintf("o/r#%d", n), i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, n := range order {
+		if f.ranked[n] != i+1 {
+			t.Errorf("the board ranks o/r#%d %d; want %d", n, f.ranked[n], i+1)
+		}
 	}
 }

@@ -569,11 +569,14 @@ func TestBrowseConsent(t *testing.T) {
 		}
 	}
 	for steps, want := range map[string]bool{
-		"Open https://dex.127.0.0.1.nip.io/dex/auth and sign in as admin@lab.local": true,
-		"Open https://localhost:32000/dex/auth":                                     true,
-		"Open http://127.0.0.1:8080/":                                               true,
-		"Open https://example.org/ and https://portal.example.org/":                 false,
-		"Open https://my-localhost.example.org/":                                    false,
+		"Open https://dex.127.0.0.1.nip.io/dex/auth and sign in as admin@lab.local":  true,
+		"Open https://localhost:32000/dex/auth":                                      true,
+		"Open https://github-bearer.lab2.127.0.0.2.nip.io/login and click Authorize": true,
+		"Open https://dex.10.0.0.2.nip.io/dex/auth":                                  false,
+		"Open http://127.0.0.2:8080/.":                                               true,
+		"Open http://127.0.0.1:8080/":                                                true,
+		"Open https://example.org/ and https://portal.example.org/":                  false,
+		"Open https://my-localhost.example.org/":                                     false,
 	} {
 		if got := namesLoopback(steps); got != want {
 			t.Errorf("namesLoopback(%q) = %v, want %v", steps, got, want)
