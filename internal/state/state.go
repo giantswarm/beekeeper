@@ -633,8 +633,14 @@ type App struct {
 	// Account is the Google account a Google OAuth client's sign-in
 	// chooses: the hook answers no other account on Google's chooser.
 	Account string `json:"account,omitempty"`
+	// GitLab is the host of the self-hosted GitLab whose OAuth application
+	// of the person's this is: the hook answers its authorize page there,
+	// by the callback hosts the person named; "" for any other record.
+	GitLab string `json:"gitlab,omitempty"`
 	// Declared is where the organisation declares the App:
-	// <repo>@<commit>:<manifest path>, or the local manifest of a deletion.
+	// <repo>@<commit>:<manifest path>, the local manifest of an App on the
+	// person's own account or of a deletion, or the person's own
+	// declaration of a GitLab application's client id.
 	Declared string `json:"declared"`
 	// Word is the person's words that asked for the grant.
 	Word string    `json:"word"`

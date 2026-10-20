@@ -60,6 +60,10 @@ type App struct {
 	// Account is the Google account a Google App's sign-in chooses on
 	// Google's account chooser, "" for any.
 	Account string
+	// GitLab is the host of the self-hosted GitLab whose OAuth application
+	// this is, its consent on that host's authorize page (gitlab.go); "" for
+	// any other App.
+	GitLab string
 	// Run is the running `beekeeper app create` of the App whose listener
 	// answers, nil for none; Created is beekeeper's ledger entry of the App
 	// it created, nil for none (applife.go).
@@ -166,6 +170,8 @@ func Click(apps []App, page Page, words string) Decision {
 		return permissionClick(apps, u, page.Title, words)
 	case host == googleHost:
 		return googleClick(apps, u, page, words)
+	case u.Path == gitlabAuthorize && gitlabHost(apps, host):
+		return gitlabConsent(apps, u, page.Title)
 	case loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
 			"whose fixture users' sign-in and consent are the person's own lab's", u.Host)}
@@ -183,8 +189,9 @@ func elsewhere(u *url.URL, title, words string) Decision {
 	}
 	return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither the consent page of an App on record "+
 		"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
-		"which %s (a GitHub App) or %s (a Google OAuth client) records on their word; every other grant stays refused.",
-		consentWhich(u, title), u.Host, AllowForm, GoogleForm)}
+		"which %s (a GitHub App), %s (a Google OAuth client) or %s (a self-hosted GitLab's OAuth application) records on their word; "+
+		"every other grant stays refused.",
+		consentWhich(u, title), u.Host, AllowForm, GoogleForm, GitLabForm)}
 }
 
 // consentElsewhere reports whether a call in words acts on a consent page:
@@ -219,7 +226,7 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		callback = strings.ToLower(r.Host)
 	}
 	for _, a := range apps {
-		if a.Google || !slices.Contains(a.Callbacks, callback) {
+		if a.Google || a.GitLab != "" || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
 		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
