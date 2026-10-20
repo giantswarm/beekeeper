@@ -503,7 +503,9 @@ func TestHookRefusesScriptMerges(t *testing.T) {
 		{"cd " + dir + "/sw*p && cat > run.sh <<'EOF'\n#!/usr/bin/env bash\nwhile read r n; do\n  out=$(devctl pr merge giantswarm/$r $n --update-branch 2>&1); ec=$?\n  echo \"$r#$n exit=$ec\" >> results.log\ndone < merge2.txt\nEOF\nchmod +x run.sh; : >| results.log; ./run.sh >/dev/null 2>&1 &\necho $!",
 			[]string{"this call, which runs ./run.sh (not readable before the call)", "line 4: out=$(devctl pr merge giantswarm/$r $n --update-branch 2>&1); ec=$?"}},
 		{"printf '%s\\n' 'devctl pr merge o/r 7' >| ./drive.sh && setsid nohup bash ./drive.sh &", []string{"this call, which runs ./drive.sh (not readable before the call)"}},
+		{"python3 -c \"import sys; open('run.sh', 'w').write(sys.argv[1])\" 'devctl pr merge o/r 7' && ./run.sh", []string{"this call, which runs ./run.sh (not readable before the call)"}},
 		// One written before, in a directory the call reaches through a glob.
+		{"cd " + dir + "/[!x]weep && ./loop.sh", []string{"the script " + filepath.Join(dir, "sweep", "loop.sh")}},
 		{"cd " + dir + "/sw*p && nohup ./loop.sh >/dev/null 2>&1 &", []string{"the script " + filepath.Join(dir, "sweep", "loop.sh"), "line 2: while read n; do devctl pr merge o/r \"$n\"; done < prs.txt"}},
 		// An interpreter's script, by name or by its shebang.
 		{"python3 merge.py", []string{"a devctl pr merge in the script " + filepath.Join(dir, "merge.py"), "line 3: subprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"], check=True)"}},
