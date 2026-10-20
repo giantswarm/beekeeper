@@ -632,3 +632,41 @@ func TestMemosOfAnOlderBeekeeperAreKeptUnread(t *testing.T) {
 		t.Errorf("a save drops or rewrites the memos: %s", raw)
 	}
 }
+
+// A state a newer release wrote loads in an older one: members it does not
+// know are kept. One it cannot decode at all (a field the newer release
+// changed) is refused naming both releases; the same document written by
+// an older or the same release is a plain decode error.
+func TestAStateANewerReleaseWroteLoadsOrNamesTheSkew(t *testing.T) {
+	dir := t.TempDir()
+	write := func(doc string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := OpenVersion(dir, "v0.81.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(`{"writer":{"version":"v0.82.0"},"nextNote":3,"lanesV2":{"l":1}}`)
+	if st, err := s.Read(); err != nil || st.NextNote != 3 || st.rest["lanesV2"] == nil {
+		t.Fatalf("a newer release's unknown member: %+v, %v", st, err)
+	}
+
+	write(`{"writer":{"version":"v0.82.0"},"nextNote":"three"}`)
+	_, err = s.Read()
+	var stale *StaleWriterError
+	if !errors.As(err, &stale) || stale.Version != "v0.81.0" || stale.Newer != "v0.82.0" || stale.Load == nil ||
+		!strings.Contains(err.Error(), "runs beekeeper v0.81.0, older than the v0.82.0 that wrote the state: it does not load it (") {
+		t.Fatalf("err = %v, want the skew named", err)
+	}
+	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); !errors.As(err, &stale) {
+		t.Errorf("update err = %v, want the skew", err)
+	}
+
+	write(`{"writer":{"version":"v0.81.0"},"nextNote":"three"}`)
+	if _, err := s.Read(); err == nil || errors.As(err, &stale) {
+		t.Errorf("err = %v, want a plain decode error", err)
+	}
+}

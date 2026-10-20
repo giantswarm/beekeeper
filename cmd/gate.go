@@ -123,9 +123,10 @@ running, the same devctl, followed on from where its stderr was copied, so
 the installed release records the outcome. devctl runs once, in a session
 of its own, so it merges on when the caller's session ends (only SIGINT
 reaches it); its document and exit code pass through unchanged. A call
-whose release is older than the one that wrote the state and that cannot
-re-execute is refused (77) before it touches the lane: the installed
-beekeeper gates the same command again; one whose devctl already ran leaves
+whose release is older than the one that wrote the state (its save
+refused, or a state it does not decode) and that cannot re-execute is
+refused (77) before it touches the lane, its line naming both releases:
+the installed beekeeper gates the same command again; one whose devctl already ran leaves
 the run's document and exit code for the watch, which records the outcome
 at its next poll. A merge into a base branch no Auto-release
 run tags (the Auto-release workflow on the branch, read once per merge,
@@ -435,10 +436,26 @@ func (g *gateRun) reexec(when string, env ...string) {
 // state refused and that could not re-execute: nothing ran, the lane is
 // untouched, and the installed beekeeper gates the same command again.
 func (g *gateRun) staleRefused(stale *state.StaleWriterError) error {
-	why := fmt.Sprintf("%s: this call runs beekeeper %s, older than the %s that wrote the state; nothing ran, the lane is untouched: run the same command again, the installed %s gates it",
-		g.key(), stale.Version, stale.Newer, project.Name)
+	load := ""
+	if stale.Load != nil {
+		load = fmt.Sprintf(", which it does not load (%v)", stale.Load)
+	}
+	why := fmt.Sprintf("%s: this call runs beekeeper %s, older than the %s that wrote the state%s; nothing ran, the lane is untouched: run the same command again, the installed %s gates it",
+		g.key(), stale.Version, stale.Newer, load, project.Name)
 	_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
 	return gateRefused("%s", why)
+}
+
+// stateRefused is a step's answer to a state that does not load or save:
+// one a newer release wrote passes on to the wait loop, which re-executes a
+// replaced binary or refuses naming both releases (staleRefused); any other
+// is refused as it is.
+func (g *gateRun) stateRefused(err error) error {
+	var stale *state.StaleWriterError
+	if errors.As(err, &stale) {
+		return stale
+	}
+	return g.refuse("the state does not load (%v): fix it, then run the same command again", err)
 }
 
 // resumeMerge carries a running merge on after the re-exec of a replaced
@@ -698,7 +715,7 @@ func (g *gateRun) step() (string, error) {
 	urgent := false
 	if b.Remaining < g.cfg.GitHub.Floor {
 		if urgent, why, err = g.urgentTurn(b); err != nil {
-			return "", g.refuse("the state does not load (%v): fix it, then run the same command again", err)
+			return "", g.stateRefused(err)
 		}
 		if !urgent {
 			g.awaitReset(b.Reset)
@@ -1230,7 +1247,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		return ev, nil
 	})
 	if err != nil {
-		return "", g.refuse("the state does not load (%v): fix it, then run the same command again", err)
+		return "", g.stateRefused(err)
 	}
 	if why != "" {
 		return why, nil
