@@ -2,7 +2,9 @@ package central_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -157,5 +159,101 @@ func TestPagerDutyReadStalledConnection(t *testing.T) {
 	}
 	if len(calls) != 2 || calls[0] == nil || !strings.Contains(calls[0].Error(), "tool call timed out (deadline 500ms)") || calls[1] != nil {
 		t.Errorf("attempts %v, want the stalled tool call, then the answer", calls)
+	}
+}
+
+// mailboxURI is the resource the listen tests subscribe to.
+const mailboxURI = "beekeeper://mailbox/ada@example.com"
+
+// subscriber is a beekeeper serve stand-in that serves subscriptions/listen
+// for mailboxURI alone, to the bearer a-token, and sends one update of it
+// on each acknowledged stream.
+func subscriber(t *testing.T) string {
+	t.Helper()
+	type bearerKey struct{}
+	hooks := &mcpserver.Hooks{}
+	hooks.AddOnRequestInitialization(func(ctx context.Context, _ any, message any) error {
+		raw, _ := json.Marshal(message)
+		var req struct {
+			Method string                        `json:"method"`
+			Params mcp.SubscriptionsListenParams `json:"params"`
+		}
+		if json.Unmarshal(raw, &req) != nil || req.Method != string(mcp.MethodSubscriptionsListen) {
+			return nil
+		}
+		if ctx.Value(bearerKey{}) != "a-token" {
+			return errors.New("not the person's bearer")
+		}
+		for _, uri := range req.Params.Notifications.ResourceSubscriptions {
+			if uri != mailboxURI {
+				return errors.New("the mailbox of another person")
+			}
+		}
+		return nil
+	})
+	hooks.AddBeforeSubscriptionsListen(func(ctx context.Context, id any, _ *mcp.SubscriptionsListenRequest) {
+		session := mcpserver.ClientSessionFromContext(ctx)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
+				Method: mcp.MethodNotificationResourceUpdated,
+				Params: mcp.NotificationParams{Meta: map[string]any{mcp.MetaKeySubscriptionID: id}, AdditionalFields: map[string]any{"uri": mailboxURI}},
+			}}
+		}()
+	})
+	s := mcpserver.NewMCPServer("beekeeper", "test", mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(hooks))
+	srv := httptest.NewServer(mcpserver.NewStreamableHTTPServer(s, mcpserver.WithStateLess(true),
+		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			return context.WithValue(ctx, bearerKey{}, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		})))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/mcp"
+}
+
+func TestListen(t *testing.T) {
+	c, _ := client(t, subscriber(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready, updated := make(chan struct{}, 1), make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Listen(ctx, []string{mailboxURI}, func() { ready <- struct{}{} }, func(uri string) { updated <- uri })
+	}()
+	for _, want := range []string{"ready", mailboxURI} {
+		select {
+		case <-ready:
+			if want != "ready" {
+				t.Fatal("acknowledged twice")
+			}
+		case uri := <-updated:
+			if uri != want {
+				t.Fatalf("updated %q, want %s", uri, want)
+			}
+		case err := <-done:
+			t.Fatalf("Listen ended before %s: %v", want, err)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("no %s", want)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Listen after its context ended = %v, want nil", err)
+	}
+}
+
+func TestListenRefused(t *testing.T) {
+	c, _ := client(t, subscriber(t))
+	err := c.Listen(context.Background(), []string{"beekeeper://mailbox/bob@example.com"}, func() { t.Error("acknowledged") }, func(string) {})
+	var r *central.Refused
+	if !errors.As(err, &r) || !strings.Contains(r.Message, "another person") {
+		t.Errorf("Listen = %v (%T), want the refusal", err, err)
+	}
+}
+
+func TestListenUnreachable(t *testing.T) {
+	c, _ := client(t, "http://127.0.0.1:1/mcp")
+	var u *central.Unreachable
+	if err := c.Listen(context.Background(), []string{mailboxURI}, func() {}, func(string) {}); !errors.As(err, &u) || u.Context != labContext {
+		t.Errorf("Listen = %v (%T), want Unreachable", err, err)
 	}
 }

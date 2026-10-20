@@ -1,7 +1,8 @@
 // Package centraltest gives a test a muster in front of a beekeeper serve:
 // its call_tool forwards x_<server>_<tool> to the backend with the caller's
-// bearer and wraps the result as muster does, and a muster binary that
-// names its endpoint and prints a token.
+// bearer and wraps the result as muster does, its subscriptions/listen
+// streams take the updates the test relays, and a muster binary that names
+// its endpoint and prints a token.
 package centraltest
 
 import (
@@ -15,7 +16,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -35,6 +38,17 @@ type Muster struct {
 	// down makes every call_tool fail as muster's does when the backend
 	// does not answer.
 	down atomic.Bool
+	// streams are the subscriptions/listen streams open on muster.
+	mu      sync.Mutex
+	streams map[*stream]struct{}
+}
+
+// stream is one subscriptions/listen stream: its session, the request id
+// its notifications carry, and the URIs it subscribed.
+type stream struct {
+	session mcpserver.ClientSession
+	id      any
+	uris    []string
 }
 
 // New starts a test muster forwarding to backend.
@@ -86,7 +100,23 @@ func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.T
 
 // handler is muster's MCP endpoint in front of backend.
 func (m *Muster) handler(backend, server string) http.Handler {
-	s := mcpserver.NewMCPServer("muster", "test")
+	hooks := &mcpserver.Hooks{}
+	hooks.AddBeforeSubscriptionsListen(func(ctx context.Context, id any, req *mcp.SubscriptionsListenRequest) {
+		st := &stream{session: mcpserver.ClientSessionFromContext(ctx), id: id, uris: req.Params.Notifications.ResourceSubscriptions}
+		m.mu.Lock()
+		if m.streams == nil {
+			m.streams = map[*stream]struct{}{}
+		}
+		m.streams[st] = struct{}{}
+		m.mu.Unlock()
+		go func() {
+			<-ctx.Done()
+			m.mu.Lock()
+			delete(m.streams, st)
+			m.mu.Unlock()
+		}()
+	})
+	s := mcpserver.NewMCPServer("muster", "test", mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(hooks))
 	s.AddTool(mcp.NewTool("call_tool", mcp.WithString("name", mcp.Required()), mcp.WithObject("arguments")),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			name := req.GetString("name", "")
@@ -110,6 +140,26 @@ func (m *Muster) handler(backend, server string) http.Handler {
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			return context.WithValue(ctx, authKey{}, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		}))
+}
+
+// Updated sends notifications/resources/updated of uri to every stream
+// subscribed to it, as muster relays the backend's, and says how many it
+// reached.
+func (m *Muster) Updated(uri string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for st := range m.streams {
+		if !slices.Contains(st.uris, uri) {
+			continue
+		}
+		st.session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
+			Method: mcp.MethodNotificationResourceUpdated,
+			Params: mcp.NotificationParams{Meta: map[string]any{mcp.MetaKeySubscriptionID: st.id}, AdditionalFields: map[string]any{"uri": uri}},
+		}}
+		n++
+	}
+	return n
 }
 
 // Down makes the backend unreachable behind muster (down) or reachable.

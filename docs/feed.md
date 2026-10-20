@@ -101,7 +101,10 @@ messages in order, each with its `id`, and `ack_messages` with those ids.
   mailbox from `source` `slack` with the conversation's id as the message's `contextId`. A reply
   to an agent not on the roster is refused, `<address> is not running`, and klaus-gateway says in
   the thread that it was not delivered and why; another person's reply never reaches the agent.
-  This is how the person talks to their guide in Slack.
+  This is how the person talks to their guide in Slack: the guide writes with `beekeeper
+  converse "<text>"`, and the person's local standby watch, subscribed to their mailbox, delivers
+  each reply into the guide's running session at its next tool round, stamped `Message from
+  <person> via slack`.
 - The mailboxes live in the `beekeeper` database of the platform's Postgres, whose URL
   `BEEKEEPER_DATABASE_URL` names; `beekeeper serve` migrates the schema at start and refuses to
   start without it.
