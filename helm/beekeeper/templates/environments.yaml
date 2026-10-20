@@ -1,0 +1,23 @@
+{{- /* The installations serve coordinates: a lease claim names one, and a
+       name no Environment carries is refused. serve writes their status
+       alone; the spec is the chart's. */}}
+{{- range .Values.environments }}
+---
+apiVersion: beekeeper.giantswarm.io/v1alpha1
+kind: Environment
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "beekeeper.labels" $ | nindent 4 }}
+spec:
+  installation: {{ .installation | default .name }}
+  {{- with .musterCluster }}
+  musterCluster: {{ . }}
+  {{- end }}
+  {{- with .team }}
+  team: {{ . }}
+  {{- end }}
+  {{- with .alertFloor }}
+  alertFloor: {{ . }}
+  {{- end }}
+{{- end }}

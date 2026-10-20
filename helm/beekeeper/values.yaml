@@ -49,6 +49,17 @@ watch:
   # How often the watch reads; a Go duration.
   interval: 30s
 
+# The installations serve coordinates, one cluster-scoped Environment each: a
+# lease claim names one, and a name none carries is refused. Each entry:
+# name, and optionally installation (default: name), musterCluster, team
+# (the owning team, whose supervisors may release another person's lease)
+# and alertFloor.
+environments: []  # @schema item: object; itemProperties: {name: {type: string}, installation: {type: string}, musterCluster: {type: string}, team: {type: string}, alertFloor: {type: string}}
+
+# The merge lanes, one cluster-scoped MergeLane each: name, installation and
+# the repositories whose merges roll onto it, merged one at a time.
+lanes: []  # @schema item: object; itemProperties: {name: {type: string}, installation: {type: string}, repositories: {type: array, items: {type: string}}}
+
 # The beekeeper database the mailboxes live in: a Secret key holding its URL
 # (BEEKEEPER_DATABASE_URL), e.g. the <cluster>-app Secret CloudNativePG
 # writes for the database's role.
@@ -74,6 +85,14 @@ serviceAccount:
 service:
   port: 8080
 
+# serve's /mcp behind a Gateway API Gateway, for the musters of other
+# installations. Off: serve is reached in-cluster only.
+httpRoute:
+  enabled: false
+  hostnames: []  # @schema item: string
+  # e.g. [{name: giantswarm-default, namespace: envoy-gateway-system}]
+  parentRefs: []  # @schema item: object; itemProperties: {group: {type: string}, kind: {type: string}, name: {type: string}, namespace: {type: string}, sectionName: {type: string}, port: {type: integer}}
+
 resources:
   requests:
     cpu: 50m
@@ -94,6 +113,14 @@ securityContext:
   capabilities:
     drop:
       - ALL
+
+# Further environment variables, volumes and mounts of serve's container,
+# and init containers of its pod (a sidecar is one with restartPolicy
+# Always): a private CA for the issuer (SSL_CERT_FILE), a local proxy to it.
+extraEnv: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.EnvVar
+extraVolumes: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.Volume
+extraVolumeMounts: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.VolumeMount
+initContainers: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.Container
 
 nodeSelector: {}  # @schema additionalProperties: true
 tolerations: []  # @schema item: object

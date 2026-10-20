@@ -1,0 +1,31 @@
+{{- /* serve's MCP endpoint behind a Gateway: the other installations' musters
+       reach the central instance here, with a token exchanged at its
+       issuer. Only /mcp is routed. */}}
+{{- if .Values.httpRoute.enabled }}
+{{- if not .Values.httpRoute.hostnames }}
+{{- fail "httpRoute.hostnames: the host names serve is reached by" }}
+{{- end }}
+{{- if not .Values.httpRoute.parentRefs }}
+{{- fail "httpRoute.parentRefs: the Gateway serve is reached through" }}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "beekeeper.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+spec:
+  hostnames:
+    {{- toYaml .Values.httpRoute.hostnames | nindent 4 }}
+  parentRefs:
+    {{- toYaml .Values.httpRoute.parentRefs | nindent 4 }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /mcp
+      backendRefs:
+        - name: {{ include "beekeeper.name" . }}
+          port: {{ .Values.service.port }}
+{{- end }}

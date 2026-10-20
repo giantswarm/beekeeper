@@ -1,0 +1,18 @@
+{{- /* The merge lanes: the repositories whose merges roll onto one
+       installation, merged one at a time. serve writes their status alone;
+       the spec is the chart's. */}}
+{{- range .Values.lanes }}
+---
+apiVersion: beekeeper.giantswarm.io/v1alpha1
+kind: MergeLane
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "beekeeper.labels" $ | nindent 4 }}
+spec:
+  installation: {{ .installation }}
+  {{- with .repositories }}
+  repositories:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
