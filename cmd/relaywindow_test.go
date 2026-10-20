@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -8,11 +9,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// A message to "the supervisor" during a relay reaches a run that takes it:
-// the outgoing holder until the successor's start, the outgoing holder still
-// while the successor's CLI takes no message after it (its headless first
-// turn ended, its desktop CLI not up), then the successor. Never an older
-// relieved run, and never a bare run name nothing answers.
+// A message to "the supervisor" during a relay reaches the holder: the
+// outgoing holder until the successor's start, the successor from it. Never
+// a run the relay relieved, whose status no longer counts it, and never a
+// bare run name nothing answers: while the successor's CLI runs without a
+// peer socket the message is refused with when to send again.
 func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	at := time.Date(2026, 10, 18, 1, 7, 0, 0, time.UTC)
 	window := 15 * time.Minute
@@ -48,6 +49,13 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 			t.Errorf("%s: %q, %v; want %q", step, got, err, want)
 		}
 	}
+	refused := func(step string, now time.Time, sessions []*claude.Session, sock func(int) string) {
+		t.Helper()
+		got, err := relayAddress(supervisorRole.get(st), supervisorRole, sessions, sock, now, window)
+		if err == nil || !strings.Contains(err.Error(), "send again") || !strings.Contains(err.Error(), out.Name) {
+			t.Errorf("%s: %q, %v; want a refusal saying when to send again", step, got, err)
+		}
+	}
 
 	// The relay is open, the successor's headless first turn runs.
 	check("relay open", at.Add(5*time.Second), []*claude.Session{olderCLI, outCLI, succCLI}, sock, out.Name)
@@ -65,8 +73,9 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	}
 
 	check("start done, headless turn still up", taken.Add(time.Second), []*claude.Session{olderCLI, outCLI, succCLI}, sock, succ.Name)
-	check("headless turn ended, desktop CLI not up", taken.Add(20*time.Second), []*claude.Session{olderCLI, outCLI}, sock, out.Name)
-	check("desktop CLI up, no socket yet", taken.Add(25*time.Second), []*claude.Session{olderCLI, outCLI, succCLI}, noSock223, out.Name)
+	refused("headless turn without a socket", taken.Add(5*time.Second), []*claude.Session{olderCLI, outCLI, succCLI}, noSock223)
+	check("headless turn ended, desktop CLI not up", taken.Add(20*time.Second), []*claude.Session{olderCLI, outCLI}, sock, succ.HostSession)
+	refused("desktop CLI up, no socket yet", taken.Add(25*time.Second), []*claude.Session{olderCLI, outCLI, succCLI}, noSock223)
 	check("desktop CLI takes messages", taken.Add(30*time.Second), []*claude.Session{olderCLI, outCLI, succCLI}, sock, succ.Name)
 
 	// The outgoing holder gone too: the successor's desktop id, which the
