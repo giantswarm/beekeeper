@@ -12,13 +12,14 @@ import (
 func (a *app) agentArchivableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "archivable <local_ desktop id>...",
-		Short: "Confirm that desktop sessions are finished workers beekeeper started, which a steward may archive",
+		Short: "Confirm that desktop sessions are finished workers beekeeper started, which the guide's session archives on the person's yes",
 		Long: `Confirms, for each desktop session named by its local_ id, that it is a
 finished worker beekeeper started: one of beekeeper's starts, off the
 roster, holding or having held no role a relay did not relieve, its desktop
 record unarchived and its CLI in no turn (the calling session's own turn
-aside). Those are the sessions agents.archiveAgreement covers, and a steward
-asked to archive runs this first and archives only what it confirms.
+aside). Those are the sessions the doctor's archive decision lists, and the
+guide's session runs this first on the person's yes and archives only what
+it confirms.
 
 A session the person started is never confirmed. Exits 3 when any named
 session is not confirmed, with why.`,
@@ -53,7 +54,7 @@ session is not confirmed, with why.`,
 
 // archivableHost is the name of the finished worker whose desktop session
 // host is, and why it is not archivable, "" when it is. The turn of self,
-// the steward asking, does not count.
+// the session asking, does not count.
 func (a *app) archivableHost(st *state.State, host string, self state.Party) (name, why string) {
 	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.HostSession == host })
 	if i < 0 {

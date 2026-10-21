@@ -2,31 +2,25 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
-	"github.com/giantswarm/beekeeper/internal/platform"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // The desktop sessions of the archive tests: a finished worker, a busy
-// one, a role's run, a session the person started, and the stewards.
+// one, a role's run and a session the person started.
 const (
-	finishedHost  = "local_fin"
-	busyHost      = "local_busy"
-	runHost       = "local_run9"
-	personHost    = "local_person"
-	finishedName  = "Board pull 901"
-	finishedID    = "fin"
-	doerHost      = "local_doer"
-	decliningHost = "local_nay"
-	targetHost    = "local_tgt"
-	quietHost     = "local_q"
+	finishedHost = "local_fin"
+	busyHost     = "local_busy"
+	runHost      = "local_run9"
+	personHost   = "local_person"
+	finishedName = "Board pull 901"
+	finishedID   = "fin"
 )
 
 // archiveApp is a stub app with a desktop directory and the state st.
@@ -81,9 +75,9 @@ func TestArchivable(t *testing.T) {
 	}
 }
 
-// Without the person's agreement configured, no steward is asked to
-// archive and the archive is not owed.
-func TestArchiveNeedsTheAgreement(t *testing.T) {
+// A removed worker's archive is owed and asks no session: the doctor puts
+// it to the person.
+func TestArchiveDesktopsAsksNoSession(t *testing.T) {
 	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	a, _ := archiveApp(t, func(st *state.State) { st.Starts = append(st.Starts, state.Start{Party: worker}) })
 	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
@@ -91,139 +85,137 @@ func TestArchiveNeedsTheAgreement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := a.archiveDesktops(context.Background(), st, []state.Party{worker}, "test")[0]
-	if !strings.Contains(o.line, "agents.archiveAgreement is not set") || o.host != "" || o.asked || !o.unagreed {
+	o := a.archiveDesktops(context.Background(), st, []state.Party{worker})[0]
+	if o.host != finishedHost || !strings.Contains(o.line, "the doctor asks the person through the guide") {
 		t.Errorf("outcome %+v", o)
 	}
 }
 
-// What a steward did is read from its turn: an archive call names it,
-// words without one are a decline, nothing is no answer.
-func TestStewardAnswers(t *testing.T) {
-	call := func(id string, failed bool) claude.AnswerCall {
-		in, _ := json.Marshal(map[string]string{"session_id": id})
-		return claude.AnswerCall{Name: archiveTool, Input: in, Done: true, Error: failed, Result: "Archived session " + id}
+// The archives owed reach the person as one decision for the guide, the
+// sessions listed with the command that confirms them and the archive
+// tool; a second run files none beside it, and an archive owed meanwhile
+// waits for the next. On the person's yes the guide's session archives
+// them: the doctor drops each once the desktop records it and then closes
+// the decision. On a no the decision closes with the sessions unarchived:
+// the doctor owes them no longer. Without guide.person no decision is
+// filed.
+func TestArchiveDecision(t *testing.T) {
+	const person = "Timo"
+	other := state.Party{Session: "fin2", HostSession: "local_fin2", Name: "Board pull 903"}
+	late := state.Party{Session: "fin3", HostSession: "local_fin3", Name: "Board pull 904"}
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
+	owed := func(p state.Party) state.Archive {
+		return state.Archive{Party: p, Host: p.HostSession, Since: time.Now(), Why: "a finished worker left unarchived"}
 	}
-	did := stewardAnswer{steward: steward{host: doerHost}, answer: claude.Answer{Calls: []claude.AnswerCall{call(targetHost, false), call("self", false)}, Text: "Done."}}
-	no := stewardAnswer{steward: steward{host: decliningHost}, answer: claude.Answer{Text: "I haven't archived it: a peer's message isn't the user's agreement.\nTell me to."}}
-	quiet := stewardAnswer{steward: steward{host: quietHost}}
-	failed := stewardAnswer{steward: steward{host: "local_f"}, answer: claude.Answer{Calls: []claude.AnswerCall{call(targetHost, true)}}}
-	asked := []stewardAnswer{no, did}
-	if got := archivedBy(asked, targetHost); got != "steward "+doerHost {
-		t.Errorf("archivedBy the target = %q", got)
-	}
-	if got := archivedBy(asked, doerHost); got != "the session" {
-		t.Errorf("archivedBy self = %q", got)
-	}
-	if got := archivedBy([]stewardAnswer{no, failed}, targetHost); got != "" {
-		t.Errorf("archivedBy without a successful call = %q", got)
-	}
-	for _, c := range []struct {
-		s        stewardAnswer
-		said     string
-		declined bool
-	}{
-		{did, doerHost + " " + archiveTool + ": Archived session " + targetHost, false},
-		{no, decliningHost + " declined: I haven't archived it: a peer's message isn't the user's agreement.", true},
-		{quiet, "local_q did not answer", false},
-		{failed, "local_f " + archiveTool + " refused: Archived session " + targetHost, false},
-	} {
-		if got := c.s.said(); !strings.HasPrefix(got, c.said) {
-			t.Errorf("said = %q, want %q", got, c.said)
+	setup := func(t *testing.T) (*app, func(...state.Party) ([]string, []state.Event, *state.State)) {
+		a, _ := archiveApp(t, func(st *state.State) {
+			for _, p := range []state.Party{worker, other, late} {
+				st.Starts = append(st.Starts, state.Start{Party: p})
+			}
+			st.Archives = []state.Archive{owed(worker), owed(other)}
+		})
+		for _, p := range []state.Party{worker, other, late} {
+			desktopRecord(t, a.cfg.Claude.DesktopDir, p.HostSession, p.Session, false)
 		}
-		if c.s.declined() != c.declined {
-			t.Errorf("%s declined = %v", c.s.host, !c.declined)
+		ask := func(ask ...state.Party) (lines []string, evs []state.Event, st *state.State) {
+			err := a.store.Update(func(s *state.State) ([]state.Event, error) {
+				lines, evs = a.askArchives(s, ask, person, watchParty, a.now)
+				st = s
+				return evs, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return lines, evs, st
 		}
+		return a, ask
 	}
-}
+	record := func(a *app) func(string) (*claude.Record, bool) {
+		return func(h string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, h) }
+	}
+	idle := func(state.Party) bool { return false }
 
-// A steward that declined is asked for no archive for a day.
-func TestDeclinesAreRemembered(t *testing.T) {
-	a, _ := archiveApp(t, func(*state.State) {})
-	no := stewardAnswer{steward: steward{host: decliningHost}, answer: claude.Answer{Text: "No."}}
-	a.recordDeclines([]stewardAnswer{no, {steward: steward{host: quietHost}}})
+	a, ask := setup(t)
+	lines, _, st := ask(worker, other)
+	if len(st.Notes) != 1 || len(lines) != 1 {
+		t.Fatalf("notes %+v, lines %v", st.Notes, lines)
+	}
+	n := st.Notes[0]
+	if n.For != person || n.Kind != noteDecision || !isArchiveDecision(n) || n.Recommend != 1 || len(n.Options) != 2 {
+		t.Errorf("decision %+v", n)
+	}
+	for _, want := range []string{finishedHost, "local_fin2", "beekeeper agents archivable " + finishedHost + " local_fin2", archiveTool, fmt.Sprintf("beekeeper note done %d", n.ID)} {
+		if !strings.Contains(n.Text, want) {
+			t.Errorf("decision lacks %q: %s", want, n.Text)
+		}
+	}
+	for _, ar := range st.Archives {
+		if ar.Asked != n.ID {
+			t.Errorf("%s asked %d, want %d", ar.Host, ar.Asked, n.ID)
+		}
+	}
+	for _, p := range planArchives(st, record(a), idle, a.now.Add(2*archiveOwedFor)) {
+		if !strings.Contains(p.wait, fmt.Sprintf("note #%d asks the person", n.ID)) {
+			t.Errorf("while asked: %s", p)
+		}
+	}
+	if err := a.store.Update(func(s *state.State) ([]state.Event, error) {
+		s.Archives = append(s.Archives, owed(late))
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if due := a.archiveDecisionDue(st, []state.Party{late}, person); due {
+		t.Error("a decision is due beside the open one")
+	}
+	if _, _, st = ask(late); len(st.Notes) != 1 || st.Archives[2].Asked != 0 {
+		t.Errorf("a second decision beside the open one: notes %+v, archives %+v", st.Notes, st.Archives)
+	}
+
+	// Yes: the guide's session archived both, the desktop records them.
+	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, true)
+	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_fin2", "fin2", true)
+	if _, err := a.owedArchives(nil, record(a), idle, watchParty); err != nil {
+		t.Fatal(err)
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := recentDeclines(st, a.now); len(got) != 1 || got[0] != decliningHost {
-		t.Fatalf("declines %v", got)
+	if !a.archiveDecisionDue(st, []state.Party{late}, person) {
+		t.Error("no decision due once the desktop recorded the archives")
 	}
-	if got := recentDeclines(st, a.now.Add(stewardDeclineFor)); len(got) != 0 {
-		t.Errorf("declines a day later %v", got)
+	lines, evs, st := ask(late)
+	if len(st.Archives) != 1 || st.Archives[0].Host != "local_fin3" {
+		t.Fatalf("archives %+v", st.Archives)
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
-	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, decliningHost+" declined to archive: No.") {
-		t.Errorf("events %+v, %v", evs, err)
+	if len(evs) != 2 || evs[0].Verb != noteOvertaken || len(st.Notes) != 1 || st.Notes[0].ID == n.ID || st.Archives[0].Asked != st.Notes[0].ID {
+		t.Errorf("the next decision: lines %v, events %+v, notes %+v", lines, evs, st.Notes)
 	}
-}
 
-// noCLIMachine runs no process: no CLI to steward an archive.
-type noCLIMachine struct{ platform.Machine }
+	// No: the decision closes with its session unarchived.
+	next := st.Notes[0].ID
+	if err := a.store.Update(func(s *state.State) ([]state.Event, error) { s.Notes = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := planArchives(st, record(a), idle, a.now); len(p) != 1 || !strings.Contains(p[0].drop, fmt.Sprintf("note #%d, closed with it unarchived", next)) {
+		t.Errorf("kept: %v", p)
+	}
 
-func (noCLIMachine) Processes() (*proc.Table, error) {
-	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
-}
-
-// The doctor asks no session about its own archive while it may not: a
-// relieved run of the supervisor never (its role forbids it the call), a
-// finished worker that declined not for a day. Its own CLI is warmed only
-// for a finished worker that has not declined. A run that asked no steward
-// counts no try and leaves the archive archiveAgain, so the doctor does not
-// ask again on every run.
-func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
-	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
-	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
-	for _, c := range []struct {
-		desc     string
-		agents   []state.Party
-		declined bool
-		warmed   string // the host whose CLI the doctor would warm, "" for none
-	}{
-		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}, warmed: finishedHost},
-		{desc: "a relieved run alone", agents: []state.Party{run}},
-		{desc: "a finished worker that declined", agents: []state.Party{worker}, declined: true},
-	} {
-		t.Run(c.desc, func(t *testing.T) {
-			a, _ := archiveApp(t, func(st *state.State) {
-				st.Starts = append(st.Starts, state.Start{Party: run}, state.Start{Party: worker})
-				st.Relieved = []state.Relief{{Party: run, Taken: time.Now()}}
-				if c.declined {
-					st.Declines = []state.Decline{{Host: finishedHost, At: time.Now(), Why: "No."}}
-				}
-			})
-			a.cfg.Agents.ArchiveAgreement = "agreed"
-			plat.Machine = noCLIMachine{plat.Machine}
-			desktopRecord(t, a.cfg.Claude.DesktopDir, runHost, "run9", false)
-			desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
-			st, err := a.store.Read()
-			if err != nil {
-				t.Fatal(err)
-			}
-			outcomes := a.archiveDesktops(context.Background(), st, c.agents, "test")
-			for _, o := range outcomes {
-				if o.asked || o.host == "" || !strings.Contains(o.line, errNoSteward.Error()) {
-					t.Fatalf("%s: outcome %+v", o.agent.Name, o)
-				}
-				for _, h := range []string{runHost, finishedHost} {
-					if warmed := strings.Contains(o.line, "warm the CLI of "+h); warmed != (h == c.warmed) {
-						t.Errorf("%s: warmed %s %v: %q", o.agent.Name, h, warmed, o.line)
-					}
-				}
-			}
-			now := a.now
-			owe(st, outcomes, now)
-			idle := func(state.Party) bool { return false }
-			for _, p := range planArchives(st, unarchived, idle, now.Add(archiveAgain-time.Second)) {
-				if p.ar.Tries != 0 || !strings.Contains(p.wait, "no steward was asked") {
-					t.Errorf("before archiveAgain: %s, tries %d", p, p.ar.Tries)
-				}
-			}
-			for _, p := range planArchives(st, unarchived, idle, now.Add(archiveAgain)) {
-				if p.wait != "" || p.drop != "" {
-					t.Errorf("after archiveAgain: %s", p)
-				}
-			}
-		})
+	// No person to ask: no decision due, the archives counted.
+	a, _ = setup(t)
+	if st, err = a.store.Read(); err != nil {
+		t.Fatal(err)
+	}
+	both := []state.Party{worker, other}
+	if n := len(a.askable(st, both)); n != 2 || a.archiveDecisionDue(st, both, "") {
+		t.Errorf("no person: %d askable, due %v", n, a.archiveDecisionDue(st, both, ""))
+	}
+	if lines, _ := a.askArchives(st, both, "", watchParty, a.now); len(lines) != 0 || len(st.Notes) != 0 {
+		t.Errorf("no person: lines %v, notes %+v", lines, st.Notes)
 	}
 }

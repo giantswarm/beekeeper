@@ -51,20 +51,6 @@ func superseded(st *state.State, p state.Party, now time.Time) (by string, since
 	return fmt.Sprintf("a later start of %q", name), time.Time{}
 }
 
-// archiveWarmGrace is how long the watch leaves running a superseded
-// session's CLI the doctor warmed to archive itself: the show, the CLI's
-// start and the steward's turn (archiveWait) fit in it.
-const archiveWarmGrace = 5 * time.Minute
-
-// archiveWarmed says whether s's CLI was warmed within archiveWarmGrace of
-// now to archive its own desktop session, which an archive owed records.
-func archiveWarmed(st *state.State, s *claude.Session, now time.Time) bool {
-	return slices.ContainsFunc(st.Archives, func(ar state.Archive) bool {
-		return (ar.Session == s.ID || s.HostID != "" && ar.Host == s.HostID) &&
-			!ar.Warmed.IsZero() && now.Sub(ar.Warmed) < archiveWarmGrace
-	})
-}
-
 // revivedRun is a running CLI of a superseded session: by carries its name
 // now.
 type revivedRun struct {
@@ -74,9 +60,8 @@ type revivedRun struct {
 
 // revivedRuns are the running CLIs of superseded sessions to stop at now: a
 // hand-over's predecessor at once, a relieved run once reliefGrace has
-// passed since its relief and its CLI runs no tool command. warmed are those
-// left running as the doctor warmed them to archive themselves.
-func revivedRuns(st *state.State, sessions []*claude.Session, now time.Time) (out []revivedRun, warmed []*claude.Session) {
+// passed since its relief and its CLI runs no tool command.
+func revivedRuns(st *state.State, sessions []*claude.Session, now time.Time) (out []revivedRun) {
 	for _, s := range sessions {
 		if s.ID == "" || s.Harness != "" {
 			continue
@@ -87,13 +72,10 @@ func revivedRuns(st *state.State, sessions []*claude.Session, now time.Time) (ou
 			continue
 		case !since.IsZero() && (now.Sub(since) < reliefGrace || len(s.Commands) > 0):
 			continue
-		case archiveWarmed(st, s, now):
-			warmed = append(warmed, s)
-			continue
 		}
 		out = append(out, revivedRun{session: s, by: by})
 	}
-	return out, warmed
+	return out
 }
 
 // endRevived stops a revived CLI; a variable for tests.
@@ -101,19 +83,15 @@ var endRevived = endSession
 
 // stopRevived stops each running CLI of a superseded session and its
 // desktop's reopen and turn units, owes the archive of its desktop session
-// and says REVIVED once per CLI. A CLI the doctor warmed to archive itself
-// runs on for archiveWarmGrace. It returns the sessions that answer to their
-// name: the running ones but the stopped and the warmed.
+// and says REVIVED once per CLI. It returns the sessions that answer to
+// their name: the running ones but the stopped.
 func (w *watcher) stopRevived(ctx context.Context, sessions []*claude.Session) []*claude.Session {
 	st, err := w.store.Peek()
 	if err != nil {
 		return sessions
 	}
-	revived, warmed := revivedRuns(st, sessions, w.now)
+	revived := revivedRuns(st, sessions, w.now)
 	drop := map[*claude.Session]bool{}
-	for _, s := range warmed {
-		drop[s] = true
-	}
 	for _, r := range revived {
 		s := r.session
 		key := fmt.Sprintf("revived %s %d", s.ID, s.PID)

@@ -732,9 +732,9 @@ type Start struct {
 	rest rest
 }
 
-// Archive is the desktop session of an agent that left the roster while
-// its archive could not be done (its CLI ran a turn, no steward recorded
-// it): the doctor asks for it again until the desktop records it.
+// Archive is the desktop session of an agent that left the roster
+// unarchived: the doctor asks the person to archive it, through the guide,
+// until the desktop records it or their decision keeps it.
 type Archive struct {
 	// Party is the agent that left the roster.
 	Party
@@ -743,24 +743,9 @@ type Archive struct {
 	Since time.Time `json:"since"`
 	// Why says why it stayed the last time.
 	Why string `json:"why"`
-	// Tries counts the stewards' turns asked for it, Tried the last.
-	Tries int       `json:"tries,omitempty"`
-	Tried time.Time `json:"tried,omitzero"`
-	// Looked is the last doctor's run that found no steward to ask.
-	Looked time.Time `json:"looked,omitzero"`
-	// Warmed is when the desktop was last made to warm the session's own
-	// CLI to archive itself: the watch leaves that CLI running a while.
-	Warmed time.Time `json:"warmed,omitzero"`
-
-	rest rest
-}
-
-// Decline is a steward's answer to an archive request that archived
-// nothing: its desktop session, when, and the first line of its reply.
-type Decline struct {
-	Host string    `json:"host"`
-	At   time.Time `json:"at"`
-	Why  string    `json:"why"`
+	// Asked is the note of the doctor's decision that asks the person to
+	// archive it; 0 while none has.
+	Asked int `json:"asked,omitempty"`
 
 	rest rest
 }
@@ -934,9 +919,6 @@ type State struct {
 	// that reported done and the relieved role runs no person typed in, once
 	// a finished session's own warmed CLI archived it.
 	DoneSeeded bool `json:"doneSeeded,omitempty"`
-	// Declines are the stewards that declined an archive request, which
-	// the doctor asks for none for a while.
-	Declines []Decline `json:"declines,omitempty"`
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`
@@ -1498,6 +1480,8 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	// Releases before the refusal recorded their stale saves here instead.
 	delete(st.rest, "staleWriters")
+	// Releases whose doctor asked stewards to archive kept their declines here.
+	delete(st.rest, "declines")
 	return nil
 }
 

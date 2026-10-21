@@ -22,14 +22,14 @@ func TestSayChoresOnce(t *testing.T) {
 	}
 }
 
-// Finished workers waiting on agents.archiveAgreement are one summary line
+// Finished workers waiting for guide.person to ask are one summary line
 // for the whole watch, ended once none waits.
-func TestSayChoresUnagreedSummary(t *testing.T) {
+func TestSayChoresUnaskedSummary(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	for range 3 {
-		w.sayChores(doctorReport{unagreed: 244})
+		w.sayChores(doctorReport{unasked: 244})
 	}
-	if n := strings.Count(out.String(), "agents.archiveAgreement"); n != 1 {
+	if n := strings.Count(out.String(), "set guide.person"); n != 1 {
 		t.Errorf("summary said %d times, want once:\n%s", n, out)
 	}
 	if !strings.Contains(out.String(), "244 finished workers") {

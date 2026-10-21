@@ -240,9 +240,9 @@ type doctorReport struct {
 	chores []string
 	faults []faultFinding
 	notes  []string
-	// unagreed counts the finished workers whose archive waits on
-	// agents.archiveAgreement, said once for all, not per agent.
-	unagreed int
+	// unasked counts the finished workers whose archive waits for
+	// guide.person to ask, said once for all, not per agent.
+	unasked int
 	// stale are the running beekeeper processes of a binary an install
 	// replaced, the watches apart (WATCH STALE names them): their saves of
 	// the state are refused.
@@ -352,31 +352,39 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			archive = append(archive, c.agent.Party)
 		}
 	}
+	if len(archive) > 0 {
+		outcomes := a.archiveDesktops(ctx, st, archive)
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			lines := owe(st, outcomes, a.now)
+			evs := make([]state.Event, len(lines))
+			for i, l := range lines {
+				rep.chores = append(rep.chores, fmt.Sprintf("%q: %s", archive[i].Name, l))
+				evs[i] = event(r.by, "agents.archive", "%s: %s", archive[i].Name, l)
+			}
+			return evs, nil
+		})
+	}
 	owed, err := a.owedArchives(sessions, record, busy, r.by)
 	if err != nil {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, owed.lines...)
-	for _, p := range owed.retry {
-		if !slices.ContainsFunc(archive, p.Is) {
-			archive = append(archive, p)
-		}
+	if st, err = a.store.Read(); err != nil {
+		return rep, err
 	}
-	if len(archive) > 0 {
-		outcomes := a.archiveDesktops(ctx, st, archive, "beekeeper doctor")
-		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-			lines := owe(st, outcomes, a.now)
-			var evs []state.Event
-			for i, l := range lines {
-				if outcomes[i].unagreed {
-					rep.unagreed++
-					continue
-				}
-				rep.chores = append(rep.chores, fmt.Sprintf("%q: %s", archive[i].Name, l))
-				evs = append(evs, event(r.by, "agents.archive", "%s: %s", archive[i].Name, l))
-			}
+	person := a.cfg.Guide.Person
+	if person == "" {
+		rep.unasked = len(a.askable(st, owed.ask))
+	}
+	if a.archiveDecisionDue(st, owed.ask, person) {
+		err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			lines, evs := a.askArchives(st, owed.ask, person, r.by, a.now)
+			rep.notes = append(rep.notes, lines...)
 			return evs, nil
 		})
+		if err != nil {
+			return rep, err
+		}
 	}
 	for _, c := range chores {
 		if c.kind != choreRetitle || (r.retry != nil && !r.retry(c.host)) {
@@ -419,14 +427,15 @@ func resetOwnUnits(ctx context.Context, dryRun bool) string {
 }
 
 // owedRun is what the doctor's run found of the archives owed: the agents
-// whose archive it asks for again, and a line for each it owes no longer.
+// whose archive it may put to the person, and a line for each it owes no
+// longer.
 type owedRun struct {
-	retry []state.Party
+	ask   []state.Party
 	lines []string
 }
 
 // owedArchives seeds the archives owed once, drops those owed no longer and
-// returns the agents whose archive is due again. It writes the state only
+// returns the agents whose archive the person may be asked for. It writes the state only
 // when it changes.
 func (a *app) owedArchives(sessions []*claude.Session, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party) (owedRun, error) {
 	var run owedRun
@@ -442,8 +451,8 @@ func (a *app) owedArchives(sessions []*claude.Session, record func(host string) 
 				line := fmt.Sprintf("its desktop session %s is owed no archive any more: %s", o.ar.Host, o.drop)
 				run.lines = append(run.lines, fmt.Sprintf("%q: %s", o.ar.Name, line))
 				evs = append(evs, event(by, "agents.archive", "%s: %s", o.ar.Name, line))
-			case o.wait == "" && len(run.retry) < archiveBatch:
-				run.retry = append(run.retry, o.ar.Party)
+			case o.wait == "":
+				run.ask = append(run.ask, o.ar.Party)
 			}
 		}
 		return evs
@@ -498,25 +507,20 @@ line:
   it left behind (a background wait loop) stopped first, once it was relieved of the
   supervisor's or the guide's role, or once it stayed idle
   agents.staleAfter (24h) with no CLI running; the desktop sessions
-  beekeeper started for the finished and the stale ones are archived in
-  one steward's turn (the desktop's Archived list brings one back); a
-  stale entry kept on purpose (agents keep, or an open timer that wakes it
-  by name) stays, and so does its desktop session;
-- asks again for an archive that stayed (its CLI ran a turn, no steward
-  recorded it) on its later runs while the CLI runs no turn, until the
-  desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
-  so are archived the session an agents handover ended and the run of the
-  supervisor or the guide a relay relieved, which frees its desktop CLI;
-  the steward is an idle desktop CLI of another session; with none
-  running, a finished worker's own desktop CLI archives it, warmed by
-  showing the session in the desktop for a moment once the person's
-  typing pauses, never while a headless turn of the session runs (claude
-  -p --resume <id>, a wake's): that turn is its CLI; the watch leaves such
-  a warmed CLI of a handed-over session running 5 minutes for
-  its archive call instead of stopping it as REVIVED; a relieved run of the
-  supervisor or the guide is never asked about itself and waits for
-  another steward; a steward that declined is asked for no archive for
-  24h; a run that asks no steward counts no turn and waits 10 minutes;
+  beekeeper started for the finished and the stale ones are owed their
+  archive; a stale entry kept on purpose (agents keep, or an open timer
+  that wakes it by name) stays, and so does its desktop session;
+- asks the person, as one decision for the guide (a note for
+  guide.person, at most 20 sessions), to archive the desktop sessions it
+  owes once their CLI runs no turn: the finished workers', the session an
+  agents handover ended and the run of the supervisor or the guide a relay
+  relieved, which frees its desktop CLI; on the person's yes the guide's
+  session confirms them with agents archivable and archives each itself
+  (the desktop's Archived list brings one back); the doctor owes one no
+  longer once the desktop records it archived, keeps one the decision
+  closed without archiving, closes the decision once it owes none of its
+  archives, and asks no other session: a peer's message is not the
+  person's consent; without guide.person an archive owed 24h is given up;
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
 - reopens a worker whose session the desktop never imported (no row in the
@@ -609,8 +613,8 @@ faults but remedying none.`,
 				return err
 			}
 			lines := append(slices.Clone(rep.chores), rep.notes...)
-			if rep.unagreed > 0 {
-				lines = append(lines, unagreedLine(rep.unagreed))
+			if rep.unasked > 0 {
+				lines = append(lines, unaskedLine(rep.unasked))
 			}
 			for _, f := range rep.faults {
 				lines = append(lines, f.String())
@@ -709,8 +713,8 @@ func (w *watcher) doctor(ctx context.Context) {
 }
 
 // sayChores says the doctor's chore lines, each once per watch (a stay that
-// repeats is not said again), its notes, and the finished workers waiting on
-// agents.archiveAgreement as one summary while any do.
+// repeats is not said again), its notes, and the finished workers waiting
+// for guide.person to ask as one summary while any do.
 func (w *watcher) sayChores(rep doctorReport) {
 	if w.doctored == nil {
 		w.doctored = map[string]bool{}
@@ -724,11 +728,11 @@ func (w *watcher) sayChores(rep doctorReport) {
 	for _, l := range rep.notes {
 		w.emitNow("doctor", "DOCTOR %s", l)
 	}
-	w.check("doctor-unagreed", rep.unagreed > 0, "DOCTOR %s", unagreedLine(rep.unagreed))
+	w.check("doctor-unasked", rep.unasked > 0, "DOCTOR %s", unaskedLine(rep.unasked))
 }
 
-// unagreedLine says how many finished workers' desktop sessions stay
-// unarchived for want of the person's agreement.
-func unagreedLine(n int) string {
-	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set agents.archiveAgreement to the person's agreement for a steward to archive them", n)
+// unaskedLine says how many finished workers' desktop sessions stay
+// unarchived for want of a person to ask.
+func unaskedLine(n int) string {
+	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set guide.person for the doctor to ask them whether to archive them", n)
 }

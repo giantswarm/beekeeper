@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 - `beekeeper serve`'s tools follow [giantswarm#38592](https://github.com/giantswarm/giantswarm/issues/38592): each description leads with a summary line of at most 120 runes, built with mcp-toolkit's `tooldesc`, and every tool states all four annotations. Before, every tool, the 8 reads included, reported mcp-go's defaults: destructive, not idempotent, open world. Now the reads are read-only and idempotent; releasing a lease, setting or lifting a hold, taking a merge out of its lane, answering or withdrawing a note, leaving the roster and acking messages are destructive; the tools that reach Slack or muster (`note_add`, `note_answer`, `note_done`, `send_message`, `converse`) are open world. `agents_register`, `agents_leave` and `converse` declare `agent` and `host` required, and `note_add` `for`, as they always refused without them. The hold tools say a central hold stops merges in the central lanes; `note_add` offers decisions only. `docs/tools.md` lists every tool as a model reads it (`make tools-doc`), kept current by a test, and a test holds the descriptions to the budget.
 - `doctor.worktreeRoots` defaults to `~/.local/state/klaus-lab/worktrees`, no longer `~/projects/worktrees`.
 - The worker rules make the settings, installs and consents of the organisation's own Apps (`beekeeper app`) the worker's `beekeeper browse` job, never the person's; a consent that acts as the person towards another's App still needs their word. The `github` skill records an own App's grant first (`beekeeper app allow`) and reports a refusal as a barrier ([#1455](https://github.com/giantswarm/beekeeper/issues/1455)).
@@ -198,6 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - The shipped `merge` skill's gated merge line is `devctl pr merge <owner/repo> <n> --update-branch` (`--rebase --update-branch` on a rebase line): from devctl 8.140.0 a head behind its base is exit 3 without it, strict protection or not. An exit 3 that still says behind on a squash line (GitHub refused the update) gets the base merged into the branch and pushed, then the same merge once more; a rebase line keeps its fresh PR from the base. A test holds every shipped skill's gated merge line to `--update-branch` ([#1306](https://github.com/giantswarm/beekeeper/issues/1306)).
 
 ## [0.148.0-rc.9] - 2026-10-17
@@ -298,6 +301,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `beekeeper answer <owner/repo#n> [--note <id>] [--choice <n>] [--via cli|slack] "<words>"` records a person's words verbatim on the GitHub thread they concern, however they came: an agent-written comment naming who answered, how it came and the note it answers, `answer.recorded` in `beekeeper log` with the thread, the comment's URL and the words, the named note closed and the asking session told (the note's filer, else the sessions serving the thread). A public thread gets nothing: the comment goes to the first private plan pull request naming it or an epic above it, then to the nearest epic above it in a private repository; with neither the answer is refused, naming what to add. `note answer` is this verb on the note's first `--ref`; `note.answered` is no longer written, and the hand-over's answers and `note add`'s re-ask warning read `answer.recorded` by thread ([#942](https://github.com/giantswarm/beekeeper/issues/942)).
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - A decision (`note add --for` the person) is refused without `--ref`: every decision names the thread its answer is recorded on ([#942](https://github.com/giantswarm/beekeeper/issues/942)).
 
@@ -549,11 +554,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `beekeeper free` has a `go-build` section of its own: a go-build dir is orphaned once it is unchanged for an hour, no go command of the user runs that began before its last change, and no process holds anything inside; it was a throwaway temp dir untouched for `--stale-hours`. A session's scratch (`session-dirs`) is dead once its CLI is gone, also a newer CLI of its desktop session, no roster agent with its task and no role holder is the session, and the git worktree its transcript names is gone; a dead session's dir under 1 MiB goes too, counted without a line of its own. A process's open files and executable keep a dir as its working directory did, and each section of dirs ends with how many it frees and their size ([#860](https://github.com/giantswarm/beekeeper/issues/860)).
 
 ## [0.135.4-rc.1] - 2026-10-13
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `beekeeper agents register --help` names the refusal of a nested claude, and `beekeeper sessions serve --help` and the README name the roster name the serve record stores ([#1047](https://github.com/giantswarm/beekeeper/issues/1047)).
 
@@ -614,6 +623,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - A started worker's first message carries only the core rules every worker needs (the goal and the report through `agents idle --done`, addressing the supervisor, problems found, never asking the person directly, secrets, git, no polling, nothing left running, the relay at `agents.relayAt`) and names the four topic skills: 2,695 bytes, 975 tokens by the model's own count, from 10,687 bytes and 3,685 tokens (3,599 on v0.120.0). The public-repository and GitHub-tooling paragraphs, desk policy rather than beekeeper process, leave the shipped rules for a desk's own project rules. `agents start` and `agents handover` put a topic skill into the first message themselves when no enabled beekeeper plugin installed serves it as the binary embeds it (none installed, or an out-of-date plugin), and say so with the command that updates the plugin, so no worker loses a rule to a stale plugin. The role skills `supervise`, `guide` and `register-agent` keep an always-loaded core and move the rest, unchanged, into `references/` files they name with the moment to read each ([#881](https://github.com/giantswarm/beekeeper/issues/881)).
 
 ## [0.134.0] - 2026-10-12
@@ -637,6 +648,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.130.0] - 2026-10-12
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `beekeeper secret github-app <installation> --code <code>` lands a GitHub App created on GitHub's manifest page in the installation's SOPS Secret without a person or a session reading a credential: beekeeper converts the one-time code (or the redirect URL carrying it) as the person's `gh` login, writes `private-key` and `client-secret` (and `webhook-secret` when the App has one) under `stringData` of the Secret `apps.secrets` names for the installation in one sops write, and prints the App's id and client id alone. Every check runs before the code is spent; a spent or expired code is refused in one line ([#979](https://github.com/giantswarm/beekeeper/issues/979)).
 
@@ -686,6 +699,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - The shipped `worker-rules` skill says never to `git stash` in a worktree: the stash list is the clone's, shared by every worktree of it, so a pop applies another session's entry or drops it; work that has to wait is committed to the worker's own branch or a throwaway branch, or left in place ([#761](https://github.com/giantswarm/beekeeper/issues/761)).
 
 ### Fixed
@@ -720,6 +735,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `beekeeper app allow` records only an App the organisation declares: it reads the App's manifest from the repository the config's `apps.repo` names, at `apps.manifest` (`{name}` for the App's name), on its default branch, refuses an App no manifest declares under its name, and takes the record's callback hosts from the manifest's `callback_urls` (`--callback` is gone); the record, `app list`, the hook's allow and the browse report name the manifest and the commit it was read at ([#655](https://github.com/giantswarm/beekeeper/issues/655)).
 
 ## [0.123.0-rc.1] - 2026-10-10
@@ -732,11 +749,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `beekeeper capacity`'s swap guard weighs disk swap's growth with memory pressure and MemAvailable instead of refusing on the growth while MemAvailable falls: a growth over `capacity.swapGrowthMaxMiB` blocks a start under pressure (memory PSI, full avg60, over the new `capacity.swapPSIMax`, default 0, or MemAvailable under `capacity.availMinMiB`; either unknown counts as pressure) and is a warning in parentheses after the verdict without, the line naming the three figures (`room for 7 starts (disk swap growing +391 MiB/h over 256, without pressure: memory PSI 0% (max 0%), MemAvailable 43.0 GiB (floor 20 GiB))`); the headroom line and `--json` carry the pressure. The rate is measured over the new `watch.swapWindow` (default 10m, at least 5m) instead of a fixed hour, for the watch's SWAP and OOMD IMMINENT checks too, so a single zswap writeback burst, which moves pages to disk without new swapping, leaves the figure within minutes rather than holding it for an hour ([#858](https://github.com/giantswarm/beekeeper/issues/858)).
 
 ## [0.122.0-rc.1] - 2026-10-10
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - The build slot bounds only a start that builds. `beekeeper capacity --builds` and `beekeeper agents start --builds` mark a task that builds, tests or lints (its commands take the slot under `beekeeper run`), and such a start is refused while no slot is free (`no start: no free build slot`). A start without the mark does not build (a filer, a dispatcher, a reviewer, a promoter proving a release read-only) and is judged on MemAvailable, disk swap's growth, the 1-minute load against the watch's HIGH LOAD limit (new in the headroom) and the kind labs alone: a busy slot is a note in parentheses after its verdict, never a `no start`, so the machine's one slot held by a worker's compile refuses no start that only reads; the watch's `CAPACITY LOW` weighs such a start. `agents start` judges its start the same way before anything is recorded and refuses one whose verdict has no room (exit 3, the guards named, no session created); `--force` starts it anyway and records the verdict overridden in the event log ([#878](https://github.com/giantswarm/beekeeper/issues/878), [#844](https://github.com/giantswarm/beekeeper/issues/844)).
 
@@ -798,6 +819,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `#<path>` on a `k8s://` source reaches into every shape a Secret's key commonly holds: a dotted key of its YAML or JSON mapping as before, a line of its dotenv lines (`KEY=value`, an `export` in front and matching quotes stripped, `#` comments and blank lines ignored), and, one level down, a value of the YAML mapping or dotenv lines a block scalar holds (`#config.yaml.oidc.clientID`; a key holding dots takes as many path segments as it needs). A path that reaches nothing fails in one line with the shape of what the key, or the node on the way, holds and nothing of its value: the format (a YAML or JSON mapping with its top-level keys, dotenv lines with their keys, a list of n items, a scalar, text, binary, nothing), its line count and byte length; a key named like a generated value is counted, not named. The caller picks the right path from the refusal instead of reading the value ([#799](https://github.com/giantswarm/beekeeper/issues/799)).
 
 ## [0.115.0-rc.3] - 2026-10-09
@@ -809,6 +832,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.115.0-rc.1] - 2026-10-09
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `secret reveal` answers a client id however random it looks: a leaf named `id`, `clientID` or `client_id` and an item of a `trustedPeers` or `peers` list are exempt from the entropy rule, since every authorize URL carries them; a key named like a secret on the path, the value scanner and a URL password still refuse, and a client id equal to a value under a secret-named key of the same file is refused ([#774](https://github.com/giantswarm/beekeeper/issues/774)).
 
@@ -828,11 +853,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - The merge gate names the command whose turn came: `promoting <owner/repo>` for `devctl release promote`, `merging <owner/repo>#<n>` for `devctl pr merge` (unchanged). A promotion devctl refuses (`not_built`, `nothing_to_promote`) logs no `merging` and its outcome line, printed after devctl returns, says `nothing promoted (<state>)`; a dispatched one says `promoted <owner/repo>: release <version> dispatched` ([#593](https://github.com/giantswarm/beekeeper/issues/593)).
 
 ## [0.113.0] - 2026-10-09
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - A rollout is read from a HelmRelease's `status.history`: `timer add --when "helmrelease-ready <context>/<namespace>/<name> <version>"` holds once the release is Ready and runs that chart version (the newest release of the history, or without one the attempted revision while Ready), and the merge gate's roll check takes the attempted revision of a Ready HelmRelease without a history. Current Flux leaves the applied revision empty, so a timer probing it never fired although the release had rolled. A conditional timer whose condition has not held for 24 h is one `TIMER STUCK` watch line (event `timer.stuck`), and `timer list -v` says since when ([#737](https://github.com/giantswarm/beekeeper/issues/737)).
 
@@ -846,6 +875,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.112.2] - 2026-10-09
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `beekeeper install` writes the standby unit as `beekeeper watch --standby`, and with `--notify` only when the new config key `watch.notify` is true (default false): a desk without desktop notifications runs install as it is. Re-running install is idempotent and safe after every update: besides what an earlier install recorded, it updates in place the hook entries that run this binary's hook command (an older matcher, settings a self-update left) and a unit that runs this binary, never adds an entry twice and touches no other setting, so a changed hook matcher (`Read|Grep`, `TaskStop`) reaches `~/.claude/settings.json`; a second run changes nothing. `install --dry-run` prints every step ([#622](https://github.com/giantswarm/beekeeper/issues/622)).
 
@@ -864,6 +895,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.112.1-rc.2] - 2026-10-09
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - The watch keeps one Alertmanager port-forward per installation from tick to tick and asks kubectl for the kubeconfig's contexts only once it changed: a tick is HTTP requests, no `kubectl` or `tsh kube credentials` run (kubectl keeps the Teleport credential until it expires). A forward that dropped is replaced by one new one at the next attempt, counted as today. An installation whose context is not in the kubeconfig is said at once (`context "<ctx>" is not in the kubeconfig`), never retried: 23 such installations ran 670 kubectl a tick. A PROCESS STORM line names the watch's own processes as `"beekeeper watch"`, and the snapshot lists the kept forwards as no session's wait. One tick over 28 installations was the machine's fork storm ([#710](https://github.com/giantswarm/beekeeper/issues/710)).
 
@@ -1195,6 +1228,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - The README's browser section says why a headless turn of a start keeps its own Claude in Chrome tools (`--chrome` in bypass) rather than going through `beekeeper browse`: the bypass is that turn's scope, so narrowing its Chrome tools would narrow nothing; a desktop turn browses through `browse`, a headless turn with its own tools ([README](README.md#agents-started-without-a-click)).
 
 ## [0.99.3-rc.1] - 2026-10-06
@@ -1260,6 +1295,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - The agent sandbox's GitHub token never enters the sandbox. `beekeeper sandbox broker` is the sandbox's only egress proxy (`sandbox.proxyPort`, 3190, on `127.0.0.1` for its own user only): the policy points Claude Code's `httpProxyPort` and `socksProxyPort` at it, it holds every connection to GitHub and `sandbox.domains`, refuses the rest and never dials a loopback or link-local address by name, and terminates TLS for `github.com`, `api.github.com` and `uploads.github.com` with a name-constrained CA made in its memory to set the `Authorization` header itself, request bodies untouched. A GitHub endpoint that echoes its input no longer returns the token. The masked token files, their masks, `tlsTerminate`, `sandbox.mask` and `beekeeper sandbox git-credential` are gone; the broker removes the old files under `$XDG_RUNTIME_DIR/beekeeper/github` at start ([README](README.md#the-agent-sandbox)).
 - The agent sandbox denies the runtime directory (`$XDG_RUNTIME_DIR`) for reading, apart from the egress proxy's CA and gh's login.
 
@@ -1286,6 +1323,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `beekeeper agents start` runs a worker in Claude Desktop from its first turn: a seed turn without tools creates the session, the desktop imports it under its name at once, and the task runs as a desktop turn of the session's desktop CLI, or of one a steward's `send_message` starts, after `makeRoom` kept the desktop under its cap. `agents wake` of a session with a desktop row and no CLI takes the same route. A turn runs headless only where the desktop cannot run it, and the command says why; a relay successor keeps its headless first turn ([README](README.md#agents-started-without-a-click)).
 
 ## [0.94.0] - 2026-10-06
@@ -1309,6 +1348,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.92.1-rc.1] - 2026-10-05
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - With `secret.session` the broker signs in to the vault by itself through the new `secret.signinCommand`, at its start and whenever a call waits, one sign-in for every waiting call, and holds the session for `secret.sessionLifetime` (12h), touching it every 10 minutes so that op does not let it idle out. The watch says `VAULT UNLOCKED … until <t>` for that lifetime and `VAULT SIGN-IN FAILED: <reason>`; no message sends the person to a terminal ([README](README.md#the-vault-session)).
 
@@ -1339,6 +1380,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - The desktop sessions of finished workers are archived only under the person's agreement: `agents.archiveAgreement` says where they agreed (never for a session they started), the steward's request quotes it, and the steward runs the new `beekeeper agents archivable <local_id>…` first, which confirms each session is a finished worker beekeeper started and exits 3 for any other. Without it no steward is asked. The doctor reads each asked steward's turn: the line names the steward whose `archive_session` call archived a session, reports a decline with the first line of the reply, and asks a declining steward for no archive for 24 hours instead of again on every run ([README](README.md#agents-started-without-a-click)).
 - The doctor owes, once, the archive of every finished worker beekeeper started whose desktop record stayed unarchived, its CLI running or not, and asks for at most 20 owed archives per run.
 - A reopen never warms a desktop CLI beside a headless turn: it looks for the session's wake right before it shows the session, after its wait for the person, and the standby watch does not resume a role's holder whose reopen runs while it asked for a desktop turn (`agents desktop`), since that reopen shows it at once.
@@ -1359,12 +1402,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - With `secret.session`, the vault session lives in the broker's memory alone: every `beekeeper secret` call on an `op://` reference runs in `beekeeper sandbox broker`, from an agent session, a sandboxed one or the person's terminal, and the broker gives the session to its own `op` calls only. The person unlocks it with the new `beekeeper secret unlock` in their own terminal (`op signin` there, the session handed over a 0600 socket in the runtime directory to a listener checked to be this binary); `secret lock` forgets it, `secret status` says whether one is held. While it is locked a call prints `vault locked: waiting for the person's approval` and waits up to `secret.unlockWait` (8m), the watch says `VAULT LOCKED: <who> waits on <ref>` and `beekeeper status` names the waiting sessions; nothing asks the person ([README](README.md#the-vault-session)).
 - The README has a threat model: the parties, the secrets and where they live, why agents read and unlock none, and the residual risks ([README](README.md#threat-model)).
 
 ## [0.91.0-rc.2] - 2026-10-05
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - No agent session signs in to or unlocks a vault: the Secret guard refuses `op signin`, `op account add`, `op unlock`, the person's unlock helpers (`secret.unlockCommands`), `beekeeper secret unlock` and keyring reads (`secret-tool lookup|search`, `security find-*-password`), and `op run` like every other `op` command. It scans every argument a shell runs (`zsh -ic <helper>`, `bash -c <word>`, `"$SHELL" -c`), `eval`'s words, shell functions and groups on the line, and the scripts a command line runs (`bash x.sh`, `./x.sh`, `source x.sh`). The agent shell prelude drops `OP_SESSION_*`, `OP_SERVICE_ACCOUNT_TOKEN` and `OP_CONNECT_TOKEN` from every agent command's environment ([README](README.md#secret-reads)).
 
@@ -1420,11 +1467,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - A merge whose devctl runs on after its pull request merged no longer holds its lane: `beekeeper watch` ends the devctl of a running merge whose pull request merged more than `merge.hungAfter` (45m, devctl's own `--timeout`) ago, or closed, with one `MERGE HUNG` line and a `merge.hung` event, and records it at the next poll (merged: the lane settles, release unconfirmed). `lanes drop <owner/repo> <n>` ends such a run at once and records it; one whose pull request is open is refused ([README](README.md#the-merge-gate)).
 
 ## [0.81.1-rc.1] - 2026-10-04
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - The standby watch (`beekeeper watch --standby`, the `beekeeper-notify` unit) reads the installations' upgrades and sets and lifts their holds while no supervisor's watch runs: a relay, a crash or a frozen desktop no longer leaves an installation unheld at `UPGRADE` or held past `UPGRADE ENDED`. The supervisor's watch says when its upgrade cycle last began in `upgrades-watch.json`; the standby watch reads none of its own while that is younger than five `watch.interval`, and says `UPGRADES read by the standby watch` once when it takes over ([README](README.md#cluster-upgrades)).
 
@@ -1438,11 +1489,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `beekeeper run` from a Claude Code session that holds a build slot already joins that slot at once instead of taking the second one: a lab proof in the background and a test suite beside it hold one slot, and the other stays free for another session. Each slot is a slice under `memcap.slice` (`memcap-slot<n>_<hash of the slot directory>.slice`, `memcap-slot<n>_test.slice` for a `MEMCAP_TEST=1` run) with the slot holder's `MemoryMax` and `MemorySwapMax`, so the runs sharing a slot share its cap; a kill at that cap is attributed by the killed task's scope (`task_memcg`), in `run`'s victim line, `snapshot` and `watch` alike.
 
 ## [0.80.0-rc.6] - 2026-10-04
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `beekeeper watch` reads the installations' Cluster API upgrades every `upgrades.every` (5m) instead of every `watch.interval`, all four kinds in one `kubectl` call per installation (one call per kind only on an installation that does not serve them all); an installation an upgrade runs on or holds is read every `watch.interval` until `UPGRADE ENDED`. The readings are shared in `upgrades.json`: a second watch, `snapshot` and `ui` use one younger than `upgrades.every`. One watch over five installations starts 5 `kubectl` per 5 minutes for upgrades instead of 21 every 30 seconds ([README](README.md#cluster-upgrades)).
 
@@ -1496,6 +1551,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 - `beekeeper serve` shows each person only the agents they may read, alike in `list_agents`, `beekeeper://roster`, `beekeeper://feed` and their notifications: their own local agents, their team's local agents that hold an Environment's lease (work on a shared installation), and every remote agent; a feed event about a roster entry follows that entry. `send_message` to a `local:` address is accepted only from the agent's person. Every member read every person's local agents, and any member could queue messages into another person's mailbox ([docs/feed.md](docs/feed.md#who-reads-which-agents)).
 
 ## [0.77.1-rc.1] - 2026-10-02
@@ -1620,6 +1676,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - The Secret guard is an allow list for credential tools. `sops` and `op` are refused in every form (encryption, `op read` and `op item list` included; `helm secrets`, `age -d` and `gpg --decrypt` too) but `op run -- <command>`, whose output op masks, and whose command is checked as a command of its own, until `beekeeper secret` ships, and so is `vault` beyond its listing and metadata commands. A Secret read, `vault kv get`, `base64 -d` of a secret's data or a render fed with secret values (`helm template -f secrets.yaml`, `kustomize build --enable-alpha-plugins`) passes only into key names, metadata or a length, a consumer that prints nothing, or, for a render, a filter that blanks the Secret data, so a diff of blanked renders passes. A file, `tee`, a variable, a hash, `grep -c|-q` and the clipboard are refused as ends, and a hash or diff of a plaintext secret file is refused. `kubectl edit secret`, `kubectl get --raw …/secrets`, `kubectl create secret … -o yaml` and templates naming annotations are refused; an unknown shape is refused by default. Every refusal names `beekeeper secret compare|fingerprint|set|copy|rotate` and no longer offers plaintext files or unkeyed hashes. The kube guard's own `op item get` refusal is gone: the Secret guard covers all of op.
 
 ## [0.64.0-rc.1] - 2026-10-01
@@ -1683,6 +1741,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.60.4-rc.1] - 2026-10-01
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `agents start --harness omp` names the agent's model on omp's command line: `--model`, else `omp.model`, an exact `provider/id` selector `omp models` lists. With neither, or a model omp does not list, the start is refused before anything is recorded. An omp agent started without a model ran on omp's own default, which answered nothing while its server was busy with other work, and a pattern could match a model nobody meant.
 - `agents` and `sessions` have a `MODEL` column; an omp session's model comes from its command line until its session file records one, so an agent not yet answered shows its model too.
@@ -1776,6 +1836,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `note add --for <guide.person>` refuses a note that asks nothing (no question mark, no `--option`, no request verb opening it), pointing to `beekeeper log add`.
 - A relieved role holder gets no `HANDOVER DUE`, and a session named as a role's run counts as one that held the role also once its relief is forgotten: it is never archived or used as a steward.
 - `agents remove` archives through the doctor's batch request, one steward turn for any number of sessions.
@@ -1806,6 +1868,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `ps` is no alias of `sessions` any more: it is the masked process table.
 
 ### Fixed
@@ -1821,6 +1885,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.41.0] - 2026-09-30
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - A role's runs are numbered: every holder is "Supervisor run N" or "Guide run N", N one above the highest run recorded. `supervisor relay` and `guide relay` take no session any more: they start the next run as a fresh session (as `agents start` does, so its desktop title, roster name and messaging name are one) and open the relay to it; its first turn takes the role with `<role> start` and ends, and the standby watch resumes it in its desktop CLI (`RESUME`). A successor that does not start withdraws its relay. After a crash the standby watch starts the next run the same way, for the guide too (`GUIDE GONE`, `SUCCESSOR`), once per gone holder; a session between beekeeper's start or wake and its desktop CLI is not gone. A start in a session not named as its run records the next run, and a steward sets its desktop title to it; `supervisor status` and `guide status` name the run. A desktop title set later does not change the name a running CLI takes messages under, so a renamed role session was unreachable by its new name.
 
@@ -1841,6 +1907,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.40.3] - 2026-09-30
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `agents remove` archives the desktop session beekeeper started for the agent, unless it runs a turn or holds a role (`--keep-desktop` keeps it): an idle desktop CLI of another session beekeeper started calls the desktop's `archive_session` on it. Finished workers piled up in the sidebar.
 - `agents reopen` restores a start's lost desktop title through any idle desktop CLI of a session beekeeper started, not only the session's own: the desktop starts no CLI for an import that lost its title and model, so the session could not retitle itself, and dozens of workers a day showed as untitled "General coding session" rows.
@@ -1871,6 +1939,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `HIGH LOAD` fires over `watch.loadPerCoreMax` (1.5) × cores, 36 on 24 cores, instead of a fixed 45; a configured `watch.loadMax` still replaces it.
 
 ## [0.38.0] - 2026-09-30
@@ -1890,12 +1960,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `agents start`, and the reopen after a start's or a wake's turn, open their `claude://` links only while Claude Desktop's window is without the focus (Hyprland's active window): each link switched the desktop's main window to another session and back under the person typing there. A start whose import waits out 2 minutes leaves it to the reopen after its first turn, which imports the session and waits up to 25 minutes.
 - The PreToolUse hook refuses a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease: a worker's sign-in tab opened in front of the person, who closed it as a stray pop-up.
 
 ## [0.37.4] - 2026-09-30
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `watch --notify` sends a memory notification (`oom-line`) only when a systemd-oomd swap kill is imminent: less than `watch.oomdHeadroomMinMiB` (1024) of swap growth left before oomd's `SwapUsedLimit`, read from `oomd.conf` and its drop-ins, or the trigger reached within `watch.oomdWithin` (30m) at the last hour's growth rate. Low RAM, swap over `watch.swapMaxMiB`, memory pressure and the desktop scope's anonymous memory stay watch lines for the supervisor. Cold pages parked in swap on a quiet machine notified the person every 30 minutes.
 - The watch's `SWAP` line says the distance to systemd-oomd's trigger and the growth rate over the last hour, e.g. `SWAP: 10627 of 16383 MiB used, 4117 MiB before systemd-oomd's 90 % trigger, +250 MiB/h over the last hour, trigger in 16h28m0s`. `beekeeper free` reads the trigger from `oomd.conf` too instead of assuming 90 %.
@@ -1922,6 +1996,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.37.0] - 2026-09-30
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `watch` holds back other teams' and team-less `notify` alerts by default once `alerts.team` is set (`{severity: notify}` in the default `alerts.quiet`): logged as `watch.quiet`, while every page, the team's alerts and an installation in play still wake.
 
@@ -2042,6 +2118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `reporter check` and the reporter's post hook refuse every bare `#<n>`, `note #<n>` and `timer #<n>` included: a report names a beekeeper note `note <n>`, and a session name with a reference links it.
 
 ## [0.27.2] - 2026-09-26
@@ -2154,6 +2232,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - `supervisor.restartGrace` defaults to `30s` instead of `1m`: the desktop app never restarts a crashed CLI, so it only debounces a supervisor someone woke.
 
 ## [0.20.0] - 2026-09-25
@@ -2172,6 +2252,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - Reading commands print only what the caller has not read: `snapshot`, `sessions`, `lanes`, `agents` and `handover` keep a read mark per caller and command (`seen.<command>.<caller>.json`), and a caller inside a Claude session that has read before gets the facts that are new or changed since, `gone: …` for those gone, or one `no change since HH:MM` line; a moving figure (an age, a countdown, a memory size, a context in tokens) is no change. `--full` prints everything; `--json`, `handover --prompt` and a person at a terminal always get the whole text. `snapshot --changes` is now the default and hidden. Marks are per host session: a subagent shares its parent's and passes `--full` or `--json`. Against v0.17.0 a second read with nothing changed drops from 5533 to 22 bytes (`snapshot`), 11746 to 22 (`sessions`), 590 to 22 (`lanes`), 577 to 22 (`agents`) and 23424 to 22 (`handover`).
 - `watch` says a lasting condition (a threshold breach, an unreadable source, a stalled lane) once when it starts and once as an `ENDED <condition> (since HH:MM)` line when it ends, instead of repeating it every `watch.repeat`, across restarts: the open conditions and one-time events (runaways, stale leases) are kept in the caller's mark (`seen.watch.<caller>.json`), so a watch restarted after an install says only an `ENDED` or what is new (`--once` keeps no mark); `watch.repeat` now only paces the notifications, which keep `notify.repeat`. Its lines carry no restated threshold or explanation: `LOW RAM: <n> MiB available, swap <n> MiB`, `SWAP: <n> of <n> MiB used`, `HIGH LOAD: <n>`, `TMPFS /tmp: <n> MiB`, `LOW DISK: / <n> GiB free`, `DESKTOP SCOPE anon: <n> MiB`, `DESKTOP SCOPE near its cap: …`, `GITHUB BUDGET <n> of <n>: hold GitHub work until HH:MM`, `SESSIONS ended: …`, `SESSIONS restarted: …`. An `ALERT RESOLVED` line leaves out the `since` its NEW line said, and an alert reading says each bracket part (a lease, a merge) once. A real hour of a supervisor's watch drops from 6977 bytes under v0.15.5 to 5862, each fact once, kept by a byte-budget test.
 
@@ -2179,12 +2261,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+
 - Claims stay gated after a supervisor crash: the grant rule holds from the first `supervisor start` until a deliberate `supervisor stop` or a successor's `supervisor start`, instead of lifting once `supervisor.restartGrace` has passed. A claim during the gap is refused naming the gone supervisor and the successor's start; `supervisor status` and `status` say it is gone and claims wait. `supervisor.restartGrace` now only delays the gone line and notification: a CLI back within it is still a restart that keeps the role.
 - A supervisor gone past the grace is `SUPERVISOR GONE` once, naming it and that claims stay gated, said once the grace has passed instead of after two polls; its `no-supervisor` notification is critical by default and repeats after `notify.repeat` while the gap lasts. A supervisor back after it is one `SUPERVISOR BACK` line.
 
 ## [0.16.0] - 2026-09-25
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - `supervisor.relayAt` (tokens, default `400k`) replaces `supervisor.shift`: `watch` says `RELAY DUE` once the supervisor session's context, read from its transcript's last request like the `CTX` column, reaches it, at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued, no relay open). It is one line naming the context and `beekeeper handover --prompt`, said once per supervisor and again only after a relay is cancelled or expires. `supervisor status` and `handover` show the supervisor's context in tokens. The state's `relayDue` record replaces `shift`.
 
@@ -2279,6 +2365,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `status [--bar]`: the supervisor, the leases held, the holds and what is due in one line; `--bar` is a fixed tab-separated row for a desktop bar, the shape of `free --summary`'s rows.
 
 ### Changed
+
+- The doctor no longer asks a steward session to archive a finished worker's or a relieved role run's desktop session: an agreement relayed in a peer's message is not the person's consent to the session receiving it, so stewards declined and the archives stayed. It puts the archives it owes to the person as one decision through the guide (a note for `guide.person`, at most 20 sessions); on their yes the guide's session confirms them with `agents archivable` and archives each itself, the doctor drops each once the desktop records it and closes the decision, and a decision closed without that keeps the sessions. No session's CLI is warmed to archive itself any more. `agents.archiveAgreement` is gone, and the 24-hour steward declines with it ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 
 - The owner hints on a NEW alert line read as timing, not cause: `[during merging … since …]`, `[during merged … at …]`, so a merge that merely coincides with an alert is not read as its cause.
 

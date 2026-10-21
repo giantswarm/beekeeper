@@ -5,10 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -218,7 +215,7 @@ func TestArchiveDesktopKeeps(t *testing.T) {
 	a := &app{}
 	ag := state.Party{Session: "a", Name: "worker"}
 	archive := func(st *state.State, ag state.Party) string {
-		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0].line
+		return a.archiveDesktops(context.Background(), st, []state.Party{ag})[0].line
 	}
 	if got := archive(&state.State{}, ag); !strings.Contains(got, "did not start it") {
 		t.Errorf("not started: %q", got)
@@ -337,49 +334,6 @@ func TestRestoreImport(t *testing.T) {
 	}
 }
 
-// An archive asks an idle steward when one runs, else warms the CLI of the
-// first session to archive that was not asked yet, which archives itself;
-// a lookup that failed otherwise warms nothing.
-func TestArchiveSteward(t *testing.T) {
-	idle := steward{host: "local_idle", sock: "/s/1.sock"}
-	var warmed []string
-	warm := func(_ context.Context, host string) (steward, error) {
-		warmed = append(warmed, host)
-		return steward{host: host, sock: "/s/2.sock"}, nil
-	}
-	none := func([]string) (steward, error) { return steward{}, errNoSteward }
-	broken := errors.New("state unreadable")
-	for _, c := range []struct {
-		desc    string
-		find    func([]string) (steward, error)
-		exclude []string
-		want    string
-		warmed  []string
-		wantErr error
-	}{
-		{desc: "an idle steward", find: func([]string) (steward, error) { return idle, nil }, want: "local_idle"},
-		{desc: "none idle", find: none, want: stewardA, warmed: []string{stewardA}},
-		{desc: "the first asked", find: none, exclude: []string{stewardA}, want: stewardB, warmed: []string{stewardB}},
-		{desc: "all asked", find: none, exclude: []string{stewardA, stewardB}, wantErr: errNoSteward},
-		{desc: "a failed lookup", find: func([]string) (steward, error) { return steward{}, broken }, wantErr: broken},
-	} {
-		warmed = nil
-		s, err := archiveSteward(t.Context(), []string{stewardA, stewardB}, c.exclude, c.find, warm)
-		if !errors.Is(err, c.wantErr) || s.host != c.want || !slices.Equal(warmed, c.warmed) {
-			t.Errorf("%s: steward %q, err %v, warmed %v", c.desc, s.host, err, warmed)
-		}
-	}
-}
-
-// A warmed steward archives its own session as "self", after the others.
-func TestArchiveRequestOfAWarmedSteward(t *testing.T) {
-	s := steward{host: stewardA, sock: "/s/2.sock"}
-	msg := archiveRequest(s, []string{stewardA, stewardB}, "beekeeper doctor", "agreed")
-	if !strings.Contains(msg, strconv.Quote(stewardB)+`, "self"`) {
-		t.Errorf("request %q", msg)
-	}
-}
-
 // headlessMachine runs a headless wake turn of session id, `claude -p
 // --resume <id>`, and no desktop CLI of it.
 type headlessMachine struct {
@@ -391,79 +345,6 @@ func (m headlessMachine) Processes() (*proc.Table, error) {
 	return &proc.Table{ByPID: map[int]*proc.Process{
 		9: {PID: 9, Comm: claudeComm, Args: []string{claudeComm, "-p", resumeFlag, m.id, "go on"}},
 	}}, nil
-}
-
-// The doctor's archive warms the desktop CLI of a session no CLI of which
-// runs, and none of a session whose headless wake turn runs: that turn is
-// its CLI, and a warmed desktop CLI would be its twin.
-func TestWarmStewardWarmsNoTwinOfAHeadlessTurn(t *testing.T) {
-	host := "local_" + rotationLogin
-	for _, c := range []struct {
-		desc     string
-		headless bool
-	}{
-		{desc: "no CLI runs"},
-		{desc: "a headless wake turn runs", headless: true},
-	} {
-		t.Run(c.desc, func(t *testing.T) {
-			a, _ := stubApp(t)
-			a.cfg.Desktop.TypingQuiet.Duration = -1
-			a.cfg.Claude.DesktopLog = filepath.Join(t.TempDir(), "main.log")
-			saved := desktopWindowActive
-			t.Cleanup(func() { desktopWindowActive = saved })
-			desktopWindowActive = func(context.Context) (bool, error) { return false, nil }
-			runtime := t.TempDir()
-			t.Setenv("XDG_RUNTIME_DIR", runtime)
-			if err := os.MkdirAll(filepath.Join(runtime, "cc-socks"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(peerSocket(runtime, 7), nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			warm := &atomic.Bool{}
-			o := &warmingOpener{warm: warm}
-			plat.Opener = o
-			plat.Machine = warmMachine{Machine: plat.Machine, id: rotationLogin, warm: warm}
-			if c.headless {
-				plat.Machine = headlessMachine{Machine: plat.Machine, id: rotationLogin}
-			}
-			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Archives = []state.Archive{{Party: state.Party{Session: rotationLogin, HostSession: host}, Host: host, Since: time.Now()}}
-				return nil, nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			warmed := func() time.Time {
-				st, err := a.store.Read()
-				if err != nil || len(st.Archives) != 1 {
-					t.Fatalf("archives %v, %v", st, err)
-				}
-				return st.Archives[0].Warmed
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			s, err := a.warmSteward(ctx, host)
-			if c.headless {
-				if _, ok := errors.AsType[headlessRuns](err); !ok || len(o.opened) > 0 {
-					t.Errorf("err %v, opened %v beside the headless turn", err, o.opened)
-				}
-				if !strings.Contains(fmt.Sprint(err), "its headless wake turn runs") {
-					t.Errorf("err %v", err)
-				}
-				if !warmed().IsZero() {
-					t.Error("the archive owed records a warm that never was")
-				}
-				return
-			}
-			if err != nil || s.host != host || len(o.opened) == 0 || o.opened[0] != continueURL(host) {
-				t.Errorf("steward %+v, err %v, opened %v", s, err, o.opened)
-			}
-			// The watch leaves the warmed CLI to its archive call.
-			if warmed().IsZero() {
-				t.Error("the archive owed does not record the warm: the watch would stop the CLI as revived")
-			}
-		})
-	}
 }
 
 // A show's last look finds a headless turn of the session that started

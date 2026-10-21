@@ -49,7 +49,7 @@ func relayed(t *testing.T, sent string) []string {
 	return tos
 }
 
-// A broadcast and a steward's archive ask reach a running CLI through the
+// A broadcast and a steward's retitle ask reach a running CLI through the
 // relay turn; when the relay turn cannot run, both name its error.
 func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	a, _ := noteApp(t)
@@ -57,7 +57,7 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	agents := []state.Agent{{Party: four}, {Party: state.Party{Session: "s5", Name: agentFive}}}
 	sessions := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}, {ID: "s5", Name: agentFive}}
 	s := steward{host: "local_steward", sock: "/run/user/1000/cc-socks/1.sock"}
-	ask := archiveRequest(s, []string{"local_finished"}, "beekeeper doctor", "agreed")
+	ask := retitleRequest(s.sessionArg("local_finished"), agentFive)
 	done := func() bool { return true }
 
 	sent := fakeRelay(t, false)
@@ -68,7 +68,7 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 		t.Fatalf("broadcast told %v, missed %v", told, missed)
 	}
 	if err := askSteward(context.Background(), s, ask, done, a.peerSend, time.Second); err != nil {
-		t.Fatalf("archive ask: %v", err)
+		t.Fatalf("retitle ask: %v", err)
 	}
 	if got := fmt.Sprint(relayed(t, sent)); got != "[Agent four Agent five uds:"+s.sock+"]" {
 		t.Errorf("relayed to %s", got)

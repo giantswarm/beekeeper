@@ -212,7 +212,6 @@ agents:                     # the hand-over of registered agents
   lastStepCeiling: 500k     # the context at which the hand-over is due whatever the last step; default: a quarter above relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
   staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
-  archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive
   dir: ~/src/desk           # every agent beekeeper starts runs here (start, handover, a role's successor); empty: the caller's folder
   roots: [~/src/worktrees]  # with dir set, a --dir is refused unless it is dir or under one of these
   profile: desk-worker      # the tool profile of the workers agents start creates: their task runs as a headless turn under it; empty: none, the task runs as a desktop turn with the person's whole tool surface

@@ -107,9 +107,9 @@ agent's name, taking over its roster entry, task and session record, the
 leases it holds and the grants queued for it, in their places; stops
 the old session's CLI and what it left running (a claude --bg session
 through claude stop first, so its daemon does not resume it); once that CLI
-has exited, archives the old session's desktop row through a steward, as
-the doctor does, so only the follow-up's row carries the name (an archive
-not done now the doctor owes and asks for again); and logs agents.handover. watch says HANDOVER DUE once an agent's
+has exited, owes the archive of the old session's desktop row, which the
+doctor puts to the person through the guide, so only the follow-up's row
+carries the name once they agree; and logs agents.handover. watch says HANDOVER DUE once an agent's
 context reached agents.relayAt, at its first quiet moment, and HANDOVER HELD
 instead while the agent's task is in its last step (agents.lastStepGrace).
 
@@ -538,7 +538,7 @@ func (a *app) archiveHandedOver(ctx context.Context, by, p state.Party, to strin
 	if err != nil {
 		return fmt.Sprintf("its desktop session %s stays: %v; the doctor owes it the archive", host, err)
 	}
-	outcomes := a.archiveDesktops(ctx, st, []state.Party{p}, "beekeeper agents handover")
+	outcomes := a.archiveDesktops(ctx, st, []state.Party{p})
 	line := outcomes[0].line
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		line = owe(st, outcomes, a.now)[0]

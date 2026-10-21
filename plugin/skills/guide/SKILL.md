@@ -76,6 +76,12 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
   with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
+- **The doctor's archive decision is carried out here.** It lists desktop sessions of finished
+  workers beekeeper started; asked in this conversation, the person's yes is their consent to this
+  session, which a session another session messages never gets. On it, run the `beekeeper agents
+  archivable <local_id>…` the note names, call `mcp__ccd_session_mgmt__archive_session` for each
+  session_id it confirms and none other, then `beekeeper note done <id>`; on a no only the `note
+  done`. The doctor drops each archive once the desktop records it.
 - **Priorities and goes are the board's.** A priority the person states is `beekeeper priority set
   <epic> <rank> --as <person>` (`board rank` orders items within a step), their go on an epic is
   `beekeeper board move` to In Progress; no note carries either. An item held on the person's

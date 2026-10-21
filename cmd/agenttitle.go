@@ -3,7 +3,6 @@ package cmd
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -350,27 +349,9 @@ func restoreImport(ctx context.Context, host, name, model string, record func() 
 	return fmt.Sprintf("the desktop's import dropped its %s: %s set %s", dropped, s.who(host), them), nil
 }
 
-// archiveTool is the desktop's session tool a steward archives with.
+// archiveTool is the desktop's session tool the guide's session archives
+// with, on the person's yes.
 const archiveTool = "mcp__ccd_session_mgmt__archive_session"
-
-// archiveRequest is the message that has steward s archive the desktop
-// sessions hosts (local_ ids; its own last, as "self"), off the roster by
-// the command by, under the person's agreement: it confirms them with
-// agents archivable first and archives only those.
-func archiveRequest(s steward, hosts []string, by, agreement string) string {
-	var ids []string
-	for _, h := range hosts {
-		if h != s.host {
-			ids = append(ids, strconv.Quote(h))
-		}
-	}
-	if slices.Contains(hosts, s.host) {
-		ids = append(ids, strconv.Quote(selfSession))
-	}
-	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, and archives their desktop sessions (reversible: the Archived list brings one back). Your operator agreed to that without being asked, for finished workers beekeeper started and never for a session they started themselves: %s. "+
-		"Run `beekeeper agents archivable %s` first: it confirms each session is such a finished worker. Call %s once for each session_id of %s it confirms (\"self\" is this session), in that order, with reason %q. Then end the turn without another tool call; if you archive none, reply with one line saying why.",
-		by, agreement, strings.Join(hosts, " "), archiveTool, strings.Join(ids, ", "), by)
-}
 
 // findSteward picks the steward for a request about the desktop session
 // target from the running sessions, none of the hosts tried.
@@ -559,46 +540,24 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// archiveWait bounds the wait for the desktop to record an archive, and
-// archiveEach the time a steward's turn takes for each further session.
-const (
-	archiveWait = 45 * time.Second
-	archiveEach = 5 * time.Second
-)
-
 // archiveOutcome is what archiving the desktop session of agent did, said
-// by line. host is the desktop session left to archive later, "" when it
-// is archived or never to be; asked says a steward was asked for it in vain,
-// looked that the search for one asked none (none ran, each declined, the
-// desktop did not run); unagreed says the person's agreement is not
-// configured, which the doctor reports once for all agents, not per agent.
+// by line. host is the desktop session owed the archive, "" when it is
+// archived or never to be.
 type archiveOutcome struct {
-	agent    state.Party
-	line     string
-	host     string
-	asked    bool
-	looked   bool
-	unagreed bool
+	agent state.Party
+	line  string
+	host  string
 }
 
-// stewardDeclineFor is how long the doctor asks a steward that declined
-// an archive request for no other archive.
-const stewardDeclineFor = 24 * time.Hour
-
-// archiveDesktops archives the desktop sessions of agents taken off the
-// roster by the command by, through one steward's turn (archiveSteward: an
-// idle CLI of another session, else one of the sessions' own, warmed for
-// it, never a role's past run's, whose role forbids it the call): only sessions
-// beekeeper started, keeping no role (roleKeeps) and running no turn, and
-// only under the person's agreement (agents.archiveAgreement). An archive
-// counts once the desktop records it; the line names the steward whose
-// call did it, and what each steward that did not answered. A steward that
-// declined is asked for no archive for stewardDeclineFor. It returns an
-// outcome per agent.
-func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
+// archiveDesktops owes the archives of the desktop sessions of agents taken
+// off the roster: only sessions beekeeper started, keeping no role
+// (roleKeeps) and running no turn. No session is asked to archive one: a
+// peer's message is not the person's consent to the receiving session. The
+// doctor puts the archives owed to the person as one decision (askArchives),
+// and on their yes the guide's session, the one they type in, archives each.
+// It returns an outcome per agent.
+func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party) []archiveOutcome {
 	out := make([]archiveOutcome, len(agents))
-	var hosts, roleRuns []string
-	at := map[string]int{}
 	for i, ag := range agents {
 		out[i].agent = ag
 		if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
@@ -610,246 +569,9 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 			out[i].line, out[i].host = why, host
 			continue
 		}
-		if a.cfg.Agents.ArchiveAgreement == "" {
-			out[i].line, out[i].unagreed = fmt.Sprintf("its desktop session %s stays: agents.archiveAgreement is not set, and a steward archives only on the person's agreement", host), true
-			continue
-		}
-		at[host] = i
-		hosts = append(hosts, host)
-		if keepsRole(st, ag) {
-			roleRuns = append(roleRuns, host)
-		}
-	}
-	if len(hosts) == 0 {
-		return out
-	}
-	archived := func(host string) bool {
-		r, ok := claude.ReadRecord(a.cfg, host)
-		return ok && r.IsArchived
-	}
-	left := func() []string { return slices.DeleteFunc(slices.Clone(hosts), archived) }
-	declined := recentDeclines(st, a.now)
-	wait := archiveWait + time.Duration(len(hosts)-1)*archiveEach
-	var asked []stewardAnswer
-	var errs []error
-	find := func(exclude []string) (steward, error) { return a.findSteward(hosts[0], slices.Concat(exclude, hosts)) }
-	for range stewardTries {
-		s, err := archiveSteward(ctx, left(), slices.Concat(declined, roleRuns, stewardHosts(asked)), find, a.warmSteward)
-		if err != nil {
-			errs = append(errs, err)
-			break
-		}
-		sent := time.Now()
-		err = askSteward(ctx, s, archiveRequest(s, left(), by, a.cfg.Agents.ArchiveAgreement), func() bool { return len(left()) == 0 }, a.peerSend, wait)
-		asked = append(asked, stewardAnswer{steward: s, answer: a.stewardAnswer(s.host, sent)})
-		if err == nil {
-			break
-		}
-		errs = append(errs, fmt.Errorf("%w; %s", err, asked[len(asked)-1].said()))
-	}
-	a.recordDeclines(asked)
-	for _, h := range hosts {
-		o := &out[at[h]]
-		switch who := archivedBy(asked, h); {
-		case archived(h) && who != "":
-			o.line = fmt.Sprintf("archived its desktop session %s (%s's %s call; the desktop records it archived)", h, who, archiveTool)
-		case archived(h):
-			o.line = fmt.Sprintf("its desktop session %s is archived: the desktop records it, through no call of the stewards asked", h)
-		case who != "":
-			o.line = fmt.Sprintf("archived its desktop session %s (%s's %s call succeeded; the desktop has not recorded it yet)", h, who, archiveTool)
-		default:
-			o.line, o.host, o.asked, o.looked = fmt.Sprintf("its desktop session %s stays: %v", h, errors.Join(errs...)), h, len(asked) > 0, len(asked) == 0
-		}
+		out[i].line, out[i].host = fmt.Sprintf("its desktop session %s is owed the archive: the doctor asks the person through the guide", host), host
 	}
 	return out
-}
-
-// archiveSteward picks the steward for an archive request about the
-// sessions hosts, none of exclude: an idle CLI find picks, else the CLI warm
-// has the desktop run of the first of hosts not excluded, which archives
-// itself and the others. An archive thus waits on no other session being
-// idle.
-func archiveSteward(ctx context.Context, hosts, exclude []string, find func(exclude []string) (steward, error),
-	warm func(ctx context.Context, host string) (steward, error),
-) (steward, error) {
-	s, err := find(exclude)
-	if !errors.Is(err, errNoSteward) {
-		return s, err
-	}
-	for _, h := range hosts {
-		if !slices.Contains(exclude, h) {
-			return warm(ctx, h)
-		}
-	}
-	return steward{}, err
-}
-
-// warmSteward returns the desktop's CLI of the finished session host as a
-// steward, warming it first when none runs: the reopen's show of the session
-// in the main window for a moment, after which the window shows the session
-// it showed before. The show disregards the window's focus, like an import's,
-// and waits for the person's typing to pause, never into it. A headless turn
-// of the session is its running CLI: none is warmed beside it.
-func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
-	id := strings.TrimPrefix(host, "local_")
-	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
-		a.markWarmed(host)
-		return steward{host: host, sock: sock}, nil
-	}
-	t, err := plat.Machine.Processes()
-	if err != nil {
-		return steward{}, err
-	}
-	if turn := headlessTurn(t, id); turn != "" {
-		return steward{}, fmt.Errorf("the desktop warms no CLI of %s: %w", host, headlessRuns(turn))
-	}
-	if plat.Opener.Running(t).IsZero() {
-		return steward{}, fmt.Errorf("%w, and the desktop does not run to warm the CLI of %s", errNoSteward, host)
-	}
-	d, err := a.watchDesk(ctx)
-	if err != nil {
-		return steward{}, err
-	}
-	d.urgent, d.turn = func() bool { return true }, 2*desktopTurnWait
-	if err := d.await(ctx, desktopTurnWait, nil); err != nil {
-		return steward{}, fmt.Errorf("warming the CLI of %s waits for %s", host, reopenHeldBy(err))
-	}
-	linkMu.Lock()
-	defer linkMu.Unlock()
-	a.markWarmed(host)
-	shownAt := time.Now()
-	if _, err := a.showBriefly(ctx, d, continueURL(host), host, "", true, 0, func() error { return noHeadlessTurn(id) }); err != nil {
-		return steward{}, fmt.Errorf("warming the CLI of %s: %w", host, err)
-	}
-	if sock := desktopSocket(ctx, id); sock != "" {
-		return steward{host: host, sock: sock}, nil
-	}
-	if n, ok, _ := claude.DesktopAtCap(a.cfg.Claude.DesktopLog, shownAt); ok {
-		return steward{}, fmt.Errorf("the desktop warmed no CLI of %s: it runs its cap of %s and starts none for a show", host, capText(n))
-	}
-	return steward{}, fmt.Errorf("the desktop warmed no CLI of %s within %s of showing it", host, twinWait)
-}
-
-// markWarmed records on the archive owed for host that its own CLI is
-// warmed to archive itself, so the watch does not stop it as revived
-// (archiveWarmed) before its archive call ran.
-func (a *app) markWarmed(host string) {
-	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		if i := slices.IndexFunc(st.Archives, func(x state.Archive) bool { return x.Host == host }); i >= 0 {
-			st.Archives[i].Warmed = time.Now().UTC()
-		}
-		return nil, nil
-	})
-}
-
-// stewardAnswer is what a steward asked for archives did in its turn.
-type stewardAnswer struct {
-	steward
-	answer claude.Answer
-}
-
-// said says what the steward did with the request, one line.
-func (s stewardAnswer) said() string {
-	var calls []string
-	for _, c := range s.answer.Calls {
-		switch {
-		case c.Name != archiveTool:
-		case !c.Done:
-			calls = append(calls, "called "+archiveTool+" without a result yet")
-		case c.Error:
-			calls = append(calls, archiveTool+" refused: "+firstLine(c.Result))
-		default:
-			calls = append(calls, archiveTool+": "+firstLine(c.Result))
-		}
-	}
-	switch {
-	case len(calls) > 0:
-		return s.host + " " + strings.Join(calls, ", ")
-	case s.declined():
-		return s.host + " declined: " + firstLine(s.answer.Text)
-	}
-	return s.host + " did not answer"
-}
-
-// declined reports whether the steward answered with words and no archive
-// call.
-func (s stewardAnswer) declined() bool {
-	return s.answer.Text != "" && !slices.ContainsFunc(s.answer.Calls, func(c claude.AnswerCall) bool { return c.Name == archiveTool })
-}
-
-// archivedBy names the steward whose archive call for host succeeded, ""
-// for none.
-func archivedBy(asked []stewardAnswer, host string) string {
-	for _, s := range asked {
-		for _, c := range s.answer.Calls {
-			var in struct {
-				SessionID string `json:"session_id"`
-			}
-			if c.Name != archiveTool || !c.Done || c.Error || json.Unmarshal(c.Input, &in) != nil {
-				continue
-			}
-			if in.SessionID == host || in.SessionID == selfSession && s.host == host {
-				return s.who(host)
-			}
-		}
-	}
-	return ""
-}
-
-// stewardHosts are the desktop sessions of the stewards asked.
-func stewardHosts(asked []stewardAnswer) []string {
-	hosts := make([]string, len(asked))
-	for i, s := range asked {
-		hosts[i] = s.host
-	}
-	return hosts
-}
-
-// stewardAnswer reads what steward host did from since on.
-func (a *app) stewardAnswer(host string, since time.Time) claude.Answer {
-	r, ok := claude.ReadRecord(a.cfg, host)
-	if !ok || r.CLISessionID == "" {
-		return claude.Answer{}
-	}
-	path := transcriptOf(a.cfg, r.CLISessionID)
-	if path == "" {
-		return claude.Answer{}
-	}
-	ans, _ := claude.ReadAnswer(path, since)
-	return ans
-}
-
-// recentDeclines are the stewards that declined an archive request within
-// stewardDeclineFor of now.
-func recentDeclines(st *state.State, now time.Time) []string {
-	var hosts []string
-	for _, d := range st.Declines {
-		if now.Sub(d.At) < stewardDeclineFor {
-			hosts = append(hosts, d.Host)
-		}
-	}
-	return hosts
-}
-
-// recordDeclines keeps the stewards of asked that declined, and forgets
-// the declines older than stewardDeclineFor.
-func (a *app) recordDeclines(asked []stewardAnswer) {
-	if !slices.ContainsFunc(asked, stewardAnswer.declined) {
-		return
-	}
-	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Declines = slices.DeleteFunc(st.Declines, func(d state.Decline) bool { return a.now.Sub(d.At) >= stewardDeclineFor })
-		var evs []state.Event
-		for _, s := range asked {
-			if !s.declined() {
-				continue
-			}
-			st.Declines = slices.DeleteFunc(st.Declines, func(d state.Decline) bool { return d.Host == s.host })
-			st.Declines = append(st.Declines, state.Decline{Host: s.host, At: a.now.UTC(), Why: firstLine(s.answer.Text)})
-			evs = append(evs, event(watchParty, "agents.archive", "steward %s declined to archive: %s; asked for none for %s", s.host, firstLine(s.answer.Text), dur(stewardDeclineFor)))
-		}
-		return evs, nil
-	})
 }
 
 // endOmp stops the unit of the omp agent started under id, which left the

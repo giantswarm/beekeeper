@@ -20,12 +20,12 @@ var (
 
 func unarchived(string) (*claude.Record, bool) { return &claude.Record{}, true }
 
-// A worker removed while its CLI runs a turn is owed the archive without a
-// try counted; the doctor waits while the turn runs and asks once it ended.
+// A worker removed while its CLI runs a turn is owed the archive; the
+// doctor waits while the turn runs and asks the person once it ended.
 func TestOwedArchiveInATurn(t *testing.T) {
 	st := &state.State{}
 	lines := owe(st, []archiveOutcome{{agent: worker, line: "its desktop session stays: its CLI 7 is in a turn", host: "local_w"}}, archiveNow)
-	if len(st.Archives) != 1 || st.Archives[0].Tries != 0 || !strings.HasSuffix(lines[0], "; the doctor asks again") {
+	if len(st.Archives) != 1 || lines[0] != "its desktop session stays: its CLI 7 is in a turn" {
 		t.Fatalf("owed %+v, line %q", st.Archives, lines[0])
 	}
 	inTurn := func(state.Party) bool { return true }
@@ -34,7 +34,7 @@ func TestOwedArchiveInATurn(t *testing.T) {
 	}
 	idle := func(state.Party) bool { return false }
 	p := planArchives(st, unarchived, idle, archiveNow.Add(time.Minute))
-	if p[0].wait != "" || p[0].drop != "" || !strings.Contains(p[0].String(), "try 1 of 5") {
+	if p[0].wait != "" || p[0].drop != "" || !strings.HasPrefix(p[0].String(), "ask the person to archive") {
 		t.Errorf("the turn ended: %s", p[0])
 	}
 	lines = owe(st, []archiveOutcome{{agent: worker, line: "archived its desktop session local_w"}}, archiveNow.Add(time.Minute))
@@ -43,31 +43,20 @@ func TestOwedArchiveInATurn(t *testing.T) {
 	}
 }
 
-// A steward that did not record the archive is asked again archiveAgain
-// later, and the doctor gives the archive up after archiveTries turns.
-func TestOwedArchiveStewardTimeout(t *testing.T) {
+// An archive no decision asked about is given up after archiveOwedFor; one
+// a decision asks about is not, while the decision is open.
+func TestOwedArchiveGivenUpUnasked(t *testing.T) {
 	st := &state.State{}
-	timeout := archiveOutcome{agent: worker, line: "its desktop session local_w stays: local_s was asked and the desktop did not record it within 45s", host: "local_w", asked: true}
-	idle := func(state.Party) bool { return false }
-	now := archiveNow
-	for try := 1; try < archiveTries; try++ {
-		if line := owe(st, []archiveOutcome{timeout}, now)[0]; !strings.HasSuffix(line, "asks again") {
-			t.Fatalf("try %d: %q", try, line)
-		}
-		if st.Archives[0].Tries != try {
-			t.Fatalf("try %d counted %d", try, st.Archives[0].Tries)
-		}
-		if p := planArchives(st, unarchived, idle, now.Add(archiveAgain-time.Second)); p[0].wait == "" {
-			t.Errorf("try %d: asked again before archiveAgain: %s", try, p[0])
-		}
-		now = now.Add(archiveAgain)
-		if p := planArchives(st, unarchived, idle, now); p[0].wait != "" || p[0].drop != "" {
-			t.Errorf("try %d: not asked again after archiveAgain: %s", try, p[0])
-		}
+	outcome := archiveOutcome{agent: worker, line: "its desktop session local_w is owed the archive", host: "local_w"}
+	owe(st, []archiveOutcome{outcome}, archiveNow)
+	if line := owe(st, []archiveOutcome{outcome}, archiveNow.Add(archiveOwedFor))[0]; len(st.Archives) != 0 || !strings.Contains(line, "gives it up: owed 24h00m with no decision") {
+		t.Errorf("unasked: owed %+v, line %q", st.Archives, line)
 	}
-	line := owe(st, []archiveOutcome{timeout}, now)[0]
-	if len(st.Archives) != 0 || !strings.Contains(line, "gives it up: 5 stewards' turns") {
-		t.Errorf("after %d tries: owed %+v, line %q", archiveTries, st.Archives, line)
+	st = &state.State{Notes: []state.Note{{ID: 4}}}
+	owe(st, []archiveOutcome{outcome}, archiveNow)
+	st.Archives[0].Asked = 4
+	if line := owe(st, []archiveOutcome{outcome}, archiveNow.Add(archiveOwedFor))[0]; len(st.Archives) != 1 || strings.Contains(line, "gives it up") {
+		t.Errorf("asked: owed %+v, line %q", st.Archives, line)
 	}
 }
 
@@ -121,12 +110,12 @@ func TestSeedArchives(t *testing.T) {
 		Starts: []state.Start{start("warm"), start("roster"), start("stopped"), start("shelved"), run, omp, start("owed")},
 		Agents: []state.Agent{{Party: state.Party{Session: "roster"}}},
 	}
-	st.Archives = []state.Archive{{Party: state.Party{Session: "owed"}, Host: "local_owed", Tries: 2}}
+	st.Archives = []state.Archive{{Party: state.Party{Session: "owed"}, Host: "local_owed", Asked: 2}}
 	record := func(host string) (*claude.Record, bool) {
 		return &claude.Record{IsArchived: host == "local_shelved"}, true
 	}
 	seedArchives(st, record, nil, archiveNow)
-	if len(st.Archives) != 3 || st.Archives[1].Host != "local_warm" || st.Archives[2].Host != "local_stopped" || st.Archives[0].Tries != 2 || !st.FinishedSeeded {
+	if len(st.Archives) != 3 || st.Archives[1].Host != "local_warm" || st.Archives[2].Host != "local_stopped" || st.Archives[0].Asked != 2 || !st.FinishedSeeded {
 		t.Fatalf("seeded %+v", st.Archives)
 	}
 	st.Archives = nil

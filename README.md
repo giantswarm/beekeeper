@@ -1971,37 +1971,31 @@ session carries its name): a request would have the desktop run a turn of it, an
 again, beside its follow-up under the same name. A title set that way is the desktop's "set
 by an agent", which its own titling never overwrites.
 
-`agents remove` archives the removed agent's desktop session the same way (`archive_session`;
-the desktop's Archived list brings it back), and prints and logs (`agents.archive`) what it did.
-It does so only for a session beekeeper started that runs no turn and holds or held no role, unless
-a relay relieved it;
-`--keep-desktop` leaves it in the sidebar. When no other steward is idle, the session's own
-desktop CLI archives it: beekeeper shows the session in the desktop for a moment once the person's
-typing pauses, as a reopen does, which warms its CLI, and the window then shows the session it
-showed before. When that cannot be done (the desktop does not run, the person keeps typing, the
-desktop at its cap of CLIs) it says so and the removal still stands; the doctor then owes the
-archive (below), and a run that asked no steward counts none of its tries.
+`agents remove` owes the removed agent's desktop session its archive, and prints and logs
+(`agents.archive`) what it did. It does so only for a session beekeeper started that runs no turn
+and holds or held no role, unless a relay relieved it; `--keep-desktop` leaves it in the sidebar.
 
-The desktop's `archive_session` may be used only on the person's explicit agreement, and a
-peer's message is not that, so beekeeper archives only under `agents.archiveAgreement`: where the
-person agreed that the desktop sessions of finished workers beekeeper started are archived
-without asking, never a session they started themselves (a standing instruction in their user
-`CLAUDE.md`, say). The request quotes it and has the steward run `beekeeper agents archivable
-<local_id>…` first, which confirms each session is such a finished worker (one of beekeeper's
-starts, off the roster, no role a relay did not relieve, unarchived, its CLI in no turn) and exits
-3 for any other, a session the person started included; the steward archives only what it
-confirms. Without `agents.archiveAgreement` no steward is asked and the line says so. An archive
-counts once the desktop records it, and the line names the steward whose `archive_session` call
-did it. A steward that archived nothing is read from its turn: one that declined is reported with
-the first line of its reply (`agents.archive`, "steward local_… declined to archive: …") and asked
-for no archive for 24 hours; one that did not answer is reported as such.
+No session is asked to archive another: the desktop's `archive_session` may be used only on the
+person's explicit agreement, and an agreement relayed in a peer's message is not that to the
+session receiving it. The doctor puts the archives it owes to the person as one decision through
+the guide: a note for `guide.person` listing the sessions, at most 20, with the command that
+confirms them. On the person's yes the guide's session, the one they type in, runs `beekeeper
+agents archivable <local_id>…`, which confirms each session is a finished worker beekeeper
+started (one of beekeeper's starts, off the roster, no role a relay did not relieve, unarchived,
+its CLI in no turn) and exits 3 for any other, a session the person started included, calls
+`archive_session` for each it confirms, and closes the note (`beekeeper note done <id>`). The
+doctor owes an archive no longer once the desktop records it, closes the decision once it owes
+none of its archives, and keeps a session the decision closed without archiving (the person's
+no). While a decision is open the archives owed meanwhile wait for the next one. Without
+`guide.person` no decision is filed, the watch says one `DOCTOR` line with the count, and an
+archive owed 24 hours is given up.
 
 `beekeeper doctor` does these chores by rule, and every watch poll (not `--once`) runs it in the
 background, one `DOCTOR` line per thing it did. It takes an agent off the roster once it reported
 its work finished with `agents idle --done` and its CLI runs no turn, once it was relieved of the
 supervisor's or the guide's role (a relieved role relays, it never hands over), or once it stayed
 idle `agents.staleAfter` (24h) with no CLI running; the desktop sessions beekeeper started for the
-finished and the stale ones are archived in one steward's turn, under the rules above. An entry
+finished and the stale ones are owed their archive, put to the person under the rules above. An entry
 kept on purpose is never removed for staleness and its desktop session never archived by the
 doctor: `beekeeper agents keep <agent> [--until <time>] [--reason <text>]` marks a judge or
 reviewer session a person returns to, a spare or a worker parked on a long external wait, and an
@@ -2024,13 +2018,11 @@ the agent's to claim (a grant to another session first keeps it parked), the wat
 to a running CLI, else headless); without it, or for a park without `--on`, `beekeeper agents
 resume <agent>` does it by hand. A resume that cannot wake the agent leaves it parked (`AGENT
 RESUME FAILED`); `agents idle` ends the park with the task. An archive
-that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed, and
-so is, once, every finished worker beekeeper started whose desktop record stayed unarchived, its
-CLI running or not: the doctor asks for at most 20 of them per run, while the CLI runs no turn, in
-the same steward's turn,
-until the desktop records it, up to 5 stewards' turns 10 minutes apart within 24 hours, each try a
-`DOCTOR` line and an `agents.archive` event with its reason; an agent back on the roster or the
-session archived by hand is owed nothing. The old session of an `agents handover` and the run of
+not done yet (the CLI ran a turn, also after `agents remove`) is owed, and so is, once, every
+finished worker beekeeper started whose desktop record stayed unarchived, its CLI running or not:
+the doctor puts it to the person in its next decision once the CLI runs no turn, until the desktop
+records it or the person keeps it, each step a `DOCTOR` line and an `agents.archive` event with its
+reason; an agent back on the roster or the session archived by hand is owed nothing. The old session of an `agents handover` and the run of
 the supervisor or the guide a relay relieved (once its successor took the role) are owed the same
 way, so a relieved run frees its desktop CLI slot. A session
 beekeeper started whose desktop record shows another title than its roster name gets the name

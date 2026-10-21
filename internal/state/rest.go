@@ -113,7 +113,6 @@ type (
 	plainAppRun       AppRun
 	plainAppCreated   AppCreated
 	plainArchive      Archive
-	plainDecline      Decline
 	plainReport       Report
 	plainReportPause  ReportPause
 	plainReportThread ReportThread
@@ -182,8 +181,6 @@ func (v *AppCreated) UnmarshalJSON(b []byte) error {
 func (v AppCreated) MarshalJSON() ([]byte, error) { return encodeKeeping(plainAppCreated(v), v.rest) }
 func (v *Archive) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainArchive)(v), &v.rest) }
 func (v Archive) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainArchive(v), v.rest) }
-func (v *Decline) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainDecline)(v), &v.rest) }
-func (v Decline) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainDecline(v), v.rest) }
 func (v *Report) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainReport)(v), &v.rest) }
 func (v Report) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainReport(v), v.rest) }
 func (v *ReportThread) UnmarshalJSON(b []byte) error {
