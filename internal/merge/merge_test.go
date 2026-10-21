@@ -112,6 +112,36 @@ func TestStripDetach(t *testing.T) {
 	}
 }
 
+// pairRef is the sibling the StripPair cases name.
+const pairRef = "o/s#3"
+
+func TestStripPair(t *testing.T) {
+	prMerge := func(args ...string) []string { return append([]string{Tool, "pr", "merge"}, args...) }
+	for _, c := range []struct {
+		name string
+		argv []string
+		want []string
+		pair string
+		set  bool
+	}{
+		{"separate", prMerge(backstage, "12", PairFlag, pairRef, "--update-branch"), prMerge(backstage, "12", "--update-branch"), pairRef, true},
+		{"joined, first", prMerge(PairFlag+"=o/s#3", backstage, "12"), prMerge(backstage, "12"), pairRef, true},
+		{"no value", prMerge(backstage, "12", PairFlag), prMerge(backstage, "12"), "", true},
+		{"none", prMerge(backstage, "12"), prMerge(backstage, "12"), "", false},
+		{"after --", prMerge(backstage, "12", "--", PairFlag, pairRef), prMerge(backstage, "12", "--", PairFlag, pairRef), "", false},
+		{"other command", []string{Tool, "pr", waitVerb, backstage, "12", PairFlag, pairRef}, []string{Tool, "pr", waitVerb, backstage, "12", PairFlag, pairRef}, "", false},
+	} {
+		in := slices.Clone(c.argv)
+		got, pair, set := StripPair(c.argv)
+		if !slices.Equal(got, c.want) || pair != c.pair || set != c.set {
+			t.Errorf("%s: got %q, pair %q %v", c.name, got, pair, set)
+		}
+		if !slices.Equal(c.argv, in) {
+			t.Errorf("%s: the caller's argv changed to %q", c.name, c.argv)
+		}
+	}
+}
+
 func TestParseDocument(t *testing.T) {
 	for _, c := range []struct {
 		name string

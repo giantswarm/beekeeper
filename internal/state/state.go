@@ -969,6 +969,9 @@ type State struct {
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
 	Urgent []Urgent `json:"urgent,omitempty"`
+	// Pairs are the merges declared to land together (the gate's --pair):
+	// neither starts unless the other is next in its lane.
+	Pairs []Pair `json:"pairs,omitempty"`
 	// RoleLines are lines for a role's holder that found none to tell: the
 	// role's next start says them.
 	RoleLines []RoleLine `json:"roleLines,omitempty"`
@@ -1014,6 +1017,47 @@ func (u Urgent) Key() string { return Merge{Repo: u.Repo, PR: u.PR}.Key() }
 // Ran says whether the merge ran under the floor in the window that resets
 // at Window.
 func (u Urgent) Ran() bool { return !u.Window.IsZero() }
+
+// Pair is two merges that must land together, a change split over two
+// repositories: the gate holds the first at its turn until the other is
+// next in its lane too, then starts both, and a refusal of either refuses
+// both with one reason.
+type Pair struct {
+	// Keys are the two merges, owner/repo#n each.
+	Keys []string  `json:"keys"`
+	By   Party     `json:"by"`
+	At   time.Time `json:"at"`
+	// Ready is when each merge's gate last found only the pair holding it
+	// back, by key.
+	Ready map[string]time.Time `json:"ready,omitempty"`
+	// Started is the merge that started first; its sibling then starts
+	// outside merge.cap and merge.sessionCap, the slot taken for both.
+	Started string `json:"started,omitempty"`
+	// Refused is why one of the two was refused, RefusedKey which: the
+	// other's gate refuses it with the same reason.
+	Refused    string `json:"refused,omitempty"`
+	RefusedKey string `json:"refusedKey,omitempty"`
+
+	rest rest
+}
+
+// Sibling is the pair's other merge than key, "" when key is not in it.
+func (p Pair) Sibling(key string) string {
+	switch {
+	case len(p.Keys) != 2:
+		return ""
+	case p.Keys[0] == key:
+		return p.Keys[1]
+	case p.Keys[1] == key:
+		return p.Keys[0]
+	}
+	return ""
+}
+
+// PairOf is the index of the pair key is in, -1 when none.
+func (s *State) PairOf(key string) int {
+	return slices.IndexFunc(s.Pairs, func(p Pair) bool { return p.Sibling(key) != "" })
+}
 
 // WorkerReport is the report a worker finished its task with: what it
 // delivered and the problems it found (broken functions, ways around them,
