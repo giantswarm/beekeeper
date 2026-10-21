@@ -244,7 +244,7 @@ gate runs lists the runs the gate runs outside their callers, gate stop
 	c.Flags().DurationVar(&limit, "limit", 0, "how long the call runs before it exits 76 and the merge or wait runs on outside it (default merge.toolLimit; 0: no limit)")
 	c.Flags().BoolVar(&queued, "queued", false, "wait as a queued merge's own run, which refuses at the end of --wait")
 	_ = c.Flags().MarkHidden("queued")
-	c.AddCommand(a.gateRunsCmd(), a.gateStopCmd())
+	c.AddCommand(a.gateRunsCmd(), a.gateStopCmd(), a.gateCheckCmd())
 	return c
 }
 
@@ -379,6 +379,12 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	// run, a re-executed wait), is judged before it takes a lane place.
 	if _, waiting := os.LookupEnv(gateDeadlineEnv); !waiting && !queued && !resumed && merge.Rebase(argv) {
 		if err := g.checkRebase(); err != nil {
+			return err
+		}
+	}
+	// A fresh merge a reviewer holds takes no lane place.
+	if _, waiting := os.LookupEnv(gateDeadlineEnv); !waiting && !queued && !resumed {
+		if err := g.checkReviews(g.refuseWith); err != nil {
 			return err
 		}
 	}
@@ -777,13 +783,18 @@ func (g *gateRun) checkCandidate() error {
 // refuseRunning refuses the merge whose turn came, its place running: the
 // place leaves the lane, which the next merge takes.
 func (g *gateRun) refuseRunning(format string, args ...any) error {
+	return g.refuseRunningWith(ExitGateRefused, format, args...)
+}
+
+// refuseRunningWith is refuseRunning with exit code code.
+func (g *gateRun) refuseRunningWith(code int, format string, args ...any) error {
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		if i := g.mine(st, state.Running); i >= 0 {
 			st.Merges = slices.Delete(st.Merges, i, i+1)
 		}
 		return nil, nil
 	})
-	return g.refuse(format, args...)
+	return g.refuseWith(code, format, args...)
 }
 
 // candidateText names a release candidate, "" as none.
@@ -915,6 +926,42 @@ func (g *gateRun) checkRebase() error {
 	case !r.Known:
 		gateLine("GitHub has not computed whether %s rebases (mergeable_state %s): it queues, devctl judges the rebase at its turn", g.key(), cmp.Or(r.State, unknownState))
 	}
+	return nil
+}
+
+// reviewHold reads the pull request's reviews and comments afresh
+// (github.ReviewGuard): the reason a reviewer holds its merge, "" when none
+// does. devctl pr merge's own guard drops a request for changes once a
+// commit or a reply is newer, so the gate reads before devctl runs.
+func (g *gateRun) reviewHold() (string, error) {
+	why := ""
+	err := g.readRetrying("the reviews of "+g.key(), func() (err error) {
+		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+		defer cancel()
+		why, err = reviewGuard(ctx, g.repo, g.pr)
+		return err
+	})
+	return why, err
+}
+
+// checkReviews refuses a pull request merge a reviewer holds, through
+// refuse: a request for changes that is the reviewer's latest verdict, or
+// unanswered feedback newer than the head. Reviews GitHub does not answer
+// for refuse too (74 in transit): nothing merges unread.
+func (g *gateRun) checkReviews(refuse func(code int, format string, args ...any) error) error {
+	if g.pr == 0 {
+		return nil
+	}
+	why, err := g.reviewHold()
+	switch {
+	case err != nil && merge.Transient(err):
+		return refuse(ExitGateUnread, "reading the reviews of %s failed in transit (%v), nothing merged: run the same command again once GitHub answers", g.key(), err)
+	case err != nil:
+		return refuse(ExitGateRefused, "the reviews of %s cannot be read (%v), nothing merged: run the same command again", g.key(), err)
+	case why != "":
+		return refuse(ExitGateRefused, "%s waits on its reviewers, nothing merged: %s. Answer the reviewer on the pull request, then run the same command again", g.key(), why)
+	}
+	gateLine("reviews: nothing holds %s", g.key())
 	return nil
 }
 
@@ -1285,6 +1332,10 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		if err := g.catchUp(); err != nil {
 			return "", err
 		}
+	}
+	// Feedback that landed while the merge waited holds it too.
+	if err := g.checkReviews(g.refuseRunningWith); err != nil {
+		return "", err
 	}
 	err = g.runMerge()
 	if p := (*preemptedError)(nil); errors.As(err, &p) {
