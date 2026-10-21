@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSize(t *testing.T) {
@@ -26,6 +27,8 @@ const (
 	kind     = "kind"
 	build    = "build"
 	docker   = "docker"
+	image    = "image"
+	oldID    = "sha256:old"
 )
 
 func TestNormalize(t *testing.T) {
@@ -49,7 +52,7 @@ func TestImporter(t *testing.T) {
 		{"/usr/bin/kind", "create", "cluster"},
 		{docker, build, "-t", "x", "."},
 		{docker, "--context", "default", build, "."},
-		{docker, "image", "load", "-i", "x.tar"},
+		{docker, image, "load", "-i", "x.tar"},
 		{docker, "save", "x"},
 		{"/usr/lib/docker/cli-plugins/docker-buildx", "buildx", build, "."},
 		{"ctr", "-n", "k8s.io", "images", "import", "x.tar"},
@@ -81,6 +84,9 @@ type fake struct {
 	crictl  map[string]string
 	removed [][]string
 	refuse  string
+	// tagged are the images' tag times by ID; an image without one was
+	// never tagged.
+	tagged map[string]string
 }
 
 func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
@@ -89,11 +95,21 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(f.df), nil
 	case slices.Equal(args, []string{"system", "df", "-v", "--format", "{{json .}}"}):
 		return []byte(f.dfv), nil
+	case args[0] == image && args[1] == "inspect":
+		var out string
+		for _, id := range args[4:] {
+			at, ok := f.tagged[id]
+			if !ok {
+				at = "0001-01-01T00:00:00Z"
+			}
+			out += id + "\t\"" + at + "\"\n"
+		}
+		return []byte(out), nil
 	case args[0] == "ps":
 		return []byte(f.nodes), nil
 	case args[0] == "exec":
 		return []byte(f.crictl[args[1]]), nil
-	case args[0] == "image" && args[1] == "rm":
+	case args[0] == image && args[1] == "rm":
 		if slices.Contains(args, f.refuse) {
 			return nil, errors.New("conflict: image is being used by a container")
 		}
@@ -114,26 +130,50 @@ const dfv = `{"Images":[
 
 func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 	f := &fake{dfv: dfv,
+		tagged: map[string]string{oldID: "2026-10-16T09:00:00.5+02:00"},
 		nodes:  "lab-control-plane\trunning\n",
 		crictl: map[string]string{"lab-control-plane": `{"images":[{"id":"sha256:other","repoTags":["docker.io/library/nginx:1"],"repoDigests":[]}]}`}}
 	images, err := ListImages(context.Background(), f.run)
 	if err != nil || len(images) != 5 {
 		t.Fatalf("images = %+v, %v", images, err)
 	}
-	if old := images[1]; old.ID != "sha256:old" || len(old.Refs) != 2 || old.Unique != 2e9 {
-		t.Errorf("old = %+v; want both tags, 2 GB", old)
+	tagged := time.Date(2026, 10, 16, 7, 0, 0, 5e8, time.UTC)
+	if old := images[1]; old.ID != oldID || len(old.Refs) != 2 || old.Unique != 2e9 || !old.Tagged.Equal(tagged) {
+		t.Errorf("old = %+v; want both tags, 2 GB, tagged %v", old, tagged)
 	}
 	used, err := KindImages(context.Background(), f.run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ids []string
-	for _, c := range Candidates(images, used) {
-		ids = append(ids, c.ID)
+	ids := func(keep time.Time) []string {
+		var out []string
+		for _, c := range Candidates(images, used, keep) {
+			out = append(out, c.ID)
+		}
+		return out
 	}
-	// The node image runs a container, nginx:1 is in the lab by its tag.
-	if want := []string{"sha256:dangling", "sha256:old", "sha256:new"}; !slices.Equal(ids, want) {
-		t.Errorf("candidates = %v; want %v", ids, want)
+	// The node image runs a container, nginx:1 is in the lab by its tag;
+	// old, created first but retagged since new was built, goes after it.
+	if got, want := ids(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)), []string{"sha256:dangling", "sha256:new", "sha256:old"}; !slices.Equal(got, want) {
+		t.Errorf("candidates = %v; want %v", got, want)
+	}
+	// Kept since the 13th: new, created on the 15th, and old, tagged on the
+	// 16th, stay whatever their Created.
+	if got, want := ids(time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)), []string{"sha256:dangling"}; !slices.Equal(got, want) {
+		t.Errorf("candidates kept since the 13th = %v; want %v", got, want)
+	}
+}
+
+func TestListImagesFailsWithoutTagTimes(t *testing.T) {
+	f := &fake{dfv: dfv}
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[0] == image && args[1] == "inspect" {
+			return nil, errors.New("no such image")
+		}
+		return f.run(ctx, args...)
+	}
+	if _, err := ListImages(context.Background(), run); err == nil {
+		t.Error("images listed without their tag times")
 	}
 }
 
@@ -152,8 +192,8 @@ func TestTrimImagesStopsAtTheTargetAndWhenBusy(t *testing.T) {
 	}
 	f := &fake{}
 	freed, removed, err := TrimImages(context.Background(), f.run, cands, 10e9, 6e9, func() bool { return false })
-	if err != nil || removed != 2 || freed != 4e9 {
-		t.Fatalf("trim = %d, %d, %v; want 2 removed, 4 GB", freed, removed, err)
+	if err != nil || !slices.Equal(removed, []string{"a", "x:1 y:1"}) || freed != 4e9 {
+		t.Fatalf("trim = %d, %v, %v; want 2 removed, 4 GB", freed, removed, err)
 	}
 	if want := [][]string{{"a"}, {"x:1", "y:1"}}; !slices.EqualFunc(f.removed, want, slices.Equal) {
 		t.Errorf("removed %v; want %v", f.removed, want)
@@ -161,16 +201,16 @@ func TestTrimImagesStopsAtTheTargetAndWhenBusy(t *testing.T) {
 	f = &fake{}
 	calls := 0
 	_, removed, err = TrimImages(context.Background(), f.run, cands, 10e9, 0, func() bool { calls++; return calls > 1 })
-	if !errors.Is(err, ErrBusy) || removed != 1 {
-		t.Errorf("busy trim = %d, %v; want 1 removed, then ErrBusy", removed, err)
+	if !errors.Is(err, ErrBusy) || len(removed) != 1 {
+		t.Errorf("busy trim = %v, %v; want 1 removed, then ErrBusy", removed, err)
 	}
 }
 
 func TestTrimImagesSkipsARefusedImage(t *testing.T) {
 	f := &fake{refuse: "a"}
 	cands := []Image{{ID: "a", Unique: 1}, {ID: "b", Unique: 1}}
-	if _, removed, err := TrimImages(context.Background(), f.run, cands, 2, 0, func() bool { return false }); err != nil || removed != 1 {
-		t.Errorf("trim = %d, %v; want b removed, a skipped", removed, err)
+	if _, removed, err := TrimImages(context.Background(), f.run, cands, 2, 0, func() bool { return false }); err != nil || !slices.Equal(removed, []string{"b"}) {
+		t.Errorf("trim = %v, %v; want b removed, a skipped", removed, err)
 	}
 }
 

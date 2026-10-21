@@ -3,7 +3,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,9 +20,10 @@ import (
 // fakeDocker is a docker CLI with 7 GiB of images over a 4 GiB cap and
 // 6 GiB of build cache over a 4 GiB cap: three unused images and one a
 // kind lab's node holds, each of 2 GiB. A removal or prune shrinks what
-// df says.
+// df says. An image was last tagged at its tagged time, never without one.
 type fakeDocker struct {
 	images, cache int64
+	tagged        map[string]time.Time
 	removed       [][]string
 	pruned        []string
 }
@@ -38,11 +41,18 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 {"Containers":"0","CreatedAt":"2026-10-01 01:00:00 +0000 UTC","ID":"sha256:lab","Repository":"gsoci.azurecr.io/giantswarm/y","Tag":"dev","UniqueSize":"2147483648B"},
 {"Containers":"2","CreatedAt":"2026-09-01 01:00:00 +0000 UTC","ID":"sha256:node","Repository":"kindest/node","Tag":"v1","UniqueSize":"2147483648B"}
 ]}`), nil
+	case args[0] == dockerImage && args[1] == "inspect":
+		var out []byte
+		for _, id := range args[4:] {
+			js, _ := json.Marshal(f.tagged[id])
+			out = fmt.Appendf(out, "%s\t%s\n", id, js)
+		}
+		return out, nil
 	case args[0] == "ps":
 		return []byte("agentlab-control-plane\trunning\n"), nil
 	case args[0] == dockerExec:
 		return []byte(`{"images":[{"id":"sha256:inside","repoTags":["gsoci.azurecr.io/giantswarm/y:dev"]}]}`), nil
-	case args[0] == "image" && args[1] == "rm":
+	case args[0] == dockerImage && args[1] == "rm":
 		f.removed = append(f.removed, args[2:])
 		f.images -= 2 << 30
 		return nil, nil
@@ -57,11 +67,14 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 // dockerExec is the docker verb the fake answers with a kind node's images.
 const dockerExec = "exec"
 
+// dockerImage is the docker command the fake inspects and removes images with.
+const dockerImage = "image"
+
 func bytesStr(n int64) string { return strconv.FormatInt(n, 10) + "B" }
 
 func dockerApp(t *testing.T) (*app, *fakeDocker) {
 	t.Helper()
-	f := &fakeDocker{images: 7 << 30, cache: 6 << 30}
+	f := &fakeDocker{images: 7 << 30, cache: 6 << 30, tagged: map[string]time.Time{}}
 	dockerCLI = f.run
 	t.Cleanup(func() { dockerCLI = nil })
 	dir := t.TempDir()
@@ -78,7 +91,7 @@ func noHolds() string { return "" }
 func TestPruneDockerKeepsUnderTheCapsAndLogs(t *testing.T) {
 	a, f := dockerApp(t)
 	r := a.pruneDocker(false, noHolds)
-	if r.err != nil || r.removed != 2 || !r.pruned {
+	if r.err != nil || len(r.removed) != 2 || !r.pruned {
 		t.Fatalf("prune = %+v; want 2 images removed and the build cache pruned", r)
 	}
 	// 7 GiB down to 3 GiB (three quarters of the 4 GiB cap): the two
@@ -95,8 +108,38 @@ func TestPruneDockerKeepsUnderTheCapsAndLogs(t *testing.T) {
 		t.Errorf("line =\n %q\nwant\n %q", got, want)
 	}
 	evs, err := a.store.Events(10, func(e state.Event) bool { return e.Verb == dockerVerb })
-	if err != nil || len(evs) != 1 || evs[0].Detail != want {
-		t.Errorf("logged %+v, %v; want one %s event with the line", evs, err, dockerVerb)
+	if logged := want + "; removed: x:dev-1, x:dev-2"; err != nil || len(evs) != 1 || evs[0].Detail != logged {
+		t.Errorf("logged %+v, %v; want one %s event %q", evs, err, dockerVerb, logged)
+	}
+}
+
+func TestPruneDockerKeepsAnOldImageTaggedRecently(t *testing.T) {
+	a, f := dockerApp(t)
+	a.cfg.Doctor.DockerBuildCacheMaxGiB = -1
+	// x:dev-1 was created longest ago but rebuilt from cache an hour ago:
+	// the session that tagged it has not loaded it yet.
+	f.tagged["sha256:old"] = time.Now().Add(-time.Hour)
+	r := a.pruneDocker(false, noHolds)
+	if want := [][]string{{"x:dev-2"}, {"x:dev-3"}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
+		t.Errorf("removed %v, %v; want %v, the recently tagged x:dev-1 kept", f.removed, r.err, want)
+	}
+}
+
+func TestDockerKeep(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	if got := dockerKeep(nil, now); !got.Equal(now.Add(-dockerTagSettle)) {
+		t.Errorf("no lab: keep %v; want the settle window", got)
+	}
+	labs := []lease.Holder{
+		{Env: labOne, Since: now.Add(-30 * time.Hour).Format(time.RFC3339)},
+		{Env: labTwo, Purpose: "(being claimed)"},
+	}
+	if got := dockerKeep(labs, now); !got.Equal(now.Add(-30 * time.Hour)) {
+		t.Errorf("a lab held 30h: keep %v; want its claim", got)
+	}
+	labs[0].Since = now.Add(-10 * 24 * time.Hour).Format(time.RFC3339)
+	if got := dockerKeep(labs, now); !got.Equal(now.Add(-dockerLabKeep)) {
+		t.Errorf("a lab held ten days: keep %v; want %v back at most", got, dockerLabKeep)
 	}
 }
 
@@ -105,7 +148,7 @@ func TestPruneDockerNeverRemovesAnImageAKindLabHolds(t *testing.T) {
 	a.cfg.Doctor.DockerImagesMaxGiB = 1
 	a.cfg.Doctor.DockerBuildCacheMaxGiB = -1
 	r := a.pruneDocker(false, noHolds)
-	if r.err != nil || r.removed != 3 {
+	if r.err != nil || len(r.removed) != 3 {
 		t.Fatalf("prune = %+v; want every unused image removed", r)
 	}
 	for _, refs := range f.removed {
@@ -137,7 +180,7 @@ func TestPruneDockerWaitsWhileAnImportRuns(t *testing.T) {
 		}
 		return ""
 	})
-	if r.removed != 1 || len(f.removed) != 1 || r.err != nil || r.held == "" {
+	if len(r.removed) != 1 || len(f.removed) != 1 || r.err != nil || r.held == "" {
 		t.Errorf("prune = %+v; want one image removed, then the wait", r)
 	}
 }

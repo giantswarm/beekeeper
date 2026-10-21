@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The doctor's Docker prune ranks images by when they were created or last tagged, the later, and keeps one created or tagged within 24 hours or since the oldest held lab lease's claim: a dev image rebuilt from cache keeps its old Created and was removed before its session loaded it. Each `docker.prune` event names the images it removed ([#1539](https://github.com/giantswarm/beekeeper/issues/1539)).
+
 ### Added
 
 - `beekeeper cache clear go [--modcache]` clears the shared Go build cache, and the module cache, without breaking a running build: it waits for the `beekeeper run`s that hold the cache's use lock, holds back the runs that start meanwhile, runs `go clean -cache` (`-modcache`) and logs a `gocache.clear` event. The hook refuses `go clean -cache`, `go clean -modcache` and a delete of either cache's directory (`rm -rf ~/.cache/go-build`, `~/go/pkg/mod`, a directory holding them), naming the command. A clear under a running build failed it on the entries it lost ([#823](https://github.com/giantswarm/beekeeper/issues/823)).
