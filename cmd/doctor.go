@@ -511,7 +511,9 @@ line:
   running, a finished worker's own desktop CLI archives it, warmed by
   showing the session in the desktop for a moment once the person's
   typing pauses, never while a headless turn of the session runs (claude
-  -p --resume <id>, a wake's): that turn is its CLI; a relieved run of the
+  -p --resume <id>, a wake's): that turn is its CLI; the watch leaves such
+  a warmed CLI of a handed-over session running 5 minutes for
+  its archive call instead of stopping it as REVIVED; a relieved run of the
   supervisor or the guide is never asked about itself and waits for
   another steward; a steward that declined is asked for no archive for
   24h; a run that asks no steward counts no turn and waits 10 minutes;

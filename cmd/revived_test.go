@@ -106,6 +106,52 @@ func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 	}
 }
 
+// The CLI of a handed-over session that the doctor warmed to archive its
+// own desktop session runs on for archiveWarmGrace: the watch neither stops
+// it as revived nor says SAME TITLE beside its follow-up, so its archive
+// call runs. Past the grace it is stopped like any revived CLI.
+func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
+	const name = "BS 2867 provider connect prompt"
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.now = time.Now()
+	useLauncher(t, &stopLauncher{})
+	ended := useEndRevived(t)
+
+	old := state.Party{Session: "6d5d9d3c-old", HostSession: "local_6d5d9d3c-old", Name: name}
+	next := state.Party{Session: "a1b2c3d4-new", HostSession: "local_a1b2c3d4-new", Name: name}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: old, At: w.now.Add(-3 * time.Hour)}, {Party: next, At: w.now.Add(-time.Minute)}}
+		st.Agents = []state.Agent{{Party: next, Task: "connect prompt"}}
+		oweArchive(st, old, "handed over to session "+next.Session, w.now)
+		st.Archives[0].Warmed = w.now.Add(-time.Minute)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldCLI := &claude.Session{PID: 4711, ID: old.Session, HostID: old.HostSession, Name: name}
+	nextCLI := &claude.Session{PID: 2, ID: next.Session, HostID: next.HostSession, Name: name}
+
+	left := w.stopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI})
+	if len(*ended) != 0 {
+		t.Fatalf("stopped %v, a CLI warmed for its archive", *ended)
+	}
+	if len(left) != 1 || left[0] != nextCLI {
+		t.Errorf("left %v, want only the follow-up answering to the name", left)
+	}
+	if d := sameTitles(left); len(d) != 0 {
+		t.Errorf("a shared title is left: %v", d)
+	}
+	if s := out.String(); strings.Contains(s, "REVIVED") {
+		t.Errorf("output:\n%s", s)
+	}
+
+	w.now = w.now.Add(archiveWarmGrace)
+	w.stopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI})
+	if len(*ended) != 1 || (*ended)[0] != oldCLI.PID {
+		t.Errorf("stopped %v past the grace, want the warmed CLI %d", *ended, oldCLI.PID)
+	}
+}
+
 // A relieved supervisor run whose CLI the desktop keeps or revives is
 // stopped once reliefGrace has passed since its successor took the relay
 // and it runs no tool command; the holder never is.
