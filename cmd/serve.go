@@ -160,13 +160,19 @@ type (
 // full before it validates it, so the bound is the server's.
 const mcpMaxBody = 4 << 20
 
-func (s *server) handler() http.Handler {
+// mcpServer is serve's MCP server: its tools and resources.
+func (s *server) mcpServer() *mcpserver.MCPServer {
 	m := mcpserver.NewMCPServer(project.Name, project.Version(), mcpserver.WithToolCapabilities(false),
 		mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(s.subscriptionHooks()))
 	for _, t := range append(s.tools(), s.messageTools()...) {
 		m.AddTool(t.tool, s.handle(t))
 	}
 	s.addResources(m)
+	return m
+}
+
+func (s *server) handler() http.Handler {
+	m := s.mcpServer()
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", s.authenticate(http.MaxBytesHandler(mcpserver.NewStreamableHTTPServer(m, mcpserver.WithStateLess(true)), mcpMaxBody)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
