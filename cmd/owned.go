@@ -362,12 +362,9 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 		_, _ = fmt.Fprintf(os.Stderr, "%s was stopped by its owner (gate stop), nobody is woken\n", r.command())
 		return
 	}
-	if a.store == nil {
-		a.cfgPath = r.spec.Config
-		if err := a.load(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "%s, unheard by %q: the configuration does not load (%v), nobody is woken\n", r.outcome(), r.spec.Owner.Name, err)
-			return
-		}
+	if err := a.loadRun(r); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s, unheard by %q: the configuration does not load (%v), nobody is woken\n", r.outcome(), r.spec.Owner.Name, err)
+		return
 	}
 	o := r.owed(time.Now())
 	if err := a.owe(o); err != nil {
@@ -385,6 +382,16 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 		o.Line = r.outcome()
 	}
 	a.payOwed(ctx, o)
+}
+
+// loadRun loads, once, the configuration and state of the gate that
+// started r: merge-child loads nothing until its command ended.
+func (a *app) loadRun(r childResult) error {
+	if a.store != nil {
+		return nil
+	}
+	a.cfgPath = r.spec.Config
+	return a.load()
 }
 
 // outcome is the run's outcome in one line: "<command> exit N: <reason>

@@ -568,8 +568,8 @@ func leaveAt(now time.Time, limit time.Duration, queued bool) time.Time {
 // leave ends the call at its tool limit, or as its caller's timeout cut it
 // (cut), while the merge's devctl (its merge-child pid) runs on: exit 76, as
 // for a queued merge, without the heard marker, so merge-child wakes the
-// owner with the outcome (tellOwner) and the watch records the run once
-// devctl ended (recordGone).
+// owner with the outcome (tellOwner), recording the run first (recordLeft);
+// the watch's recordGone records one whose merge-child died before that.
 func (g *gateRun) leave(pid int, cut bool) error {
 	past, why := "its limit", "this call's limit (merge.toolLimit; a desktop Bash call stops at 10 minutes)"
 	if cut {
