@@ -911,7 +911,7 @@ type Doctor struct {
 	DockerEvery Duration `yaml:"dockerEvery"`
 	// WorktreeRoots are the folders (~/ allowed) under which the watch
 	// looks for the linked git worktrees of finished workers (default
-	// ~/projects/worktrees).
+	// ~/.local/state/klaus-lab/worktrees).
 	WorktreeRoots []string `yaml:"worktreeRoots"`
 	// WorktreesEvery is how often the watch removes the worktrees whose
 	// pull request merged or closed, and the build output of those that
@@ -1961,7 +1961,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Doctor.DockerEvery, time.Hour)
 	setDur(&c.Doctor.WorktreesEvery, 6*time.Hour)
 	if c.Doctor.WorktreeRoots == nil {
-		c.Doctor.WorktreeRoots = []string{"~/projects/worktrees"}
+		c.Doctor.WorktreeRoots = []string{"~/.local/state/klaus-lab/worktrees"}
 	}
 	for i, r := range c.Doctor.WorktreeRoots {
 		c.Doctor.WorktreeRoots[i] = filepath.Clean(homePath(home, r))
