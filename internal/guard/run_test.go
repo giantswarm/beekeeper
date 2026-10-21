@@ -47,7 +47,7 @@ func TestCommandHead(t *testing.T) {
 // after it is what holds the slot.
 const slotIncident = `S=/tmp/claude-1000/-home-teemow-projects-klaus-lab/5df9a204-e414-4e77-b24b-b146480a8572/scratchpad/amp; ` +
 	`git -C "$S" checkout -q -- . && git -C ~/projects/giantswarm/agentlab worktree remove "$S"; ` +
-	`cd ~/projects/worktrees/agentlab/fix-slackproof-flake && go test -race -timeout 25m -run '^TestSlackProof$' -count=150 -v ./internal/lab/ 2>&1 | /usr/bin/grep -E "^panic|^(--- |ok|FAIL)" | sort | uniq -c`
+	`cd ~/.local/state/klaus-lab/worktrees/agentlab/fix-slackproof-flake && go test -race -timeout 25m -run '^TestSlackProof$' -count=150 -v ./internal/lab/ 2>&1 | /usr/bin/grep -E "^panic|^(--- |ok|FAIL)" | sort | uniq -c`
 
 func TestHolderNamesTheHeavyCommand(t *testing.T) {
 	o := Options{SlotDir: t.TempDir(), Max: "12G"}

@@ -163,7 +163,7 @@ func TestHeavyClassification(t *testing.T) {
 		{"git -C /tmp/amp checkout -q --detach e82d26b", false},
 		{"git checkout -q -b fix-make-test origin/main", false},
 		{"git switch -c go-test-flake", false},
-		{"git worktree add -q ~/projects/worktrees/x/make-build -b make-build origin/main", false},
+		{"git worktree add -q ~/.local/state/klaus-lab/worktrees/x/make-build -b make-build origin/main", false},
 		{"cd ~/src/x && git fetch -q origin && git checkout -q -B build origin/main", false},
 		{`S=/tmp/amp; git -C "$S" checkout -q -- . && git -C ~/src/x worktree remove "$S"`, false},
 		// builds, tests and lints keep the slot
