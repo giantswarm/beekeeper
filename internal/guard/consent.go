@@ -79,13 +79,13 @@ type App struct {
 }
 
 // Page is a tab's page: its URL and title, on Google's sign-in the callback
-// host of the OAuth flow the tab's earlier pages there named, and the text
-// the Chrome tools read from it while the tab was at that URL (a page's text,
-// its accessibility tree, a find's matches).
+// host of the OAuth flow the tab's earlier pages there named, and on a
+// GitLab authorize page the client id its consent form carries, as
+// GitLabFormScript read it while the tab was at that URL.
 type Page struct {
 	URL, Title string
 	Flow       string
-	Text       string
+	Form       string
 }
 
 // Decision is the hook's answer for a call acting on a page: Allow, Deny or
@@ -439,14 +439,16 @@ func lastPage(transcript, tab string) (Page, bool) {
 // lastPages are the pages of the tabs as the transcript last showed them,
 // by tabId; none for a transcript that cannot be read. A page on Google's
 // sign-in carries the callback host of the flow the tab's pages there
-// named since it came to that host; a page carries the text the reading
-// tools (readsPage) executed on its tab read from it since the tab's last
-// result of any other call or its last change of URL.
+// named since it came to that host; a page carries the client id
+// GitLabFormScript, a call of its own, read from its consent form, unless a
+// result of a call that can change the tab's page (changesPage: a click, a
+// key, a navigation, another script, such a batch) or a change of its URL
+// followed.
 func lastPages(transcript string) map[string]Page {
-	pages, flows, texts := map[string]Page{}, map[string]googleFlow{}, map[string]pageText{}
+	pages, flows, forms := map[string]Page{}, map[string]googleFlow{}, map[string]pageForm{}
 	seen := func(tab string, p Page) {
-		if texts[tab].url != p.URL {
-			delete(texts, tab)
+		if forms[tab].url != p.URL {
+			delete(forms, tab)
 		}
 		pages[tab] = p
 		u, err := url.Parse(p.URL)
@@ -459,7 +461,7 @@ func lastPages(transcript string) map[string]Page {
 		p.Flow = f.callback
 		pages[tab] = p
 	}
-	scanJoined(transcript, func(tool, text string) {
+	scanJoined(transcript, func(call chromeAction, text string) {
 		// The tab context is the tool's trailer of the result: the page's
 		// own text before it names no tab.
 		if trimmed := strings.TrimSpace(text); strings.HasPrefix(trimmed, tabsJSONOpen) {
@@ -478,38 +480,39 @@ func lastPages(transcript string) map[string]Page {
 		for _, m := range trailerTab.FindAllStringSubmatch(trailer, -1) {
 			seen(m[1], Page{URL: m[3], Title: m[2]})
 		}
-		// The result's own text, before the trailer, is what a reading call
-		// read from the tab it executed on, at the URL the trailer names; any
-		// other call on the tab (a click, a navigation, a script whose output
-		// the model wrote) leaves no text the page is known by.
+		// The result's own text, before the trailer, is what GitLabFormScript
+		// read from the consent form of the tab it executed on, at the URL the
+		// trailer names; a call that can change the tab's page (a click, a key,
+		// a navigation, another script) leaves no client id the page is known
+		// by, a wait, a page read or a tab listing keeps it.
 		if m := executedTab.FindStringSubmatch(trailer); m != nil {
 			p, ok := pages[m[1]]
-			body := strings.TrimSpace(text[:at[len(at)-1][0]])
+			code, _ := call.input[textKey].(string)
 			switch {
-			case !ok || !slices.Contains(readsPage, chromeTool(tool)):
-				delete(texts, m[1])
-			case body != "":
-				texts[m[1]] = pageText{p.URL, strings.TrimSpace(texts[m[1]].text + "\n" + body)}
+			case ok && chromeTool(call.name) == chromeScript && isGitLabForm(code):
+				if id := gitlabFormID(text[:at[len(at)-1][0]]); id != "" {
+					forms[m[1]] = pageForm{p.URL, id}
+				} else {
+					delete(forms, m[1])
+				}
+			case !ok || changesPage(call.name, call.input, m[1]):
+				delete(forms, m[1])
 			}
 		}
 	})
-	for tab, t := range texts {
+	for tab, f := range forms {
 		p := pages[tab]
-		p.Text = t.text
+		p.Form = f.clientID
 		pages[tab] = p
 	}
 	return pages
 }
 
-// pageText is the text the Chrome tools read from a tab while it was at
-// url.
-type pageText struct {
-	url, text string
+// pageForm is the client id GitLabFormScript read from a tab's consent form
+// while it was at url.
+type pageForm struct {
+	url, clientID string
 }
-
-// readsPage are the Chrome tools whose result is the page's own text read
-// from its DOM: its text, its accessibility tree, a find's matches.
-var readsPage = []string{chromePageText, chromeReadPage, chromeFind}
 
 // executedTab is the tab a Chrome tool result's call executed on, as its
 // tab context names it.
@@ -526,46 +529,23 @@ var contextLine = regexp.MustCompile(`(?m)^Tab Context:`)
 
 const tabsJSONOpen = `{"availableTabs"`
 
-// scanJoined calls fn with the tool and the text of each result of a
+// scanJoined calls fn with the call and the text of each result of a
 // Chrome tool call in the transcript's tail, its blocks joined, in order:
 // another tool's result, a shell's output say, names no tab.
-func scanJoined(transcript string, fn func(tool, text string)) {
-	browser := map[string]string{}
+func scanJoined(transcript string, fn func(call chromeAction, text string)) {
+	browser := map[string]chromeAction{}
 	scanLines(transcript, func(line []byte) {
-		for id, name := range toolUses(line) {
-			if isBrowserTool(name) {
-				browser[id] = name
+		for _, c := range toolCalls(line) {
+			if isBrowserTool(c.name) {
+				browser[c.id] = c.chromeAction
 			}
 		}
 		for _, r := range resultGroups(line) {
-			if tool, ok := browser[r.id]; ok {
-				fn(tool, strings.Join(r.texts, "\n"))
+			if call, ok := browser[r.id]; ok {
+				fn(call, strings.Join(r.texts, "\n"))
 			}
 		}
 	})
-}
-
-// toolUses are the tool calls on one transcript line: name by id.
-func toolUses(line []byte) map[string]string {
-	var entry struct {
-		Message struct {
-			Content []struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"content"`
-		} `json:"message"`
-	}
-	if json.Unmarshal(line, &entry) != nil {
-		return nil
-	}
-	uses := map[string]string{}
-	for _, b := range entry.Message.Content {
-		if b.Type == "tool_use" {
-			uses[b.ID] = b.Name
-		}
-	}
-	return uses
 }
 
 // scanResults calls fn with the text of each tool result in the

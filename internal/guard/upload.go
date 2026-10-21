@@ -116,8 +116,8 @@ func batchActions(input map[string]any) []chromeAction {
 
 // changesPage reports whether a Chrome call can change the page of tab
 // (a call naming no tab can change any): a navigate, a click, key or typed
-// text, a form value, a script other than the upload-target check, or a
-// batch's.
+// text, a form value, a script other than the upload-target check and
+// GitLabFormScript, or a batch's.
 func changesPage(tool string, input map[string]any, tab string) bool {
 	if t := tabOf(input[tabKey]); t != "" && t != tab && chromeTool(tool) != chromeBatch {
 		return false
@@ -130,7 +130,7 @@ func changesPage(tool string, input map[string]any, tab string) bool {
 		return slices.Contains(acting, action)
 	case chromeScript:
 		code, _ := input[textKey].(string)
-		return !isCheck(code)
+		return !isCheck(code) && !isGitLabForm(code)
 	case chromeBatch:
 		return slices.ContainsFunc(batchActions(input), func(a chromeAction) bool { return changesPage(a.name, a.input, tab) })
 	}
