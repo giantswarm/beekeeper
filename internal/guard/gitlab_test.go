@@ -115,15 +115,16 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 		return path
 	}
 	click := tabInput(leftClick, map[string]any{refKey: "ref_7", summaryKey: "Clicks GitLab's 'Authorize workspace-manager' button"})
+	const allowed = "own GitLab application workspace-manager"
 	enter := tabInput(actionKeyPress, map[string]any{textKey: "Return", summaryKey: "Presses Enter on the focused 'Authorize workspace-manager' button"})
 	for name, tc := range map[string]struct {
 		transcript, decision, reason string
 		enter                        bool
 	}{
-		"its form, a wait, then Enter":   {transcript(result("f", form(gitlabUID), authorize), result("w", "[computer:wait] Waited for 4 seconds", authorize)), decisionAllow, "own GitLab application workspace-manager", true},
+		"its form, a wait, then Enter":   {transcript(result("f", form(gitlabUID), authorize), result("w", "[computer:wait] Waited for 4 seconds", authorize)), decisionAllow, allowed, true},
 		"its form, a click, then Enter":  {transcript(result("f", form(gitlabUID), authorize), result("c", "Clicked on element ref_42", authorize)), decisionDeny, GitLabFormScript, true},
-		"its form read":                  {transcript(result("f", form(gitlabUID), authorize)), decisionAllow, "own GitLab application workspace-manager", false},
-		"its form, then a find":          {transcript(result("f", form(gitlabUID), authorize), result("t", "Found 1", authorize)), decisionAllow, "own GitLab application workspace-manager", false},
+		"its form read":                  {transcript(result("f", form(gitlabUID), authorize)), decisionAllow, allowed, false},
+		"its form, then a find":          {transcript(result("f", form(gitlabUID), authorize), result("t", "Found 1", authorize)), decisionAllow, allowed, false},
 		"a look-alike's form":            {transcript(result("t", lookAlike, authorize), result("f", form("uid-2"), authorize)), decisionDeny, "consent page of client id uid-2", false},
 		"a look-alike's label alone":     {transcript(result("t", lookAlike, authorize)), decisionDeny, siteConsent, false},
 		"its button found, no form read": {transcript(result("t", "- ref_7: button \"\"Authorize workspace-manager\"\" (submit)", authorize)), decisionDeny, GitLabFormScript, false},
