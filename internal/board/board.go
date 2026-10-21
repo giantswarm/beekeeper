@@ -124,6 +124,10 @@ type Candidate struct {
 	// sub-issue it is.
 	Step string `json:"step"`
 	Epic string `json:"epic,omitempty"`
+	// Match says what of the step placed it there: the values of its
+	// item that the step's matchers took ("status Backlog, kind Bug by
+	// label bug"), the epic's for a sub-issue offered through one.
+	Match string `json:"match,omitempty"`
 	// Skip says why it is not free, empty when it is.
 	Skip string `json:"skip,omitempty"`
 	// Priority is the rank ByPriority applied, 0 for none; PriorityOf the
@@ -186,7 +190,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 		byRef[strings.ToLower(it.Ref)] = it
 	}
 	var out []Candidate
-	offer := func(it Item, step, epic, skip string) {
+	offer := func(it Item, step, match, epic, skip string) {
 		if seen[it.Ref] {
 			return
 		}
@@ -197,12 +201,12 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			}
 			return snap.Parent(ref)
 		}
-		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
+		out = append(out, Candidate{Item: it, Step: step, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
 			for _, it := range snap.Search[i] {
-				offer(it, st.Name, "", "")
+				offer(it, st.Name, "search", "", "")
 			}
 			continue
 		}
@@ -210,12 +214,13 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			if seen[it.Ref] || !Matches(st, it, now) {
 				continue
 			}
+			m := matched(st, it)
 			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 {
-				offer(it, st.Name, "", "")
+				offer(it, st.Name, m, "", "")
 				continue
 			}
 			if len(it.SubIssues) == 0 && len(it.Missing) > 0 {
-				offer(it, st.Name, "", "sub-issues unknown: "+strings.Join(it.Missing, "; "))
+				offer(it, st.Name, m, "", "sub-issues unknown: "+strings.Join(it.Missing, "; "))
 				continue
 			}
 			seen[it.Ref] = true
@@ -239,7 +244,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				case sub.OnBoard:
 					skip = Unoffered(snap.Order, sub, now)
 				}
-				offer(sub, st.Name, it.Ref, skip)
+				offer(sub, st.Name, m, it.Ref, skip)
 			}
 		}
 	}
@@ -270,9 +275,63 @@ func Unoffered(order []config.BoardStep, it Item, now time.Time) string {
 
 // selects reports whether st's statuses, kinds and labels take it.
 func selects(st config.BoardStep, it Item) bool {
+	kind, _ := kindOf(st.Kind, it)
 	return (len(st.Status) == 0 || slices.Contains(st.Status, it.Status)) &&
-		(len(st.Kind) == 0 || slices.Contains(st.Kind, it.Kind)) &&
+		(len(st.Kind) == 0 || kind != "") &&
 		(len(st.Labels) == 0 || slices.ContainsFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) }))
+}
+
+// kindOf is the one of kinds that it is: its Kind, or for an item without
+// one the kind a label of it stands for ("bug" or "kind/bug" for "Bug 🐞"),
+// that label then label; kind is "" for none.
+func kindOf(kinds []string, it Item) (kind, label string) {
+	if slices.Contains(kinds, it.Kind) {
+		return it.Kind, ""
+	}
+	if it.Kind != "" {
+		return "", ""
+	}
+	for _, l := range it.Labels {
+		w := words(strings.TrimPrefix(strings.ToLower(l), KindLabel))
+		if i := slices.IndexFunc(kinds, func(k string) bool { return words(k) == w }); w != "" && i >= 0 {
+			return kinds[i], l
+		}
+	}
+	return "", ""
+}
+
+// KindLabel is the prefix of an issue label naming its kind: kind/bug.
+const KindLabel = "kind/"
+
+// matched says what of it the matchers of st, which selects it, took:
+// "status Backlog 📦, kind Bug 🐞 by label bug"; "every item" for a step
+// without any.
+func matched(st config.BoardStep, it Item) string {
+	var parts []string
+	if len(st.Status) > 0 {
+		parts = append(parts, "status "+it.Status)
+	}
+	if len(st.Kind) > 0 {
+		k, l := kindOf(st.Kind, it)
+		if l != "" {
+			k += " by label " + l
+		}
+		parts = append(parts, "kind "+k)
+	}
+	if len(st.Labels) > 0 {
+		i := slices.IndexFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) })
+		parts = append(parts, "label "+it.Labels[i])
+	}
+	if st.Unblocked {
+		parts = append(parts, "blockers closed")
+	}
+	if d := st.CreatedWithin.Duration; d > 0 {
+		parts = append(parts, "created within "+span(d))
+	}
+	if len(parts) == 0 {
+		return "every item"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // refusal says why st turns away an item it selects: its blockers, a
