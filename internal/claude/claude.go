@@ -28,8 +28,8 @@ type Session struct {
 	ID     string `json:"session"`
 	HostID string `json:"hostSession,omitempty"`
 	// Parent is the session whose tool command started this one.
-	Parent     string    `json:"parent,omitempty"`
-	Name       string    `json:"name"`
+	Parent string `json:"parent,omitempty"`
+	Name   string `json:"name"`
 	// Peer is the name the CLI takes messages under: the name in its record,
 	// else its -n. A desktop title that follows a rename (Name) is not it
 	// when the CLI derived its own, from its folder ("klaus-lab-16").

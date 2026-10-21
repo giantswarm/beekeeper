@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -107,7 +108,7 @@ func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 	}
 	sessions := []*claude.Session{
 		{ID: out.Session, HostID: out.HostSession, Name: out.Name, Peer: "klaus-lab-15", PID: 249},
-		{ID: succ.Session, HostID: succ.HostSession, Name: succ.Name, Peer: "klaus-lab-16", PID: 250},
+		{ID: succ.Session, HostID: succ.HostSession, Name: succ.Name, Peer: derivedPeer, PID: 250},
 	}
 	sock := func(pid int) string { return "/run/" + strconv.Itoa(pid) + ".sock" }
 	h := guard.Hook{
@@ -121,7 +122,7 @@ func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 		Holds: func(name string) string { return holderRole(st, name) },
 	}
 	for _, to := range []string{"the supervisor", succ.Name, "supervisor run 250"} {
-		raw, _ := json.Marshal(map[string]any{"session_id": "worker", "tool_name": guard.SendMessageTool, "tool_input": map[string]any{"to": to, "message": "report"}})
+		raw := fmt.Appendf(nil, `{"session_id":"w1","tool_name":%q,"tool_input":{"to":%q,"message":"done"}}`, guard.SendMessageTool, to)
 		var got struct {
 			Out struct {
 				Decision string         `json:"permissionDecision"`
@@ -131,8 +132,12 @@ func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 		if err := json.Unmarshal(h.Decide(raw), &got); err != nil {
 			t.Fatalf("%q: %v", to, err)
 		}
-		if got.Out.Decision != "allow" || got.Out.Input["to"] != "klaus-lab-16" {
-			t.Errorf("%q: %s to %v, want allow to klaus-lab-16", to, got.Out.Decision, got.Out.Input["to"])
+		if got.Out.Decision != "allow" || got.Out.Input["to"] != derivedPeer {
+			t.Errorf("%q: %s to %v, want allow to %s", to, got.Out.Decision, got.Out.Input["to"], derivedPeer)
 		}
 	}
 }
+
+// derivedPeer is the name a desktop CLI derived from its folder takes
+// messages under while its title is the supervisor's run name.
+const derivedPeer = "klaus-lab-16"
