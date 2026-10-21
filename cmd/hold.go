@@ -65,12 +65,9 @@ Without a subcommand, lists the holds.`,
 			if err := a.checkTarget(args[0]); err != nil {
 				return err
 			}
-			if err := a.checkExcept(args[0], except); err != nil {
-				return err
-			}
 			exceptSession = strings.TrimSpace(exceptSession)
-			if exceptSession != "" && args[0] == "github" {
-				return usageErr("a github hold stops every GitHub call and makes no exception")
+			if err := a.checkExcept(args[0], except, exceptSession); err != nil {
+				return err
 			}
 			if strings.TrimSpace(reason) == "" {
 				return &exitError{code: ExitUsage, msg: "--reason is required"}
@@ -247,10 +244,13 @@ func splitPR(s string) (repo string, pr int, ok bool) {
 	return repo, n, err == nil && n > 0
 }
 
-// checkExcept refuses an exception the hold cannot make: one that is not a
-// repository or pull request, on github, of another repository than the
-// held one, or outside the held lane.
-func (a *app) checkExcept(target, except string) error {
+// checkExcept refuses an exception the hold cannot make: any on github, and
+// a pull request one (except) that is not a repository or pull request, of
+// another repository than the held one, or outside the held lane.
+func (a *app) checkExcept(target, except, session string) error {
+	if (except != "" || session != "") && target == "github" {
+		return usageErr("a github hold stops every GitHub call and makes no exception")
+	}
 	if except == "" {
 		return nil
 	}
@@ -259,8 +259,6 @@ func (a *app) checkExcept(target, except string) error {
 	switch {
 	case !ok:
 		return usageErr("--except wants owner/repo or owner/repo#n, got %s", except)
-	case target == "github":
-		return usageErr("a github hold stops every GitHub call and makes no exception")
 	case isLane && a.cfg.LaneOf(repo).Name != lane:
 		return usageErr("%s is not in lane %s (beekeeper lanes lists the lanes)", repo, lane)
 	case strings.Contains(target, "/") && (!strings.EqualFold(repo, target) || pr == 0):
