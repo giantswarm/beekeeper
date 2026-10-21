@@ -102,6 +102,8 @@ func googleTranscript(t *testing.T, urls ...string) string {
 	for _, u := range urls {
 		lines = append(lines, resultLine(strconv.Quote("Clicked.\n\nTab Context:\n- Available tabs:\n  • tabId 7: \""+googleTitle+`" ("`+u+`")`)))
 	}
+	// The last page's draw check answered drawn; its result names no page.
+	lines = append(lines, drawUse(), strings.Replace(resultLine(strconv.Quote(drawOpen+Drawn)), `"tool_use_id":"t"`, `"tool_use_id":"d"`, 1))
 	path := filepath.Join(t.TempDir(), "t.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)

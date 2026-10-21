@@ -155,8 +155,10 @@ func (c Capture) refusal(tool string, input json.RawMessage) string {
 	case name == chromeNavigation && !strings.HasPrefix(str(urlKey), "https://") && !strings.HasPrefix(str(urlKey), "http://") &&
 		str(urlKey) != "back" && str(urlKey) != "forward":
 		return blind + "navigate opens an http or https page only."
-	case name == chromeScript && strings.TrimSpace(str(textKey)) != ReaderScript(c.Pattern.String()):
-		return blind + "the one script it runs is beekeeper's reader, verbatim: " + ReaderScript(c.Pattern.String())
+	case name == chromeScript && strings.TrimSpace(str(textKey)) != ReaderScript(c.Pattern.String()) &&
+		!isDrawCheck(str(textKey)) && !isLeaveDisarm(str(textKey)):
+		return blind + "the scripts it runs are beekeeper's reader, verbatim: " + ReaderScript(c.Pattern.String()) +
+			" and, read nothing of the page, beekeeper's draw check and leave-page disarm, verbatim"
 	}
 	return ""
 }

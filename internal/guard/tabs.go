@@ -181,7 +181,8 @@ func BrowseStop(input []byte) []byte {
 	}
 	out, _ := json.Marshal(map[string]string{"decision": "block", "reason": fmt.Sprintf(
 		"Before you end, close the tabs you opened that are still open, blank ones included, with tabs_close_mcp in this order: %s "+
-			"(the tab your group was made with last). Then end with your report as before, adding which tabs you closed.",
-		strings.Join(open, ", "))})
+			"(the tab your group was made with last), each on a web page after this, run on it with javascript_tool (alone or in the same batch "+
+			"before its close), so no leave-page prompt holds it open:\n%s\nThen end with your report as before, adding which tabs you closed.",
+		strings.Join(open, ", "), LeaveDisarm)})
 	return out
 }
