@@ -43,9 +43,9 @@ func TestToolAnnotations(t *testing.T) {
 	want := map[string]hint{
 		"lease_list": read, "hold_list": read, "lanes": read, "lane_turn": read,
 		"note_list": read, "list_agents": read, "snapshot": read, "receive_messages": read,
-		"lease_claim": add, "lane_queue": add, "lane_settle": add, "agents_register": add,
+		"lease_claim": add, "lane_queue": add, "lane_settle": add, nameAgentsRegister: add,
 		"lease_release": remove, "hold_set": remove, "hold_lift": remove, "lane_leave": remove,
-		"agents_leave": remove, "ack_messages": remove,
+		nameAgentsLeave: remove, "ack_messages": remove,
 		"note_done": {false, true, true, true}, "note_answer": {false, true, true, true},
 		"note_add": {false, false, false, true}, "send_message": {false, false, false, true}, "converse": {false, false, false, true},
 	}
@@ -64,7 +64,7 @@ func TestToolAnnotations(t *testing.T) {
 // TestCallerRequired: a tool that acts as the calling agent itself requires
 // agent and host, and only such a tool: its handler refuses without them.
 func TestCallerRequired(t *testing.T) {
-	identified := map[string]bool{"agents_register": true, "agents_leave": true, "converse": true}
+	identified := map[string]bool{nameAgentsRegister: true, nameAgentsLeave: true, "converse": true}
 	for name, st := range docsServer().ListTools() {
 		required := map[string]bool{}
 		for _, r := range st.Tool.InputSchema.Required {
@@ -77,7 +77,7 @@ func TestCallerRequired(t *testing.T) {
 	// The roster tools refuse before they read the store.
 	s := &server{cfg: &config.Config{}, now: time.Now}
 	for _, tool := range append(s.tools(), s.messageTools()...) {
-		if tool.tool.Name != "agents_register" && tool.tool.Name != "agents_leave" {
+		if tool.tool.Name != nameAgentsRegister && tool.tool.Name != nameAgentsLeave {
 			continue
 		}
 		req := mcp.CallToolRequest{}

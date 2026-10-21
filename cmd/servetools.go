@@ -45,6 +45,9 @@ const (
 	keyMailbox       = "mailbox"
 	keyNotes         = "notes"
 	lanesName        = "lanes"
+	// The roster tools, which act as the calling agent itself.
+	nameAgentsRegister = "agents_register"
+	nameAgentsLeave    = "agents_leave"
 )
 
 // callerOptions are the arguments every tool takes: who the calling agent is
@@ -142,12 +145,12 @@ func (s *server) tools() []serveTool {
 		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
 			"", hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number"))), toolNoteDone},
-		{newTool("agents_register", "Register the calling agent on its team's roster: idle, or busy with its task.",
+		{newTool(nameAgentsRegister, "Register the calling agent on its team's roster: idle, or busy with its task.",
 			"A machine publishing its agents passes each one's task and whether it is done; an agent registering itself passes neither and keeps its task.",
 			hints{idempotent: true, identified: true},
 			mcp.WithString(paramTask, mcp.Description("the agent's task (a machine's agent): empty is idle")),
 			mcp.WithBoolean(paramDone, mcp.Description("the agent reported its work finished: ended on the roster"))), toolAgentsRegister},
-		{newTool("agents_leave", "Take the calling agent off the roster: its machine no longer runs it.", "",
+		{newTool(nameAgentsLeave, "Take the calling agent off the roster: its machine no longer runs it.", "",
 			hints{destructive: true, idempotent: true, identified: true}), toolAgentsLeave},
 		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintRead,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
