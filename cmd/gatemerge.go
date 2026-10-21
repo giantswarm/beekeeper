@@ -604,11 +604,24 @@ func (a *app) mergeChildRun(ctx context.Context, base string, bin binary) error 
 			_, _ = fmt.Fprintf(os.Stderr, "%sthe new binary does not start (%v): handing the outcome over under %s\n", GatePrefix, err, project.Version())
 		}
 	}
+	a.recordLeft(ctx, r)
 	a.tellOwner(ctx, r)
 	if filepath.Base(filepath.Dir(r.base)) == ownedRuns && !proc.Alive(r.spec.Gate) {
 		removeMergeFiles(r.base) // a gate gone leaves a wait's or queued merge's files to its run
 	}
 	return exitCode(unitExit(r.rc))
+}
+
+// recordLeft records the finished run of a gate that left it to run on
+// (its tool limit, its caller's timeout) and is gone, before its owner hears
+// the outcome: its lane lists it no longer running the moment its devctl
+// ended. A gate still running records the run itself; the watch's
+// recordGone stays the backstop for a merge-child that died before this.
+func (a *app) recordLeft(ctx context.Context, r childResult) {
+	if proc.Alive(r.spec.Gate) || a.loadRun(r) != nil {
+		return
+	}
+	a.recordGone(ctx)
 }
 
 // mergeDoneEnv carries a finished command's outcome across merge-child's
