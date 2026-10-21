@@ -440,9 +440,10 @@ func lastPage(transcript, tab string) (Page, bool) {
 // by tabId; none for a transcript that cannot be read. A page on Google's
 // sign-in carries the callback host of the flow the tab's pages there
 // named since it came to that host; a page carries the client id
-// GitLabFormScript executed on its tab read from its consent form, unless a
-// result of any call but a reading one (readsPage) on the tab or a change of
-// its URL followed.
+// GitLabFormScript, a call of its own, read from its consent form, unless a
+// result of a call that can change the tab's page (changesPage: a click, a
+// key, a navigation, another script, such a batch) or a change of its URL
+// followed.
 func lastPages(transcript string) map[string]Page {
 	pages, flows, forms := map[string]Page{}, map[string]googleFlow{}, map[string]pageForm{}
 	seen := func(tab string, p Page) {
@@ -481,9 +482,9 @@ func lastPages(transcript string) map[string]Page {
 		}
 		// The result's own text, before the trailer, is what GitLabFormScript
 		// read from the consent form of the tab it executed on, at the URL the
-		// trailer names; any other call on the tab but a reading one (a
-		// click, a navigation, another script) leaves no client id the page is
-		// known by.
+		// trailer names; a call that can change the tab's page (a click, a key,
+		// a navigation, another script) leaves no client id the page is known
+		// by, a wait, a page read or a tab listing keeps it.
 		if m := executedTab.FindStringSubmatch(trailer); m != nil {
 			p, ok := pages[m[1]]
 			code, _ := call.input[textKey].(string)
@@ -494,7 +495,7 @@ func lastPages(transcript string) map[string]Page {
 				} else {
 					delete(forms, m[1])
 				}
-			case !ok || !slices.Contains(readsPage, chromeTool(call.name)):
+			case !ok || changesPage(call.name, call.input, m[1]):
 				delete(forms, m[1])
 			}
 		}
@@ -512,10 +513,6 @@ func lastPages(transcript string) map[string]Page {
 type pageForm struct {
 	url, clientID string
 }
-
-// readsPage are the Chrome tools that only read a page: its text, its
-// accessibility tree, a find's matches.
-var readsPage = []string{chromePageText, chromeReadPage, chromeFind}
 
 // executedTab is the tab a Chrome tool result's call executed on, as its
 // tab context names it.

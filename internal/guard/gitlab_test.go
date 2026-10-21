@@ -72,7 +72,8 @@ func TestGitLabFormID(t *testing.T) {
 // The hook answers a click on a GitLab application's authorize page, titled
 // "GitLab" with the client id redacted, from the client id GitLabFormScript
 // read from its consent form on that tab at that URL: a page read after it
-// keeps it; a look-alike application, whose quoted name imitates the
+// keeps it, as does a batch that only waits and lists the tabs, for a click
+// or an Enter on the button, never a click after it; a look-alike application, whose quoted name imitates the
 // recorded one's "Authorize <name>" label, is refused by its form's id and
 // without a form read by its label alone; another script's output, a form
 // read at the tab's earlier URL or before a later call on the tab names
@@ -100,8 +101,13 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 			in, _ := json.Marshal(map[string]any{"action": "javascript_exec", tabKey: 7, textKey: code})
 			return `{"type":"tool_use","id":"` + id + `","name":"mcp__claude-in-chrome__javascript_tool","input":` + string(in) + `}`
 		}
+		// "w" is a batch that waits and lists the tabs, "c" a click on the
+		// tab.
 		uses := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"mcp__claude-in-chrome__find","input":{}},` +
-			script("f", GitLabFormScript) + `,` + script("o", "'"+form(gitlabUID)+"'") + `]}}`
+			script("f", GitLabFormScript) + `,` + script("o", "'"+form(gitlabUID)+"'") + `,` +
+			`{"type":"tool_use","id":"w","name":"mcp__claude-in-chrome__browser_batch","input":{"actions":[` +
+			`{"name":"computer","input":{"action":"wait","duration":4,"tabId":7}},{"name":"tabs_context_mcp","input":{}}]}},` +
+			`{"type":"tool_use","id":"c","name":"mcp__claude-in-chrome__computer","input":{"action":"left_click","ref":"ref_42","tabId":7}}]}}`
 		path := filepath.Join(t.TempDir(), "t.jsonl")
 		if err := os.WriteFile(path, []byte(uses+"\n"+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -109,22 +115,30 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 		return path
 	}
 	click := tabInput(leftClick, map[string]any{refKey: "ref_7", summaryKey: "Clicks GitLab's 'Authorize workspace-manager' button"})
+	enter := tabInput(actionKeyPress, map[string]any{textKey: "Return", summaryKey: "Presses Enter on the focused 'Authorize workspace-manager' button"})
 	for name, tc := range map[string]struct {
 		transcript, decision, reason string
+		enter                        bool
 	}{
-		"its form read":                  {transcript(result("f", form(gitlabUID), authorize)), decisionAllow, "own GitLab application workspace-manager"},
-		"its form, then a find":          {transcript(result("f", form(gitlabUID), authorize), result("t", "Found 1", authorize)), decisionAllow, "own GitLab application workspace-manager"},
-		"a look-alike's form":            {transcript(result("t", lookAlike, authorize), result("f", form("uid-2"), authorize)), decisionDeny, "consent page of client id uid-2"},
-		"a look-alike's label alone":     {transcript(result("t", lookAlike, authorize)), decisionDeny, siteConsent},
-		"its button found, no form read": {transcript(result("t", "- ref_7: button \"\"Authorize workspace-manager\"\" (submit)", authorize)), decisionDeny, GitLabFormScript},
-		"no single form":                 {transcript(result("f", gitlabFormOpen+"none: 2 authorize forms", authorize)), decisionDeny, siteConsent},
-		"another script's output":        {transcript(result("o", form(gitlabUID), authorize)), decisionDeny, siteConsent},
-		"read at the earlier URL":        {transcript(result("f", form(gitlabUID), "https://gitlab.example.org/users/sign_in"), result("t", "Clicked", authorize)), decisionDeny, siteConsent},
-		"a script after the form read":   {transcript(result("f", form(gitlabUID), authorize), result("o", "done", authorize)), decisionDeny, siteConsent},
-		"a later form read":              {transcript(result("f", form(gitlabUID), authorize), result("f", form("uid-2"), authorize)), decisionDeny, "client id uid-2"},
+		"its form, a wait, then Enter":   {transcript(result("f", form(gitlabUID), authorize), result("w", "[computer:wait] Waited for 4 seconds", authorize)), decisionAllow, "own GitLab application workspace-manager", true},
+		"its form, a click, then Enter":  {transcript(result("f", form(gitlabUID), authorize), result("c", "Clicked on element ref_42", authorize)), decisionDeny, GitLabFormScript, true},
+		"its form read":                  {transcript(result("f", form(gitlabUID), authorize)), decisionAllow, "own GitLab application workspace-manager", false},
+		"its form, then a find":          {transcript(result("f", form(gitlabUID), authorize), result("t", "Found 1", authorize)), decisionAllow, "own GitLab application workspace-manager", false},
+		"a look-alike's form":            {transcript(result("t", lookAlike, authorize), result("f", form("uid-2"), authorize)), decisionDeny, "consent page of client id uid-2", false},
+		"a look-alike's label alone":     {transcript(result("t", lookAlike, authorize)), decisionDeny, siteConsent, false},
+		"its button found, no form read": {transcript(result("t", "- ref_7: button \"\"Authorize workspace-manager\"\" (submit)", authorize)), decisionDeny, GitLabFormScript, false},
+		"no single form":                 {transcript(result("f", gitlabFormOpen+"none: 2 authorize forms", authorize)), decisionDeny, siteConsent, false},
+		"another script's output":        {transcript(result("o", form(gitlabUID), authorize)), decisionDeny, siteConsent, false},
+		"read at the earlier URL":        {transcript(result("f", form(gitlabUID), "https://gitlab.example.org/users/sign_in"), result("t", "Clicked", authorize)), decisionDeny, siteConsent, false},
+		"a script after the form read":   {transcript(result("f", form(gitlabUID), authorize), result("o", "done", authorize)), decisionDeny, siteConsent, false},
+		"a later form read":              {transcript(result("f", form(gitlabUID), authorize), result("f", form("uid-2"), authorize)), decisionDeny, "client id uid-2", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ev := toolEvent(browserTools+chromeComputer, click)
+			in := click
+			if tc.enter {
+				in = enter
+			}
+			ev := toolEvent(browserTools+chromeComputer, in)
 			ev["permission_mode"] = dontAsk
 			ev[sessionKey] = browseTurn
 			ev["transcript_path"] = tc.transcript

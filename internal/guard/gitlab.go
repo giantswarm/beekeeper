@@ -91,7 +91,8 @@ func gitlabConsent(apps []App, u *url.URL, page Page) Decision {
 	if clientID == "" {
 		which = strconv.Quote(page.Title)
 		how = " The Chrome tools redact the client id the page's URL carries: read it from the consent form first, with javascript_tool " +
-			"on the tab, this script verbatim:\n" + GitLabFormScript + "\nthen click again, with no other call on the tab between."
+			"on the tab, a call of its own (not in a batch), this script verbatim:\n" + GitLabFormScript + "\nthen click or press Enter again, " +
+			"with no click, key, navigation or other script on the tab between."
 	}
 	return Decision{Deny, fmt.Sprintf("Refused: %s's consent page %s (callback %s) names a GitLab application beekeeper has no record of. "+
 		"A consent is a grant of the person's identity, answered only for an application the person owns and asked for, which %s "+
