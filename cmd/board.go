@@ -99,10 +99,10 @@ name (lease/<resource>, lease/agentlab-1) free or the caller's: an item
 whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
 an epic passes the same checks, and a serve record or task naming
-the epic covers it too ("…, on epic owner/repo#n"). No note is read: a
-hold is a blocked-by (board block) or the Status Blocked / Waiting a
-decision sets while it is open (note add --holds), a priority a board
-rank. A held item,
+the epic covers it too ("…, on epic owner/repo#n"). A hold is a
+blocked-by (board block) or the Status Blocked / Waiting a decision sets on
+each of its --ref while it is open (note add --holds), skipped as "held:
+decision #<n> for <person> until it closes"; a priority is a board rank. A held item,
 one with an open recorded blocker, is skipped as "held: blocked by
 <owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
 its sub-issues, and every issue under it is skipped as "held: sub-issue of
@@ -530,6 +530,18 @@ func skipCounts(by map[string]int) string {
 	return fmt.Sprintf("%d in all: %s", total, strings.Join(parts, ", "))
 }
 
+// heldByDecision names the open decision that holds the board item it
+// (note add --holds), every --ref of it alike, while the Status its hold set
+// stands: "held: decision #n for <person> until it closes"; empty for an
+// item no decision holds.
+func heldByDecision(notes []state.Note, it board.Item) string {
+	n, h := heldBy(notes, it.Ref, 0)
+	if n == nil || !strings.EqualFold(it.Status, h.Status) {
+		return ""
+	}
+	return fmt.Sprintf("%sdecision #%d for %s until it closes", board.HeldWord, n.ID, noteWho(*n))
+}
+
 // nextFree walks all the candidates in order and picks the first free one;
 // the rest go to AfterPick, each with its skip reason or free.
 // An item is owned by a record of a running session (or of one that
@@ -553,6 +565,7 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 		return o
 	}
 	for _, c := range cands {
+		c.Skip = cmp.Or(heldByDecision(st.Notes, c.Item), c.Skip)
 		if c.Skip == "" {
 			c.Skip = owned(c.Ref)
 		}

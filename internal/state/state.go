@@ -444,12 +444,35 @@ type Note struct {
 	Recommend int      `json:"recommend,omitempty"`
 	// Posted is the gateway's handle on the decision's message, once posted.
 	Posted string `json:"posted,omitempty"`
-	// Held is the board item the decision holds (note add --holds): its
+	// Held is the board item the decision holds (note add --holds), its
+	// first --ref, and AlsoHeld those of its further --ref: each one's
 	// Status set to Blocked / Waiting until the decision closes, then set
-	// back. nil for a note that holds nothing.
-	Held *ItemHold `json:"held,omitempty"`
+	// back. nil and empty for a note that holds nothing.
+	Held     *ItemHold  `json:"held,omitempty"`
+	AlsoHeld []ItemHold `json:"alsoHeld,omitempty"`
 
 	rest rest
+}
+
+// Holds are the board items n holds: Held, then AlsoHeld.
+func (n *Note) Holds() []ItemHold {
+	if n.Held == nil {
+		return nil
+	}
+	return append([]ItemHold{*n.Held}, n.AlsoHeld...)
+}
+
+// HoldOf is n's hold of the board item ref; nil when n holds no such item.
+func (n *Note) HoldOf(ref string) *ItemHold {
+	if n.Held != nil && strings.EqualFold(n.Held.Ref, ref) {
+		return n.Held
+	}
+	for i := range n.AlsoHeld {
+		if strings.EqualFold(n.AlsoHeld[i].Ref, ref) {
+			return &n.AlsoHeld[i]
+		}
+	}
+	return nil
 }
 
 // ItemHold is a board item a decision holds on its person: the issue, the
