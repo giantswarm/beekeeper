@@ -1266,12 +1266,13 @@ like a merge typed on the command line.
 
 - **Refused, exit 77**, one line starting `beekeeper gate: refused,` that says why and what to do:
   the repository, its lane, `merges` or `github` is held, or a cluster upgrade runs on the lane's
-  installation (the hold's reason); the GitHub budget is unknown, checked before devctl makes a
+  installation (the hold's reason); the GitHub budget is unknown (no login), checked before devctl makes a
   single request; the lane's installation cannot be read (a lapsed `tsh` login). A read that
   fails in transit (a resolver error, a refused or reset connection, a timeout, a killed
   `kubectl`, gh's `error connecting to`) is sent again three times, 10s, 30s and 1m20s apart,
   each retry a `reading … failed in transit (…): retrying in …` line, the merge keeping its place; only then
-  does it refuse, naming the read's last error and the tries. Nothing was
+  does it refuse, naming the read's last error and the tries; the GitHub budget's read exits 74
+  instead (below). Nothing was
   queued: a 77 never says `queued`. A hold refuses a new merge only: a merge that has its place
   in the lane keeps it during a hold and runs once the hold lifts or lets it through, and a
   held place holds no place against the one merge the hold lets through (`--except
@@ -1280,6 +1281,10 @@ like a merge typed on the command line.
   (`merge.preempted` in the log); one GitHub reports merged all the same is recorded as merged.
   Nothing else stops a merge: a lane whose
   release has not rolled past `merge.settleTimeout` keeps it waiting, and `watch` says `LANE STUCK`.
+- **Unread, exit 74**, one line starting `beekeeper gate: unread,`: the GitHub budget's read
+  failed in transit on every try (`reading the GitHub budget failed in transit (…), the merge was
+  not judged`). It is no refusal: nothing was judged or queued, and the same command runs again
+  once GitHub answers.
 - **Queued, exit 76**, one line starting `beekeeper gate: queued,` with the merge's position and
   whom it waits behind (when the machine-wide devctl cap is the reason, `<n> devctl processes run
   machine-wide (cap <n>), not a lane problem`), once the merge has waited `--wait` (2 minutes, 30
@@ -1421,7 +1426,7 @@ settles its lane with its release unconfirmed and the gate line names `devctl re
 GitHub unanswered, the lane settles as for a lost merge.
 
 A unit beekeeper starts (a merge-child, a wake's turn, a reopen) fails in the user manager only
-on a real fault: devctl's documented codes, the gate's 76 and 77 and a stop as asked end it
+on a real fault: devctl's documented codes, the gate's 74, 76 and 77 and a stop as asked end it
 successfully, an unmapped exit or a kill fails it. An isolated harness state, whose stub tools
 and deliberate kills are not faults, sets `units.quiet: true` in its configuration: every end of
 its units then counts as success (`SuccessExitStatus` lists the exit statuses 1–255 and SIGKILL,
