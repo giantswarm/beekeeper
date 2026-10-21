@@ -68,11 +68,12 @@ const (
 )
 
 // An upload is one file_upload of a Chrome call: the ref and the tab it
-// targets, and whether an action of its batch before it changes that tab's
-// page.
+// targets, whether an action of its batch before it changes that tab's page,
+// and whether one runs the upload-target check or a page read there, whose
+// result the hook cannot read yet.
 type upload struct {
-	ref, tab string
-	changed  bool
+	ref, tab        string
+	changed, inside bool
 }
 
 // uploads are the file_uploads of a Chrome call, each of a batch's.
@@ -87,6 +88,7 @@ func uploads(tool string, input map[string]any) []upload {
 		for i, a := range actions {
 			for _, up := range uploads(a.name, a.input) {
 				up.changed = slices.ContainsFunc(actions[:i], func(b chromeAction) bool { return changesPage(b.name, b.input, up.tab) })
+				up.inside = slices.ContainsFunc(actions[:i], func(b chromeAction) bool { return targets(b.name, b.input, up.tab) })
 				out = append(out, up)
 			}
 		}
@@ -137,6 +139,22 @@ func changesPage(tool string, input map[string]any, tab string) bool {
 	return false
 }
 
+// targets reports whether a batch action resolves the upload target of tab:
+// the upload-target check or a find or read_page there.
+func targets(tool string, input map[string]any, tab string) bool {
+	if t := tabOf(input[tabKey]); t != "" && t != tab {
+		return false
+	}
+	switch chromeTool(tool) {
+	case chromeScript:
+		code, _ := input[textKey].(string)
+		return isCheck(code)
+	case chromeFind, chromeReadPage:
+		return true
+	}
+	return false
+}
+
 // checkScope opens the upload-target check: its scope line.
 var checkScope = regexp.MustCompile(`^const scope = ("(?:[^"\\\n]|\\.)*");\n`)
 
@@ -151,9 +169,14 @@ func isCheck(code string) bool {
 
 // labelled is the element line of a page read whose accessible name is
 // UploadTargetLabel: find's `- ref_9: button "<label>" (file)` and
-// read_page's `button "<label>" [ref_9] type="file"`.
-var labelled = regexp.MustCompile(`^\s*(?:-\s*(ref_\d+):\s*\S+\s+` + regexp.QuoteMeta(quoteLabel) + `(?:\s|$)|\S+\s+` +
-	regexp.QuoteMeta(quoteLabel) + `\s+\[(ref_\d+)\])`)
+// read_page's `button "<label>" [ref_9] type="file"`. Find words its answer
+// itself and quotes the name once, twice (`""<label>""`, the query's quotes
+// kept) or not at all, so the name matches with any quotes around it.
+var labelled = regexp.MustCompile(`^\s*(?:-\s*(ref_\d+):\s*\S+\s+` + anyQuoted + `(?:\s|$)|\S+\s+` +
+	anyQuoted + `\s+\[(ref_\d+)\])`)
+
+// anyQuoted is UploadTargetLabel in a page read, in any quotes or none.
+var anyQuoted = `["'“”]*` + regexp.QuoteMeta(UploadTargetLabel) + `["'“”]*`
 
 // uploadTarget is what the transcript says of the session's upload target:
 // the last check's result and its tab, and the refs the page reads of that
@@ -240,7 +263,8 @@ func toolCalls(line []byte) []toolUse {
 
 // uploadRefusal returns why the hook refuses a Chrome call's file_upload, ""
 // when it passes: one whose tab and ref are not the tab and the one input
-// the session's last upload-target check marked.
+// the session's last upload-target check marked. A refusal of an upload whose
+// own batch checks or reads its page first says those results come too late.
 func uploadRefusal(ev event) string {
 	if !isBrowserTool(ev.ToolName) {
 		return ""
@@ -251,23 +275,37 @@ func uploadRefusal(ev event) string {
 	}
 	u := readUploadTarget(ev.TranscriptPath)
 	for _, up := range ups {
-		switch {
-		case up.changed:
-			return uploadReason(fmt.Sprintf("an action of the batch before the file_upload to %s can change its page after the upload-target check", refName(up.ref)))
-		case u.check == "":
-			return uploadReason(fmt.Sprintf("the file_upload to %s comes before any upload-target check of its page", refName(up.ref)))
-		case strings.HasPrefix(u.check, uploadUnmarked):
-			return uploadReason(fmt.Sprintf("the last upload-target check marked no input (%s)", u.check))
-		case up.tab != u.tab:
-			return uploadReason(fmt.Sprintf("the file_upload targets tab %s, the last upload-target check ran in tab %s", refName(up.tab), refName(u.tab)))
-		case len(u.refs) == 0:
-			return uploadReason("no find for " + quoteLabel + " in its tab followed the last upload-target check, so no ref is the marked input's")
-		case len(u.refs) > 1:
-			return uploadReason(fmt.Sprintf("the page reads after the last upload-target check give several refs the label (%s)", strings.Join(u.refs, ", ")))
-		case up.ref != u.refs[0]:
-			return uploadReason(fmt.Sprintf("%s is not the input the last upload-target check marked (%s; find gave %s)",
-				refName(up.ref), strings.TrimPrefix(u.check, uploadMarked), u.refs[0]))
+		if r := targetRefusal(up, u); r != "" {
+			if up.inside {
+				return uploadReason("the batch runs the upload-target check or its find before the file_upload to " + refName(up.ref) +
+					", and the hook reads their results only once they are in the transcript: run them in a call before the file_upload's, " +
+					"the file_upload in a call of its own (" + r + ")")
+			}
+			return uploadReason(r)
 		}
+	}
+	return ""
+}
+
+// targetRefusal says why the upload is not to the target the transcript
+// resolved, "" when it is.
+func targetRefusal(up upload, u uploadTarget) string {
+	switch {
+	case up.changed:
+		return fmt.Sprintf("an action of the batch before the file_upload to %s can change its page after the upload-target check", refName(up.ref))
+	case u.check == "":
+		return fmt.Sprintf("the file_upload to %s comes before any upload-target check of its page", refName(up.ref))
+	case strings.HasPrefix(u.check, uploadUnmarked):
+		return fmt.Sprintf("the last upload-target check marked no input (%s)", u.check)
+	case up.tab != u.tab:
+		return fmt.Sprintf("the file_upload targets tab %s, the last upload-target check ran in tab %s", refName(up.tab), refName(u.tab))
+	case len(u.refs) == 0:
+		return "no find for " + quoteLabel + " in its tab followed the last upload-target check, so no ref is the marked input's"
+	case len(u.refs) > 1:
+		return fmt.Sprintf("the page reads after the last upload-target check give several refs the label (%s)", strings.Join(u.refs, ", "))
+	case up.ref != u.refs[0]:
+		return fmt.Sprintf("%s is not the input the last upload-target check marked (%s; find gave %s)",
+			refName(up.ref), strings.TrimPrefix(u.check, uploadMarked), u.refs[0])
 	}
 	return ""
 }

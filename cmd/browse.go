@@ -1551,7 +1551,8 @@ const uploadWords = "The caller shares these files with you for upload, and only
 	"each file_upload resolve its input: run this upload-target check with javascript_tool on the tab, scope set to a selector of the " +
 	"intended form or comment box (\"\" for the whole page): %s It marks the one visible, enabled file input there or says why it marked none " +
 	"(hidden, disabled, several: narrow the scope; none visible: open the intended comment box, or stop and report it). Then find '" +
-	guard.UploadTargetLabel + "' and file_upload to the ref it gives, and only that ref: the hook refuses a file_upload to any other. "
+	guard.UploadTargetLabel + "' and file_upload to the ref it gives, and only that ref: the hook refuses a file_upload to any other. " +
+	"The hook reads the check and the find from their results, so both answer before the call that holds the file_upload, never in its batch. "
 
 // uploadPrompt are the upload words of the shared files, "" without any.
 func uploadPrompt(shared []sharedFile) string {
