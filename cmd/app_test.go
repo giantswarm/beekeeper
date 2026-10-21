@@ -318,17 +318,18 @@ func TestAppGitLabRecord(t *testing.T) {
 	}
 	authorize := "https://" + gitlab + "/oauth/authorize?client_id=" + uid + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&scope=api"
 	title := "Authorize " + app + " to use your account? · GitLab"
+	const site = "GitLab"
 	redacted := strings.ReplaceAll(authorize, uid, "REDACTED")
 	for name, tc := range map[string]struct {
 		url, title, form, want string
 	}{
 		"its authorize page":           {authorize, title, "", checkAllow + "beekeeper allows the click: the consent page on " + gitlab + " of the person's own GitLab application " + app},
-		"redacted, its form":           {redacted, "GitLab", uid, checkAllow},
-		"redacted, another form":       {redacted, "GitLab", "other-uid", checkRefuse + "Refused: " + gitlab + "'s consent page of client id other-uid"},
+		"redacted, its form":           {redacted, site, uid, checkAllow},
+		"redacted, another form":       {redacted, site, "other-uid", checkRefuse + "Refused: " + gitlab + "'s consent page of client id other-uid"},
 		"redacted, its title, no form": {redacted, title, "", checkRefuse + "Refused: " + gitlab + "'s consent page \"" + title + "\""},
 		"another client id":            {strings.ReplaceAll(authorize, uid, "other-uid"), title, "", checkRefuse},
 		"another callback host":        {strings.ReplaceAll(authorize, callback, "evil.example.net"), title, "", checkRefuse},
-		"GitLab's title, nothing read": {redacted, "GitLab", "", checkRefuse + "Refused: " + gitlab + "'s consent page \"GitLab\""},
+		"GitLab's title, nothing read": {redacted, site, "", checkRefuse + "Refused: " + gitlab + "'s consent page \"GitLab\""},
 		"another GitLab":               {strings.ReplaceAll(authorize, gitlab, "gitlab.example.net"), title, "", checkRefuse + "Refused: \"" + title + "\" is a consent page (an OAuth grant) on gitlab.example.net"},
 	} {
 		if out, err := runApp(t, a, appCheck, tc.url, titleFlag, tc.title, "--form", tc.form); err != nil || !strings.HasPrefix(out, tc.want) {

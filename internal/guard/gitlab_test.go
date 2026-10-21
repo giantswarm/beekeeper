@@ -18,28 +18,30 @@ import (
 // page elsewhere.
 // siteTitle is current GitLab's title of its authorize page: the site's
 // name; siteConsent is how a refusal names a page known by it alone.
+// gitlabUID is the recorded application's client id.
 const (
 	siteTitle   = "GitLab"
 	siteConsent = `consent page "` + siteTitle + `"`
+	gitlabUID   = "uid-1"
 )
 
 func TestGitLabConsent(t *testing.T) {
-	apps := []App{{Name: "workspace-manager", ClientID: "uid-1", Callbacks: []string{"muster.example.org"}, GitLab: "gitlab.example.org", Declared: "decl"}}
+	apps := []App{{Name: "workspace-manager", ClientID: gitlabUID, Callbacks: []string{"muster.example.org"}, GitLab: "gitlab.example.org", Declared: "decl"}}
 	page := "https://gitlab.example.org/oauth/authorize?client_id=uid-1&redirect_uri=https%3A%2F%2Fmuster.example.org%2Fcb&response_type=code"
 	title := "Authorize workspace-manager to use your account?"
-	redacted := strings.ReplaceAll(page, "uid-1", chromeRedacted)
+	redacted := strings.ReplaceAll(page, gitlabUID, chromeRedacted)
 	for name, tc := range map[string]struct {
 		url, title, form, want string
 	}{
 		"its page":                    {page, title, "", Allow},
-		"redacted, its form":          {redacted, siteTitle, "uid-1", Allow},
+		"redacted, its form":          {redacted, siteTitle, gitlabUID, Allow},
 		"redacted, another form":      {redacted, siteTitle, "uid-2", Deny},
 		"redacted, its title alone":   {redacted, title, "", Deny},
 		"redacted, a look-alike":      {redacted, `Authorize workspace-manager" to use your account?`, "uid-2", Deny},
 		"redacted, nothing read":      {redacted, siteTitle, "", Deny},
-		"redacted, another callback":  {strings.ReplaceAll(redacted, "muster.example.org", "evil.example.net"), siteTitle, "uid-1", Deny},
-		"another client id":           {strings.ReplaceAll(page, "uid-1", "uid-2"), title, "", Deny},
-		"another client id, its form": {strings.ReplaceAll(page, "uid-1", "uid-2"), title, "uid-1", Deny},
+		"redacted, another callback":  {strings.ReplaceAll(redacted, "muster.example.org", "evil.example.net"), siteTitle, gitlabUID, Deny},
+		"another client id":           {strings.ReplaceAll(page, gitlabUID, "uid-2"), title, "", Deny},
+		"another client id, its form": {strings.ReplaceAll(page, gitlabUID, "uid-2"), title, gitlabUID, Deny},
 		"another callback":            {strings.ReplaceAll(page, "muster.example.org", "evil.example.net"), title, "", Deny},
 		"another GitLab":              {strings.ReplaceAll(page, "gitlab.example.org", "gitlab.example.net"), title, "", Deny},
 		"GitHub's page":               {strings.ReplaceAll(page, "gitlab.example.org/oauth/authorize", "github.com/login/oauth/authorize"), title, "", Deny},
@@ -53,8 +55,8 @@ func TestGitLabConsent(t *testing.T) {
 // GitLabFormScript's answer names a client id only in its own form.
 func TestGitLabFormID(t *testing.T) {
 	for body, want := range map[string]string{
-		"beekeeper consent form: application uid-1":            "uid-1",
-		"\nbeekeeper consent form: application uid-1\n":        "uid-1",
+		"beekeeper consent form: application uid-1":            gitlabUID,
+		"\nbeekeeper consent form: application uid-1\n":        gitlabUID,
 		"beekeeper consent form: application REDACTED":         "",
 		"beekeeper consent form: none: 2 authorize forms":      "",
 		"beekeeper consent form: application uid-1 and uid-2":  "",
@@ -77,7 +79,7 @@ func TestGitLabFormID(t *testing.T) {
 // nothing on this one, and each refusal names the record's form.
 func TestGitLabConsentFromTheTranscript(t *testing.T) {
 	apps := func() []App {
-		return []App{{Name: "workspace-manager", ClientID: "uid-1", Callbacks: []string{"muster.example.org"}, GitLab: "gitlab.example.org", Declared: "decl"}}
+		return []App{{Name: "workspace-manager", ClientID: gitlabUID, Callbacks: []string{"muster.example.org"}, GitLab: "gitlab.example.org", Declared: "decl"}}
 	}
 	authorize := "https://gitlab.example.org/oauth/authorize?client_id=REDACTED&code_challenge=REDACTED&code_challenge_method=S256" +
 		"&redirect_uri=https%3A%2F%2Fmuster.example.org%2Foauth%2Fproxy%2Fcallback&response_type=code&scope=api+read_user&state=REDACTED"
@@ -99,7 +101,7 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 			return `{"type":"tool_use","id":"` + id + `","name":"mcp__claude-in-chrome__javascript_tool","input":` + string(in) + `}`
 		}
 		uses := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"mcp__claude-in-chrome__find","input":{}},` +
-			script("f", GitLabFormScript) + `,` + script("o", "'"+form("uid-1")+"'") + `]}}`
+			script("f", GitLabFormScript) + `,` + script("o", "'"+form(gitlabUID)+"'") + `]}}`
 		path := filepath.Join(t.TempDir(), "t.jsonl")
 		if err := os.WriteFile(path, []byte(uses+"\n"+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -110,16 +112,16 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 	for name, tc := range map[string]struct {
 		transcript, decision, reason string
 	}{
-		"its form read":                  {transcript(result("f", form("uid-1"), authorize)), decisionAllow, "own GitLab application workspace-manager"},
-		"its form, then a find":          {transcript(result("f", form("uid-1"), authorize), result("t", "Found 1", authorize)), decisionAllow, "own GitLab application workspace-manager"},
+		"its form read":                  {transcript(result("f", form(gitlabUID), authorize)), decisionAllow, "own GitLab application workspace-manager"},
+		"its form, then a find":          {transcript(result("f", form(gitlabUID), authorize), result("t", "Found 1", authorize)), decisionAllow, "own GitLab application workspace-manager"},
 		"a look-alike's form":            {transcript(result("t", lookAlike, authorize), result("f", form("uid-2"), authorize)), decisionDeny, "consent page of client id uid-2"},
 		"a look-alike's label alone":     {transcript(result("t", lookAlike, authorize)), decisionDeny, siteConsent},
 		"its button found, no form read": {transcript(result("t", "- ref_7: button \"\"Authorize workspace-manager\"\" (submit)", authorize)), decisionDeny, GitLabFormScript},
 		"no single form":                 {transcript(result("f", gitlabFormOpen+"none: 2 authorize forms", authorize)), decisionDeny, siteConsent},
-		"another script's output":        {transcript(result("o", form("uid-1"), authorize)), decisionDeny, siteConsent},
-		"read at the earlier URL":        {transcript(result("f", form("uid-1"), "https://gitlab.example.org/users/sign_in"), result("t", "Clicked", authorize)), decisionDeny, siteConsent},
-		"a script after the form read":   {transcript(result("f", form("uid-1"), authorize), result("o", "done", authorize)), decisionDeny, siteConsent},
-		"a later form read":              {transcript(result("f", form("uid-1"), authorize), result("f", form("uid-2"), authorize)), decisionDeny, "client id uid-2"},
+		"another script's output":        {transcript(result("o", form(gitlabUID), authorize)), decisionDeny, siteConsent},
+		"read at the earlier URL":        {transcript(result("f", form(gitlabUID), "https://gitlab.example.org/users/sign_in"), result("t", "Clicked", authorize)), decisionDeny, siteConsent},
+		"a script after the form read":   {transcript(result("f", form(gitlabUID), authorize), result("o", "done", authorize)), decisionDeny, siteConsent},
+		"a later form read":              {transcript(result("f", form(gitlabUID), authorize), result("f", form("uid-2"), authorize)), decisionDeny, "client id uid-2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ev := toolEvent(browserTools+chromeComputer, click)
