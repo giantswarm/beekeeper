@@ -557,7 +557,7 @@ line:
   last; negative: off); each run that freed something is logged
   (free.apply);
 - removes the worktrees of finished workers: a linked git worktree under
-  doctor.worktreeRoots (~/projects/worktrees) whose branch's newest pull
+  doctor.worktreeRoots (~/.local/state/klaus-lab/worktrees) whose branch's newest pull
   request merged or closed six hours ago, untouched as long, goes whole
   (a worktree on a detached HEAD: untouched three days)
   when it holds nothing but build output (ignored files, and untracked
