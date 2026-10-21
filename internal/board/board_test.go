@@ -154,6 +154,64 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 	}
 }
 
+func TestKindStepTakesAnItemWithoutAKindByItsLabel(t *testing.T) {
+	snap := snapshot(t)
+	it := func(n int, kind string, labels ...string) Item {
+		return Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: backlog, Kind: kind, Labels: labels, Created: days(5), Updated: days(1)}
+	}
+	snap.Items = []Item{
+		it(1, ""),
+		it(2, "Feature ✨", "bug"),
+		it(3, "", "team/x", "kind/bug"),
+		it(4, "", "Bug"),
+		it(5, bug),
+		it(6, "", "bugfix"),
+	}
+	snap.Search = nil
+	var got []string
+	for _, c := range Rank(snap, deskBoard(), now) {
+		got = append(got, c.Ref+" "+c.Step+": "+c.Match)
+	}
+	want := []string{
+		"o/r#3 bug: kind Bug 🐞 by label kind/bug",
+		"o/r#4 bug: kind Bug 🐞 by label Bug",
+		"o/r#5 bug: kind Bug 🐞",
+		"o/r#1 Backlog: status Backlog 📦, created within 90 days",
+		"o/r#2 Backlog: status Backlog 📦, created within 90 days",
+		"o/r#6 Backlog: status Backlog 📦, created within 90 days",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rank:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestMatchNamesTheMatchersOfTheStep(t *testing.T) {
+	snap := snapshot(t)
+	var got []string
+	for _, c := range Rank(snap, deskBoard(), now) {
+		if slices.Contains([]string{"o/r#3", "o/r#40", "o/r#6", "o/r#11", "o/tools#1"}, c.Ref) {
+			got = append(got, c.Ref+": "+c.Match)
+		}
+	}
+	want := []string{
+		"o/r#3: status In Progress ⛏️",
+		"o/r#40: status In Progress ⛏️",
+		"o/r#6: status Blocked / Waiting ⛔️, blockers closed",
+		"o/r#11: kind Bug 🐞",
+		"o/tools#1: search",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("match:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	step := config.BoardStep{Name: "labelled", Labels: []string{"Urgent"}}
+	if m := matched(step, Item{Labels: []string{"team/x", "urgent"}}); m != "label urgent" {
+		t.Errorf("labels step: %q", m)
+	}
+	if m := matched(config.BoardStep{Name: "all"}, Item{}); m != "every item" {
+		t.Errorf("empty step: %q", m)
+	}
+}
+
 func TestPositionIsThePriorityWithinAStep(t *testing.T) {
 	// The board's items in position order: a rank that moves #12 above #10
 	// makes it the first Up Next item, still after every In Progress one.

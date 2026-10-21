@@ -404,7 +404,8 @@ type BoardStep struct {
 	// Name says why an item of the step is picked.
 	Name string `yaml:"name"`
 	// Status and Kind are the board's Status and Kind values; an
-	// unambiguous part of one ("up next") stands for it.
+	// unambiguous part of one ("up next") stands for it. Kind takes an
+	// item without a Kind by a label naming one: bug or kind/bug for Bug.
 	Status []string `yaml:"status"`
 	Kind   []string `yaml:"kind"`
 	Labels []string `yaml:"labels"`
