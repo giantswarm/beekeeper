@@ -132,7 +132,9 @@ var (
 	drawWords = "On each page a step names, before its first screenshot or click, check that Chrome draws it: run javascript_tool on the " +
 		"tab, a call of its own (not in a batch), with this code verbatim:\n" + guard.DrawCheck + "\nIt answers '" + guard.Drawn +
 		"' or '" + guard.NotDrawn + "'. On '" + guard.NotDrawn + "' (the window is not on screen, though the tab may say visible) open a " +
-		"fresh tab with tabs_create_mcp, navigate it to the page's URL and check there once. Still '" + guard.NotDrawn + "': take no " +
+		"fresh tab with tabs_create_mcp, navigate it to the page's URL and check there once. Where the extension refuses scripts on " +
+		"the page ('Permission denied for JavaScript execution'), a screenshot of the tab, a call of its own, is the proof instead: " +
+		"one captured is drawn. Still '" + guard.NotDrawn + "': take no " +
 		"screenshot and click nothing on that page, read it with get_page_text for the evidence, and end your report with the line '" +
 		guard.NotDrawnLine + "' followed by the page and the steps not done, one per line. "
 	leaveWords = "A page with an unsaved form holds its tab's close on a leave-page prompt nobody answers: before you close a tab on a " +
@@ -160,6 +162,19 @@ const windowWords = "A click that opens a window (window.open: an identity provi
 	"URL-encoded> in place of flow=popup, so the portal returns to the page signed in. Back on the page, a sign-in it still shows is clicked " +
 	"once more, which now finds the session. 'none': a sign-in window opens once the page has asked its backend, so wait 2 seconds and " +
 	"read it again; still 'none', the click opened no window, go on. "
+
+// errTurnStopped opens the error of a turn stopped at its timeout.
+var errTurnStopped = errors.New("the browse turn did not end")
+
+// cleanupWords are the prompt of the turn that resumes a turn stopped at its
+// timeout, cleanupWait its own timeout: it closes the tabs the turn left
+// open and does nothing else.
+const (
+	cleanupWords = "beekeeper browse: this turn was stopped at its timeout. Do nothing but clean up: call tabs_context_mcp; for each tab of " +
+		"your group still open, run beekeeper's leave-page disarm on it with javascript_tool (go on when the extension refuses scripts " +
+		"there), verbatim:\n" + guard.LeaveDisarm + "\nthen close it with tabs_close_mcp, the group's first tab last. Report which tabs you closed."
+	cleanupWait = 2 * time.Minute
+)
 
 // browseStart names the browse turn's start record, which has the hook act
 // in the turn wherever it runs.
@@ -359,15 +374,20 @@ page, before its first screenshot or click, the turn runs beekeeper's draw
 check (two animation frames within 1.5s), which answers drawn or not drawn;
 the hook (beekeeper hook pretooluse) refuses a click or key it would allow
 on a consent or sign-in page until a draw check at that page answered
-drawn. Not drawn, the turn tries one fresh tab; still not drawn, it clicks
-nothing there and the command fails with "window not drawn". Below the
+drawn. On a page the extension refuses scripts on, a screenshot of the tab
+that succeeds is the proof instead (one that times out is not drawn). Not
+drawn, the turn tries one fresh tab; still not drawn, it clicks nothing
+there and the command fails with "window not drawn". Below the
 report, "not drawn:" counts the checks that answered not drawn and says
 whether a later one recovered.
 
 The turn closes every tab it opened before it ends, the blank ones
 included. A page with an unsaved form holds its close on a leave-page
 prompt nobody answers, so before closing a tab on a web page the turn runs
-beekeeper's leave-page disarm there, which the hook requires. Its tab group is keyed by the tab it was made with: closing that
+beekeeper's leave-page disarm there, which the hook requires. A turn stopped
+at its --timeout with tabs of its own open is resumed once by a cleanup
+turn (2m) that closes them: its tab group is its session's, which no other
+turn reaches. Below the report, "timed out:" says the cleanup ran. Its tab group is keyed by the tab it was made with: closing that
 tab while another of the turn's tabs is open dissolves the group and
 strands the other tab outside it, where no call reaches it, so the hook
 (beekeeper hook pretooluse) refuses that close, naming the order, the
@@ -483,13 +503,13 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if blind != nil {
 		out = &blind.out
 	}
-	// turn runs one headless turn of the session under its own timeout and
-	// prints its report.
-	turn := func(argv []string) (string, error) {
+	// turn runs one headless turn of the session under its own timeout,
+	// limit, and prints its report; a turn stopped at it is errTurnStopped.
+	turn := func(argv []string, limit time.Duration) (string, error) {
 		if blind != nil {
 			argv = blind.shape(argv, self)
 		}
-		ctx, cancel := context.WithTimeout(ctx, wait)
+		ctx, cancel := context.WithTimeout(ctx, limit)
 		defer cancel()
 		c := exec.CommandContext(ctx, bin, argv...) //nolint:gosec // the claude CLI on PATH
 		c.Dir = dir
@@ -500,7 +520,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		}
 		stdout, err := c.Output()
 		if ctx.Err() != nil {
-			err = fmt.Errorf("the browse turn did not end within %s and was stopped: a page waiting on a person (a sign-in form, a dialog) is the usual cause", wait)
+			err = fmt.Errorf("%w within %s and was stopped: a page waiting on a person (a sign-in form, a dialog) is the usual cause", errTurnStopped, limit)
 		}
 		report := strings.TrimSpace(string(stdout))
 		if _, werr := fmt.Fprintln(out, report); werr != nil {
@@ -513,7 +533,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if blind != nil {
 		prompt = blindPrompt(steps, deploy, consents, lab, blind.match)
 	}
-	report, err := turn(browseArgv(id, model, prompt, self, rules, false))
+	report, err := turn(browseArgv(id, model, prompt, self, rules, false), wait)
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
@@ -523,9 +543,19 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	// a fresh CLI resuming the session has a fresh Chrome connection and goes
 	// on with the steps not done, its findings read with the first turn's.
 	if err == nil && found.lost() {
-		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true))
+		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true), wait)
 		found, ferr = readFindings(path)
 		found.Reconnected = true
+	}
+	// A turn stopped at its timeout with tabs of its own open is resumed once
+	// to close them: its tab group is its session's, which no other turn
+	// reaches.
+	if errors.Is(err, errTurnStopped) && len(found.Left.Reachable()) > 0 {
+		if _, cerr := turn(browseArgv(id, model, cleanupWords, self, rules, true), cleanupWait); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("the cleanup turn: %w", cerr))
+		}
+		found, ferr = readFindings(path)
+		found.CleanedUp = true
 	}
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
 	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
@@ -651,8 +681,8 @@ const sharedHint = "a file the steps upload is shared with `beekeeper browse --f
 // order, the draw checks that answered not drawn (NotDrawn) and whether
 // the last check answered drawn (Drawn), and the Chrome connection: Lost are the words of each call that
 // found it gone, Recovered whether a Chrome call was answered after the last
-// of them, Reconnected whether browse's own reconnect turn ran, which the
-// run sets.
+// of them, Reconnected whether browse's own reconnect turn ran and
+// CleanedUp whether its cleanup turn after a timeout ran, which the run sets.
 type browseFindings struct {
 	Refused     []refusal
 	NotRendered int
@@ -663,6 +693,7 @@ type browseFindings struct {
 	Lost        []string
 	Recovered   bool
 	Reconnected bool
+	CleanedUp   bool
 	Left        guard.Tabs
 }
 
@@ -920,6 +951,9 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 	}
 	if l := f.windowsLine(); l != "" {
 		out = append(out, l)
+	}
+	if f.CleanedUp {
+		out = append(out, "timed out: the turn was stopped at its timeout with tabs of its own open; a resumed cleanup turn closed what it reached")
 	}
 	if open := f.Left.Open(); len(open) > 0 {
 		out = append(out, "tabs left open: "+tabsLeft(f.Left))

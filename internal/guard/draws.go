@@ -72,8 +72,10 @@ type pageCheck struct {
 // pageChecks are the checks of each tab at its page as the transcript last
 // showed it: a check made at an earlier URL of the tab says nothing of its
 // page now. A DrawCheck counts as a call of its own, its verdict from its
-// result; a LeaveDisarm counts alone or in a batch, run or refused (a page
-// the extension refuses scripts on asks nothing either).
+// result; so does a screenshot of its own, the proof on a page the
+// extension refuses scripts on: captured is drawn, timed out on a frozen
+// renderer not drawn. A LeaveDisarm counts alone or in a batch, run or
+// refused (a page the extension refuses scripts on asks nothing either).
 func pageChecks(transcript string) map[string]pageCheck {
 	urls, checks := map[string]string{}, map[string]pageCheck{}
 	at := func(tab string) pageCheck {
@@ -91,6 +93,13 @@ func pageChecks(transcript string) map[string]pageCheck {
 		} else if i := contextLine.FindAllStringIndex(text, -1); len(i) > 0 {
 			for _, m := range trailerTab.FindAllStringSubmatch(text[i[len(i)-1][0]:], -1) {
 				urls[m[1]] = m[3]
+			}
+		}
+		if v := shotVerdict(call, text); v != "" {
+			if tab := tabOf(call.input[tabKey]); tab != "" {
+				c := at(tab)
+				c.drawn = v
+				checks[tab] = c
 			}
 		}
 		for _, a := range append([]chromeAction{call}, batchActions(call.input)...) {
@@ -117,6 +126,28 @@ func pageChecks(transcript string) map[string]pageCheck {
 	return checks
 }
 
+// shotCaptured is in the result of a screenshot that was taken.
+const shotCaptured = "Successfully captured screenshot"
+
+// shotVerdict is the draw verdict of a screenshot call of its own: Drawn
+// for one captured, NotDrawn for one that timed out on a frozen renderer, ""
+// for any other call or result.
+func shotVerdict(call chromeAction, text string) string {
+	if chromeTool(call.name) != chromeComputer {
+		return ""
+	}
+	if action, _ := call.input[actionKey].(string); action != actionScreenshot {
+		return ""
+	}
+	switch {
+	case strings.Contains(text, shotCaptured):
+		return Drawn
+	case strings.Contains(text, FrozenRenderer):
+		return NotDrawn
+	}
+	return ""
+}
+
 // drawRefusal returns why the hook refuses a click or key it would allow on
 // page, the tab's, "" when it passes: one the tab's DrawCheck at that page
 // did not answer drawn, where the click would do nothing.
@@ -138,7 +169,9 @@ func drawRefusal(page Page, tab string, checks map[string]pageCheck) string {
 	return "Refused: first check that Chrome draws this tab: a click or key on a page whose window is not on screen does nothing, " +
 		"and a consent page there keeps its button disabled. Run this draw check with javascript_tool on the tab, a call of its own " +
 		"(not in a batch), verbatim:\n" + DrawCheck + "\nWhen it answers '" + Drawn + "', click again; when it answers '" + NotDrawn +
-		"', open a fresh tab, navigate it to this page's URL and check there once."
+		"', open a fresh tab, navigate it to this page's URL and check there once. Where the extension refuses scripts on the page " +
+		"('Permission denied for JavaScript execution'), take a screenshot of the tab instead, a call of its own: one captured proves " +
+		"the tab drawn."
 }
 
 // NotDrawnLine is the line a browse turn's report names a page Chrome did
