@@ -285,7 +285,7 @@ func (r *Run) orphans() {
 	}
 	var pids []int
 	for _, p := range r.procs() {
-		if !r.orphaned(p) || p.Elapsed(r.Now) < r.Orphan || r.uid(p.PID) != r.UID {
+		if !r.Table.Orphaned(p) || p.Elapsed(r.Now) < r.Orphan || r.uid(p.PID) != r.UID {
 			continue
 		}
 		c := p.Cmdline()
@@ -307,14 +307,6 @@ func (r *Run) orphans() {
 	if r.Apply {
 		r.kill(pids)
 	}
-}
-
-func (r *Run) orphaned(p *proc.Process) bool {
-	if p.PPID == 1 {
-		return true
-	}
-	parent := r.Table.ByPID[p.PPID]
-	return parent != nil && parent.Comm == "systemd"
 }
 
 // terminate sends TERM, and KILL to what survives two seconds.

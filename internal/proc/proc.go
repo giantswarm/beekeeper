@@ -243,6 +243,25 @@ func (t *Table) Descendants(pid int) []*Process {
 	return out
 }
 
+// Process is the process pid of the table, nil when the table has none or
+// is nil.
+func (t *Table) Process(pid int) *Process {
+	if t == nil {
+		return nil
+	}
+	return t.ByPID[pid]
+}
+
+// Orphaned reports whether p's parent is gone: the kernel reparented it to
+// PID 1 or to the user's service manager, the subreaper of its units.
+func (t *Table) Orphaned(p *Process) bool {
+	if p.PPID == 1 {
+		return true
+	}
+	parent := t.ByPID[p.PPID]
+	return parent != nil && parent.Comm == "systemd"
+}
+
 // Children returns the direct children of pid.
 func (t *Table) Children(pid int) []*Process {
 	out := make([]*Process, 0, len(t.children[pid]))

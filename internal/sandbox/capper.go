@@ -55,6 +55,11 @@ func (Capper) Adopt(int, string, platform.Cap) error {
 	return errors.New("a sandboxed session asks the broker for its scope")
 }
 
+// Reap is the host's: the sandbox keeps the service manager out of reach,
+// so the host's watch stops a scope whose run is gone (an orphaned slot
+// scope).
+func (Capper) Reap(string) ([]int, error) { return nil, nil }
+
 // EnterScope asks the broker to move this process into the capped scope
 // unit, in cp.Slice.
 func EnterScope(dir, unit string, cp platform.Cap) error {
