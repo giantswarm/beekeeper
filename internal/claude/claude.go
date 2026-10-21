@@ -30,6 +30,10 @@ type Session struct {
 	// Parent is the session whose tool command started this one.
 	Parent     string    `json:"parent,omitempty"`
 	Name       string    `json:"name"`
+	// Peer is the name the CLI takes messages under: the name in its record,
+	// else its -n. A desktop title that follows a rename (Name) is not it
+	// when the CLI derived its own, from its folder ("klaus-lab-16").
+	Peer       string    `json:"peer,omitempty"`
 	Cwd        string    `json:"cwd"`
 	Repo       string    `json:"repo,omitempty"`
 	Branch     string    `json:"branch,omitempty"`
@@ -60,6 +64,10 @@ type Session struct {
 // Aside says why the guide leaves the session out of its feed: "archived",
 // "test" (titled "test: …", as every test run is), "" for neither.
 func (s *Session) Aside() string { return aside(s.Name, s.Archived) }
+
+// Address is the name a SendMessage reaches the session's CLI by: Peer, else
+// Name.
+func (s *Session) Address() string { return cmp.Or(s.Peer, s.Name) }
 
 func aside(title string, archived bool) string {
 	switch {
@@ -373,6 +381,7 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 			s.Name = rec.Name
 		}
 	}
+	s.Peer = s.Name
 	if env, err := t.Environ(p.PID); err == nil {
 		// Every tool command inherits its session's ids. A CLI whose
 		// environment names a session was started by that session and

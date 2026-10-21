@@ -462,15 +462,15 @@ func wakeLive(sessions []*claude.Session, p state.Party, id string) (*claude.Ses
 func uniqueName(sessions []*claude.Session, s *claude.Session) (string, error) {
 	var pids []string
 	for _, o := range sessions {
-		if strings.EqualFold(o.Name, s.Name) {
+		if strings.EqualFold(o.Address(), s.Address()) {
 			pids = append(pids, fmt.Sprint(o.PID))
 		}
 	}
 	if len(pids) > 1 {
 		return "", refused("%d running CLIs are named %q (PIDs %s): a message by name reaches neither for sure; stop the one that should not run",
-			len(pids), s.Name, strings.Join(pids, ", "))
+			len(pids), s.Address(), strings.Join(pids, ", "))
 	}
-	return s.Name, nil
+	return s.Address(), nil
 }
 
 // resumeFlag continues a session in a new CLI.
@@ -771,7 +771,7 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 	own, live := claude.Live(sessions, ag.Party)
 	var others []string
 	for _, s := range sessions {
-		if strings.EqualFold(s.Name, name) && s != own {
+		if strings.EqualFold(s.Address(), name) && s != own {
 			others = append(others, s.ID)
 		}
 	}
@@ -817,7 +817,7 @@ func (a *app) absentPeer(name string) string {
 // sessions.
 func absentAgent(st *state.State, sessions []*claude.Session, name string, now time.Time) string {
 	for _, s := range sessions {
-		if strings.EqualFold(s.Name, name) || s.ID == name {
+		if strings.EqualFold(s.Name, name) || strings.EqualFold(s.Address(), name) || s.ID == name {
 			return ""
 		}
 	}
