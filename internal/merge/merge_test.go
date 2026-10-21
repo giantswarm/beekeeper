@@ -810,3 +810,21 @@ func TestParseReleaseWait(t *testing.T) {
 		})
 	}
 }
+
+// BlockingFor lets the session a hold admits through, its merges and its
+// promote, and holds every other session's.
+func TestBlockingForAdmitsTheHoldsSession(t *testing.T) {
+	now := time.Now()
+	st := &state.State{Holds: []state.Hold{{Target: LanePrefix + serving, Reason: "promoting", ExceptSession: "BK 0.156 promoter"}}}
+	lane := config.Lane{Name: serving}
+	for _, pr := range []int{0, 7} {
+		if _, ok := BlockingFor(st, now, "bk 0.156 promoter", "giantswarm/model-manager", pr, lane); ok {
+			t.Errorf("#%d: the admitted session is held", pr)
+		}
+		for _, s := range []string{"", "another worker"} {
+			if h, ok := BlockingFor(st, now, s, "giantswarm/model-manager", pr, lane); !ok || h.ExceptSession != "BK 0.156 promoter" {
+				t.Errorf("#%d: session %q is not held", pr, s)
+			}
+		}
+	}
+}

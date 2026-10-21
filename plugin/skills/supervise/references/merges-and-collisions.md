@@ -10,7 +10,8 @@ due.
   set`, `--lane <name>` for a lane) and with the config's `lanes`, which the gate enforces
   (`beekeeper lanes`; `lanes queue <repo> <n> --for <session>` seeds a place, `lanes settle <repo>
   <n> --for <session>` registers a merge that ran outside the gate, `hold set --lane <name> --except
-  <repo#n>` keeps a proving window open for the one merge it waits for): one merge or promotion at
+  <repo#n>` keeps a proving window open for the one merge it waits for, `--except-session
+  "<promoter>"` keeps a line for its promoter's own promote): one merge or promotion at
   a time per lane, the lane's HelmReleases Ready on the release before the next. A merge behind a
   busy lane waits on in its own run and wakes its session with the outcome, so the lane needs no
   `clear` message and a promotion no separate `go`; only a hold stops a merge, and `lanes clear` is

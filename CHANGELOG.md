@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A merge hold can admit one session, `hold set <target> --except-session "<name>"`: the line's promoter's own `devctl release promote` and merges go through the gate while every other session's are refused (exit 77) with a `beekeeper gate:` line naming the admitted session; a refused run no longer takes another session's waiting place of the same promote or pull request out of the lane ([#822](https://github.com/giantswarm/beekeeper/issues/822)).
+
 - The doctor's Docker prune ranks images by when they were created or last tagged, the later, and keeps one created or tagged within 24 hours or since the oldest held lab lease's claim: a dev image rebuilt from cache keeps its old Created and was removed before its session loaded it. Each `docker.prune` event names the images it removed ([#1539](https://github.com/giantswarm/beekeeper/issues/1539)).
 
 ### Added
