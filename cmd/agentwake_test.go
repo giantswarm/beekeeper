@@ -153,6 +153,10 @@ func TestUniqueNameAndWakeLive(t *testing.T) {
 	if _, err := uniqueName([]*claude.Session{head, desk, other}, head); err == nil || !strings.Contains(err.Error(), "10, 11") && !strings.Contains(err.Error(), "11, 10") {
 		t.Errorf("two CLIs under one name: %v", err)
 	}
+	derived := &claude.Session{PID: 13, ID: "d", HostID: "local_derived", Name: "Supervisor run 250", Peer: derivedPeer}
+	if n, err := uniqueName([]*claude.Session{derived, other}, derived); err != nil || n != derivedPeer {
+		t.Errorf("a CLI is sent to by the name it takes messages under, not its title: %q, %v", n, err)
+	}
 	sessions := []*claude.Session{head, other}
 	if s, ok := wakeLive(sessions, state.Party{HostSession: "local_s1"}, "s1"); !ok || s != head {
 		t.Errorf("a headless turn is found by its session id: %v %v", s, ok)
