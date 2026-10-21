@@ -39,6 +39,10 @@ const (
 	onDoneFlag = "--on-done"
 )
 
+// PairFlag is the gate's flag on devctl pr merge naming the merge it lands
+// with, owner/repo#n; the gate takes it off before devctl runs.
+const PairFlag = "--pair"
+
 var (
 	repoArg = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
 	numArg  = regexp.MustCompile(`^\d+$`)
@@ -94,6 +98,34 @@ func StripDetach(argv []string) (out, stripped []string) {
 		}
 	}
 	return out, stripped
+}
+
+// StripPair takes devctl pr merge's --pair <owner/repo#n> (either form) off
+// argv, the gate's own flag: pair is its value, set says the flag was there
+// (an empty value too). argv of any other command comes back as it is.
+func StripPair(argv []string) (out []string, pair string, set bool) {
+	i := slices.Index(argv, "merge")
+	if i < 1 || argv[i-1] != "pr" {
+		return argv, "", false
+	}
+	out = slices.Clip(argv[:i+1])
+	for j := i + 1; j < len(argv); j++ {
+		switch a := argv[j]; {
+		case a == "--":
+			return append(out, argv[j:]...), pair, set
+		case strings.HasPrefix(a, PairFlag+"="):
+			pair, set = strings.TrimPrefix(a, PairFlag+"="), true
+		case a == PairFlag:
+			set = true
+			if j+1 < len(argv) {
+				j++
+				pair = argv[j]
+			}
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, pair, set
 }
 
 // noReleaseWaitFlag ends devctl pr merge at the merge.

@@ -1,7 +1,8 @@
 // Package dockerprune keeps the Docker images and build cache of a lab
-// machine under a size: the unused images created longest ago go first, the
-// build cache is pruned by Docker's own least-recently-used order. An image a
-// container uses, or one a kind lab's node holds, is never removed.
+// machine under a size: the unused images created or tagged longest ago go
+// first, the build cache is pruned by Docker's own least-recently-used order.
+// An image a container uses, one a kind lab's node holds, or one created or
+// tagged since a keep time is never removed.
 package dockerprune
 
 import (
@@ -69,13 +70,34 @@ type Image struct {
 	Refs    []string
 	Digest  string
 	Created time.Time
+	// Tagged is when a tag was last put on it (docker build, tag or load):
+	// an image rebuilt from cache or retagged keeps its old Created.
+	Tagged time.Time
 	// Unique is what removing it frees: the layers no other image shares.
 	Unique     int64
 	Containers int
 }
 
+// Active is when the image was last produced: created or tagged, the later.
+func (i Image) Active() time.Time {
+	if i.Tagged.After(i.Created) {
+		return i.Tagged
+	}
+	return i.Created
+}
+
+// Name is how a removal names the image: its references, or its ID for a
+// dangling one.
+func (i Image) Name() string {
+	if len(i.Refs) == 0 {
+		return i.ID
+	}
+	return strings.Join(i.Refs, " ")
+}
+
 // ListImages reads every image with what removing it frees, from docker
-// system df -v, which lists an image once per tag.
+// system df -v, which lists an image once per tag, and when it was tagged
+// last, from docker image inspect.
 func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 	raw, err := d(ctx, "system", "df", "-v", "--format", "{{json .}}")
 	if err != nil {
@@ -107,7 +129,41 @@ func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 			out[i].Refs = append(out[i].Refs, repo+":"+tag)
 		}
 	}
-	return out, nil
+	return out, tagTimes(ctx, d, out)
+}
+
+// tagTimes sets each image's Tagged. An image whose tag time is unreadable
+// fails the list: what may be removed is then unknown.
+func tagTimes(ctx context.Context, d Docker, images []Image) error {
+	if len(images) == 0 {
+		return nil
+	}
+	args := []string{"image", "inspect", "--format", "{{.Id}}\t{{json .Metadata.LastTagTime}}"}
+	at := map[string]int{}
+	for i, img := range images {
+		args, at[img.ID] = append(args, img.ID), i
+	}
+	raw, err := d(ctx, args...)
+	if err != nil {
+		return err
+	}
+	seen := 0
+	for line := range bytes.Lines(raw) {
+		id, js, _ := strings.Cut(strings.TrimSpace(string(line)), "\t")
+		i, ok := at[id]
+		if !ok {
+			continue
+		}
+		var t time.Time
+		if err := json.Unmarshal([]byte(js), &t); err != nil {
+			return fmt.Errorf("docker image inspect: image %s: tag time %s: %w", id, js, err)
+		}
+		images[i].Tagged, seen = t, seen+1
+	}
+	if seen != len(images) {
+		return fmt.Errorf("docker image inspect: tag times of %d of %d images", seen, len(images))
+	}
+	return nil
 }
 
 // none is s, or "" for docker's "<none>".
@@ -193,9 +249,11 @@ func KindImages(ctx context.Context, d Docker) (InUse, error) {
 }
 
 // Candidates are the images a trim may remove, in the order it removes
-// them: dangling ones first, then the ones created longest ago.
-func Candidates(images []Image, used InUse) []Image {
-	out := slices.DeleteFunc(slices.Clone(images), used.Has)
+// them: dangling ones first, then the ones created or tagged longest ago.
+// An image created or tagged after keep is no candidate: a session may have
+// produced it for a lab it has not loaded yet.
+func Candidates(images []Image, used InUse, keep time.Time) []Image {
+	out := slices.DeleteFunc(slices.Clone(images), func(i Image) bool { return used.Has(i) || i.Active().After(keep) })
 	slices.SortStableFunc(out, func(a, b Image) int {
 		if da, db := len(a.Refs) == 0, len(b.Refs) == 0; da != db {
 			if da {
@@ -203,7 +261,7 @@ func Candidates(images []Image, used InUse) []Image {
 			}
 			return 1
 		}
-		return a.Created.Compare(b.Created)
+		return a.Active().Compare(b.Active())
 	})
 	return out
 }
@@ -211,9 +269,9 @@ func Candidates(images []Image, used InUse) []Image {
 // TrimImages removes candidates in order until the images' size, from
 // total, is at most target, asking busy before each removal. An image
 // Docker refuses to remove (a container started on it since) is skipped.
-// It returns what it freed by the images' unique sizes and how many it
-// removed.
-func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, busy func() bool) (freed int64, removed int, err error) {
+// It returns what it freed by the images' unique sizes and the names of
+// the images it removed.
+func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, busy func() bool) (freed int64, removed []string, err error) {
 	var refused []error
 	for _, img := range candidates {
 		if total-freed <= target {
@@ -233,9 +291,9 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			continue
 		}
 		freed += img.Unique
-		removed++
+		removed = append(removed, img.Name())
 	}
-	if len(refused) > 0 && removed == 0 {
+	if len(refused) > 0 && len(removed) == 0 {
 		return freed, removed, errors.Join(refused...)
 	}
 	return freed, removed, nil

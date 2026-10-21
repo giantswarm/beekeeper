@@ -375,6 +375,21 @@ func (systemdCapper) Adopt(pid int, name string, c Cap) error {
 	return fmt.Errorf("process %d is not in %s.scope after 5s", pid, name)
 }
 
+// reapTimeout bounds the stop of a run's scope: the service manager sends
+// SIGTERM and, after its stop timeout, SIGKILL to what is left.
+const reapTimeout = 2 * time.Minute
+
+func (systemdCapper) Reap(name string) ([]int, error) {
+	unit := name + ".scope"
+	left := pidsIn(machine.FindMemcapScope(unit))
+	if len(left) == 0 {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reapTimeout)
+	defer cancel()
+	return left, systemctlUser(ctx, "stop", unit)
+}
+
 // sizeBytes is a systemd size with base-1024 suffixes, or "infinity", in
 // bytes, as the service manager's memory properties take it.
 func sizeBytes(s string) (uint64, error) {

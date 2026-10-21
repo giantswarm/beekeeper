@@ -93,6 +93,7 @@ func (stubCapper) Command(string, Cap, []string) (*exec.Cmd, error) {
 	return nil, missing("Capper.Command")
 }
 func (stubCapper) Adopt(int, string, Cap) error { return missing("Capper.Adopt") }
+func (stubCapper) Reap(string) ([]int, error)   { return nil, missing("Capper.Reap") }
 
 type stubInput struct{}
 
