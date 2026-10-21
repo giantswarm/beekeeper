@@ -1312,9 +1312,8 @@ like a merge typed on the command line.
   organisation); any other owner's repository takes the **plain squash merge** instead, in the
   same place and unit: as the gh login, it waits up to `--timeout` (45m) for the head's checks,
   refuses what devctl refuses before its wait (a draft, a closed, merged or conflicting pull
-  request: 3; another person's: 5), refuses as devctl's review guard does a reviewer's
-  unanswered `COMMENTED` or `CHANGES_REQUESTED` review or comment newer than the head (5,
-  `unanswered review: …`, read before the wait and again right before the merge call; its document's
+  request: 3; another person's: 5), refuses a reviewer's feedback as the gate's review read
+  (below) does (5, read before the wait and again right before the merge call; its document's
   `unansweredReviews` lists what the last read found, empty when nothing held the merge), and
   squash-merges green with the judged head as the expected
   one and `<title> (#<n>)` as the subject, then deletes the branch; red is 1, a timeout 2, a gh
@@ -1410,7 +1409,16 @@ session ending: it ends a running merge's devctl through its merge-child and dro
 merge's place (a seeded place stays), `merge.stopped` each, and the gate or the next watch tick
 records the run. The stopping session is told the signal and each merge's outcome, as GitHub
 reports it once devctl is gone: cancelled, nothing merged, it leaves the lane; or merged before
-the stop. `beekeeper gate runs` lists every run the gate runs outside its caller (a running merge or
+the stop. Before a pull request merge takes a lane place, and again at its turn before devctl
+runs, the gate reads its reviews and comments afresh and refuses (77, nothing merged, the reviewer
+and link named) while a reviewer holds it: a `CHANGES_REQUESTED` that is the reviewer's latest
+verdict, which newer commits and replies leave standing and only their approval or its dismissal
+clears, or a `COMMENTED` review or comment newer than the head and unanswered by the author or the
+caller since (devctl's review guard drops a request for changes once a commit or reply is newer);
+the author's and automation's own feedback holds nothing, and a read failing in transit is 74.
+`beekeeper gate check <owner/repo> <n>` is that read alone, the gate's dry path: 77 naming the
+reviewer, 74 unread, 0 when the reviews let the merge through; nothing queues or is logged.
+`beekeeper gate runs` lists every run the gate runs outside its caller (a running merge or
 promotion, one waiting in a queued run of its own, a devctl wait, also one its call left to run on):
 its id, owning session, command, start, merge-child and devctl pids. `beekeeper gate stop <id>` ends
 one, never a kill by pid: a merge as a `TaskStop` of its task does (a seeded place leaves too); a
