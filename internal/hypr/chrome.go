@@ -199,6 +199,9 @@ type Shown struct {
 	Where  string
 	// To is the workspace it was shown on.
 	To Workspace
+	// Left says why Restore left the window where it was: closed, or moved
+	// by the person to another workspace; "" when it put it back.
+	Left string
 	// moved and floated are the steps done, which Restore undoes.
 	moved, floated, placed bool
 }
@@ -255,9 +258,10 @@ func Show(ctx context.Context, ctl Ctl) (*Shown, error) {
 }
 
 // Restore puts the window back as it was: its size and position when it
-// floated, tiled again when it did not, on its own workspace. A window
-// closed since, or moved off the shown workspace by the person, is left
-// where it is.
+// floated, tiled again when it did not, on its own workspace. One the
+// person moved back to its own workspace is only given its float and size
+// back; one closed since, or moved to a third workspace, is left where it
+// is, and Left says so.
 func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 	if s == nil {
 		return nil
@@ -267,13 +271,20 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 		return err
 	}
 	for _, w := range l.windows {
-		if w.Address == s.Before.Address {
-			if w.Workspace.ID != s.To.ID {
-				return nil
-			}
-			return s.undo(ctx, ctl)
+		if w.Address != s.Before.Address {
+			continue
 		}
+		switch w.Workspace.ID {
+		case s.To.ID:
+		case s.Before.Workspace.ID:
+			s.moved = false
+		default:
+			s.Left = "moved by the person to workspace " + w.Workspace.Name
+			return nil
+		}
+		return s.undo(ctx, ctl)
 	}
+	s.Left = "closed"
 	return nil
 }
 

@@ -54,6 +54,9 @@ func (f *fake) lua() []string {
 // other is the address of a window beside Chrome on its workspace.
 const other = "0xk"
 
+// unfloat is the Lua dispatch that tiles Chrome again.
+const unfloat = `hl.dsp.window.float({ action = "unset", window = "address:0xc" })`
+
 var (
 	ws2     = Workspace{ID: 2, Name: "2"}
 	music   = Workspace{ID: -95, Name: "special:music"}
@@ -132,7 +135,7 @@ func TestShowUnderASpecialWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	want = []string{
-		`hl.dsp.window.float({ action = "unset", window = "address:0xc" })`,
+		unfloat,
 		`hl.dsp.window.move({ workspace = "2", follow = false, window = "address:0xc" })`,
 	}
 	if !slices.Equal(f.calls, want) {
@@ -235,7 +238,7 @@ func TestShowFailsNamingTheWorkspace(t *testing.T) {
 		t.Errorf("error %q carries more than hyprctl's first line", err)
 	}
 	undo := []string{
-		`hl.dsp.window.float({ action = "unset", window = "address:0xc" })`,
+		unfloat,
 		`hl.dsp.window.move({ workspace = "special:music", follow = false, window = "address:0xc" })`,
 	}
 	if n := len(f.calls); n < 2 || !slices.Equal(f.calls[n-2:], undo) {
@@ -253,12 +256,33 @@ func TestRestoreLeavesAWindowThePersonMoved(t *testing.T) {
 	}
 	f.calls = nil
 	f.windows[0].Workspace = Workspace{ID: 5, Name: "5"}
-	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.calls) != 0 {
-		t.Errorf("Restore of a moved window = %v, dispatched %q", err, f.calls)
+	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.calls) != 0 || s.Left != "moved by the person to workspace 5" {
+		t.Errorf("Restore of a moved window = %v, left %q, dispatched %q", err, s.Left, f.calls)
 	}
 	f.windows = nil
-	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.calls) != 0 {
-		t.Errorf("Restore of a closed window = %v, dispatched %q", err, f.calls)
+	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.calls) != 0 || s.Left != "closed" {
+		t.Errorf("Restore of a closed window = %v, left %q, dispatched %q", err, s.Left, f.calls)
+	}
+}
+
+// A window the person moved back to its own workspace while it floated
+// there is only tiled again, not moved.
+func TestRestoreTilesAWindowMovedHome(t *testing.T) {
+	m := laptop
+	m.SpecialWorkspace = magic
+	f := &fake{windows: []Window{chrome, claudeW}, monitors: []Monitor{m}, layout: "monocle"}
+	s, err := Show(t.Context(), f.ctl)
+	if err != nil || s == nil {
+		t.Fatalf("Show = %+v, %v", s, err)
+	}
+	f.calls = nil
+	f.windows[0].Floating = true
+	if err := s.Restore(t.Context(), f.ctl); err != nil || s.Left != "" {
+		t.Fatalf("Restore = %v, left %q", err, s.Left)
+	}
+	want := []string{unfloat}
+	if !slices.Equal(f.calls, want) {
+		t.Errorf("dispatches = %q, want %q", f.calls, want)
 	}
 }
 

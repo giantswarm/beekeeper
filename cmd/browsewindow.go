@@ -24,13 +24,15 @@ const windowWait = 10 * time.Second
 // Locked names the screen locker that ran, under which the compositor
 // draws no window; Where is where the window was when it was not shown and
 // To the workspace the turn showed it on; Failed says why it could not
-// show it; Restored whether it went back after.
+// show it; Restored whether it went back after, and Left why it was left
+// where it was (hypr.Shown.Left).
 type placement struct {
 	Locked   string
 	Where    string
 	To       string
 	Failed   string
 	Restored bool
+	Left     string
 	shown    *hypr.Shown
 }
 
@@ -73,7 +75,7 @@ func (p *placement) restore(ctx context.Context) error {
 	if err := s.Restore(ctx, chromeCtl); err != nil {
 		return fmt.Errorf("putting the shared Chrome window back on workspace %s: %w", s.Before.Workspace.Name, err)
 	}
-	p.Restored = true
+	p.Restored, p.Left = s.Left == "", s.Left
 	return nil
 }
 
@@ -88,7 +90,10 @@ func (p placement) line() string {
 		return ""
 	}
 	back := "and put it back after"
-	if !p.Restored {
+	switch {
+	case p.Left != "":
+		back = "and left it where it was after: " + p.Left + " during the turn"
+	case !p.Restored:
 		back = "and did not put it back"
 	}
 	return fmt.Sprintf("window shown: the shared Chrome window was on %s; the turn showed it floating on workspace %s %s", p.Where, p.To, back)
