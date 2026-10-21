@@ -458,6 +458,10 @@ type watcher struct {
 	worktreesOn       bool
 	worktreesTrimming atomic.Bool
 	worktreesNext     time.Time
+	// slotsOn stops orphaned slot scopes (not for --once); orphanSince is
+	// when the watch first saw each orphaned slot scope.
+	slotsOn     bool
+	orphanSince map[string]time.Time
 	// doctored are the chore lines the doctor said, each said once.
 	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
@@ -558,6 +562,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.dockerOn = true
 	w.freeOn = true
 	w.worktreesOn = true
+	w.slotsOn = true
 	w.readFreeMark()
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
@@ -1113,6 +1118,7 @@ func (w *watcher) sample(ctx context.Context) {
 	w.docker(now)
 	w.autoFree(now)
 	w.worktrees(now)
+	w.slotOrphans(now, table)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)
 	if s != nil {

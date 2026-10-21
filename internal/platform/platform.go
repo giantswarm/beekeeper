@@ -170,6 +170,12 @@ type Capper interface {
 	// c.Slice, and returns once it is there: a command the sandbox keeps
 	// from the service manager asks the host for its scope this way.
 	Adopt(pid int, name string, c Cap) error
+	// Reap stops the scope name once its command has exited, with every
+	// process the command left in it (a test's kube-apiserver), and
+	// returns those processes; none when the scope has ended with its
+	// command. A scope that runs on keeps its slot's slice, and so the
+	// slot, busy.
+	Reap(name string) (left []int, err error)
 }
 
 // Opener hands claude:// links to the desktop app.

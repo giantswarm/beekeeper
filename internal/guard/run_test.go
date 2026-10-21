@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -87,6 +88,7 @@ type fakeCapper struct {
 func (f *fakeCapper) Available() bool                     { return !f.down }
 func (*fakeCapper) Capped() bool                          { return false }
 func (*fakeCapper) Adopt(int, string, platform.Cap) error { return nil }
+func (*fakeCapper) Reap(string) ([]int, error)            { return nil, nil }
 func (f *fakeCapper) CapSlot(c platform.Cap) error {
 	f.capped = append(f.capped, c.Slice)
 	return nil
@@ -242,6 +244,100 @@ func TestRunLeavesASlotWhoseSliceStillRuns(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "1.holder")); !os.IsNotExist(err) {
 		t.Errorf("the occupied slot kept a holder record: %v", err)
+	}
+}
+
+// scopeCapper runs the command in a process group of its own, its scope,
+// and reaps what the command leaves in the group, the left processes'
+// ids read from the file the command writes them to.
+type scopeCapper struct {
+	fakeCapper
+	cmd *exec.Cmd
+	// pids is the file the command writes the ids it leaves behind to.
+	pids string
+	// lock is the run's slot lock, held: Reap finds it still held.
+	lock   string
+	reaped []string
+	held   bool
+}
+
+func (s *scopeCapper) Command(name string, c platform.Cap, argv []string) (*exec.Cmd, error) {
+	cmd, _ := s.fakeCapper.Command(name, c, argv)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	s.cmd = cmd
+	return cmd, nil
+}
+
+func (s *scopeCapper) Reap(name string) ([]int, error) {
+	s.reaped = append(s.reaped, name)
+	if err := syscall.Kill(-s.cmd.Process.Pid, 0); err != nil {
+		return nil, nil // the scope ended with its command
+	}
+	ok, err := flock.New(s.lock).TryLock()
+	s.held = err == nil && !ok
+	raw, _ := os.ReadFile(s.pids)
+	var left []int
+	for _, f := range strings.Fields(string(raw)) {
+		if pid, err := strconv.Atoi(f); err == nil {
+			left = append(left, pid)
+		}
+	}
+	return left, syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
+}
+
+// A command that exits and leaves a background child in its scope (go
+// test's envtest kube-apiserver) ends with the scope stopped before the
+// slot is released: the slot is free for the next run at once.
+func TestRunStopsWhatTheCommandLeavesInItsScope(t *testing.T) {
+	dir := t.TempDir()
+	f := &scopeCapper{pids: filepath.Join(t.TempDir(), "left"), lock: filepath.Join(dir, "1.lock")}
+	saved := plat.Capper
+	plat.Capper = f
+	t.Cleanup(func() { plat.Capper = saved })
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "fresh")
+	var stderr strings.Builder
+	var ends []string
+	o := Options{Max: "1M", Swap: "0", SlotDir: dir, Slots: 1, Wait: time.Second, Stderr: &stderr,
+		Record: func(verb, detail string) {
+			if verb == VerbEnd {
+				ends = append(ends, detail)
+			}
+		}}
+	leaves := []string{"sh", "-c", `sleep 300 & echo $! > "$0"`, f.pids}
+	if rc := Run(o, leaves); rc != 0 {
+		t.Fatalf("exit %d, want the command's 0:\n%s", rc, stderr.String())
+	}
+	raw, err := os.ReadFile(f.pids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if len(f.reaped) != 1 || !f.held {
+		t.Fatalf("reaped %v, slot held while reaping %v: want the run's scope reaped once, before the slot is released", f.reaped, f.held)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(child, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if syscall.Kill(child, 0) == nil {
+		_ = syscall.Kill(child, syscall.SIGKILL)
+		t.Errorf("the left child %d runs on", child)
+	}
+	want := fmt.Sprintf("the command exited and left %d in %s.scope: stopped them, they hold slot 1 no longer", child, f.reaped[0])
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("run said:\n%s\nwant %q", stderr.String(), want)
+	}
+	if len(ends) != 1 || !strings.Contains(ends[0], fmt.Sprintf(", stopped what it left: %d: ", child)) {
+		t.Errorf("end events %q: want the stop in the run's end", ends)
+	}
+	if s := machine.ReadSlots(dir, 1); !s[0].Free {
+		t.Errorf("slot 1 after the run: %+v, want free", s[0])
+	}
+	// The next run takes the slot at once, and a command that leaves
+	// nothing behind has nothing reaped and says nothing about it.
+	stderr.Reset()
+	if rc := Run(o, trueCmd); rc != 0 || stderr.Len() != 0 {
+		t.Errorf("the next run: exit %d, said %q; want 0 and nothing", rc, stderr.String())
 	}
 }
 

@@ -78,6 +78,9 @@ the slot's cap. A command a capped run starts runs inside that run's scope. When
 reaches the cap the kernel kills its biggest process and nothing outside the
 scope notices; run then names the victim in one line starting with
 "` + guard.LogPrefix + `" and exits 137 (or the tool's own failure code).
+When the command exits and leaves processes in its scope (a test's
+kube-apiserver), run stops the scope before it releases the slot and names
+them; a scope left that way would keep the slot busy for every other run.
 Bound the command's parallelism rather than raising --max.
 
 When every slot is held, or MemAvailable is below the cap, run waits up to

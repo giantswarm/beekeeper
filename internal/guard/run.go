@@ -32,6 +32,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Exit codes Run returns besides the command's own.
@@ -346,6 +347,9 @@ func Run(o Options, argv []string) int {
 	start := time.Now()
 	rc := scope(capper, unit, o, slot, argv, env, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
+	if left := reap(capper, unit, slot, logf); left != "" {
+		end += ", " + left
+	}
 	if rc != 0 {
 		if kills := victims(unit, start, rc); len(kills) > 0 {
 			what, advice, detail := killReport(o, unit, slot, shared, kills)
@@ -568,6 +572,55 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv, env [
 		return 128 + int(ws.Signal())
 	}
 	return c.ProcessState.ExitCode()
+}
+
+// reap stops the run's scope once the command has exited and left
+// processes in it (a test's kube-apiserver): a scope that runs on keeps the
+// slot's slice busy, and no run takes the slot while it does. It runs
+// before the slot is released. Its result is the end event's detail, ""
+// when the scope ended with its command.
+func reap(capper platform.Capper, unit string, slot int, logf func(string, ...any)) string {
+	// The processes' names, read while they run.
+	var t *proc.Table
+	if s := plat.Machine.MemcapScope(unit + ".scope"); s != nil && len(plat.Machine.ScopePIDs(s.Path)) > 0 {
+		t, _ = plat.Machine.Processes()
+	}
+	left, err := capper.Reap(unit)
+	if len(left) == 0 {
+		if err != nil {
+			logf("stopping %s.scope: %v", unit, err)
+		}
+		return ""
+	}
+	procs := ProcList(left, t)
+	if err != nil {
+		logf("the command exited and left %s in %s.scope; stopping it failed: %v — slot %d stays busy until they end or the watch stops the scope",
+			procs, unit, err, slot)
+		return "left " + procs + ", stop failed"
+	}
+	logf("the command exited and left %s in %s.scope: stopped them, they hold slot %d no longer", procs, unit, slot)
+	return "stopped what it left: " + procs
+}
+
+// maxProcs is how many processes ProcList names before it counts the rest.
+const maxProcs = 5
+
+// ProcList names the processes, "4711 (kube-apiserver), 4712 (etcd)" by the
+// table t (nil: their ids only), at most maxProcs of them and the count of
+// the rest.
+func ProcList(pids []int, t *proc.Table) string {
+	var v []string
+	for _, pid := range pids[:min(len(pids), maxProcs)] {
+		if p := t.Process(pid); p != nil {
+			v = append(v, fmt.Sprintf("%d (%s)", pid, p.Comm))
+		} else {
+			v = append(v, strconv.Itoa(pid))
+		}
+	}
+	if len(pids) > maxProcs {
+		v = append(v, fmt.Sprintf("%d more", len(pids)-maxProcs))
+	}
+	return strings.Join(v, ", ")
 }
 
 // killReport is what the kernel killed in the run's scope, the advice that

@@ -32,6 +32,7 @@ func (r *recordingCapper) CapSlot(c platform.Cap) error {
 	return nil
 }
 func (*recordingCapper) Command(string, platform.Cap, []string) (*exec.Cmd, error) { return nil, nil }
+func (*recordingCapper) Reap(string) ([]int, error)                                { return nil, nil }
 func (r *recordingCapper) Adopt(pid int, _ string, _ platform.Cap) error {
 	r.adopts = append(r.adopts, pid)
 	return nil
