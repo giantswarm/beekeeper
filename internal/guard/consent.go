@@ -303,6 +303,7 @@ func (h Hook) consent(ev event) []byte {
 	}
 	apps := h.Apps()
 	var pages map[string]Page
+	var checks map[string]pageCheck
 	allowed := ""
 	for _, c := range calls {
 		var d Decision
@@ -321,6 +322,16 @@ func (h Hook) consent(ev event) []byte {
 				// record covers: the classifier decides it.
 				if c.typed && d.Decision == Allow && onGoogle(page) {
 					d = Decision{}
+				}
+				// A click or key the record allows lands only on a page
+				// Chrome draws.
+				if c.pointer && d.Decision == Allow {
+					if checks == nil {
+						checks = pageChecks(ev.TranscriptPath)
+					}
+					if r := drawRefusal(page, tabFor(pages, c.tab), checks); r != "" {
+						d = Decision{Deny, r}
+					}
 				}
 			}
 		}
@@ -352,6 +363,10 @@ type chromeCall struct {
 	// typed says the call enters input: a typed text, a key, a drag, a
 	// form value; anything but a click.
 	typed bool
+	// pointer says the call is an input event on the page (the computer
+	// tool's), which lands only where Chrome draws it; a form value is set
+	// on the element.
+	pointer bool
 }
 
 // chromeCalls are the calls of a Chrome tool call the hook decides: a
@@ -367,7 +382,7 @@ func chromeCalls(tool string, input map[string]any) []chromeCall {
 		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey), text: valueOf(input, valueKey), typed: true}}
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(acting, action) {
-			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), text: valueOf(input, textKey), typed: !strings.HasSuffix(action, "click")}}
+			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), text: valueOf(input, textKey), typed: !strings.HasSuffix(action, "click"), pointer: true}}
 		}
 	case chromeBatch:
 		actions, _ := input["actions"].([]any)
@@ -595,6 +610,16 @@ func pageOf(pages map[string]Page, tab string) (Page, bool) {
 		}
 	}
 	return Page{}, false
+}
+
+// tabFor is tab, or, for a call that names no tab, the one tab of pages.
+func tabFor(pages map[string]Page, tab string) string {
+	if tab == "" && len(pages) == 1 {
+		for t := range pages {
+			return t
+		}
+	}
+	return tab
 }
 
 // resultTexts are the texts of the tool results on one transcript line: a

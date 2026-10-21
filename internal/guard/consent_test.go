@@ -142,6 +142,9 @@ func transcriptWith(t *testing.T, page Page, asJSON bool) string {
 		`{"type":"user","message":{"content":"plain text"}}`,
 		"no json here",
 		resultLine(`[{"type":"text","text":` + strconv.Quote("Successfully captured screenshot "+ctx(page)) + `},{"type":"image"}]`),
+		// The page's draw check answered drawn.
+		drawUse(),
+		strings.Replace(resultLine(`[{"type":"text","text":`+strconv.Quote(drawOpen+Drawn+", visibility visible"+ctx(page))+`}]`), `"tool_use_id":"t"`, `"tool_use_id":"d"`, 1),
 	}
 	if asJSON {
 		lines = append(lines, resultLine(strconv.Quote(`{"availableTabs":[{"tabId":7,"title":`+strconv.Quote(page.Title)+`,"url":`+strconv.Quote(page.URL)+`}],"selectedTabId":7}`)))
@@ -151,6 +154,12 @@ func transcriptWith(t *testing.T, page Page, asJSON bool) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// drawUse is the transcript line of a DrawCheck call on tab 7, id "d".
+func drawUse() string {
+	in, _ := json.Marshal(script(DrawCheck))
+	return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d","name":"mcp__claude-in-chrome__javascript_tool","input":` + string(in) + `}]}}`
 }
 
 // The Chrome calls the decision is tested with: a click on tab 7, a

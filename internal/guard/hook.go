@@ -290,6 +290,9 @@ func (h Hook) decide(ev event) []byte {
 	if r := tabCloseRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if r := leaveRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if r := sharedRefusal(ev, h.Shared); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
