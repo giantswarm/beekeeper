@@ -20,12 +20,14 @@ import (
 
 // A lab machine that loads dev images into kind clusters piles up Docker
 // images and build cache nothing removes. Over doctor.dockerImagesMaxGiB the
-// watch removes the unused images created longest ago down to three
-// quarters of the cap; over doctor.dockerBuildCacheMaxGiB it prunes the
+// watch removes the unused images created or tagged longest ago down to
+// three quarters of the cap; over doctor.dockerBuildCacheMaxGiB it prunes the
 // build cache likewise. An image a container uses or a kind lab's node
-// holds is never removed, and nothing is pruned while an image import or
-// build runs or a lab lease is fresh (its holder may be mid-load). Each
-// prune is logged (docker.prune). One process prunes at a time
+// holds is never removed, nor one created or tagged within dockerTagSettle
+// or since a held lab lease was claimed (a session's dev image not yet
+// loaded), and nothing is pruned while an image import or build runs or a
+// lab lease is fresh (its holder may be mid-load). Each prune is logged
+// (docker.prune) with the images it removed. One process prunes at a time
 // (docker.lock), and the watches share when Docker was read last
 // (docker.json).
 
@@ -36,6 +38,12 @@ const (
 	// dockerLabSettle is how long after a lab lease's claim its holder
 	// may still be loading images: no prune runs before.
 	dockerLabSettle = time.Hour
+	// dockerTagSettle is how long an image created or tagged stays: the
+	// session that built it may load it into a lab hours later.
+	dockerTagSettle = 24 * time.Hour
+	// dockerLabKeep bounds how far back a held lab lease keeps images, so
+	// a forgotten lease does not stop every prune.
+	dockerLabKeep = 72 * time.Hour
 	// dockerTimeout bounds one look at Docker, prune included.
 	dockerTimeout = 15 * time.Minute
 )
@@ -44,9 +52,9 @@ const (
 type dockerRun struct {
 	imagesMax, cacheMax int64
 	before, after       dockerprune.Usage
-	// removed images freed about freed bytes; pruned says the build cache
-	// was pruned.
-	removed int
+	// removed are the images removed, which freed about freed bytes;
+	// pruned says the build cache was pruned.
+	removed []string
 	freed   int64
 	pruned  bool
 	// held says what held the prune back; locked says another process
@@ -60,7 +68,7 @@ func (r dockerRun) off() bool        { return r.imagesMax == 0 && r.cacheMax == 
 func (r dockerRun) imagesOver() bool { return r.imagesMax > 0 && r.before.Images > r.imagesMax }
 func (r dockerRun) cacheOver() bool  { return r.cacheMax > 0 && r.before.BuildCache > r.cacheMax }
 func (r dockerRun) over() bool       { return r.imagesOver() || r.cacheOver() }
-func (r dockerRun) acted() bool      { return r.removed > 0 || r.pruned }
+func (r dockerRun) acted() bool      { return len(r.removed) > 0 || r.pruned }
 
 // String says the run in one line.
 func (r dockerRun) String() string {
@@ -73,8 +81,8 @@ func (r dockerRun) String() string {
 	head := fmt.Sprintf("Docker: images %s, cap %s; build cache %s, cap %s (doctor.dockerImagesMaxGiB, doctor.dockerBuildCacheMaxGiB)",
 		gibStr(r.before.Images), capStr(r.imagesMax), gibStr(r.before.BuildCache), capStr(r.cacheMax))
 	var did []string
-	if r.removed > 0 {
-		did = append(did, fmt.Sprintf("%d unused images removed (about %s), images now %s", r.removed, gibStr(r.freed), gibStr(r.after.Images)))
+	if len(r.removed) > 0 {
+		did = append(did, fmt.Sprintf("%d unused images removed (about %s), images now %s", len(r.removed), gibStr(r.freed), gibStr(r.after.Images)))
 	}
 	if r.pruned {
 		did = append(did, "build cache pruned to "+gibStr(r.after.BuildCache))
@@ -101,6 +109,15 @@ func (r dockerRun) String() string {
 		return head + "; would prune " + strings.Join(would, " and ")
 	}
 	return head
+}
+
+// logLine is the run's line with the images it removed, so a later "No
+// such image" is traceable to its prune.
+func (r dockerRun) logLine() string {
+	if len(r.removed) == 0 {
+		return r.String()
+	}
+	return r.String() + "; removed: " + strings.Join(r.removed, ", ")
 }
 
 func capStr(b int64) string {
@@ -222,14 +239,14 @@ func (a *app) pruneDocker(dryRun bool, holds func() string) dockerRun {
 	}
 	r.err = errors.Join(errs...)
 	if r.acted() {
-		_ = a.store.Log(event(watchParty, dockerVerb, "%s", r))
+		_ = a.store.Log(event(watchParty, dockerVerb, "%s", r.logLine()))
 	}
 	return r
 }
 
-// trimDockerImages removes the unused images, the kind labs' left alone,
-// until the images are under three quarters of their cap or something
-// holds the prune back.
+// trimDockerImages removes the unused images, the kind labs' and the
+// recently produced left alone (dockerKeep), until the images are under
+// three quarters of their cap or something holds the prune back.
 func (a *app) trimDockerImages(ctx context.Context, d dockerprune.Docker, r *dockerRun, holds func() string) error {
 	images, err := dockerprune.ListImages(ctx, d)
 	if err != nil {
@@ -240,11 +257,30 @@ func (a *app) trimDockerImages(ctx context.Context, d dockerprune.Docker, r *doc
 		return fmt.Errorf("no image removed: %w", err)
 	}
 	busy := func() bool { r.held = holds(); return r.held != "" }
-	r.freed, r.removed, err = dockerprune.TrimImages(ctx, d, dockerprune.Candidates(images, used), r.before.Images, r.imagesMax*3/4, busy)
+	keep := dockerKeep(a.heldLabs(), time.Now())
+	r.freed, r.removed, err = dockerprune.TrimImages(ctx, d, dockerprune.Candidates(images, used, keep), r.before.Images, r.imagesMax*3/4, busy)
 	if errors.Is(err, dockerprune.ErrBusy) {
 		return nil
 	}
 	return err
+}
+
+// dockerKeep is the time since which a created or tagged image stays:
+// dockerTagSettle before now, or the claim of the oldest held lab lease if
+// earlier, as its holder may still load what it built for it, though never
+// before dockerLabKeep. A lease whose claim time is unknown keeps the
+// settle window.
+func dockerKeep(labs []lease.Holder, now time.Time) time.Time {
+	keep, floor := now.Add(-dockerTagSettle), now.Add(-dockerLabKeep)
+	for _, h := range labs {
+		if since := h.SinceTime(); !since.IsZero() && since.Before(keep) {
+			keep = since
+		}
+	}
+	if keep.Before(floor) {
+		return floor
+	}
+	return keep
 }
 
 // dockerMark is the watches' shared memory of Docker: when its size was
