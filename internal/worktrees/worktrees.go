@@ -348,6 +348,55 @@ func finished(t Tree, done string, pushed bool) Verdict {
 // hours says d as whole hours, "72h".
 func hours(d time.Duration) string { return fmt.Sprintf("%dh", int(d.Hours())) }
 
+// Writable gives the owner write and search permission on every directory
+// under path, path included, as go clean -modcache does: a read-only one (a
+// Go module cache copy, envtest's binaries under go/bin/k8s) refuses the
+// unlink of what it holds, while a read-only file in a writable directory
+// unlinks. Symbolic links are not followed, path itself included, and no
+// change reaches outside path.
+func Writable(path string) error {
+	if fi, err := os.Lstat(path); err != nil || !fi.IsDir() {
+		return nil
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	var errs []error
+	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			errs = append(errs, err)
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			errs = append(errs, err)
+			return fs.SkipDir
+		}
+		if fi.Mode().Perm()&0o700 != 0o700 {
+			if err := root.Chmod(p, fi.Mode().Perm()|0o700); err != nil {
+				errs = append(errs, err)
+				return fs.SkipDir
+			}
+		}
+		return nil
+	})
+	return errors.Join(errs...)
+}
+
+// RemoveAll removes path and everything under it, read-only directories
+// included (Writable).
+func RemoveAll(path string) error {
+	if err := Writable(path); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
+}
+
 // Size is the disk space in bytes the files under path take, as du counts
 // it (the apparent size where the platform says no blocks).
 func Size(path string) int64 {
