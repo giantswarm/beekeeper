@@ -37,6 +37,10 @@ const (
 	// ExitGateRefused: a hold, a GitHub budget unknown or an unreadable
 	// installation; nothing is queued.
 	ExitGateRefused = 77
+	// ExitGateUnread: the GitHub budget read failed in transit on every try
+	// (sysexits' EX_IOERR); the merge was neither judged nor queued, the same
+	// command runs again once GitHub answers.
+	ExitGateUnread = 74
 	// ExitGateDuplicate: the pull request's merge already runs, devctl's
 	// "not applicable".
 	ExitGateDuplicate = 3
@@ -86,7 +90,11 @@ the release candidate, the base branch or the rebase that fails in transit
 (a resolver error, a refused or reset connection, a timeout, a killed
 kubectl, gh's "error connecting to") is sent again three times (10s, 30s,
 1m20s apart), a line per retry, the merge keeping its place; the refusal
-after the last try names the read's last error. A rebase merge (--rebase) GitHub reports
+after the last try names the read's last error. The budget's read is the
+exception: failing in transit on every try it is no refusal but exit 74
+(unread), the merge neither judged nor queued, its line ("beekeeper gate:
+unread, …") naming the failed read; the same command runs again once
+GitHub answers. A rebase merge (--rebase) GitHub reports
 not rebaseable or conflicting with its base is refused (77) before it takes
 a lane place, the way out a replacement PR; GitHub not answering whether it
 rebases refuses too. At its turn a rebase merge is read again: one only
@@ -248,8 +256,14 @@ func gateRefused(format string, args ...any) error {
 	return gateRefusedWith(ExitGateRefused, format, args...)
 }
 
+// gateRefusedWith prints the gate's line and exits code: "refused, …", or
+// "unread, …" for a read that failed in transit, which judged nothing.
 func gateRefusedWith(code int, format string, args ...any) error {
-	gateLine("refused, "+format, args...)
+	word := "refused, "
+	if code == ExitGateUnread {
+		word = "unread, "
+	}
+	gateLine(word+format, args...)
 	return &exitError{code: code}
 }
 
@@ -712,7 +726,7 @@ func (g *gateRun) step() (string, error) {
 	b, err := g.gateBudget()
 	if err != nil {
 		if merge.Transient(err) {
-			return "", g.refuse("the GitHub budget is unknown (%v): run the same command again once GitHub answers", err)
+			return "", g.refuseWith(ExitGateUnread, "reading the GitHub budget failed in transit (%v), the merge was not judged: run the same command again once GitHub answers", err)
 		}
 		return "", g.refuse("the GitHub budget is unknown (%v): fix that (gh auth status), then run the same command again", err)
 	}

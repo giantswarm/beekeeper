@@ -521,7 +521,7 @@ func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
 // successfully.
 func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
 	for rc, want := range map[int]int{
-		0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 9: 0, ExitGateQueued: 0, ExitGateRefused: 0, 143: 0,
+		0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 9: 0, ExitGateQueued: 0, ExitGateRefused: 0, ExitGateUnread: 0, 143: 0,
 		8: 8, 75: 75, 127: 127, 130: 130, 137: 137,
 	} {
 		if got := unitExit(rc); got != want {

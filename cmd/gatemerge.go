@@ -695,14 +695,14 @@ func doneResult(base string) (childResult, bool) {
 // session and the event log; the unit fails only where a person must act:
 // devctl's authentication (8), a kill or merge-child itself failing. devctl's
 // verdicts (0-7, 9: a merge, a red or unfinished pull request, a refusal, a
-// mistyped flag), the gate's own (76 queued, 77 refused, of a queued merge's
-// gate) and a stop as asked (SIGTERM) are the calling session's to act on and
-// end the unit successfully.
+// mistyped flag), the gate's own (76 queued, 77 refused, 74 unread, of a
+// queued merge's gate) and a stop as asked (SIGTERM) are the calling
+// session's to act on and end the unit successfully.
 func unitExit(rc int) int {
 	switch {
 	case rc == devctlAuth:
 		return rc
-	case rc >= 0 && rc <= devctlUnconfirmed, rc == ExitGateQueued, rc == ExitGateRefused, rc == 128+int(syscall.SIGTERM):
+	case rc >= 0 && rc <= devctlUnconfirmed, rc == ExitGateQueued, rc == ExitGateRefused, rc == ExitGateUnread, rc == 128+int(syscall.SIGTERM):
 		return 0
 	}
 	return rc

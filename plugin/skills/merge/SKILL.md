@@ -10,9 +10,9 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
 - **One merge command per PR, through the gate**: `devctl pr merge <owner/repo> <n> --update-branch`
   (a rebase line: `--rebase --update-branch`) for `merge.devctlOwners`, `devctl release promote
   <owner/repo> --version <proven RC>` likewise. Act on its exit code, never around it: 76 queued,
-  its outcome wakes the worker (park on the PR, never run it again); 77 refused, its `beekeeper
-  gate:` line goes to the supervisor, no second merge; 3 still "behind" (the update refused) on a
-  squash line: merge the base into the branch, push, the same merge once more.
+  its outcome wakes the worker (park on the PR, never run it again); 77 refused, its line to the
+  supervisor, no second merge; 74 unread: the same merge once GitHub answers; 3 still "behind"
+  on a squash line: merge the base into the branch, push, the same merge once more.
 - **Protection** is read with `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
 - **Nothing rolls onto an installation while one of its clusters upgrades.**
 - **Before a non-mechanical change**, read the repo's open PRs and recent commits: a
