@@ -36,7 +36,7 @@ var guideCalls = map[string]map[string]any{
 	"gh review":       bashCall("gh pr review 7 --repo o/r --approve"),
 	"browser click":   toolEvent(browserTools+"computer", map[string]any{"action": "left_click", "coordinate": []any{1, 2}}),
 	"browser type":    computerCall("type"),
-	"browser form":    toolEvent(browserTools+"form_input", map[string]any{"ref": "r1", "value": "x"}),
+	"browser form":    toolEvent(browserTools+"form_input", map[string]any{refKey: "r1", "value": "x"}),
 	"browser js":      toolEvent(browserTools+"javascript_tool", map[string]any{}),
 	"connector merge": toolEvent("mcp__github__merge_pull_request", map[string]any{"pullNumber": 7}),
 	"connector review": toolEvent("mcp__claude_ai_GitHub_MCP__pull_request_review_write",

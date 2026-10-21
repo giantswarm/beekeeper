@@ -29,7 +29,7 @@ const browserTools = mcpPrefix + "claude-in-chrome__"
 // read it, look at it.
 var browserReads = []string{
 	"tabs_context", "tabs_context_mcp", "tabs_create", "tabs_create_mcp", "navigate",
-	"read_page", "get_page_text", "find", "read_console_messages", "read_network_requests", "shortcuts_list",
+	chromeReadPage, chromePageText, chromeFind, "read_console_messages", "read_network_requests", "shortcuts_list",
 }
 
 // actionKey is the input of the browser's computer tool that names its

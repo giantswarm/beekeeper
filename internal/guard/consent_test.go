@@ -186,7 +186,7 @@ func TestConsentDecision(t *testing.T) {
 	other := transcriptWith(t, Page{URL: redactedPage, Title: otherTitle}, false)
 	plain := transcriptWith(t, Page{URL: applicationsPage, Title: applicationsTitle}, false)
 	lan := transcriptWith(t, Page{URL: lanConsentPage, Title: grantAccess}, false)
-	click := tabInput(leftClick, map[string]any{"ref": "ref_45", "action_summary": clicksAuthorize})
+	click := tabInput(leftClick, map[string]any{"ref": "ref_45", summaryKey: clicksAuthorize})
 	screenshot := tabInput("screenshot", nil)
 	batch := map[string]any{"actions": []any{batchAction(chromeComputer, screenshot), batchAction(chromeComputer, tabInput(leftClick, nil))}}
 	reads := map[string]any{"actions": []any{batchAction("find", map[string]any{"query": clicksAuthorize, tabKey: json.Number(tab7)})}}

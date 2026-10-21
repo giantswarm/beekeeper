@@ -15,7 +15,7 @@ import (
 // a call past the hook. The turn finds its controls with find, clicks them
 // by ref, and runs one script, the reader.
 var BlindReads = []string{
-	"get_page_text", "read_page", "read_network_requests", "read_console_messages",
+	chromePageText, chromeReadPage, "read_network_requests", "read_console_messages",
 	"gif_creator", "upload_image", "file_upload", "shortcuts_execute", chromeBatch,
 }
 
@@ -24,7 +24,7 @@ var BlindReads = []string{
 // passes without its picture actions and its copy and paste keys, navigate
 // with an http or https URL alone, javascript_tool with the reader alone.
 var captureTools = []string{
-	"find", chromeComputer, chromeNavigation, chromeForm, chromeScript, "resize_window",
+	chromeFind, chromeComputer, chromeNavigation, chromeForm, chromeScript, "resize_window",
 	"tabs_context_mcp", "tabs_create_mcp", "tabs_close_mcp", "list_connected_browsers", "select_browser", "switch_browser",
 }
 
