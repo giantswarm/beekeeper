@@ -693,6 +693,7 @@ func archiveSteward(ctx context.Context, hosts, exclude []string, find func(excl
 func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	id := strings.TrimPrefix(host, "local_")
 	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
+		a.markWarmed(host)
 		return steward{host: host, sock: sock}, nil
 	}
 	t, err := plat.Machine.Processes()
@@ -715,6 +716,7 @@ func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	}
 	linkMu.Lock()
 	defer linkMu.Unlock()
+	a.markWarmed(host)
 	shownAt := time.Now()
 	if _, err := a.showBriefly(ctx, d, continueURL(host), host, "", true, 0, func() error { return noHeadlessTurn(id) }); err != nil {
 		return steward{}, fmt.Errorf("warming the CLI of %s: %w", host, err)
@@ -726,6 +728,18 @@ func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 		return steward{}, fmt.Errorf("the desktop warmed no CLI of %s: it runs its cap of %s and starts none for a show", host, capText(n))
 	}
 	return steward{}, fmt.Errorf("the desktop warmed no CLI of %s within %s of showing it", host, twinWait)
+}
+
+// markWarmed records on the archive owed for host that its own CLI is
+// warmed to archive itself, so the watch does not stop it as revived
+// (archiveWarmed) before its archive call ran.
+func (a *app) markWarmed(host string) {
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Archives, func(x state.Archive) bool { return x.Host == host }); i >= 0 {
+			st.Archives[i].Warmed = time.Now().UTC()
+		}
+		return nil, nil
+	})
 }
 
 // stewardAnswer is what a steward asked for archives did in its turn.
