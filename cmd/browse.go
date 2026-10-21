@@ -122,6 +122,23 @@ const frontWords = "Work in a tab in front of its window: a tab behind another t
 	"dissolves the group and leaves that tab open outside it, where no call reaches it. Before you end, close every tab you opened, the " +
 	"blank ones included, with tabs_close_mcp: the others first, the group's first tab last. "
 
+// drawWords tell a browse turn to check that Chrome draws a page before it
+// screenshots or clicks there: a window not on screen draws nothing while
+// its tab says visible, its screenshot times out and a click does nothing
+// (a consent page keeps its button disabled). The hook refuses a click it
+// would allow on a page no draw check answered drawn. leaveWords tell it to
+// take a page's leave-page prompt away before it closes the tab.
+var (
+	drawWords = "On each page a step names, before its first screenshot or click, check that Chrome draws it: run javascript_tool on the " +
+		"tab, a call of its own (not in a batch), with this code verbatim:\n" + guard.DrawCheck + "\nIt answers '" + guard.Drawn +
+		"' or '" + guard.NotDrawn + "'. On '" + guard.NotDrawn + "' (the window is not on screen, though the tab may say visible) open a " +
+		"fresh tab with tabs_create_mcp, navigate it to the page's URL and check there once. Still '" + guard.NotDrawn + "': take no " +
+		"screenshot and click nothing on that page, read it with get_page_text for the evidence, and end your report with the line '" +
+		guard.NotDrawnLine + "' followed by the page and the steps not done, one per line. "
+	leaveWords = "A page with an unsaved form holds its tab's close on a leave-page prompt nobody answers: before you close a tab on a " +
+		"web page, run javascript_tool on it with this code verbatim, alone or in the same batch before the close:\n" + guard.LeaveDisarm + "\n"
+)
+
 // windowCapture replaces the page's window.open: the address of a window
 // the page opens is kept on the page instead of a window outside the turn's
 // tab group; windowRead reads it, its result opening with windowOpened.
@@ -335,8 +352,22 @@ every further screenshot and zoom of the turn, which reads the page's text
 instead, naming the page not rendered. Screenshots that timed out are
 counted as "not rendered:" below the report.
 
+A window that is not on screen (on a workspace not shown, minimised, under
+another window) draws nothing while its tab says visible: a consent page
+there keeps its Authorize button disabled and a click does nothing. On each
+page, before its first screenshot or click, the turn runs beekeeper's draw
+check (two animation frames within 1.5s), which answers drawn or not drawn;
+the hook (beekeeper hook pretooluse) refuses a click or key it would allow
+on a consent or sign-in page until a draw check at that page answered
+drawn. Not drawn, the turn tries one fresh tab; still not drawn, it clicks
+nothing there and the command fails with "window not drawn". Below the
+report, "not drawn:" counts the checks that answered not drawn and says
+whether a later one recovered.
+
 The turn closes every tab it opened before it ends, the blank ones
-included. Its tab group is keyed by the tab it was made with: closing that
+included. A page with an unsaved form holds its close on a leave-page
+prompt nobody answers, so before closing a tab on a web page the turn runs
+beekeeper's leave-page disarm there, which the hook requires. Its tab group is keyed by the tab it was made with: closing that
 tab while another of the turn's tabs is open dissolves the group and
 strands the other tab outside it, where no call reaches it, so the hook
 (beekeeper hook pretooluse) refuses that close, naming the order, the
@@ -508,7 +539,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
-	return errors.Join(err, ferr, serr, found.lostErr(report), found.tabsErr())
+	return errors.Join(err, ferr, serr, found.lostErr(report), found.drawErr(), found.tabsErr())
 }
 
 // The turn's classifier names a call it refused in the call's error result:
@@ -617,13 +648,16 @@ const sharedHint = "a file the steps upload is shared with `beekeeper browse --f
 // browseFindings are what a turn's transcript says beyond its report: the
 // calls the classifier refused, the screenshots of a page that is not
 // rendered, the tabs the calls named and the windows the pages opened, in
-// order, and the Chrome connection: Lost are the words of each call that
+// order, the draw checks that answered not drawn (NotDrawn) and whether
+// the last check answered drawn (Drawn), and the Chrome connection: Lost are the words of each call that
 // found it gone, Recovered whether a Chrome call was answered after the last
 // of them, Reconnected whether browse's own reconnect turn ran, which the
 // run sets.
 type browseFindings struct {
 	Refused     []refusal
 	NotRendered int
+	NotDrawn    int
+	Drawn       bool
 	Tabs        []int64
 	Windows     []string
 	Lost        []string
@@ -663,6 +697,12 @@ func readFindings(transcript string) (browseFindings, error) {
 					f.Windows = append(f.Windows, w)
 				}
 				denied := strings.Contains(text, classifierDenial)
+				if v := guard.DrawVerdict(text); v != "" && strings.HasSuffix(c.name, scriptTool) && !b.IsError {
+					f.Drawn = v == guard.Drawn
+					if !f.Drawn {
+						f.NotDrawn++
+					}
+				}
 				if strings.HasPrefix(c.name, chromeToolPrefix) && !denied {
 					if lost = connectionLost(c.name, text); lost {
 						f.Lost = append(f.Lost, c.words)
@@ -692,6 +732,20 @@ func readFindings(transcript string) (browseFindings, error) {
 	f.Recovered = len(f.Lost) > 0 && !lost
 	f.Left = guard.ReadTabs(transcript)
 	return f, err
+}
+
+// notDrawnWhy says what a page Chrome does not draw is and does.
+const notDrawnWhy = "the window was not on screen (on a workspace not shown, minimised or under another window), " +
+	"where Chrome draws nothing though the tab says visible, a screenshot times out and a click does nothing (a consent page keeps its button disabled)"
+
+// drawErr is the error of a turn whose last draw check answered not drawn:
+// it clicked nothing on that page; nil when none did or a later one drew.
+func (f browseFindings) drawErr() error {
+	if f.NotDrawn == 0 || f.Drawn {
+		return nil
+	}
+	return fmt.Errorf("%s: Chrome did not draw the turn's page, a fresh tab included: %s; the turn clicked nothing there. "+
+		"Show the shared Chrome window on screen and run the steps again", guard.NotDrawnLine, notDrawnWhy)
 }
 
 // tabsErr is the error of a turn that left tabs it opened open: the ones
@@ -854,6 +908,15 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 			"or its window occluded or minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
 			"the hook refused every later screenshot and the turn read the page's text instead of its picture; bring the Chrome window forward and "+
 			"run the steps again for a screenshot", plural(n, "screenshot")))
+	}
+	if n := f.NotDrawn; n > 0 {
+		line := fmt.Sprintf("not drawn: %s answered %s: %s; ", plural(n, "draw check"), guard.NotDrawn, notDrawnWhy)
+		if f.Drawn {
+			line += "recovered: a later check, in a fresh tab, answered " + guard.Drawn + " and the turn went on there"
+		} else {
+			line += "the turn clicked nothing on that page"
+		}
+		out = append(out, line)
 	}
 	if l := f.windowsLine(); l != "" {
 		out = append(out, l)
@@ -1075,7 +1138,7 @@ func browseArgv(id, model, prompt, self string, rules []string, reconnect bool) 
 // when one is declared, the Apps on record and the lab sign-in the steps
 // name, then the steps.
 func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared []sharedFile) string {
-	p := browsePreamble + connectionWords + frontWords + windowWords + uploadPrompt(shared)
+	p := browsePreamble + connectionWords + frontWords + drawWords + leaveWords + windowWords + uploadPrompt(shared)
 	if deploy != "" {
 		p += fmt.Sprintf(deployWords, deploy)
 	}

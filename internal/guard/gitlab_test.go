@@ -109,6 +109,8 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 			`{"name":"computer","input":{"action":"wait","duration":4,"tabId":7}},{"name":"tabs_context_mcp","input":{}}]}},` +
 			`{"type":"tool_use","id":"c","name":"mcp__claude-in-chrome__computer","input":{"action":"left_click","ref":"ref_42","tabId":7}}]}}`
 		path := filepath.Join(t.TempDir(), "t.jsonl")
+		// The page's draw check answered drawn first.
+		lines = append([]string{drawUse(), result("d", drawOpen+Drawn, authorize)}, lines...)
 		if err := os.WriteFile(path, []byte(uses+"\n"+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}

@@ -102,12 +102,12 @@ func TestBrowseTurn(t *testing.T) {
 	}
 	// Every prompt has the connection words: the check before each step,
 	// the one reconnect in the turn, the lost line and the steps not done.
-	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+frontWords+windowWords+browseSteps+"steps" ||
+	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+"steps" ||
 		!strings.Contains(connectionWords, "list_connected_browsers before each step") || !strings.Contains(connectionWords, "select_browser") ||
 		!strings.Contains(connectionWords, "'"+lostLine+"' followed by the steps not done") {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
@@ -633,7 +633,7 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true, nil)
-	if !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
+	if !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
@@ -783,7 +783,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 		!strings.Contains(p, "file_upload refuses every other path") || !strings.Contains(p, guard.UploadTargetScript) || !strings.HasSuffix(p, browseSteps+steps) {
 		t.Errorf("the prompt with shared files = %q", p)
 	}
-	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+windowWords+browseSteps+steps {
+	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+steps {
 		t.Error("a prompt without shared files names uploads")
 	}
 
@@ -1055,5 +1055,57 @@ func TestBrowseGoogleConsent(t *testing.T) {
 	if l := (browseFindings{}).lines("steps", "", consents, false); len(l) != 1 ||
 		!strings.HasPrefix(l[0], "allowed consent: example-portal (Google, callback portal.example.org, account person@example.com, "+googleDeclared+")") {
 		t.Errorf("lines = %q", l)
+	}
+}
+
+// A draw check that answered not drawn counts, and the turn fails naming
+// the window not drawn; a later check that drew, in a fresh tab, is the
+// recovery the line names, and the turn does not fail on it.
+func TestReadFindingsNotDrawn(t *testing.T) {
+	code, _ := json.Marshal(guard.DrawCheck)
+	use := func(id string) string {
+		return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + id + `","name":"mcp__claude-in-chrome__javascript_tool",` +
+			`"input":{"action":"javascript_exec","tabId":1,"text":` + string(code) + `}}]}}`
+	}
+	answer := func(id, verdict string) string {
+		text, _ := json.Marshal("beekeeper draw check: " + verdict + ", visibility visible\n\nTab Context:\n- Executed on tabId: 1")
+		return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","content":[{"type":"text","text":` + string(text) + `}]}]}}`
+	}
+	// notDrawn are the "not drawn:" lines of f.
+	notDrawn := func(f browseFindings) []string {
+		return slices.DeleteFunc(f.lines("", "", nil, false), func(l string) bool { return !strings.HasPrefix(l, "not drawn: ") })
+	}
+	write := func(lines ...string) browseFindings {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "t.jsonl")
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := readFindings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	stuck := write(use("a"), answer("a", guard.NotDrawn), use("b"), answer("b", guard.NotDrawn))
+	if stuck.NotDrawn != 2 || stuck.Drawn {
+		t.Fatalf("findings of two checks not drawn = %+v", stuck)
+	}
+	if err := stuck.drawErr(); err == nil || !strings.HasPrefix(err.Error(), guard.NotDrawnLine+": ") || !strings.Contains(err.Error(), "clicked nothing there") {
+		t.Errorf("drawErr = %v", err)
+	}
+	if l := notDrawn(stuck); len(l) != 1 || !strings.HasPrefix(l[0], "not drawn: 2 draw checks answered not drawn: the window was not on screen") ||
+		!strings.HasSuffix(l[0], "the turn clicked nothing on that page") {
+		t.Errorf("lines = %q", l)
+	}
+	recovered := write(use("a"), answer("a", guard.NotDrawn), use("b"), answer("b", guard.Drawn))
+	if recovered.NotDrawn != 1 || !recovered.Drawn || recovered.drawErr() != nil {
+		t.Errorf("findings of a recovered draw = %+v, %v", recovered, recovered.drawErr())
+	}
+	if l := notDrawn(recovered); len(l) != 1 || !strings.Contains(l[0], "recovered: a later check, in a fresh tab, answered drawn") {
+		t.Errorf("lines of a recovered draw = %q", l)
+	}
+	if drawn := write(use("a"), answer("a", guard.Drawn)); drawn.NotDrawn != 0 || drawn.drawErr() != nil || len(notDrawn(drawn)) != 0 {
+		t.Errorf("findings of a drawn page = %+v", drawn)
 	}
 }
