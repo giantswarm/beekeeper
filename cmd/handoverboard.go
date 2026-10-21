@@ -74,12 +74,11 @@ func (a *app) prioritiesHandover(ctx context.Context, notes []state.Note) *prior
 	// A decision names its person: it comes first, whatever else holds the
 	// item.
 	for _, n := range notes {
-		if n.Held == nil {
-			continue
+		for _, h := range n.Holds() {
+			it := items[strings.ToLower(h.Ref)]
+			add(heldView{Ref: h.Ref, Title: it.Title, Status: cmp.Or(it.Status, h.Status),
+				By: fmt.Sprintf("decision #%d for %s: %s (back to %s once it closes)", n.ID, noteWho(n), oneLine(n.Text), h.Was)})
 		}
-		it := items[strings.ToLower(n.Held.Ref)]
-		add(heldView{Ref: n.Held.Ref, Title: it.Title, Status: cmp.Or(it.Status, n.Held.Status),
-			By: fmt.Sprintf("decision #%d for %s: %s (back to %s once it closes)", n.ID, noteWho(n), oneLine(n.Text), n.Held.Was)})
 	}
 	for _, it := range snap.Items {
 		switch {

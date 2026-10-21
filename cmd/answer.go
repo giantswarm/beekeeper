@@ -141,9 +141,7 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		}
 		// A decision its default closed released its hold then.
 		if wasOpen {
-			if l := a.release(ctx, me, n, closedAnswered); l != "" {
-				notes = append(notes, l)
-			}
+			notes = append(notes, a.release(ctx, me, n, closedAnswered)...)
 		}
 	} else {
 		rec.Told, notes = a.tellServing(ctx, me, about, line)

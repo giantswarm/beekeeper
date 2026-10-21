@@ -30,8 +30,15 @@ const (
 	verbDone    = "done"
 )
 
-// heldRef is the board item the hold tests hold, decisionRef's issue.
-const heldRef = decisionRef
+// heldRef is the board item the hold tests hold, decisionRef's issue;
+// alsoHeldRef the one a decision holds as its second --ref.
+const (
+	heldRef     = decisionRef
+	alsoHeldRef = "o/r#9"
+)
+
+// stepNextUp is the name of the step the fake board's order offers.
+const stepNextUp = "next up"
 
 // fakeBoard is a board project of owner o whose items are the issues of
 // o/r, each with its Status by number; an issue without one is not on the
@@ -54,7 +61,7 @@ func useFakeBoard(t *testing.T, a *app, status map[int]string) *fakeBoard {
 	boardGH = f.gh
 	t.Cleanup(func() { boardGH = was })
 	a.cfg.Board.Owner, a.cfg.Board.Project = "o", 7
-	a.cfg.Board.Order = []config.BoardStep{{Name: "next up", Status: []string{holdUpNext}}}
+	a.cfg.Board.Order = []config.BoardStep{{Name: stepNextUp, Status: []string{holdUpNext}}}
 	return f
 }
 
@@ -177,6 +184,61 @@ func TestNoteAddHoldsSetsTheItemBlocked(t *testing.T) {
 	}
 	if got := f.offered(a); got != "" {
 		t.Errorf("board next offers %s while held", got)
+	}
+}
+
+// note add --holds holds every --ref, not only the first: each is set
+// Blocked / Waiting, board next offers none of them, and the answer sets
+// each back.
+func TestNoteAddHoldsEveryRef(t *testing.T) {
+	a, out := noteApp(t)
+	f := useFakeBoard(t, a, map[int]string{7: holdUpNext, 9: holdWorking})
+	a.cfg.Board.Order = []config.BoardStep{{Name: stepNextUp, Status: []string{holdUpNext, holdWorking}}}
+	if err := addNote(a, decisionNote("--holds", flagRef, alsoHeldRef, "approve "+prURL)...); err != nil {
+		t.Fatal(err)
+	}
+	if s7, s9 := f.statusOf(7), f.statusOf(9); s7 != holdBlocked || s9 != holdBlocked {
+		t.Fatalf("Status %q and %q, want both %q", s7, s9, holdBlocked)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.Notes) != 1 {
+		t.Fatalf("notes %+v, %v", st, err)
+	}
+	want := []state.ItemHold{{Ref: heldRef, Status: holdBlocked, Was: holdUpNext}, {Ref: alsoHeldRef, Status: holdBlocked, Was: holdWorking}}
+	if h := st.Notes[0].Holds(); !slices.Equal(h, want) {
+		t.Fatalf("holds %+v, want %+v", h, want)
+	}
+	if !strings.Contains(out.String(), "holds "+alsoHeldRef+": "+holdBlocked+" until the decision closes, then In Progress again") {
+		t.Errorf("said %q", out.String())
+	}
+	if got := f.offered(a); got != "" {
+		t.Fatalf("board next offers %s while both are held", got)
+	}
+	if _, err := noteCommand(a, verbAnswer, "1", flagChoice, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if s7, s9 := f.statusOf(7), f.statusOf(9); s7 != holdUpNext || s9 != holdWorking {
+		t.Errorf("after the answer: Status %q and %q, want %q and %q", s7, s9, holdUpNext, holdWorking)
+	}
+	if evs := releasedEvents(t, a); len(evs) != 2 {
+		t.Errorf("released events %+v, want one per item", evs)
+	}
+}
+
+// A --ref the hold refuses leaves none held: the items held before it are
+// set back, and no note is written.
+func TestNoteAddHoldsAllOrNone(t *testing.T) {
+	a, _ := noteApp(t)
+	f := useFakeBoard(t, a, map[int]string{7: holdUpNext})
+	err := addNote(a, decisionNote("--holds", flagRef, offBoardRef, "approve "+prURL)...)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), offBoardRef+" is not on the board") {
+		t.Fatalf("exit %d, %v", Code(err), err)
+	}
+	if s := f.statusOf(7); s != holdUpNext {
+		t.Errorf("Status %q after the refusal, want %q", s, holdUpNext)
+	}
+	if st, _ := a.store.Read(); len(st.Notes) != 0 {
+		t.Errorf("notes %+v", st.Notes)
 	}
 }
 
