@@ -67,9 +67,11 @@ func gitlabNamed(page Page) []string {
 }
 
 // gitlabAuthorizeText is an "Authorize <name>" a GitLab authorize page's
-// text shows: the name runs to the heading's question, a quote or the line's
-// end.
-var gitlabAuthorizeText = regexp.MustCompile(`(?m)\bAuthorize ([^"\n]+?)(?: to use your account\?|"|$)`)
+// text shows, in the page's own forms only: a button's or heading's label in
+// its accessibility tree or a find's match (`button "Authorize <name>"`,
+// quoted once or twice), or a whole line of its text; the name holds no
+// quote and runs to the heading's question or the label's or line's end.
+var gitlabAuthorizeText = regexp.MustCompile(`(?m)(?:\b(?:button|heading) "{1,2}|^[^\S\n]*)Authorize ([^"\n]+?)(?: to use your account\?)?(?:"|[^\S\n]*$)`)
 
 // gitlabNames reports whether the names a page carries name the
 // application name alone.

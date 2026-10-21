@@ -14,8 +14,12 @@ import (
 // callback host; any other application or callback there is
 // refused; a GitHub consent page does not take its client id; the same page
 // on another host is a consent page elsewhere.
-// siteTitle is current GitLab's title of its authorize page: the site's name.
-const siteTitle = "GitLab"
+// siteTitle is current GitLab's title of its authorize page: the site's
+// name; siteConsent is how a refusal names a page known by it alone.
+const (
+	siteTitle   = "GitLab"
+	siteConsent = `consent page "` + siteTitle + `"`
+)
 
 func TestGitLabConsent(t *testing.T) {
 	apps := []App{{Name: "workspace-manager", ClientID: "uid-1", Callbacks: []string{"muster.example.org"}, GitLab: "gitlab.example.org", Declared: "decl"}}
@@ -38,6 +42,7 @@ func TestGitLabConsent(t *testing.T) {
 		"GitLab's title, nothing read":     {redacted, siteTitle, "", Deny},
 		"GitLab's title, another heading":  {redacted, siteTitle, strings.ReplaceAll(heading, "workspace-manager", "other"), Deny},
 		"GitLab's title, a prefix":         {redacted, siteTitle, strings.ReplaceAll(heading, "workspace-manager", "workspace-manager-other"), Deny},
+		"GitLab's title, prose only":       {redacted, siteTitle, `the button with the text "Authorize workspace-manager"`, Deny},
 		"GitLab's title, two names":        {redacted, siteTitle, heading + "\nAuthorize other", Deny},
 		"GitLab's title, another callback": {strings.ReplaceAll(redacted, "muster.example.org", "evil.example.net"), siteTitle, heading, Deny},
 		"another client id":                {strings.ReplaceAll(page, "uid-1", "uid-2"), title, "", Deny},
@@ -54,7 +59,8 @@ func TestGitLabConsent(t *testing.T) {
 // The hook answers a click on a GitLab application's authorize page, titled
 // "GitLab" with the client id redacted, from what the Chrome tools read on
 // that tab at that URL: a find's match of the "Authorize <name>" button;
-// text read at the tab's earlier URL names nothing on this one, and another
+// text read at the tab's earlier URL, a script's output or text read before
+// a later call on the tab names nothing on this one, and another
 // application's button is refused naming the record's form.
 func TestGitLabConsentFromTheTranscript(t *testing.T) {
 	apps := func() []App {
@@ -69,10 +75,15 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 		return resultLine(`[{"type":"text","text":` + strconv.Quote(body) + `},{"type":"text","text":` +
 			strconv.Quote("\n\nTab Context:\n- Executed on tabId: 7\n- Available tabs:\n  • tabId 7: \"GitLab\" (\""+url+"\")") + `}]`)
 	}
+	// scriptResult is the same result of a call that is no reading one.
+	scriptResult := func(body, url string) string {
+		return strings.Replace(result(body, url), `"tool_use_id":"t"`, `"tool_use_id":"s"`, 1)
+	}
 	transcript := func(lines ...string) string {
 		path := filepath.Join(t.TempDir(), "t.jsonl")
-		use := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"mcp__claude-in-chrome__find","input":{}}]}}`
-		if err := os.WriteFile(path, []byte(use+"\n"+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		uses := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"mcp__claude-in-chrome__find","input":{}},` +
+			`{"type":"tool_use","id":"s","name":"mcp__claude-in-chrome__javascript_tool","input":{}}]}}`
+		if err := os.WriteFile(path, []byte(uses+"\n"+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		return path
@@ -82,7 +93,9 @@ func TestGitLabConsentFromTheTranscript(t *testing.T) {
 		transcript, decision, reason string
 	}{
 		"its button found":           {transcript(result(found("workspace-manager"), authorize)), decisionAllow, "own GitLab application workspace-manager"},
-		"read at the earlier URL":    {transcript(result(found("workspace-manager"), "https://gitlab.example.org/users/sign_in"), result("Clicked", authorize)), decisionDeny, `consent page "GitLab"`},
+		"read at the earlier URL":    {transcript(result(found("workspace-manager"), "https://gitlab.example.org/users/sign_in"), result("Clicked", authorize)), decisionDeny, siteConsent},
+		"a script's output":          {transcript(scriptResult(found("workspace-manager"), authorize)), decisionDeny, siteConsent},
+		"a click after the find":     {transcript(result(found("workspace-manager"), authorize), scriptResult("Clicked", authorize)), decisionDeny, siteConsent},
 		"another application's page": {transcript(result(found("other"), authorize)), decisionDeny, `consent page "Authorize other" (callback muster.example.org)`},
 	} {
 		t.Run(name, func(t *testing.T) {

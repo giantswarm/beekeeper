@@ -140,6 +140,7 @@ const (
 	chromeBatch      = "browser_batch"
 	chromeForm       = "form_input"
 	chromeNavigation = "navigate"
+	chromePageText   = "get_page_text"
 	tabKey           = "tabId"
 	urlKey           = "url"
 	summaryKey       = "action_summary"
@@ -438,8 +439,9 @@ func lastPage(transcript, tab string) (Page, bool) {
 // lastPages are the pages of the tabs as the transcript last showed them,
 // by tabId; none for a transcript that cannot be read. A page on Google's
 // sign-in carries the callback host of the flow the tab's pages there
-// named since it came to that host; a page carries the text the results
-// executed on its tab read from it since the tab came to its URL.
+// named since it came to that host; a page carries the text the reading
+// tools (readsPage) executed on its tab read from it since the tab's last
+// result of any other call or its last change of URL.
 func lastPages(transcript string) map[string]Page {
 	pages, flows, texts := map[string]Page{}, map[string]googleFlow{}, map[string]pageText{}
 	seen := func(tab string, p Page) {
@@ -457,7 +459,7 @@ func lastPages(transcript string) map[string]Page {
 		p.Flow = f.callback
 		pages[tab] = p
 	}
-	scanJoined(transcript, func(text string) {
+	scanJoined(transcript, func(tool, text string) {
 		// The tab context is the tool's trailer of the result: the page's
 		// own text before it names no tab.
 		if trimmed := strings.TrimSpace(text); strings.HasPrefix(trimmed, tabsJSONOpen) {
@@ -476,13 +478,18 @@ func lastPages(transcript string) map[string]Page {
 		for _, m := range trailerTab.FindAllStringSubmatch(trailer, -1) {
 			seen(m[1], Page{URL: m[3], Title: m[2]})
 		}
-		// The result's own text, before the trailer, is what the call read
-		// from the tab it executed on, at the URL the trailer names.
+		// The result's own text, before the trailer, is what a reading call
+		// read from the tab it executed on, at the URL the trailer names; any
+		// other call on the tab (a click, a navigation, a script whose output
+		// the model wrote) leaves no text the page is known by.
 		if m := executedTab.FindStringSubmatch(trailer); m != nil {
-			if p, ok := pages[m[1]]; ok {
-				if body := strings.TrimSpace(text[:at[len(at)-1][0]]); body != "" {
-					texts[m[1]] = pageText{p.URL, strings.TrimSpace(texts[m[1]].text + "\n" + body)}
-				}
+			p, ok := pages[m[1]]
+			body := strings.TrimSpace(text[:at[len(at)-1][0]])
+			switch {
+			case !ok || !slices.Contains(readsPage, chromeTool(tool)):
+				delete(texts, m[1])
+			case body != "":
+				texts[m[1]] = pageText{p.URL, strings.TrimSpace(texts[m[1]].text + "\n" + body)}
 			}
 		}
 	})
@@ -500,6 +507,10 @@ type pageText struct {
 	url, text string
 }
 
+// readsPage are the Chrome tools whose result is the page's own text read
+// from its DOM: its text, its accessibility tree, a find's matches.
+var readsPage = []string{chromePageText, chromeReadPage, chromeFind}
+
 // executedTab is the tab a Chrome tool result's call executed on, as its
 // tab context names it.
 var executedTab = regexp.MustCompile(`(?m)^- Executed on tabId: (\d+)\s*$`)
@@ -515,20 +526,20 @@ var contextLine = regexp.MustCompile(`(?m)^Tab Context:`)
 
 const tabsJSONOpen = `{"availableTabs"`
 
-// scanJoined calls fn with the text of each result of a Chrome tool call
-// in the transcript's tail, its blocks joined, in order: another tool's
-// result, a shell's output say, names no tab.
-func scanJoined(transcript string, fn func(text string)) {
-	browser := map[string]bool{}
+// scanJoined calls fn with the tool and the text of each result of a
+// Chrome tool call in the transcript's tail, its blocks joined, in order:
+// another tool's result, a shell's output say, names no tab.
+func scanJoined(transcript string, fn func(tool, text string)) {
+	browser := map[string]string{}
 	scanLines(transcript, func(line []byte) {
 		for id, name := range toolUses(line) {
 			if isBrowserTool(name) {
-				browser[id] = true
+				browser[id] = name
 			}
 		}
 		for _, r := range resultGroups(line) {
-			if browser[r.id] {
-				fn(strings.Join(r.texts, "\n"))
+			if tool, ok := browser[r.id]; ok {
+				fn(tool, strings.Join(r.texts, "\n"))
 			}
 		}
 	})
