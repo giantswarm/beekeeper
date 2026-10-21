@@ -173,3 +173,24 @@ func TestAlertTargetsAddTheDiscoveredInstallations(t *testing.T) {
 		t.Errorf("discovery off: targets = %+v", got)
 	}
 }
+
+// The snapshot names the installations without a kube context in one line
+// and keeps an unreachable one's own line with its cause.
+func TestSnapshotLinesWithoutContext(t *testing.T) {
+	targets := []alerts.Target{{Name: gazelle}, {Name: "far-one"}, {Name: mcName}, {Name: "far-two"}}
+	answers := []alerts.Answer{
+		{OK: true},
+		{Why: `error: context "teleport.giantswarm.io-far-one" does not exist`, NoContext: true},
+		{Why: "error: connection refused (3 attempts)"},
+		{Why: "no kube context for far-two", NoContext: true},
+	}
+	now := time.Date(2026, 10, 21, 23, 22, 0, 0, time.UTC)
+	want := []string{
+		gazelle + " at 23:22Z: 0 active",
+		mcName + " unreachable: error: connection refused (3 attempts)",
+		"2 installations without a kube context, not read: far-one, far-two",
+	}
+	if got := snapshotLines(alerts.Rules{}, targets, answers, now); !slices.Equal(got, want) {
+		t.Errorf("lines = %q, want %q", got, want)
+	}
+}
