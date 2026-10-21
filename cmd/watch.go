@@ -1900,10 +1900,10 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 }
 
-// emitReleased releases the board item the closed decision n held and says
-// so.
+// emitReleased releases the board items the closed decision n held and
+// says so, one line each.
 func (w *watcher) emitReleased(ctx context.Context, n *state.Note, how string) {
-	if l := w.release(ctx, watchParty, n, how); l != "" {
+	for _, l := range w.release(ctx, watchParty, n, how) {
 		w.emitNow("pending", "%s", l)
 	}
 }
