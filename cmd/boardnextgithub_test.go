@@ -37,7 +37,7 @@ var errBoardRead = errors.New("the board read reached GitHub")
 func TestBoardNextReadsGitHubWhateverMemosTheStateKeeps(t *testing.T) {
 	a, _ := noteApp(t)
 	a.cfg.Board.Owner, a.cfg.Board.Project, a.cfg.StateDir = defaultOrg, 1, t.TempDir()
-	a.cfg.Board.Order = []config.BoardStep{{Name: "next up", Status: []string{"Up Next"}}}
+	a.cfg.Board.Order = []config.BoardStep{{Name: stepNextUp, Status: []string{"Up Next"}}}
 	writeState(t, a, olderMemos)
 	was := boardGH
 	boardGH = func(context.Context, ...string) ([]byte, error) { return nil, errBoardRead }

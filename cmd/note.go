@@ -76,11 +76,12 @@ recorded on that thread (beekeeper answer). A note for a person whose
 --ref an answer of that person was recorded on within the last 72 hours
 (answer.recorded) is filed with a warning that quotes the answer.
 
---holds holds the decision's first --ref on the board: its Status is set to
-Blocked / Waiting, which board next offers in no step, and the Status it had
-is recorded on the note. When the decision closes, answered (beekeeper
-answer, note answer, the serve tool), by its default, as overtaken or by
-hand, the item is set back to that Status (board.released, BOARD RELEASED)
+--holds holds every --ref of the decision on the board: each one's Status is
+set to Blocked / Waiting, which board next offers in no step and names the
+decision for as it skips the item, and the Status it had is recorded on the
+note; one refused leaves none held. When the decision closes, answered
+(beekeeper answer, note answer, the serve tool), by its default, as
+overtaken or by hand, each item is set back to that Status (board.released, BOARD RELEASED)
 and its filer told. An item whose Status was changed while held is left as
 it is (HOLD LEFT), the filer told why; one another open decision holds stays
 held until that one closes (HOLD KEPT). --holds without --ref, on an issue
@@ -148,7 +149,7 @@ and tells the session that filed it.`,
 				case n.Kind != noteDecision:
 					return refused("--holds is a decision's: a %s holds no board item", n.Kind)
 				case len(linked) == 0:
-					return refused("--holds needs --ref: the board item it holds is its first --ref")
+					return refused("--holds needs --ref: the board items it holds are its --ref")
 				case foldInto != 0:
 					return refused("--holds with --fold-into: the open note's hold stands; file the hold on a note of its own")
 				}
@@ -190,7 +191,7 @@ and tells the session that filed it.`,
 				if err != nil {
 					return err
 				}
-				if n.Held, err = a.holdOn(cmd.Context(), st.Notes, linked[0]); err != nil {
+				if err = a.holdAll(cmd.Context(), st.Notes, &n, linked); err != nil {
 					return err
 				}
 			}
@@ -198,7 +199,7 @@ and tells the session that filed it.`,
 			fold := func(o *state.Note, why string) []state.Event {
 				o.Text += fmt.Sprintf(" | Also from %s: %s", me.Name, n.Text)
 				if o.Held == nil {
-					o.Held = n.Held
+					o.Held, o.AlsoHeld = n.Held, n.AlsoHeld
 				}
 				folded = o
 				return []state.Event{event(me, "note.folded", "into #%d (%s): %s", o.ID, why, n.Text)}
@@ -238,11 +239,15 @@ and tells the session that filed it.`,
 				_, err = fmt.Fprintf(a.out, "note #%d (folded: %s)\n", folded.ID, why)
 				return err
 			}
-			if _, err = fmt.Fprintf(a.out, "note #%d\n", n.ID); err != nil || n.Held == nil {
+			if _, err = fmt.Fprintf(a.out, "note #%d\n", n.ID); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "holds %s: %s until the decision closes, then %s again\n", n.Held.Ref, n.Held.Status, n.Held.Was)
-			return err
+			for _, h := range n.Holds() {
+				if _, err = fmt.Fprintf(a.out, "holds %s: %s until the decision closes, then %s again\n", h.Ref, h.Status, h.Was); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 	add.Flags().StringVar(&forWho, "for", "", "who has to act: a person's name or email, or team:<name>")
@@ -256,7 +261,7 @@ and tells the session that filed it.`,
 	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default) or "login" (a sign-in, closed once --until passes)`)
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
 	add.Flags().IntVar(&foldInto, "fold-into", 0, "an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand")
-	add.Flags().BoolVar(&holds, "holds", false, "the decision holds its first --ref: its board Status is Blocked / Waiting until the decision closes, then set back")
+	add.Flags().BoolVar(&holds, "holds", false, "the decision holds every --ref: its board Status is Blocked / Waiting until the decision closes, then set back")
 	add.Flags().StringArrayVar(&refs, "ref", nil, "an issue or pull request the note asks about, owner/repo#n (repeatable): the note closes once all are closed or merged")
 	done := &cobra.Command{
 		Use:   "done <id>...",

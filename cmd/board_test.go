@@ -99,6 +99,31 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	}
 }
 
+// A decision that holds several items (note add --holds with more than one
+// --ref) has board next skip each of them, naming the decision, while the
+// Status its hold set stands; one whose Status was set since is offered.
+func TestNextFreeSkipsEveryItemADecisionHolds(t *testing.T) {
+	const waiting = "Blocked / Waiting"
+	cands := boardCandidates(4)
+	hold := func(i int) state.ItemHold { return state.ItemHold{Ref: cands[i].Ref, Status: waiting, Was: stepUpNext} }
+	// The second named in another case, the third set Up Next since.
+	also := []state.ItemHold{hold(1), hold(2)}
+	also[0].Ref = strings.ToUpper(also[0].Ref)
+	st := &state.State{Notes: []state.Note{{ID: 1917, For: claimSupervisor, Kind: noteDecision, Refs: []string{cands[0].Ref, cands[1].Ref, cands[2].Ref},
+		Held: new(hold(0)), AlsoHeld: also}}}
+	cands[0].Status, cands[1].Status, cands[2].Status = waiting, waiting, stepUpNext
+	res := nextFree(st, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return false }})
+	var got []string
+	for _, c := range res.Skipped {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	held := ": held: decision #1917 for " + claimSupervisor + " until it closes"
+	want := []string{cands[0].Ref + held, cands[1].Ref + held}
+	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != cands[2].Ref || res.SkippedBy[kindBlocked] != 2 {
+		t.Errorf("pick %v, skipped by %v:\n%s\nwant %s after:\n%s", res.Pick, res.SkippedBy, strings.Join(got, "\n"), cands[2].Ref, strings.Join(want, "\n"))
+	}
+}
+
 // epicTen is the item the board tests hold by a record.
 const epicTen = "o/r#10"
 
