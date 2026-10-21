@@ -62,6 +62,22 @@ const (
 	orphanSlotScope = "memcap-200-000002.scope"
 )
 
+// slotTable is the machine's processes: the user's service manager (900),
+// a live run (100) whose command (101) runs go (102) in its scope, an
+// envtest kube-apiserver (300, with its etcd 301) the service manager
+// adopted, and a sleep PID 1 adopted (400).
+func slotTable() *proc.Table {
+	return proc.NewTable(
+		&proc.Process{PID: 900, PPID: 1, Comm: "systemd"},
+		&proc.Process{PID: 100, PPID: 50, Comm: pluginName},
+		&proc.Process{PID: 101, PPID: 100, Comm: testShell},
+		&proc.Process{PID: 102, PPID: 101, Comm: "go"},
+		&proc.Process{PID: 300, PPID: 900, Comm: "kube-apiserver"},
+		&proc.Process{PID: 301, PPID: 300, Comm: "etcd"},
+		&proc.Process{PID: 400, PPID: 1, Comm: sleepComm},
+	)
+}
+
 // A slot scope whose run is gone (an envtest kube-apiserver the service
 // manager adopted) is named at the first sample, stopped once it has run on
 // for the grace, and the slot is free; a live run's scope in the same slice
@@ -87,13 +103,7 @@ func TestWatchStopsAnOrphanedSlotScope(t *testing.T) {
 	savedM, savedL := plat.Machine, plat.Launcher
 	plat.Machine, plat.Launcher = m, l
 	t.Cleanup(func() { plat.Machine, plat.Launcher = savedM, savedL })
-	table := proc.NewTable(
-		&proc.Process{PID: 900, PPID: 1, Comm: "systemd"},
-		&proc.Process{PID: 100, PPID: 50, Comm: "beekeeper"},
-		&proc.Process{PID: 101, PPID: 100, Comm: "zsh"},
-		&proc.Process{PID: 102, PPID: 101, Comm: "go"},
-		&proc.Process{PID: 300, PPID: 900, Comm: "kube-apiserver"},
-	)
+	table := slotTable()
 	t0 := time.Date(2026, 10, 21, 10, 0, 0, 0, time.Local)
 
 	once := a.newWatcher(false, false)
@@ -128,15 +138,7 @@ func TestWatchStopsAnOrphanedSlotScope(t *testing.T) {
 }
 
 func TestOrphanedScope(t *testing.T) {
-	table := proc.NewTable(
-		&proc.Process{PID: 900, PPID: 1, Comm: "systemd"},
-		&proc.Process{PID: 100, PPID: 50, Comm: "beekeeper"},
-		&proc.Process{PID: 101, PPID: 100, Comm: "zsh"},
-		&proc.Process{PID: 102, PPID: 101, Comm: "go"},
-		&proc.Process{PID: 300, PPID: 900, Comm: "kube-apiserver"},
-		&proc.Process{PID: 301, PPID: 300, Comm: "etcd"},
-		&proc.Process{PID: 400, PPID: 1, Comm: "sleep"},
-	)
+	table := slotTable()
 	for _, c := range []struct {
 		name string
 		pids []int
@@ -147,7 +149,7 @@ func TestOrphanedScope(t *testing.T) {
 		{"adopted by PID 1", []int{400}, true},
 		{"a live run's command beside an adopted one", []int{101, 300}, false},
 		{"processes gone from the table", []int{7, 8}, false},
-		{"none", nil, false},
+		{"no process", nil, false},
 	} {
 		if got := orphanedScope(table, c.pids); got != c.want {
 			t.Errorf("%s: orphanedScope(%v) = %v, want %v", c.name, c.pids, got, c.want)
