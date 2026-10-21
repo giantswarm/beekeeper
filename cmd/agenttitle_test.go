@@ -427,6 +427,19 @@ func TestWarmStewardWarmsNoTwinOfAHeadlessTurn(t *testing.T) {
 			if c.headless {
 				plat.Machine = headlessMachine{Machine: plat.Machine, id: rotationLogin}
 			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Archives = []state.Archive{{Party: state.Party{Session: rotationLogin, HostSession: host}, Host: host, Since: time.Now()}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			warmed := func() time.Time {
+				st, err := a.store.Read()
+				if err != nil || len(st.Archives) != 1 {
+					t.Fatalf("archives %v, %v", st, err)
+				}
+				return st.Archives[0].Warmed
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			s, err := a.warmSteward(ctx, host)
@@ -437,10 +450,17 @@ func TestWarmStewardWarmsNoTwinOfAHeadlessTurn(t *testing.T) {
 				if !strings.Contains(fmt.Sprint(err), "its headless wake turn runs") {
 					t.Errorf("err %v", err)
 				}
+				if !warmed().IsZero() {
+					t.Error("the archive owed records a warm that never was")
+				}
 				return
 			}
 			if err != nil || s.host != host || len(o.opened) == 0 || o.opened[0] != continueURL(host) {
 				t.Errorf("steward %+v, err %v, opened %v", s, err, o.opened)
+			}
+			// The watch leaves the warmed CLI to its archive call.
+			if warmed().IsZero() {
+				t.Error("the archive owed does not record the warm: the watch would stop the CLI as revived")
 			}
 		})
 	}

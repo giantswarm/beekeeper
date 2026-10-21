@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A handed-over session's desktop CLI that the doctor warms to archive itself is no longer stopped as `REVIVED` before its archive call runs, which left the session unarchived and warmed and stopped its CLI again every few minutes: the archive owed records the warm, and the watch leaves that CLI running, without `SAME TITLE` beside its follow-up, for 5 minutes ([#1511](https://github.com/giantswarm/beekeeper/issues/1511)).
 - The merge gate no longer refuses (77) a merge whose GitHub budget read failed in transit (a resolver error, a refused or reset connection, a timeout) on every try: it exits 74 (unread), its line `beekeeper gate: unread, reading the GitHub budget failed in transit (…), the merge was not judged`, and the same command runs again once GitHub answers. A budget GitHub refuses to tell (no login) still refuses (77) ([#1472](https://github.com/giantswarm/beekeeper/issues/1472)).
 - `note add --holds` holds every `--ref` of the decision, not only the first: each is set `Blocked / Waiting`, `board next` skips each as `held: decision #<n> for <person> until it closes`, and each is set back once the decision closes; a `--ref` the hold refuses leaves none held ([#1475](https://github.com/giantswarm/beekeeper/issues/1475)).
 - Builds on Go 1.27.3 (`toolchain go1.27.3`), which fixes the standard library vulnerability GO-2026-6809 that govulncheck reports for Go 1.27.2.
