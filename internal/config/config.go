@@ -1092,10 +1092,10 @@ type Lane struct {
 	Context string `yaml:"context"`
 }
 
-// Merge configures the gate on devctl pr merge.
 // DefaultQueueTTL is merge.queueTTL unless the configuration sets it.
 const DefaultQueueTTL = 15 * time.Minute
 
+// Merge configures the gate on devctl pr merge.
 type Merge struct {
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.

@@ -2690,7 +2690,8 @@ Prometheus export: nothing on the lab machine scrapes one.
 ## The central instance
 
 The leases of the installations a team shares live in one place, `beekeeper serve` behind
-muster, so two people's machines see one holder. Its tools, as a model reads them: [docs/tools.md](docs/tools.md). `central: {context: <muster context>}` turns it
+muster, so two people's machines see one holder; its tools, as a model reads them, are in
+[docs/tools.md](docs/tools.md). `central: {context: <muster context>}` turns it
 on: `lease claim|release|status` of a name that is none of the machine's own resources
 (`resources`, the model server, the browser) goes to the central instance as the person, through
 muster's `call_tool` (`x_<central.server>_<tool>`). The person signs in once with `muster auth login --context <context>`; each call takes the context's endpoint and the person's token from

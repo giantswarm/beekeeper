@@ -3,10 +3,15 @@ package cmd
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/giantswarm/mcp-toolkit/tooldesc/tooldesctest"
+	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+
+	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/identity"
 )
 
 // docsServer is serve's MCP server: every tool is registered in every mode.
@@ -30,23 +35,56 @@ func TestToolDescriptionBudgets(t *testing.T) {
 	}
 }
 
-// TestToolAnnotations: every tool says what it does to the shared state.
-// A read-only tool is not destructive and idempotent, or mcp-go's defaults
-// report it destructive; a tool acting on the calling agent itself requires
-// agent and host, as its handler does.
+// TestToolAnnotations: every tool says what it does to the shared state,
+// all four hints, as this table judged them from its handler.
 func TestToolAnnotations(t *testing.T) {
-	identified := map[string]bool{"agents_register": true, "agents_leave": true}
-	for name, st := range docsServer().ListTools() {
+	type hint struct{ readOnly, destructive, idempotent, openWorld bool }
+	read, add, remove := hint{true, false, true, false}, hint{false, false, true, false}, hint{false, true, true, false}
+	want := map[string]hint{
+		"lease_list": read, "hold_list": read, "lanes": read, "lane_turn": read,
+		"note_list": read, "list_agents": read, "snapshot": read, "receive_messages": read,
+		"lease_claim": add, "lane_queue": add, "lane_settle": add, "agents_register": add,
+		"lease_release": remove, "hold_set": remove, "hold_lift": remove, "lane_leave": remove,
+		"agents_leave": remove, "ack_messages": remove,
+		"note_done": {false, true, true, true}, "note_answer": {false, true, true, true},
+		"note_add": {false, false, false, true}, "send_message": {false, false, false, true}, "converse": {false, false, false, true},
+	}
+	tools := docsServer().ListTools()
+	if len(tools) != len(want) {
+		t.Errorf("%d tools registered, the table judges %d", len(tools), len(want))
+	}
+	for name, st := range tools {
 		a := st.Tool.Annotations
-		if *a.ReadOnlyHint && (*a.DestructiveHint || !*a.IdempotentHint) {
-			t.Errorf("%s is read-only but reported destructive %v, idempotent %v", name, *a.DestructiveHint, *a.IdempotentHint)
+		if got := (hint{*a.ReadOnlyHint, *a.DestructiveHint, *a.IdempotentHint, *a.OpenWorldHint}); got != want[name] {
+			t.Errorf("%s reports %+v, want %+v", name, got, want[name])
 		}
+	}
+}
+
+// TestCallerRequired: a tool that acts as the calling agent itself requires
+// agent and host, and only such a tool: its handler refuses without them.
+func TestCallerRequired(t *testing.T) {
+	identified := map[string]bool{"agents_register": true, "agents_leave": true, "converse": true}
+	for name, st := range docsServer().ListTools() {
 		required := map[string]bool{}
 		for _, r := range st.Tool.InputSchema.Required {
 			required[r] = true
 		}
 		if got := required[paramAgent] && required[paramHost]; got != identified[name] {
 			t.Errorf("%s requires agent and host: %v, its handler: %v", name, got, identified[name])
+		}
+	}
+	// The roster tools refuse before they read the store.
+	s := &server{cfg: &config.Config{}, now: time.Now}
+	for _, tool := range append(s.tools(), s.messageTools()...) {
+		if tool.tool.Name != "agents_register" && tool.tool.Name != "agents_leave" {
+			continue
+		}
+		req := mcp.CallToolRequest{}
+		req.Params.Arguments = map[string]any{}
+		c := s.newCall(t.Context(), identity.Caller{Email: "ada@example.com"}, req)
+		if _, err := tool.run(c, req); Code(err) != ExitUsage {
+			t.Errorf("%s without agent and host: %v, want a usage error", tool.tool.Name, err)
 		}
 	}
 }

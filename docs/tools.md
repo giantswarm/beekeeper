@@ -10,7 +10,7 @@ Generated from the registered tools of `beekeeper serve` (`make tools-doc`); thr
 | `converse` | write |
 | `hold_lift` | write, destructive |
 | `hold_list` | read-only |
-| `hold_set` | write |
+| `hold_set` | write, destructive |
 | `lane_leave` | write, destructive |
 | `lane_queue` | write |
 | `lane_settle` | write |
@@ -21,7 +21,7 @@ Generated from the registered tools of `beekeeper serve` (`make tools-doc`); thr
 | `lease_release` | write, destructive |
 | `list_agents` | read-only |
 | `note_add` | write |
-| `note_answer` | write |
+| `note_answer` | write, destructive |
 | `note_done` | write, destructive |
 | `note_list` | read-only |
 | `receive_messages` | read-only |
@@ -138,7 +138,7 @@ The first message opens the thread; the person's replies arrive in your mailbox 
 {
   "properties": {
     "agent": {
-      "description": "the calling agent's name (default: your email)",
+      "description": "the calling agent's name",
       "type": "string"
     },
     "host": {
@@ -151,7 +151,9 @@ The first message opens the thread; the person's replies arrive in your mailbox 
     }
   },
   "required": [
-    "text"
+    "text",
+    "agent",
+    "host"
   ],
   "type": "object"
 }
@@ -189,7 +191,7 @@ Lift a hold: your own, or as its setter's team's supervisor role.
 ## `hold_list`
 
 ```text
-List the holds that stop merges into a repository or lane, or all GitHub work, until lifted.
+List the holds on merges into a repository or lane, or on every merge, until lifted.
 ```
 
 ```json
@@ -212,7 +214,7 @@ List the holds that stop merges into a repository or lane, or all GitHub work, u
 ## `hold_set`
 
 ```text
-Hold a target until lifted: owner/repo, lane:<name>, merges (every merge) or github (every GitHub call).
+Hold merges in the central lanes: owner/repo, lane:<name>, or merges or github for all of them.
 ```
 
 ```json
@@ -294,7 +296,7 @@ Take a merge out of its lane: it merged and rolled, failed, or its gate gave up.
 ```text
 Queue a pull request's merge at the end of its repository's merge lane.
 
-Queue it again while it waits: a waiting place not queued again for merge.queueTTL (default 15m0s) holds up nobody.
+Queue it again while it waits: a waiting place not queued again for merge.queueTTL (default 15m) holds up nobody.
 ```
 
 ```json
@@ -328,7 +330,7 @@ Queue it again while it waits: a waiting place not queued again for merge.queueT
 ## `lane_settle`
 
 ```text
-Make a merge run outside the gate its lane's head: running, or settling once merged.
+Record a merge run outside the gate as its lane's head: running, or settling once merged.
 ```
 
 ```json
@@ -513,7 +515,7 @@ Release an installation: your own, or as the holder's team's supervisor role.
 ## `list_agents`
 
 ```text
-List the agents you may read: your own local agents, your team's holding a lease, every remote one.
+List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.
 ```
 
 ```json
@@ -540,7 +542,7 @@ List the agents you may read: your own local agents, your team's holding a lease
 ## `note_add`
 
 ```text
-File a note: a decision put to a person or team in Slack, or a sign-in (kind login).
+File a decision for a person or a team, put to them in Slack: its question, due time, default and thread.
 ```
 
 ```json
@@ -571,7 +573,7 @@ File a note: a decision put to a person or team in Slack, or a sign-in (kind log
       "type": "string"
     },
     "kind": {
-      "description": "decision (the default) or login",
+      "description": "decision, the default and the only kind this tool files",
       "type": "string"
     },
     "options": {
@@ -606,7 +608,8 @@ File a note: a decision put to a person or team in Slack, or a sign-in (kind log
     }
   },
   "required": [
-    "text"
+    "text",
+    "for"
   ],
   "type": "object"
 }
@@ -617,7 +620,7 @@ File a note: a decision put to a person or team in Slack, or a sign-in (kind log
 ```text
 Answer a decision in the person's words and close it: as the person it is for, or a member of the team it is for.
 
-A decision its default closed stays answerable for a day: the answer replaces the default.
+A decision its default closed stays answerable for 24h: the answer replaces the default.
 ```
 
 ```json
@@ -710,7 +713,7 @@ List every open note, whoever it is for or filed it: decisions and sign-ins.
 ## `receive_messages`
 
 ```text
-Read the oldest unacked messages of your mailbox, in order; ack them with ack_messages.
+Read the oldest unacked messages to any of your agents, in order; ack only those addressed to you.
 ```
 
 ```json
@@ -743,7 +746,7 @@ Read the oldest unacked messages of your mailbox, in order; ack them with ack_me
 ```text
 Send an A2A message to an agent: one of your own local agents, or a kagent session.
 
-A local: message is queued in your mailbox, once per messageId; a kagent: one goes through muster as you.
+A local: message is queued in your mailbox, a messageId sent again within 24h not queued again; a kagent: one goes through muster as you.
 ```
 
 ```json
