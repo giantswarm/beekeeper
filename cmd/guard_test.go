@@ -34,6 +34,9 @@ func TestMain(m *testing.M) {
 	// Nor does an answer reach GitHub: every thread but unknownThread is a
 	// private one to it; a test that reads the comments stubs its own.
 	boardGH = (&answerGH{}).run
+	// Nor does a browse move a window of the desktop's compositor; a test
+	// that places one stubs its own hyprctl.
+	hyprRunning = func() bool { return false }
 	// Nor does a gated merge read its reviews: nothing holds it; a test
 	// that wants a reviewer stubs its own.
 	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }

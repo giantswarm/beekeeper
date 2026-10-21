@@ -381,6 +381,18 @@ there and the command fails with "window not drawn". Below the
 report, "not drawn:" counts the checks that answered not drawn and says
 whether a later one recovered.
 
+Under Hyprland, a shared Chrome window the compositor does not show (on a
+workspace not shown, under a special workspace shown over its own, behind
+the front window of a monocle workspace) is shown for the turn: moved
+silently onto the workspace its monitor shows, floating at 1280x800 in the
+lower right corner, the focus left where it is, and put back as it was once
+the turn ends. browse only dispatches window moves; it never changes the
+compositor's configuration. Below the report, "window shown:" says where
+the window was; "window not shown:" names where it is when it could not be
+moved. Under a screen locker (hyprlock) the compositor draws no window at
+all: browse moves nothing, says "screen locked:", and a page not drawn
+fails the command with "screen locked".
+
 The turn closes every tab it opened before it ends, the blank ones
 included. A page with an unsaved form holds its close on a leave-page
 prompt nobody answers, so before closing a tab on a web page the turn runs
@@ -528,6 +540,10 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		}
 		return report, err
 	}
+	// The shared Chrome window is shown on screen for the turns and put back
+	// after them, a stopped browse included.
+	win := showChrome(ctx)
+	defer func() { _ = win.restore(ctx) }()
 	rules := browseRules(deploy, consents, lab)
 	prompt := browsePrompt(steps, deploy, consents, lab, shared)
 	if blind != nil {
@@ -557,6 +573,8 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		found, ferr = readFindings(path)
 		found.CleanedUp = true
 	}
+	werr := win.restore(ctx)
+	found.Window = *win
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
 	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
 	lines = append(lines, "transcript: "+path)
@@ -569,7 +587,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
-	return errors.Join(err, ferr, serr, found.lostErr(report), found.drawErr(), found.tabsErr())
+	return errors.Join(err, ferr, serr, werr, found.lostErr(report), found.drawErr(), found.tabsErr())
 }
 
 // The turn's classifier names a call it refused in the call's error result:
@@ -682,8 +700,10 @@ const sharedHint = "a file the steps upload is shared with `beekeeper browse --f
 // the last check answered drawn (Drawn), and the Chrome connection: Lost are the words of each call that
 // found it gone, Recovered whether a Chrome call was answered after the last
 // of them, Reconnected whether browse's own reconnect turn ran and
-// CleanedUp whether its cleanup turn after a timeout ran, which the run sets.
+// CleanedUp whether its cleanup turn after a timeout ran and Window what it
+// did with the shared Chrome window, which the run sets.
 type browseFindings struct {
+	Window      placement
 	Refused     []refusal
 	NotRendered int
 	NotDrawn    int
@@ -771,12 +791,22 @@ const notDrawnWhy = "the window was not on screen (on a workspace not shown, min
 
 // drawErr is the error of a turn whose last draw check answered not drawn:
 // it clicked nothing on that page; nil when none did or a later one drew.
+// Under a locked screen it says so first; a window browse could not show
+// names where it is.
 func (f browseFindings) drawErr() error {
 	if f.NotDrawn == 0 || f.Drawn {
 		return nil
 	}
+	if l := f.Window.Locked; l != "" {
+		return fmt.Errorf("screen locked: %s runs, and the compositor draws no window under the lock: %s: Chrome did not draw the turn's page; "+
+			"the turn clicked nothing there. Run the steps again once the screen is unlocked", l, guard.NotDrawnLine)
+	}
+	why := notDrawnWhy
+	if f.Window.Failed != "" {
+		why = f.Window.Failed
+	}
 	return fmt.Errorf("%s: Chrome did not draw the turn's page, a fresh tab included: %s; the turn clicked nothing there. "+
-		"Show the shared Chrome window on screen and run the steps again", guard.NotDrawnLine, notDrawnWhy)
+		"Show the shared Chrome window on screen and run the steps again", guard.NotDrawnLine, why)
 }
 
 // tabsErr is the error of a turn that left tabs it opened open: the ones
@@ -939,6 +969,9 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 			"or its window occluded or minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
 			"the hook refused every later screenshot and the turn read the page's text instead of its picture; bring the Chrome window forward and "+
 			"run the steps again for a screenshot", plural(n, "screenshot")))
+	}
+	if l := f.Window.line(); l != "" {
+		out = append(out, l)
 	}
 	if n := f.NotDrawn; n > 0 {
 		line := fmt.Sprintf("not drawn: %s answered %s: %s; ", plural(n, "draw check"), guard.NotDrawn, notDrawnWhy)
