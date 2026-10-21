@@ -748,6 +748,9 @@ type Archive struct {
 	Tried time.Time `json:"tried,omitzero"`
 	// Looked is the last doctor's run that found no steward to ask.
 	Looked time.Time `json:"looked,omitzero"`
+	// Warmed is when the desktop was last made to warm the session's own
+	// CLI to archive itself: the watch leaves that CLI running a while.
+	Warmed time.Time `json:"warmed,omitzero"`
 
 	rest rest
 }
