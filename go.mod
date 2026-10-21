@@ -2,6 +2,8 @@ module github.com/giantswarm/beekeeper
 
 go 1.26.0
 
+toolchain go1.27.3
+
 require (
 	charm.land/bubbletea/v2 v2.1.0
 	charm.land/lipgloss/v2 v2.0.6
@@ -9,8 +11,8 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/giantswarm/go-selfupdate v1.6.5
-	github.com/giantswarm/selfupdate-cosign v0.3.8
+	github.com/giantswarm/go-selfupdate v1.6.6
+	github.com/giantswarm/selfupdate-cosign v0.3.9
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-logr/logr v1.4.4
 	github.com/godbus/dbus/v5 v5.2.4
