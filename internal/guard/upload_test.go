@@ -114,8 +114,8 @@ func TestUploadRefusal(t *testing.T) {
 		"find's name in curly quotes":   {[]turnCall{marked, curly}, uploadTool, upload("ref_42"), ""},
 		"a check and find in the upload's batch": {[]turnCall{findCall}, batchTool,
 			map[string]any{actionsKey: []any{map[string]any{nameKey: "javascript_tool", inputKey: map[string]any{textKey: UploadTargetCheck(""), tabKey: json.Number("7")}},
-				map[string]any{nameKey: "find", inputKey: map[string]any{tabKey: json.Number("7")}},
-				map[string]any{nameKey: "file_upload", inputKey: upload("ref_42")}}}, "the file_upload in a call of its own"},
+				map[string]any{nameKey: chromeFind, inputKey: map[string]any{tabKey: json.Number("7")}},
+				map[string]any{nameKey: chromeUpload, inputKey: upload("ref_42")}}}, "the file_upload in a call of its own"},
 		"a hidden input's ref":       {[]turnCall{marked, readPage}, uploadTool, upload("ref_9"), "ref_9 is not the input the last upload-target check marked"},
 		"no check":                   {[]turnCall{findCall}, uploadTool, upload("ref_42"), "comes before any upload-target check"},
 		"a check that marked none":   {[]turnCall{marked, findCall, unmarked}, uploadTool, upload("ref_42"), "marked no input"},
@@ -134,10 +134,10 @@ func TestUploadRefusal(t *testing.T) {
 		"a script in another tab": {[]turnCall{marked, findCall, {scriptTool, map[string]any{textKey: "1", tabKey: json.Number("8")}, "1"}}, uploadTool, upload("ref_42"), ""},
 		"a batch's script before its upload": {[]turnCall{marked, findCall}, batchTool,
 			map[string]any{actionsKey: []any{map[string]any{nameKey: "javascript_tool", inputKey: map[string]any{textKey: "x()", tabKey: json.Number("7")}},
-				map[string]any{nameKey: "file_upload", inputKey: upload("ref_42")}}}, "an action of the batch before"},
+				map[string]any{nameKey: chromeUpload, inputKey: upload("ref_42")}}}, "an action of the batch before"},
 		"no ref": {[]turnCall{marked, findCall}, uploadTool, map[string]any{tabKey: json.Number("7")}, "none is not the input"},
 		"a batch's upload": {[]turnCall{marked, findCall}, batchTool,
-			map[string]any{actionsKey: []any{map[string]any{nameKey: "file_upload", inputKey: upload("ref_9")}}}, "ref_9 is not"},
+			map[string]any{actionsKey: []any{map[string]any{nameKey: chromeUpload, inputKey: upload("ref_9")}}}, "ref_9 is not"},
 		"no upload": {nil, scriptTool, map[string]any{textKey: "1"}, ""},
 	}
 	for name, c := range cases {
