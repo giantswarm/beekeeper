@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `doctor.worktreeRoots` defaults to `~/.local/state/klaus-lab/worktrees`, no longer `~/projects/worktrees`.
 - The worker rules make the settings, installs and consents of the organisation's own Apps (`beekeeper app`) the worker's `beekeeper browse` job, never the person's; a consent that acts as the person towards another's App still needs their word. The `github` skill records an own App's grant first (`beekeeper app allow`) and reports a refusal as a barrier ([#1455](https://github.com/giantswarm/beekeeper/issues/1455)).
 
 ### Fixed
