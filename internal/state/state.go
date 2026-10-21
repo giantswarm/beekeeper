@@ -241,6 +241,10 @@ type Hold struct {
 	// Except is what a merge hold lets through: a repository (the tool's own
 	// during a tool-release window) or one pull request, owner/repo#n.
 	Except string `json:"except,omitempty"`
+	// ExceptSession is the session (by name) a merge hold lets through: its
+	// merges and promotes run, a line's promoter promoting while the hold
+	// keeps every other session's merges off the line.
+	ExceptSession string `json:"exceptSession,omitempty"`
 	// Tool is the binary whose release window this hold is, ToolFrom the
 	// version it reported when the window opened, ToolPR the pull request
 	// that opened it (0 for a promotion), ToolMerged whether it merged and
@@ -289,6 +293,11 @@ func (h Hold) Expired(now time.Time) bool {
 // Excepts reports whether the hold lets a merge of repo#pr through.
 func (h Hold) Excepts(repo string, pr int) bool {
 	return h.Except != "" && (strings.EqualFold(h.Except, repo) || strings.EqualFold(h.Except, fmt.Sprintf("%s#%d", repo, pr)))
+}
+
+// Admits reports whether the hold lets the session named session through.
+func (h Hold) Admits(session string) bool {
+	return h.ExceptSession != "" && strings.EqualFold(strings.TrimSpace(h.ExceptSession), strings.TrimSpace(session))
 }
 
 // AwaitsOwnRelease reports whether the hold is a repository's whose lift

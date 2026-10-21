@@ -26,7 +26,11 @@ window, such as a model load on an installation's GPU pool, stops the lane
 whose components it exercises and not the others), "merges" every merge,
 "github" every GitHub call (the budget is spent). A merge hold can let one
 repository or pull request through (--except owner/repo or owner/repo#n): a
-window that stops a lane but for the one merge it waits for. The gate on
+window that stops a lane but for the one merge it waits for. A merge hold
+can also let one session through (--except-session <name>, the session's
+title): a line's promoter promotes, and merges, while the hold keeps every
+other session's merges and promotes off the line; their refusals name the
+session the hold admits. The gate on
 beekeeper gate -- devctl pr merge refuses a new held merge with the hold's
 reason; a merge with its place in the lane keeps it and waits, and the
 exception enters ahead of it. A hold that lets one pull request through, set
@@ -50,7 +54,7 @@ Without a subcommand, lists the holds.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.holdList() },
 	}
-	var reason, until, except, liftWhen string
+	var reason, until, except, exceptSession, liftWhen string
 	var lane laneFlag
 	set := &cobra.Command{
 		Use:   "set <target> | --lane <name>",
@@ -61,7 +65,8 @@ Without a subcommand, lists the holds.`,
 			if err := a.checkTarget(args[0]); err != nil {
 				return err
 			}
-			if err := a.checkExcept(args[0], except); err != nil {
+			exceptSession = strings.TrimSpace(exceptSession)
+			if err := a.checkExcept(args[0], except, exceptSession); err != nil {
 				return err
 			}
 			if strings.TrimSpace(reason) == "" {
@@ -70,6 +75,9 @@ Without a subcommand, lists the holds.`,
 			if a.centralTarget(args[0]) {
 				if liftWhen != "" {
 					return usageErr("--lift-when is a probe on this machine; %s is held in the central instance for every machine: lift it with hold lift", args[0])
+				}
+				if exceptSession != "" {
+					return usageErr("--except-session names a session on this machine; %s is held in the central instance, which admits pull requests only (--except)", args[0])
 				}
 				return a.setCentral(args[0], reason, until, except)
 			}
@@ -81,7 +89,7 @@ Without a subcommand, lists the holds.`,
 			if err != nil {
 				return err
 			}
-			h := state.Hold{Target: args[0], Reason: reason, By: me, At: a.now.UTC(), Until: u.UTC(), Except: except, LiftWhen: strings.TrimSpace(liftWhen)}
+			h := state.Hold{Target: args[0], Reason: reason, By: me, At: a.now.UTC(), Until: u.UTC(), Except: except, ExceptSession: exceptSession, LiftWhen: strings.TrimSpace(liftWhen)}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Holds = slices.DeleteFunc(st.Holds, func(x state.Hold) bool { return x.Target == h.Target || x.Expired(a.now) })
 				st.Holds = append(st.Holds, h)
@@ -97,6 +105,7 @@ Without a subcommand, lists the holds.`,
 	set.Flags().StringVarP(&reason, "reason", "r", "", "why (required)")
 	set.Flags().StringVar(&until, "until", "", "when the hold ends by itself: a time (15:30) or a duration (2h); default: until lifted")
 	set.Flags().StringVar(&except, "except", "", "the one owner/repo or owner/repo#n the merge hold lets through")
+	set.Flags().StringVar(&exceptSession, "except-session", "", "the session (its name) the merge hold lets through: a line's promoter")
 	set.Flags().StringVar(&liftWhen, "lift-when", "", "a shell command; the watch lifts the hold once it exits 0")
 	lane.register(set)
 	var liftLane, checkLane laneFlag
@@ -235,10 +244,13 @@ func splitPR(s string) (repo string, pr int, ok bool) {
 	return repo, n, err == nil && n > 0
 }
 
-// checkExcept refuses an exception the hold cannot make: one that is not a
-// repository or pull request, on github, of another repository than the
-// held one, or outside the held lane.
-func (a *app) checkExcept(target, except string) error {
+// checkExcept refuses an exception the hold cannot make: any on github, and
+// a pull request one (except) that is not a repository or pull request, of
+// another repository than the held one, or outside the held lane.
+func (a *app) checkExcept(target, except, session string) error {
+	if (except != "" || session != "") && target == "github" {
+		return usageErr("a github hold stops every GitHub call and makes no exception")
+	}
 	if except == "" {
 		return nil
 	}
@@ -247,8 +259,6 @@ func (a *app) checkExcept(target, except string) error {
 	switch {
 	case !ok:
 		return usageErr("--except wants owner/repo or owner/repo#n, got %s", except)
-	case target == "github":
-		return usageErr("a github hold stops every GitHub call and makes no exception")
 	case isLane && a.cfg.LaneOf(repo).Name != lane:
 		return usageErr("%s is not in lane %s (beekeeper lanes lists the lanes)", repo, lane)
 	case strings.Contains(target, "/") && (!strings.EqualFold(repo, target) || pr == 0):
@@ -275,6 +285,9 @@ func holdTarget(h state.Hold) string {
 	var except []string
 	if h.Except != "" {
 		except = append(except, h.Except)
+	}
+	if h.ExceptSession != "" {
+		except = append(except, fmt.Sprintf("session %q", h.ExceptSession))
 	}
 	if h.AwaitsOwnRelease() {
 		except = append(except, "its promote")

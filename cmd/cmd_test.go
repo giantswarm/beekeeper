@@ -319,7 +319,7 @@ func TestCheckExcept(t *testing.T) {
 		{"github", "giantswarm/devctl", false},
 		{"github", "", true},
 	} {
-		if err := a.checkExcept(c.target, c.except); (err == nil) != c.ok {
+		if err := a.checkExcept(c.target, c.except, ""); (err == nil) != c.ok {
 			t.Errorf("%s except %q: %v", c.target, c.except, err)
 		}
 	}
