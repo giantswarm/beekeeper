@@ -341,7 +341,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				}
 				o.bytes += worktrees.Size(p)
 				if !r.dryRun {
-					o.err = errors.Join(o.err, os.RemoveAll(p))
+					o.err = errors.Join(o.err, worktrees.RemoveAll(p))
 				}
 			}
 			if v.Kept != "" {
@@ -389,10 +389,13 @@ func pushed(ctx context.Context, git worktrees.Git, t worktrees.Tree, headOid st
 }
 
 // removeWorktree removes the worktree dir through its repository, its build
-// output with it, and prunes its record.
+// output with it, read-only directories included, and prunes its record.
 func removeWorktree(ctx context.Context, git worktrees.Git, dir string) error {
 	out, err := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
+		return err
+	}
+	if err := worktrees.Writable(dir); err != nil {
 		return err
 	}
 	common := strings.TrimSpace(string(out))
