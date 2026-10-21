@@ -27,6 +27,9 @@ const (
 // rotationParty is the worker's party.
 var rotationParty = state.Party{Session: rotationLogin, HostSession: "local_" + rotationLogin, Name: rotationName}
 
+// hyprlock is the screen locker of a locked lockMachine.
+const hyprlock = "hyprlock"
+
 // lockMachine's process table holds a screen locker, or none.
 type lockMachine struct {
 	platform.Machine
@@ -53,7 +56,7 @@ func TestALockedScreenHoldsNoLink(t *testing.T) {
 	if err := d.await(t.Context(), 2*awayPoll, nil); !errors.Is(err, errDesktopInUse) {
 		t.Fatalf("unlocked, the desktop's focused window: %v, want errDesktopInUse", err)
 	}
-	plat.Machine = lockMachine{Machine: plat.Machine, locker: "hyprlock"}
+	plat.Machine = lockMachine{Machine: plat.Machine, locker: hyprlock}
 	if err := d.await(t.Context(), 2*awayPoll, nil); err != nil {
 		t.Errorf("a link under a locked screen waited: %v", err)
 	}
