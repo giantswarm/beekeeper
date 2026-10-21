@@ -22,17 +22,20 @@ import (
 // federates, and kagent sessions reached through muster.
 func (s *server) messageTools() []serveTool {
 	return []serveTool{
-		{newTool("send_message", "Send an A2A message to an agent: local:<machine>/<name>, one of your own local agents, into your mailbox; kagent:<installation>/<namespace>/<session> through muster as you.", false,
+		{newTool("send_message", "Send an A2A message to an agent: one of your own local agents, or a kagent session.",
+			"A local: message is queued in your mailbox, once per messageId; a kagent: one goes through muster as you.",
+			hints{openWorld: true},
 			mcp.WithString("to", mcp.Required(), mcp.Description("the address: local:<machine>/<name> or kagent:<installation>/<namespace>/<session>")),
 			mcp.WithObject(paramMessage, mcp.Required(), mcp.Description("the A2A Message: messageId, role and parts")),
 			mcp.WithString("deadline", mcp.Description("when an unacked local: message expires: an RFC 3339 time or a duration (2h); default 24h"))), toolSendMessage},
-		{newTool("receive_messages", "The oldest unacked messages of your mailbox, in order; ack them with ack_messages.", true,
+		{newTool("receive_messages", "Read the oldest unacked messages of your mailbox, in order; ack them with ack_messages.", "", hintRead,
 			mcp.WithString(paramFor, mcp.Description("the mailbox: your email (default)")),
 			mcp.WithNumber("limit", mcp.Description(fmt.Sprintf("at most this many (default and most: %d)", mailbox.Cap)))), toolReceiveMessages},
-		{newTool("ack_messages", "Ack received messages of your mailbox by their ids: they are not delivered again.", false,
+		{newTool("ack_messages", "Ack messages of your mailbox by their ids, so they are not delivered again.", "", hintRemove,
 			mcp.WithString(paramFor, mcp.Description("the mailbox: your email (default)")),
 			mcp.WithArray("ids", mcp.Required(), mcp.WithNumberItems(), mcp.Description("the ids receive_messages returned"))), toolAckMessages},
-		{newTool("converse", "Write to your person in Slack as the calling agent, in its conversation thread (the first message opens it); the person's replies there arrive in your mailbox from source slack.", false,
+		{newTool("converse", "Write to your person in Slack as the calling agent, in its conversation thread.",
+			"The first message opens the thread; the person's replies arrive in your mailbox from source slack.", hints{openWorld: true},
 			mcp.WithString(paramText, mcp.Required(), mcp.Description(fmt.Sprintf("the message, Slack markdown of at most %d characters", conversationText)))), toolConverse},
 	}
 }

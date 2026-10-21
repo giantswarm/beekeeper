@@ -1093,6 +1093,9 @@ type Lane struct {
 }
 
 // Merge configures the gate on devctl pr merge.
+// DefaultQueueTTL is merge.queueTTL unless the configuration sets it.
+const DefaultQueueTTL = 15 * time.Minute
+
 type Merge struct {
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
@@ -2020,7 +2023,7 @@ func (c *Config) defaults() error {
 
 	setInt(&c.Merge.Cap, 5)
 	setInt(&c.Merge.SessionCap, 2)
-	setDur(&c.Merge.QueueTTL, 15*time.Minute)
+	setDur(&c.Merge.QueueTTL, DefaultQueueTTL)
 	setDur(&c.Merge.SeedTTL, 12*time.Hour)
 	setDur(&c.Merge.Settle, 5*time.Minute)
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
