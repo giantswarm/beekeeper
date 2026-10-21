@@ -1109,3 +1109,62 @@ func TestReadFindingsNotDrawn(t *testing.T) {
 		t.Errorf("findings of a drawn page = %+v", drawn)
 	}
 }
+
+// A turn stopped at its timeout with a tab of its own open is resumed once
+// by a cleanup turn (the same session, the cleanup prompt), which closes it:
+// the command fails on the timeout, the lines say a cleanup ran and that the
+// turn closed its tab. A stopped turn with no tab open runs no cleanup.
+func TestBrowseCleansUpAfterTimeout(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	argvFile, transcript, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "count")
+	// The fake claude counts its runs, records each run's arguments, appends
+	// that run's transcript under its session and, on its first run, waits
+	// past the turn's timeout.
+	script := "#!/bin/sh\nn=$(cat \"$BROWSE_COUNT\" 2>/dev/null || echo 0); n=$((n+1)); echo \"$n\" > \"$BROWSE_COUNT\"\n" +
+		": > \"$BROWSE_ARGV.$n\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV.$n\"\n" +
+		"  case \"$prev\" in --session-id|--resume) id=$a;; esac\n  prev=$a\ndone\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cat \"$BROWSE_TRANSCRIPT.$n\" >> \"$BROWSE_PROJECT/$id.jsonl\"\n" +
+		"if [ \"$n\" = 1 ]; then exec sleep 5; fi\necho cleaned up\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_ARGV", argvFile)
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_COUNT", count)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	group := `{"availableTabs":[{"tabId":5,"title":"Portal","url":"https://portal.example.test/"}],"tabGroupId":9}` +
+		"\n\nTab Context:\n- Available tabs:\n  • tabId 5: \"Portal\" (\"https://portal.example.test/\")"
+	writeFile(t, transcript+".1", chromeUse("t1", "tabs_context_mcp", `{"createIfEmpty":true}`)+chromeAnswer("t1", group))
+	writeFile(t, transcript+".2", chromeUse("t2", "tabs_close_mcp", `{"tabId":5}`)+
+		chromeAnswer("t2", "Closed tab 5. Group is now empty (auto-removed). \n\nTab Context:\n- Available tabs:\n"))
+	err := a.browse(t.Context(), "Open the portal.", bin, "", time.Second, "", nil, nil)
+	if !errors.Is(err, errTurnStopped) || strings.Contains(err.Error(), "left") {
+		t.Errorf("browse of a stopped turn = %v", err)
+	}
+	b, _ := os.ReadFile(count) //nolint:gosec // the test's own file
+	if strings.TrimSpace(string(b)) != "2" {
+		t.Fatalf("the fake claude ran %s times, want 2\n%s", b, out.String())
+	}
+	second, _ := os.ReadFile(argvFile + ".2") //nolint:gosec // the test's own file
+	args := strings.Split(strings.TrimSuffix(string(second), "\x00"), "\x00")
+	if !slices.Contains(args, resumeFlag) || args[len(args)-1] != cleanupWords {
+		t.Errorf("the cleanup ran with %q", args)
+	}
+	if s := out.String(); !strings.Contains(s, "timed out: the turn was stopped at its timeout") || !strings.Contains(s, "tabs closed: the turn closed all 1 tab it opened") {
+		t.Errorf("browse of a stopped turn printed %q", s)
+	}
+	// No tab open: no cleanup.
+	out.Reset()
+	if err := os.Remove(count); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, transcript+".1", chromeUse("t1", "list_connected_browsers", `{}`)+chromeAnswer("t1", oneBrowser))
+	if err := a.browse(t.Context(), "Open the portal.", bin, "", time.Second, "", nil, nil); !errors.Is(err, errTurnStopped) {
+		t.Errorf("browse of a stopped turn without tabs = %v", err)
+	}
+	if b, _ := os.ReadFile(count); strings.TrimSpace(string(b)) != "1" { //nolint:gosec // the test's own file
+		t.Errorf("the fake claude ran %s times without tabs, want 1", b)
+	}
+}
