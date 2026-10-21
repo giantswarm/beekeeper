@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `beekeeper browse` under a running screen locker (hyprlock) starts no turn: it exits non-zero at once with an error that starts with `screen locked`, names the locker and the probe a caller parks on until the screen unlocks (`! pgrep -x <locker>`). The turn spent minutes on draw checks that cannot pass under the lock and failed as not drawn. browse never touches the lock ([#1546](https://github.com/giantswarm/beekeeper/issues/1546)).
 - The doctor's Docker prune ranks images by when they were created or last tagged, the later, and keeps one created or tagged within 24 hours or since the oldest held lab lease's claim: a dev image rebuilt from cache keeps its old Created and was removed before its session loaded it. Each `docker.prune` event names the images it removed ([#1539](https://github.com/giantswarm/beekeeper/issues/1539)).
 
 ### Added

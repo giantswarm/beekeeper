@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -35,6 +36,34 @@ type placement struct {
 	Left     string
 	shown    *hypr.Shown
 }
+
+// errScreenLocked opens the refusal of a browse under a running screen
+// locker.
+var errScreenLocked = errors.New("screen locked")
+
+// screenLockedErr refuses a browse before its turn starts while a screen
+// locker runs: the compositor draws no window under the lock, so no draw
+// check, screenshot or click of the turn could pass. It names the probe a
+// caller parks on until the screen unlocks; the lock stays the person's.
+// nil when no locker runs or the process table cannot be read.
+func screenLockedErr() error {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return nil
+	}
+	l := claude.ScreenLocker(t)
+	if l == "" {
+		return nil
+	}
+	return fmt.Errorf("%w: %s runs, and the compositor draws no window under the lock: browse started no turn. "+
+		"Park until the screen unlocks and run the steps again then, with a timer on the probe %q "+
+		"(beekeeper timer add 1m \"screen unlocked: run the browse steps again\" --probe %q --wake \"<agent>\" --until 12h), not a retry loop; "+
+		"browse never touches the lock", errScreenLocked, l, unlockedProbe(l), unlockedProbe(l))
+}
+
+// unlockedProbe is a shell command that exits 0 once the locker no longer
+// runs.
+func unlockedProbe(locker string) string { return "! pgrep -x " + locker }
 
 // showChrome brings the shared Chrome window on screen for the turn when
 // the compositor does not show it (hypr.Show). Under a locked screen it
