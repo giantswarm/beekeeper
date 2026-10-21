@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -99,11 +100,20 @@ func revivedRuns(st *state.State, sessions []*claude.Session, now time.Time) (ou
 // endRevived stops a revived CLI; a variable for tests.
 var endRevived = endSession
 
+// desktopArchived says whether the desktop records the session host
+// archived; a variable for tests.
+var desktopArchived = func(cfg *config.Config, host string) bool {
+	r, ok := claude.ReadRecord(cfg, host)
+	return ok && r.IsArchived
+}
+
 // stopRevived stops each running CLI of a superseded session and its
 // desktop's reopen and turn units, owes the archive of its desktop session
 // and says REVIVED once per CLI. A CLI the doctor warmed to archive itself
-// runs on for archiveWarmGrace. It returns the sessions that answer to their
-// name: the running ones but the stopped and the warmed.
+// runs on for archiveWarmGrace; once its desktop session is archived, it is
+// stopped as done, logged as agents.archive, never REVIVED. It returns the
+// sessions that answer to their name: the running ones but the stopped and
+// the warmed.
 func (w *watcher) stopRevived(ctx context.Context, sessions []*claude.Session) []*claude.Session {
 	st, err := w.store.Peek()
 	if err != nil {
@@ -129,6 +139,11 @@ func (w *watcher) stopRevived(ctx context.Context, sessions []*claude.Session) [
 		}
 		drop[s] = true
 		lines := stopUnits(ctx, s.ID)
+		if s.HostID != "" && desktopArchived(w.cfg, s.HostID) {
+			_ = w.store.Record(event(watchParty, "agents.archive", "%s: session %s's CLI %d stopped: its desktop session %s is archived and %s carries its name",
+				s.Name, s.ID, s.PID, s.HostID, r.by))
+			continue
+		}
 		_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
 			oweArchive(st, s.Party(), "revived after "+r.by+" took its name", w.now)
 			return []state.Event{event(watchParty, "agents.revived", "%s: session %s, CLI %d, stopped: %s carries its name", s.Name, s.ID, s.PID, r.by)}, nil
