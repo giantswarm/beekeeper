@@ -83,6 +83,12 @@ var (
 	reload = turnCall{"mcp__claude-in-chrome__navigate", map[string]any{urlKey: "https://x", tabKey: json.Number("7")}, "Navigated"}
 	twice  = turnCall{findTool, map[string]any{tabKey: json.Number("7")},
 		"- ref_42: button \"" + UploadTargetLabel + "\" (file)\n- ref_9: button \"" + UploadTargetLabel + "\" (file)\n"}
+	// requoted is find's answer with the query's quotes kept around the
+	// name, bare and curly its answers with none and with typographic ones.
+	requoted = turnCall{findTool, map[string]any{tabKey: json.Number("7")},
+		"Found 1 matching element\n\n- ref_42: button \"\"" + UploadTargetLabel + "\"\" (file) - Exact match for \"" + UploadTargetLabel + "\"\n"}
+	bare  = turnCall{findTool, map[string]any{tabKey: json.Number("7")}, "- ref_42: button " + UploadTargetLabel + " (file)\n"}
+	curly = turnCall{findTool, map[string]any{tabKey: json.Number("7")}, "- ref_42: button “" + UploadTargetLabel + "” (file)\n"}
 	// namedIn is a page read whose text names the label in no element's name.
 	namedIn = turnCall{"mcp__claude-in-chrome__get_page_text", map[string]any{tabKey: json.Number("7")}, "ref_9 says " + UploadTargetLabel}
 )
@@ -103,17 +109,24 @@ func TestUploadRefusal(t *testing.T) {
 	}{
 		"the marked ref":                {[]turnCall{marked, findCall}, uploadTool, upload("ref_42"), ""},
 		"the marked ref of a page read": {[]turnCall{marked, readPage}, uploadTool, upload("ref_42"), ""},
-		"a hidden input's ref":          {[]turnCall{marked, readPage}, uploadTool, upload("ref_9"), "ref_9 is not the input the last upload-target check marked"},
-		"no check":                      {[]turnCall{findCall}, uploadTool, upload("ref_42"), "comes before any upload-target check"},
-		"a check that marked none":      {[]turnCall{marked, findCall, unmarked}, uploadTool, upload("ref_42"), "marked no input"},
-		"no find after the check":       {[]turnCall{findCall, marked}, uploadTool, upload("ref_42"), noFind},
-		"the turn's own imitation":      {[]turnCall{fake, findCall}, uploadTool, upload("ref_42"), beforeCheck},
-		"code after the check":          {[]turnCall{appended, findCall}, uploadTool, upload("ref_42"), beforeCheck},
-		"a find in another tab":         {[]turnCall{marked, otherTab}, uploadTool, upload("ref_42"), noFind},
-		"an upload to another tab":      {[]turnCall{marked, findCall}, uploadTool, map[string]any{refKey: "ref_42", tabKey: json.Number("8")}, "targets tab 8"},
-		"a navigate after the check":    {[]turnCall{marked, findCall, reload}, uploadTool, upload("ref_42"), beforeCheck},
-		"two refs with the label":       {[]turnCall{marked, twice}, uploadTool, upload("ref_42"), "several refs"},
-		"a mention in a page's text":    {[]turnCall{marked, namedIn}, uploadTool, upload("ref_9"), noFind},
+		"find's name quoted twice":      {[]turnCall{marked, requoted}, uploadTool, upload("ref_42"), ""},
+		"find's name unquoted":          {[]turnCall{marked, bare}, uploadTool, upload("ref_42"), ""},
+		"find's name in curly quotes":   {[]turnCall{marked, curly}, uploadTool, upload("ref_42"), ""},
+		"a check and find in the upload's batch": {[]turnCall{findCall}, batchTool,
+			map[string]any{actionsKey: []any{map[string]any{nameKey: "javascript_tool", inputKey: map[string]any{textKey: UploadTargetCheck(""), tabKey: json.Number("7")}},
+				map[string]any{nameKey: "find", inputKey: map[string]any{tabKey: json.Number("7")}},
+				map[string]any{nameKey: "file_upload", inputKey: upload("ref_42")}}}, "the file_upload in a call of its own"},
+		"a hidden input's ref":       {[]turnCall{marked, readPage}, uploadTool, upload("ref_9"), "ref_9 is not the input the last upload-target check marked"},
+		"no check":                   {[]turnCall{findCall}, uploadTool, upload("ref_42"), "comes before any upload-target check"},
+		"a check that marked none":   {[]turnCall{marked, findCall, unmarked}, uploadTool, upload("ref_42"), "marked no input"},
+		"no find after the check":    {[]turnCall{findCall, marked}, uploadTool, upload("ref_42"), noFind},
+		"the turn's own imitation":   {[]turnCall{fake, findCall}, uploadTool, upload("ref_42"), beforeCheck},
+		"code after the check":       {[]turnCall{appended, findCall}, uploadTool, upload("ref_42"), beforeCheck},
+		"a find in another tab":      {[]turnCall{marked, otherTab}, uploadTool, upload("ref_42"), noFind},
+		"an upload to another tab":   {[]turnCall{marked, findCall}, uploadTool, map[string]any{refKey: "ref_42", tabKey: json.Number("8")}, "targets tab 8"},
+		"a navigate after the check": {[]turnCall{marked, findCall, reload}, uploadTool, upload("ref_42"), beforeCheck},
+		"two refs with the label":    {[]turnCall{marked, twice}, uploadTool, upload("ref_42"), "several refs"},
+		"a mention in a page's text": {[]turnCall{marked, namedIn}, uploadTool, upload("ref_9"), noFind},
 		"a script after the check": {[]turnCall{marked, findCall, {scriptTool, map[string]any{textKey: "document.querySelector('#x').remove()", tabKey: json.Number("7")}, "ok"}},
 			uploadTool, upload("ref_42"), beforeCheck},
 		"a click after the check": {[]turnCall{marked, findCall, {"mcp__claude-in-chrome__computer", map[string]any{actionKey: leftClick, tabKey: json.Number("7")}, "ok"}},
