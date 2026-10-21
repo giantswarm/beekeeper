@@ -1580,6 +1580,15 @@ second mark in the window, or while one waits, is refused with the reason, and a
 its gate after the window's run is dropped (`merge.urgent.refused`) and its merge waits for the
 reset like any other.
 
+A change that needs two pull requests to land together, a credentials rotation split over two
+repositories of one installation, names the other on each merge: `devctl pr merge <owner/repo> <n>
+--update-branch --pair <owner/repo#m>` (the gate takes `--pair` off before devctl runs). Each keeps
+its place in its own lane; the first to reach its turn waits there until the other is next in its
+lane too, then starts with two `merge.cap` slots (and two of its party's `merge.sessionCap`), and
+the other starts at its next check outside both caps. A refusal of either before its devctl runs
+refuses the other with the same reason (`merge.refused`); a run that merged nothing is no refusal.
+`beekeeper lanes` shows each place with the merge it lands with and where that is.
+
 ## Cluster upgrades
 
 While an installation's clusters upgrade, work on it waits. `watch` reads the Cluster API

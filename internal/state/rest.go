@@ -126,6 +126,7 @@ type (
 	plainWorkerReport WorkerReport
 	plainUrgent       Urgent
 	plainRoleLine     RoleLine
+	plainPair         Pair
 )
 
 func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
@@ -220,3 +221,5 @@ func (v *RoleLine) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainRoleLine)(v), &v.rest)
 }
 func (v RoleLine) MarshalJSON() ([]byte, error) { return encodeKeeping(plainRoleLine(v), v.rest) }
+func (v *Pair) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainPair)(v), &v.rest) }
+func (v Pair) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainPair(v), v.rest) }

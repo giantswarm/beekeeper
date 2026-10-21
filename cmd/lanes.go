@@ -28,6 +28,17 @@ type laneView struct {
 	// Stall is set when the lane's first arrived merge has waited longer
 	// than merge.stallAfter behind places whose merges are not in the gate.
 	Stall *merge.Stall `json:"stall,omitempty"`
+	// Pairs say, by key, what each of the lane's paired merges lands with
+	// (the gate's --pair): its sibling and where that is.
+	Pairs map[string]string `json:"pairs,omitempty"`
+}
+
+// paired is the pair line of the merge key, ", lands with …", "" when none.
+func (v laneView) paired(key string) string {
+	if t := v.Pairs[key]; t != "" {
+		return ", " + t
+	}
+	return ""
 }
 
 func (a *app) lanesCmd() *cobra.Command {
@@ -339,12 +350,21 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 func (a *app) laneViews(st *state.State) []laneView {
 	var out []laneView
 	seen := map[string]bool{}
+	pairs := pairLines(st)
 	add := func(name, installation string) {
 		if seen[name] {
 			return
 		}
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
+		for _, m := range st.Merges {
+			if t := pairs[m.Key()]; m.Lane == name && t != "" {
+				if v.Pairs == nil {
+					v.Pairs = map[string]string{}
+				}
+				v.Pairs[m.Key()] = t
+			}
+		}
 		if s, ok := v.Stalled(a.now, a.cfg.Merge.StallAfter.Duration, a.present, proc.Alive, arrived); ok {
 			v.Stall = &s
 		}
@@ -439,7 +459,7 @@ func (a *app) printLanes(views []laneView) {
 		status := "free"
 		switch {
 		case v.Running != nil:
-			status = fmt.Sprintf("running %s by %s since %s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started))
+			status = fmt.Sprintf("running %s by %s since %s%s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started), v.paired(v.Running.Key()))
 		case v.Settling != nil:
 			status = a.settlingText(*v.Settling)
 		}
@@ -483,7 +503,7 @@ func (a *app) printLanes(views []laneView) {
 			default:
 				how = "not arrived, queued"
 			}
-			p("%s %d. %s by %s, %s since %s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined))
+			p("%s %d. %s by %s, %s since %s%s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined), v.paired(m.Key()))
 		}
 		for _, f := range v.Failed {
 			p("  failed %s by %s at %s, %s, %s; shown until its next attempt", f.Key(), quotedOwner(f.By), clock(a.now, f.At),

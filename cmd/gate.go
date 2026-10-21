@@ -169,6 +169,20 @@ document or ended by a signal is judged by GitHub: merged, its release is
 unconfirmed. A second merge of a pull request whose merge runs is refused
 (exit 3) with that run's start, owner and last line.
 
+A change that needs two pull requests to land together (two repositories
+of one installation) names the other on each merge: devctl pr merge
+<owner/repo> <n> --pair <owner/repo#m>, a flag the gate takes off before
+devctl runs. Each merge keeps its place in its own lane; the first to reach
+its turn waits there ("it lands with …") until the other is next in its lane
+too, then starts, taking two merge.cap slots (and two of the party's
+merge.sessionCap) for both, and the other starts at its next check outside
+the caps. A refusal of either before its devctl runs (a hold on a new
+merge, a reviewer, a rebase conflict, the end of a queued run's wait)
+refuses the other with the same reason, waiting or arriving later; a run
+that merged nothing is no refusal, and the other merges on. A merge pairs
+with one other at most: a second --pair naming another is refused. lanes
+shows each place with the merge it lands with and where that is.
+
 devctl pr wait, release wait and rollout wait run the same way outside
 their caller, without a queue, at the budget's reset after the merges
 queued for it (merge.resetFirst); one whose identical command already runs on
@@ -330,6 +344,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		gateLine("dropped %s: the gate runs the merge outside your session already, its outcome reaches you as for the blocking form",
 			strings.Join(detached, " "))
 	}
+	argv, pair, paired := merge.StripPair(argv)
 	repo, pr, ok := parseGated(argv)
 	if !ok {
 		if a.store != nil && merge.ParseOwned(argv) {
@@ -345,6 +360,12 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		bin: runningBinary(), output: gateOutput()}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	g.leaveAt = leaveAt(time.Now(), limit, queued)
+	if paired {
+		a.now = time.Now()
+		if err := g.declarePair(pair); err != nil {
+			return err
+		}
+	}
 	resumed := false
 	if v, ok := os.LookupEnv(gateRunningEnv); ok {
 		_ = os.Unsetenv(gateRunningEnv)
@@ -622,6 +643,7 @@ func (g *gateRun) step() (string, error) {
 	behind := false
 	dropped := false
 	session := ""
+	pairRefused := ""
 	// A new merge is refused during a hold; one that has its place keeps it
 	// and waits until the hold lifts or lets it through.
 	placed := g.placed
@@ -637,6 +659,10 @@ func (g *gateRun) step() (string, error) {
 				dup = &st.Merges[i]
 				return nil, nil
 			}
+		}
+		prunePairs(st, g.now, g.cfg.Merge.SeedTTL.Duration)
+		if pairRefused = g.pairRefusal(st); pairRefused != "" {
+			return nil, nil
 		}
 		var ev []state.Event
 		merge.Retry(st, g.repo, g.pr)
@@ -667,7 +693,10 @@ func (g *gateRun) step() (string, error) {
 		}
 		q = merge.Queue(st, g.lane.Name)
 		ahead, behind = q.Ahead(g.repo, g.pr, merge.Unheld(st, g.now, g.lane, g.present))
-		session = g.sessionWait(st)
+		if st.PairOf(g.key()) < 0 {
+			// A paired merge's slots are decided at its turn (pairTurn).
+			session = g.sessionWait(st)
+		}
 		return ev, nil
 	})
 	var stale *state.StaleWriterError
@@ -676,6 +705,8 @@ func (g *gateRun) step() (string, error) {
 		return "", stale // nothing ran: the gate re-executes a replaced binary, else refuses
 	case err != nil:
 		return "", gateRefused("the state does not load (%v): fix it, then run the same command again", err)
+	case pairRefused != "":
+		return "", g.refuse("%s", pairRefused)
 	case dropped:
 		return "", g.refuse("%s was taken out of lane %s (beekeeper lanes drop): nothing ran; run it again only if it is still wanted", g.key(), g.lane.Name)
 	case held && !placed:
@@ -1177,6 +1208,9 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 	g.centralLeave("refused: " + why)
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		g.drop(st)
+		if code == ExitGateRefused {
+			g.refusePair(st, why)
+		}
 		return []state.Event{event(g.me, "merge.refused", "%s: %s", g.key(), why)}, nil
 	})
 	return gateRefusedWith(code, "%s", why)
@@ -1279,12 +1313,17 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 				g.lane.Name, merge.Tool, h.ToolRelease, toolKey(h))
 			return nil, nil
 		}
-		if why = g.capWait(st, st.Merges[i]); why != "" {
+		var need int
+		if why, need = g.pairTurn(st); why != "" {
 			return nil, nil
 		}
-		if why = g.sessionWait(st); why != "" {
+		if why = g.capWaitFor(st, st.Merges[i], need); why != "" {
 			return nil, nil
 		}
+		if why = g.sessionWaitFor(st, need); why != "" {
+			return nil, nil
+		}
+		g.startPair(st)
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 			if m.Lane == g.lane.Name && m.Phase == state.Settling {
 				settled = append(settled, m)
@@ -1349,19 +1388,31 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 // waits never, except in the merge's reset window (merge.resetFirst): only
 // the running merges count, and the older merges queued for the reset that
 // are free to start take their slots first.
-func (g *gateRun) capWait(st *state.State, me state.Merge) string {
+func (g *gateRun) capWait(st *state.State, me state.Merge) string { return g.capWaitFor(st, me, 1) }
+
+// capWaitFor is capWait for a start that takes need slots: two for the
+// first merge of a pair, which starts its sibling too (pairTurn), none for
+// that sibling.
+func (g *gateRun) capWaitFor(st *state.State, me state.Merge, need int) string {
+	if need <= 0 {
+		return ""
+	}
 	most := g.cfg.Merge.Cap
+	pair := ""
+	if need > 1 {
+		pair = fmt.Sprintf(", it and the merge it lands with need %d slots", need)
+	}
 	window := g.cfg.Merge.ResetFirst.Duration
 	if !merge.InResetWindow(me, g.now, window) {
-		if n := capRuns(st); n >= most {
-			return fmt.Sprintf("%d merges and promotes run machine-wide (cap %d), not a lane problem: %s is next in lane %s and starts when one ends",
-				n, most, g.key(), g.lane.Name)
+		if n := capRuns(st); n+need > most {
+			return fmt.Sprintf("%d merges and promotes run machine-wide (cap %d)%s, not a lane problem: %s is next in lane %s and starts when one ends",
+				n, most, pair, g.key(), g.lane.Name)
 		}
 		return ""
 	}
 	ahead := merge.ResetAhead(st, me, g.now, window, g.present, proc.Alive)
 	running := len(runningMerges(st))
-	if running+len(ahead) < most {
+	if running+len(ahead)+need <= most {
 		return ""
 	}
 	if len(ahead) > 0 {
@@ -1388,13 +1439,24 @@ func (g *gateRun) awaitReset(reset time.Time) {
 // devctl polls GitHub, so one party's queued merges run a few at a time and
 // the rest wait in their lanes without reading GitHub, starting in the order
 // they queued.
-func (g *gateRun) sessionWait(st *state.State) string {
+func (g *gateRun) sessionWait(st *state.State) string { return g.sessionWaitFor(st, 1) }
+
+// sessionWaitFor is sessionWait for a start that takes need of the party's
+// slots (capWaitFor): a pair's first keeps one free for its sibling.
+func (g *gateRun) sessionWaitFor(st *state.State, need int) string {
 	i := g.mine(st, state.Waiting)
-	if i < 0 {
+	if i < 0 || need <= 0 {
 		return ""
 	}
 	most := g.cfg.Merge.SessionCap
-	running, first, ok := merge.SessionTurn(st, st.Merges[i], most, g.present, proc.Alive)
+	present := g.present
+	if p := st.PairOf(g.key()); need > 1 && most > 0 && p >= 0 {
+		// The sibling takes the slot kept free, not one before this merge.
+		most = max(most-need+1, 1)
+		sib := st.Pairs[p].Sibling(g.key())
+		present = func(m state.Merge) bool { return m.Key() != sib && g.present(m) }
+	}
+	running, first, ok := merge.SessionTurn(st, st.Merges[i], most, present, proc.Alive)
 	switch {
 	case ok:
 		return ""

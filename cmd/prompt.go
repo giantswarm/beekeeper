@@ -268,7 +268,7 @@ func (a *app) promptLanes(p printer, lanes []laneView) {
 			parts = append(parts, "held (see Holds)")
 		}
 		for i, m := range v.Waiting {
-			parts = append(parts, fmt.Sprintf("%d. %s by %q, queued %s", i+1, m.Key(), m.By.Name, a.stamp(m.Joined)))
+			parts = append(parts, fmt.Sprintf("%d. %s by %q, queued %s%s", i+1, m.Key(), m.By.Name, a.stamp(m.Joined), v.paired(m.Key())))
 		}
 		if len(parts) == 0 {
 			parts = append(parts, "free")
