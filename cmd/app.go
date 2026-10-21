@@ -273,7 +273,7 @@ Any of them, with --word, the person's words that asked for it.`,
 			return err
 		},
 	}
-	var title, words string
+	var title, text, words string
 	var navigate bool
 	check := &cobra.Command{
 		Use:   "check <url>",
@@ -283,7 +283,10 @@ from the Apps on record, without a session or a click: "allow:", "refuse:"
 or "no decision:" and the reason. --title is the page's title, which GitHub's
 consent page carries the App's name in ("Authorize <name>"): it decides a
 URL whose client id the Chrome tools redacted (client_id=REDACTED), as the
-tool results show it. --words are the call's own words (the summary the
+tool results show it; --text is what the Chrome tools read from the page
+(its text, its accessibility tree, a find's match), which carries a GitLab
+application's name ("Authorize <name>") where its title is "GitLab".
+--words are the call's own words (the summary the
 model wrote for it, a typed text, a form value), which decide a call on an
 App's permissions page and an App's creation, installation and deletion
 pages; --navigate asks for a navigation to <url> instead of a click on it.
@@ -305,7 +308,7 @@ credentials were stored nowhere). check decides from the same.`,
 			if navigate {
 				d = guard.Navigation(apps, args[0])
 			} else {
-				d = guard.Click(apps, guard.Page{URL: args[0], Title: title}, words)
+				d = guard.Click(apps, guard.Page{URL: args[0], Title: title, Text: text}, words)
 			}
 			line := "no decision: not a page the hook decides: the classifier decides it as before"
 			switch d.Decision {
@@ -319,6 +322,7 @@ credentials were stored nowhere). check decides from the same.`,
 		},
 	}
 	check.Flags().StringVar(&title, "title", "", "the page's title (GitHub's consent page: \"Authorize <name>\")")
+	check.Flags().StringVar(&text, "text", "", "what the Chrome tools read from the page (a GitLab authorize page: \"Authorize <name>\")")
 	check.Flags().StringVar(&words, "words", "", "the call's own words (its summary, a typed text, a form value)")
 	check.Flags().BoolVar(&navigate, "navigate", false, "the decision for a navigation to <url> instead of a click on it")
 	c.AddCommand(a.appCreateCmd(), a.appInstallationCmd(), allow, listCmd("List the Apps on record", a.appList), revoke, check)

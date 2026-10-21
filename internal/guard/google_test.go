@@ -209,7 +209,7 @@ func TestGoogleFlowFromTheTrailerOnly(t *testing.T) {
 // the tab's flow in the transcript and refuses the consent of a third
 // party's; text typed or set there is left to the classifier.
 func TestGoogleConsentDecision(t *testing.T) {
-	click := tabInput(leftClick, map[string]any{refKey: "ref_9", "action_summary": continueClick})
+	click := tabInput(leftClick, map[string]any{refKey: "ref_9", summaryKey: continueClick})
 	for name, tc := range map[string]struct {
 		tool     string
 		input    map[string]any

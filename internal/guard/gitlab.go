@@ -3,6 +3,7 @@ package guard
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,8 +14,10 @@ import (
 // URL carries the application's client id (its uid) and the redirect_uri of
 // the authorization request. The hook decides a call on it from the GitLab
 // applications on record for that host: allowed for the application whose
-// client id the URL carries (or whose name the title carries where the
-// Chrome tools redacted the id) and whose callback host the redirect names,
+// client id the URL carries (or, where the Chrome tools redacted the id, whose
+// name alone the page's title and the text the tools read from it carry: the
+// title is the site's name, "GitLab", on current GitLab) and whose callback
+// host the redirect names,
 // refused for any other application or callback host there. A GitLab no
 // record names is decided as a consent page elsewhere.
 const gitlabAuthorize = "/oauth/authorize"
@@ -46,9 +49,37 @@ func gitlabTitled(title string) string {
 	return strings.TrimSpace(strings.TrimPrefix(t, authorizeTitle))
 }
 
+// gitlabNamed are the application names a GitLab authorize page carries
+// where the Chrome tools redacted its client id: the title's, and each
+// "Authorize <name>" its text shows (the heading "Authorize <name> to use your
+// account?", the button "Authorize <name>"), never the bare title "GitLab".
+func gitlabNamed(page Page) []string {
+	var names []string
+	if n := gitlabTitled(page.Title); n != "" {
+		names = append(names, n)
+	}
+	for _, m := range gitlabAuthorizeText.FindAllStringSubmatch(page.Text, -1) {
+		if n := strings.TrimSpace(m[1]); n != "" && !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// gitlabAuthorizeText is an "Authorize <name>" a GitLab authorize page's
+// text shows: the name runs to the heading's question, a quote or the line's
+// end.
+var gitlabAuthorizeText = regexp.MustCompile(`(?m)\bAuthorize ([^"\n]+?)(?: to use your account\?|"|$)`)
+
+// gitlabNames reports whether the names a page carries name the
+// application name alone.
+func gitlabNames(names []string, name string) bool {
+	return len(names) > 0 && !slices.ContainsFunc(names, func(n string) bool { return !strings.EqualFold(n, name) })
+}
+
 // gitlabConsent decides a call on the authorize page u of a GitLab on
-// record, titled title.
-func gitlabConsent(apps []App, u *url.URL, title string) Decision {
+// record, the tab's page.
+func gitlabConsent(apps []App, u *url.URL, page Page) Decision {
 	host := strings.ToLower(u.Hostname())
 	q := u.Query()
 	clientID := q.Get("client_id")
@@ -56,18 +87,25 @@ func gitlabConsent(apps []App, u *url.URL, title string) Decision {
 	if r, err := url.Parse(q.Get("redirect_uri")); err == nil {
 		callback = strings.ToLower(r.Host)
 	}
+	var names []string
+	if clientID == chromeRedacted {
+		names = gitlabNamed(page)
+	}
 	for _, a := range apps {
 		if !strings.EqualFold(a.GitLab, host) || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
-		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(gitlabTitled(title), a.Name)) {
+		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && gitlabNames(names, a.Name)) {
 			return Decision{Allow, fmt.Sprintf("beekeeper allows the click: the consent page on %s of the person's own GitLab application %s (callback %s), "+
 				"declared in %s, on record since %s by %s: %s", host, a.Name, callback, a.Declared, a.At.UTC().Format("2006-01-02"), a.By, a.Word)}
 		}
 	}
 	which := "of client id " + clientID
-	if clientID == "" || clientID == chromeRedacted {
-		which = strconv.Quote(title)
+	switch {
+	case len(names) > 0:
+		which = strconv.Quote(authorizeTitle + strings.Join(names, ", "))
+	case clientID == "" || clientID == chromeRedacted:
+		which = strconv.Quote(page.Title)
 	}
 	return Decision{Deny, fmt.Sprintf("Refused: %s's consent page %s (callback %s) names a GitLab application beekeeper has no record of. "+
 		"A consent is a grant of the person's identity, answered only for an application the person owns and asked for, which %s "+

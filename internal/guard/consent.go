@@ -78,11 +78,14 @@ type App struct {
 	At       time.Time
 }
 
-// Page is a tab's page: its URL and title, and on Google's sign-in the
-// callback host of the OAuth flow the tab's earlier pages there named.
+// Page is a tab's page: its URL and title, on Google's sign-in the callback
+// host of the OAuth flow the tab's earlier pages there named, and the text
+// the Chrome tools read from it while the tab was at that URL (a page's text,
+// its accessibility tree, a find's matches).
 type Page struct {
 	URL, Title string
 	Flow       string
+	Text       string
 }
 
 // Decision is the hook's answer for a call acting on a page: Allow, Deny or
@@ -172,7 +175,7 @@ func Click(apps []App, page Page, words string) Decision {
 	case host == googleHost:
 		return googleClick(apps, u, page, words)
 	case u.Path == gitlabAuthorize && gitlabHost(apps, host):
-		return gitlabConsent(apps, u, page.Title)
+		return gitlabConsent(apps, u, page)
 	case Loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
 			"whose fixture users' sign-in and consent are the person's own lab's", u.Host)}
@@ -435,10 +438,14 @@ func lastPage(transcript, tab string) (Page, bool) {
 // lastPages are the pages of the tabs as the transcript last showed them,
 // by tabId; none for a transcript that cannot be read. A page on Google's
 // sign-in carries the callback host of the flow the tab's pages there
-// named since it came to that host.
+// named since it came to that host; a page carries the text the results
+// executed on its tab read from it since the tab came to its URL.
 func lastPages(transcript string) map[string]Page {
-	pages, flows := map[string]Page{}, map[string]googleFlow{}
+	pages, flows, texts := map[string]Page{}, map[string]googleFlow{}, map[string]pageText{}
 	seen := func(tab string, p Page) {
+		if texts[tab].url != p.URL {
+			delete(texts, tab)
+		}
 		pages[tab] = p
 		u, err := url.Parse(p.URL)
 		if err != nil || !strings.EqualFold(u.Hostname(), googleHost) {
@@ -465,12 +472,37 @@ func lastPages(transcript string) map[string]Page {
 		if len(at) == 0 {
 			return
 		}
-		for _, m := range trailerTab.FindAllStringSubmatch(text[at[len(at)-1][0]:], -1) {
+		trailer := text[at[len(at)-1][0]:]
+		for _, m := range trailerTab.FindAllStringSubmatch(trailer, -1) {
 			seen(m[1], Page{URL: m[3], Title: m[2]})
 		}
+		// The result's own text, before the trailer, is what the call read
+		// from the tab it executed on, at the URL the trailer names.
+		if m := executedTab.FindStringSubmatch(trailer); m != nil {
+			if p, ok := pages[m[1]]; ok {
+				if body := strings.TrimSpace(text[:at[len(at)-1][0]]); body != "" {
+					texts[m[1]] = pageText{p.URL, strings.TrimSpace(texts[m[1]].text + "\n" + body)}
+				}
+			}
+		}
 	})
+	for tab, t := range texts {
+		p := pages[tab]
+		p.Text = t.text
+		pages[tab] = p
+	}
 	return pages
 }
+
+// pageText is the text the Chrome tools read from a tab while it was at
+// url.
+type pageText struct {
+	url, text string
+}
+
+// executedTab is the tab a Chrome tool result's call executed on, as its
+// tab context names it.
+var executedTab = regexp.MustCompile(`(?m)^- Executed on tabId: (\d+)\s*$`)
 
 // trailerTab is one tab of a tab context, one per line: the line's first
 // bullet names the tab, its title runs to the line's last `" ("`, so a

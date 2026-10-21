@@ -318,16 +318,18 @@ func TestAppGitLabRecord(t *testing.T) {
 	authorize := "https://" + gitlab + "/oauth/authorize?client_id=" + uid + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&scope=api"
 	title := "Authorize " + app + " to use your account? · GitLab"
 	for name, tc := range map[string]struct {
-		url, title, want string
+		url, title, text, want string
 	}{
-		"its authorize page":     {authorize, title, checkAllow + "beekeeper allows the click: the consent page on " + gitlab + " of the person's own GitLab application " + app},
-		"the redacted client id": {strings.ReplaceAll(authorize, uid, "REDACTED"), title, checkAllow},
-		"another application":    {strings.ReplaceAll(authorize, uid, "REDACTED"), "Authorize other-app · GitLab", checkRefuse + "Refused: " + gitlab + "'s consent page"},
-		"another client id":      {strings.ReplaceAll(authorize, uid, "other-uid"), title, checkRefuse},
-		"another callback host":  {strings.ReplaceAll(authorize, callback, "evil.example.net"), title, checkRefuse},
-		"another GitLab":         {strings.ReplaceAll(authorize, gitlab, "gitlab.example.net"), title, checkRefuse + "Refused: \"" + title + "\" is a consent page (an OAuth grant) on gitlab.example.net"},
+		"its authorize page":           {authorize, title, "", checkAllow + "beekeeper allows the click: the consent page on " + gitlab + " of the person's own GitLab application " + app},
+		"the redacted client id":       {strings.ReplaceAll(authorize, uid, "REDACTED"), title, "", checkAllow},
+		"another application":          {strings.ReplaceAll(authorize, uid, "REDACTED"), "Authorize other-app · GitLab", "", checkRefuse + "Refused: " + gitlab + "'s consent page"},
+		"another client id":            {strings.ReplaceAll(authorize, uid, "other-uid"), title, "", checkRefuse},
+		"another callback host":        {strings.ReplaceAll(authorize, callback, "evil.example.net"), title, "", checkRefuse},
+		"GitLab's title, its heading":  {strings.ReplaceAll(authorize, uid, "REDACTED"), "GitLab", "Authorize " + app + " to use your account?", checkAllow},
+		"GitLab's title, nothing read": {strings.ReplaceAll(authorize, uid, "REDACTED"), "GitLab", "", checkRefuse + "Refused: " + gitlab + "'s consent page \"GitLab\""},
+		"another GitLab":               {strings.ReplaceAll(authorize, gitlab, "gitlab.example.net"), title, "", checkRefuse + "Refused: \"" + title + "\" is a consent page (an OAuth grant) on gitlab.example.net"},
 	} {
-		if out, err := runApp(t, a, appCheck, tc.url, titleFlag, tc.title); err != nil || !strings.HasPrefix(out, tc.want) {
+		if out, err := runApp(t, a, appCheck, tc.url, titleFlag, tc.title, "--text", tc.text); err != nil || !strings.HasPrefix(out, tc.want) {
 			t.Errorf("%s: app check = %q, %v; want %q", name, out, err, tc.want)
 		}
 	}
