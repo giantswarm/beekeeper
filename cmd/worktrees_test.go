@@ -175,6 +175,37 @@ func TestTrimWorktreesRemovesTheFinishedAndKeepsWork(t *testing.T) {
 	}
 }
 
+// readOnlyT puts under dir a read-only file in a read-only directory, as
+// envtest's binaries under go/bin/k8s and Go's module cache are, and makes
+// them writable again when the test ends so its temporary directory goes.
+func readOnlyT(t *testing.T, dir string) {
+	t.Helper()
+	bin := filepath.Join(dir, "k8s", "1.37.0-linux-amd64")
+	writeT(t, filepath.Join(bin, "kube-apiserver"), "binary")
+	for _, p := range []string{filepath.Join(bin, "kube-apiserver"), bin, filepath.Dir(bin)} {
+		if err := os.Chmod(p, 0o500); err != nil { //nolint:gosec // read-only on purpose
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = worktrees.Writable(dir) })
+}
+
+func TestTrimWorktreesRemovesReadOnlyDirectories(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into read-only directories")
+	}
+	a, machine, app := worktreeApp(t)
+	readOnlyT(t, filepath.Join(app, mergedPR, "node_modules"))
+	readOnlyT(t, filepath.Join(app, "work", "node_modules"))
+	r := a.trimWorktrees(false, machine)
+	if r.err != nil || len(r.failed) > 0 {
+		t.Fatalf("run = %q, failed %+v; want no failure", r, r.failed)
+	}
+	if exists(filepath.Join(app, mergedPR)) || exists(filepath.Join(app, "work", "node_modules")) || !exists(filepath.Join(app, "work", "notes.txt")) {
+		t.Errorf("run = %q, want the finished worktree and the build output removed, the work kept", r)
+	}
+}
+
 func TestTrimWorktreesDryRunRemovesNothing(t *testing.T) {
 	a, machine, app := worktreeApp(t)
 	orphan := orphanT(t, filepath.Dir(app))

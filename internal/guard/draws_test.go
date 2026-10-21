@@ -79,6 +79,9 @@ func TestPageChecks(t *testing.T) {
 		"drawn, then another page":  {[]drawsCall{drawResult(Drawn, page), nav}, pageCheck{url: later}},
 		"another script's words":    {[]drawsCall{{chromeScript, script("'" + drawOpen + Drawn + "'"), drawOpen + Drawn, page}}, pageCheck{}},
 		"the check in a batch":      {[]drawsCall{{chromeBatch, map[string]any{actionsKey: []any{batchAction(chromeScript, script(DrawCheck))}}, drawOpen + Drawn, page}}, pageCheck{}},
+		"a screenshot captured":     {[]drawsCall{{chromeComputer, tabInput(actionScreenshot, nil), shotCaptured + " (839x521, jpeg)", page}}, pageCheck{url: page, drawn: Drawn}},
+		"a screenshot frozen":       {[]drawsCall{{chromeComputer, tabInput(actionScreenshot, nil), "Error capturing screenshot: the " + FrozenRenderer, page}}, pageCheck{url: page, drawn: NotDrawn}},
+		"a screenshot in a batch":   {[]drawsCall{{chromeBatch, map[string]any{actionsKey: []any{batchAction(chromeComputer, tabInput(actionScreenshot, nil))}}, shotCaptured, page}}, pageCheck{}},
 		"disarmed":                  {[]drawsCall{{chromeScript, script(LeaveDisarm), leaveAnswer, page}}, pageCheck{url: page, left: true}},
 		"disarmed in a batch":       {[]drawsCall{{chromeBatch, map[string]any{actionsKey: []any{batchAction(chromeScript, script(LeaveDisarm))}}, leaveAnswer, page}}, pageCheck{url: page, left: true}},
 		"disarmed, then a new page": {[]drawsCall{{chromeScript, script(LeaveDisarm), leaveAnswer, page}, nav}, pageCheck{url: later}},
@@ -115,6 +118,7 @@ func TestDrawRefusal(t *testing.T) {
 		reason   string
 	}{
 		"no draw check":                {[]drawsCall{form}, chromeComputer, click, decisionDeny, DrawCheck},
+		"a screenshot proves the draw": {[]drawsCall{form, {chromeComputer, tabInput(actionScreenshot, nil), shotCaptured, authorize}}, chromeComputer, click, decisionAllow, allowed},
 		"drawn, then the form read":    {[]drawsCall{drawResult(Drawn, authorize), form}, chromeComputer, click, decisionAllow, allowed},
 		"the form read, then drawn":    {[]drawsCall{form, drawResult(Drawn, authorize)}, chromeComputer, click, decisionAllow, allowed},
 		"Enter on a drawn page":        {[]drawsCall{drawResult(Drawn, authorize), form}, chromeComputer, enter, decisionAllow, allowed},

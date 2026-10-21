@@ -134,3 +134,39 @@ func TestDangling(t *testing.T) {
 		t.Error("a folder without a gitfile is dangling")
 	}
 }
+
+func TestRemoveAllReadOnlyAndNotThroughLinks(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into read-only directories")
+	}
+	base := t.TempDir()
+	dir, outside := filepath.Join(base, "go"), filepath.Join(base, "outside")
+	bin := filepath.Join(dir, "bin", "k8s")
+	for _, d := range []string{bin, outside} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bin, "kube-apiserver"), []byte("binary"), 0o500); err != nil { //nolint:gosec // read-only on purpose
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{bin, filepath.Dir(bin), outside} {
+		if err := os.Chmod(d, 0o500); err != nil { //nolint:gosec // read-only on purpose
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = os.Chmod(outside, 0o700) }) //nolint:gosec // the test's own directory
+
+	if err := RemoveAll(dir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s is still there: %v", dir, err)
+	}
+	if fi, err := os.Stat(outside); err != nil || fi.Mode().Perm() != 0o500 {
+		t.Errorf("the linked directory outside is %v, %v; want it untouched at 0500", fi.Mode(), err)
+	}
+}
