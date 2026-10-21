@@ -398,8 +398,14 @@ func MergeCommit(raw []byte) string {
 // the latest release and runs, and only from the release on does every new
 // run of it refuse until it is updated.
 func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.Lane) (state.Hold, bool) {
+	return BlockingFor(st, now, "", repo, pr, lane)
+}
+
+// BlockingFor is Blocking for a merge or promote session runs: a hold that
+// admits session (hold set --except-session) lets it through.
+func BlockingFor(st *state.State, now time.Time, session, repo string, pr int, lane config.Lane) (state.Hold, bool) {
 	for _, h := range st.Holds {
-		if !h.Active(now) || h.Excepts(repo, pr) || h.Tool != "" && !ToolReleased(h) || pr == 0 && h.Target == repo && h.AwaitsOwnRelease() {
+		if !h.Active(now) || h.Excepts(repo, pr) || h.Admits(session) || h.Tool != "" && !ToolReleased(h) || pr == 0 && h.Target == repo && h.AwaitsOwnRelease() {
 			continue
 		}
 		switch h.Target {
@@ -416,7 +422,7 @@ func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.L
 // keeps its turn for after the hold.
 func Unheld(st *state.State, now time.Time, lane config.Lane, present func(state.Merge) bool) func(state.Merge) bool {
 	return func(m state.Merge) bool {
-		_, held := Blocking(st, now, m.Repo, m.PR, lane)
+		_, held := BlockingFor(st, now, m.By.Name, m.Repo, m.PR, lane)
 		return !held && present(m)
 	}
 }
@@ -426,7 +432,7 @@ func Unheld(st *state.State, now time.Time, lane config.Lane, present func(state
 // pull request through (--except owner/repo#n), an order that pull request
 // goes first in. A hold without such an exception stops new merges only.
 func Preempts(st *state.State, now time.Time, m state.Merge, lane config.Lane) (state.Hold, bool) {
-	h, held := Blocking(st, now, m.Repo, m.PR, lane)
+	h, held := BlockingFor(st, now, m.By.Name, m.Repo, m.PR, lane)
 	if !held || !h.At.After(m.Started) || !strings.Contains(h.Except, "#") {
 		return state.Hold{}, false
 	}

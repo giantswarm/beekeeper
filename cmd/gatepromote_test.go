@@ -332,3 +332,40 @@ func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
 		t.Errorf("a merge said promoting: event %q, stderr %q", d, stderr)
 	}
 }
+
+// A lane hold that admits the line's promoter lets that promoter's own
+// promote through; every other session's promote and merge on the line is
+// refused (exit 77) with a gate line naming the session the hold admits.
+func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
+	noSystemd(t)
+	stubGitHub(t, github.Open, "")
+	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"dispatched"}]}'`)
+	newest := candidateA
+	stubCandidate(t, &newest)
+	hold := state.Hold{Target: merge.LanePrefix + scratchRepo, Reason: "promoting v1.2.4", By: state.Party{Name: aheadName}, At: time.Now(),
+		ExceptSession: ownerName}
+	admitted := `session "` + ownerName + `"`
+
+	a, g := promotePlace(t)
+	setHold(t, a, hold)
+	other := &gateRun{app: a, ctx: context.Background(), argv: promoteArgv(), repo: scratchRepo, lane: g.lane,
+		me: state.Party{Session: "s2", Name: aheadName}, pid: os.Getpid()}
+	var err error
+	stderr := gateStderr(t, func() { _, err = other.step() })
+	if Code(err) != ExitGateRefused || !strings.Contains(stderr, GatePrefix+"refused") || !strings.Contains(stderr, admitted) {
+		t.Errorf("another session's promote: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, ExitGateRefused, admitted)
+	}
+	promoter := a.as
+	a.as = aheadName
+	stderr = gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false) })
+	a.as = promoter
+	if Code(err) != ExitGateRefused || !strings.Contains(stderr, admitted) {
+		t.Errorf("another session's merge: exit %d (%v), stderr %q, want %d naming %s", Code(err), err, stderr, ExitGateRefused, admitted)
+	}
+	if why, err := g.step(); err != nil || why != "" {
+		t.Fatalf("the admitted promoter's promote: %q, %v", why, err)
+	}
+	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
+		t.Errorf("merged event %q", d)
+	}
+}

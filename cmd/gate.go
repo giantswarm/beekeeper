@@ -649,7 +649,7 @@ func (g *gateRun) step() (string, error) {
 	placed := g.placed
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, g.cfg.Merge.SeedTTL.Duration, proc.Alive)
-		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane); held && !placed {
+		if hold, held = merge.BlockingFor(st, g.now, g.me.Name, g.repo, g.pr, g.lane); held && !placed {
 			g.drop(st)
 			return nil, nil
 		}
@@ -1186,10 +1186,13 @@ func (g *gateRun) mine(st *state.State, phase string) int {
 }
 
 // drop removes the merge's waiting entry; a seeded place stays, without the
-// run that leaves it (its merge-child owes the outcome).
+// run that leaves it (its merge-child owes the outcome), and so does another
+// session's place a fresh run of the same pull request or promote is refused
+// next to (the session a hold admits keeps its turn).
 func (g *gateRun) drop(st *state.State) {
 	switch i := g.mine(st, state.Waiting); {
 	case i < 0:
+	case !g.placed && !st.Merges[i].By.Is(g.me):
 	case st.Merges[i].Seeded:
 		st.Merges[i].Run = ""
 	default:
