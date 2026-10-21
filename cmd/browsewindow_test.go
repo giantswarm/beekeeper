@@ -38,6 +38,11 @@ func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	return []byte("ok"), nil
 }
 
+// chromeOnMusic is a compositor with Chrome on special:music, not shown.
+func chromeOnMusic() *compositor {
+	return &compositor{window: hypr.Window{Address: "0xc", Class: "google-chrome", Workspace: hypr.Workspace{ID: -95, Name: "special:music"}}}
+}
+
 func stubCompositor(t *testing.T, c *compositor) {
 	t.Helper()
 	running, ctl := hyprRunning, chromeCtl
@@ -50,7 +55,7 @@ func stubCompositor(t *testing.T, c *compositor) {
 func TestShowChromeForTheTurn(t *testing.T) {
 	_, _ = stubApp(t)
 	plat.Machine = lockMachine{Machine: plat.Machine}
-	c := &compositor{window: hypr.Window{Address: "0xc", Class: "google-chrome", Workspace: hypr.Workspace{ID: -95, Name: "special:music"}}}
+	c := chromeOnMusic()
 	stubCompositor(t, c)
 	p := showChrome(t.Context())
 	if p.To != "2" || p.Locked != "" || p.Failed != "" || len(c.calls) != 4 {
@@ -78,7 +83,7 @@ func TestShowChromeForTheTurn(t *testing.T) {
 func TestShowChromeUnderALockedScreen(t *testing.T) {
 	_, _ = stubApp(t)
 	plat.Machine = lockMachine{Machine: plat.Machine, locker: hyprlock}
-	c := &compositor{window: hypr.Window{Address: "0xc", Class: "google-chrome", Workspace: hypr.Workspace{ID: -95, Name: "special:music"}}}
+	c := chromeOnMusic()
 	stubCompositor(t, c)
 	p := showChrome(t.Context())
 	if p.Locked != hyprlock || len(c.calls) != 0 {
@@ -105,7 +110,7 @@ func TestBrowseRefusesALockedScreen(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	c := &compositor{window: hypr.Window{Address: "0xc", Class: "google-chrome", Workspace: hypr.Workspace{ID: -95, Name: "special:music"}}}
+	c := chromeOnMusic()
 	stubCompositor(t, c)
 	plat.Machine = lockMachine{Machine: plat.Machine, locker: hyprlock}
 	err := a.browse(t.Context(), "Open the portal.", bin, "", time.Minute, "", nil, nil)
