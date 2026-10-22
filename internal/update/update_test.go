@@ -120,7 +120,7 @@ func (v *acceptingValidator) Validate(asset string, binary, bundle []byte) error
 func setup(t *testing.T, current string, src selfupdate.Source) {
 	t.Helper()
 	prevSource, prevValidator, prevExe, prevVersion := newSource, newValidator, executable, currentVersion
-	newSource = func() (selfupdate.Source, error) { return src, nil }
+	newSource = func() selfupdate.Source { return src }
 	currentVersion = func() string { return current }
 	t.Cleanup(func() {
 		newSource, newValidator, executable, currentVersion = prevSource, prevValidator, prevExe, prevVersion
