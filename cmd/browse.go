@@ -375,7 +375,8 @@ A window that is not on screen (on a workspace not shown, minimised, under
 another window) draws nothing while its tab says visible: a consent page
 there keeps its Authorize button disabled and a click does nothing. On each
 page, before its first screenshot or click, the turn runs beekeeper's draw
-check (two animation frames within 1.5s), which answers drawn or not drawn;
+check (two animation frames within 4s: a drawn window whose frame
+callbacks stall still gets about one a second), which answers drawn or not drawn;
 the hook (beekeeper hook pretooluse) refuses a click or key it would allow
 on a consent or sign-in page until a draw check at that page answered
 drawn. On a page the extension refuses scripts on, a screenshot of the tab
