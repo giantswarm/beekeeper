@@ -6,9 +6,11 @@
 // there. The surface is a headless output of its own, placed where no edge
 // touches the person's monitors: the window is drawn there and never
 // appears on the person's screen, and their monitors, workspaces and focus
-// stay as they are. Every window Chrome opens while the turn runs (a sign-in
-// pop-up, a new window) maps there too, silently and without the focus, and
-// goes back with the shared window after. It never changes Hyprland's
+// stay as they are. Every window Chrome opens while the turn runs and the
+// person does not work at the desktop (a sign-in pop-up, a new window) maps
+// there too, silently and without the focus, and goes back with the shared
+// window after; one the person opens stays on their screen. It never
+// changes Hyprland's
 // configuration files: the output's monitor, workspace and window rules are
 // set at runtime only.
 package hypr
@@ -154,10 +156,8 @@ func query(ctx context.Context, ctl Ctl, v any, args ...string) error {
 func (l layout) browser() *Window {
 	var b *Window
 	for i, w := range l.windows {
-		for _, c := range browserClasses {
-			if strings.EqualFold(w.Class, c) && (b == nil || w.FocusHistoryID < b.FocusHistoryID) {
-				b = &l.windows[i]
-			}
+		if isBrowser(w) && (b == nil || w.FocusHistoryID < b.FocusHistoryID) {
+			b = &l.windows[i]
 		}
 	}
 	return b
@@ -183,6 +183,58 @@ func (l layout) view() []Monitor {
 		}
 	}
 	return v
+}
+
+// inView says how a Chrome browser window is in the person's view, "" when
+// none is: focused, focused just before the window that has the focus now,
+// or on the workspace one of their monitors shows, a special workspace
+// shown over it or not. A window on the output is the turn's.
+func (l layout) inView() string {
+	for _, w := range l.windows {
+		if !isBrowser(w) || w.Workspace.Name == Surface {
+			continue
+		}
+		switch w.FocusHistoryID {
+		case 0:
+			return "a Chrome window has the focus"
+		case 1:
+			return "a Chrome window had the focus before the current window"
+		}
+	}
+	for _, w := range l.windows {
+		if !isBrowser(w) || w.Workspace.Name == Surface {
+			continue
+		}
+		if m := l.showing(w.Workspace); m != nil {
+			return fmt.Sprintf("a Chrome window is on workspace %s, which %s shows", w.Workspace.Name, m.Name)
+		}
+	}
+	return ""
+}
+
+// showing is the person's monitor that shows ws, a special workspace shown
+// over it or not; nil when none does.
+func (l layout) showing(ws Workspace) *Monitor {
+	for i, m := range l.monitors {
+		if m.Name != Output && (m.ActiveWorkspace.ID == ws.ID || m.SpecialWorkspace.ID != 0 && m.SpecialWorkspace.ID == ws.ID) {
+			return &l.monitors[i]
+		}
+	}
+	return nil
+}
+
+// InView says how a Chrome browser window is in the person's view, "" when
+// none is (layout.inView).
+func InView(ctx context.Context, ctl Ctl) (string, error) {
+	l, err := read(ctx, ctl)
+	if err != nil {
+		return "", err
+	}
+	return l.inView(), nil
+}
+
+func isBrowser(w Window) bool {
+	return slices.ContainsFunc(browserClasses, func(c string) bool { return strings.EqualFold(w.Class, c) })
 }
 
 // where says where the window is when the compositor does not show it, ""
@@ -234,12 +286,15 @@ type Shown struct {
 	// Opened counts the other windows Restore moved off the output: ones
 	// Chrome opened during the turn and still open after it.
 	Opened int `json:"opened,omitempty"`
+	// redirecting says the windows Chrome opens map on the output now.
+	redirecting bool
 }
 
 // Show readies the headless output for a browse turn, creating it when
 // there is none, and redirects every window a browser class maps until
-// Restore, or hold at the latest: a pop-up the turn's page opens is drawn
-// there, never on the person's screen, and takes no focus. It moves
+// Restore, Redirect off or hold at the latest: a pop-up the turn's page
+// opens is drawn there, never on the person's screen, and takes no focus.
+// It moves
 // Chrome's browser window onto the output when the compositor does not show
 // it, the focus left where it is. An output that changed the person's view
 // (their monitors' place, shown workspaces or focus) or took a numbered
@@ -281,8 +336,8 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 			return fail(err)
 		}
 	}
-	if err := run(ctx, ctl, "eval", redirectOn(hold)); err != nil {
-		return fail(fmt.Errorf("redirecting the windows Chrome opens (a Lua configuration's window rule): %w", err))
+	if err := s.Redirect(ctx, ctl, true, hold); err != nil {
+		return fail(err)
 	}
 	if where != "" {
 		if err := moveTo(w.Address, surface).run(ctx, ctl); err != nil {
@@ -291,6 +346,45 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 		s.Moved = true
 	}
 	return s, nil
+}
+
+// Redirect turns the redirect of the windows Chrome opens on, until hold at
+// the latest, or off: off while the person works at the desktop, so a
+// window they open stays on their screen. A redirect already so is left.
+func (s *Shown) Redirect(ctx context.Context, ctl Ctl, on bool, hold time.Duration) error {
+	if s == nil || s.redirecting == on {
+		return nil
+	}
+	if !on {
+		if err := run(ctx, ctl, "eval", redirectOff); err != nil {
+			return fmt.Errorf("ending the redirect of the windows Chrome opens: %w", err)
+		}
+		s.redirecting = false
+		return nil
+	}
+	if err := run(ctx, ctl, "eval", redirectOn(hold)); err != nil {
+		return fmt.Errorf("redirecting the windows Chrome opens (a Lua configuration's window rule): %w", err)
+	}
+	s.redirecting = true
+	return nil
+}
+
+// Turned says how the person turned to the shared window during the turn,
+// "" when they did not: one of their monitors shows the window's own
+// workspace, where it was moved from or is drawn on, a special workspace
+// shown over it or not.
+func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
+	if s == nil {
+		return "", nil
+	}
+	l, err := read(ctx, ctl)
+	if err != nil {
+		return "", err
+	}
+	if m := l.showing(s.Before.Workspace); m != nil {
+		return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
+	}
+	return "", nil
 }
 
 // checkOutput refuses an output that changed the person's view from
@@ -319,6 +413,7 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 		return nil
 	}
 	errs := []error{run(ctx, ctl, "eval", redirectOff)}
+	s.redirecting = false
 	l, err := read(ctx, ctl)
 	if err != nil {
 		return joinErr(append(errs, err)...)

@@ -393,8 +393,9 @@ for the turn: browse creates the headless output BEEKEEPER-BROWSE, placed
 far from every monitor with its own workspace beekeeper-browse (number 31337), moves
 the window silently onto it, and puts it back on its own workspace and
 removes the output once the turn ends. Every window Chrome opens while the
-turn runs (a sign-in pop-up, a new window), the shared window shown or not,
-maps on that output too, silently, without the focus and deaf to
+turn runs and the person's keyboards and pointers are quiet (desktop.typingQuiet;
+a sign-in pop-up, a new window), the shared window shown or not, maps on
+that output too, silently, without the focus and deaf to
 activation requests: a runtime window rule after the person's own, under a
 Lua configuration, which the turn's end turns off and a Hyprland timer
 ends at the turn's longest run should the browse be killed. Such a window
@@ -410,7 +411,22 @@ says where the window was; "window not shown:" names where it is when it
 could not be drawn there. Under a screen locker (hyprlock) the compositor draws no window at
 all: browse starts no turn and exits non-zero at once with an error that
 starts with "screen locked", names the locker and the probe to park on
-until the screen unlocks. A lock that comes after the turn started moves
+until the screen unlocks.
+
+A turn never takes the shared Chrome window from a person working at it.
+With a Chrome window in the person's view (focused, focused just before the
+current window, or on the workspace a monitor shows, a special workspace
+over it or not), browse watches their keyboards and
+pointers for ` + awaySample.String() + ` first; in use, it starts no turn and exits non-zero
+at once with an error that starts with "person at Chrome" and names the
+probe to park on, "beekeeper browse away". During the turn it keeps
+watching: while the person types or points, a window Chrome opens stays on
+their screen; once they turn to the shared window's own workspace, the
+turn yields: it stops, the window goes back at once, a cleanup turn closes
+the tabs the turn opened, "window yielded:" below the report says so, and
+the command fails with "person at Chrome" and the probe. Keyboards and
+pointers browse cannot read count as in use; desktop.typingQuiet below
+zero watches none. A lock that comes after the turn started moves
 nothing, says "screen locked:" below the report, and a page not drawn
 fails the command with "screen locked". browse never touches the lock.
 
@@ -468,7 +484,35 @@ again once the extension is connected.`,
 	c.Flags().DurationVar(&wait, "timeout", browseWait, "stop the turn and fail after this long")
 	c.Flags().StringArrayVar(&files, "file", nil, "a file the steps upload through a page's file input, shared with the turn for this run (repeatable)")
 	c.Flags().StringVar(&deploy, "allow-deploy", "", "a deploy or create click the task covers (\"<what, where>\"), allowed to the turn's auto mode for this run")
+	c.AddCommand(a.browseAwayCmd())
 	return c
+}
+
+// browseAwayCmd is the probe a browse refused for a person at Chrome parks
+// on.
+func (a *app) browseAwayCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "away",
+		Short: "Exit 0 once the person no longer works at Chrome, 3 while they do",
+		Long: `browse away answers what a browse asks before its turn: whether the
+person works at Chrome, a Chrome window in their view (focused, focused just
+before the current window, or on the workspace a monitor shows) and their keyboard or
+pointer in use within ` + awaySample.String() + `. It exits 0 when they do not, and 3
+(refused) with the reason when they do; it starts no turn and moves no
+window. It is the probe a browse refused with "person at Chrome" names,
+for a timer to park on.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := atChrome(cmd.Context(), a.cfg.Desktop.TypingQuiet.Duration); err != nil {
+				if errors.Is(err, errPersonAtChrome) {
+					return refused("%v", err)
+				}
+				return err
+			}
+			_, err := fmt.Fprintln(a.out, "away: the person does not work at Chrome")
+			return err
+		},
+	}
 }
 
 // browse runs the steps in a headless turn and prints its report and
@@ -478,6 +522,14 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	// A locked screen, and a file the steps cannot upload, are refused before
 	// anything starts.
 	if err := screenLockedErr(); err != nil {
+		return err
+	}
+	// Nor does a turn take the shared Chrome window from a person working at
+	// it; the watch follows them over the turn.
+	watchCtx, endWatch := context.WithCancel(ctx)
+	defer endWatch()
+	pres, err := atChrome(watchCtx, a.cfg.Desktop.TypingQuiet.Duration)
+	if err != nil {
 		return err
 	}
 	cwd, _ := os.Getwd()
@@ -541,8 +593,9 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		out = &blind.out
 	}
 	// turn runs one headless turn of the session under its own timeout,
-	// limit, and prints its report; a turn stopped at it is errTurnStopped.
-	turn := func(argv []string, limit time.Duration) (string, error) {
+	// limit, and prints its report; a turn stopped at it is errTurnStopped,
+	// one that yielded the window to the person errPersonAtChrome.
+	turn := func(ctx context.Context, argv []string, limit time.Duration) (string, error) {
 		if blind != nil {
 			argv = blind.shape(argv, self)
 		}
@@ -556,7 +609,9 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 			c.Stderr = &blind.out
 		}
 		stdout, err := c.Output()
-		if ctx.Err() != nil {
+		if cause := context.Cause(ctx); errors.Is(cause, errPersonAtChrome) {
+			err = cause
+		} else if ctx.Err() != nil {
 			err = fmt.Errorf("%w within %s and was stopped: a page waiting on a person (a sign-in form, a dialog) is the usual cause", errTurnStopped, limit)
 		}
 		report := strings.TrimSpace(string(stdout))
@@ -566,15 +621,20 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		return report, err
 	}
 	// The shared Chrome window is drawn off the person's screen for the
-	// turns and put back after them, a stopped browse included.
+	// turns and put back after them, a stopped browse included; the person
+	// turning to it gets it back at once, which stops the turns (yield).
 	win := showChrome(ctx, filepath.Join(a.cfg.StateDir, "browse", "window.json"), browseHold(wait))
 	defer func() { _ = win.restore(ctx) }()
+	yctx, yield := context.WithCancelCause(ctx)
+	defer yield(nil)
+	stopWatch := win.watch(watchCtx, pres, browseHold(wait), yield)
+	defer stopWatch()
 	rules := browseRules(deploy, consents, lab)
 	prompt := browsePrompt(steps, deploy, consents, lab, shared)
 	if blind != nil {
 		prompt = blindPrompt(steps, deploy, consents, lab, blind.match)
 	}
-	report, err := turn(browseArgv(id, model, prompt, self, rules, false), wait)
+	report, err := turn(yctx, browseArgv(id, model, prompt, self, rules, false), wait)
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
@@ -584,15 +644,17 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	// a fresh CLI resuming the session has a fresh Chrome connection and goes
 	// on with the steps not done, its findings read with the first turn's.
 	if err == nil && found.lost() {
-		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true), wait)
+		report, err = turn(yctx, browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true), wait)
 		found, ferr = readFindings(path)
 		found.Reconnected = true
 	}
-	// A turn stopped at its timeout with tabs of its own open is resumed once
-	// to close them: its tab group is its session's, which no other turn
-	// reaches.
-	if errors.Is(err, errTurnStopped) && len(found.Left.Reachable()) > 0 {
-		if _, cerr := turn(browseArgv(id, model, cleanupWords, self, rules, true), cleanupWait); cerr != nil {
+	// The window is the caller's again; a yielded one is back already.
+	stopWatch()
+	// A turn stopped at its timeout, or yielding the window to the person,
+	// with tabs of its own open is resumed once to close them: its tab group
+	// is its session's, which no other turn reaches.
+	if (errors.Is(err, errTurnStopped) || errors.Is(err, errPersonAtChrome)) && len(found.Left.Reachable()) > 0 {
+		if _, cerr := turn(ctx, browseArgv(id, model, cleanupWords, self, rules, true), cleanupWait); cerr != nil {
 			err = errors.Join(err, fmt.Errorf("the cleanup turn: %w", cerr))
 		}
 		found, ferr = readFindings(path)
@@ -725,7 +787,7 @@ const sharedHint = "a file the steps upload is shared with `beekeeper browse --f
 // the last check answered drawn (Drawn), and the Chrome connection: Lost are the words of each call that
 // found it gone, Recovered whether a Chrome call was answered after the last
 // of them, Reconnected whether browse's own reconnect turn ran and
-// CleanedUp whether its cleanup turn after a timeout ran and Window what it
+// CleanedUp whether its cleanup turn after a timeout or a yield ran and Window what it
 // did with the shared Chrome window, which the run sets.
 type browseFindings struct {
 	Window      placement
@@ -1013,7 +1075,10 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 	if l := f.windowsLine(); l != "" {
 		out = append(out, l)
 	}
-	if f.CleanedUp {
+	switch {
+	case f.CleanedUp && f.Window.Yielded != "":
+		out = append(out, "yielded: the turn was stopped for the person with tabs of its own open; a resumed cleanup turn closed what it reached")
+	case f.CleanedUp:
 		out = append(out, "timed out: the turn was stopped at its timeout with tabs of its own open; a resumed cleanup turn closed what it reached")
 	}
 	if open := f.Left.Open(); len(open) > 0 {

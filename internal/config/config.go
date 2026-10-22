@@ -1732,7 +1732,9 @@ type Desktop struct {
 	// idle before a claude:// link switches the desktop's window (the
 	// import of agents start, a reopen): a stray keystroke goes into the
 	// window the link opens. A negative value opens links without
-	// watching the input.
+	// watching the input. A browse turn draws the windows Chrome opens
+	// off the person's screen only while their input stays quiet this long,
+	// and watches none when it is negative.
 	TypingQuiet Duration `yaml:"typingQuiet"`
 }
 

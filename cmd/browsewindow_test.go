@@ -21,14 +21,23 @@ type compositor struct {
 	window hypr.Window
 	output bool
 	calls  []string
+	// special is the special workspace the person's monitor shows over
+	// workspace 2; redirect says the turn's window rule is on.
+	special  hypr.Workspace
+	redirect bool
+	// down says the compositor answers no query.
+	down bool
 }
 
 func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	switch args[len(args)-1] {
 	case "clients":
+		if c.down {
+			return nil, errors.New("no socket")
+		}
 		return json.Marshal([]hypr.Window{c.window})
 	case "monitors":
-		ms := []hypr.Monitor{{Name: "eDP-1", Width: 1920, Height: 1200, Focused: true, ActiveWorkspace: hypr.Workspace{ID: 2, Name: "2"}}}
+		ms := []hypr.Monitor{{Name: "eDP-1", Width: 1920, Height: 1200, Focused: true, ActiveWorkspace: hypr.Workspace{ID: 2, Name: "2"}, SpecialWorkspace: c.special}}
 		if c.output {
 			ms = append(ms, hypr.Monitor{ID: 1, Name: hypr.Output, ActiveWorkspace: hypr.Workspace{ID: hypr.SurfaceID, Name: hypr.Surface}})
 		}
@@ -39,6 +48,10 @@ func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	call := strings.Join(args, " ")
 	c.calls = append(c.calls, call)
 	switch {
+	case args[0] == "eval" && strings.Contains(call, "set_enabled(true)"):
+		c.redirect = true
+	case args[0] == "eval" && strings.Contains(call, "set_enabled(false)"):
+		c.redirect = false
 	case call == "output create headless "+hypr.Output:
 		c.output = true
 	case call == "output remove "+hypr.Output:
@@ -51,12 +64,15 @@ func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	return []byte("ok"), nil
 }
 
+// chromeClass is Chrome's browser window class.
+const chromeClass = "google-chrome"
+
 // musicWS is the special workspace Chrome starts on, not shown.
 var musicWS = hypr.Workspace{ID: -95, Name: "special:music"}
 
 // chromeOnMusic is a compositor with Chrome on special:music, not shown.
 func chromeOnMusic() *compositor {
-	return &compositor{window: hypr.Window{Address: "0xc", Class: "google-chrome", Workspace: musicWS}}
+	return &compositor{window: hypr.Window{Address: "0xc", Class: chromeClass, Workspace: musicWS}}
 }
 
 func stubCompositor(t *testing.T, c *compositor) {
@@ -202,4 +218,143 @@ func TestDrawErrNamesWhereTheWindowIs(t *testing.T) {
 	if err := f.drawErr(); err == nil || !strings.Contains(err.Error(), "the turn drew it on the off-screen output BEEKEEPER-BROWSE") || !strings.Contains(err.Error(), "on "+where) {
 		t.Errorf("drawErr = %v, want it to name where the window was and what the turn tried", err)
 	}
+}
+
+// typedAt stubs the person's input: the watch's first answer is start, its
+// later ones *last (start: no input yet); unreadable fails the watch.
+func typedAt(t *testing.T, start time.Time, last *time.Time, unreadable bool) {
+	t.Helper()
+	saved, sample, poll := desktopInput, awaySample, presencePoll
+	t.Cleanup(func() { desktopInput, awaySample, presencePoll = saved, sample, poll })
+	awaySample, presencePoll = time.Millisecond, time.Millisecond
+	*last = start
+	desktopInput = func(context.Context) (func() time.Time, error) {
+		if unreadable {
+			return nil, errors.New("permission denied")
+		}
+		first := true
+		return func() time.Time {
+			if first {
+				first = false
+				return start
+			}
+			return *last
+		}, nil
+	}
+}
+
+// A browse refuses a turn while the person works at Chrome: a Chrome window
+// in their view and their input in the sample, or unreadable input; it
+// names the probe. With Chrome out of view, or the person not typing, it
+// starts the turn.
+func TestAtChrome(t *testing.T) {
+	_, _ = stubApp(t)
+	start := time.Now()
+	focused := hypr.Window{Address: "0xc", Class: chromeClass, Workspace: hypr.Workspace{ID: 2, Name: "2"}}
+	hidden := hypr.Window{Address: "0xc", Class: chromeClass, Workspace: musicWS, FocusHistoryID: 4}
+	for name, tc := range map[string]struct {
+		window     hypr.Window
+		down       bool
+		typed      bool
+		unreadable bool
+		quiet      time.Duration
+		want       string
+	}{
+		"focused and typing":         {window: focused, typed: true, quiet: time.Minute, want: "a Chrome window has the focus and their keyboard or pointer was in use"},
+		"focused and unreadable":     {window: focused, unreadable: true, quiet: time.Minute, want: "cannot be read, which counts as their input"},
+		"shown and typing":           {window: with(focused, 4), typed: true, quiet: time.Minute, want: "a Chrome window is on workspace 2, which eDP-1 shows"},
+		"focused just before typing": {window: with(hidden, 1), typed: true, quiet: time.Minute, want: "had the focus before the current window"},
+		"focused and quiet":          {window: focused, quiet: time.Minute},
+		"compositor down and typing": {down: true, typed: true, quiet: time.Minute, want: "the compositor could not be asked where Chrome is"},
+		"hidden and typing":          {window: hidden, typed: true, quiet: time.Minute},
+		"input not watched":          {window: focused, typed: true, quiet: -time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var last time.Time
+			typedAt(t, start, &last, tc.unreadable)
+			if tc.typed {
+				last = start.Add(time.Millisecond)
+			}
+			stubCompositor(t, &compositor{window: tc.window, down: tc.down})
+			_, err := atChrome(t.Context(), tc.quiet)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("atChrome = %v, want a turn", err)
+			case tc.want != "" && (!errors.Is(err, errPersonAtChrome) || !strings.Contains(err.Error(), tc.want) ||
+				!strings.Contains(err.Error(), `--probe "beekeeper browse away"`)):
+				t.Errorf("atChrome = %v, want person at Chrome: %s, and the probe", err, tc.want)
+			}
+		})
+	}
+}
+
+// with is w with the focus history id id.
+func with(w hypr.Window, id int) hypr.Window { w.FocusHistoryID = id; return w }
+
+// Over the turn the watch turns the redirect off while the person types,
+// on again once they are quiet, and yields the window once they turn to its
+// workspace: the turn is cancelled as person at Chrome and the window is
+// back at once.
+func TestFollowYieldsTheWindow(t *testing.T) {
+	_, _ = stubApp(t)
+	lockScreen(t, "")
+	start := time.Now()
+	var last time.Time
+	typedAt(t, start, &last, false)
+	c := chromeOnMusic()
+	c.window.FocusHistoryID = 4
+	stubCompositor(t, c)
+	p := showChrome(t.Context(), filepath.Join(t.TempDir(), "window.json"), time.Hour)
+	if p.To != hypr.Output || !c.redirect {
+		t.Fatalf("placement = %+v, redirect %v", p, c.redirect)
+	}
+	pres := watchPresence(t.Context(), time.Minute)
+	var cause error
+	cancel := func(err error) { cause = err }
+
+	if p.follow(t.Context(), pres, time.Hour, cancel) || !c.redirect {
+		t.Fatalf("quiet: yielded, or redirect %v", c.redirect)
+	}
+	last = time.Now()
+	if p.follow(t.Context(), pres, time.Hour, cancel) || c.redirect || c.window.Workspace.Name != hypr.Surface {
+		t.Fatalf("typing elsewhere: redirect %v, Chrome on %+v", c.redirect, c.window.Workspace)
+	}
+	c.special = musicWS
+	if !p.follow(t.Context(), pres, time.Hour, cancel) {
+		t.Fatal("the person turned to the window's workspace and the turn did not yield")
+	}
+	if !errors.Is(cause, errPersonAtChrome) || !strings.Contains(cause.Error(), "eDP-1 shows workspace special:music") {
+		t.Errorf("cancel cause = %v", cause)
+	}
+	if c.window.Workspace != musicWS || c.output || c.redirect || !p.Restored || p.Watch != "" {
+		t.Errorf("after the yield: Chrome on %+v, output %v, redirect %v, placement %+v", c.window.Workspace, c.output, c.redirect, p)
+	}
+	if l := p.line(); !strings.Contains(l, "window yielded: during the turn eDP-1 shows workspace special:music") {
+		t.Errorf("line = %q", l)
+	}
+	n := len(c.calls)
+	if err := p.restore(t.Context()); err != nil || len(c.calls) != n {
+		t.Errorf("a restore after the yield = %v, ran %q", err, c.calls[n:])
+	}
+}
+
+// The watch runs until stop, and stop waits for it; without a placement it
+// watches nothing.
+func TestWatchStops(t *testing.T) {
+	_, _ = stubApp(t)
+	lockScreen(t, "")
+	start := time.Now()
+	var last time.Time
+	typedAt(t, start, &last, false)
+	c := chromeOnMusic()
+	stubCompositor(t, c)
+	p := showChrome(t.Context(), filepath.Join(t.TempDir(), "window.json"), time.Hour)
+	pres := watchPresence(t.Context(), time.Minute)
+	stop := p.watch(t.Context(), pres, time.Hour, func(error) {})
+	stop()
+	stop()
+	if p.Yielded != "" || c.window.Workspace.Name != hypr.Surface {
+		t.Errorf("a quiet watch yielded: %+v", p)
+	}
+	(&placement{}).watch(t.Context(), pres, time.Hour, func(error) {})()
 }
