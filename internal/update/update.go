@@ -30,13 +30,13 @@ const lookupTimeout = 15 * time.Second
 // ErrOutdated is what a check returns when a newer release exists.
 var ErrOutdated = errors.New("a newer beekeeper release is available")
 
-// Seams the tests replace: where releases come from (nil is public GitHub,
-// anonymous unless GITHUB_TOKEN is set), what a download must verify against
+// Seams the tests replace: where releases come from (public GitHub, its
+// latest release added to the list), what a download must verify against
 // (the shared cosign validator: a CircleCI build of Repository, against the
 // Sigstore public-good trust root), the file the update replaces and the
 // running version.
 var (
-	newSource      = func() selfupdate.Source { return nil }
+	newSource      = newGitHubSource
 	newValidator   = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
@@ -71,7 +71,11 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases or with go install %s@latest", res.Current, project.Source, project.Module)
 	}
 
-	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: newValidator()})
+	src, err := newSource()
+	if err != nil {
+		return res, err
+	}
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: src, Validator: newValidator()})
 	if err != nil {
 		return res, err
 	}
@@ -85,7 +89,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 	case err != nil:
 		return res, fmt.Errorf("looking up the latest release of %s (is this machine online?): %w", Repository, err)
 	case !found:
-		return res, fmt.Errorf("no release of %s carries a binary for %s/%s", Repository, runtime.GOOS, runtime.GOARCH)
+		return res, fmt.Errorf("GitHub answered no release of %s that carries a binary for %s/%s", Repository, runtime.GOOS, runtime.GOARCH)
 	}
 	res.Latest, res.Published, res.URL = "v"+rel.Version(), rel.PublishedAt, rel.URL
 	res.Newer = newer(res.Latest, res.Current)
