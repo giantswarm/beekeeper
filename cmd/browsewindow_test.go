@@ -30,7 +30,7 @@ func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	case "monitors":
 		ms := []hypr.Monitor{{Name: "eDP-1", Width: 1920, Height: 1200, Focused: true, ActiveWorkspace: hypr.Workspace{ID: 2, Name: "2"}}}
 		if c.output {
-			ms = append(ms, hypr.Monitor{ID: 1, Name: hypr.Output, ActiveWorkspace: hypr.Workspace{ID: -1337, Name: hypr.Surface}})
+			ms = append(ms, hypr.Monitor{ID: 1, Name: hypr.Output, ActiveWorkspace: hypr.Workspace{ID: hypr.SurfaceID, Name: hypr.Surface}})
 		}
 		return json.Marshal(ms)
 	case "general:layout":
@@ -44,7 +44,7 @@ func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	case call == "output remove "+hypr.Output:
 		c.output = false
 	case strings.Contains(call, `workspace = "name:`+hypr.Surface+`"`):
-		c.window.Workspace = hypr.Workspace{ID: -1337, Name: hypr.Surface}
+		c.window.Workspace = hypr.Workspace{ID: hypr.SurfaceID, Name: hypr.Surface}
 	case strings.Contains(call, `workspace = "`+musicWS.Name+`"`):
 		c.window.Workspace = musicWS
 	}

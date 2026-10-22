@@ -35,7 +35,7 @@ type fake struct {
 func (f *fake) open(w Window) {
 	w.Workspace = f.monitors[0].ActiveWorkspace
 	if f.redirect && regexp.MustCompile(browserPattern()).MatchString(w.Class) {
-		w.Workspace = Workspace{ID: -1337, Name: Surface}
+		w.Workspace = surface
 	}
 	f.windows = append(f.windows, w)
 }
@@ -68,7 +68,7 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 	case args[0] == evalCmd && strings.HasPrefix(args[1], redirectOff):
 		f.redirect = false
 	case slices.Equal(args, []string{"output", "create", "headless", Output}):
-		out := Monitor{ID: 1, Name: Output, X: -30000, Y: -30000, Width: Size[0], Height: Size[1], ActiveWorkspace: Workspace{ID: -1337, Name: Surface}}
+		out := Monitor{ID: 1, Name: Output, X: -30000, Y: -30000, Width: Size[0], Height: Size[1], ActiveWorkspace: surface}
 		if f.onCreate != nil {
 			f.onCreate(f, &out)
 		}
@@ -91,7 +91,7 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 
 // workspace is the workspace a selector names.
 func (f *fake) workspace(sel string) Workspace {
-	for _, ws := range []Workspace{ws2, music, magic, {ID: -1337, Name: Surface}} {
+	for _, ws := range []Workspace{ws2, music, magic, surface} {
 		if ws.Name == sel {
 			return ws
 		}
@@ -162,8 +162,8 @@ func TestWhere(t *testing.T) {
 			"workspace 2, under the special workspace special:magic shown over it on eDP-1"},
 		"on the shown special workspace": {layout{monitors: []Monitor{underMagic()}},
 			with(chrome, func(w *Window) { w.Workspace = magic; w.Floating = true }), ""},
-		"on the off-screen output": {layout{monitors: []Monitor{underMagic(), {ID: 1, Name: Output, ActiveWorkspace: Workspace{ID: -1337, Name: Surface}}}},
-			with(chrome, func(w *Window) { w.Workspace = Workspace{ID: -1337, Name: Surface} }), ""},
+		"on the off-screen output": {layout{monitors: []Monitor{underMagic(), {ID: 1, Name: Output, ActiveWorkspace: surface}}},
+			with(chrome, func(w *Window) { w.Workspace = surface }), ""},
 		"behind the front window of a monocle workspace": {
 			layout{monitors: []Monitor{laptop}, monocle: true, windows: []Window{chrome, with(chrome, func(w *Window) { w.Address, w.Class, w.FocusHistoryID = other, "kitty", 1 })}},
 			chrome, "workspace 2, behind its front window kitty (monocle layout)"},
@@ -220,7 +220,7 @@ func TestShowUnderASpecialWorkspace(t *testing.T) {
 	}
 }
 
-// The rules give the output its far-off place and the named workspace
+// The rules give the output its far-off place and its numbered workspace
 // before it exists, in Lua; a classic configuration takes them as
 // keywords, but has no window rule a turn could turn off again: Show
 // refuses it, the output removed and the window left where it is.
@@ -232,7 +232,8 @@ func TestShowClassicSyntax(t *testing.T) {
 	}
 	for _, want := range []string{
 		"keyword monitor BEEKEEPER-BROWSE,1280x800,-30000x-30000,1",
-		"keyword workspace name:beekeeper-browse,monitor:BEEKEEPER-BROWSE,default:true",
+		"keyword workspace name:beekeeper-browse,default:false",
+		"keyword workspace 31337,monitor:BEEKEEPER-BROWSE,default:true,defaultName:beekeeper-browse",
 		create,
 		remove,
 	} {
@@ -244,7 +245,8 @@ func TestShowClassicSyntax(t *testing.T) {
 		t.Errorf("Chrome on %+v, monitors %+v", f.windows[0].Workspace, f.monitors)
 	}
 	for _, want := range []string{`hl.monitor({ output = "BEEKEEPER-BROWSE", mode = "1280x800", position = "-30000x-30000", scale = "1" })`,
-		`hl.workspace_rule({ workspace = "name:beekeeper-browse", monitor = "BEEKEEPER-BROWSE", default = true })`} {
+		`hl.workspace_rule({ workspace = "name:beekeeper-browse", default = false })`,
+		`hl.workspace_rule({ workspace = "31337", monitor = "BEEKEEPER-BROWSE", default = true, default_name = "beekeeper-browse" })`} {
 		if !strings.Contains(f.calls[0], want) {
 			t.Errorf("eval %q lacks %q", f.calls[0], want)
 		}
@@ -339,7 +341,7 @@ func TestShowRefusesAnOutputThatChangesThePersonsView(t *testing.T) {
 // An output there already is used, not created again, and removed after:
 // it is beekeeper's by its name.
 func TestShowOnTheOutputThereAlready(t *testing.T) {
-	out := Monitor{ID: 1, Name: Output, ActiveWorkspace: Workspace{ID: -1337, Name: Surface}}
+	out := Monitor{ID: 1, Name: Output, ActiveWorkspace: surface}
 	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop, out}}
 	s, err := Show(t.Context(), f.ctl, hold)
 	if err != nil || s == nil || s.Created {
@@ -422,7 +424,7 @@ func TestRestoreMovesEveryWindowOffTheOutput(t *testing.T) {
 	if err != nil || s == nil {
 		t.Fatalf("Show = %+v, %v", s, err)
 	}
-	popup := Window{Address: "0xe", Class: chromeClass, Workspace: Workspace{ID: -1337, Name: Surface}}
+	popup := Window{Address: "0xe", Class: chromeClass, Workspace: surface}
 	f.windows = append(f.windows, popup)
 	f.calls, f.refuse = nil, []string{"address:0xe"}
 	if err := s.Restore(t.Context(), f.ctl); err == nil || !strings.Contains(err.Error(), "the output BEEKEEPER-BROWSE stays") {

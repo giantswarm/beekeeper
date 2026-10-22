@@ -42,10 +42,14 @@ func Running() bool { return os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "" }
 var browserClasses = []string{"google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "chromium-browser"}
 
 // Output is the headless output a turn draws the window on, and Surface
-// its workspace: named, so the person's workspace numbers stay theirs.
+// its workspace's name. The workspace has the number SurfaceID, far above
+// the person's: a re-created output shows the workspace with the number it
+// last showed, and a named workspace's number is the next free one below
+// -1337, which a named workspace the person creates between turns takes.
 const (
-	Output  = "BEEKEEPER-BROWSE"
-	Surface = "beekeeper-browse"
+	Output    = "BEEKEEPER-BROWSE"
+	Surface   = "beekeeper-browse"
+	SurfaceID = 31337
 )
 
 // Size is the output's mode: big enough for a page's screenshot.
@@ -72,7 +76,7 @@ func (w Workspace) selector() string {
 }
 
 // surface is the output's workspace.
-var surface = Workspace{Name: Surface}
+var surface = Workspace{ID: SurfaceID, Name: Surface}
 
 // Window is a client as hyprctl clients names it.
 type Window struct {
@@ -355,16 +359,20 @@ func (s *Shown) removeOutput(ctx context.Context, ctl Ctl) error {
 }
 
 // rules give the output its far-off place and Size, and its workspace the
-// name Surface, before it exists: in a Lua configuration once per
-// configuration load, in a classic one as keywords.
+// number SurfaceID and the name Surface, before it exists: in a Lua
+// configuration once per configuration load, in a classic one as keywords.
+// The named workspace's default rule of an earlier beekeeper, which a
+// running compositor still holds, is merged into one that is no default.
 var rules = setting{
-	lua: fmt.Sprintf(`if not beekeeper_browse then beekeeper_browse = true; `+
-		`hl.monitor({ output = %q, mode = "%dx%d", position = %q, scale = "1" }); `+
-		`hl.workspace_rule({ workspace = %q, monitor = %q, default = true }) end`,
-		Output, Size[0], Size[1], position, "name:"+Surface, Output),
+	lua: fmt.Sprintf(`if not beekeeper_browse_surface then beekeeper_browse_surface = true; `+
+		`hl.monitor({ output = %[1]q, mode = "%[2]dx%[3]d", position = %[4]q, scale = "1" }); `+
+		`hl.workspace_rule({ workspace = %[5]q, default = false }); `+
+		`hl.workspace_rule({ workspace = "%[6]d", monitor = %[1]q, default = true, default_name = %[7]q }) end`,
+		Output, Size[0], Size[1], position, "name:"+Surface, SurfaceID, Surface),
 	classic: [][2]string{
 		{"monitor", fmt.Sprintf("%s,%dx%d,%s,1", Output, Size[0], Size[1], position)},
-		{"workspace", fmt.Sprintf("name:%s,monitor:%s,default:true", Surface, Output)},
+		{"workspace", fmt.Sprintf("name:%s,default:false", Surface)},
+		{"workspace", fmt.Sprintf("%d,monitor:%s,default:true,defaultName:%s", SurfaceID, Output, Surface)},
 	},
 }
 

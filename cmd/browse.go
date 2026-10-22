@@ -390,7 +390,7 @@ Under Hyprland, a shared Chrome window the compositor does not show (on a
 workspace not shown, under a special workspace shown over its own, behind
 the front window of a monocle workspace) is drawn off the person's screen
 for the turn: browse creates the headless output BEEKEEPER-BROWSE, placed
-far from every monitor with its own named workspace beekeeper-browse, moves
+far from every monitor with its own workspace beekeeper-browse (number 31337), moves
 the window silently onto it, and puts it back on its own workspace and
 removes the output once the turn ends. Every window Chrome opens while the
 turn runs (a sign-in pop-up, a new window), the shared window shown or not,
