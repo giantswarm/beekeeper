@@ -289,7 +289,7 @@ func TestRunOfABenchmarkRunsBesideHeldSlots(t *testing.T) {
 	state, env := capped(t)
 	holdSlots(t, state)
 	self, _ := os.Executable()
-	for _, class := range []string{"benchmark", "lab"} {
+	for _, class := range []string{guard.ClassBenchmark, guard.ClassLab} {
 		_, errOut, rc := zsh(t, env, self+" run --wait 1s --class "+class+" -- true")
 		if rc != 0 || strings.Contains(errOut, "waiting up to") {
 			t.Errorf("%s with every slot held: rc %d, stderr %q", class, rc, errOut)
