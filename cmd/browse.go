@@ -163,6 +163,10 @@ const windowWords = "A click that opens a window (window.open: an identity provi
 	"once more, which now finds the session. 'none': a sign-in window opens once the page has asked its backend, so wait 2 seconds and " +
 	"read it again; still 'none', the click opened no window, go on. "
 
+// browseHold bounds the redirect of the windows Chrome opens to the
+// longest a browse's turns run: the turn, its reconnect and its cleanup.
+func browseHold(wait time.Duration) time.Duration { return 2*wait + cleanupWait + time.Minute }
+
 // errTurnStopped opens the error of a turn stopped at its timeout.
 var errTurnStopped = errors.New("the browse turn did not end")
 
@@ -387,11 +391,18 @@ the front window of a monocle workspace) is drawn off the person's screen
 for the turn: browse creates the headless output BEEKEEPER-BROWSE, placed
 far from every monitor with its own named workspace beekeeper-browse, moves
 the window silently onto it, and puts it back on its own workspace and
-removes the output once the turn ends. The person's monitors, workspace
-numbers and focus stay as they are; an output that would change them is
-removed again before the window moves. Nothing floats or appears on the
-person's screen. The output's monitor and workspace rules are set at
-runtime only; no Hyprland configuration file changes. A window a browse
+removes the output once the turn ends. Every window Chrome opens while the
+turn runs (a sign-in pop-up, a new window), the shared window shown or not,
+maps on that output too, silently, without the focus and deaf to
+activation requests: a runtime window rule after the person's own, under a
+Lua configuration, which the turn's end turns off and a Hyprland timer
+ends at the turn's longest run should the browse be killed. Such a window
+still open after the turn goes with the shared window to its workspace
+("windows opened:" below the report). The person's monitors, workspace
+numbers, layout and focus stay as they are; an output that would change
+them is removed again before the window moves. Nothing floats or appears
+on the person's screen. The output's monitor, workspace and window rules
+are set at runtime only; no Hyprland configuration file changes. A window a browse
 that died mid-turn left on the output is put back by the next browse (its
 record: <stateDir>/browse/window.json). Below the report, "window shown:"
 says where the window was; "window not shown:" names where it is when it
@@ -555,7 +566,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	}
 	// The shared Chrome window is drawn off the person's screen for the
 	// turns and put back after them, a stopped browse included.
-	win := showChrome(ctx, filepath.Join(a.cfg.StateDir, "browse", "window.json"))
+	win := showChrome(ctx, filepath.Join(a.cfg.StateDir, "browse", "window.json"), browseHold(wait))
 	defer func() { _ = win.restore(ctx) }()
 	rules := browseRules(deploy, consents, lab)
 	prompt := browsePrompt(steps, deploy, consents, lab, shared)

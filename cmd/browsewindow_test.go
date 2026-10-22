@@ -75,7 +75,7 @@ func TestShowChromeForTheTurn(t *testing.T) {
 	c := chromeOnMusic()
 	stubCompositor(t, c)
 	record := filepath.Join(t.TempDir(), "browse", "window.json")
-	p := showChrome(t.Context(), record)
+	p := showChrome(t.Context(), record, time.Hour)
 	if p.To != hypr.Output || p.Locked != "" || p.Failed != "" || c.window.Workspace.Name != hypr.Surface {
 		t.Fatalf("placement = %+v, commands %q", p, c.calls)
 	}
@@ -110,10 +110,10 @@ func TestShowChromeRecoversADiedTurn(t *testing.T) {
 	c := chromeOnMusic()
 	stubCompositor(t, c)
 	record := filepath.Join(t.TempDir(), "browse", "window.json")
-	if died := showChrome(t.Context(), record); died.To == "" {
+	if died := showChrome(t.Context(), record, time.Hour); died.To == "" {
 		t.Fatalf("placement = %+v", died)
 	}
-	p := showChrome(t.Context(), record)
+	p := showChrome(t.Context(), record, time.Hour)
 	if p.Recovered != musicWS.Name || p.Failed != "" || p.To != hypr.Output {
 		t.Fatalf("placement after a died turn = %+v, commands %q", p, c.calls)
 	}
@@ -133,7 +133,7 @@ func TestShowChromeUnderALockedScreen(t *testing.T) {
 	lockScreen(t, hyprlock)
 	c := chromeOnMusic()
 	stubCompositor(t, c)
-	p := showChrome(t.Context(), filepath.Join(t.TempDir(), "window.json"))
+	p := showChrome(t.Context(), filepath.Join(t.TempDir(), "window.json"), time.Hour)
 	if p.Locked != hyprlock || len(c.calls) != 0 {
 		t.Fatalf("placement = %+v, commands %q", p, c.calls)
 	}
@@ -192,6 +192,10 @@ func TestDrawErrNamesWhereTheWindowIs(t *testing.T) {
 	}
 	if l := (placement{}).line(); l != "" {
 		t.Errorf("line of a window found shown = %q", l)
+	}
+	if l := (placement{Opened: 1, Back: "2"}).line(); l != "windows opened: 1 window(s) Chrome opened during the turn were drawn on the off-screen output BEEKEEPER-BROWSE, "+
+		"never on the person's screen, and were still open after it: they went to the shared window's workspace 2" {
+		t.Errorf("line of a pop-up left open = %q", l)
 	}
 	where := "workspace 2, under the special workspace special:magic shown over it on eDP-1"
 	f = browseFindings{NotDrawn: 2, Window: placement{Where: where, To: hypr.Output, Restored: true}}
