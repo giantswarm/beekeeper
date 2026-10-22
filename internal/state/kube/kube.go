@@ -716,9 +716,7 @@ func (snap *snapshot) state() *state.State {
 		st.NextNote = max(st.NextNote, n.Spec.ID)
 	}
 	for _, k := range sortedKeys(snap.roster) {
-		r := snap.roster[k]
-		st.Agents = append(st.Agents, state.Agent{Party: party(r.Spec.Party), Registered: r.Spec.Registered.Time,
-			Task: r.Status.Task, IdleSince: timeOf(r.Status.IdleSince), Done: r.Status.State == "ended", Conversation: r.Status.Conversation})
+		st.Agents = append(st.Agents, agentOf(snap.roster[k]))
 	}
 	canonical(st)
 	return st
@@ -856,7 +854,8 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		if _, dup := want.roster[k]; dup {
 			return nil, fmt.Errorf("two agents %s on %s", a.Name, a.Host)
 		}
-		if cur, ok := snap.roster[k]; ok {
+		cur, ok := snap.roster[k]
+		if ok {
 			r = cur.DeepCopy()
 		}
 		r.Spec.Address, r.Spec.Party, r.Spec.Registered = "local:"+a.Host+"/"+a.Name, apiParty(a.Party), metav1.Time{Time: a.Registered}
@@ -868,6 +867,11 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			r.Status.State = "busy"
 		default:
 			r.Status.State = "idle"
+		}
+		if ok && equal(agentOf(cur), agentOf(r)) {
+			// The agent is unchanged: an entry whose status a concurrent
+			// create has not written yet stays the creator's to write.
+			r = cur
 		}
 		want.roster[k] = r
 	}
@@ -1142,6 +1146,12 @@ func objOrNil[T any, P interface {
 }
 
 // equal compares as the API server stores: JSON, times to the second.
+// agentOf is the roster entry's agent as the state document carries it.
+func agentOf(r *v1alpha1.RosterEntry) state.Agent {
+	return state.Agent{Party: party(r.Spec.Party), Registered: r.Spec.Registered.Time,
+		Task: r.Status.Task, IdleSince: timeOf(r.Status.IdleSince), Done: r.Status.State == "ended", Conversation: r.Status.Conversation}
+}
+
 func equal(a, b any) bool {
 	ra, _ := json.Marshal(a)
 	rb, _ := json.Marshal(b)
