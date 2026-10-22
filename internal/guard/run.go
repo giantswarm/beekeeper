@@ -374,7 +374,7 @@ func Run(o Options, argv []string) int {
 	shared := lock == nil && slot > 0
 	switch {
 	case o.slotless():
-		if !waitForMemory(o, needKiB, logf) {
+		if !waitForMemory(o, needKiB, argv, logf) {
 			return ExitBusy
 		}
 	case slot == 0:
@@ -435,8 +435,9 @@ func Run(o Options, argv []string) int {
 
 // waitForMemory waits, within o.Wait, until MemAvailable covers the cap of a
 // run that takes no slot: one line when the wait starts, one when it ends.
-// It reports whether the memory came.
-func waitForMemory(o Options, needKiB int64, logf func(string, ...any)) bool {
+// It reports whether the memory came; when it did not, the log names the
+// command as not run.
+func waitForMemory(o Options, needKiB int64, argv []string, logf func(string, ...any)) bool {
 	deadline := time.Now().Add(o.Wait)
 	t0 := time.Now()
 	waited := false
@@ -449,6 +450,7 @@ func waitForMemory(o Options, needKiB int64, logf func(string, ...any)) bool {
 		now := time.Now()
 		if !now.Before(deadline) {
 			logf("gave up after %s waiting for %s", o.waitText(), reason)
+			logf("not run: %s — the machine is short of memory; try again later — do not poll", CommandHead(argv))
 			return false
 		}
 		if !waited {
@@ -492,7 +494,7 @@ func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool)
 // until MemAvailable covers the cap, both within o.Wait: one line when the
 // wait starts, one when it ends. A slot the session holds, before or during
 // the wait, is shared at once: the slot without a lock. No slot within the
-// wait: 0.
+// wait: 0, and the log names the command as not run.
 func waitForSlot(o Options, needKiB int64, session string, argv []string, logf func(string, ...any)) (*flock.Flock, int) {
 	deadline := time.Now().Add(o.Wait)
 	t0 := time.Now()
@@ -534,10 +536,11 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 		now := time.Now()
 		if !now.Before(deadline) {
 			logf("gave up after %s waiting for %s", o.waitText(), reason)
+			notRun := fmt.Sprintf("not run: %s — the machine is busy", CommandHead(argv))
 			if o.Background {
-				logf("the machine is busy; try again later — do not poll")
+				logf("%s; try again later — do not poll", notRun)
 			} else {
-				logf("the machine is busy; run this command with run_in_background (the wait is then %s) or try again later — do not poll", BackgroundWait)
+				logf("%s; run this command with run_in_background (the wait is then %s) or try again later — do not poll", notRun, BackgroundWait)
 			}
 			if lock != nil {
 				_ = os.Remove(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder"))

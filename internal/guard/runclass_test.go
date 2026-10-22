@@ -84,7 +84,8 @@ func TestRunOfASlotlessClassWaitsForItsMemory(t *testing.T) {
 	if rc := Run(o, trueCmd); rc != ExitBusy {
 		t.Fatalf("exit %d, want %d", rc, ExitBusy)
 	}
-	if !strings.Contains(stderr.String(), "gave up after 0s waiting for memory: 1 MiB available, the benchmark run's cap needs 8192") || len(f.ran) != 0 {
+	if !strings.Contains(stderr.String(), "gave up after 0s waiting for memory: 1 MiB available, the benchmark run's cap needs 8192") ||
+		!strings.Contains(stderr.String(), "not run: true") || len(f.ran) != 0 {
 		t.Errorf("ran %v, stderr:\n%s", f.ran, stderr.String())
 	}
 }
