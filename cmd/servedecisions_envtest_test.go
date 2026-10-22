@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,6 +139,28 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		return int(id)
 	}
 	ask := func(forWho, due string) int { return askText(museLane, forWho, due) }
+	// heard is what the filing agent was told since the last call, through
+	// its person's mailbox, each acked.
+	heard := func() []string {
+		t.Helper()
+		msgs, _ := e.expect(t, ana, "receive_messages", map[string]any{}, false, "")["messages"].([]any)
+		var lines []string
+		var ids []any
+		for _, m := range msgs {
+			d, _ := m.(map[string]any)
+			raw, _ := json.Marshal(d["envelope"])
+			var env mailEnvelope
+			if err := json.Unmarshal(raw, &env); err != nil || env.To != localPrefix+lab+"/"+anaAgent || env.From.Person != serveParty.Name {
+				t.Fatalf("delivery %+v: %v", d, err)
+			}
+			lines = append(lines, env.Message.text())
+			ids = append(ids, d["id"])
+		}
+		if len(ids) > 0 {
+			e.expect(t, ana, "ack_messages", map[string]any{paramIDs: ids}, false, "")
+		}
+		return lines
+	}
 
 	// A person's decision: posted as a direct message, answered by a click.
 	n := ask("bo", "3h")
@@ -167,6 +190,9 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	if len(f.comments) != 0 {
 		t.Fatalf("posted on GitHub: %q", f.comments)
 	}
+	if got := heard(); len(got) != 1 || got[0] != fmt.Sprintf("NOTE ANSWERED #%d by bo: own — until Friday (on %s)", n, privateThread) {
+		t.Fatalf("the filer heard %q", got)
+	}
 
 	// A team's decision: posted to its channel, any member answers.
 	n = ask("team:"+ourTeam, "3h")
@@ -176,20 +202,32 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	}
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramText: portalLane}, true, "only its addressee")
 	e.expect(t, kim, "note_answer", map[string]any{paramNote: n, paramText: "portal, after the release"}, false, "answered and closed")
+	if got := heard(); len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprintf("NOTE ANSWERED #%d by ", n)) || !strings.Contains(got[0], ": portal, after the release") {
+		t.Fatalf("the filer heard %q", got)
+	}
 
 	// Withdrawn by its filer; two defaulted at their due time in one
 	// update, then the first answered.
 	n = ask("bo", "3h")
 	e.expect(t, bo, "note_done", map[string]any{paramNote: n}, true, "only that person")
 	e.expect(t, ana, "note_done", map[string]any{paramNote: n}, false, "done")
+	if got := heard(); len(got) != 0 {
+		t.Fatalf("the filer heard of its own withdrawal: %q", got)
+	}
 	n = ask("bo", "1h")
-	askText(whichLane, "bo", "1h") // the same question would fold into n
+	n2 := askText(whichLane, "bo", "1h") // the same question would fold into n
 	if err := e.srv.defaultDue(context.Background(), time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
+	}
+	if got := heard(); len(got) != 2 || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n, ownLane)) || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n2, ownLane)) {
+		t.Fatalf("the filer heard %q", got)
 	}
 	// An answer after the default replaces it; a second one finds it closed.
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 1}, false, "the answer replaces")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 2}, true, "not open")
+	if got := heard(); len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprintf("NOTE ANSWERED #%d by bo: portal (replaces the default applied: %s)", n, ownLane)) {
+		t.Fatalf("the filer heard %q", got)
+	}
 	if _, closed := gw.seen(); len(closed) != 6 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d5 defaulted: "+ownLane || closed[5] != "d4 answered: portal" {
 		t.Fatalf("closed %q", closed)
 	}

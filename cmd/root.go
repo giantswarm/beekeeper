@@ -115,8 +115,12 @@ type app struct {
 	// zone reads the machine's time zone; nil is machine.Zone.
 	zone func() (*time.Location, error)
 	// central is an app of beekeeper serve: its notes' filers run on other
-	// machines and learn of an outcome from its feed.
+	// machines and learn of an outcome from their person's mailbox.
 	central bool
+	// mailFiler queues a line for a note's filer in its person's mailbox,
+	// addressed to the filing agent (a central app's tellFiler); nil tells
+	// nobody.
+	mailFiler func(ctx context.Context, n *state.Note, line string) error
 	// centralClient calls the central instance (hub); nil until first used.
 	centralClient *central.Client
 	// guideDues are the guide's relay dues its guide watch said; nil in a

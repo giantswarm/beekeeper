@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
+	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 )
@@ -291,6 +293,37 @@ func (s *server) defaultDue(ctx context.Context, now time.Time) error {
 	for i := range due {
 		s.log.Info("default", "note", due[i].ID, "for", due[i].For, "default", due[i].Default)
 		s.closeDecision(ctx, &due[i], outcomeDefaulted, due[i].Default)
+		if err := s.mailFiler(ctx, &due[i], defaultedLine(&due[i])); err != nil {
+			s.log.Error("default", "note", due[i].ID, "filer", due[i].By.Name, "host", due[i].By.Host, "detail", "telling the filer: "+err.Error())
+		}
 	}
 	return nil
+}
+
+// mailFiler queues line in the mailbox of the person whose agent filed n,
+// addressed to that agent: its machine's watch delivers it to the filing
+// session. A note no machine's agent filed has nobody to tell. The message
+// id is the note's and the line's: a line said twice is queued once.
+func (s *server) mailFiler(ctx context.Context, n *state.Note, line string) error {
+	if n.By.Person == "" || n.By.Host == "" || line == "" {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(n.By.Team + "/" + strconv.Itoa(n.ID) + "/" + line))
+	id := fmt.Sprintf("note-%d-%x", n.ID, sum[:6])
+	var env struct {
+		To   string `json:"to"`
+		From struct {
+			Person string `json:"person"`
+		} `json:"from"`
+		Message a2aMessage `json:"message"`
+	}
+	env.To = agentAddress(state.Agent{Party: n.By})
+	env.From.Person = serveParty.Name
+	env.Message = a2aMessage{MessageID: id, Role: a2aRoleAgent, Parts: []a2aPart{{Kind: a2aKindText, Text: line}}}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	_, err = s.mail.Send(ctx, mailbox.Message{Mailbox: n.By.Person, Sender: serveParty.Name, ID: id, Envelope: raw}, s.now())
+	return err
 }
