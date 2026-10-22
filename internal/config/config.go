@@ -1748,6 +1748,10 @@ type Memcap struct {
 	// (100 each): the runs' share of the cores while the desktop wants
 	// them too (default DefaultMemcapCPUWeight).
 	CPUWeight int `yaml:"cpuWeight"`
+	// HoldBound is how long a run may hold a build slot before watch names
+	// it and its holder (default 30m): a build longer than that is a
+	// benchmark or a lab proof, which runs with --class and takes no slot.
+	HoldBound Duration `yaml:"holdBound"`
 }
 
 // Duration is a time.Duration written as "30s", "10m" in YAML.
@@ -2040,6 +2044,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
 	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
+	setDur(&c.Memcap.HoldBound, 30*time.Minute)
 	setInt(&c.Capacity.Floor, 5)
 	setInt(&c.Capacity.Ceiling, 10)
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)

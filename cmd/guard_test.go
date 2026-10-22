@@ -269,7 +269,7 @@ func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 	holdSlots(t, state)
 	self, _ := os.Executable()
 	_, errOut, rc := zsh(t, env, self+" run --wait 1s -- true")
-	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: {\"pid\":1,\"cmd\":\"go test holder-2\"}") ||
+	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: pid 1: go test holder-2\n") ||
 		!strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (--wait) waiting for") ||
 		!strings.Contains(errOut, guard.LogPrefix+"not run: true — the machine is busy") ||
 		!strings.Contains(errOut, "run_in_background (the wait is then 60m)") {
@@ -280,6 +280,23 @@ func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 		!strings.Contains(errOut, guard.LogPrefix+"not run: true — the machine is busy") ||
 		strings.Contains(errOut, "run_in_background") {
 		t.Errorf("background: rc %d, stderr %q", rc, errOut)
+	}
+}
+
+// A benchmark or a lab proof takes no build slot: with every slot held it
+// runs at once, beside them; an unknown class is a usage error.
+func TestRunOfABenchmarkRunsBesideHeldSlots(t *testing.T) {
+	state, env := capped(t)
+	holdSlots(t, state)
+	self, _ := os.Executable()
+	for _, class := range []string{guard.ClassBenchmark, guard.ClassLab} {
+		_, errOut, rc := zsh(t, env, self+" run --wait 1s --class "+class+" -- true")
+		if rc != 0 || strings.Contains(errOut, "waiting up to") {
+			t.Errorf("%s with every slot held: rc %d, stderr %q", class, rc, errOut)
+		}
+	}
+	if _, errOut, rc := zsh(t, env, self+" run --class long -- true"); rc == 0 || !strings.Contains(errOut, "build, benchmark, lab") {
+		t.Errorf("an unknown class: rc %d, stderr %q", rc, errOut)
 	}
 }
 

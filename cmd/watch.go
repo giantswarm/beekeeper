@@ -58,7 +58,10 @@ last one, grouped by whose limit they hit; a cap kill whose scope no
 run.start names says its cap is unknown. A kill in a test run's scope
 (memcap-test-…, MEMCAP_TEST=1) is one quiet "test kill" line, never a
 KERNEL OOM. Sessions that start, end or
-restart are reported, and so is a lease whose holder is gone. A session
+restart are reported, and so is a lease whose holder is gone. A run
+holding a build slot past memcap.holdBound (30m) is one SLOT HELD LONG
+line naming the slot, its holder and since when, and one ENDED line once
+the slot is free. A session
 over a threshold in metrics.runaway (GitHub calls in the last hour, the
 same failing tool call repeating in it, its context's fill) is one RUNAWAY
 line per figure, once per watch. A lane whose first arrived merge has
@@ -1356,6 +1359,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.owedOutcomes(ctx)
 	w.pollToolWindow(ctx, watchParty)
 	w.stalls()
+	w.slotHolds()
 	w.unbrokered()
 	w.vaultWaits()
 	w.sink(ctx)
@@ -2246,6 +2250,28 @@ func (w *watcher) runaways(sessions []*claude.Session, t *proc.Table) {
 			}
 		}
 	}
+}
+
+// slotHolds says each build slot a run has held longer than
+// memcap.holdBound: one SLOT HELD LONG line naming the slot, its holder and
+// the command when it starts, one ENDED line when the slot is free again.
+func (w *watcher) slotHolds() {
+	bound := w.cfg.Memcap.HoldBound.Duration
+	if bound <= 0 {
+		return
+	}
+	found := map[string]bool{}
+	for _, s := range machine.ReadSlots(w.slotView()) {
+		h, ok := guard.ParseHolder(s.Holder)
+		if s.Free || !ok || h.Since.IsZero() || w.now.Sub(h.Since) < bound {
+			continue
+		}
+		key := fmt.Sprintf("slothold:%d:%d:%s", s.N, h.PID, h.Since.UTC().Format(time.RFC3339))
+		found[key] = true
+		w.emit(key, "SLOT HELD LONG: slot %d past memcap.holdBound (%s), held by %s — a benchmark or a lab proof runs with beekeeper run --class benchmark|lab, which takes no slot",
+			s.N, dur(bound), guard.HolderText(s.Holder, w.now))
+	}
+	w.clearMissing("slothold:", found)
 }
 
 func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {

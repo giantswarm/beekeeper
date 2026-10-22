@@ -64,9 +64,9 @@ func (a *app) slotView() (dir string, n int) {
 }
 
 func (a *app) runCmd() *cobra.Command {
-	var maxFlag, swapFlag, waitFlag string
+	var maxFlag, swapFlag, waitFlag, classFlag string
 	c := &cobra.Command{
-		Use:   "run [--max SIZE] [--wait DURATION] -- command [args...]",
+		Use:   "run [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
 		Short: "Run a build, test or lint command in a build slot under a memory cap",
 		Long: `run takes one of the machine's build slots and runs the command in a
 transient systemd user scope in the slot's slice under memcap.slice, both
@@ -83,12 +83,23 @@ kube-apiserver), run stops the scope before it releases the slot and names
 them; a scope left that way would keep the slot busy for every other run.
 Bound the command's parallelism rather than raising --max.
 
+--class names what kind of run it is. A build (the default: a build, test
+or lint) takes a build slot. A benchmark and a lab proof (lab) are long by
+design and wait on their model or their lab, not on the cores: they take
+no slot, so the slots stay with the builds, which run beside them. Such a
+run waits up to --wait only for MemAvailable to cover its cap, then runs in
+its own scope under memcap.slice with that cap: memory stays the bound, and
+a benchmark's model takes its budget with lease claim model-server --gib
+as before. A run that declares no class and runs agentlab without a build
+is a lab run.
+
 When every slot is held, or MemAvailable is below the cap, run waits up to
 --wait in the build slot queue it shares with agents start --builds: a
 ticket per waiter under <slotDir>/queue/, the slots taken first in first
 out (the memcap wrapper takes none), one line when the wait starts and one
 when it ends. A wait that runs
-out exits 75, states the wait it applied and lists the holders: run the
+out exits 75, states the wait it applied and names each slot's holder (its
+session, its process, since when and for how long, its command): run the
 command in the background instead, never poll. The wait is --wait, else
 MEMCAP_WAIT, else 8m, or 60m in a background Bash call: the PreToolUse hook
 exports MEMCAP_BACKGROUND=1 into every background call, so a run reached
@@ -174,6 +185,12 @@ machine's files stay untouched.`,
 					return usageErr("%v", err)
 				}
 			}
+			if o.Class, err = guard.ParseClass(classFlag); err != nil {
+				return usageErr("%v", err)
+			}
+			if !f.Changed("class") {
+				o.Class = guard.DefaultClass(args)
+			}
 			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {
 				return &exitError{code: rc}
@@ -184,6 +201,7 @@ machine's files stay untouched.`,
 	c.Flags().SetInterspersed(false)
 	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
+	c.Flags().StringVar(&classFlag, "class", "", "the run's class: build takes a build slot, benchmark and lab take none (default build, lab for agentlab)")
 	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT, else 8m, 60m in a background call)")
 	return c
 }
