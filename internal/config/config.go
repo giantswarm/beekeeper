@@ -422,6 +422,11 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
+	// WorkScope offers only the work scope: an issue under an epic of the
+	// priority list, an order (an item of a step without WorkScope) and an
+	// open recorded blocker of either; anything else is skipped as "not in
+	// a priority epic".
+	WorkScope bool `yaml:"workScope"`
 }
 
 // Hooks configures where beekeeper's Claude Code hooks act.

@@ -81,7 +81,11 @@ first: the candidates are ordered by the rank of their epic, an issue's own
 or that of its nearest ranked ancestor through the sub-issue relation, the
 unranked after the ranked, each rank in the order above; the pick prints the
 rank it applied ("priority 2 of epic <owner/repo#n>", --json priority and
-priorityOf). A plan is
+priorityOf). A step with workScope offers only the work scope: an issue
+under an epic of the priority list, an order (an item a step without
+workScope offers) and an open recorded blocker of either; an item under an
+unranked epic or under none is skipped as "not in a priority epic", not
+ordered last. A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
@@ -123,7 +127,7 @@ the skipped items' count by kind: served (a session's record, a busy
 agent's task, a running session's work), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
 (the epic gate holds it), unknown (GitHub answered its board fields or an
-epic's sub-issues with an error) and order (a rule of board.order turns it
+epic's sub-issues with an error), scope (outside the work scope) and order (a rule of board.order turns it
 away: an old Backlog item, one in Inbox, one without recorded blockers), and
 each epic in planning or past its go with its plan's URL, state and head,
 for one past its go the head its go comment implemented and how the plan
@@ -184,6 +188,7 @@ the whole walk.`,
 			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
 			board.ByPriority(cands, snap.Priorities.Ranks(), snap.Parent)
+			snap.Scope(cands)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -492,6 +497,7 @@ const (
 	kindPlanning = "planning"
 	kindUnknown  = "unknown"
 	kindOrder    = "order"
+	kindScope    = "scope"
 )
 
 // skipKind names the kind of a skip reason: who holds the item, or what
@@ -512,6 +518,8 @@ func skipKind(reason string) string {
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
 		return kindUnknown
+	case reason == board.OutOfScope:
+		return kindScope
 	}
 	return kindOrder
 }
