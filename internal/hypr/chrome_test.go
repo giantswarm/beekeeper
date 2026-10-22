@@ -496,17 +496,20 @@ func TestInView(t *testing.T) {
 	onMusic := with(chrome, func(w *Window) { w.Workspace = music })
 	for name, tc := range map[string]struct {
 		windows []Window
+		monitor Monitor
 		want    string
 	}{
-		"focused":                   {[]Window{with(chrome, func(w *Window) { w.FocusHistoryID = 0 })}, "a Chrome window has the focus"},
-		"focused just before":       {[]Window{with(onMusic, func(w *Window) { w.FocusHistoryID = 1 })}, "a Chrome window had the focus before the current window"},
-		"shown":                     {[]Window{chrome}, "a Chrome window is shown on workspace 2"},
-		"hidden":                    {[]Window{onMusic}, ""},
-		"a web app's window":        {[]Window{with(chrome, func(w *Window) { w.Class, w.FocusHistoryID = "chrome-meet-Default", 0 })}, ""},
-		"the turn's, on the output": {[]Window{with(chrome, func(w *Window) { w.Workspace, w.FocusHistoryID = surface, 0 })}, ""},
+		"focused":                   {[]Window{with(onMusic, func(w *Window) { w.FocusHistoryID = 0 })}, laptop, "a Chrome window has the focus"},
+		"focused just before":       {[]Window{with(onMusic, func(w *Window) { w.FocusHistoryID = 1 })}, laptop, "a Chrome window had the focus before the current window"},
+		"shown":                     {[]Window{chrome}, laptop, "a Chrome window is on workspace 2, which eDP-1 shows"},
+		"under a special workspace": {[]Window{chrome}, underMagic(), "a Chrome window is on workspace 2, which eDP-1 shows"},
+		"on the special workspace":  {[]Window{with(chrome, func(w *Window) { w.Workspace = magic })}, underMagic(), "a Chrome window is on workspace special:magic, which eDP-1 shows"},
+		"hidden":                    {[]Window{onMusic}, laptop, ""},
+		"a web app's window":        {[]Window{with(onMusic, func(w *Window) { w.Class, w.FocusHistoryID = "chrome-meet.google.com__-Default", 0 })}, laptop, ""},
+		"the turn's, on the output": {[]Window{with(chrome, func(w *Window) { w.Workspace, w.FocusHistoryID = surface, 0 })}, laptop, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			l := layout{windows: tc.windows, monitors: []Monitor{laptop, {ID: 1, Name: Output, ActiveWorkspace: surface}}}
+			l := layout{windows: tc.windows, monitors: []Monitor{tc.monitor, {ID: 1, Name: Output, ActiveWorkspace: surface}}}
 			if got := l.inView(); got != tc.want {
 				t.Errorf("inView = %q, want %q", got, tc.want)
 			}
@@ -566,6 +569,10 @@ func TestTurned(t *testing.T) {
 	f.monitors[0].SpecialWorkspace = music
 	if got, err := s.Turned(t.Context(), f.ctl); err != nil || got != "eDP-1 shows workspace special:music, the shared Chrome window's" {
 		t.Errorf("Turned = %q, %v", got, err)
+	}
+	f.monitors[0].SpecialWorkspace, f.monitors[0].ActiveWorkspace = Workspace{}, ws2
+	if got, err := s.Turned(t.Context(), f.ctl); err != nil || got != "" {
+		t.Errorf("Turned on workspace 2 = %q, %v; want not turned", got, err)
 	}
 	if got, err := (*Shown)(nil).Turned(t.Context(), f.ctl); err != nil || got != "" {
 		t.Errorf("Turned of no placement = %q, %v", got, err)

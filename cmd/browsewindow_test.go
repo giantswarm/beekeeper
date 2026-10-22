@@ -25,11 +25,16 @@ type compositor struct {
 	// workspace 2; redirect says the turn's window rule is on.
 	special  hypr.Workspace
 	redirect bool
+	// down says the compositor answers no query.
+	down bool
 }
 
 func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	switch args[len(args)-1] {
 	case "clients":
+		if c.down {
+			return nil, errors.New("no socket")
+		}
 		return json.Marshal([]hypr.Window{c.window})
 	case "monitors":
 		ms := []hypr.Monitor{{Name: "eDP-1", Width: 1920, Height: 1200, Focused: true, ActiveWorkspace: hypr.Workspace{ID: 2, Name: "2"}, SpecialWorkspace: c.special}}
@@ -249,6 +254,7 @@ func TestAtChrome(t *testing.T) {
 	hidden := hypr.Window{Address: "0xc", Class: chromeClass, Workspace: musicWS, FocusHistoryID: 4}
 	for name, tc := range map[string]struct {
 		window     hypr.Window
+		down       bool
 		typed      bool
 		unreadable bool
 		quiet      time.Duration
@@ -256,9 +262,10 @@ func TestAtChrome(t *testing.T) {
 	}{
 		"focused and typing":         {window: focused, typed: true, quiet: time.Minute, want: "a Chrome window has the focus and their keyboard or pointer was in use"},
 		"focused and unreadable":     {window: focused, unreadable: true, quiet: time.Minute, want: "cannot be read, which counts as their input"},
-		"shown and typing":           {window: with(focused, 4), typed: true, quiet: time.Minute, want: "a Chrome window is shown on workspace 2"},
+		"shown and typing":           {window: with(focused, 4), typed: true, quiet: time.Minute, want: "a Chrome window is on workspace 2, which eDP-1 shows"},
 		"focused just before typing": {window: with(hidden, 1), typed: true, quiet: time.Minute, want: "had the focus before the current window"},
 		"focused and quiet":          {window: focused, quiet: time.Minute},
+		"compositor down and typing": {down: true, typed: true, quiet: time.Minute, want: "the compositor could not be asked where Chrome is"},
 		"hidden and typing":          {window: hidden, typed: true, quiet: time.Minute},
 		"input not watched":          {window: focused, typed: true, quiet: -time.Second},
 	} {
@@ -268,7 +275,7 @@ func TestAtChrome(t *testing.T) {
 			if tc.typed {
 				last = start.Add(time.Millisecond)
 			}
-			stubCompositor(t, &compositor{window: tc.window})
+			stubCompositor(t, &compositor{window: tc.window, down: tc.down})
 			_, err := atChrome(t.Context(), tc.quiet)
 			switch {
 			case tc.want == "" && err != nil:

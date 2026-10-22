@@ -163,7 +163,7 @@ func personAtChromeErr(why string) error {
 
 // atChrome watches the person's input from now until ctx ends and refuses a
 // turn while they work at Chrome: a Chrome window in their view (focused,
-// focused just before, or shown) and their input within awaySample. With no
+// focused just before, or on a workspace a monitor shows) and their input within awaySample. With no
 // Chrome window in view it starts the turn without waiting. Not under
 // Hyprland, it watches nothing and refuses nothing.
 func atChrome(ctx context.Context, quiet time.Duration) (presence, error) {
@@ -177,8 +177,11 @@ func atChrome(ctx context.Context, quiet time.Duration) (presence, error) {
 	vctx, cancel := context.WithTimeout(ctx, windowWait)
 	why, err := hypr.InView(vctx, chromeCtl)
 	cancel()
-	if err != nil || why == "" {
-		// A compositor that cannot be asked fails the placement, which says so.
+	if err != nil {
+		// A compositor that cannot be asked counts as Chrome in view.
+		why = fmt.Sprintf("the compositor could not be asked where Chrome is (%v)", err)
+	}
+	if why == "" {
 		return p, nil
 	}
 	if p.last != nil {

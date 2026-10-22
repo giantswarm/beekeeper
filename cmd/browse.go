@@ -415,7 +415,8 @@ until the screen unlocks.
 
 A turn never takes the shared Chrome window from a person working at it.
 With a Chrome window in the person's view (focused, focused just before the
-current window, or shown on a monitor), browse watches their keyboards and
+current window, or on the workspace a monitor shows, a special workspace
+over it or not), browse watches their keyboards and
 pointers for ` + awaySample.String() + ` first; in use, it starts no turn and exits non-zero
 at once with an error that starts with "person at Chrome" and names the
 probe to park on, "beekeeper browse away". During the turn it keeps
@@ -495,7 +496,7 @@ func (a *app) browseAwayCmd() *cobra.Command {
 		Short: "Exit 0 once the person no longer works at Chrome, 3 while they do",
 		Long: `browse away answers what a browse asks before its turn: whether the
 person works at Chrome, a Chrome window in their view (focused, focused just
-before the current window, or shown on a monitor) and their keyboard or
+before the current window, or on the workspace a monitor shows) and their keyboard or
 pointer in use within ` + awaySample.String() + `. It exits 0 when they do not, and 3
 (refused) with the reason when they do; it starts no turn and moves no
 window. It is the probe a browse refused with "person at Chrome" names,

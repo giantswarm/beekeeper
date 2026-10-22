@@ -187,7 +187,8 @@ func (l layout) view() []Monitor {
 
 // inView says how a Chrome browser window is in the person's view, "" when
 // none is: focused, focused just before the window that has the focus now,
-// or shown on one of their monitors. A window on the output is the turn's.
+// or on the workspace one of their monitors shows, a special workspace
+// shown over it or not. A window on the output is the turn's.
 func (l layout) inView() string {
 	for _, w := range l.windows {
 		if !isBrowser(w) || w.Workspace.Name == Surface {
@@ -201,11 +202,25 @@ func (l layout) inView() string {
 		}
 	}
 	for _, w := range l.windows {
-		if isBrowser(w) && w.Workspace.Name != Surface && l.where(w) == "" {
-			return "a Chrome window is shown on workspace " + w.Workspace.Name
+		if !isBrowser(w) || w.Workspace.Name == Surface {
+			continue
+		}
+		if m := l.showing(w.Workspace); m != nil {
+			return fmt.Sprintf("a Chrome window is on workspace %s, which %s shows", w.Workspace.Name, m.Name)
 		}
 	}
 	return ""
+}
+
+// showing is the person's monitor that shows ws, a special workspace shown
+// over it or not; nil when none does.
+func (l layout) showing(ws Workspace) *Monitor {
+	for i, m := range l.monitors {
+		if m.Name != Output && (m.ActiveWorkspace.ID == ws.ID || m.SpecialWorkspace.ID != 0 && m.SpecialWorkspace.ID == ws.ID) {
+			return &l.monitors[i]
+		}
+	}
+	return nil
 }
 
 // InView says how a Chrome browser window is in the person's view, "" when
@@ -356,7 +371,8 @@ func (s *Shown) Redirect(ctx context.Context, ctl Ctl, on bool, hold time.Durati
 
 // Turned says how the person turned to the shared window during the turn,
 // "" when they did not: one of their monitors shows the window's own
-// workspace, where it was moved from or is drawn on.
+// workspace, where it was moved from or is drawn on, a special workspace
+// shown over it or not.
 func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
 	if s == nil {
 		return "", nil
@@ -365,10 +381,8 @@ func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, m := range l.view() {
-		if m.shows().ID == s.Before.Workspace.ID {
-			return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
-		}
+	if m := l.showing(s.Before.Workspace); m != nil {
+		return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
 	}
 	return "", nil
 }
