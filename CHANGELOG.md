@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The image's certs stage builds on alpine 3.24.2 with a current CA bundle instead of `alpine:3.20.3-giantswarm` (2024-09).
 - A `beekeeper run` that gets no build slot within its wait says so: its exit-75 log names the command as `not run: <command>`. The hook wraps a build word only at a command position of the parsed command line; one inside a quoted argument, a here-document's body or a grep pattern (a timer's note, a report, a PR body) runs unwrapped ([#841](https://github.com/giantswarm/beekeeper/issues/841)).
 - `beekeeper browse` under a running screen locker (hyprlock) starts no turn: it exits non-zero at once with an error that starts with `screen locked`, names the locker and the probe a caller parks on until the screen unlocks (`! pgrep -x <locker>`). The turn spent minutes on draw checks that cannot pass under the lock and failed as not drawn. browse never touches the lock ([#1546](https://github.com/giantswarm/beekeeper/issues/1546)).
 - A merge hold can admit one session, `hold set <target> --except-session "<name>"`: the line's promoter's own `devctl release promote` and merges go through the gate while every other session's are refused (exit 77) with a `beekeeper gate:` line naming the admitted session; a refused run no longer takes another session's waiting place of the same promote or pull request out of the lane ([#822](https://github.com/giantswarm/beekeeper/issues/822)).
@@ -65,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `note migrate` and the memo code are gone: the state keeps no memos and no pinned notes, `board next` reads priorities and holds from GitHub only and is never refused over an older beekeeper's memos, `self-update` names no migration, and the hand-overs' standing instructions are `standing.md` alone. A state document an older beekeeper left with memos keeps them as written and unread; the Note resource has no `pinned` field ([#938](https://github.com/giantswarm/beekeeper/issues/938)).
+
 
 ## [0.149.1-rc.3] - 2026-10-18
 
