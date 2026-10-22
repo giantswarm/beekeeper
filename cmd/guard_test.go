@@ -261,8 +261,9 @@ func holdSlots(t *testing.T, state string) {
 	}
 }
 
-// The exit-75 message states the wait applied and where it came from; only
-// a foreground run is advised to run in the background.
+// The exit-75 message states the wait applied and where it came from and
+// names the command as not run; only a foreground run is advised to run in
+// the background.
 func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 	state, env := capped(t)
 	holdSlots(t, state)
@@ -270,11 +271,13 @@ func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 	_, errOut, rc := zsh(t, env, self+" run --wait 1s -- true")
 	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: {\"pid\":1,\"cmd\":\"go test holder-2\"}") ||
 		!strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (--wait) waiting for") ||
+		!strings.Contains(errOut, guard.LogPrefix+"not run: true — the machine is busy") ||
 		!strings.Contains(errOut, "run_in_background (the wait is then 60m)") {
 		t.Errorf("foreground: rc %d, stderr %q", rc, errOut)
 	}
 	_, errOut, rc = zsh(t, append(env, "MEMCAP_WAIT=1s"), "export MEMCAP_BACKGROUND=1; "+self+" run -- true")
 	if rc != guard.ExitBusy || !strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (MEMCAP_WAIT) waiting for") ||
+		!strings.Contains(errOut, guard.LogPrefix+"not run: true — the machine is busy") ||
 		strings.Contains(errOut, "run_in_background") {
 		t.Errorf("background: rc %d, stderr %q", rc, errOut)
 	}

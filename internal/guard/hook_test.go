@@ -157,6 +157,24 @@ func TestHeavyClassification(t *testing.T) {
 		{"python3 - <<'EOF'\nprint('go test ./...')\nEOF", false},
 		{"cat > notes.md <<EOF\nmake build\nEOF", false},
 		{"echo 'bash -c \"make\"'", false},
+		// a build word inside any command's quoted argument or here-document
+		// is text, at whatever position of that text it stands
+		{`beekeeper timer add --probe 'gh pr checks 1 --repo o/r' "note mentioning go test"`, false},
+		{`beekeeper timer add 10m "rerun the suite (go test ./...) once the slot is free"`, false},
+		{`beekeeper sessions serve x o/r#1 --waits "CI; go test ./... locally"`, false},
+		{`beekeeper agents park --on o/r#1 "waits on go test ./... in CI"`, false},
+		{"beekeeper agents idle --done --report \"merged o/r#1\nmake lint passes\" --problem none", false},
+		{"gh pr create --repo o/r --title t --body \"$(cat <<'EOF'\nSummary\n\ngo test ./... passes\nEOF\n)\"", false},
+		{"git commit -m \"subject\n\nmake lint runs in CI\"", false},
+		{"cat <<'EOF' > f\nmake test\nEOF", false},
+		{`gh issue create --repo o/r --title t --body "go install from the tag; go build ./... works"`, false},
+		{`grep -E '^(build|test|go test|make lint):' Makefile`, false},
+		{`gh api repos/o/r/contents/src/commands/go-test.yaml --jq .content | grep '^test:'`, false},
+		{`graphify query "which make target runs go test; does go build use it"`, false},
+		{`beekeeper log x --json | python3 -c 'import sys; print("go test" in sys.stdin.read())'`, false},
+		{"true # go test", false},
+		{"cd x && go test ./...", true},
+		{`beekeeper timer add 10m "note" && go test ./...`, true},
 		// git's working-tree commands build nothing, whatever their branch or
 		// path names say
 		{`git -C "$S" checkout -q -- .`, false},
