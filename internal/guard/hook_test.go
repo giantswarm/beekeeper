@@ -120,6 +120,31 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 	}
 }
 
+// An agentlab e2e proof builds nothing and waits on its lab, its model and
+// GitHub: the hook passes it unwrapped, so it takes no build slot, whatever
+// "test" its subcommand or a package script names; a build beside it in the
+// same call still is wrapped.
+func TestAgentlabProofTakesNoSlot(t *testing.T) {
+	for _, cmd := range []string{
+		"agentlab backstage-test",
+		"agentlab agents-test",
+		"agentlab platform-test",
+		"cd ~/lab && agentlab --lab agentlab-1 backstage-test 2>&1 | tail -40",
+		"KUBECONFIG=~/lab/kubeconfig agentlab workspaces-test",
+		"cd ~/src/backstage && yarn test:e2e:agentlab",
+	} {
+		if d := decide(t, hook(), "/", cmd, nil); d != nil {
+			t.Errorf("%q: want pass-through, got %+v", cmd, d)
+		}
+	}
+	for _, cmd := range []string{"go test ./...", "agentlab backstage-test && go test ./..."} {
+		d := decide(t, hook(), "/", cmd, nil)
+		if d == nil || d.UpdatedInput["command"] != self+" run -- zsh -c "+ShellQuote(cmd) {
+			t.Errorf("%q: want wrapped, got %+v", cmd, d)
+		}
+	}
+}
+
 func TestHeavyClassification(t *testing.T) {
 	for _, tc := range []struct {
 		cmd   string
