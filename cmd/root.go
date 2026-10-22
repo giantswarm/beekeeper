@@ -109,6 +109,9 @@ type app struct {
 
 	// kindClusters lists the running kind clusters; nil asks docker.
 	kindClusters func() ([]string, error)
+	// labDirs maps the labs agentlab knows to their directories; nil asks
+	// agentlab list.
+	labDirs func() (map[string]string, error)
 	// zone reads the machine's time zone; nil is machine.Zone.
 	zone func() (*time.Location, error)
 	// central is an app of beekeeper serve: its notes' filers run on other
