@@ -35,7 +35,8 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   and whose `--problem` lines as `PROBLEM FOUND`: each finding, and each one a worker messages on
   the way, becomes an issue in its owning repository and a worker; a code scan's finding only once
   the commit it names is the default branch's head, or a re-scan there still raises it.
-  `PARKED ON A PERSON` goes to the guide, who tells the person. The doctor takes the agent off the roster and archives
+  `PARKED ON A PERSON` goes to the guide, who tells the person; `PARKED ON A LEASE` is the
+  supervisor's own, settled by its grant, never the guide's. The doctor takes the agent off the roster and archives
   its session, as it does with relieved role holders and idle entries whose CLI is gone a day
   (`beekeeper doctor --dry-run` lists them); none of it is a note for the person. Briefs are standalone, because every agent
   starts on an empty context. The checkout the sessions load their project rules and skills from
