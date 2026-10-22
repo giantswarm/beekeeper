@@ -25,7 +25,8 @@ import (
 // and consent are allowed; on Google's sign-in, the consent of a Google App
 // on record, by the callback host of the tab's flow, is allowed and any
 // other's refused (google.go); on a third party's OAuth client's consent
-// page the hook knows, the consent as the account on record (thirdparty.go);
+// page the hook knows and its device-code page, the consent as the account
+// on record (thirdparty.go);
 // a consent page on any other host is refused, so
 // no grant elsewhere is left to the browse turn's classifier. A change of an
 // App's permissions is decided the same way from the record of the one
@@ -325,6 +326,7 @@ func (h Hook) consent(ev event) []byte {
 				d = Click(apps, page, c.words)
 				if c.typed && d.Decision == Allow {
 					d = typedCallback(apps, page, c.text, d)
+					d = typedDeviceCode(page, c.text, d)
 				}
 				// Text typed or set on Google's sign-in is no grant the
 				// record covers: the classifier decides it.

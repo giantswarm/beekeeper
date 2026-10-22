@@ -97,8 +97,10 @@ other application's there. A consent to a third party's OAuth client as
 the person's own account there (OpenAI's Codex sign-in with ChatGPT) is
 recorded with --oauth <host> --client-id <id> --account <address>, on the
 person's word alone, for a client whose consent page beekeeper knows: the
-hook answers a click on that page whose own words name the account, and
-refuses it for any other account or a client on no record. A
+hook answers a click on that page, and the device code typed and its
+Continue on the client's device-code page, whose own words name the
+account, and refuses it for any other account, a client on no record or
+other text typed there. A
 consent page on any other host (a path or title that names a
 consent or a grant, or an OAuth authorization page where the call's own
 words name one) is refused, not left to the browse turn's classifier. An App's creation, installation and deletion are grants too: the
@@ -168,7 +170,8 @@ replaced:
   as their own account <address> there, on the consent page beekeeper
   knows of that client on <host>: OpenAI's Codex sign-in with ChatGPT
   (--oauth auth.openai.com --client-id app_EMoamEEZ73f0CkXaXp7hrann,
-  auth.openai.com/sign-in-with-chatgpt/codex/consent). The record is the
+  auth.openai.com/sign-in-with-chatgpt/codex/consent, and the device-code
+  page auth.openai.com/deviceauth/callback). The record is the
   person's word alone, kept in the machine's state; --word names where
   they gave it. A client beekeeper knows no consent page of is refused.
 

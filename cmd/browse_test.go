@@ -1060,8 +1060,8 @@ func TestBrowseGoogleConsent(t *testing.T) {
 
 // A turn whose steps name a third-party consent on record, by its sign-in
 // host, runs with its auto mode rule, its prompt names the Continue on that
-// client's consent page for the account, and the line below the report
-// names the record.
+// client's consent page and the device code on its device-code page for
+// the account, and the line below the report names the record.
 func TestBrowseThirdPartyConsent(t *testing.T) {
 	o := []guard.App{{Name: "openai-codex", OAuth: "auth.openai.com", ClientID: "app_EMoamEEZ73f0CkXaXp7hrann", Account: "person@example.com",
 		Declared: oauthDeclared, Word: personsWord, By: agentOne}}
@@ -1074,15 +1074,18 @@ func TestBrowseThirdPartyConsent(t *testing.T) {
 	}
 	if rules := browseRules("", consents, false); len(rules) != 1 || rules[0] != oauthConsentRule(o[0]) ||
 		!strings.Contains(rules[0], "Third-Party OAuth Consent") || !strings.Contains(rules[0], "account person@example.com") ||
-		!strings.Contains(rules[0], "auth.openai.com/sign-in-with-chatgpt/codex/consent") {
+		!strings.Contains(rules[0], "auth.openai.com/sign-in-with-chatgpt/codex/consent") ||
+		!strings.Contains(rules[0], "on its device-code page auth.openai.com/deviceauth/callback the device code typed") {
 		t.Errorf("browseRules = %q", rules)
 	}
 	if p := browsePrompt("steps", "", consents, false, nil); !strings.Contains(p, "consent to OpenAI's Codex sign-in with ChatGPT is on record as their own account person@example.com") ||
+		!strings.Contains(p, "On its device-code page (auth.openai.com/deviceauth/callback) type only the device code") ||
 		strings.Contains(p, "GitHub's page 'Authorize") {
 		t.Errorf("browsePrompt = %q", p)
 	}
 	if l := (browseFindings{}).lines("steps", "", consents, false); len(l) != 1 ||
-		!strings.HasPrefix(l[0], "allowed consent: openai-codex (OpenAI's Codex sign-in with ChatGPT, client app_EMoamEEZ73f0CkXaXp7hrann, account person@example.com, "+oauthDeclared+")") {
+		!strings.HasPrefix(l[0], "allowed consent: openai-codex (OpenAI's Codex sign-in with ChatGPT, client app_EMoamEEZ73f0CkXaXp7hrann, account person@example.com, "+oauthDeclared+")") ||
+		!strings.Contains(l[0], "and the device code on auth.openai.com/deviceauth/callback") {
 		t.Errorf("lines = %q", l)
 	}
 }
