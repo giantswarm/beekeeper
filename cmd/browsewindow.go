@@ -37,6 +37,21 @@ type placement struct {
 	shown    *hypr.Shown
 }
 
+// screenLocker names the screen locker that runs, "" when none does or the
+// process table cannot be read: under it the compositor draws no window
+// but the lock's. Tests replace it.
+var screenLocker = machineScreenLocker
+
+// machineScreenLocker reads the screen locker from the machine's process
+// table.
+func machineScreenLocker() string {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return ""
+	}
+	return claude.ScreenLocker(t)
+}
+
 // errScreenLocked opens the refusal of a browse under a running screen
 // locker.
 var errScreenLocked = errors.New("screen locked")
@@ -47,11 +62,7 @@ var errScreenLocked = errors.New("screen locked")
 // caller parks on until the screen unlocks; the lock stays the person's.
 // nil when no locker runs or the process table cannot be read.
 func screenLockedErr() error {
-	t, err := plat.Machine.Processes()
-	if err != nil {
-		return nil
-	}
-	l := claude.ScreenLocker(t)
+	l := screenLocker()
 	if l == "" {
 		return nil
 	}
@@ -70,10 +81,8 @@ func unlockedProbe(locker string) string { return "! pgrep -x " + locker }
 // moves nothing: no window is drawn there, wherever it sits.
 func showChrome(ctx context.Context) *placement {
 	p := &placement{}
-	if t, err := plat.Machine.Processes(); err == nil {
-		if p.Locked = claude.ScreenLocker(t); p.Locked != "" {
-			return p
-		}
+	if p.Locked = screenLocker(); p.Locked != "" {
+		return p
 	}
 	if !hyprRunning() {
 		return p

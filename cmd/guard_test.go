@@ -37,6 +37,9 @@ func TestMain(m *testing.M) {
 	// Nor does a browse move a window of the desktop's compositor; a test
 	// that places one stubs its own hyprctl.
 	hyprRunning = func() bool { return false }
+	// Nor does a browse or a link read the machine's screen locker: the
+	// screen is unlocked; a test that wants it locked stubs its own.
+	screenLocker = func() string { return "" }
 	// Nor does a gated merge read its reviews: nothing holds it; a test
 	// that wants a reviewer stubs its own.
 	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }

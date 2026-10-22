@@ -95,10 +95,7 @@ var desktopWindowActive = claude.DesktopWindowActive
 // screenLocked reports whether a screen locker runs: nobody reads or types
 // in the desktop's window, whatever the compositor still names as focused,
 // and keystrokes go to the locker.
-func screenLocked() bool {
-	t, err := plat.Machine.Processes()
-	return err == nil && claude.ScreenLocked(t)
-}
+func screenLocked() bool { return screenLocker() != "" }
 
 // desktopInput watches the person's keyboards and pointers; tests replace
 // it.

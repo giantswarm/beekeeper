@@ -44,6 +44,32 @@ func (m lockMachine) Processes() (*proc.Table, error) {
 	return t, nil
 }
 
+// lockScreen makes locker the screen locker that runs, "" none, for the
+// test.
+func lockScreen(t *testing.T, locker string) {
+	t.Helper()
+	saved := screenLocker
+	t.Cleanup(func() { screenLocker = saved })
+	screenLocker = func() string { return locker }
+}
+
+// The machine's screen locker is read from its process table; a table it
+// cannot read names none.
+func TestTheMachineNamesItsScreenLocker(t *testing.T) {
+	_, _ = stubApp(t)
+	if l := machineScreenLocker(); l != "" {
+		t.Errorf("no process table: locker %q", l)
+	}
+	plat.Machine = lockMachine{Machine: plat.Machine}
+	if l := machineScreenLocker(); l != "" {
+		t.Errorf("unlocked: locker %q", l)
+	}
+	plat.Machine = lockMachine{Machine: plat.Machine, locker: hyprlock}
+	if l := machineScreenLocker(); l != hyprlock {
+		t.Errorf("locked: locker %q, want %q", l, hyprlock)
+	}
+}
+
 // A locked screen holds no link: the compositor still names the desktop's
 // window, but nobody reads or types there, and keystrokes go to the locker.
 func TestALockedScreenHoldsNoLink(t *testing.T) {
@@ -52,11 +78,11 @@ func TestALockedScreenHoldsNoLink(t *testing.T) {
 	t.Cleanup(func() { desktopWindowActive = saved })
 	desktopWindowActive = func(context.Context) (bool, error) { return true, nil }
 	d := desk{quiet: time.Hour, last: time.Now, locked: screenLocked}
-	plat.Machine = lockMachine{Machine: plat.Machine}
+	lockScreen(t, "")
 	if err := d.await(t.Context(), 2*awayPoll, nil); !errors.Is(err, errDesktopInUse) {
 		t.Fatalf("unlocked, the desktop's focused window: %v, want errDesktopInUse", err)
 	}
-	plat.Machine = lockMachine{Machine: plat.Machine, locker: hyprlock}
+	lockScreen(t, hyprlock)
 	if err := d.await(t.Context(), 2*awayPoll, nil); err != nil {
 		t.Errorf("a link under a locked screen waited: %v", err)
 	}
