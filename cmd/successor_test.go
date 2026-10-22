@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -78,7 +79,10 @@ func TestStartNumbersTheRun(t *testing.T) {
 }
 
 func TestSuccessorBriefTakesTheRoleAndEndsTheTurn(t *testing.T) {
-	b := guideRole.successorBrief("Guide run 8", guideSeven)
+	b := guideRole.successorBrief(config.Role{Skill: guideName}, "Guide run 8", guideSeven)
+	if !strings.HasPrefix(b, "/guide You are ") {
+		t.Errorf("the brief does not open with the bare /guide:\n%s", b)
+	}
 	for _, want := range []string{`You are "Guide run 8"`, "`beekeeper guide start`", "end the turn", "Arm no Monitor", "`beekeeper guide handover --prompt`", `from "Guide run 7"`} {
 		if !strings.Contains(b, want) {
 			t.Errorf("the brief lacks %q:\n%s", want, b)
@@ -428,5 +432,33 @@ func TestStandbyResumesTheDesktopCLINotTheFirstTurn(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the desktop CLI got no resume")
+	}
+}
+
+// A role skill carries disable-model-invocation: only a prompt that starts
+// with its bare slash command loads it, never a "Run /<skill>" the model
+// would hand to the Skill tool.
+func TestRolePromptsOpenWithTheBareSlashCommand(t *testing.T) {
+	for _, c := range []struct {
+		cfg  config.Role
+		want string
+	}{
+		{config.Role{Skill: supervisorRole.inf}, "/supervise "},
+		{config.Role{Skill: "beekeeper:guide"}, "/beekeeper:guide "},
+		{config.Role{Instructions: "~/guide.md"}, ""},
+		{config.Role{}, ""},
+	} {
+		if got := roleSlash(c.cfg); got != c.want {
+			t.Errorf("roleSlash(%+v) = %q, want %q", c.cfg, got, c.want)
+		}
+		if b := supervisorRole.successorBrief(c.cfg, "Supervisor run 12", "Supervisor run 11"); !strings.HasPrefix(b, c.want+"You are ") {
+			t.Errorf("the brief under %+v does not open with %q:\n%s", c.cfg, c.want, b)
+		}
+	}
+	var out bytes.Buffer
+	a := &app{out: &out, now: relayNow, cfg: &config.Config{Guide: config.Guide{Role: config.Role{Skill: guideName}}}}
+	intro, err := a.roleInstructions(guideRole, state.Role{})
+	if err != nil || intro != "/guide you take over the guide's role." {
+		t.Errorf("the guide's prompt opens with %q, %v", intro, err)
 	}
 }

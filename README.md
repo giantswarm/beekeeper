@@ -150,7 +150,11 @@ or, for a project's shared settings (`.claude/settings.json`):
 
 The plugin follows the default branch; `"ref": "<release tag>"` in the source pins it to the
 binary's release. With `supervisor.skill: beekeeper:supervise` and `guide.skill: beekeeper:guide`
-a relayed successor opens with the plugin's role.
+a relayed successor opens with the plugin's role. The role skills carry `disable-model-invocation`, so
+they stay out of every worker's skill listing and the Skill tool refuses them: a role loads only from a
+prompt that starts with its bare slash command, as the person types it. A successor's first prompt and
+`handover --prompt` (`guide handover --prompt`) start with it (`/beekeeper:supervise you take over …`),
+and a desk's own copy of a role skill carries the flag too.
 
 ## What it does
 
@@ -1880,7 +1884,8 @@ reopen imports a session the desktop did not. A start that delivers no turn of t
 exits non-zero, logs `agents.start` "task not delivered" with the reason, and `agents` (REACHABLE)
 and the watch's AGENTS STOPPED line say "task not delivered" until `agents wake` delivers a turn,
 so a worker that never got its task is never silent. A role's relay successor keeps
-its headless first turn, which only takes the role; its relay hands it the desktop turn.
+its headless first turn, which only takes the role; its relay hands it the desktop turn. That first
+prompt starts with the role skill's bare slash command, which loads the skill into the session.
 
 #### Worker profiles
 

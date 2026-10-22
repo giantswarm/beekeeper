@@ -1,6 +1,7 @@
 ---
 name: guide
 description: Run the guide session — walk the person through the decisions the sessions on the machine wait on, one at a time with the status quo and the why, relay each answer word for word to the session that asked, take their new ideas and input to the right place, and keep the roadmap board current. Always a session of its own, never the supervisor's. Use when the person asks for a guide, wants to go through their open decisions, or when a relayed `beekeeper guide handover --prompt` arrives.
+disable-model-invocation: true
 ---
 
 # guide — the session that guides the person through their decisions
