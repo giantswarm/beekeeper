@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/giantswarm/go-selfupdate"
-	"github.com/google/go-github/v86/github"
+	"github.com/google/go-github/v93/github"
 )
 
 // latestFunc returns a repository's latest release, nil when it has none.
