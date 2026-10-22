@@ -31,8 +31,10 @@ const windowWait = 10 * time.Second
 // draws no window; Where is where the window was when it was not shown and
 // To the off-screen output the turn drew it on; Failed says why it could
 // not; Restored whether it went back after, and Left why it was left where
-// it was (hypr.Shown.Left); Recovered is the workspace a window a died
-// turn left on the output went back to.
+// it was (hypr.Shown.Left); Opened counts the windows Chrome opened during
+// the turn that were still open after it (hypr.Shown.Opened), which went
+// to Back, the shared window's workspace; Recovered is
+// the workspace a window a died turn left on the output went back to.
 type placement struct {
 	Locked    string
 	Where     string
@@ -40,6 +42,8 @@ type placement struct {
 	Failed    string
 	Restored  bool
 	Left      string
+	Opened    int
+	Back      string
 	Recovered string
 	shown     *hypr.Shown
 	record    string
@@ -84,12 +88,13 @@ func screenLockedErr() error {
 // runs.
 func unlockedProbe(locker string) string { return "! pgrep -x " + locker }
 
-// showChrome gives the shared Chrome window a drawn surface for the turn
-// when the compositor does not show it (hypr.Show), off the person's
-// screen, and keeps what it moved in record until restore. A record a died
-// turn left is put back first. Under a locked screen it moves nothing: no
-// window is drawn there, wherever it sits.
-func showChrome(ctx context.Context, record string) *placement {
+// showChrome readies the off-screen output for the turn (hypr.Show): every
+// window Chrome opens until restore, or hold at the latest, is drawn there,
+// and the shared window too when the compositor does not show it; it keeps
+// the placement in record until restore. A record a died turn left is put
+// back first. Under a locked screen it moves nothing: no window is drawn
+// there, wherever it sits.
+func showChrome(ctx context.Context, record string, hold time.Duration) *placement {
 	p := &placement{record: record}
 	if p.Locked = screenLocker(); p.Locked != "" {
 		return p
@@ -112,7 +117,7 @@ func showChrome(ctx context.Context, record string) *placement {
 		}
 		_ = os.Remove(record)
 	}
-	s, err := hypr.Show(ctx, chromeCtl)
+	s, err := hypr.Show(ctx, chromeCtl, hold)
 	if err != nil {
 		p.Failed = err.Error()
 		return p
@@ -120,7 +125,10 @@ func showChrome(ctx context.Context, record string) *placement {
 	if s == nil {
 		return p
 	}
-	p.shown, p.Where, p.To = s, s.Where, hypr.Output
+	p.shown = s
+	if s.Moved {
+		p.Where, p.To = s.Where, hypr.Output
+	}
 	if err := writeShown(record, s); err != nil {
 		p.Failed = err.Error()
 		_ = p.restore(ctx)
@@ -173,7 +181,7 @@ func (p *placement) restore(ctx context.Context) error {
 	if err := s.Restore(ctx, chromeCtl); err != nil {
 		return fmt.Errorf("putting the shared Chrome window back on workspace %s: %w", s.Before.Workspace.Name, err)
 	}
-	p.Restored, p.Left = s.Left == "", s.Left
+	p.Restored, p.Left, p.Opened, p.Back = s.Left == "", s.Left, s.Opened, s.Before.Workspace.Name
 	if err := os.Remove(p.record); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
@@ -193,6 +201,10 @@ func (p placement) line() string {
 		lines = append(lines, "window not shown: "+p.Failed)
 	case p.To != "":
 		lines = append(lines, fmt.Sprintf("window shown: the shared Chrome window was on %s; the turn %s", p.Where, p.tried()))
+	}
+	if p.Opened > 0 {
+		lines = append(lines, fmt.Sprintf("windows opened: %d window(s) Chrome opened during the turn were drawn on the off-screen output %s, "+
+			"never on the person's screen, and were still open after it: they went to the shared window's workspace %s", p.Opened, hypr.Output, p.Back))
 	}
 	return strings.Join(lines, "\n")
 }

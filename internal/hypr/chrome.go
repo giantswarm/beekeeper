@@ -6,8 +6,11 @@
 // there. The surface is a headless output of its own, placed where no edge
 // touches the person's monitors: the window is drawn there and never
 // appears on the person's screen, and their monitors, workspaces and focus
-// stay as they are. It never changes Hyprland's configuration files: the
-// output's monitor and workspace rules are set at runtime only.
+// stay as they are. Every window Chrome opens while the turn runs (a sign-in
+// pop-up, a new window) maps there too, silently and without the focus, and
+// goes back with the shared window after. It never changes Hyprland's
+// configuration files: the output's monitor, workspace and window rules are
+// set at runtime only.
 package hypr
 
 import (
@@ -16,9 +19,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Ctl runs hyprctl with args and returns what it prints; tests replace it.
@@ -78,6 +83,7 @@ type Window struct {
 	Fullscreen     int       `json:"fullscreen"`
 	Monitor        int       `json:"monitor"`
 	FocusHistoryID int       `json:"focusHistoryID"`
+	Pid            int       `json:"pid"`
 }
 
 // Monitor is a monitor as hyprctl monitors names it: X and Y in layout
@@ -206,29 +212,37 @@ func (l layout) where(w Window) string {
 	return ""
 }
 
-// Shown is a window a placement moved onto the headless output, with what
-// it was before. It is kept as JSON while the turn runs, so a browse that
-// died mid-turn still puts the window back.
+// Shown is the shared window of a turn's placement, with what it was
+// before. It is kept as JSON while the turn runs, so a browse that died
+// mid-turn still puts the window back and ends the redirect.
 type Shown struct {
-	// Before is the window as it was; Where says where that was.
+	// Before is the window as it was; Where says where that was when the
+	// compositor did not show it, "" when it did.
 	Before Window `json:"before"`
 	Where  string `json:"where"`
+	// Moved says the placement moved the window onto the output.
+	Moved bool `json:"moved"`
 	// Created says the placement created the output, which Restore removes.
 	Created bool `json:"created"`
 	// Left says why Restore left the window where it was: closed, or moved
 	// by the person to another workspace; "" when it put it back.
 	Left string `json:"left,omitempty"`
+	// Opened counts the other windows Restore moved off the output: ones
+	// Chrome opened during the turn and still open after it.
+	Opened int `json:"opened,omitempty"`
 }
 
-// Show moves Chrome's browser window onto the headless output when the
-// compositor does not show it, creating the output when there is none:
-// drawn there, never on the person's screen, the focus left where it is.
-// An output that changed the person's view (their monitors' place, shown
-// workspaces or focus) or took a numbered workspace is removed again and
-// the window left where it is. It returns nil when there is no browser
-// window or it is shown already; a step that fails is undone and its error
+// Show readies the headless output for a browse turn, creating it when
+// there is none, and redirects every window a browser class maps until
+// Restore, or hold at the latest: a pop-up the turn's page opens is drawn
+// there, never on the person's screen, and takes no focus. It moves
+// Chrome's browser window onto the output when the compositor does not show
+// it, the focus left where it is. An output that changed the person's view
+// (their monitors' place, shown workspaces or focus) or took a numbered
+// workspace is removed again and the window left where it is. It returns
+// nil without a browser window; a step that fails is undone and its error
 // names where the window is.
-func Show(ctx context.Context, ctl Ctl) (*Shown, error) {
+func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 	l, err := read(ctx, ctl)
 	if err != nil {
 		return nil, err
@@ -238,13 +252,14 @@ func Show(ctx context.Context, ctl Ctl) (*Shown, error) {
 		return nil, nil
 	}
 	where := l.where(*w)
-	if where == "" {
-		return nil, nil
-	}
 	s := &Shown{Before: *w, Where: where}
 	fail := func(err error) (*Shown, error) {
-		return nil, fmt.Errorf("the shared Chrome window is on %s; drawing it on the off-screen output %s failed: %w",
-			where, Output, joinErr(err, s.removeOutput(ctx, ctl)))
+		at := "shown on the person's screen"
+		if where != "" {
+			at = "on " + where
+		}
+		return nil, fmt.Errorf("the shared Chrome window is %s; readying the off-screen output %s failed: %w",
+			at, Output, joinErr(err, run(ctx, ctl, "eval", redirectOff), s.removeOutput(ctx, ctl)))
 	}
 	if l.output() == nil {
 		if err := rules.run(ctx, ctl); err != nil {
@@ -262,8 +277,14 @@ func Show(ctx context.Context, ctl Ctl) (*Shown, error) {
 			return fail(err)
 		}
 	}
-	if err := moveTo(w.Address, surface).run(ctx, ctl); err != nil {
-		return fail(err)
+	if err := run(ctx, ctl, "eval", redirectOn(hold)); err != nil {
+		return fail(fmt.Errorf("redirecting the windows Chrome opens (a Lua configuration's window rule): %w", err))
+	}
+	if where != "" {
+		if err := moveTo(w.Address, surface).run(ctx, ctl); err != nil {
+			return fail(err)
+		}
+		s.Moved = true
 	}
 	return s, nil
 }
@@ -283,25 +304,29 @@ func checkOutput(before, after layout) error {
 	return nil
 }
 
-// Restore puts the window back on its own workspace, and any other window
-// on the output's workspace with it (one the turn opened); then it removes
-// the output, unless a window failed to move off it, which
-// removing the output would put on the person's screen. One closed since,
-// or moved by the person to a third workspace, is left where it is, and
-// Left says so.
+// Restore ends the redirect, then puts the window back on its own
+// workspace, and every other window on the output's workspace with it (one
+// Chrome opened during the turn); then it removes the output, unless a
+// window failed to move off it, which removing the output would put on the
+// person's screen. One closed since, or moved by the person to a third
+// workspace, is left where it is, and Left says so.
 func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 	if s == nil {
 		return nil
 	}
+	errs := []error{run(ctx, ctl, "eval", redirectOff)}
 	l, err := read(ctx, ctl)
 	if err != nil {
-		return err
+		return joinErr(append(errs, err)...)
 	}
-	var errs []error
-	s.Left = "closed"
+	s.Left, s.Opened = "closed", 0
+	var moves []error
 	for _, w := range l.windows {
 		if w.Workspace.Name == Surface {
-			errs = append(errs, moveTo(w.Address, s.Before.Workspace).run(ctx, ctl))
+			moves = append(moves, moveTo(w.Address, s.Before.Workspace).run(ctx, ctl))
+			if w.Address != s.Before.Address {
+				s.Opened++
+			}
 		}
 		switch {
 		case w.Address != s.Before.Address:
@@ -311,13 +336,13 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 			s.Left = "moved by the person to workspace " + w.Workspace.Name
 		}
 	}
-	if err := joinErr(errs...); err != nil {
-		return fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output)
+	if err := joinErr(moves...); err != nil {
+		return joinErr(append(errs, fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output))...)
 	}
 	// The output is beekeeper's by its name: one a died turn left is
 	// removed too.
 	s.Created = l.output() != nil
-	return s.removeOutput(ctx, ctl)
+	return joinErr(append(errs, s.removeOutput(ctx, ctl))...)
 }
 
 // removeOutput removes the output the placement created, once.
@@ -341,6 +366,37 @@ var rules = setting{
 		{"monitor", fmt.Sprintf("%s,%dx%d,%s,1", Output, Size[0], Size[1], position)},
 		{"workspace", fmt.Sprintf("name:%s,monitor:%s,default:true", Surface, Output)},
 	},
+}
+
+// redirectOn is the Lua chunk that maps every window of a browser class on
+// the output's workspace, silently, without the initial focus and deaf to
+// activation, fullscreen and maximize requests, until redirectOff or hold.
+// The rule is made once per configuration load and comes after the
+// person's own rules, so its workspace wins over theirs; the timer ends it
+// when no Restore comes (a browse killed mid-turn). A classic configuration
+// has no rule to turn off again, and no redirect.
+func redirectOn(hold time.Duration) string {
+	return fmt.Sprintf(`%s beekeeper_browse_windows = beekeeper_browse_windows or {}; `+
+		`local r = beekeeper_browse_windows[%[2]q]; `+
+		`if not r then r = hl.window_rule({ name = %[3]q, match = { class = %[2]q }, workspace = %[4]q, `+
+		`no_initial_focus = true, suppress_event = "activate activatefocus fullscreen maximize", enabled = false }); `+
+		`beekeeper_browse_windows[%[2]q] = r end; `+
+		`r:set_enabled(true); `+
+		`beekeeper_browse_timer = hl.timer(function() r:set_enabled(false) end, { timeout = %[5]d, type = "oneshot" })`,
+		redirectOff, browserPattern(), "beekeeper-browse "+browserPattern(), surface.selector()+" silent", hold.Milliseconds())
+}
+
+// redirectOff is the Lua chunk that ends the redirect and its timer.
+const redirectOff = `if beekeeper_browse_timer then beekeeper_browse_timer:set_enabled(false) end; ` +
+	`for _, r in pairs(beekeeper_browse_windows or {}) do r:set_enabled(false) end;`
+
+// browserPattern matches the class of a browser window and nothing else.
+func browserPattern() string {
+	q := make([]string, len(browserClasses))
+	for i, c := range browserClasses {
+		q[i] = regexp.QuoteMeta(c)
+	}
+	return "^(" + strings.Join(q, "|") + ")$"
 }
 
 // setting is runtime configuration in both of Hyprland's syntaxes: a Lua
