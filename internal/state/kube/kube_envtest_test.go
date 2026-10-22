@@ -443,3 +443,29 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 		t.Fatalf("a refused update wrote: defaulted %+v, grants %+v", st.Defaulted, st.Grants)
 	}
 }
+
+// A roster entry created but not yet given its status (the create's second
+// write) is no change of another writer's update.
+func TestEnvtestRosterEntryAwaitingItsStatus(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	if err := c.Create(context.Background(), &v1alpha1.RosterEntry{
+		ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: rosterName(bo)},
+		Spec:       v1alpha1.RosterEntrySpec{Address: "local:" + bo.Host + "/" + bo.Name, Party: apiParty(bo), Registered: metav1.Now().Rfc3339Copy()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = append(st.Notes, state.Note{ID: 1, For: ana.Person, Kind: state.NoteDecision, Text: "roster?", By: ana, At: time.Now().Truncate(time.Second)})
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("a note beside a roster entry awaiting its status: %v", err)
+	}
+	r := &v1alpha1.RosterEntry{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: teamNamespace(team), Name: rosterName(bo)}, r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Status.State != "" {
+		t.Fatalf("the note's update wrote the roster entry's status: %+v", r.Status)
+	}
+}
