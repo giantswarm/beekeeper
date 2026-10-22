@@ -9,13 +9,17 @@ import (
 )
 
 // DrawCheck asks a tab whether Chrome draws it: two animation frames within
-// a second and a half. A window the compositor does not draw (on a
-// workspace not shown, minimised, under another) produces no frame while its
+// four seconds. A window the compositor does not draw (on a workspace not
+// shown, minimised, under another) produces no frame while its
 // document.visibilityState still says visible; a consent page there keeps
 // its Authorize button disabled (its clickjacking guard waits on a drawn
-// frame) and a click on it does nothing. It is one expression, which a
-// second run on the same page evaluates again without a declaration clash.
-const DrawCheck = "'" + drawOpen + "' + ((await new Promise(done => { const late = setTimeout(() => done(false), 1500); " +
+// frame) and a click on it does nothing. A drawn window whose frame
+// callbacks stall (the shared Chrome on the off-screen output) still draws,
+// on Chrome's own fallback of about one frame a second: two frames take up
+// to two seconds there, which four seconds leave room for. It is one
+// expression, which a second run on the same page evaluates again without a
+// declaration clash.
+const DrawCheck = "'" + drawOpen + "' + ((await new Promise(done => { const late = setTimeout(() => done(false), 4000); " +
 	"requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(late); done(true); })); })) ? '" + Drawn + "' : '" +
 	NotDrawn + "') + ', visibility ' + document.visibilityState"
 

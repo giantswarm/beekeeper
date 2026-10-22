@@ -64,7 +64,7 @@ func snapshot(t *testing.T, ctx context.Context) view {
 	}
 	v := view{Monitors: l.view(), Focused: active.Address}
 	for _, ws := range wss {
-		if ws.Name != hidden && ws.Name != Surface {
+		if ws.Name != hidden && ws.Name != hiddenNumber && ws.Name != Surface {
 			v.Workspaces = append(v.Workspaces, ws.Name)
 		}
 	}
