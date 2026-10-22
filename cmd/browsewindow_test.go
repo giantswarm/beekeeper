@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,10 +15,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/hypr"
 )
 
-// compositor answers hyprctl with Chrome on a special workspace not shown
-// and records the dispatches.
+// compositor answers hyprctl with Chrome on a special workspace not shown,
+// creates and removes the off-screen output, and records the commands.
 type compositor struct {
 	window hypr.Window
+	output bool
 	calls  []string
 }
 
@@ -26,21 +28,35 @@ func (c *compositor) ctl(_ context.Context, args ...string) ([]byte, error) {
 	case "clients":
 		return json.Marshal([]hypr.Window{c.window})
 	case "monitors":
-		return json.Marshal([]hypr.Monitor{{Name: "eDP-1", Width: 1920, Height: 1200, Scale: 1, Focused: true,
-			ActiveWorkspace: hypr.Workspace{ID: 2, Name: "2"}}})
+		ms := []hypr.Monitor{{Name: "eDP-1", Width: 1920, Height: 1200, Focused: true, ActiveWorkspace: hypr.Workspace{ID: 2, Name: "2"}}}
+		if c.output {
+			ms = append(ms, hypr.Monitor{ID: 1, Name: hypr.Output, ActiveWorkspace: hypr.Workspace{ID: -1337, Name: hypr.Surface}})
+		}
+		return json.Marshal(ms)
 	case "general:layout":
 		return []byte(`{"str":"dwindle"}`), nil
 	}
-	c.calls = append(c.calls, args[len(args)-1])
-	if strings.Contains(args[len(args)-1], `workspace = "2"`) {
-		c.window.Workspace = hypr.Workspace{ID: 2, Name: "2"}
+	call := strings.Join(args, " ")
+	c.calls = append(c.calls, call)
+	switch {
+	case call == "output create headless "+hypr.Output:
+		c.output = true
+	case call == "output remove "+hypr.Output:
+		c.output = false
+	case strings.Contains(call, `workspace = "name:`+hypr.Surface+`"`):
+		c.window.Workspace = hypr.Workspace{ID: -1337, Name: hypr.Surface}
+	case strings.Contains(call, `workspace = "`+musicWS.Name+`"`):
+		c.window.Workspace = musicWS
 	}
 	return []byte("ok"), nil
 }
 
+// musicWS is the special workspace Chrome starts on, not shown.
+var musicWS = hypr.Workspace{ID: -95, Name: "special:music"}
+
 // chromeOnMusic is a compositor with Chrome on special:music, not shown.
 func chromeOnMusic() *compositor {
-	return &compositor{window: hypr.Window{Address: "0xc", Class: "google-chrome", Workspace: hypr.Workspace{ID: -95, Name: "special:music"}}}
+	return &compositor{window: hypr.Window{Address: "0xc", Class: "google-chrome", Workspace: musicWS}}
 }
 
 func stubCompositor(t *testing.T, c *compositor) {
@@ -50,31 +66,63 @@ func stubCompositor(t *testing.T, c *compositor) {
 	hyprRunning, chromeCtl = func() bool { return true }, c.ctl
 }
 
-// Chrome on a special workspace not shown is shown for the turn and put
-// back; the findings say where it was.
+// Chrome on a special workspace not shown is drawn on the off-screen
+// output for the turn, recorded while it is there, and put back; the
+// findings say where it was.
 func TestShowChromeForTheTurn(t *testing.T) {
 	_, _ = stubApp(t)
 	lockScreen(t, "")
 	c := chromeOnMusic()
 	stubCompositor(t, c)
-	p := showChrome(t.Context())
-	if p.To != "2" || p.Locked != "" || p.Failed != "" || len(c.calls) != 4 {
-		t.Fatalf("placement = %+v, dispatches %q", p, c.calls)
+	record := filepath.Join(t.TempDir(), "browse", "window.json")
+	p := showChrome(t.Context(), record)
+	if p.To != hypr.Output || p.Locked != "" || p.Failed != "" || c.window.Workspace.Name != hypr.Surface {
+		t.Fatalf("placement = %+v, commands %q", p, c.calls)
+	}
+	if _, err := os.Stat(record); err != nil {
+		t.Errorf("no record while the window is on the output: %v", err)
 	}
 	if err := p.restore(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if last := c.calls[len(c.calls)-1]; !strings.Contains(last, `workspace = "special:music"`) {
-		t.Errorf("last dispatch = %q, want the move back to special:music", last)
+	if c.window.Workspace != musicWS || c.output {
+		t.Errorf("after restore: Chrome on %+v, output there %v; commands %q", c.window.Workspace, c.output, c.calls)
+	}
+	if _, err := os.Stat(record); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the record outlived the restore: %v", err)
 	}
 	want := "window shown: the shared Chrome window was on workspace special:music, not shown on any monitor; " +
-		"the turn showed it floating on workspace 2 and put it back after"
+		"the turn drew it on the off-screen output BEEKEEPER-BROWSE, never on the person's screen, and put it back after"
 	if got := p.line(); got != want {
 		t.Errorf("line = %q, want %q", got, want)
 	}
 	n := len(c.calls)
 	if err := p.restore(t.Context()); err != nil || len(c.calls) != n {
-		t.Errorf("a second restore = %v, dispatched %q", err, c.calls[n:])
+		t.Errorf("a second restore = %v, ran %q", err, c.calls[n:])
+	}
+}
+
+// A window a died turn left on the output is put back from its record by
+// the next browse before its own placement.
+func TestShowChromeRecoversADiedTurn(t *testing.T) {
+	_, _ = stubApp(t)
+	lockScreen(t, "")
+	c := chromeOnMusic()
+	stubCompositor(t, c)
+	record := filepath.Join(t.TempDir(), "browse", "window.json")
+	if died := showChrome(t.Context(), record); died.To == "" {
+		t.Fatalf("placement = %+v", died)
+	}
+	p := showChrome(t.Context(), record)
+	if p.Recovered != musicWS.Name || p.Failed != "" || p.To != hypr.Output {
+		t.Fatalf("placement after a died turn = %+v, commands %q", p, c.calls)
+	}
+	if l := p.line(); !strings.HasPrefix(l, "window put back: a died turn had left the shared Chrome window on the off-screen output BEEKEEPER-BROWSE; "+
+		"it went back to workspace special:music\nwindow shown: ") {
+		t.Errorf("line = %q", l)
+	}
+	if err := p.restore(t.Context()); err != nil || c.window.Workspace != musicWS || c.output {
+		t.Errorf("restore = %v, Chrome on %+v, output %v", err, c.window.Workspace, c.output)
 	}
 }
 
@@ -85,9 +133,9 @@ func TestShowChromeUnderALockedScreen(t *testing.T) {
 	lockScreen(t, hyprlock)
 	c := chromeOnMusic()
 	stubCompositor(t, c)
-	p := showChrome(t.Context())
+	p := showChrome(t.Context(), filepath.Join(t.TempDir(), "window.json"))
 	if p.Locked != hyprlock || len(c.calls) != 0 {
-		t.Fatalf("placement = %+v, dispatches %q", p, c.calls)
+		t.Fatalf("placement = %+v, commands %q", p, c.calls)
 	}
 	if l := p.line(); !strings.HasPrefix(l, "screen locked: hyprlock runs") {
 		t.Errorf("line = %q", l)
@@ -119,7 +167,7 @@ func TestBrowseRefusesALockedScreen(t *testing.T) {
 		t.Fatalf("browse under a locked screen = %v", err)
 	}
 	if _, serr := os.Stat(ran); serr == nil || out.Len() != 0 || len(c.calls) != 0 {
-		t.Errorf("browse under a locked screen ran a turn (%v), printed %q or dispatched %q", serr, out.String(), c.calls)
+		t.Errorf("browse under a locked screen ran a turn (%v), printed %q or ran %q", serr, out.String(), c.calls)
 	}
 	st, rerr := a.store.Read()
 	if rerr != nil || len(st.Starts) != 0 {
@@ -131,9 +179,10 @@ func TestBrowseRefusesALockedScreen(t *testing.T) {
 	}
 }
 
-// A window browse could not show is named where it is in the draw error.
+// A window browse could not draw is named where it is in the draw error;
+// one drawn on the output and still not drawn names what the turn tried.
 func TestDrawErrNamesWhereTheWindowIs(t *testing.T) {
-	failed := "the shared Chrome window is on workspace special:music, not shown on any monitor; showing it failed: no socket"
+	failed := "the shared Chrome window is on workspace special:music, not shown on any monitor; drawing it on the off-screen output BEEKEEPER-BROWSE failed: no socket"
 	f := browseFindings{NotDrawn: 1, Window: placement{Failed: failed}}
 	if err := f.drawErr(); err == nil || !strings.HasPrefix(err.Error(), guard.NotDrawnLine+": ") || !strings.Contains(err.Error(), "workspace special:music") {
 		t.Errorf("drawErr = %v", err)
@@ -143,5 +192,10 @@ func TestDrawErrNamesWhereTheWindowIs(t *testing.T) {
 	}
 	if l := (placement{}).line(); l != "" {
 		t.Errorf("line of a window found shown = %q", l)
+	}
+	where := "workspace 2, under the special workspace special:magic shown over it on eDP-1"
+	f = browseFindings{NotDrawn: 2, Window: placement{Where: where, To: hypr.Output, Restored: true}}
+	if err := f.drawErr(); err == nil || !strings.Contains(err.Error(), "the turn drew it on the off-screen output BEEKEEPER-BROWSE") || !strings.Contains(err.Error(), "on "+where) {
+		t.Errorf("drawErr = %v, want it to name where the window was and what the turn tried", err)
 	}
 }

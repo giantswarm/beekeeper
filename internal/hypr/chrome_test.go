@@ -4,21 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
 
-// fake is a compositor: its windows and monitors answer hyprctl's queries,
-// and the dispatches it takes are recorded; refuse answers each dispatch
-// holding one of its words with an error text instead of ok.
+// fake is a compositor: its windows and monitors answer hyprctl's queries;
+// it creates and removes the headless output, moves windows, and records
+// every command it takes. lua says its configuration is a Lua one, which
+// refuses classic dispatches and keywords (a classic one refuses Lua
+// calls and eval); refuse answers each command holding one of its words
+// with an error text instead of ok; onCreate changes the compositor when
+// the output is created (a numbered workspace, a focus that moved).
 type fake struct {
 	windows  []Window
 	monitors []Monitor
 	layout   string
+	classic  bool
 	calls    []string
 	refuse   []string
+	onCreate func(f *fake, out *Monitor)
 }
+
+var moveRE = regexp.MustCompile(`(?:workspace = "|movetoworkspacesilent )(?:name:)?([^",]+)[",].*address:(0x[0-9a-f]+)`)
 
 func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 	switch {
@@ -28,49 +37,94 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 		return json.Marshal(f.monitors)
 	case slices.Equal(args, []string{"-j", "getoption", "general:layout"}):
 		return json.Marshal(map[string]any{"option": "general:layout", "str": f.layout, "set": true})
-	case len(args) == 2 && args[0] == "dispatch":
-		f.calls = append(f.calls, args[1])
-		for _, r := range f.refuse {
-			if strings.Contains(args[1], r) {
-				return []byte("error: refused\nmore"), nil
+	}
+	call := strings.Join(args, " ")
+	f.calls = append(f.calls, call)
+	for _, r := range f.refuse {
+		if strings.Contains(call, r) {
+			return []byte("error: refused\nmore"), nil
+		}
+	}
+	lua := args[0] == evalCmd || strings.HasPrefix(call, "dispatch hl.dsp.")
+	if slices.Contains([]string{evalCmd, "keyword", "dispatch"}, args[0]) && lua == f.classic {
+		return []byte("error: not this syntax"), nil
+	}
+	switch {
+	case slices.Equal(args, []string{"output", "create", "headless", Output}):
+		out := Monitor{ID: 1, Name: Output, X: -30000, Y: -30000, Width: Size[0], Height: Size[1], ActiveWorkspace: Workspace{ID: -1337, Name: Surface}}
+		if f.onCreate != nil {
+			f.onCreate(f, &out)
+		}
+		f.monitors = append(f.monitors, out)
+	case slices.Equal(args, []string{"output", "remove", Output}):
+		f.monitors = slices.DeleteFunc(f.monitors, func(m Monitor) bool { return m.Name == Output })
+	case args[0] == "dispatch":
+		m := moveRE.FindStringSubmatch(args[1])
+		if m == nil {
+			return nil, errors.New("unexpected dispatch " + args[1])
+		}
+		for i, w := range f.windows {
+			if w.Address == m[2] {
+				f.windows[i].Workspace = f.workspace(m[1])
 			}
 		}
-		return []byte("ok\n"), nil
 	}
-	return nil, errors.New("unexpected hyprctl " + strings.Join(args, " "))
+	return []byte("ok\n"), nil
 }
 
-// lua are the Lua calls among the dispatches taken.
-func (f *fake) lua() []string {
+// workspace is the workspace a selector names.
+func (f *fake) workspace(sel string) Workspace {
+	for _, ws := range []Workspace{ws2, music, magic, {ID: -1337, Name: Surface}} {
+		if ws.Name == sel {
+			return ws
+		}
+	}
+	return Workspace{ID: 99, Name: sel}
+}
+
+// commands are the commands taken but queries, the eval chunk shortened.
+func (f *fake) commands() []string {
 	var out []string
 	for _, c := range f.calls {
-		if strings.HasPrefix(c, "hl.dsp.") {
-			out = append(out, c)
+		if strings.HasPrefix(c, evalCmd+" ") {
+			c = evalCmd
 		}
+		out = append(out, c)
 	}
 	return out
 }
 
+// evalCmd is hyprctl's command that runs a Lua chunk.
+const evalCmd = "eval"
+
 // other is the address of a window beside Chrome on its workspace.
 const other = "0xk"
-
-// unfloat is the Lua dispatch that tiles Chrome again.
-const unfloat = `hl.dsp.window.float({ action = "unset", window = "address:0xc" })`
 
 var (
 	ws2     = Workspace{ID: 2, Name: "2"}
 	music   = Workspace{ID: -95, Name: "special:music"}
 	magic   = Workspace{ID: -97, Name: "special:magic"}
-	laptop  = Monitor{ID: 0, Name: "eDP-1", Width: 1920, Height: 1200, Scale: 1, Reserved: [4]int{0, 38, 0, 0}, ActiveWorkspace: ws2, Focused: true}
-	chrome  = Window{Address: "0xc", Class: "google-chrome", Workspace: ws2, At: [2]int{22, 60}, Size: [2]int{1876, 1118}, FocusHistoryID: 4}
-	claudeW = Window{Address: "0xd", Class: "com.anthropic.Claude", Workspace: magic, At: [2]int{22, 60}, Size: [2]int{1876, 1118}}
+	laptop  = Monitor{ID: 0, Name: "eDP-1", Width: 1920, Height: 1200, ActiveWorkspace: ws2, Focused: true}
+	chrome  = Window{Address: "0xc", Class: "google-chrome", Workspace: ws2, FocusHistoryID: 4}
+	claudeW = Window{Address: "0xd", Class: "com.anthropic.Claude", Workspace: magic}
+)
+
+const (
+	toSurface = `dispatch hl.dsp.window.move({ workspace = "name:beekeeper-browse", follow = false, window = "address:0xc" })`
+	toWS2     = `dispatch hl.dsp.window.move({ workspace = "2", follow = false, window = "address:0xc" })`
+	create    = "output create headless " + Output
+	remove    = "output remove " + Output
 )
 
 func with(w Window, f func(*Window)) Window { f(&w); return w }
 
+func underMagic() Monitor {
+	m := laptop
+	m.SpecialWorkspace = magic
+	return m
+}
+
 func TestWhere(t *testing.T) {
-	underMagic := laptop
-	underMagic.SpecialWorkspace = magic
 	for name, tc := range map[string]struct {
 		l    layout
 		w    Window
@@ -81,10 +135,12 @@ func TestWhere(t *testing.T) {
 			with(chrome, func(w *Window) { w.Workspace = music }), "workspace special:music, not shown on any monitor"},
 		"on a workspace not shown": {layout{monitors: []Monitor{laptop}},
 			with(chrome, func(w *Window) { w.Workspace = Workspace{ID: 4, Name: "4"} }), "workspace 4, not shown on any monitor"},
-		"under a special workspace shown over its own": {layout{monitors: []Monitor{underMagic}}, chrome,
+		"under a special workspace shown over its own": {layout{monitors: []Monitor{underMagic()}}, chrome,
 			"workspace 2, under the special workspace special:magic shown over it on eDP-1"},
-		"on the shown special workspace": {layout{monitors: []Monitor{underMagic}},
+		"on the shown special workspace": {layout{monitors: []Monitor{underMagic()}},
 			with(chrome, func(w *Window) { w.Workspace = magic; w.Floating = true }), ""},
+		"on the off-screen output": {layout{monitors: []Monitor{underMagic(), {ID: 1, Name: Output, ActiveWorkspace: Workspace{ID: -1337, Name: Surface}}}},
+			with(chrome, func(w *Window) { w.Workspace = Workspace{ID: -1337, Name: Surface} }), ""},
 		"behind the front window of a monocle workspace": {
 			layout{monitors: []Monitor{laptop}, monocle: true, windows: []Window{chrome, with(chrome, func(w *Window) { w.Address, w.Class, w.FocusHistoryID = other, "kitty", 1 })}},
 			chrome, "workspace 2, behind its front window kitty (monocle layout)"},
@@ -106,73 +162,117 @@ func TestWhere(t *testing.T) {
 	}
 }
 
-// Chrome under the special workspace the person works in is shown floating
-// on that special workspace, the focus left alone, and put back tiled on
-// its own workspace after.
+// Chrome under the special workspace the person works in is drawn on the
+// off-screen output for the turn and put back after: nothing floats, the
+// person's monitor, its special workspace and the focus stay as they were,
+// and the output goes again.
 func TestShowUnderASpecialWorkspace(t *testing.T) {
-	m := laptop
-	m.SpecialWorkspace = magic
-	f := &fake{windows: []Window{chrome, claudeW}, monitors: []Monitor{m}, layout: "monocle"}
+	f := &fake{windows: []Window{chrome, claudeW}, monitors: []Monitor{underMagic()}, layout: "monocle"}
 	s, err := Show(t.Context(), f.ctl)
 	if err != nil || s == nil {
 		t.Fatalf("Show = %v, %v", s, err)
 	}
-	if s.To != magic || !strings.Contains(s.Where, "under the special workspace special:magic") {
+	if !s.Created || !strings.Contains(s.Where, "under the special workspace special:magic") {
 		t.Errorf("shown = %+v", s)
 	}
-	want := []string{
-		`hl.dsp.window.move({ workspace = "special:magic", follow = false, window = "address:0xc" })`,
-		`hl.dsp.window.float({ action = "set", window = "address:0xc" })`,
-		`hl.dsp.window.resize({ x = 1280, y = 800, window = "address:0xc" })`,
-		`hl.dsp.window.move({ x = 632, y = 392, window = "address:0xc" })`,
+	if want := []string{evalCmd, create, toSurface}; !slices.Equal(f.commands(), want) {
+		t.Errorf("commands =\n%s\nwant\n%s", strings.Join(f.commands(), "\n"), strings.Join(want, "\n"))
 	}
-	if !slices.Equal(f.calls, want) {
-		t.Errorf("dispatches =\n%s\nwant\n%s", strings.Join(f.calls, "\n"), strings.Join(want, "\n"))
+	if f.monitors[0] != underMagic() || f.windows[0].Workspace.Name != Surface {
+		t.Errorf("after Show: the person's monitor %+v, Chrome on %+v", f.monitors[0], f.windows[0].Workspace)
 	}
 	f.calls = nil
-	f.windows[0].Workspace, f.windows[0].Floating = magic, true
-	if err := s.Restore(t.Context(), f.ctl); err != nil {
-		t.Fatal(err)
+	if err := s.Restore(t.Context(), f.ctl); err != nil || s.Left != "" {
+		t.Fatalf("Restore = %v, left %q", err, s.Left)
 	}
-	want = []string{
-		unfloat,
-		`hl.dsp.window.move({ workspace = "2", follow = false, window = "address:0xc" })`,
+	if want := []string{toWS2, remove}; !slices.Equal(f.commands(), want) {
+		t.Errorf("restore commands = %q, want %q", f.commands(), want)
 	}
-	if !slices.Equal(f.calls, want) {
-		t.Errorf("restore dispatches =\n%s\nwant\n%s", strings.Join(f.calls, "\n"), strings.Join(want, "\n"))
+	if len(f.monitors) != 1 || f.monitors[0] != underMagic() || f.windows[0] != chrome {
+		t.Errorf("after Restore: monitors %+v, Chrome %+v", f.monitors, f.windows[0])
 	}
 	f.calls = nil
 	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.calls) != 0 {
-		t.Errorf("a second restore = %v, dispatched %q", err, f.calls)
+		t.Errorf("a second restore = %v, ran %q", err, f.calls)
 	}
 }
 
-// A floating Chrome on a special workspace not shown goes back to its own
-// size and place, floating still, on that special workspace.
-func TestShowAFloatingWindowAndPutItBack(t *testing.T) {
-	w := with(chrome, func(w *Window) {
-		w.Workspace, w.Floating, w.At, w.Size = music, true, [2]int{100, 100}, [2]int{900, 700}
-	})
-	f := &fake{windows: []Window{w}, monitors: []Monitor{laptop}}
+// The rules give the output its far-off place and the named workspace
+// before it exists, in Lua; a classic configuration takes them as
+// keywords and the moves as classic dispatches.
+func TestShowClassicSyntax(t *testing.T) {
+	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}, classic: true}
 	s, err := Show(t.Context(), f.ctl)
-	if err != nil || s == nil || s.To != ws2 {
+	if err != nil || s == nil {
 		t.Fatalf("Show = %+v, %v", s, err)
 	}
-	if slices.ContainsFunc(f.calls, func(c string) bool { return strings.Contains(c, "float(") }) {
-		t.Errorf("a floating window was floated: %q", f.calls)
+	for _, want := range []string{
+		"keyword monitor BEEKEEPER-BROWSE,1280x800,-30000x-30000,1",
+		"keyword workspace name:beekeeper-browse,monitor:BEEKEEPER-BROWSE,default:true",
+		create,
+		"dispatch movetoworkspacesilent name:beekeeper-browse,address:0xc",
+	} {
+		if !slices.Contains(f.calls, want) {
+			t.Errorf("commands %q lack %q", f.calls, want)
+		}
+	}
+	for _, want := range []string{`hl.monitor({ output = "BEEKEEPER-BROWSE", mode = "1280x800", position = "-30000x-30000", scale = "1" })`,
+		`hl.workspace_rule({ workspace = "name:beekeeper-browse", monitor = "BEEKEEPER-BROWSE", default = true })`} {
+		if !strings.Contains(f.calls[0], want) {
+			t.Errorf("eval %q lacks %q", f.calls[0], want)
+		}
+	}
+}
+
+// An output that would change the person's view, or take a numbered
+// workspace, is removed again before Chrome moves: their monitors,
+// workspace numbers and focus stay theirs.
+func TestShowRefusesAnOutputThatChangesThePersonsView(t *testing.T) {
+	for name, tc := range map[string]struct {
+		onCreate func(f *fake, out *Monitor)
+		says     string
+	}{
+		"a numbered workspace": {func(_ *fake, out *Monitor) { out.ActiveWorkspace = Workspace{ID: 5, Name: "5"} }, "shows workspace 5, not beekeeper-browse"},
+		"the focus moved": {func(f *fake, out *Monitor) {
+			f.monitors[0].Focused, out.Focused = false, true
+		}, "changed the person's monitors"},
+		"the person's monitor moved": {func(f *fake, _ *Monitor) { f.monitors[0].X = 1280 }, "changed the person's monitors"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}, onCreate: tc.onCreate}
+			s, err := Show(t.Context(), f.ctl)
+			if s != nil || err == nil || !strings.Contains(err.Error(), tc.says) || !strings.Contains(err.Error(), "under the special workspace special:magic") {
+				t.Fatalf("Show = %+v, %v; want an error saying %q", s, err, tc.says)
+			}
+			if want := []string{evalCmd, create, remove}; !slices.Equal(f.commands(), want) {
+				t.Errorf("commands = %q, want %q", f.commands(), want)
+			}
+			if f.windows[0] != chrome {
+				t.Errorf("Chrome moved: %+v", f.windows[0])
+			}
+		})
+	}
+}
+
+// An output there already is used, not created again, and removed after:
+// it is beekeeper's by its name.
+func TestShowOnTheOutputThereAlready(t *testing.T) {
+	out := Monitor{ID: 1, Name: Output, ActiveWorkspace: Workspace{ID: -1337, Name: Surface}}
+	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop, out}}
+	s, err := Show(t.Context(), f.ctl)
+	if err != nil || s == nil || s.Created {
+		t.Fatalf("Show = %+v, %v", s, err)
+	}
+	if !slices.Equal(f.commands(), []string{toSurface}) {
+		t.Errorf("commands = %q", f.commands())
 	}
 	f.calls = nil
-	f.windows[0].Workspace = ws2
-	if err := s.Restore(t.Context(), f.ctl); err != nil {
-		t.Fatal(err)
+	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.monitors) != 1 {
+		t.Fatalf("Restore = %v, monitors %+v", err, f.monitors)
 	}
-	want := []string{
-		`hl.dsp.window.resize({ x = 900, y = 700, window = "address:0xc" })`,
-		`hl.dsp.window.move({ x = 100, y = 100, window = "address:0xc" })`,
-		`hl.dsp.window.move({ workspace = "special:music", follow = false, window = "address:0xc" })`,
-	}
-	if !slices.Equal(f.calls, want) {
-		t.Errorf("restore dispatches =\n%s\nwant\n%s", strings.Join(f.calls, "\n"), strings.Join(want, "\n"))
+	want := []string{`dispatch hl.dsp.window.move({ workspace = "special:music", follow = false, window = "address:0xc" })`, remove}
+	if !slices.Equal(f.commands(), want) {
+		t.Errorf("restore commands = %q, want %q", f.commands(), want)
 	}
 }
 
@@ -184,7 +284,7 @@ func TestShowNothingToDo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, err := Show(t.Context(), f.ctl)
 			if s != nil || err != nil || len(f.calls) != 0 {
-				t.Errorf("Show = %+v, %v, dispatched %q", s, err, f.calls)
+				t.Errorf("Show = %+v, %v, ran %q", s, err, f.calls)
 			}
 			if err := s.Restore(t.Context(), f.ctl); err != nil {
 				t.Errorf("Restore of nothing shown = %v", err)
@@ -203,33 +303,15 @@ func TestBrowserIsTheLastFocused(t *testing.T) {
 	}
 }
 
-// Under a classic configuration hyprctl refuses the Lua call and takes the
-// classic one.
-func TestShowClassicSyntax(t *testing.T) {
-	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}, refuse: []string{"hl.dsp."}}
-	if _, err := Show(t.Context(), f.ctl); err != nil {
-		t.Fatal(err)
-	}
-	var classic []string
-	for _, c := range f.calls {
-		if !strings.HasPrefix(c, "hl.dsp.") {
-			classic = append(classic, c)
-		}
-	}
-	want := []string{"movetoworkspacesilent 2,address:0xc", "setfloating address:0xc", "resizewindowpixel exact 1280 800,address:0xc", "movewindowpixel exact 632 392,address:0xc"}
-	if !slices.Equal(classic, want) || len(f.lua()) != len(want) {
-		t.Errorf("dispatches = %q, want the classic %q each after its Lua call", f.calls, want)
-	}
-}
-
-// A step that fails is undone, and the error names where the window is.
+// A move that fails is undone by removing the output it created, and the
+// error names where the window is.
 func TestShowFailsNamingTheWorkspace(t *testing.T) {
-	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}, refuse: []string{"resize"}}
+	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}, refuse: []string{"address:0xc"}}
 	s, err := Show(t.Context(), f.ctl)
 	if s != nil || err == nil {
 		t.Fatalf("Show = %+v, %v; want an error", s, err)
 	}
-	for _, want := range []string{"workspace special:music, not shown on any monitor", "showing it failed", "resizewindowpixel", "error: refused"} {
+	for _, want := range []string{"workspace special:music, not shown on any monitor", "drawing it on the off-screen output BEEKEEPER-BROWSE failed", "movetoworkspacesilent", "error: refused"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not say %q", err, want)
 		}
@@ -237,17 +319,42 @@ func TestShowFailsNamingTheWorkspace(t *testing.T) {
 	if strings.Contains(err.Error(), "more") {
 		t.Errorf("error %q carries more than hyprctl's first line", err)
 	}
-	undo := []string{
-		unfloat,
-		`hl.dsp.window.move({ workspace = "special:music", follow = false, window = "address:0xc" })`,
-	}
-	if n := len(f.calls); n < 2 || !slices.Equal(f.calls[n-2:], undo) {
-		t.Errorf("dispatches = %q, want them to end undoing the float and the move: %q", f.calls, undo)
+	if c := f.commands(); c[len(c)-1] != remove || len(f.monitors) != 1 {
+		t.Errorf("commands = %q, monitors %+v: want the output removed", c, f.monitors)
 	}
 }
 
-// A window the person moved off the shown workspace, or closed, stays
-// where it is.
+// Every window on the output's workspace goes to Chrome's workspace before
+// the output is removed, so none lands on the person's screen; one that
+// does not move keeps the output.
+func TestRestoreMovesEveryWindowOffTheOutput(t *testing.T) {
+	f := &fake{windows: []Window{chrome, claudeW}, monitors: []Monitor{underMagic()}}
+	s, err := Show(t.Context(), f.ctl)
+	if err != nil || s == nil {
+		t.Fatalf("Show = %+v, %v", s, err)
+	}
+	popup := Window{Address: "0xe", Class: "google-chrome", Workspace: Workspace{ID: -1337, Name: Surface}}
+	f.windows = append(f.windows, popup)
+	f.calls, f.refuse = nil, []string{"address:0xe"}
+	if err := s.Restore(t.Context(), f.ctl); err == nil || !strings.Contains(err.Error(), "the output BEEKEEPER-BROWSE stays") {
+		t.Fatalf("Restore with a window stuck on the output = %v", err)
+	}
+	if len(f.monitors) != 2 || slices.Contains(f.calls, remove) {
+		t.Errorf("the output was removed with a window on it: %q", f.calls)
+	}
+	f.calls, f.refuse = nil, nil
+	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.monitors) != 1 {
+		t.Fatalf("Restore = %v, monitors %+v", err, f.monitors)
+	}
+	for _, w := range f.windows {
+		if w.Address != claudeW.Address && w.Workspace != ws2 {
+			t.Errorf("window %s on %+v, want workspace 2", w.Address, w.Workspace)
+		}
+	}
+}
+
+// A window the person moved off the output, or closed, stays where it is;
+// the output goes all the same.
 func TestRestoreLeavesAWindowThePersonMoved(t *testing.T) {
 	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}}
 	s, err := Show(t.Context(), f.ctl)
@@ -256,55 +363,38 @@ func TestRestoreLeavesAWindowThePersonMoved(t *testing.T) {
 	}
 	f.calls = nil
 	f.windows[0].Workspace = Workspace{ID: 5, Name: "5"}
-	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.calls) != 0 || s.Left != "moved by the person to workspace 5" {
-		t.Errorf("Restore of a moved window = %v, left %q, dispatched %q", err, s.Left, f.calls)
+	if err := s.Restore(t.Context(), f.ctl); err != nil || !slices.Equal(f.commands(), []string{remove}) || s.Left != "moved by the person to workspace 5" {
+		t.Errorf("Restore of a moved window = %v, left %q, ran %q", err, s.Left, f.calls)
 	}
-	f.windows = nil
+	f.calls, f.windows = nil, nil
 	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.calls) != 0 || s.Left != "closed" {
-		t.Errorf("Restore of a closed window = %v, left %q, dispatched %q", err, s.Left, f.calls)
+		t.Errorf("Restore of a closed window = %v, left %q, ran %q", err, s.Left, f.calls)
 	}
 }
 
-// A window the person moved back to its own workspace while it floated
-// there is only tiled again, not moved.
-func TestRestoreTilesAWindowMovedHome(t *testing.T) {
-	m := laptop
-	m.SpecialWorkspace = magic
-	f := &fake{windows: []Window{chrome, claudeW}, monitors: []Monitor{m}, layout: "monocle"}
+// A placement survives as JSON: a browse that died mid-turn is put back by
+// the next one from its record.
+func TestShownRoundTrips(t *testing.T) {
+	f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
 	s, err := Show(t.Context(), f.ctl)
 	if err != nil || s == nil {
 		t.Fatalf("Show = %+v, %v", s, err)
 	}
-	f.calls = nil
-	f.windows[0].Floating = true
-	if err := s.Restore(t.Context(), f.ctl); err != nil || s.Left != "" {
-		t.Fatalf("Restore = %v, left %q", err, s.Left)
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := []string{unfloat}
-	if !slices.Equal(f.calls, want) {
-		t.Errorf("dispatches = %q, want %q", f.calls, want)
+	var back Shown
+	if err := json.Unmarshal(b, &back); err != nil || back.Before != s.Before || back.Where != s.Where || !back.Created {
+		t.Fatalf("round trip = %+v, %v", back, err)
 	}
-}
-
-func TestCorner(t *testing.T) {
-	for name, tc := range map[string]struct {
-		m        Monitor
-		at, size [2]int
-	}{
-		"a laptop with a top bar": {laptop, [2]int{632, 392}, [2]int{1280, 800}},
-		"a scaled second monitor": {Monitor{X: 1920, Width: 3840, Height: 2160, Scale: 2}, [2]int{1920 + 1920 - 8 - 1280, 1080 - 8 - 800}, [2]int{1280, 800}},
-		"a small screen":          {Monitor{Width: 1024, Height: 768, Scale: 1}, [2]int{8, 8}, [2]int{1008, 752}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if at, size := corner(tc.m); at != tc.at || size != tc.size {
-				t.Errorf("corner = %v %v, want %v %v", at, size, tc.at, tc.size)
-			}
-		})
+	if err := back.Restore(t.Context(), f.ctl); err != nil || f.windows[0] != chrome || len(f.monitors) != 1 {
+		t.Errorf("Restore from the record = %v, Chrome %+v, monitors %+v", err, f.windows[0], f.monitors)
 	}
 }
 
 func TestSelector(t *testing.T) {
-	for ws, want := range map[Workspace]string{ws2: "2", music: "special:music", {ID: 12, Name: "mail"}: "name:mail"} {
+	for ws, want := range map[Workspace]string{ws2: "2", music: "special:music", {ID: 12, Name: "mail"}: "name:mail", surface: "name:beekeeper-browse"} {
 		if got := ws.selector(); got != want {
 			t.Errorf("selector(%+v) = %q, want %q", ws, got, want)
 		}
