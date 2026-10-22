@@ -491,3 +491,83 @@ func TestSelector(t *testing.T) {
 		}
 	}
 }
+
+func TestInView(t *testing.T) {
+	onMusic := with(chrome, func(w *Window) { w.Workspace = music })
+	for name, tc := range map[string]struct {
+		windows []Window
+		want    string
+	}{
+		"focused":                   {[]Window{with(chrome, func(w *Window) { w.FocusHistoryID = 0 })}, "a Chrome window has the focus"},
+		"focused just before":       {[]Window{with(onMusic, func(w *Window) { w.FocusHistoryID = 1 })}, "a Chrome window had the focus before the current window"},
+		"shown":                     {[]Window{chrome}, "a Chrome window is shown on workspace 2"},
+		"hidden":                    {[]Window{onMusic}, ""},
+		"a web app's window":        {[]Window{with(chrome, func(w *Window) { w.Class, w.FocusHistoryID = "chrome-meet-Default", 0 })}, ""},
+		"the turn's, on the output": {[]Window{with(chrome, func(w *Window) { w.Workspace, w.FocusHistoryID = surface, 0 })}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := layout{windows: tc.windows, monitors: []Monitor{laptop, {ID: 1, Name: Output, ActiveWorkspace: surface}}}
+			if got := l.inView(); got != tc.want {
+				t.Errorf("inView = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// While the person types the redirect is off, so a window they open stays
+// on their screen; on again, a window Chrome opens is drawn on the output.
+// Each change is made once, and Restore ends it.
+func TestRedirectFollowsThePerson(t *testing.T) {
+	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}}
+	s, err := Show(t.Context(), f.ctl, hold)
+	if err != nil || s == nil || !f.redirect {
+		t.Fatalf("Show = %+v, %v, redirect %v", s, err, f.redirect)
+	}
+	f.calls = nil
+	for range 2 {
+		if err := s.Redirect(t.Context(), f.ctl, false, hold); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.redirect || len(f.calls) != 1 {
+		t.Fatalf("redirect off: on %v, commands %q", f.redirect, f.calls)
+	}
+	f.open(Window{Address: "0xa1", Class: chromeClass})
+	if ws := f.windows[len(f.windows)-1].Workspace; ws != ws2 {
+		t.Errorf("a window the person opened went to %+v, want their workspace 2", ws)
+	}
+	if err := s.Redirect(t.Context(), f.ctl, true, hold); err != nil || !f.redirect {
+		t.Fatalf("redirect on = %v, on %v", err, f.redirect)
+	}
+	f.open(Window{Address: "0xa2", Class: chromeClass})
+	if ws := f.windows[len(f.windows)-1].Workspace; ws != surface {
+		t.Errorf("a window Chrome opened during a quiet turn went to %+v, want the output's", ws)
+	}
+	if err := s.Restore(t.Context(), f.ctl); err != nil || f.redirect {
+		t.Fatalf("Restore = %v, redirect %v", err, f.redirect)
+	}
+	f.calls = nil
+	if err := s.Redirect(t.Context(), f.ctl, false, hold); err != nil || len(f.calls) != 0 {
+		t.Errorf("redirect off after Restore = %v, commands %q", err, f.calls)
+	}
+}
+
+// The person turned to the shared window once a monitor of theirs shows
+// its own workspace, never for the output's.
+func TestTurned(t *testing.T) {
+	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}}
+	s, err := Show(t.Context(), f.ctl, hold)
+	if err != nil || s == nil || !s.Moved {
+		t.Fatalf("Show = %+v, %v", s, err)
+	}
+	if got, err := s.Turned(t.Context(), f.ctl); err != nil || got != "" {
+		t.Errorf("Turned = %q, %v; want not turned", got, err)
+	}
+	f.monitors[0].SpecialWorkspace = music
+	if got, err := s.Turned(t.Context(), f.ctl); err != nil || got != "eDP-1 shows workspace special:music, the shared Chrome window's" {
+		t.Errorf("Turned = %q, %v", got, err)
+	}
+	if got, err := (*Shown)(nil).Turned(t.Context(), f.ctl); err != nil || got != "" {
+		t.Errorf("Turned of no placement = %q, %v", got, err)
+	}
+}

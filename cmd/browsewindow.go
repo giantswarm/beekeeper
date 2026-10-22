@@ -35,8 +35,12 @@ const windowWait = 10 * time.Second
 // the turn that were still open after it (hypr.Shown.Opened), which went
 // to Back, the shared window's workspace; Recovered is
 // the workspace a window a died turn left on the output went back to.
+// Yielded says how the person turned to the window during the turn, which
+// gave it back to them; Watch names what failed while following them.
 type placement struct {
 	Locked    string
+	Yielded   string
+	Watch     string
 	Where     string
 	To        string
 	Failed    string
@@ -88,12 +92,169 @@ func screenLockedErr() error {
 // runs.
 func unlockedProbe(locker string) string { return "! pgrep -x " + locker }
 
+// errPersonAtChrome opens the refusal of a browse while the person works at
+// Chrome, and the error of a turn that gave the shared window back to them.
+var errPersonAtChrome = errors.New("person at Chrome")
+
+// awayProbe is the command a caller parks on until the person leaves
+// Chrome: browse away.
+const awayProbe = "beekeeper browse away"
+
+// awaySample is how long browse watches the person's input before a turn
+// on a Chrome window in their view; presencePoll paces the watch over the
+// turn. Tests shorten both.
+var (
+	awaySample   = 5 * time.Second
+	presencePoll = 2 * time.Second
+)
+
+// presence is the person's input as browse watches it: input counts while
+// it arrived within quiet. An input browse cannot read counts as arriving.
+// The zero presence watches nothing and never counts input.
+type presence struct {
+	watched bool
+	start   time.Time
+	last    func() time.Time
+	quiet   time.Duration
+}
+
+// watchPresence watches the person's keyboards and pointers until ctx ends,
+// quiet being desktop.typingQuiet; a negative quiet watches nothing.
+func watchPresence(ctx context.Context, quiet time.Duration) presence {
+	if quiet < 0 {
+		return presence{}
+	}
+	p := presence{watched: true, quiet: quiet}
+	if last, err := desktopInput(ctx); err == nil {
+		// The watch's start is its first answer: only input after it counts.
+		p.last, p.start = last, last()
+	}
+	return p
+}
+
+// typing reports whether the person typed or pointed within quiet.
+func (p presence) typing(now time.Time) bool {
+	switch {
+	case !p.watched:
+		return false
+	case p.last == nil:
+		return true
+	}
+	l := p.last()
+	return l.After(p.start) && now.Sub(l) < p.quiet
+}
+
+// how says what the watch saw of the person's input.
+func (p presence) how() string {
+	if p.last == nil {
+		return "their keyboards and pointers cannot be read, which counts as their input"
+	}
+	return "their keyboard or pointer was in use"
+}
+
+// personAtChromeErr refuses a browse, or ends its turn, while the person
+// works at Chrome (why), naming the probe a caller parks on.
+func personAtChromeErr(why string) error {
+	return fmt.Errorf("%w: %s: browse leaves the shared Chrome window to the person. "+
+		"Park until they leave Chrome and run the steps again then, with a timer on the probe %q "+
+		"(beekeeper timer add 1m \"person away from Chrome: run the browse steps again\" --probe %q --wake \"<agent>\" --until 12h), not a retry loop",
+		errPersonAtChrome, why, awayProbe, awayProbe)
+}
+
+// atChrome watches the person's input from now until ctx ends and refuses a
+// turn while they work at Chrome: a Chrome window in their view (focused,
+// focused just before, or shown) and their input within awaySample. With no
+// Chrome window in view it starts the turn without waiting. Not under
+// Hyprland, it watches nothing and refuses nothing.
+func atChrome(ctx context.Context, quiet time.Duration) (presence, error) {
+	if !hyprRunning() {
+		return presence{}, nil
+	}
+	p := watchPresence(ctx, quiet)
+	if !p.watched {
+		return p, nil
+	}
+	vctx, cancel := context.WithTimeout(ctx, windowWait)
+	why, err := hypr.InView(vctx, chromeCtl)
+	cancel()
+	if err != nil || why == "" {
+		// A compositor that cannot be asked fails the placement, which says so.
+		return p, nil
+	}
+	if p.last != nil {
+		t := time.NewTimer(awaySample)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return p, ctx.Err()
+		case <-t.C:
+		}
+	}
+	if !p.typing(time.Now()) {
+		return p, nil
+	}
+	return p, personAtChromeErr(fmt.Sprintf("%s and %s", why, p.how()))
+}
+
+// watch follows the person over the turn until the returned stop: while
+// they type or point, the windows Chrome opens stay on their screen, and
+// once they turn to the shared window's workspace the turn yields, cancel
+// stops it with errPersonAtChrome and the window goes back at once. stop
+// waits for the watch to end, so the placement is the caller's again.
+func (p *placement) watch(ctx context.Context, pres presence, hold time.Duration, cancel context.CancelCauseFunc) (stop func()) {
+	if p.shown == nil || !pres.watched {
+		return func() {}
+	}
+	ctx, end := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(presencePoll)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			if p.follow(ctx, pres, hold, cancel) {
+				return
+			}
+		}
+	}()
+	return func() { end(); <-done }
+}
+
+// follow is one look of watch: it sets the redirect by the person's input
+// and yields the window when they turned to it, reporting whether it did.
+func (p *placement) follow(ctx context.Context, pres presence, hold time.Duration, cancel context.CancelCauseFunc) bool {
+	ctx, done := context.WithTimeout(ctx, windowWait)
+	defer done()
+	typing := pres.typing(time.Now())
+	if err := p.shown.Redirect(ctx, chromeCtl, !typing, hold); err != nil && p.Watch == "" {
+		p.Watch = err.Error()
+	}
+	if !typing {
+		return false
+	}
+	turned, err := p.shown.Turned(ctx, chromeCtl)
+	if err != nil || turned == "" {
+		return false
+	}
+	p.Yielded = turned
+	cancel(personAtChromeErr(fmt.Sprintf("during the turn %s and %s, so the turn stopped and the window went back to them", turned, pres.how())))
+	if err := p.restore(ctx); err != nil && p.Watch == "" {
+		p.Watch = err.Error()
+	}
+	return true
+}
+
 // showChrome readies the off-screen output for the turn (hypr.Show): every
-// window Chrome opens until restore, or hold at the latest, is drawn there,
-// and the shared window too when the compositor does not show it; it keeps
-// the placement in record until restore. A record a died turn left is put
-// back first. Under a locked screen it moves nothing: no window is drawn
-// there, wherever it sits.
+// window Chrome opens while redirected, until restore or hold at the
+// latest, is drawn there, and the shared window too when the compositor
+// does not show it; it keeps the placement in record until restore. A
+// record a died turn left is put back first. Under a locked screen it moves
+// nothing: no window is drawn there, wherever it sits.
 func showChrome(ctx context.Context, record string, hold time.Duration) *placement {
 	p := &placement{record: record}
 	if p.Locked = screenLocker(); p.Locked != "" {
@@ -201,6 +362,12 @@ func (p placement) line() string {
 		lines = append(lines, "window not shown: "+p.Failed)
 	case p.To != "":
 		lines = append(lines, fmt.Sprintf("window shown: the shared Chrome window was on %s; the turn %s", p.Where, p.tried()))
+	}
+	if p.Yielded != "" {
+		lines = append(lines, fmt.Sprintf("window yielded: during the turn %s while the person worked at the desktop: the turn stopped and the window went back to them", p.Yielded))
+	}
+	if p.Watch != "" {
+		lines = append(lines, "person not followed: "+p.Watch)
 	}
 	if p.Opened > 0 {
 		lines = append(lines, fmt.Sprintf("windows opened: %d window(s) Chrome opened during the turn were drawn on the off-screen output %s, "+

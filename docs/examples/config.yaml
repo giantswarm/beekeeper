@@ -338,7 +338,7 @@ omp:
       apiKey: op://Shared/spark/credential   # the key's reference, never the key: it goes into the agent's environment alone
 
 desktop:
-  typingQuiet: 30s          # the default; a claude:// link waits for this much idle keyboard and pointer input; negative: no wait
+  typingQuiet: 30s          # the default; a claude:// link waits for this much idle keyboard and pointer input, and a browse turn sends Chrome's new windows off-screen only after it; negative: no wait, no watch
 
 metrics:
   models:                   # USD per million tokens and the context window; an entry replaces the default of its id
