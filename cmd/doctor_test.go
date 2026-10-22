@@ -247,19 +247,34 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 }
 
 // A park on a person reaches the supervisor's watch once; a park on a
-// merge ahead in the lane does not.
+// merge ahead in the lane, a timer or the supervisor's lease grant does not,
+// and a park on a lease is said once as a lease wait with its queue place.
 func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 	now := time.Now()
-	st := &state.State{Agents: []state.Agent{
-		{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
-		{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
-		{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
-	}}
-	lines, evs := parkedOnPerson(st, "Timo", now)
-	if len(lines) != 2 || len(evs) != 2 || !strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) || !strings.Contains(lines[1], "tells Timo") {
+	lab := labOne
+	queued := state.Party{Name: "on a lease", Session: "s2"}
+	st := &state.State{
+		Grants: []state.Grant{{Resource: lab, To: state.Party{Name: "first", Session: "s1"}}, {Resource: lab, To: queued}},
+		Agents: []state.Agent{
+			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
+			{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
+			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{Waits: "a colleague's reply on the timer setting"}},
+			{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
+			{Party: queued, Task: "t", Park: &state.Park{On: leaseParkOn(lab), Waits: "the lease " + lab + ": the supervisor's review proof"}},
+			{Party: state.Party{Name: "on a grant"}, Task: "t", Park: &state.Park{Waits: "the v1.2.0 release and the supervisor's agentlab-2 grant"}},
+			{Party: state.Party{Name: "on a probe"}, Task: "t", Park: &state.Park{Waits: "the rollout probe the supervisor set"}},
+		},
+	}
+	lines, evs := parkedNews(st, "Timo", now)
+	if len(lines) != 4 || len(evs) != 4 ||
+		!strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) ||
+		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on Timo"`) || !strings.Contains(lines[1], "tells Timo") ||
+		!strings.HasPrefix(lines[2], `PARKED ON A PERSON: "on a reply"`) ||
+		!strings.HasPrefix(lines[3], `PARKED ON A LEASE: "on a lease" parked on lease agentlab-1`) ||
+		!strings.Contains(lines[3], `number 2 in the queue of agentlab-1 behind "first"`) {
 		t.Fatalf("lines = %q", lines)
 	}
-	if lines, _ := parkedOnPerson(st, "Timo", now); len(lines) != 0 {
+	if lines, _ := parkedNews(st, "Timo", now); len(lines) != 0 {
 		t.Errorf("said again: %q", lines)
 	}
 }

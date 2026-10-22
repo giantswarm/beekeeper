@@ -1856,7 +1856,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
 		lines, evs = append(lines, pl...), append(evs, pe...)
-		ppl, ppe := parkedOnPerson(st, w.cfg.Guide.Person, w.now)
+		ppl, ppe := parkedNews(st, w.cfg.Guide.Person, w.now)
 		lines, evs = append(lines, ppl...), append(evs, ppe...)
 		for _, e := range ce {
 			lines = append(lines, fmt.Sprintf("SUPERVISOR RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
@@ -2212,10 +2212,26 @@ func reportLines(r state.WorkerReport) []string {
 	return lines
 }
 
-// parkedOnPerson says once per park which agents parked on a person (a note,
-// the person's or a colleague's answer, a review): the supervisor carries it
-// to the guide, who tells the person.
-func parkedOnPerson(st *state.State, person string, now time.Time) ([]string, []state.Event) {
+// parkOnPerson reports whether park p waits on a person's word: a note, or
+// waits that name a person's answer, review or reply, or person; waits that
+// name only the supervisor or the guide beside a lease grant, a timer or a
+// probe wait on a resource. A park on a lease never waits on a person.
+func parkOnPerson(p *state.Park, person string) bool {
+	if _, note := parkNote(p.On); note {
+		return true
+	}
+	if _, lease := parkLease(p.On); lease {
+		return false
+	}
+	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person) ||
+		parkedOn(p.Waits, person) != "" && !resourceWaitWords.MatchString(p.Waits)
+}
+
+// parkedNews says once per park which agents parked on a person (a note,
+// the person's or a colleague's answer, a review), which the supervisor
+// carries to the guide, who tells the person, and which parked on a lease,
+// with their place in its queue: the supervisor's grant settles that one.
+func parkedNews(st *state.State, person string, now time.Time) ([]string, []state.Event) {
 	var lines []string
 	var evs []state.Event
 	for i := range st.Agents {
@@ -2224,7 +2240,13 @@ func parkedOnPerson(st *state.State, person string, now time.Time) ([]string, []
 		if p == nil || !p.Told.IsZero() {
 			continue
 		}
-		if _, note := parkNote(p.On); !note && parkedOn(p.Waits, person) == "" {
+		if res, ok := parkLease(p.On); ok {
+			p.Told = now.UTC()
+			lines = append(lines, fmt.Sprintf("PARKED ON A LEASE: %q %s; %s", ag.Name, parkedText(p, now), leaseQueueText(st, ag.Party, res)))
+			evs = append(evs, event(watchParty, "agents.parked-on-lease", "%s: %s", ag.Name, res))
+			continue
+		}
+		if !parkOnPerson(p, person) {
 			continue
 		}
 		p.Told = now.UTC()
@@ -2232,6 +2254,20 @@ func parkedOnPerson(st *state.State, person string, now time.Time) ([]string, []
 		evs = append(evs, event(watchParty, "agents.parked-on-person", "%s: %s", ag.Name, p.Waits))
 	}
 	return lines, evs
+}
+
+// leaseQueueText says where party stands in the grant queue of the lease
+// res: its number and who is first, or that it holds no grant yet.
+func leaseQueueText(st *state.State, party state.Party, res string) string {
+	queue := lease.Pending(st, res, true, time.Time{}, 0)
+	pos := slices.IndexFunc(queue, func(g state.Grant) bool { return g.To.Is(party) })
+	switch {
+	case pos < 0:
+		return fmt.Sprintf("no grant of %s to it yet: the supervisor grants it, not the person", res)
+	case pos == 0:
+		return fmt.Sprintf("number 1 in the queue of %s, granted, for the lease to come free", res)
+	}
+	return fmt.Sprintf("number %d in the queue of %s behind %q: the supervisor's grant settles it, not the person", pos+1, res, queue[0].To.Name)
 }
 
 // runaways prints one line for each session figure over its threshold in
