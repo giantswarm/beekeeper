@@ -296,7 +296,7 @@ func TestAppGitLabRecord(t *testing.T) {
 		{append(slices.Clone(base), clientIDFlag, uid), "--gitlab needs --declared <ref>"},
 		{append(slices.Clone(base), declFl, declared), "--gitlab needs --client-id <uid>"},
 		{append(slices.Clone(base), clientIDFlag, "another-uid", declFl, declared), "GitLab application " + app + " is not declared: " + declared + " carries another client id than another-uid"},
-		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google or --gitlab"},
+		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google, --gitlab or --oauth"},
 		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, permissionFlag, deviceChange), "--gitlab records a consent on a GitLab's authorize page alone"},
 		{[]string{appAllow, app, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--declared names the person's own declaration of a GitLab application's client id, with --gitlab"},
 		{[]string{appAllow, app, gitlabFl, gitlab, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--gitlab needs --callback <host>"},
@@ -563,5 +563,62 @@ func TestAppLifecycleCheck(t *testing.T) {
 		if out, err := runApp(t, a, tc.args...); err != nil || !strings.HasPrefix(out, tc.want) {
 			t.Errorf("%s: app check = %q, %v; want %q", name, out, err, tc.want)
 		}
+	}
+}
+
+// A consent to a third party's OAuth client is recorded with --oauth, the
+// client id of a consent page beekeeper knows and the account it is given
+// as, on the person's word: a client beekeeper knows no page of, a missing
+// account or client id, another provider's flags and a GitHub App's are
+// refused. check allows Continue on that client's consent page for a call
+// naming the account and refuses one naming another.
+func TestAppThirdPartyRecord(t *testing.T) {
+	a, _ := stubApp(t)
+	const (
+		name    = "openai-codex"
+		host    = "auth.openai.com"
+		codex   = "app_EMoamEEZ73f0CkXaXp7hrann"
+		account = "person@example.com"
+		consent = "https://" + host + "/sign-in-with-chatgpt/codex/consent"
+		oauth   = "--oauth"
+	)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{appAllow, name, oauth, host, accountFlag, account, wordFlag, "w"}, "--oauth needs --client-id <id>"},
+		{[]string{appAllow, name, oauth, host, clientIDFlag, codex, wordFlag, "w"}, "--oauth needs --account <address>"},
+		{[]string{appAllow, name, oauth, host, clientIDFlag, "app_other", accountFlag, account, wordFlag, "w"}, "beekeeper knows no consent page of client app_other on auth.openai.com"},
+		{[]string{appAllow, name, oauth, "auth.example.net", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "beekeeper knows no consent page of client " + codex + " on auth.example.net"},
+		{[]string{appAllow, name, oauth, host, googleFlag, clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--google, --gitlab or --oauth: a record is of one provider's consent"},
+		{[]string{appAllow, name, oauth, host, callbackFlag, "cb.example.org", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--oauth records a consent to a third party's OAuth client alone"},
+		{[]string{appAllow, name, oauth, host, permissionFlag, deviceChange, clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--oauth records a consent to a third party's OAuth client alone"},
+		{[]string{appAllow, name, oauth, "auth openai", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, `--oauth names the client's sign-in host (or its URL), not "auth openai"`},
+		{[]string{appAllow, name, oauth, host, clientIDFlag, codex, accountFlag, account}, "--word"},
+	} {
+		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
+		}
+	}
+	if out, _ := runApp(t, a, appCheck, consent, wordsFlag, "Clicks Continue as "+account); !strings.HasPrefix(out, checkRefuse) || !strings.Contains(out, guard.OAuthForm) {
+		t.Errorf("check without a record = %q", out)
+	}
+	out, err := runApp(t, a, appAllow, name, oauth, "https://Auth.OpenAI.com/", clientIDFlag, codex, accountFlag, " Person@Example.com ", wordFlag, personsWord)
+	if err != nil || out != "App "+name+" on record, declared in "+oauthDeclared+": the consent on "+host+"/sign-in-with-chatgpt/codex/consent "+
+		"(OpenAI's Codex sign-in with ChatGPT) as "+account+" is answered by the hook\n" {
+		t.Fatalf("app allow --oauth = %q, %v", out, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, name+"  OAuth "+host+"  client id "+codex+"  account "+account+"  declared in "+oauthDeclared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, consent, wordsFlag, "Clicks Continue as "+account); !strings.HasPrefix(out, checkAllow+"beekeeper allows it: the consent page of OpenAI's Codex sign-in") {
+		t.Errorf("check of its consent = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, consent, wordsFlag, "Clicks Continue as other@example.com"); !strings.HasPrefix(out, checkRefuse) {
+		t.Errorf("check of another account = %q", out)
+	}
+	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
+	if apps := a.allowedApps(); len(apps) != 1 || apps[0].OAuth != host || apps[0].ClientID != codex || apps[0].Account != account {
+		t.Errorf("allowedApps = %+v", apps)
 	}
 }

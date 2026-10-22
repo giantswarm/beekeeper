@@ -100,6 +100,9 @@ const (
 		"naming it in the call's summary, never another account and never 'Use another account', and click Continue " +
 		"(or Allow) on its 'Sign in to' and consent pages once each; click nothing else that grants access, and stop on Google's consent for " +
 		"any other App. "
+	oauthConsentWords = "The person's consent to %s is on record as their own account %s: once the steps reach its consent page (%s), " +
+		"check the page names exactly that account and click Continue once, naming the account in the call's summary; click nothing else that " +
+		"grants access, and stop on the consent page for any other account or client. "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.<n>.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
@@ -281,6 +284,16 @@ consent of scopes); Google's consent page of a flow for any other host is
 refused, a third party's. A turn whose steps name the client or its
 callback host runs with its auto mode rule, its prompt says which clicks,
 and "allowed consent: <name> (Google, callback <host>, …)" goes below the
+report.
+
+A consent to a third party's OAuth client as the person's own account
+there, on a consent page beekeeper knows (OpenAI's Codex sign-in with
+ChatGPT), is recorded with "beekeeper app allow <name> --oauth <host>
+--client-id <id> --account <address> --word '<the person's words>'". The
+hook answers Continue on that page for a call whose own words name the
+account, and refuses it for any other account or a client on no record. A
+turn whose steps name the record or its sign-in host runs with its auto
+mode rule, and "allowed consent: <name> (<client>, …)" goes below the
 report.
 
 A sign-in or consent page of the lab's own identity provider on a loopback
@@ -741,7 +754,7 @@ var grantWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|a
 // consentHint names the record forms below a grant refusal of a run whose
 // steps name no App on record.
 const consentHint = "a consent for an App the person owns and asked for is recorded with " + guard.AllowForm +
-	" (a Google OAuth client's with " + guard.GoogleForm + ")" +
+	" (a Google OAuth client's with " + guard.GoogleForm + ", a third party's OAuth client's with " + guard.OAuthForm + ")" +
 	", one change of such an App's permissions with " + guard.PermissionForm + ", one callback URL with " + guard.CallbackForm +
 	", an App's deletion with " + guard.DeleteForm +
 	" (its creation and installation are answered while " + guard.CreateForm + " runs for it), after which the hook answers the click on its consent page, " +
@@ -991,7 +1004,11 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
 	}
 	for _, c := range consents {
-		if c.Google {
+		if c.OAuth != "" {
+			out = append(out, fmt.Sprintf("allowed consent: %s (%s, client %s, account %s, %s): the hook answers the Continue on %s for that account "+
+				"and the turn's auto mode allows it, on record since %s by %s: %s", c.Name, thirdParty(c).Name, c.ClientID, c.Account, c.Declared,
+				consentPage(c), c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		} else if c.Google {
 			out = append(out, fmt.Sprintf("allowed consent: %s (Google, callback %s, account %s, %s): the hook answers the clicks of Google's sign-in "+
 				"and consent for that callback and the turn's auto mode allows them, on record since %s by %s: %s", c.Name, callbacks(c), googleAccount(c), c.Declared,
 				c.At.UTC().Format("2006-01-02"), c.By, c.Word))
@@ -1303,7 +1320,9 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 		p += fmt.Sprintf(deployWords, deploy)
 	}
 	for _, c := range consents {
-		if c.Google {
+		if c.OAuth != "" {
+			p += fmt.Sprintf(oauthConsentWords, thirdParty(c).Name, c.Account, consentPage(c))
+		} else if c.Google {
 			p += fmt.Sprintf(googleConsentWords, c.Name, callbacks(c), googleAccount(c))
 		} else if len(c.Callbacks) > 0 {
 			p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
@@ -1337,7 +1356,9 @@ func browseRules(deploy string, consents []guard.App, lab bool) []string {
 		rules = append(rules, allowDeployRule(deploy))
 	}
 	for _, c := range consents {
-		if c.Google {
+		if c.OAuth != "" {
+			rules = append(rules, oauthConsentRule(c))
+		} else if c.Google {
 			rules = append(rules, googleConsentRule(c))
 		} else if len(c.Callbacks) > 0 {
 			rules = append(rules, consentRule(c))
@@ -1404,6 +1425,30 @@ func googleConsentRule(a guard.App) string {
 		"Google's consent for any other App or callback host, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
 		a.Name, callbacks(a), googleAccount(a))
 }
+
+// oauthConsentRule is the auto mode allow rule of a consent on record to a
+// third party's OAuth client: the person's pre-authorization of the
+// Continue on that client's consent page as their account, which the hook
+// verifies; any other account, client or grant is not covered.
+func oauthConsentRule(a guard.App) string {
+	return fmt.Sprintf("Third-Party OAuth Consent: The person asked, on record with beekeeper, to consent to %s (OAuth client %s) as their own "+
+		"account %s: on its consent page %s the Continue click for that account is pre-authorized and no Permission Grant to refuse, and a step "+
+		"that names it is no grant request; beekeeper's own hook verifies the page and the account and answers the click. Not covered: the consent "+
+		"for any other account or client, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
+		thirdParty(a).Name, a.ClientID, a.Account, consentPage(a))
+}
+
+// thirdParty is the known client a third-party consent on record is to.
+func thirdParty(a guard.App) guard.ThirdPartyClient {
+	c, _ := guard.ThirdPartyClientOf(a.OAuth, a.ClientID)
+	if c.Name == "" {
+		c.Name = "the OAuth client " + a.ClientID
+	}
+	return c
+}
+
+// consentPage is the consent page of a third-party consent on record.
+func consentPage(a guard.App) string { return a.OAuth + thirdParty(a).Consent }
 
 // googleAccount is the account a Google App's sign-in chooses: the
 // record's, or the person's signed-in one for a record that names none.
@@ -1497,14 +1542,16 @@ const labRule = "Lab Identity Provider: a sign-in or consent page on a loopback 
 	"host. Not covered: a page on any other host, a credential of the person's own. Every other rule applies in full."
 
 // appsNamed are the Apps the hook decides from that the steps name, by
-// name, by slug, by one of their callback hosts, or by the loopback
-// listener of their running app create.
+// name, by slug, by one of their callback hosts, by the sign-in host of a
+// third-party consent, or by the loopback listener of their running app
+// create.
 func appsNamed(apps []guard.App, steps string) []guard.App {
 	s := strings.ToLower(steps)
 	var named []guard.App
 	for _, x := range apps {
 		if strings.Contains(s, strings.ToLower(x.Name)) || strings.Contains(s, guard.AppSlug(x.Name)) ||
 			slices.ContainsFunc(x.Callbacks, func(h string) bool { return strings.Contains(s, h) }) ||
+			x.OAuth != "" && strings.Contains(s, x.OAuth) ||
 			x.Run != nil && strings.Contains(s, x.Run.Listener) {
 			named = append(named, x)
 		}

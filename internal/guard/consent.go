@@ -24,7 +24,9 @@ import (
 // the lab's own identity provider, a loopback host, a fixture user's sign-in
 // and consent are allowed; on Google's sign-in, the consent of a Google App
 // on record, by the callback host of the tab's flow, is allowed and any
-// other's refused (google.go); a consent page on any other host is refused, so
+// other's refused (google.go); on a third party's OAuth client's consent
+// page the hook knows, the consent as the account on record (thirdparty.go);
+// a consent page on any other host is refused, so
 // no grant elsewhere is left to the browse turn's classifier. A change of an
 // App's permissions is decided the same way from the record of the one
 // change the person asked for (appchange.go), an App's creation,
@@ -65,6 +67,10 @@ type App struct {
 	// this is, its consent on that host's authorize page (gitlab.go); "" for
 	// any other App.
 	GitLab string
+	// OAuth is the sign-in host of a third party's OAuth client a consent
+	// is recorded for as the person's Account there (thirdparty.go); "" for
+	// any other App.
+	OAuth string
 	// Run is the running `beekeeper app create` of the App whose listener
 	// answers, nil for none; Created is beekeeper's ledger entry of the App
 	// it created, nil for none (applife.go).
@@ -175,6 +181,8 @@ func Click(apps []App, page Page, words string) Decision {
 		return permissionClick(apps, u, page.Title, words)
 	case host == googleHost:
 		return googleClick(apps, u, page, words)
+	case thirdPartyHost(host):
+		return thirdPartyClick(apps, u, page, words)
 	case u.Path == gitlabAuthorize && gitlabHost(apps, host):
 		return gitlabConsent(apps, u, page)
 	case Loopback(host) && signIn(u.Path):
@@ -194,9 +202,9 @@ func elsewhere(u *url.URL, title, words string) Decision {
 	}
 	return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither the consent page of an App on record "+
 		"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
-		"which %s (a GitHub App), %s (a Google OAuth client) or %s (a self-hosted GitLab's OAuth application) records on their word; "+
-		"every other grant stays refused.",
-		consentWhich(u, title), u.Host, AllowForm, GoogleForm, GitLabForm)}
+		"which %s (a GitHub App), %s (a Google OAuth client), %s (a self-hosted GitLab's OAuth application) or %s (a third party's OAuth "+
+		"client whose consent page beekeeper knows) records on their word; every other grant stays refused.",
+		consentWhich(u, title), u.Host, AllowForm, GoogleForm, GitLabForm, OAuthForm)}
 }
 
 // consentElsewhere reports whether a call in words acts on a consent page:
@@ -231,7 +239,7 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		callback = strings.ToLower(r.Host)
 	}
 	for _, a := range apps {
-		if a.Google || a.GitLab != "" || !slices.Contains(a.Callbacks, callback) {
+		if a.Google || a.GitLab != "" || a.OAuth != "" || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
 		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
