@@ -93,7 +93,12 @@ self-hosted GitLab's OAuth application the person owns and asked a consent
 for is recorded with --gitlab <host> --client-id <uid> --callback <host>
 --declared <ref>: on that GitLab's authorize page the hook answers the
 consent of that application for a recorded callback host and refuses any
-other application's there. A
+other application's there. A consent to a third party's OAuth client as
+the person's own account there (OpenAI's Codex sign-in with ChatGPT) is
+recorded with --oauth <host> --client-id <id> --account <address>, on the
+person's word alone, for a client whose consent page beekeeper knows: the
+hook answers a click on that page whose own words name the account, and
+refuses it for any other account or a client on no record. A
 consent page on any other host (a path or title that names a
 consent or a grant, or an OAuth authorization page where the call's own
 words name one) is refused, not left to the browse turn's classifier. An App's creation, installation and deletion are grants too: the
@@ -158,6 +163,14 @@ replaced:
   file's path, as beekeeper secret names one) must carry it, compared in
   this process, no value in any output. The record is kept in the
   machine's state.
+  --oauth <host> --client-id <id> --account <address>: a consent to a
+  third party's OAuth client, one the person neither owns nor declares,
+  as their own account <address> there, on the consent page beekeeper
+  knows of that client on <host>: OpenAI's Codex sign-in with ChatGPT
+  (--oauth auth.openai.com --client-id app_EMoamEEZ73f0CkXaXp7hrann,
+  auth.openai.com/sign-in-with-chatgpt/codex/consent). The record is the
+  person's word alone, kept in the machine's state; --word names where
+  they gave it. A client beekeeper knows no consent page of is refused.
 
 An App apps.repo does not declare that app create --manifest created on the
 person's own account (beekeeper's ledger, app list) is recorded for a
@@ -180,9 +193,10 @@ Any of them, with --word, the person's words that asked for it.`,
 				return usageErr("--word: the person's words that asked for the grant")
 			}
 			rec.GitLab = strings.ToLower(strings.TrimSpace(rec.GitLab))
+			rec.OAuth = strings.ToLower(strings.TrimSpace(rec.OAuth))
 			switch {
-			case rec.Google && rec.GitLab != "":
-				return usageErr("--google or --gitlab: a record is of one provider's consent")
+			case providers(rec) > 1:
+				return usageErr("--google, --gitlab or --oauth: a record is of one provider's consent")
 			case declaredRef != "" && rec.GitLab == "":
 				return usageErr("--declared names the person's own declaration of a GitLab application's client id, with --gitlab")
 			}
@@ -191,6 +205,8 @@ Any of them, with --word, the person's words that asked for it.`,
 				err = googleClient(&rec, hosts, permission, manifest)
 			case rec.GitLab != "":
 				err = a.gitlabApp(c.Context(), &rec, hosts, permission, manifest, declaredRef)
+			case rec.OAuth != "":
+				err = thirdPartyClient(&rec, hosts, permission, manifest)
 			default:
 				err = a.githubApp(c.Context(), &rec, hosts, permission, manifest)
 			}
@@ -216,6 +232,9 @@ Any of them, with --word, the person's words that asked for it.`,
 				answers = append(answers, "its consent on Google's sign-in with callback "+strings.Join(rec.Callbacks, " or ")+" as "+rec.Account)
 			case rec.GitLab != "":
 				answers = append(answers, "its consent on "+rec.GitLab+"'s authorize page with callback "+strings.Join(rec.Callbacks, " or "))
+			case rec.OAuth != "":
+				c, _ := guard.ThirdPartyClientOf(rec.OAuth, rec.ClientID)
+				answers = append(answers, "the consent on "+rec.OAuth+c.Consent+" ("+c.Name+") as "+rec.Account)
 			case len(rec.Callbacks) > 0:
 				answers = append(answers, "its consent page with callback "+strings.Join(rec.Callbacks, " or "))
 			}
@@ -246,7 +265,8 @@ Any of them, with --word, the person's words that asked for it.`,
 	allow.Flags().StringArrayVar(&hosts, "callback", nil, "with --google or --gitlab, a callback host (or URL) of the client's redirect (repeatable)")
 	allow.Flags().StringVar(&rec.GitLab, "gitlab", "", "a consent on a self-hosted GitLab's authorize page: the GitLab's host, with --client-id, --callback and --declared")
 	allow.Flags().StringVar(&declaredRef, "declared", "", "with --gitlab, the person's own declaration of the application's client id: op://<vault>/<item>/<field> or <SOPS file>#<path>")
-	allow.Flags().StringVar(&rec.Account, "account", "", "with --google, the Google account the sign-in chooses on Google's account chooser")
+	allow.Flags().StringVar(&rec.Account, "account", "", "with --google, the Google account the sign-in chooses on Google's account chooser; with --oauth, the account the consent is given as")
+	allow.Flags().StringVar(&rec.OAuth, "oauth", "", "a consent to a third party's OAuth client as the person's own account there: its sign-in host, with --client-id and --account")
 	revoke := &cobra.Command{
 		Use:   "revoke <name>",
 		Short: "Take an App off the record: its consent page is refused again",
@@ -337,7 +357,7 @@ func (a *app) githubApp(ctx context.Context, rec *state.App, hosts []string, per
 		return usageErr("--callback names a Google OAuth client's or a GitLab application's callback hosts, with --google or --gitlab: a GitHub App's are its manifest's")
 	}
 	if rec.Account != "" {
-		return usageErr("--account names the account a Google OAuth client's sign-in chooses, with --google")
+		return usageErr("--account names the account a Google OAuth client's sign-in chooses, with --google, or a third party's consent is given as, with --oauth")
 	}
 	if rec.Permission, err = permissionChange(permission); err != nil {
 		return err
@@ -410,6 +430,53 @@ func googleClient(rec *state.App, hosts []string, permission, manifest string) e
 		return usageErr("--google needs --account <address>: the Google account the sign-in chooses on Google's account chooser, not %q", rec.Account)
 	}
 	rec.Declared = googleDeclared
+	return nil
+}
+
+// providers counts the consent providers rec names: Google, a GitLab, a
+// third party's sign-in host.
+func providers(rec state.App) int {
+	n := 0
+	for _, named := range []bool{rec.Google, rec.GitLab != "", rec.OAuth != ""} {
+		if named {
+			n++
+		}
+	}
+	return n
+}
+
+// oauthDeclared is the declaration of a third party's OAuth client on
+// record: no repository declares one, the person's word does.
+const oauthDeclared = "the person's word (a third party's OAuth client)"
+
+// thirdPartyClient fills rec, a consent to a third party's OAuth client,
+// from its flags: a client whose consent page beekeeper knows on the host
+// named, given as the account named.
+func thirdPartyClient(rec *state.App, hosts []string, permission, manifest string) error {
+	if permission != "" || rec.CallbackURL != "" || rec.Delete || manifest != "" || len(hosts) > 0 {
+		return usageErr("--oauth records a consent to a third party's OAuth client alone: --permission, --callback-url, --delete, --manifest and --callback are an App's of the person's own")
+	}
+	if u, err := url.Parse(rec.OAuth); err == nil && u.Host != "" {
+		rec.OAuth = strings.ToLower(u.Hostname())
+	}
+	if strings.ContainsAny(rec.OAuth, "/?#@: ") || !strings.Contains(rec.OAuth, ".") {
+		return usageErr("--oauth names the client's sign-in host (or its URL), not %q", rec.OAuth)
+	}
+	if rec.ClientID == "" {
+		return usageErr("--oauth needs --client-id <id>: the third party's OAuth client the consent is to")
+	}
+	if _, ok := guard.ThirdPartyClientOf(rec.OAuth, rec.ClientID); !ok {
+		known := make([]string, 0, len(guard.ThirdPartyClients))
+		for _, c := range guard.ThirdPartyClients {
+			known = append(known, fmt.Sprintf("%s (--oauth %s --client-id %s)", c.Name, c.Host, c.ClientID))
+		}
+		return refused("beekeeper knows no consent page of client %s on %s, so the hook could answer none: it knows %s", rec.ClientID, rec.OAuth, strings.Join(known, ", "))
+	}
+	rec.Account = strings.ToLower(strings.TrimSpace(rec.Account))
+	if !strings.Contains(rec.Account, "@") || strings.ContainsAny(rec.Account, " /?#") {
+		return usageErr("--oauth needs --account <address>: the person's own account the consent is given as, not %q", rec.Account)
+	}
+	rec.Declared = oauthDeclared
 	return nil
 }
 
@@ -511,6 +578,9 @@ func recordParts(x state.App) []string {
 	}
 	if x.GitLab != "" {
 		parts = append(parts, "GitLab "+x.GitLab)
+	}
+	if x.OAuth != "" {
+		parts = append(parts, "OAuth "+x.OAuth)
 	}
 	if x.ClientID != "" {
 		parts = append(parts, "client id "+x.ClientID)
@@ -754,7 +824,7 @@ func guardApps(apps []state.App) []guard.App {
 	out := make([]guard.App, 0, len(apps))
 	for _, x := range apps {
 		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Org: x.Org, Permission: x.Permission,
-			CallbackURL: x.CallbackURL, Delete: x.Delete, Google: x.Google, Account: x.Account, GitLab: x.GitLab, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+			CallbackURL: x.CallbackURL, Delete: x.Delete, Google: x.Google, Account: x.Account, GitLab: x.GitLab, OAuth: x.OAuth, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
 	}
 	return out
 }
