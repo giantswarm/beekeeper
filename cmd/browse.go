@@ -103,6 +103,8 @@ const (
 	oauthConsentWords = "The person's consent to %s is on record as their own account %s: once the steps reach its consent page (%s), " +
 		"check the page names exactly that account and click Continue once, naming the account in the call's summary; click nothing else that " +
 		"grants access, and stop on the consent page for any other account or client. "
+	oauthDeviceWords = "On its device-code page (%s) type only the device code the steps give and click Continue once, naming the account " +
+		"in each call's summary; never type a credential there. "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.<n>.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
@@ -290,8 +292,10 @@ A consent to a third party's OAuth client as the person's own account
 there, on a consent page beekeeper knows (OpenAI's Codex sign-in with
 ChatGPT), is recorded with "beekeeper app allow <name> --oauth <host>
 --client-id <id> --account <address> --word '<the person's words>'". The
-hook answers Continue on that page for a call whose own words name the
-account, and refuses it for any other account or a client on no record. A
+hook answers Continue on that page, and the device code and its Continue
+on the client's device-code page, for a call whose own words name the
+account, and refuses it for any other account, a client on no record or
+other text typed there. A
 turn whose steps name the record or its sign-in host runs with its auto
 mode rule, and "allowed consent: <name> (<client>, …)" goes below the
 report.
@@ -1007,7 +1011,7 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		if c.OAuth != "" {
 			out = append(out, fmt.Sprintf("allowed consent: %s (%s, client %s, account %s, %s): the hook answers the Continue on %s for that account "+
 				"and the turn's auto mode allows it, on record since %s by %s: %s", c.Name, thirdParty(c).Name, c.ClientID, c.Account, c.Declared,
-				consentPage(c), c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+				oauthPages(c), c.At.UTC().Format("2006-01-02"), c.By, c.Word))
 		} else if c.Google {
 			out = append(out, fmt.Sprintf("allowed consent: %s (Google, callback %s, account %s, %s): the hook answers the clicks of Google's sign-in "+
 				"and consent for that callback and the turn's auto mode allows them, on record since %s by %s: %s", c.Name, callbacks(c), googleAccount(c), c.Declared,
@@ -1322,6 +1326,9 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 	for _, c := range consents {
 		if c.OAuth != "" {
 			p += fmt.Sprintf(oauthConsentWords, thirdParty(c).Name, c.Account, consentPage(c))
+			if d := devicePage(c); d != "" {
+				p += fmt.Sprintf(oauthDeviceWords, d)
+			}
 		} else if c.Google {
 			p += fmt.Sprintf(googleConsentWords, c.Name, callbacks(c), googleAccount(c))
 		} else if len(c.Callbacks) > 0 {
@@ -1428,14 +1435,19 @@ func googleConsentRule(a guard.App) string {
 
 // oauthConsentRule is the auto mode allow rule of a consent on record to a
 // third party's OAuth client: the person's pre-authorization of the
-// Continue on that client's consent page as their account, which the hook
-// verifies; any other account, client or grant is not covered.
+// Continue on that client's consent page as their account, and the device
+// code and its Continue on its device-code page, which the hook verifies;
+// any other account, client or grant is not covered.
 func oauthConsentRule(a guard.App) string {
+	device := ""
+	if d := devicePage(a); d != "" {
+		device = fmt.Sprintf(", and on its device-code page %s the device code typed and its Continue click for that account likewise", d)
+	}
 	return fmt.Sprintf("Third-Party OAuth Consent: The person asked, on record with beekeeper, to consent to %s (OAuth client %s) as their own "+
-		"account %s: on its consent page %s the Continue click for that account is pre-authorized and no Permission Grant to refuse, and a step "+
+		"account %s: on its consent page %s the Continue click for that account is pre-authorized and no Permission Grant to refuse%s, and a step "+
 		"that names it is no grant request; beekeeper's own hook verifies the page and the account and answers the click. Not covered: the consent "+
 		"for any other account or client, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
-		thirdParty(a).Name, a.ClientID, a.Account, consentPage(a))
+		thirdParty(a).Name, a.ClientID, a.Account, consentPage(a), device)
 }
 
 // thirdParty is the known client a third-party consent on record is to.
@@ -1449,6 +1461,24 @@ func thirdParty(a guard.App) guard.ThirdPartyClient {
 
 // consentPage is the consent page of a third-party consent on record.
 func consentPage(a guard.App) string { return a.OAuth + thirdParty(a).Consent }
+
+// devicePage is the device-code entry page of a third-party consent on
+// record, "" for a client with none.
+func devicePage(a guard.App) string {
+	if d := thirdParty(a).DeviceCode; d != "" {
+		return a.OAuth + d
+	}
+	return ""
+}
+
+// oauthPages are the pages the hook answers for a third-party consent on
+// record: its consent page and its device-code page.
+func oauthPages(a guard.App) string {
+	if d := devicePage(a); d != "" {
+		return consentPage(a) + " and the device code on " + d
+	}
+	return consentPage(a)
+}
 
 // googleAccount is the account a Google App's sign-in chooses: the
 // record's, or the person's signed-in one for a record that names none.
