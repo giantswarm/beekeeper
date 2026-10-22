@@ -54,7 +54,7 @@ func stubCompositor(t *testing.T, c *compositor) {
 // back; the findings say where it was.
 func TestShowChromeForTheTurn(t *testing.T) {
 	_, _ = stubApp(t)
-	plat.Machine = lockMachine{Machine: plat.Machine}
+	lockScreen(t, "")
 	c := chromeOnMusic()
 	stubCompositor(t, c)
 	p := showChrome(t.Context())
@@ -82,7 +82,7 @@ func TestShowChromeForTheTurn(t *testing.T) {
 // the command as screen locked, naming the locker.
 func TestShowChromeUnderALockedScreen(t *testing.T) {
 	_, _ = stubApp(t)
-	plat.Machine = lockMachine{Machine: plat.Machine, locker: hyprlock}
+	lockScreen(t, hyprlock)
 	c := chromeOnMusic()
 	stubCompositor(t, c)
 	p := showChrome(t.Context())
@@ -112,7 +112,7 @@ func TestBrowseRefusesALockedScreen(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	c := chromeOnMusic()
 	stubCompositor(t, c)
-	plat.Machine = lockMachine{Machine: plat.Machine, locker: hyprlock}
+	lockScreen(t, hyprlock)
 	err := a.browse(t.Context(), "Open the portal.", bin, "", time.Minute, "", nil, nil)
 	if !errors.Is(err, errScreenLocked) || !strings.HasPrefix(err.Error(), "screen locked: hyprlock runs") ||
 		!strings.Contains(err.Error(), "Park until the screen unlocks") || !strings.Contains(err.Error(), `--probe "! pgrep -x hyprlock"`) {
@@ -125,7 +125,7 @@ func TestBrowseRefusesALockedScreen(t *testing.T) {
 	if rerr != nil || len(st.Starts) != 0 {
 		t.Errorf("browse under a locked screen recorded starts %+v (%v)", st.Starts, rerr)
 	}
-	plat.Machine = lockMachine{Machine: plat.Machine}
+	lockScreen(t, "")
 	if err := screenLockedErr(); err != nil {
 		t.Errorf("an unlocked screen was refused: %v", err)
 	}
