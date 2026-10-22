@@ -13,7 +13,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/giantswarm/go-selfupdate v1.6.6
 	github.com/giantswarm/mcp-toolkit v0.4.4
-	github.com/giantswarm/selfupdate-cosign v0.3.10
+	github.com/giantswarm/selfupdate-cosign v0.3.13
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-logr/logr v1.4.4
 	github.com/godbus/dbus/v5 v5.2.4
