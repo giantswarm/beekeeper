@@ -48,6 +48,14 @@ func TestWorkerRulesNameTheTopics(t *testing.T) {
 	}
 }
 
+// The worker rules say where an agentlab proof runs: outside beekeeper run,
+// whose build slot it would hold while it only waits.
+func TestWorkerRulesKeepAgentlabProofsOutOfTheSlot(t *testing.T) {
+	if !strings.Contains(strings.Join(strings.Fields(WorkerRules()), " "), "an agentlab proof only waits: never under `beekeeper run`") {
+		t.Error("the worker rules do not say an agentlab proof never runs under beekeeper run")
+	}
+}
+
 // The budgets a worker's context keeps, in bytes at the measured 2.7 bytes
 // per token of this text: the core rules at most 1,000 tokens, a topic
 // skill at most 700, its description at most 60.
