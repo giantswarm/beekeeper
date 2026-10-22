@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -77,8 +78,19 @@ func (a *app) instructions(st *state.State) (string, error) {
 	return a.roleInstructions(supervisorRole, st.SupervisorRole())
 }
 
-// roleInstructions opens rl's successor prompt: the configured skill or
-// file.
+// roleSlash is the bare slash command that opens a prompt of rl as the
+// person would type it ("/supervise "), "" when rl runs no skill. A role
+// skill carries disable-model-invocation, so the Skill tool refuses it: only
+// a prompt that starts with its slash command loads it.
+func roleSlash(cfg config.Role) string {
+	if cfg.Instructions != "" || cfg.Skill == "" {
+		return ""
+	}
+	return "/" + cfg.Skill + " "
+}
+
+// roleInstructions opens rl's successor prompt: the configured skill's bare
+// slash command or the file.
 func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
 	cfg := rl.cfg(a.cfg)
 	from := ""
@@ -93,7 +105,7 @@ func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
 		}
 		return strings.TrimSpace(string(raw)), nil
 	case cfg.Skill != "":
-		return fmt.Sprintf("Run /%s: you take over %s%s.", cfg.Skill, rl.duty, from), nil
+		return fmt.Sprintf("%syou take over %s%s.", roleSlash(cfg), rl.duty, from), nil
 	}
 	return fmt.Sprintf("You take over %s%s. (No instructions are configured: set %s.skill or %s.instructions.)", rl.duty, from, rl.name, rl.name), nil
 }

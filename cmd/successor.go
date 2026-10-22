@@ -58,14 +58,15 @@ func (rl role) lastRun(r state.Role) int {
 // Its first turn runs headless and only takes the role: a headless turn
 // that arms a watch never ends, so the desktop never gets the session's
 // CLI and a click on its row would start a second one. The standby watch
-// resumes it in its desktop CLI.
-func (rl role) successorBrief(name, from string) string {
-	return fmt.Sprintf(`You are %q, the next %s run, a fresh session beekeeper started to take over %s from %q.
+// resumes it in its desktop CLI. It opens with the role skill's slash
+// command (roleSlash), which loads the skill into the session for good.
+func (rl role) successorBrief(cfg config.Role, name, from string) string {
+	return fmt.Sprintf(`%sYou are %q, the next %s run, a fresh session beekeeper started to take over %s from %q.
 
 This first turn runs headless from the command line. In it, only take the role: run `+"`beekeeper %s start`"+`, then end the turn. Arm no Monitor, watch or background task in it: the desktop gets this session's CLI only once this turn has ended.
 
 Once the desktop runs your CLI, a message tells you so there: then run `+"`%s`"+` and follow it. Peers message you as %q.`,
-		name, rl.name, rl.duty, from, rl.name, rl.handover, name)
+		roleSlash(cfg), name, rl.name, rl.duty, from, rl.name, rl.handover, name)
 }
 
 // startSuccessor starts rl's next run as a fresh session and opens the
@@ -120,7 +121,7 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	// a desktop turn's does: its role turn soon runs headless and may not
 	// end before the next relay, and the person sees the role's holder only
 	// in the desktop's sidebar.
-	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, role: rl.name, brief: rl.successorBrief(to.Name, fromLabel),
+	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, role: rl.name, brief: rl.successorBrief(rl.cfg(a.cfg), to.Name, fromLabel),
 		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true, headless: true})
 	if err != nil {
 		a.withdrawRelay(rl, to, by)

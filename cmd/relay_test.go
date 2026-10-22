@@ -146,7 +146,7 @@ func TestPromptHasThePendingStateAndNoLiveValue(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		`Run /supervise: you take over the supervisor's watch from "Supervisor run 11".`,
+		`/supervise you take over the supervisor's watch from "Supervisor run 11".`,
 		"## Scope", "the leases of agentlab-1, graveler, browser; the merge lanes serving, portal; the alerts of gazelle",
 		"- 1 notes the guide serves (1 for Timo)", "#3: no deadline", "### Answered since the last relay\n\nNone.",
 		`#1 (at`, rollout, "not yet",

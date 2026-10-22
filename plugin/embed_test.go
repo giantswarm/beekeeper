@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -210,6 +211,18 @@ func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	} {
 		if !strings.Contains(merge, want) {
 			t.Errorf("the merge skill does not say %q", want)
+		}
+	}
+}
+
+// The role skills load only from a prompt that opens with their bare slash
+// command (handover --prompt, a successor's first prompt, the person), so a
+// worker's skill listing never carries them.
+func TestRoleSkillsAreHiddenFromTheModel(t *testing.T) {
+	for _, name := range []string{"supervise", "guide"} {
+		front, _, _ := strings.Cut(strings.TrimPrefix(string(SkillFile(name)), "---\n"), "\n---\n")
+		if !slices.Contains(strings.Split(front, "\n"), "disable-model-invocation: true") {
+			t.Errorf("%s/SKILL.md lacks disable-model-invocation: true:\n%s", name, front)
 		}
 	}
 }

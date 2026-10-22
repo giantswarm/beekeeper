@@ -1,6 +1,7 @@
 ---
 name: supervise
 description: Run the desk's supervisor session — watch the other Claude sessions and the machine's memory, swap, load and labs for hours at a time (typically overnight), keep every session's work finishing, schedule new work from the roadmap board, prevent the desktop-wide OOM, and coordinate sessions that turn out to be working on the same repo, issue, PR or environment. Use when the person asks for a supervisor, a babysitter for the running sessions, an overnight watch, or when a session titled "supervisor" starts or a relayed `beekeeper handover --prompt` arrives.
+disable-model-invocation: true
 ---
 
 # supervise — the supervisor session

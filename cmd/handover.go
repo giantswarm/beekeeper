@@ -57,7 +57,8 @@ they closed, or the open decision that holds it (note add --holds) with its
 person. A failed read is shown as not read, never filled from the state.
 
 --prompt prints the successor's session prompt instead: the configured
-instructions (supervisor.skill or supervisor.instructions), the scope
+instructions (supervisor.skill's bare slash command, "/supervise you take
+over …", or supervisor.instructions), the scope
 (supervisor.scope), the pending state as selected above, the priorities
 and holds and the epics with their plans, and the commands that read the
 live values. It carries no other live value: no version, memory figure or
