@@ -72,6 +72,9 @@ const (
 	latestV = "v0.3.0"
 )
 
+// newBinary is the binary a release carries in the tests.
+const newBinary = "new"
+
 // The asset IDs of a release: the bundle and the binary.
 const (
 	bundleID int64 = 1
@@ -114,10 +117,10 @@ func (v *acceptingValidator) Validate(asset string, binary, bundle []byte) error
 
 // setup makes the running version current and GitHub src; the validator
 // stays the real one unless a test replaces it.
-func setup(t *testing.T, current string, src *fakeSource) {
+func setup(t *testing.T, current string, src selfupdate.Source) {
 	t.Helper()
 	prevSource, prevValidator, prevExe, prevVersion := newSource, newValidator, executable, currentVersion
-	newSource = func() selfupdate.Source { return src }
+	newSource = func() (selfupdate.Source, error) { return src, nil }
 	currentVersion = func() string { return current }
 	t.Cleanup(func() {
 		newSource, newValidator, executable, currentVersion = prevSource, prevValidator, prevExe, prevVersion
@@ -209,7 +212,7 @@ func TestReportsAnUnreachableGitHub(t *testing.T) {
 func TestReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
 	setup(t, running, &fakeSource{
 		releases: []selfupdate.SourceRelease{release(latestV)},
-		assets:   map[int64][]byte{binaryID: []byte("new"), bundleID: []byte("its bundle")},
+		assets:   map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte("its bundle")},
 	})
 	exe, _ := installed(t)
 	link, _ := executable()
@@ -224,13 +227,13 @@ func TestReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
 	if !res.Updated || res.Path != link {
 		t.Errorf("result %+v", res)
 	}
-	if got, _ := os.ReadFile(filepath.Clean(exe)); string(got) != "new" {
+	if got, _ := os.ReadFile(filepath.Clean(exe)); string(got) != newBinary {
 		t.Errorf("executable holds %q after the update", got)
 	}
 	if !strings.Contains(out.String(), "Verified the signature and updated") {
 		t.Errorf("output:\n%s", out.String())
 	}
-	if v.asset != binaryName() || string(v.binary) != "new" || string(v.bundle) != "its bundle" {
+	if v.asset != binaryName() || string(v.binary) != newBinary || string(v.bundle) != "its bundle" {
 		t.Errorf("validated %q (%q) against bundle %q", v.asset, v.binary, v.bundle)
 	}
 	if runtime.GOOS == "windows" {
