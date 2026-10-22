@@ -318,9 +318,9 @@ board:                      # the project board `beekeeper board next` picks wor
     - {name: In Progress, status: [in progress], subIssues: true}   # an epic offers its open sub-issues
     - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed, the Status set before the last close
     - {name: Up Next, status: [up next]}
-    - {name: bug, status: [backlog], kind: [bug]}   # an item without a Kind by its label too (bug, kind/bug)
+    - {name: bug, status: [backlog], kind: [bug], workScope: true}   # an item without a Kind by its label too (bug, kind/bug); workScope: only a priority epic's sub-issues, orders and their blockers
     - {name: queue, search: "repo:example-org/tools label:team/platform"}   # open issues, oldest first
-    - {name: Backlog, status: [backlog], createdWithin: 2160h}
+    - {name: Backlog, status: [backlog], createdWithin: 2160h, workScope: true}
   epics:                    # the epic gate, whatever the order says (these are the defaults)
     kind: [epic]            # an epic
     planning: [up next]     # in planning: neither it nor its sub-issues offered, board next shows its plan
