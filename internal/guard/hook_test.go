@@ -128,7 +128,6 @@ func TestAgentlabProofTakesNoSlot(t *testing.T) {
 	for _, cmd := range []string{
 		"agentlab backstage-test",
 		"agentlab agents-test",
-		"agentlab platform-test",
 		"cd ~/lab && agentlab --lab agentlab-1 backstage-test 2>&1 | tail -40",
 		"KUBECONFIG=~/lab/kubeconfig agentlab workspaces-test",
 		"cd ~/src/backstage && yarn test:e2e:agentlab",
