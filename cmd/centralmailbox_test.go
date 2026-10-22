@@ -47,7 +47,7 @@ func (m *mailboxStandIn) url(t *testing.T) string {
 	srv.AddTool(mcp.NewTool("ack_messages"), func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		for _, id := range req.GetIntSlice("ids", nil) {
+		for _, id := range req.GetIntSlice(paramIDs, nil) {
 			m.acked = append(m.acked, int64(id))
 		}
 		return mcp.NewToolResultText("acked"), nil

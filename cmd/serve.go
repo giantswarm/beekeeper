@@ -70,7 +70,10 @@ person's email, or a member of the team's Dex group in serve.teams; the
 first answer closes a team's). A decision klaus-gateway does not take is
 withdrawn at once. Its message is closed on every path: answered, withdrawn
 (note_done) or at its due time, when serve closes it with its default
-(note.defaulted).`,
+(note.defaulted). The agent that filed it (note_add's agent and host) is
+told its answer (NOTE ANSWERED) or default (NOTE DEFAULTED) through its
+person's mailbox, addressed to local:<host>/<agent>: that machine's watch
+delivers it to the filing session.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
@@ -245,7 +248,7 @@ func (s *server) newCall(ctx context.Context, who identity.Caller, req mcp.CallT
 	st := &auditStore{Store: s.store}
 	out := &bytes.Buffer{}
 	return &call{s: s, ctx: ctx, who: who, me: me, store: st, out: out,
-		app: &app{cfg: &cfg, as: me.Name, store: st, now: s.now(), out: out, central: true}}
+		app: &app{cfg: &cfg, as: me.Name, store: st, now: s.now(), out: out, central: true, mailFiler: s.mailFiler}}
 }
 
 // handle runs a tool for the authenticated caller and audits it: the Event

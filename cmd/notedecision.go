@@ -183,9 +183,20 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 // filed it may have relayed since. While no session holds the role, or its
 // holder cannot be told, line waits for the role's next start. It returns
 // what it says of a line that reached another than the filer, or waits, ""
-// otherwise; a central instance has no sessions to tell.
+// otherwise. A central instance has no sessions to tell: it queues line in
+// the mailbox of the filer's person, addressed to the filing agent, whose
+// machine's watch delivers it.
 func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) string {
-	if a.central || n.By.Name == "" {
+	if a.central {
+		if a.mailFiler == nil || n.By.Host == "" {
+			return ""
+		}
+		if err := a.mailFiler(ctx, n, line); err != nil {
+			return fmt.Sprintf("note #%d: telling %q on %s failed (%v): %s", n.ID, n.By.Name, n.By.Host, err, line)
+		}
+		return ""
+	}
+	if n.By.Name == "" {
 		return ""
 	}
 	st, err := a.store.Read()

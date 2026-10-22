@@ -33,7 +33,7 @@ func (s *server) messageTools() []serveTool {
 			mcp.WithNumber("limit", mcp.Description(fmt.Sprintf("at most this many (default and most: %d)", mailbox.Cap)))), toolReceiveMessages},
 		{newTool("ack_messages", "Ack messages of your mailbox by their ids, so they are not delivered again.", "", hintRemove,
 			mcp.WithString(paramFor, mcp.Description("the mailbox: your email (default)")),
-			mcp.WithArray("ids", mcp.Required(), mcp.WithNumberItems(), mcp.Description("the ids receive_messages returned"))), toolAckMessages},
+			mcp.WithArray(paramIDs, mcp.Required(), mcp.WithNumberItems(), mcp.Description("the ids receive_messages returned"))), toolAckMessages},
 		{newTool("converse", "Write to your person in Slack as the calling agent, in its conversation thread.",
 			"The first message opens the thread; the person's replies arrive in your mailbox from source slack.", hints{openWorld: true, identified: true},
 			mcp.WithString(paramText, mcp.Required(), mcp.Description(fmt.Sprintf("the message, Slack markdown of at most %d characters", conversationText)))), toolConverse},
@@ -61,6 +61,16 @@ type a2aMessage struct {
 		Source string `json:"source"`
 	} `json:"metadata"`
 }
+
+// The A2A values of a message serve writes itself: its role and its parts'
+// kind.
+const (
+	a2aRoleAgent = "agent"
+	a2aKindText  = "text"
+)
+
+// paramIDs is ack_messages' parameter: the deliveries to ack.
+const paramIDs = "ids"
 
 // a2aPart is what send_message reads of an A2A Part.
 type a2aPart struct {
@@ -277,7 +287,7 @@ func toolAckMessages(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	var seqs []int64
-	for _, v := range req.GetIntSlice("ids", nil) {
+	for _, v := range req.GetIntSlice(paramIDs, nil) {
 		seqs = append(seqs, int64(v))
 	}
 	if len(seqs) == 0 {

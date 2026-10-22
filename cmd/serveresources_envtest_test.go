@@ -307,7 +307,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	e.expect(t, bo, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("b1", "x")}, true, "not on the roster")
 
 	e.expect(t, bo, "receive_messages", map[string]any{paramFor: anaEmail}, true, "you read and ack only your own")
-	e.expect(t, bo, "ack_messages", map[string]any{paramFor: anaEmail, "ids": []any{sent["id"]}}, true, "you read and ack only your own")
+	e.expect(t, bo, "ack_messages", map[string]any{paramFor: anaEmail, paramIDs: []any{sent["id"]}}, true, "you read and ack only your own")
 	got := e.expect(t, ana, "receive_messages", map[string]any{}, false, "message from ana@example.com: m1")
 	msgs := got["messages"].([]any)
 	if len(msgs) != 2 {
@@ -319,7 +319,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 		env["to"] != anaAddress || env[paramMessage].(map[string]any)["messageId"] != "m1" {
 		t.Errorf("the envelope %v", env)
 	}
-	e.expect(t, ana, "ack_messages", map[string]any{"ids": []any{first["id"]}}, false, "acked 1 of 1")
+	e.expect(t, ana, "ack_messages", map[string]any{paramIDs: []any{first["id"]}}, false, "acked 1 of 1")
 	e.expect(t, ana, "receive_messages", map[string]any{}, false, "m2")
 
 	// The cap: 49 more fill ana's mailbox to 50, the next is refused.
