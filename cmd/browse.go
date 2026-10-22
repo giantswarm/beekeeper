@@ -555,6 +555,9 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	prompt := browsePrompt(steps, deploy, consents, lab, shared)
 	if blind != nil {
 		prompt = blindPrompt(steps, deploy, consents, lab, blind.match)
+		if blind.rule != "" {
+			rules = append(rules, blind.rule)
+		}
 	}
 	report, err := turn(browseArgv(id, model, prompt, self, rules, false), wait)
 	path := transcriptOf(a.cfg, id)
