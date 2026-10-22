@@ -390,8 +390,11 @@ the turn ends. browse only dispatches window moves; it never changes the
 compositor's configuration. Below the report, "window shown:" says where
 the window was; "window not shown:" names where it is when it could not be
 moved. Under a screen locker (hyprlock) the compositor draws no window at
-all: browse moves nothing, says "screen locked:", and a page not drawn
-fails the command with "screen locked".
+all: browse starts no turn and exits non-zero at once with an error that
+starts with "screen locked", names the locker and the probe to park on
+until the screen unlocks. A lock that comes after the turn started moves
+nothing, says "screen locked:" below the report, and a page not drawn
+fails the command with "screen locked". browse never touches the lock.
 
 The turn closes every tab it opened before it ends, the blank ones
 included. A page with an unsaved form holds its close on a leave-page
@@ -454,7 +457,11 @@ again once the extension is connected.`,
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
-	// A file the steps cannot upload is refused before anything starts.
+	// A locked screen, and a file the steps cannot upload, are refused before
+	// anything starts.
+	if err := screenLockedErr(); err != nil {
+		return err
+	}
 	cwd, _ := os.Getwd()
 	if err := checkUploads(files, uploadRoots(cwd, dir, a.cfg.StateDir, os.Getenv("CLAUDE_CODE_SESSION_ID"))); err != nil {
 		return err
