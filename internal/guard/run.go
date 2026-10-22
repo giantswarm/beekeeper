@@ -10,6 +10,7 @@
 package guard
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -86,6 +87,49 @@ const (
 	TestScopePrefix = "memcap-test-"
 )
 
+// The classes of a run (Options.Class). A build, test or lint takes a build
+// slot. A benchmark and a lab proof are long by design and wait on their
+// model or their lab, not on the cores: they take no slot, only their own
+// cap in memcap.slice once the memory for it is there, so builds run beside
+// them and memory stays the bound.
+const (
+	ClassBuild     = "build"
+	ClassBenchmark = "benchmark"
+	ClassLab       = "lab"
+)
+
+// Classes are the classes a run may declare, the default first.
+var Classes = []string{ClassBuild, ClassBenchmark, ClassLab}
+
+// ParseClass checks a declared class; "" is ClassBuild.
+func ParseClass(s string) (string, error) {
+	if s == "" {
+		return ClassBuild, nil
+	}
+	if !slices.Contains(Classes, s) {
+		return "", fmt.Errorf("invalid class %q: want one of %s", s, strings.Join(Classes, ", "))
+	}
+	return s, nil
+}
+
+// labCommand is a lab command at a command position: agentlab, which waits
+// on its cluster and builds nothing.
+var labCommand = regexp.MustCompile(`(?m)` + pos + `(agentlab)\b`)
+
+// DefaultClass is the class of a run that declares none: ClassLab for a lab
+// command (agentlab) that runs no build, ClassBuild for the rest.
+func DefaultClass(argv []string) string {
+	cmd := shellCommand(argv)
+	if commandMatch(labCommand, cmd, notHelp) != nil && !isHeavy(cmd) {
+		return ClassLab
+	}
+	return ClassBuild
+}
+
+// MemcapSlice is the slice every capped run sits under; a run that takes no
+// slot sits in it directly, under its own cap.
+const MemcapSlice = "memcap.slice"
+
 // SlotSlice is the slice of the run's slot n under memcap.slice (systemd
 // nests a slice by the dashes in its name, so the rest has none), named by
 // the slot directory: a scratch state's slot never shares a cap with the
@@ -128,10 +172,7 @@ func CommandHead(argv []string) string { return commandHead(argv, 100) }
 // holds the slot ("… go test …"), never with what runs before it (a cd, an
 // assignment, a git checkout).
 func commandHead(argv []string, n int) string {
-	cmd := strings.Join(argv, " ")
-	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", "bash", "zsh"}, filepath.Base(argv[0])) {
-		cmd = argv[2]
-	}
+	cmd := shellCommand(argv)
 	s := oneLine(cmd)
 	if len([]rune(s)) <= n {
 		return s
@@ -143,6 +184,15 @@ func commandHead(argv []string, n int) string {
 		s = string(r[:n-1]) + "…"
 	}
 	return s
+}
+
+// shellCommand is the command argv runs: a shell's -c script rather than the
+// shell (the hook wraps every build in zsh -c), else argv joined.
+func shellCommand(argv []string) string {
+	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", bashCmd, "zsh"}, filepath.Base(argv[0])) {
+		return argv[2]
+	}
+	return strings.Join(argv, " ")
 }
 
 // oneLine is s with every run of whitespace a single space.
@@ -187,11 +237,22 @@ type Options struct {
 	// take RAM; "" leaves the caller's. The run removes it after the
 	// command.
 	TmpDir string
+	// Class is the run's class (ClassBuild, …); "" is ClassBuild. Only a
+	// build takes a slot.
+	Class string
 }
 
-// cap is the run's cap in the slice of slot n.
+// slotless reports whether the run's class takes no build slot.
+func (o Options) slotless() bool { return o.Class != "" && o.Class != ClassBuild }
+
+// cap is the run's cap in the slice of slot n; slot 0, a slotless run's, is
+// memcap.slice itself.
 func (o Options) cap(n int) platform.Cap {
-	return platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(n), CPUQuota: o.CPUQuota, CPUWeight: o.CPUWeight}
+	slice := MemcapSlice
+	if n > 0 {
+		slice = o.SlotSlice(n)
+	}
+	return platform.Cap{Max: o.Max, Swap: o.Swap, Slice: slice, CPUQuota: o.CPUQuota, CPUWeight: o.CPUWeight}
 }
 
 func (o Options) record(verb, detail string) {
@@ -305,9 +366,17 @@ func Run(o Options, argv []string) int {
 		return 1
 	}
 
-	lock, slot := waitForSlot(o, needKiB, sessionID(), argv, logf)
-	shared := lock == nil
+	var lock *flock.Flock
+	slot := 0
+	if !o.slotless() {
+		lock, slot = waitForSlot(o, needKiB, sessionID(), argv, logf)
+	}
+	shared := lock == nil && slot > 0
 	switch {
+	case o.slotless():
+		if !waitForMemory(o, needKiB, logf) {
+			return ExitBusy
+		}
 	case slot == 0:
 		return ExitBusy
 	case shared:
@@ -339,11 +408,14 @@ func Run(o Options, argv []string) int {
 	}
 	unit := fmt.Sprintf("%s%d-%06d", prefix, os.Getpid(), time.Now().Nanosecond()%1000000)
 	head := CommandHead(argv)
-	how := "slot"
-	if shared {
-		how = "shared slot"
+	how := fmt.Sprintf("slot %d", slot)
+	switch {
+	case o.slotless():
+		how = o.Class + ", no slot,"
+	case shared:
+		how = "shared " + how
 	}
-	o.record(VerbStart, fmt.Sprintf("%s.scope %s %d max %s: %s", unit, how, slot, o.Max, head))
+	o.record(VerbStart, fmt.Sprintf("%s.scope %s max %s: %s", unit, how, o.Max, head))
 	start := time.Now()
 	rc := scope(capper, unit, o, slot, argv, env, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
@@ -359,6 +431,37 @@ func Run(o Options, argv []string) int {
 	}
 	o.record(VerbEnd, end+": "+head)
 	return rc
+}
+
+// waitForMemory waits, within o.Wait, until MemAvailable covers the cap of a
+// run that takes no slot: one line when the wait starts, one when it ends.
+// It reports whether the memory came.
+func waitForMemory(o Options, needKiB int64, logf func(string, ...any)) bool {
+	deadline := time.Now().Add(o.Wait)
+	t0 := time.Now()
+	waited := false
+	for {
+		m, err := plat.Machine.Mem()
+		if err != nil || int64(m.AvailableMiB)<<10 >= needKiB {
+			break
+		}
+		reason := fmt.Sprintf("memory: %d MiB available, the %s run's cap needs %d", m.AvailableMiB, o.Class, needKiB>>10)
+		now := time.Now()
+		if !now.Before(deadline) {
+			logf("gave up after %s waiting for %s", o.waitText(), reason)
+			return false
+		}
+		if !waited {
+			logf("waiting up to %s for %s", o.waitText(), reason)
+			waited = true
+		}
+		time.Sleep(min(deadline.Sub(now), slotPoll))
+	}
+	if waited {
+		logf("memory for the %s cap after %ds", o.Max, int(time.Since(t0).Seconds()))
+	}
+	logf("a %s run takes no build slot: its own %s cap in %s, builds run beside it", o.Class, o.Max, MemcapSlice)
+	return true
 }
 
 // holdGoCache takes the Go build cache's use lock shared for the command,
@@ -477,15 +580,65 @@ func acquire(o Options) (lock *flock.Flock, slot int, occupied string) {
 	return nil, 0, b.String()
 }
 
-// holders lists the held slots' records, one indented line each.
+// holders lists the held slots' holders, one indented line each
+// (HolderText).
 func holders(o Options) string {
 	var b strings.Builder
+	now := time.Now()
 	for _, s := range machine.ReadSlots(o.SlotDir, o.Slots) {
 		if !s.Free {
-			fmt.Fprintf(&b, "  slot %d: %s\n", s.N, s.Holder)
+			fmt.Fprintf(&b, "  slot %d: %s\n", s.N, HolderText(s.Holder, now))
 		}
 	}
 	return b.String()
+}
+
+// Holder is a slot's holder record as read: who holds it, since when and
+// with what.
+type Holder struct {
+	PID     int
+	Session string
+	// Name is the holding session's name, "" when its run had none.
+	Name string
+	Cmd  string
+	// Since is when the slot was taken, zero when the record has none.
+	Since time.Time
+}
+
+// ParseHolder reads a slot's raw holder record (memcap's JSON line); false
+// when it is none.
+func ParseHolder(raw string) (Holder, bool) {
+	var h holderRecord
+	if json.Unmarshal([]byte(raw), &h) != nil {
+		return Holder{}, false
+	}
+	since, _ := time.Parse(time.RFC3339, h.Since)
+	return Holder{PID: h.PID, Session: h.Session, Name: h.Name, Cmd: h.Cmd, Since: since}, true
+}
+
+// Who names the holder: its session's name, else its session id, and its
+// process.
+func (h Holder) Who() string {
+	who := cmp.Or(h.Name, h.Session)
+	if who == "" {
+		return fmt.Sprintf("pid %d", h.PID)
+	}
+	return fmt.Sprintf("%s (pid %d)", who, h.PID)
+}
+
+// HolderText states a slot's holder for a waiter's line: who holds it, since
+// when and for how long by now, and the command; a record it cannot read as
+// it is.
+func HolderText(raw string, now time.Time) string {
+	h, ok := ParseHolder(raw)
+	if !ok {
+		return raw
+	}
+	s := h.Who()
+	if !h.Since.IsZero() {
+		s += fmt.Sprintf(" since %s (%s)", h.Since.UTC().Format("15:04Z"), now.Sub(h.Since).Round(time.Second))
+	}
+	return s + ": " + h.Cmd
 }
 
 // sessionSlot is the slot a run of the session holds, 0 for none or no
@@ -519,6 +672,9 @@ type holderRecord struct {
 	Cmd     string `json:"cmd"`
 	Max     string `json:"max"`
 	Since   string `json:"since"`
+	// Name is the session's name ($CLAUDE_CODE_SESSION_NAME), beekeeper's
+	// addition; memcap's readers skip it.
+	Name string `json:"name,omitempty"`
 }
 
 func writeHolder(o Options, slot int, argv []string) {
@@ -532,7 +688,7 @@ func writeHolder(o Options, slot int, argv []string) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(holderRecord{PID: os.Getpid(), Session: sessionID(), CWD: cwd, Cmd: cmd, Max: o.Max,
-		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z")})
+		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME")})
 }
 
 // scope runs argv in the capped scope unit, in the slot's slice, with env
@@ -593,12 +749,16 @@ func reap(capper platform.Capper, unit string, slot int, logf func(string, ...an
 		return ""
 	}
 	procs := ProcList(left, t)
+	held := fmt.Sprintf("slot %d", slot)
+	if slot == 0 {
+		held = "their memory"
+	}
 	if err != nil {
-		logf("the command exited and left %s in %s.scope; stopping it failed: %v — slot %d stays busy until they end or the watch stops the scope",
-			procs, unit, err, slot)
+		logf("the command exited and left %s in %s.scope; stopping it failed: %v — %s stays busy until they end or the watch stops the scope",
+			procs, unit, err, held)
 		return "left " + procs + ", stop failed"
 	}
-	logf("the command exited and left %s in %s.scope: stopped them, they hold slot %d no longer", procs, unit, slot)
+	logf("the command exited and left %s in %s.scope: stopped them, they hold %s no longer", procs, unit, held)
 	return "stopped what it left: " + procs
 }
 
