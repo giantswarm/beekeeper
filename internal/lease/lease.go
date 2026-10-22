@@ -44,6 +44,12 @@ type Holder struct {
 	// BudgetGiB is what the holder's models may hold on the model server,
 	// 0 on every other resource.
 	BudgetGiB int `json:"budgetGiB,omitempty"`
+	// LabConfig is a lab's agentlab.yaml at the claim, nil on every other
+	// resource and on a lab whose configuration the claim could not read.
+	LabConfig *LabConfig `json:"labConfig,omitempty"`
+	// LabChange is the change the lab's previous release left, shown to
+	// this holder at its claim.
+	LabChange *LabChange `json:"labChange,omitempty"`
 }
 
 // Label is the resource with the budget its claim carries.

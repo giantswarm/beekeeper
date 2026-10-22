@@ -30,6 +30,9 @@ const (
 type leaseView struct {
 	lease.Holder
 	State string `json:"state"`
+	// LabConfigState is a held lab's configuration against its claim-time
+	// state (lease status).
+	LabConfigState *labConfigView `json:"labConfigState,omitempty"`
 }
 
 func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
@@ -210,6 +213,14 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		return "", err
 	}
 	lab := a.claimedLab(res)
+	var labCfg *lease.LabConfig
+	var labRaw []byte
+	var labNote string
+	if a.cfg.LabCluster(res) != "" {
+		if labCfg, labRaw, err = a.readLabConfig(res); err != nil {
+			labNote = fmt.Sprintf("\nagentlab.yaml not recorded (%v): the release compares nothing", err)
+		}
+	}
 	dir := lease.Dir(a.cfg.LeaseDir)
 	var msg string
 	var refusal error
@@ -260,6 +271,10 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		if idx >= 0 {
 			unblock = st.Grants[idx].UpgradeUnblock
 		}
+		change, err := dir.LabChangeOf(res)
+		if err != nil {
+			return nil, err
+		}
 		host, _ := os.Hostname()
 		cur, err := dir.Claim(res, lease.Holder{
 			Env:         res,
@@ -275,6 +290,8 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 
 			UpgradeUnblock: unblock,
 			BudgetGiB:      budget,
+			LabConfig:      labCfg,
+			LabChange:      change,
 		})
 		if err != nil {
 			return nil, err
@@ -286,6 +303,18 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 			st.Grants = slices.Delete(st.Grants, idx, idx+1)
 		}
 		msg = fmt.Sprintf("held by you since %s: claimed %s", clock(a.now, a.now), res+lab)
+		if labRaw != nil {
+			if err := dir.KeepLabConfig(res, labRaw); err != nil {
+				labNote = fmt.Sprintf("\nagentlab.yaml not kept (%v): the release compares nothing", err)
+			}
+		}
+		if change != nil {
+			if err := dir.DropLabChange(res); err != nil {
+				return nil, err
+			}
+			msg += "\nagentlab.yaml was " + change.Text()
+		}
+		msg += labNote
 		if budget > 0 {
 			msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
 			return append(evs, event(me, verbLeaseClaim, "%s: %s (%d GiB)", res, purpose, budget)), nil
@@ -401,7 +430,8 @@ func (a *app) heldBy(v leaseView) error {
 }
 
 func (a *app) leaseReleaseCmd() *cobra.Command {
-	var force bool
+	var force, restore bool
+	var keep string
 	c := &cobra.Command{
 		Use:   "release <resource>",
 		Short: "Release a resource you hold, or withdraw your queued grant of it (--force frees another holder's)",
@@ -409,12 +439,28 @@ func (a *app) leaseReleaseCmd() *cobra.Command {
 queued behind its holder or earlier grants, is withdrawn instead: your grant
 leaves its queue, your park on it (lease claim --park) ends, and the next
 grant moves up. --force frees the lease of another holder whose session is
-gone; it withdraws nothing.`,
+gone; it withdraws nothing.
+
+A lab's claim keeps its agentlab.yaml, and its release compares the lab's
+configuration with it. A change is refused, naming the keys that differ,
+until --restore puts the claim-time agentlab.yaml back (the released one is
+kept beside it as agentlab.yaml.released) or --keep-config "<why>" declares
+it; a declared change, and one a --force release found, is shown to the
+lab's next claim.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
 				return err
+			}
+			keep = strings.TrimSpace(keep)
+			switch {
+			case cmd.Flags().Changed("keep-config") && keep == "":
+				return usageErr("--keep-config needs the reason: why the next holder gets the changed configuration")
+			case restore && keep != "":
+				return usageErr("--restore puts the claim-time agentlab.yaml back, --keep-config keeps the change: one of them")
+			case (restore || keep != "") && a.cfg.LabCluster(res) == "":
+				return usageErr("--restore and --keep-config settle a lab's agentlab.yaml: %s is not a lab", res)
 			}
 			if a.cfg.IsCentral(res) {
 				return a.releaseCentral(res, force)
@@ -444,6 +490,10 @@ gone; it withdraws nothing.`,
 				if !mine && !force {
 					return nil, refused("%s is held by %q, not by you, and no grant of it to you waits: only --force frees another holder's lease", res, cur.Name)
 				}
+				labLine, err := a.labRelease(dir, *cur, me, restore, keep, force)
+				if err != nil {
+					return nil, err
+				}
 				if err := dir.Release(res); err != nil {
 					return nil, err
 				}
@@ -453,9 +503,10 @@ gone; it withdraws nothing.`,
 				st.Released[res] = a.now.UTC()
 				msg = "released " + res
 				if !mine {
-					msg += fmt.Sprintf(" (held by %q: %s)", cur.Name, cur.Purpose)
+					msg += fmt.Sprintf(" (held by %q: %s)", cur.Name, cur.Purpose) + labLine
 					return []state.Event{event(me, "lease.force-release", "%s held by %s: %s", res, cur.Name, cur.Purpose)}, nil
 				}
+				msg += labLine
 				return []state.Event{event(me, "lease.release", "%s", res)}, nil
 			})
 			if err != nil {
@@ -466,6 +517,8 @@ gone; it withdraws nothing.`,
 		},
 	}
 	c.Flags().BoolVar(&force, "force", false, "free a lease another session or person holds (its holder is gone)")
+	c.Flags().BoolVar(&restore, "restore", false, "a lab: put its claim-time agentlab.yaml back before the release")
+	c.Flags().StringVar(&keep, "keep-config", "", "a lab: release it with its changed agentlab.yaml, and say why; the next claim is told")
 	return c
 }
 
@@ -510,7 +563,10 @@ func (a *app) leaseStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status <resource>",
 		Short: "Say whether a resource is free (exit 0) or held (exit 3)",
-		Args:  cobra.ExactArgs(1),
+		Long: `Say whether a resource is free (exit 0) or held (exit 3). A held lab also
+says whether its agentlab.yaml is at its claim-time state, a free one the
+change its last release left for the next claim.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
@@ -519,12 +575,23 @@ func (a *app) leaseStatusCmd() *cobra.Command {
 			if a.cfg.IsCentral(res) {
 				return a.statusCentral(res)
 			}
-			cur, err := lease.Dir(a.cfg.LeaseDir).Get(res)
+			dir := lease.Dir(a.cfg.LeaseDir)
+			cur, err := dir.Get(res)
 			if err != nil {
 				return err
 			}
 			if cur == nil {
-				_, err := fmt.Fprintln(a.out, "free")
+				var line string
+				if a.cfg.LabCluster(res) != "" {
+					change, err := dir.LabChangeOf(res)
+					if err != nil {
+						return err
+					}
+					if change != nil {
+						line = "; agentlab.yaml was " + change.Text()
+					}
+				}
+				_, err := fmt.Fprintln(a.out, "free"+line)
 				return err
 			}
 			sessions, _, err := a.sessions()
@@ -532,10 +599,18 @@ func (a *app) leaseStatusCmd() *cobra.Command {
 				return err
 			}
 			v := a.leaseView(sessions, *cur)
+			if a.cfg.LabCluster(res) != "" {
+				lc := labConfigOf(dir, *cur)
+				v.LabConfigState = &lc
+			}
 			if a.json {
 				_ = a.printJSON(v)
 			}
-			return a.heldBy(v)
+			err = a.heldBy(v)
+			if v.LabConfigState != nil {
+				err = refused("%s\n%s", err, v.LabConfigState.Text())
+			}
+			return err
 		},
 	}
 }

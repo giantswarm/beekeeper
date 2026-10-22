@@ -38,6 +38,8 @@ func claimApp(t *testing.T, grants ...state.Grant) *app {
 	a.cfg.LeaseDir = t.TempDir()
 	a.cfg.Resources = []string{labOne, labTwo, graveler}
 	a.cfg.Labs = map[string]string{labOne: labCluster, labTwo: labTwo}
+	labDirs := labConfigs(t, labCluster, labTwo)
+	a.labDirs = func() (map[string]string, error) { return labDirs, nil }
 	a.cfg.GrantTTL = config.Duration{Duration: 30 * time.Minute}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.SetSupervisorRole(state.Role{Holder: &state.Supervisor{Party: claimSup}})
