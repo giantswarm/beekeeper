@@ -383,13 +383,19 @@ whether a later one recovered.
 
 Under Hyprland, a shared Chrome window the compositor does not show (on a
 workspace not shown, under a special workspace shown over its own, behind
-the front window of a monocle workspace) is shown for the turn: moved
-silently onto the workspace its monitor shows, floating at 1280x800 in the
-lower right corner, the focus left where it is, and put back as it was once
-the turn ends. browse only dispatches window moves; it never changes the
-compositor's configuration. Below the report, "window shown:" says where
-the window was; "window not shown:" names where it is when it could not be
-moved. Under a screen locker (hyprlock) the compositor draws no window at
+the front window of a monocle workspace) is drawn off the person's screen
+for the turn: browse creates the headless output BEEKEEPER-BROWSE, placed
+far from every monitor with its own named workspace beekeeper-browse, moves
+the window silently onto it, and puts it back on its own workspace and
+removes the output once the turn ends. The person's monitors, workspace
+numbers and focus stay as they are; an output that would change them is
+removed again before the window moves. Nothing floats or appears on the
+person's screen. The output's monitor and workspace rules are set at
+runtime only; no Hyprland configuration file changes. A window a browse
+that died mid-turn left on the output is put back by the next browse (its
+record: <stateDir>/browse/window.json). Below the report, "window shown:"
+says where the window was; "window not shown:" names where it is when it
+could not be drawn there. Under a screen locker (hyprlock) the compositor draws no window at
 all: browse starts no turn and exits non-zero at once with an error that
 starts with "screen locked", names the locker and the probe to park on
 until the screen unlocks. A lock that comes after the turn started moves
@@ -547,9 +553,9 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		}
 		return report, err
 	}
-	// The shared Chrome window is shown on screen for the turns and put back
-	// after them, a stopped browse included.
-	win := showChrome(ctx)
+	// The shared Chrome window is drawn off the person's screen for the
+	// turns and put back after them, a stopped browse included.
+	win := showChrome(ctx, filepath.Join(a.cfg.StateDir, "browse", "window.json"))
 	defer func() { _ = win.restore(ctx) }()
 	rules := browseRules(deploy, consents, lab)
 	prompt := browsePrompt(steps, deploy, consents, lab, shared)
@@ -809,11 +815,14 @@ func (f browseFindings) drawErr() error {
 			"the turn clicked nothing there. Run the steps again once the screen is unlocked", l, guard.NotDrawnLine)
 	}
 	why := notDrawnWhy
-	if f.Window.Failed != "" {
+	switch {
+	case f.Window.Failed != "":
 		why = f.Window.Failed
+	case f.Window.To != "":
+		why = fmt.Sprintf("the shared Chrome window was on %s, and the turn %s, yet Chrome drew nothing", f.Window.Where, f.Window.tried())
 	}
 	return fmt.Errorf("%s: Chrome did not draw the turn's page, a fresh tab included: %s; the turn clicked nothing there. "+
-		"Show the shared Chrome window on screen and run the steps again", guard.NotDrawnLine, why)
+		"Run the steps again", guard.NotDrawnLine, why)
 }
 
 // tabsErr is the error of a turn that left tabs it opened open: the ones
