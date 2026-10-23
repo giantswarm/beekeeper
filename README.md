@@ -2142,7 +2142,9 @@ The import switches the desktop's main window to the new session. Once it has (u
 beekeeper switches the window back to the session it showed before, the last focus change in the
 desktop's log (`claude.desktopLog`, `~/.config/Claude/logs/main.log`), so the person keeps working
 where they were; the new session waits in the sidebar. A desktop that showed no session, or that
-the start had to launch, stays on the new one.
+the start had to launch, stays on the new one, and so does one that showed a relieved role run or
+a hand-over's predecessor: the desktop warms the CLI of the session its window shows, and the
+watch would stop that CLI as revived after every start, reopen and wake.
 
 Neither link goes while the desktop's window has the focus (Hyprland's active window, `hyprctl
 activewindow`, app id `com.anthropic.Claude`): a switch there would land under someone reading or
