@@ -38,6 +38,11 @@ looks, unless it equals a value under a secret-named key of the same file.
 One that looks secret refuses the whole call (exit 3), named by its path and the
 reason, never its value; copy and compare move and check a secret.
 
+A path through a string leaf holding a YAML document (dex-operator's
+provider credentials, a block scalar) answers a key inside that document,
+classified by the keys inside it and above the leaf, the leaf's own name
+aside: credentials.teams is answered, credentials.client-secret refused.
+
 --json answers [{"path": …, "value": …}], a tool's input:
 
   beekeeper --json secret reveal secret-values.yaml.patch \
