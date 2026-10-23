@@ -433,8 +433,9 @@ func signalName(s syscall.Signal) string {
 
 // runReason is what a run's document says about its end (its verdict and
 // reason, the failed checks the reason does not name), else its last stderr
-// line; handCut is a merge's base branch that no Auto-release run
-// tags, whose release nobody awaits. A merge declined on classic branch
+// line, with a busy base's spent budget (busySpent) the last line names;
+// handCut is a merge's base branch that no Auto-release run tags, whose
+// release nobody awaits. A merge declined on classic branch
 // protection is its cause and fix alone (merge.ClassicProtection), which the
 // truncation of devctl's long reason would cut.
 func runReason(doc []byte, last, handCut string) string {
@@ -455,6 +456,9 @@ func runReason(doc []byte, last, handCut string) string {
 	}
 	if len(unnamed) > 0 {
 		why = strings.Trim(why+"; failed: "+strings.Join(unnamed, ", "), "; ")
+	}
+	if spent := strings.TrimPrefix(last, GatePrefix); merge.BusyBase(doc) && strings.HasPrefix(spent, busySpent) {
+		why += "; " + spent
 	}
 	if o, ok := merge.ParseDocument(doc); ok && o.Merged {
 		rel := o.Release

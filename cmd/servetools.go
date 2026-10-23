@@ -42,6 +42,7 @@ const (
 	paramStatusQuo   = "status_quo"
 	paramOptions     = "options"
 	paramRecommend   = "recommend"
+	paramFoldInto    = "fold_into"
 	paramFor         = "for"
 	paramAfter       = "after"
 	paramKind        = "kind"
@@ -143,7 +144,8 @@ func (s *server) tools() []serveTool {
 			mcp.WithArray(paramOptions, mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
 			mcp.WithNumber(paramRecommend, mcp.Description("the option recommended, 1-based")),
 			mcp.WithString(paramChecked, mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
-			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n"))), toolNoteAdd},
+			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
+			mcp.WithNumber(paramFoldInto, mcp.Description("an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand, and its number is returned"))), toolNoteAdd},
 		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintRead), toolNoteList},
 		{newTool("note_answer", "Answer a decision in the person's words and close it: as the person it is for, or a member of the team it is for.",
 			fmt.Sprintf("A decision its default closed stays answerable for %s: the answer replaces the default.", shortDur(defaultedKeep)), hints{destructive: true, idempotent: true, openWorld: true},
@@ -746,6 +748,9 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	if r := req.GetInt(paramRecommend, 0); r != 0 {
 		args = append(args, "--recommend", strconv.Itoa(r))
+	}
+	if f := req.GetInt(paramFoldInto, 0); f != 0 {
+		args = append(args, "--fold-into", strconv.Itoa(f))
 	}
 	if err := c.verb(c.app.noteCmd(), args...); err != nil {
 		return nil, err

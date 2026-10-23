@@ -146,7 +146,19 @@ const rebaseFlag = "--rebase"
 
 // Rebase says whether a devctl pr merge argument vector is a rebase merge:
 // --rebase (or --rebase=true) among its flags, before any --.
-func Rebase(argv []string) bool {
+func Rebase(argv []string) bool { return mergeFlag(argv, rebaseFlag) }
+
+// updateBranchFlag has devctl pr merge bring a head behind its base up to it.
+const updateBranchFlag = "--update-branch"
+
+// UpdatesBranch says whether a devctl pr merge argument vector updates a
+// head behind its base: --update-branch (or --update-branch=true) among its
+// flags, before any --.
+func UpdatesBranch(argv []string) bool { return mergeFlag(argv, updateBranchFlag) }
+
+// mergeFlag says whether the boolean flag is set among the flags of a devctl
+// pr merge argument vector, before any --.
+func mergeFlag(argv []string, flag string) bool {
 	i := slices.Index(argv, "merge")
 	if i < 1 || argv[i-1] != "pr" {
 		return false
@@ -155,7 +167,7 @@ func Rebase(argv []string) bool {
 		switch a {
 		case "--":
 			return false
-		case rebaseFlag, rebaseFlag + "=true":
+		case flag, flag + "=true":
 			return true
 		}
 	}

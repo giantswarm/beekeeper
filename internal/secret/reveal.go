@@ -54,21 +54,40 @@ func (o *Ops) Reveal(ctx context.Context, file string, paths []string) ([]Field,
 	return out, nil
 }
 
-// revealed are the classified leaves of doc under path.
+// revealed are the classified leaves of doc under path. A path through a
+// string leaf reaches into the YAML document it holds: its leaves are
+// classified by their keys inside it and the keys above the leaf, the
+// leaf's own name (credentials) saying what the document holds besides.
 func (o *Ops) revealed(doc *document, file, path string) ([]Field, error) {
-	n := doc.node(path)
+	n, named, secrets := doc.node(path), path, doc.secretValues()
 	if n == nil {
-		return nil, fmt.Errorf("%s: no value at %s", file, path)
+		l, ok := doc.inLeaf(splitPath(path))
+		if !ok {
+			return nil, fmt.Errorf("%s: no value at %s", file, path)
+		}
+		inner := parseContent([]byte(l.node.Value)).doc
+		if inner == nil {
+			return nil, fmt.Errorf("%s: no value at %s: %s holds %s", file, path, l.at(), nodeShape(l.node))
+		}
+		if _, n, _ = inner.walk(l.rest); n == nil {
+			_, err := lookup([]byte(l.node.Value), l.at(), l.rest)
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		named = joinPath(strings.Join(l.held[:len(l.held)-1], "."), strings.Join(l.rest, "."))
+		for v, p := range inner.secretValues() {
+			if _, seen := secrets[v]; !seen {
+				secrets[v] = joinPath(l.at(), p)
+			}
+		}
 	}
 	leaves := (&document{root: n}).leaves()
-	secrets := doc.secretValues()
 	out := make([]Field, 0, len(leaves))
 	for _, k := range sortedKeys(leaves) {
-		p := path
+		p, c := path, named
 		if k != "" {
-			p += "." + k
+			p, c = p+"."+k, c+"."+k
 		}
-		why := o.secretLike(p, leaves[k], publicID(p))
+		why := o.secretLike(c, leaves[k], publicID(c))
 		if s, ok := secrets[leaves[k]]; why == "" && ok && publicID(p) {
 			why = fmt.Sprintf("an id equal to the secret at %s", s)
 		}
@@ -109,6 +128,11 @@ func (o *Ops) RevealTo(ctx context.Context, file, path string, dst Ref, write bo
 	doc, err := o.decrypt(ctx, file)
 	if err != nil {
 		return res, err
+	}
+	if doc.node(path) == nil {
+		if _, ok := doc.inLeaf(splitPath(path)); ok {
+			return res, fmt.Errorf("%s#%s: --to copies a node of the file; a key inside a leaf's document is revealed without --to", file, path)
+		}
 	}
 	fields, err := o.revealed(doc, file, path)
 	if err != nil {

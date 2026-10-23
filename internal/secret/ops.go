@@ -273,10 +273,15 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 }
 
 // place is the path a value for path takes in doc, the document of file,
-// refused when file's creation rule would leave it in plaintext.
+// refused when file's creation rule would leave it in plaintext: the leaf
+// sops encrypts, the one holding the document for a path into it.
 func place(doc *document, file, path string) (string, error) {
 	path = doc.valuePath(path)
-	if err := checkRule(file, splitPath(path)); err != nil {
+	keys := splitPath(path)
+	if l, ok := doc.inLeaf(keys); ok {
+		keys = l.held
+	}
+	if err := checkRule(file, keys); err != nil {
 		return "", err
 	}
 	return path, nil

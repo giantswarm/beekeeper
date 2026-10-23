@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -71,7 +72,9 @@ capacity count it parked, not busy, the doctor and the watch leave it
 alone, and it ends its turn instead of waiting in a sleep that holds its
 slot and its CLI's memory.
 
---on names what settles the wait: a note (#12), an issue or pull request
+--on names what settles the wait: a note (#12; on a machine with a central
+instance <context>#12 is its note, and a bare number the machine has no
+note of is the central instance's), an issue or pull request
 (owner/repo#n) or a hold (hold:<target>, the one a gate's exit 77 names);
 lease claim --park parks on a lease. Once the note is closed (answered,
 defaulted, done or overtaken), the pull request merged or closed, the hold
@@ -104,11 +107,13 @@ agents wake: its task is that message's first line.`,
 				}
 				on = holdParkOn(target)
 			} else if _, isNote := parkNote(on); on != "" && !isNote {
-				r, ok := parseRef(on)
-				if !ok {
-					return usageErr("--on %s is neither a note (#12), an issue or pull request (owner/repo#n) nor a hold (hold:<target>)", on)
+				if _, _, central := parkCentralNote(on); !central {
+					r, ok := parseRef(on)
+					if !ok {
+						return usageErr("--on %s is neither a note (#12, <context>#12), an issue or pull request (owner/repo#n) nor a hold (hold:<target>)", on)
+					}
+					on = refName(r)
 				}
-				on = refName(r)
 			}
 			line, err := a.park(me, on, waits)
 			if err != nil {
@@ -118,15 +123,24 @@ agents wake: its task is that message's first line.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12), an issue or pull request (owner/repo#n) or a hold (hold:<target>)")
+	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n) or a hold (hold:<target>)")
 	return c
 }
 
-// park parks the agent me on on (a note "#12", an issue or pull request
-// owner/repo#n, a hold of holdParkOn, a lease of leaseParkOn, or nothing)
-// waiting for waits, and returns the line that says so.
+// park parks the agent me on on (a note "#12", a central instance's note
+// "<context>#12", an issue or pull request owner/repo#n, a hold of
+// holdParkOn, a lease of leaseParkOn, or nothing) waiting for waits, and
+// returns the line that says so. A bare note number is the central
+// instance's note when the machine has none of it open, as note answer's.
 func (a *app) park(me state.Party, on, waits string) (string, error) {
 	id, isNote := parkNote(on)
+	if _, _, central := parkCentralNote(on); isNote || central {
+		var err error
+		if on, err = a.parkNoteOn(on); err != nil {
+			return "", err
+		}
+		id, isNote = parkNote(on)
+	}
 	var line string
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
@@ -299,7 +313,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	for _, n := range st.Notes {
 		open[n.ID] = true
 	}
-	var parked []state.Agent
+	var parked, centralParked []state.Agent
 	var closed []int
 	var refs []github.PR
 	var out []settledPark
@@ -324,6 +338,10 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			if !open[id] {
 				parked, closed = append(parked, ag), append(closed, id)
 			}
+		} else if ctx, _, ok := parkCentralNote(p.On); ok {
+			if w.centralNotesOn() && strings.EqualFold(ctx, w.cfg.Central.Context) {
+				centralParked = append(centralParked, ag)
+			}
 		} else if r, ok := parseRef(p.On); ok {
 			parked = append(parked, ag)
 			if !slices.Contains(refs, r) {
@@ -331,6 +349,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			}
 		}
 	}
+	out = append(out, w.settledCentralParks(ctx, centralParked)...)
 	if len(parked) == 0 {
 		return out
 	}
@@ -345,32 +364,13 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		}
 		states = s
 	}
-	closes := map[int]string{}
+	var closes map[int]string
 	if len(closed) > 0 {
-		evs, err := w.store.Events(0, func(e state.Event) bool {
-			switch e.Verb {
-			case answerRecorded, noteDefaulted, noteDone, noteOvertaken:
-				return true
-			}
-			return false
-		})
+		evs, err := w.store.Events(0, func(e state.Event) bool { return noteClosing(e.Verb) })
 		if err != nil {
 			return out // the next poll reads the notes again
 		}
-		for _, e := range evs {
-			for _, id := range closed {
-				if an, ok := parseAnswered(e); ok {
-					if an.ID == id {
-						closes[id] = fmt.Sprintf("note #%d answered by %s: %s", id, an.For, an.Answer)
-						if an.Comment != "" {
-							closes[id] += " (" + an.Comment + ")"
-						}
-					}
-				} else if strings.HasPrefix(e.Detail, fmt.Sprintf("#%d ", id)) {
-					closes[id] = fmt.Sprintf("note #%d closed: %s", id, oneLine(e.Detail))
-				}
-			}
-		}
+		closes = noteCloses(evs, closed, "")
 	}
 	for _, ag := range parked {
 		on := ag.Park.On
@@ -381,6 +381,90 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		r, _ := parseRef(on)
 		if s := states[r].State; s != "" && s != github.Open {
 			out = append(out, settledPark{ag.Party, on, refName(r) + " " + strings.ToLower(s)})
+		}
+	}
+	return out
+}
+
+// noteClosing says whether verb closes a note: answered, defaulted, done
+// or overtaken.
+func noteClosing(verb string) bool {
+	switch verb {
+	case answerRecorded, noteDefaulted, noteDone, noteOvertaken:
+		return true
+	}
+	return false
+}
+
+// noteCloses is what closed each note of ids among the closing events evs,
+// oldest first, the last one winning: its answer word for word, or how it
+// closed. Each note is named <central>#<n>.
+func noteCloses(evs []state.Event, ids []int, central string) map[int]string {
+	closes := map[int]string{}
+	for _, e := range evs {
+		for _, id := range ids {
+			if an, ok := parseAnswered(e); ok {
+				if an.ID == id {
+					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.For, an.Answer)
+					if an.Comment != "" {
+						closes[id] += " (" + an.Comment + ")"
+					}
+				}
+			} else if strings.HasPrefix(e.Detail, fmt.Sprintf("#%d ", id)) {
+				closes[id] = fmt.Sprintf("note %s#%d closed: %s", central, id, oneLine(e.Detail))
+			}
+		}
+	}
+	return closes
+}
+
+// settledCentralParks reads which of parked, each parked on a central
+// note, settled: its note is no longer among the central instance's open
+// notes (note_list); what closed it is the feed's (read_feed), read only
+// then. An unreachable central instance leaves them parked, said once.
+func (w *watcher) settledCentralParks(ctx context.Context, parked []state.Agent) []settledPark {
+	if len(parked) == 0 {
+		return nil
+	}
+	const key = "park-central"
+	me := state.Party{Name: w.cfg.Identity.Person, Host: w.cfg.Identity.Host}
+	notes, err := w.centralNotes(ctx, me)
+	if err != nil {
+		w.fail(key, "cannot read the central instance's notes (%s) the parked agents wait on: %v", w.cfg.Central.Context, err)
+		return nil
+	}
+	open := map[int]bool{}
+	for _, n := range notes {
+		open[n.ID] = true
+	}
+	var closed []int
+	for _, ag := range parked {
+		if _, id, _ := parkCentralNote(ag.Park.On); !open[id] {
+			closed = append(closed, id)
+		}
+	}
+	if len(closed) == 0 {
+		w.clear(key)
+		return nil
+	}
+	var f feed.Feed
+	if _, err := w.callCentralRaw(ctx, me, nameReadFeed, map[string]any{}, &f); err != nil {
+		w.fail(key, "cannot read the central feed (%s) for what closed the notes the parked agents wait on: %v", w.cfg.Central.Context, err)
+		return nil
+	}
+	w.clear(key)
+	var evs []state.Event
+	for _, ev := range f.Events {
+		detail, ok := strings.CutPrefix(ev.Line, feed.Line(ev.Kind, ev.Actor, ""))
+		if ok && noteClosing(ev.Kind) {
+			evs = append(evs, state.Event{At: ev.Time, Verb: ev.Kind, Detail: detail, By: state.Party{Name: ev.Actor.Name, Person: ev.Actor.Person, Host: ev.Actor.Host}})
+		}
+	}
+	closes := noteCloses(evs, closed, w.cfg.Central.Context)
+	var out []settledPark
+	for _, ag := range parked {
+		if _, id, _ := parkCentralNote(ag.Park.On); !open[id] {
+			out = append(out, settledPark{ag.Party, ag.Park.On, cmp.Or(closes[id], fmt.Sprintf("note %s is closed", ag.Park.On))})
 		}
 	}
 	return out

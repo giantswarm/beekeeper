@@ -264,6 +264,12 @@ type childSpec struct {
 	HandCut string      `json:"handCut,omitempty"`
 	// WithCaller is set for a wait, never for a merge or a queued merge's run.
 	WithCaller bool `json:"withCaller,omitempty"`
+	// BusyBudget, set for a merge with --update-branch, is how long from its
+	// first run merge-child runs devctl again after a run ends on a busy base
+	// (merge.BusyBase), BusyPauses its pauses before them (merge.BusyNext);
+	// zero: once.
+	BusyBudget time.Duration   `json:"busyBudget,omitempty"`
+	BusyPauses []time.Duration `json:"busyPauses,omitempty"`
 }
 
 // childRun is how a detached run ended for its gate: devctl's document and
@@ -319,7 +325,7 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
-	return followChild(base, pid, 0, nil, nil, leave, spec.WithCaller)
+	return followChild(base, pid, 0, nil, nil, leave, spec.WithCaller, nil)
 }
 
 // followChild follows the devctl that merge-child pid runs outside its
@@ -346,12 +352,16 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 // document it takes off the stdout (held), for the gate to decide. leave,
 // when set, is when the follow returns with left set while the run goes on
 // (the gate's tool limit), its files in place for its merge-child and the
-// watch.
-func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool) (r childRun) {
+// watch. sig, when given, hears the signals from before devctl started
+// (gateRun.followSignals); else the follow hears them from its start on.
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) (r childRun) {
 	r.rc = guard.ExitNotFound
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sig)
+	if sig == nil {
+		own := make(chan os.Signal, 1)
+		signal.Notify(own, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		defer signal.Stop(own)
+		sig = own
+	}
 	log, err := os.Open(base + ".log") //nolint:gosec // the gate's own file under the state directory
 	if err == nil {
 		defer func() { _ = log.Close() }()
@@ -751,7 +761,10 @@ type childResult struct {
 // from the gate's caller; the first one is the run's stop. A wait
 // (spec.WithCaller) ends with its caller: once its gate is gone without the
 // left mark (leftExt) and no other run follows it (followerGlob), devctl is
-// sent SIGTERM and the run is callerGone. Re-executed by a replaced merge-child whose
+// sent SIGTERM and the run is callerGone. A merge's run that ends on a busy
+// base (merge.BusyBase) runs again after a pause within spec.BusyBudget, its
+// stdout replaced and its stderr appended, the exit code the last run's.
+// Re-executed by a replaced merge-child whose
 // command ended, it returns that outcome (doneResult) and runs nothing.
 func mergeChild(base string) childResult {
 	if r, ok := doneResult(base); ok {
@@ -777,8 +790,6 @@ func mergeChild(base string) childResult {
 		return r
 	}
 	defer func() { _ = errs.Close() }()
-	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
-	c.Stdout, c.Stderr, c.Env, c.Dir = out, errs, spec.Env, spec.Dir
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
@@ -786,43 +797,51 @@ func mergeChild(base string) childResult {
 	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // the gate's own file, named by the gate
 		return r
 	}
-	rc := guard.ExitNotFound
 	var stop atomic.Value
 	var gone atomic.Bool
-	if err := c.Start(); err == nil {
-		go func() {
-			for s := range sig {
-				if n, ok := s.(syscall.Signal); ok {
-					stop.CompareAndSwap(nil, n)
-				}
-				_ = c.Process.Signal(s)
+	var current atomic.Pointer[os.Process]
+	stopCh := make(chan struct{})
+	go func() {
+		for s := range sig {
+			if n, ok := s.(syscall.Signal); ok && stop.CompareAndSwap(nil, n) {
+				close(stopCh)
 			}
-		}()
-		ended := make(chan struct{})
-		if spec.WithCaller && spec.Gate > 0 {
-			go func() {
-				for {
-					select {
-					case <-ended:
-						return
-					case <-time.After(followPoll):
-					}
-					if callerGone(base, spec.Gate) {
-						gone.Store(true)
-						_ = c.Process.Signal(syscall.SIGTERM)
-						return
-					}
-				}
-			}()
+			if p := current.Load(); p != nil {
+				_ = p.Signal(s)
+			}
 		}
-		_ = c.Wait()
-		close(ended)
-		rc = c.ProcessState.ExitCode()
-		if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			rc = 128 + int(ws.Signal())
+	}()
+	rc := runSpec(base, spec, out, errs, &current, &stop, &gone)
+	start := time.Now()
+	for run := 1; stop.Load() == nil && !gone.Load(); run++ {
+		doc, _ := os.ReadFile(base + ".json") //nolint:gosec // as above
+		if rc != 3 || !merge.BusyBase(doc) {
+			break
 		}
-	} else {
-		_, _ = fmt.Fprintln(errs, err)
+		pause, ok := merge.BusyNext(spec.BusyPauses, run, start, time.Now(), spec.BusyBudget)
+		if !ok {
+			if spec.BusyBudget > 0 {
+				_, _ = fmt.Fprintf(errs, "%s%s: %d devctl runs in %s, merge.busyBudget %s; nothing merged\n",
+					GatePrefix, busySpent, run, time.Since(start).Round(time.Second), spec.BusyBudget)
+			}
+			break
+		}
+		_, _ = fmt.Fprintf(errs, "%sthe base moved during every wait of devctl run %d (%s of the busy-base budget %s spent): the merge keeps its lane place, and devctl runs again in %s, updating the branch once its checks are green\n",
+			GatePrefix, run, time.Since(start).Round(time.Second), spec.BusyBudget, pause)
+		select {
+		case <-time.After(pause):
+		case <-stopCh:
+		}
+		if stop.Load() != nil {
+			break
+		}
+		if _, err := out.Seek(0, io.SeekStart); err != nil || out.Truncate(0) != nil {
+			break
+		}
+		if rc = runSpec(base, spec, out, errs, &current, &stop, &gone); rc == 0 {
+			_, _ = fmt.Fprintf(errs, "%sdevctl run %d landed the merge on the busy base, %s of the busy-base budget %s spent\n",
+				GatePrefix, run+1, time.Since(start).Round(time.Second), spec.BusyBudget)
+		}
 	}
 	r.rc = rc
 	r.stop, _ = stop.Load().(syscall.Signal)
@@ -843,4 +862,53 @@ func mergeChild(base string) childResult {
 		writeResult(base, runResult{RC: rc, Doc: string(r.doc), Kept: r.kept})
 	}
 	return r
+}
+
+// busySpent opens merge-child's last line when a busy base's runs spent
+// merge.busyBudget, which the run's reason carries on (runReason).
+const busySpent = "busy-base budget spent"
+
+// runSpec runs spec's command once with its stdout to out and its stderr to
+// errs, the process in current for the signals merge-child passes on (one
+// that came before it started, the run's stop, reaches it once it has), and
+// returns its exit code (128+n for a signal). A wait (spec.WithCaller) ends
+// with its caller: once its gate is gone without the left mark (leftExt)
+// and no other run follows it (followerGlob), the command is sent SIGTERM
+// and gone set.
+func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
+	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
+	c.Stdout, c.Stderr, c.Env, c.Dir = out, errs, spec.Env, spec.Dir
+	if err := c.Start(); err != nil {
+		_, _ = fmt.Fprintln(errs, err)
+		return guard.ExitNotFound
+	}
+	current.Store(c.Process)
+	defer current.Store(nil)
+	if s, ok := stop.Load().(syscall.Signal); ok {
+		_ = c.Process.Signal(s)
+	}
+	ended := make(chan struct{})
+	if spec.WithCaller && spec.Gate > 0 {
+		go func() {
+			for {
+				select {
+				case <-ended:
+					return
+				case <-time.After(followPoll):
+				}
+				if callerGone(base, spec.Gate) {
+					gone.Store(true)
+					_ = c.Process.Signal(syscall.SIGTERM)
+					return
+				}
+			}
+		}()
+	}
+	_ = c.Wait()
+	close(ended)
+	rc := c.ProcessState.ExitCode()
+	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		rc = 128 + int(ws.Signal())
+	}
+	return rc
 }
