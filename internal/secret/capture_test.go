@@ -198,6 +198,7 @@ func TestCaptureRefusesBeforeTheProducerRuns(t *testing.T) {
 		{"no count", pw, with("openssl", "rand", "-hex"), "takes an operand"},
 		{"two counts", pw, with("openssl", "rand", "-hex", "32", "33"), "no such operand"},
 		{"option without its value", pw, with("az", "acr", "token", "credential", "generate", "--name"), "takes a value"},
+		{"debug as a value", pw, with("az", "acr", "token", "credential", "generate", "--name", "--debug"), "takes a value"},
 		{"no path", secret.Ref{File: file}, secret.CaptureOptions{}, "file#path"},
 		{"plaintext path", secret.Ref{File: file, Path: "token"}, secret.CaptureOptions{}, "would stay plaintext"},
 		{"bad filter", secret.Ref{File: file, Path: pwPath}, secret.CaptureOptions{JQ: ".["}, "--jq"},

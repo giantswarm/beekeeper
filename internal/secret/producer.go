@@ -92,7 +92,8 @@ func checkProducer(words []string) error {
 		case !takes && inline:
 			return fmt.Errorf("%s takes no value", name)
 		case takes && !inline:
-			if len(args) < 2 {
+			// az takes --debug wherever it stands, the value's place too
+			if len(args) < 2 || strings.HasPrefix(args[1], "-") {
 				return fmt.Errorf("%s takes a value", name)
 			}
 			args = args[1:]
