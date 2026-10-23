@@ -310,7 +310,7 @@ type watcher struct {
 	dirty    bool
 	// feedID is the id of the last central feed event the watch printed,
 	// kept in its mark.
-	feedID string
+	feedID   string
 	lastPoll time.Time
 	// refusedSince is the newest hook.refused event said; zero before the
 	// first reading, which said none.
