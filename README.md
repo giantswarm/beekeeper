@@ -2734,6 +2734,15 @@ to the central roster on their transitions only (registered, a task taken or end
 answers again; what was not published meanwhile is published then. A watch with nothing to
 publish asks every five minutes.
 
+Every watch prints the central instance's feed. It subscribes to `beekeeper://feed` through
+muster as the person and, once the subscription stands and on each update, reads it (muster's
+`get_resource`): each event the person may read prints once, as `CENTRAL <line> [<person> on
+<host>]` with the actor's person and host. A session's watch keeps the last event's id in its
+mark, so a restarted watch prints what happened while it was down and nothing twice; a watch
+without one starts at the newest event. A subscription that ends on an unreachable central
+instance is the `CENTRAL UNREACHABLE` line, one the instance refused `CENTRAL FEED REFUSED`; the
+watch subscribes again after a minute.
+
 The standby watch delivers the person's mailbox to the machine's agents. It subscribes to
 `beekeeper://mailbox/<person>` through muster (`subscriptions/listen`, MCP 2026-07-28) and, once
 the subscription stands and on each update, calls `receive_messages`: each message addressed to

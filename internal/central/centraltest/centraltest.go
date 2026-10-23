@@ -1,6 +1,7 @@
 // Package centraltest gives a test a muster in front of a beekeeper serve:
 // its call_tool forwards x_<server>_<tool> to the backend with the caller's
-// bearer and wraps the result as muster does, its subscriptions/listen
+// bearer and wraps the result as muster does, its get_resource reads the
+// backend's resources as the caller, its subscriptions/listen
 // streams take the updates the test relays, and a muster binary that names
 // its endpoint and prints a token.
 package centraltest
@@ -136,6 +137,21 @@ func (m *Muster) handler(backend, server string) http.Handler {
 			env, _ := json.Marshal(map[string]any{"isError": res.IsError, "content": res.Content, "structuredContent": res.StructuredContent})
 			return &mcp.CallToolResult{Content: []mcp.Content{mcp.NewTextContent(string(env))}, IsError: res.IsError, StructuredContent: res.StructuredContent}, nil
 		})
+	s.AddTool(mcp.NewTool("get_resource", mcp.WithString("uri", mcp.Required()), mcp.WithString("server")),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if sv := req.GetString("server", ""); sv != "" && sv != server {
+				return mcp.NewToolResultError("Resource retrieval failed: server " + sv + " not found"), nil
+			}
+			if m.down.Load() {
+				return mcp.NewToolResultError("Resource retrieval failed: the backend does not answer"), nil
+			}
+			token, _ := ctx.Value(authKey{}).(string)
+			text, err := read(ctx, backend, token, req.GetString("uri", ""))
+			if err != nil {
+				return mcp.NewToolResultError("Resource retrieval failed: " + err.Error()), nil
+			}
+			return mcp.NewToolResultText(text), nil
+		})
 	return mcpserver.NewStreamableHTTPServer(s, mcpserver.WithStateLess(true),
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			return context.WithValue(ctx, authKey{}, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
@@ -168,21 +184,55 @@ func (m *Muster) Down(down bool) { m.down.Store(down) }
 // Close stops muster itself.
 func (m *Muster) Close() { m.srv.Close() }
 
-func forward(ctx context.Context, url, token, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+// read reads the backend's resource uri as token's person and returns its
+// text, as muster's get_resource does.
+func read(ctx context.Context, url, token, uri string) (string, error) {
+	c, err := dial(ctx, url, token)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = c.Close() }()
+	req := mcp.ReadResourceRequest{}
+	req.Params.URI = uri
+	res, err := c.ReadResource(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	var texts []string
+	for _, ct := range res.Contents {
+		if t, ok := mcp.AsTextResourceContents(ct); ok {
+			texts = append(texts, t.Text)
+		}
+	}
+	return strings.Join(texts, "\n"), nil
+}
+
+// dial is an initialized client of the backend at url as token's person.
+func dial(ctx context.Context, url, token string) (*client.Client, error) {
 	c, err := client.NewStreamableHttpClient(url, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = c.Close() }()
 	if err := c.Start(ctx); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 	init := mcp.InitializeRequest{}
 	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	init.Params.ClientInfo = mcp.Implementation{Name: "muster", Version: "test"}
 	if _, err := c.Initialize(ctx, init); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
+	return c, nil
+}
+
+func forward(ctx context.Context, url, token, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+	c, err := dial(ctx, url, token)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = c.Close() }()
 	req := mcp.CallToolRequest{}
 	req.Params.Name, req.Params.Arguments = tool, args
 	return c.CallTool(ctx, req)
