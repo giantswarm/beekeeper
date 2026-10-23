@@ -13,17 +13,20 @@ import (
 )
 
 const (
-	org       = "giantswarm:giantswarm"
-	bumblebee = "bumblebee"
-	ana       = "ana@example.com"
-	notValid  = "not valid"
-	teamGroup = "giantswarm:team-bumblebee"
+	org             = "giantswarm:giantswarm"
+	bumblebee       = "bumblebee"
+	planeteers      = "planeteers"
+	ana             = "ana@example.com"
+	notValid        = "not valid"
+	teamGroup       = "giantswarm:team-bumblebee"
+	employees       = "a-employees"
+	planeteersGroup = "giantswarm:team-planeteers"
 )
 
 func serveConfig(issuer string) config.Serve {
 	return config.Serve{
 		Issuer: issuer, ClientIDs: []string{"muster", "exchanged"}, Organization: org,
-		Teams:       map[string]string{teamGroup: bumblebee, "giantswarm:team-planeteers": "planeteers"},
+		Teams:       map[string]string{teamGroup: bumblebee, planeteersGroup: planeteers},
 		Supervisors: map[string]string{bumblebee: "giantswarm:bumblebee-supervisors"},
 	}
 }
@@ -53,7 +56,7 @@ func TestVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !v.Supervises(sup, bumblebee) || v.Supervises(sup, "planeteers") {
+	if !v.Supervises(sup, bumblebee) || v.Supervises(sup, planeteers) {
 		t.Error("the supervisors' group supervises its team only")
 	}
 
@@ -101,6 +104,33 @@ func TestVerifyOrganizations(t *testing.T) {
 	_, err = v.Verify(ctx, iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: []string{teamGroup}}))
 	if err == nil || !strings.Contains(err.Error(), "not a member of "+org+" or giantswarm-admins") {
 		t.Errorf("a caller in neither organization group: %v", err)
+	}
+}
+
+// A member of a team's own group and of an organization-wide group mapped to
+// another team is the own group's, whichever name sorts first.
+func TestVerifyMostSpecificGroup(t *testing.T) {
+	iss := identitytest.New(t)
+	ctx := context.Background()
+	cfg := serveConfig(iss.URL)
+	cfg.Organization = employees
+	cfg.Teams = map[string]string{employees: "everyone", planeteersGroup: planeteers, teamGroup: bumblebee}
+	v, err := identity.New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		groups []string
+		want   string
+	}{
+		{[]string{employees, teamGroup}, bumblebee},
+		{[]string{employees, planeteersGroup}, planeteers},
+		{[]string{employees}, "everyone"},
+	} {
+		c, err := v.Verify(ctx, iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: tc.groups}))
+		if err != nil || c.Team != tc.want {
+			t.Errorf("groups %v: caller %+v, %v; want a member of %s", tc.groups, c, err, tc.want)
+		}
 	}
 }
 

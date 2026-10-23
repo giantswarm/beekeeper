@@ -207,6 +207,23 @@ func TestDecisionAddressee(t *testing.T) {
 			t.Errorf("%s answered by %s: %v, want %v", c.forWho, c.who.Email, got, c.want)
 		}
 	}
+
+	// An organization-wide group mapped to the team answers only while the
+	// team has no group of its own.
+	const orgGroup = "giantswarm:employees"
+	employee := identity.Caller{Email: "outsider@example.com", Groups: []string{orgGroup}}
+	wide := config.Serve{Organization: orgGroup, Teams: map[string]string{orgGroup: ourTeam}}
+	if !decidesNote(wide, &state.Note{For: "team:" + ourTeam}, employee) {
+		t.Error("a team with only the organization's group: an employee does not answer")
+	}
+	wide.Teams[teamGroup] = ourTeam
+	if decidesNote(wide, &state.Note{For: "team:" + ourTeam}, employee) {
+		t.Error("a team with its own group: an employee outside it answers")
+	}
+	if !decidesNote(wide, &state.Note{For: "team:" + ourTeam}, identity.Caller{Email: "kim@example.com", Groups: []string{orgGroup, teamGroup}}) {
+		t.Error("a team with its own group: its member does not answer")
+	}
+
 	if email, _, _, err := addressee(cfg, notePerson); email != patEmail || err != nil {
 		t.Errorf("%s: %q %v", notePerson, email, err)
 	}
