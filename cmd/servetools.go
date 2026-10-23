@@ -149,7 +149,7 @@ func (s *server) tools() []serveTool {
 			fmt.Sprintf("A decision its default closed stays answerable for %s: the answer replaces the default.", shortDur(defaultedKeep)), hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
 			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
-			mcp.WithString(paramText, mcp.Description("the answer in the person's own words")),
+			mcp.WithString(paramText, mcp.Description(fmt.Sprintf("the answer in the person's own words, at most %d characters", answerMax))),
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
 		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
 			"", hints{destructive: true, idempotent: true, openWorld: true},

@@ -145,3 +145,48 @@ func TestEnvtestCentralNotesTwoPersons(t *testing.T) {
 		t.Fatalf("bo's done of his own note, central down: exit %d: %s", code, out)
 	}
 }
+
+// An answer to a central note is recorded whole up to answerMax characters,
+// though its answer.recorded Event, the note's question with it, exceeds the
+// API server's 1024 bytes for a message: bo answers ana's decisions with 470
+// and 1000 characters, ana's agent is told each word for word, and one
+// character over answerMax is refused with nothing recorded.
+func TestEnvtestCentralAnswerLong(t *testing.T) {
+	e := newServeEnv(t)
+	decisionsVia(t, e, &fakeGateway{})
+	stubAnswerGH(t, &answerGH{})
+	m := centraltest.New(t, e.url, "beekeeper")
+	anaToken := e.token(t, anaEmail, teamGroup)
+	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, "ana-laptop", anaAgent)
+	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
+
+	for _, size := range []int{470, 1000} {
+		id := ana.fileCentral(fmt.Sprintf("Which lane for muster, answered in %d characters?", size), "3h")
+		words := "keep the lane, " + strings.Repeat("ä", size-len("keep the lane, "))
+		if out, code := bo.run("note", "answer", fmt.Sprintf("lab#%d", id), words); code != 0 || !strings.Contains(out, words) {
+			t.Fatalf("bo's answer of %d characters: exit %d: %s", size, code, out)
+		}
+		evs, err := e.store.Events(0, func(ev state.Event) bool {
+			return ev.Verb == answerRecorded && strings.Contains(ev.Detail, fmt.Sprintf("note #%d ", id))
+		})
+		if err != nil || len(evs) != 1 || !strings.HasSuffix(evs[0].Detail, ": "+words) || len(evs[0].Detail) <= 1024 && size == 1000 {
+			t.Fatalf("answer.recorded of %d characters: %v %+v", size, err, evs)
+		}
+		msgs, _ := e.expect(t, e.as(t, anaToken), "receive_messages", map[string]any{}, false, "")["messages"].([]any)
+		if len(msgs) != 1 {
+			t.Fatalf("ana's mailbox %+v, want the answer of %d characters", msgs, size)
+		}
+		raw, _ := json.Marshal(msgs[0].(map[string]any)["envelope"])
+		var env mailEnvelope
+		if err := json.Unmarshal(raw, &env); err != nil || !strings.Contains(env.Message.text(), words) {
+			t.Fatalf("ana's delivery of %d characters %+v: %v", size, env, err)
+		}
+		e.expect(t, e.as(t, anaToken), "ack_messages", map[string]any{paramIDs: []any{msgs[0].(map[string]any)["id"]}}, false, "")
+	}
+
+	id := ana.fileCentral("Which lane for muster, answered at length?", "3h")
+	if out, code := bo.run("note", "answer", fmt.Sprintf("lab#%d", id), strings.Repeat("ä", answerMax+1)); code != ExitUsage ||
+		!strings.Contains(out, fmt.Sprintf("at most %d", answerMax)) {
+		t.Fatalf("bo's answer over %d characters: exit %d: %s", answerMax, code, out)
+	}
+}
