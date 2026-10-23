@@ -565,6 +565,10 @@ File a decision for a person or a team, put to them in Slack: its question, due 
       "description": "when it is due: a time (22:55) or a duration (3h)",
       "type": "string"
     },
+    "fold_into": {
+      "description": "an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand, and its number is returned",
+      "type": "number"
+    },
     "for": {
       "description": "who decides: a person's name or email, or team:<name>",
       "type": "string"

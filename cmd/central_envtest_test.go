@@ -63,7 +63,7 @@ func (p *person) run(args ...string) (string, int) {
 	if i := slices.Index(args, "--json"); i > 0 {
 		a.json, args = true, slices.Delete(slices.Clone(args), i, i+1)
 	}
-	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd, "note": a.noteCmd, "guide": a.guideCmd}[args[0]]()
+	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd, "note": a.noteCmd, "guide": a.guideCmd, agentsName: a.agentsCmd}[args[0]]()
 	cmd.SetArgs(args[1:])
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)

@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -188,5 +190,75 @@ func TestEnvtestCentralAnswerLong(t *testing.T) {
 	if out, code := bo.run("note", "answer", fmt.Sprintf("lab#%d", id), strings.Repeat("ä", answerMax+1)); code != ExitUsage ||
 		!strings.Contains(out, fmt.Sprintf("at most %d", answerMax)) {
 		t.Fatalf("bo's answer over %d characters: exit %d: %s", answerMax, code, out)
+	}
+}
+
+// A worker parks on a central note and folds into one: ana's agent parks
+// on her decision for bo by lab#<n> and by its bare number, a closed or
+// unknown central note is refused, a second decision folds into the first
+// by lab#<n> and by its bare number, and once bo answers, ana's watch
+// settles the park with bo's answer word for word, read from the feed.
+func TestEnvtestCentralParkAndFold(t *testing.T) {
+	e := newServeEnv(t)
+	decisionsVia(t, e, &fakeGateway{})
+	stubAnswerGH(t, &answerGH{})
+	m := centraltest.New(t, e.url, "beekeeper")
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, "ana-laptop", anaAgent)
+	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
+	local, err := state.Open(ana.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = local.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Name: anaAgent}, Task: "pick muster's lane"}}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lane := ana.fileCentral("Which lane for muster?", "3h")
+	laneRef := fmt.Sprintf("lab#%d", lane)
+	for _, on := range []string{laneRef, strconv.Itoa(lane)} {
+		if out, code := ana.run("agents", "park", "--on", on, "bo's lane"); code != 0 || !strings.Contains(out, "parked on "+laneRef+": bo's lane") {
+			t.Fatalf("ana's park --on %s: exit %d: %s", on, code, out)
+		}
+	}
+	if out, code := ana.run("agents", "park", "--on", "lab#999", "nothing"); code != ExitRefused || !strings.Contains(out, "lab#999 is not open") {
+		t.Fatalf("ana's park on a note not open: exit %d: %s", code, out)
+	}
+
+	fold := func(into, question string) {
+		t.Helper()
+		out, code := ana.run("note", "add", "--for", "bo", "--due", "3h", "--default", ownLane, "--status-quo", noMuseLane,
+			"--why", "only its owners pick its lane", "--option", "portal: it rolls with backstage", "--option", "own: a lane of its own",
+			"--recommend", "2", "--ref", privateThread, "--fold-into", into, question)
+		if code != 0 || !strings.HasPrefix(out, "note "+laneRef+" (folded: --fold-into") {
+			t.Fatalf("ana's fold into %s: exit %d: %s", into, code, out)
+		}
+	}
+	fold(laneRef, "Which lane for the portal?")
+	fold(strconv.Itoa(lane), "Which lane for agentlab?")
+	out, code := bo.run("note", "list", "--full")
+	if code != 0 || strings.Count(out, "lab#") != 1 || !strings.Contains(out, "Which lane for the portal?") || !strings.Contains(out, "Which lane for agentlab?") {
+		t.Fatalf("bo's note list after the folds: exit %d: %s", code, out)
+	}
+
+	var watched bytes.Buffer
+	w := ana.watcher(&watched)
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parks := w.settledParks(context.Background(), st); len(parks) != 0 {
+		t.Fatalf("parks settled while the note is open: %+v", parks)
+	}
+	if out, code = bo.run("note", "answer", laneRef, "--choice", "2", "until Friday"); code != 0 {
+		t.Fatalf("bo's answer: exit %d: %s", code, out)
+	}
+	parks := w.settledParks(context.Background(), st)
+	if len(parks) != 1 || parks[0].on != laneRef || !strings.HasPrefix(parks[0].answer, "note "+laneRef+" answered by ") ||
+		!strings.HasSuffix(parks[0].answer, ": own — until Friday") {
+		t.Fatalf("parks settled after bo's answer: %+v (watch: %s)", parks, watched.String())
 	}
 }

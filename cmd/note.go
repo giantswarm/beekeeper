@@ -35,6 +35,7 @@ Without a subcommand, lists the open notes.`,
 	}
 	var forWho, due, overtaken string
 	var foldInto int
+	var foldArg string
 	var holds bool
 	var refs []string
 	var draft noteDraft
@@ -115,7 +116,9 @@ On a machine with a central instance (central.context), a decision is filed
 there (note_add, through muster as the person) once its checks pass: the
 central instance puts it in Slack and its answer or default reaches the
 filing session through the person's mailbox. Its number is the central
-note's. A sign-in, --holds and --fold-into stay on the machine. With the
+note's. A sign-in, --holds and --fold-into a machine's note stay on the
+machine; --fold-into <context>#<n>, or a bare <n> only the central instance
+has open, folds a decision into the central instance's note. With the
 central instance unreachable before the call went out, the decision is
 filed on the machine, as stderr says; one sent and left unanswered is
 filed nowhere else and exits 69.`,
@@ -128,6 +131,13 @@ filed nowhere else and exits 69.`,
 			me, err := a.caller()
 			if err != nil {
 				return err
+			}
+			var into noteID
+			if foldArg != "" {
+				if into, err = a.noteNamed(foldArg); err != nil {
+					return err
+				}
+				foldInto = into.ID
 			}
 			draft.Question = strings.Join(args, " ")
 			linked := make([]string, 0, len(refs))
@@ -196,6 +206,12 @@ filed nowhere else and exits 69.`,
 			}
 			if err := a.warnAnswered(cmd, n); err != nil {
 				return err
+			}
+			if into.Central {
+				if n.Kind != noteDecision {
+					return refused("a %s folds into the machine's notes only: %s#%d is the central instance's", n.Kind, a.cfg.Central.Context, foldInto)
+				}
+				return a.foldCentral(cmd.Context(), me, &n, draft, foldInto)
 			}
 			if a.centralNote(&n, holds, foldInto) {
 				if filed, err := a.fileCentral(cmd.Context(), cmd.ErrOrStderr(), me, &n, draft, stage); filed || err != nil {
@@ -276,7 +292,7 @@ filed nowhere else and exits 69.`,
 	add.Flags().StringVar(&draft.Checked, "checked", "", "where a state claim (merged, green, released, rolled, closed) was checked")
 	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default) or "login" (a sign-in, closed once --until passes)`)
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
-	add.Flags().IntVar(&foldInto, "fold-into", 0, "an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand")
+	add.Flags().StringVar(&foldArg, "fold-into", "", "an open note for the same person this one folds into, whatever it asks (<n>, or <context>#<n> for a central instance's): that note's default and recommendation stand")
 	add.Flags().BoolVar(&holds, "holds", false, "the decision holds every --ref: its board Status is Blocked / Waiting until the decision closes, then set back")
 	add.Flags().StringArrayVar(&refs, "ref", nil, "an issue or pull request the note asks about, owner/repo#n (repeatable): the note closes once all are closed or merged")
 	done := &cobra.Command{
