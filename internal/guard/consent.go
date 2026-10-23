@@ -26,7 +26,8 @@ import (
 // on record, by the callback host of the tab's flow, is allowed and any
 // other's refused (google.go); on a third party's OAuth client's consent
 // page the hook knows and its device-code page, the consent as the account
-// on record (thirdparty.go);
+// on record (thirdparty.go); on Slack's install consent page of a Slack app
+// on record, the Allow that keeps its recorded webhook channel (slack.go);
 // a consent page on any other host is refused, so
 // no grant elsewhere is left to the browse turn's classifier. A change of an
 // App's permissions is decided the same way from the record of the one
@@ -72,6 +73,12 @@ type App struct {
 	// is recorded for as the person's Account there (thirdparty.go); "" for
 	// any other App.
 	OAuth string
+	// Slack is the workspace host (<workspace>.slack.com) of a Slack app of
+	// the person's whose install consent is on record there, SlackApp its
+	// app id and Channel the webhook channel its install keeps, lower case
+	// without "#" ("" for an app without one) (slack.go); Slack is "" for
+	// any other App.
+	Slack, SlackApp, Channel string
 	// Run is the running `beekeeper app create` of the App whose listener
 	// answers, nil for none; Created is beekeeper's ledger entry of the App
 	// it created, nil for none (applife.go).
@@ -88,11 +95,14 @@ type App struct {
 // Page is a tab's page: its URL and title, on Google's sign-in the callback
 // host of the OAuth flow the tab's earlier pages there named, and on a
 // GitLab authorize page the client id its consent form carries, as
-// GitLabFormScript read it while the tab was at that URL.
+// GitLabFormScript read it while the tab was at that URL; on Slack's install
+// consent page the channel the last call on the tab that named one named
+// there (slack.go).
 type Page struct {
 	URL, Title string
 	Flow       string
 	Form       string
+	Picked     string
 }
 
 // Decision is the hook's answer for a call acting on a page: Allow, Deny or
@@ -184,6 +194,11 @@ func Click(apps []App, page Page, words string) Decision {
 		return googleClick(apps, u, page, words)
 	case thirdPartyHost(host):
 		return thirdPartyClick(apps, u, page, words)
+	case slackHost(host):
+		if d, ok := slackClick(apps, u, page, words); ok {
+			return d
+		}
+		return elsewhere(u, page.Title, words)
 	case u.Path == gitlabAuthorize && gitlabHost(apps, host):
 		return gitlabConsent(apps, u, page)
 	case Loopback(host) && signIn(u.Path):
@@ -203,9 +218,9 @@ func elsewhere(u *url.URL, title, words string) Decision {
 	}
 	return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither the consent page of an App on record "+
 		"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
-		"which %s (a GitHub App), %s (a Google OAuth client), %s (a self-hosted GitLab's OAuth application) or %s (a third party's OAuth "+
-		"client whose consent page beekeeper knows) records on their word; every other grant stays refused.",
-		consentWhich(u, title), u.Host, AllowForm, GoogleForm, GitLabForm, OAuthForm)}
+		"which %s (a GitHub App), %s (a Google OAuth client), %s (a self-hosted GitLab's OAuth application), %s (a Slack app) or %s (a third "+
+		"party's OAuth client whose consent page beekeeper knows) records on their word; every other grant stays refused.",
+		consentWhich(u, title), u.Host, AllowForm, GoogleForm, GitLabForm, SlackForm, OAuthForm)}
 }
 
 // consentElsewhere reports whether a call in words acts on a consent page:
@@ -327,6 +342,7 @@ func (h Hook) consent(ev event) []byte {
 				if c.typed && d.Decision == Allow {
 					d = typedCallback(apps, page, c.text, d)
 					d = typedDeviceCode(page, c.text, d)
+					d = typedSlack(apps, page, c.text, d)
 				}
 				// Text typed or set on Google's sign-in is no grant the
 				// record covers: the classifier decides it.
@@ -470,10 +486,13 @@ func lastPage(transcript, tab string) (Page, bool) {
 // key, a navigation, another script, such a batch) or a change of its URL
 // followed.
 func lastPages(transcript string) map[string]Page {
-	pages, flows, forms := map[string]Page{}, map[string]googleFlow{}, map[string]pageForm{}
+	pages, flows, forms, picks := map[string]Page{}, map[string]googleFlow{}, map[string]pageForm{}, map[string]pagePick{}
 	seen := func(tab string, p Page) {
 		if forms[tab].url != p.URL {
 			delete(forms, tab)
+		}
+		if picks[tab].url != p.URL {
+			delete(picks, tab)
 		}
 		pages[tab] = p
 		u, err := url.Parse(p.URL)
@@ -523,11 +542,25 @@ func lastPages(transcript string) map[string]Page {
 			case !ok || changesPage(call.name, call.input, m[1]):
 				delete(forms, m[1])
 			}
+			// On Slack's install consent page the channel the call's own
+			// words name is the one it chose in the webhook picker.
+			if ok && SlackConsentURL(p.URL) {
+				for _, c := range chromeCalls(call.name, call.input) {
+					if ch := slackChannelOf(c.words); ch != "" && (c.tab == "" || c.tab == m[1]) {
+						picks[m[1]] = pagePick{p.URL, ch}
+					}
+				}
+			}
 		}
 	})
 	for tab, f := range forms {
 		p := pages[tab]
 		p.Form = f.clientID
+		pages[tab] = p
+	}
+	for tab, f := range picks {
+		p := pages[tab]
+		p.Picked = f.channel
 		pages[tab] = p
 	}
 	return pages
@@ -537,6 +570,12 @@ func lastPages(transcript string) map[string]Page {
 // while it was at url.
 type pageForm struct {
 	url, clientID string
+}
+
+// pagePick is the channel a call on a tab named while it was at url, on
+// Slack's install consent page.
+type pagePick struct {
+	url, channel string
 }
 
 // executedTab is the tab a Chrome tool result's call executed on, as its

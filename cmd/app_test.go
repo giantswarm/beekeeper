@@ -296,7 +296,7 @@ func TestAppGitLabRecord(t *testing.T) {
 		{append(slices.Clone(base), clientIDFlag, uid), "--gitlab needs --declared <ref>"},
 		{append(slices.Clone(base), declFl, declared), "--gitlab needs --client-id <uid>"},
 		{append(slices.Clone(base), clientIDFlag, "another-uid", declFl, declared), "GitLab application " + app + " is not declared: " + declared + " carries another client id than another-uid"},
-		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google, --gitlab or --oauth"},
+		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google, --gitlab, --slack or --oauth"},
 		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, permissionFlag, deviceChange), "--gitlab records a consent on a GitLab's authorize page alone"},
 		{[]string{appAllow, app, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--declared names the person's own declaration of a GitLab application's client id, with --gitlab"},
 		{[]string{appAllow, app, gitlabFl, gitlab, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--gitlab needs --callback <host>"},
@@ -590,7 +590,7 @@ func TestAppThirdPartyRecord(t *testing.T) {
 		{[]string{appAllow, name, oauth, host, clientIDFlag, codex, wordFlag, "w"}, "--oauth needs --account <address>"},
 		{[]string{appAllow, name, oauth, host, clientIDFlag, "app_other", accountFlag, account, wordFlag, "w"}, "beekeeper knows no consent page of client app_other on auth.openai.com"},
 		{[]string{appAllow, name, oauth, "auth.example.net", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "beekeeper knows no consent page of client " + codex + " on auth.example.net"},
-		{[]string{appAllow, name, oauth, host, googleFlag, clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--google, --gitlab or --oauth: a record is of one provider's consent"},
+		{[]string{appAllow, name, oauth, host, googleFlag, clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--google, --gitlab, --slack or --oauth: a record is of one provider's consent"},
 		{[]string{appAllow, name, oauth, host, callbackFlag, "cb.example.org", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--oauth records a consent to a third party's OAuth client alone"},
 		{[]string{appAllow, name, oauth, host, permissionFlag, deviceChange, clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--oauth records a consent to a third party's OAuth client alone"},
 		{[]string{appAllow, name, oauth, "auth openai", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, `--oauth names the client's sign-in host (or its URL), not "auth openai"`},
@@ -619,6 +619,72 @@ func TestAppThirdPartyRecord(t *testing.T) {
 	}
 	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
 	if apps := a.allowedApps(); len(apps) != 1 || apps[0].OAuth != host || apps[0].ClientID != codex || apps[0].Account != account {
+		t.Errorf("allowedApps = %+v", apps)
+	}
+}
+
+// A Slack app's install consent is recorded with --slack, its workspace
+// host, app id and client id and the webhook channel its install keeps, on
+// the person's word: a missing or malformed one, another provider's flags
+// and --app-id without --slack are refused. check allows Allow on Slack's
+// install page once the recorded channel is picked, and refuses it before,
+// for another channel and for another client id.
+func TestAppSlackRecord(t *testing.T) {
+	a, _ := stubApp(t)
+	const (
+		name       = "Swarmgeist"
+		ws         = "gigantic.slack.com"
+		appID      = "A08A95JBNH1"
+		client     = "2171500629.8349188396579"
+		slack      = "--slack"
+		appFl      = "--app-id"
+		chanFl     = "--webhook-channel"
+		allowWords = "Clicks Allow"
+		install    = "https://" + ws + "/oauth?client_id=" + client + "&scope=usergroups%3Aread%2Cincoming-webhook&install_redirect=install-on-team"
+	)
+	base := []string{appAllow, name, slack, ws, appFl, appID, clientIDFlag, client, wordFlag, "w"}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{appAllow, name, slack, ws, clientIDFlag, client, wordFlag, "w"}, "--slack needs --app-id <id>"},
+		{[]string{appAllow, name, slack, ws, appFl, appID, wordFlag, "w"}, "--slack needs --client-id <id>"},
+		{[]string{appAllow, name, slack, ws, appFl, appID, clientIDFlag, "not.an.id", wordFlag, "w"}, "--slack needs --client-id <id>"},
+		{[]string{appAllow, name, slack, "slack.example.org", appFl, appID, clientIDFlag, client, wordFlag, "w"}, "--slack names the workspace's host"},
+		{append(slices.Clone(base), chanFl, "two words"), "--webhook-channel names a Slack channel"},
+		{append(slices.Clone(base), googleFlag), "--google, --gitlab, --slack or --oauth"},
+		{append(slices.Clone(base), callbackFlag, "cb.example.org"), "--slack records a Slack app's install consent alone"},
+		{append(slices.Clone(base), accountFlag, "person@example.com"), "--slack records a Slack app's install consent alone"},
+		{[]string{appAllow, name, appFl, appID, clientIDFlag, client, wordFlag, "w"}, "with --slack"},
+		{[]string{appAllow, name, slack, ws, appFl, appID, clientIDFlag, client}, "--word"},
+	} {
+		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
+		}
+	}
+	if out, _ := runApp(t, a, appCheck, install, "--picked", "#team-bumblebee", wordsFlag, allowWords); !strings.HasPrefix(out, checkRefuse) || !strings.Contains(out, guard.SlackForm) {
+		t.Errorf("check without a record = %q", out)
+	}
+	out, err := runApp(t, a, appAllow, name, slack, "https://Gigantic.Slack.com/", appFl, strings.ToLower(appID), clientIDFlag, client, chanFl, "#Team-Bumblebee", wordFlag, personsWord)
+	if err != nil || out != "App "+name+" on record, declared in "+slackDeclared+": its install consent on "+ws+", keeping the webhook channel #team-bumblebee is answered by the hook\n" {
+		t.Fatalf("app allow --slack = %q, %v", out, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, name+"  Slack "+ws+"  app id "+appID+"  client id "+client+"  webhook channel #team-bumblebee  declared in "+slackDeclared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	for _, tc := range []struct{ picked, words, url, want string }{
+		{"#team-bumblebee", allowWords, install, checkAllow + "beekeeper allows it: Slack's install consent page of the person's own Slack app " + name},
+		{"", allowWords, install, checkRefuse},
+		{"", "Chooses #general in the channel picker", install, checkRefuse},
+		{"#team-bumblebee", allowWords, strings.Replace(install, client, "1.2", 1), checkRefuse},
+		{"", "Clicks Reinstall to Giant Swarm", "https://api.slack.com/apps/" + appID + "/install-on-team", checkAllow},
+	} {
+		if out, _ := runApp(t, a, appCheck, tc.url, "--picked", tc.picked, wordsFlag, tc.words); !strings.HasPrefix(out, tc.want) {
+			t.Errorf("check %q picked %q = %q, want %q", tc.words, tc.picked, out, tc.want)
+		}
+	}
+	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
+	if apps := a.allowedApps(); len(apps) != 1 || apps[0].Slack != ws || apps[0].SlackApp != appID || apps[0].Channel != "team-bumblebee" {
 		t.Errorf("allowedApps = %+v", apps)
 	}
 }

@@ -690,6 +690,14 @@ type App struct {
 	// person consents to as their Account there: the hook answers that
 	// client's consent page on that host; "" for any other record.
 	OAuth string `json:"oauth,omitempty"`
+	// Slack is the workspace host (<workspace>.slack.com) of a Slack app of
+	// the person's whose install consent the hook answers there, SlackApp
+	// its app id and WebhookChannel the channel its webhook posts to, which
+	// the install keeps (lower case, without "#"; "" for an app without
+	// one); Slack is "" for any other record.
+	Slack          string `json:"slack,omitempty"`
+	SlackApp       string `json:"slackApp,omitempty"`
+	WebhookChannel string `json:"webhookChannel,omitempty"`
 	// Declared is where the organisation declares the App:
 	// <repo>@<commit>:<manifest path>, the local manifest of an App on the
 	// person's own account or of a deletion, or the person's own

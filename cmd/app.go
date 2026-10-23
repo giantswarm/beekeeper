@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -100,7 +101,14 @@ person's word alone, for a client whose consent page beekeeper knows: the
 hook answers a click on that page, and the device code typed and its
 Continue on the client's device-code page, whose own words name the
 account, and refuses it for any other account, a client on no record or
-other text typed there. A
+other text typed there. A Slack app the person owns and asked to install or
+re-install is recorded with --slack <workspace>.slack.com --app-id <id>
+--client-id <id> --webhook-channel <#channel>, on the person's word alone:
+on its Install App page the hook answers Install or Reinstall, and on
+Slack's install consent page ("Allow <app> to access Slack") of that client
+id on that workspace the picker of the webhook channel, the recorded channel
+chosen there and Allow once it is chosen, refusing another channel, other
+text typed, and the page of any other app or workspace. A
 consent page on any other host (a path or title that names a
 consent or a grant, or an OAuth authorization page where the call's own
 words name one) is refused, not left to the browse turn's classifier. An App's creation, installation and deletion are grants too: the
@@ -174,6 +182,18 @@ replaced:
   page auth.openai.com/deviceauth/callback). The record is the
   person's word alone, kept in the machine's state; --word names where
   they gave it. A client beekeeper knows no consent page of is refused.
+  --slack <workspace>.slack.com --app-id <id> --client-id <id>
+  --webhook-channel <#channel>: a Slack app's install or re-install consent
+  (a re-install takes a scope added to the app), the person's own app
+  <name> with that app id, on Slack's install page "Allow <name> to access
+  Slack" (<workspace>.slack.com/oauth) carrying that client id, and the
+  Install or Reinstall click on its Install App page
+  (api.slack.com/apps/<id>/install-on-team). An app with the
+  incoming-webhook scope asks for a "Channel for webhook": --webhook-channel
+  is the channel its webhook posts to now (its Incoming Webhooks page), the
+  only one the hook lets the install choose, and Allow waits until a call
+  that names it chose it. The record is the person's word alone, kept in
+  the machine's state.
 
 An App apps.repo does not declare that app create --manifest created on the
 person's own account (beekeeper's ledger, app list) is recorded for a
@@ -197,9 +217,12 @@ Any of them, with --word, the person's words that asked for it.`,
 			}
 			rec.GitLab = strings.ToLower(strings.TrimSpace(rec.GitLab))
 			rec.OAuth = strings.ToLower(strings.TrimSpace(rec.OAuth))
+			rec.Slack = strings.ToLower(strings.TrimSpace(rec.Slack))
 			switch {
 			case providers(rec) > 1:
-				return usageErr("--google, --gitlab or --oauth: a record is of one provider's consent")
+				return usageErr("--google, --gitlab, --slack or --oauth: a record is of one provider's consent")
+			case rec.Slack == "" && (rec.SlackApp != "" || rec.WebhookChannel != ""):
+				return usageErr("--app-id and --webhook-channel name a Slack app's id and the channel its install keeps, with --slack")
 			case declaredRef != "" && rec.GitLab == "":
 				return usageErr("--declared names the person's own declaration of a GitLab application's client id, with --gitlab")
 			}
@@ -210,6 +233,8 @@ Any of them, with --word, the person's words that asked for it.`,
 				err = a.gitlabApp(c.Context(), &rec, hosts, permission, manifest, declaredRef)
 			case rec.OAuth != "":
 				err = thirdPartyClient(&rec, hosts, permission, manifest)
+			case rec.Slack != "":
+				err = slackApp(&rec, hosts, permission, manifest)
 			default:
 				err = a.githubApp(c.Context(), &rec, hosts, permission, manifest)
 			}
@@ -238,6 +263,8 @@ Any of them, with --word, the person's words that asked for it.`,
 			case rec.OAuth != "":
 				c, _ := guard.ThirdPartyClientOf(rec.OAuth, rec.ClientID)
 				answers = append(answers, "the consent on "+rec.OAuth+c.Consent+" ("+c.Name+") as "+rec.Account)
+			case rec.Slack != "":
+				answers = append(answers, "its install consent on "+rec.Slack+slackKeeps(rec))
 			case len(rec.Callbacks) > 0:
 				answers = append(answers, "its consent page with callback "+strings.Join(rec.Callbacks, " or "))
 			}
@@ -269,6 +296,9 @@ Any of them, with --word, the person's words that asked for it.`,
 	allow.Flags().StringVar(&rec.GitLab, "gitlab", "", "a consent on a self-hosted GitLab's authorize page: the GitLab's host, with --client-id, --callback and --declared")
 	allow.Flags().StringVar(&declaredRef, "declared", "", "with --gitlab, the person's own declaration of the application's client id: op://<vault>/<item>/<field> or <SOPS file>#<path>")
 	allow.Flags().StringVar(&rec.Account, "account", "", "with --google, the Google account the sign-in chooses on Google's account chooser; with --oauth, the account the consent is given as")
+	allow.Flags().StringVar(&rec.Slack, "slack", "", "a Slack app's install or re-install consent: the workspace's host (<workspace>.slack.com), with --app-id and --client-id")
+	allow.Flags().StringVar(&rec.SlackApp, "app-id", "", "with --slack, the Slack app's id (A…), whose Install App page opens the consent")
+	allow.Flags().StringVar(&rec.WebhookChannel, "webhook-channel", "", "with --slack, the channel the app's webhook posts to now, which the install keeps (#channel)")
 	allow.Flags().StringVar(&rec.OAuth, "oauth", "", "a consent to a third party's OAuth client as the person's own account there: its sign-in host, with --client-id and --account")
 	revoke := &cobra.Command{
 		Use:   "revoke <name>",
@@ -296,7 +326,7 @@ Any of them, with --word, the person's words that asked for it.`,
 			return err
 		},
 	}
-	var title, form, words string
+	var title, form, words, picked string
 	var navigate bool
 	check := &cobra.Command{
 		Use:   "check <url>",
@@ -308,7 +338,9 @@ consent page carries the App's name in ("Authorize <name>"): it decides a
 URL whose client id the Chrome tools redacted (client_id=REDACTED), as the
 tool results show it; --form is the client id a GitLab authorize page's
 consent form carries, as the hook's form script (javascript_tool) reads it
-where the Chrome tools redacted the URL's.
+where the Chrome tools redacted the URL's; --picked is the webhook channel a
+call on the tab already chose on Slack's install consent page, as its own
+words named it.
 --words are the call's own words (the summary the
 model wrote for it, a typed text, a form value), which decide a call on an
 App's permissions page and an App's creation, installation and deletion
@@ -331,7 +363,7 @@ credentials were stored nowhere). check decides from the same.`,
 			if navigate {
 				d = guard.Navigation(apps, args[0])
 			} else {
-				d = guard.Click(apps, guard.Page{URL: args[0], Title: title, Form: form}, words)
+				d = guard.Click(apps, guard.Page{URL: args[0], Title: title, Form: form, Picked: guard.SlackChannel(picked)}, words)
 			}
 			line := "no decision: not a page the hook decides: the classifier decides it as before"
 			switch d.Decision {
@@ -346,6 +378,7 @@ credentials were stored nowhere). check decides from the same.`,
 	}
 	check.Flags().StringVar(&title, "title", "", "the page's title (GitHub's consent page: \"Authorize <name>\")")
 	check.Flags().StringVar(&form, "form", "", "the client id a GitLab authorize page's consent form carries, as the hook's form script reads it")
+	check.Flags().StringVar(&picked, "picked", "", "the channel a call on the tab chose on Slack's install consent page (#channel)")
 	check.Flags().StringVar(&words, "words", "", "the call's own words (its summary, a typed text, a form value)")
 	check.Flags().BoolVar(&navigate, "navigate", false, "the decision for a navigation to <url> instead of a click on it")
 	c.AddCommand(a.appCreateCmd(), a.appInstallationCmd(), allow, listCmd("List the Apps on record", a.appList), revoke, check)
@@ -437,10 +470,10 @@ func googleClient(rec *state.App, hosts []string, permission, manifest string) e
 }
 
 // providers counts the consent providers rec names: Google, a GitLab, a
-// third party's sign-in host.
+// third party's sign-in host, a Slack workspace.
 func providers(rec state.App) int {
 	n := 0
-	for _, named := range []bool{rec.Google, rec.GitLab != "", rec.OAuth != ""} {
+	for _, named := range []bool{rec.Google, rec.GitLab != "", rec.OAuth != "", rec.Slack != ""} {
 		if named {
 			n++
 		}
@@ -481,6 +514,55 @@ func thirdPartyClient(rec *state.App, hosts []string, permission, manifest strin
 	}
 	rec.Declared = oauthDeclared
 	return nil
+}
+
+// slackDeclared is the declaration of a Slack app on record: the person's
+// word.
+const slackDeclared = "the person's word (a Slack app)"
+
+// slackAppID and slackClientID are a Slack app's id and its OAuth client id.
+var (
+	slackAppID    = regexp.MustCompile(`^A[A-Z0-9]{6,}$`)
+	slackClientID = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
+)
+
+// slackApp fills rec, a Slack app's install consent, from its flags: the
+// workspace it is installed to, its app id and client id, and the webhook
+// channel the install keeps.
+func slackApp(rec *state.App, hosts []string, permission, manifest string) error {
+	if permission != "" || rec.CallbackURL != "" || rec.Delete || manifest != "" || len(hosts) > 0 || rec.Account != "" {
+		return usageErr("--slack records a Slack app's install consent alone: --permission, --callback-url, --delete, --manifest, --callback and --account are another provider's")
+	}
+	if u, err := url.Parse(rec.Slack); err == nil && u.Host != "" {
+		rec.Slack = strings.ToLower(u.Hostname())
+	}
+	if !strings.HasSuffix(rec.Slack, ".slack.com") || strings.ContainsAny(rec.Slack, "/?#@: ") || strings.Count(rec.Slack, ".") != 2 {
+		return usageErr("--slack names the workspace's host, <workspace>.slack.com (or its URL), not %q", rec.Slack)
+	}
+	rec.SlackApp = strings.ToUpper(strings.TrimSpace(rec.SlackApp))
+	if !slackAppID.MatchString(rec.SlackApp) {
+		return usageErr("--slack needs --app-id <id>: the Slack app's id (A…, its settings at api.slack.com/apps/<id>), not %q", rec.SlackApp)
+	}
+	if !slackClientID.MatchString(rec.ClientID) {
+		return usageErr("--slack needs --client-id <id>: the app's client id its install URL carries (<digits>.<digits>), not %q", rec.ClientID)
+	}
+	if rec.WebhookChannel != "" {
+		c := guard.SlackChannel(rec.WebhookChannel)
+		if c == "" {
+			return usageErr("--webhook-channel names a Slack channel (#name), not %q", rec.WebhookChannel)
+		}
+		rec.WebhookChannel = c
+	}
+	rec.Declared = slackDeclared
+	return nil
+}
+
+// slackKeeps names the webhook channel a Slack app's install keeps.
+func slackKeeps(rec state.App) string {
+	if rec.WebhookChannel == "" {
+		return ""
+	}
+	return ", keeping the webhook channel #" + rec.WebhookChannel
 }
 
 // callbackHosts reads --callback for kind (--google, --gitlab): the hosts
@@ -585,6 +667,9 @@ func recordParts(x state.App) []string {
 	if x.OAuth != "" {
 		parts = append(parts, "OAuth "+x.OAuth)
 	}
+	if x.Slack != "" {
+		parts = append(parts, "Slack "+x.Slack, "app id "+x.SlackApp)
+	}
 	if x.ClientID != "" {
 		parts = append(parts, "client id "+x.ClientID)
 	}
@@ -593,6 +678,9 @@ func recordParts(x state.App) []string {
 	}
 	if x.Account != "" {
 		parts = append(parts, "account "+x.Account)
+	}
+	if x.WebhookChannel != "" {
+		parts = append(parts, "webhook channel #"+x.WebhookChannel)
 	}
 	if x.Permission != "" {
 		parts = append(parts, "permission "+x.Permission)
@@ -827,7 +915,8 @@ func guardApps(apps []state.App) []guard.App {
 	out := make([]guard.App, 0, len(apps))
 	for _, x := range apps {
 		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Org: x.Org, Permission: x.Permission,
-			CallbackURL: x.CallbackURL, Delete: x.Delete, Google: x.Google, Account: x.Account, GitLab: x.GitLab, OAuth: x.OAuth, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+			CallbackURL: x.CallbackURL, Delete: x.Delete, Google: x.Google, Account: x.Account, GitLab: x.GitLab, OAuth: x.OAuth,
+			Slack: x.Slack, SlackApp: x.SlackApp, Channel: x.WebhookChannel, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
 	}
 	return out
 }

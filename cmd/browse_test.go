@@ -1090,6 +1090,34 @@ func TestBrowseThirdPartyConsent(t *testing.T) {
 	}
 }
 
+// A turn whose steps name a Slack app on record, by its app id or its
+// workspace, runs with its auto mode rule, its prompt names Reinstall, the
+// webhook channel to keep and Allow, and the line below the report names
+// the record.
+func TestBrowseSlackConsent(t *testing.T) {
+	s := []guard.App{{Name: "Swarmgeist", Slack: "gigantic.slack.com", SlackApp: "A08A95JBNH1", ClientID: "2171500629.8349188396579",
+		Channel: "team-bumblebee", Declared: slackDeclared, Word: personsWord, By: agentOne}}
+	if named := appsNamed(s, "Open https://api.slack.com/apps/A0OTHER123 and look."); len(named) != 0 {
+		t.Errorf("appsNamed of other steps = %+v", named)
+	}
+	consents := appsNamed(s, "Open https://api.slack.com/apps/A08A95JBNH1/install-on-team and reinstall the app.")
+	if len(consents) != 1 {
+		t.Fatalf("appsNamed = %+v", consents)
+	}
+	if rules := browseRules("", consents, false); len(rules) != 1 || rules[0] != slackConsentRule(s[0]) ||
+		!strings.Contains(rules[0], "Own Slack App Install") || !strings.Contains(rules[0], "keeping the webhook channel #team-bumblebee") {
+		t.Errorf("browseRules = %q", rules)
+	}
+	if p := browsePrompt("steps", "", consents, false, nil); !strings.Contains(p, "Slack app Swarmgeist (A08A95JBNH1) is on record for its install on gigantic.slack.com") ||
+		!strings.Contains(p, "choose exactly #team-bumblebee") || !strings.Contains(p, "then click Allow once") {
+		t.Errorf("browsePrompt = %q", p)
+	}
+	if l := (browseFindings{}).lines("steps", "", consents, false); len(l) != 1 ||
+		!strings.HasPrefix(l[0], "allowed consent: Swarmgeist (Slack, app A08A95JBNH1 on gigantic.slack.com, client 2171500629.8349188396579, keeping the webhook channel #team-bumblebee, "+slackDeclared+")") {
+		t.Errorf("lines = %q", l)
+	}
+}
+
 // A draw check that answered not drawn counts, and the turn fails naming
 // the window not drawn; a later check that drew, in a fresh tab, is the
 // recovery the line names, and the turn does not fail on it.
