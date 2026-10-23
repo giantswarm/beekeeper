@@ -167,10 +167,10 @@ func TestFolderGuardNamesTheScratchpad(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("TMPDIR", tmp)
-	h.Project = "/home/u/projects/klaus-lab"
+	h.Project = "/home/u/projects/notebook"
 	ev := toolEvent(writeTool, map[string]any{filePathKey: filepath.Join(checkout, "body.md")})
 	ev["cwd"], ev["session_id"] = checkout, "8bf5cba8-50ec-4608-b1bc-a266c56e1e6a"
-	want := filepath.Join(tmp, "claude-"+strconv.Itoa(os.Getuid()), "-home-u-projects-klaus-lab", "8bf5cba8-50ec-4608-b1bc-a266c56e1e6a", "scratchpad")
+	want := filepath.Join(tmp, "claude-"+strconv.Itoa(os.Getuid()), "-home-u-projects-notebook", "8bf5cba8-50ec-4608-b1bc-a266c56e1e6a", "scratchpad")
 	if d := decideEvent(t, h, ev); !denied(d) || !strings.Contains(d.Reason, want) {
 		t.Fatalf("the refusal does not name %s:\n%v", want, d)
 	}

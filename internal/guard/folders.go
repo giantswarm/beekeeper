@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -166,10 +167,17 @@ func (h Hook) personFolder(dir string) bool {
 	return false
 }
 
+// gitSafe are the options that keep a checkout's own configuration from
+// running a program in the hook, which runs outside the agent sandbox: no
+// file system monitor, no hooks, no external diff or filters.
+var gitSafe = []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "core.untrackedCache=false"}
+
 // gitSays reports whether the git command in dir exits 0; one that fails to
-// run says no.
+// run says no. It writes no lock or index.
 func gitSays(dir string, args ...string) bool {
-	return exec.Command("git", append([]string{"-C", dir}, args...)...).Run() == nil //nolint:gosec // fixed git subcommands
+	c := exec.Command("git", append(append(slices.Clone(gitSafe), "-C", dir), args...)...) //nolint:gosec // fixed git subcommands
+	c.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
+	return c.Run() == nil
 }
 
 // writeTargets are the files a Bash command line writes through an output
