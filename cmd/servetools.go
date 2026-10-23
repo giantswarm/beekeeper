@@ -34,6 +34,13 @@ const (
 	paramTarget      = "target"
 	paramNote        = "note"
 	paramRefs        = "refs"
+	paramDefault     = "default"
+	paramChecked     = "checked"
+	paramDue         = "due"
+	paramWhy         = "why"
+	paramStatusQuo   = "status_quo"
+	paramOptions     = "options"
+	paramRecommend   = "recommend"
 	paramFor         = "for"
 	paramKind        = "kind"
 	paramText        = "text"
@@ -127,13 +134,13 @@ func (s *server) tools() []serveTool {
 			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question (one line, at most 150 characters)")),
 			mcp.WithString(paramFor, mcp.Required(), mcp.Description("who decides: a person's name or email, or team:<name>")),
 			mcp.WithString(paramKind, mcp.Description("decision, the default and the only kind this tool files")),
-			mcp.WithString("due", mcp.Description("when it is due: a time (22:55) or a duration (3h)")),
-			mcp.WithString("default", mcp.Description("the action if nobody answers by the due time")),
-			mcp.WithString("status_quo", mcp.Description("what is true now")),
-			mcp.WithString("why", mcp.Description("why it needs the person")),
-			mcp.WithArray("options", mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
-			mcp.WithNumber("recommend", mcp.Description("the option recommended, 1-based")),
-			mcp.WithString("checked", mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
+			mcp.WithString(paramDue, mcp.Description("when it is due: a time (22:55) or a duration (3h)")),
+			mcp.WithString(paramDefault, mcp.Description("the action if nobody answers by the due time")),
+			mcp.WithString(paramStatusQuo, mcp.Description("what is true now")),
+			mcp.WithString(paramWhy, mcp.Description("why it needs the person")),
+			mcp.WithArray(paramOptions, mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
+			mcp.WithNumber(paramRecommend, mcp.Description("the option recommended, 1-based")),
+			mcp.WithString(paramChecked, mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
 			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n"))), toolNoteAdd},
 		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintRead), toolNoteList},
 		{newTool("note_answer", "Answer a decision in the person's words and close it: as the person it is for, or a member of the team it is for.",
@@ -722,18 +729,18 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	args := []string{"add", text}
-	for _, f := range [][2]string{{"for", "for"}, {"kind", "kind"}, {"due", "due"}, {"default", "default"}, {"status_quo", "status-quo"}, {"why", "why"}, {"checked", "checked"}} {
+	for _, f := range [][2]string{{"for", "for"}, {"kind", "kind"}, {paramDue, "due"}, {paramDefault, "default"}, {paramStatusQuo, "status-quo"}, {paramWhy, "why"}, {paramChecked, "checked"}} {
 		if v := req.GetString(f[0], ""); v != "" {
 			args = append(args, "--"+f[1], v)
 		}
 	}
-	for _, o := range req.GetStringSlice("options", nil) {
+	for _, o := range req.GetStringSlice(paramOptions, nil) {
 		args = append(args, "--option", o)
 	}
 	for _, r := range req.GetStringSlice(paramRefs, nil) {
 		args = append(args, "--ref", r)
 	}
-	if r := req.GetInt("recommend", 0); r != 0 {
+	if r := req.GetInt(paramRecommend, 0); r != 0 {
 		args = append(args, "--recommend", strconv.Itoa(r))
 	}
 	if err := c.verb(c.app.noteCmd(), args...); err != nil {

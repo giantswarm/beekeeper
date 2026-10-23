@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `note add --for <person|team:name>` on a machine with a central instance (`central.context`) files the decision there (`note_add`, through muster as the person) once the local checks pass: it reaches Slack and the guide from the central instance, its answer or default reaches the filing session through the person's mailbox, and it prints the central note's number. A sign-in, `--holds` and `--fold-into` stay on the machine; with the central instance unreachable before the call went out the decision is filed on the machine as before, as stderr says, and a call sent and left unanswered is filed nowhere else (exit 69) ([#360](https://github.com/giantswarm/beekeeper/issues/360)).
+
 ### Fixed
 
 - A third-party OAuth consent on record (`app allow --oauth`) also admits the client's device-code page on the same host: on `auth.openai.com/deviceauth/callback` ("grant access to Codex CLI") the hook answers the device code typed and its Continue for a call naming the recorded account, so a Codex sign-in with ChatGPT finishes through `beekeeper browse`. Another account, a client id or record of another client, and any text there but a device code (nine letters or digits at most) stay refused; the browse prompt, its auto mode rule and the report line name the page ([#1599](https://github.com/giantswarm/beekeeper/issues/1599)).

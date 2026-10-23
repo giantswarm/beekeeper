@@ -108,6 +108,9 @@ func TestCallStalledConnection(t *testing.T) {
 			if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Reason != stage+" timed out (deadline 500ms)" {
 				t.Fatalf("stalled: %v, want Unreachable naming the %s stage and its deadline", err, stage)
 			}
+			if u.Sent != (method == "tools/call") {
+				t.Errorf("stalled in the %s stage: Sent %v, want it only once the tool call went out", stage, u.Sent)
+			}
 			if text, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); err != nil || text != "claimed graveler" {
 				t.Errorf("after the stall: %q, %v, want the answer over a fresh connection", text, err)
 			}
