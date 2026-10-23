@@ -92,6 +92,11 @@ func TestBrokeredSecretArgs(t *testing.T) {
 	if err := brokeredSecretArgs(consumer, true, false); err == nil {
 		t.Errorf("%q in the sandbox: want a refusal", consumer)
 	}
+	// a producer runs on the host like a consumer
+	producer := []string{copyOp, "cmd://az acr token credential generate --name x#passwords.0.value", "pull.sops.yaml", "--dockerconfigjson", "r.io", "--username", "x"}
+	if err := brokeredSecretArgs(producer, true, false); err == nil || !strings.Contains(err.Error(), "cmd://") {
+		t.Errorf("%q in the sandbox: %v, want a refusal", producer, err)
+	}
 	// import reads the person's own vault: brokered in session mode only
 	imp := []string{"import", "--recipient=age1x", "op://Private/x/y"}
 	if err := brokeredSecretArgs(imp, true, true); err != nil {

@@ -42,6 +42,28 @@ func (d DockerConfig) check() error {
 	return nil
 }
 
+// fill writes the .dockerconfigjson that authenticates the user with
+// password under keys of doc, a Secret in file, and types the Secret. It
+// answers the .dockerconfigjson.
+func (d DockerConfig) fill(doc *document, file string, keys []string, password string) (string, error) {
+	v, err := d.value(password)
+	if err != nil {
+		return "", err
+	}
+	if err := doc.set("type", dockerConfigType); err != nil {
+		return "", fmt.Errorf("%s: %w", file, err)
+	}
+	return v, setAt(doc, file, keys, v)
+}
+
+// setAt puts v under keys of doc, the document of file.
+func setAt(doc *document, file string, keys []string, v string) error {
+	if err := doc.setKeys(keys, v); err != nil {
+		return fmt.Errorf("%s: %w", file, err)
+	}
+	return nil
+}
+
 // value is the .dockerconfigjson that authenticates the user with password.
 func (d DockerConfig) value(password string) (string, error) {
 	auth := base64.StdEncoding.EncodeToString([]byte(d.Username + ":" + password))
@@ -146,19 +168,15 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 	}
 	// the vault keeps the printed value, the SOPS path its written form
 	if opt.Docker != nil {
-		if v, err = opt.Docker.value(v); err != nil {
-			return CaptureResult{}, err
-		}
-		if err := doc.set("type", dockerConfigType); err != nil {
-			return CaptureResult{}, fmt.Errorf("%s: %w", dst.File, err)
-		}
+		v, err = opt.Docker.fill(doc, dst.File, keys, v)
 	} else {
 		v = o.Encode.Apply(v)
+		err = setAt(doc, dst.File, keys, v)
+	}
+	if err != nil {
+		return CaptureResult{}, err
 	}
 	key := Ref{File: dst.File, Path: strings.Join(keys, ".")}
-	if err := doc.setKeys(keys, v); err != nil {
-		return CaptureResult{}, fmt.Errorf("%s: %w", dst.File, err)
-	}
 	if err := o.encrypt(ctx, doc, dst.File); err != nil {
 		if opt.Vault != (Ref{}) {
 			return CaptureResult{}, fmt.Errorf("the vault holds the value, the SOPS file not (copy %s %s): %w", opt.Vault, key, err)
@@ -180,15 +198,22 @@ func (o *Ops) captureTarget(ctx context.Context, dst Ref, opt CaptureOptions) (*
 		}
 		return doc, strings.Split(dst.Path, "."), nil
 	}
-	doc, err := o.document(ctx, dst.File, opt.New)
+	return o.dockerTarget(ctx, dst.File, opt.New)
+}
+
+// dockerTarget is the Secret in file a .dockerconfigjson goes into, an
+// absent file started as nw, and the keys of stringData..dockerconfigjson,
+// checked against the creation rule.
+func (o *Ops) dockerTarget(ctx context.Context, file string, nw *NewSecret) (*document, []string, error) {
+	doc, err := o.document(ctx, file, nw)
 	if err != nil {
 		return nil, nil, err
 	}
 	if k, _ := doc.get("kind"); k != secretKind {
-		return nil, nil, fmt.Errorf("%s: --dockerconfigjson writes a Secret; start one in an absent file with --name and --namespace", dst.File)
+		return nil, nil, fmt.Errorf("%s: --dockerconfigjson writes a Secret; start one in an absent file with --name and --namespace", file)
 	}
 	keys := []string{"stringData", dockerConfigKey}
-	if err := checkRule(dst.File, keys); err != nil {
+	if err := checkRule(file, keys); err != nil {
 		return nil, nil, err
 	}
 	return doc, keys, nil

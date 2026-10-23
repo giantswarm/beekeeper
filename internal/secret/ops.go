@@ -129,16 +129,22 @@ func (o *Ops) CopyFile(ctx context.Context, src Ref, dst, name, namespace string
 }
 
 // CopyValue copies one value into a path of a SOPS file, creating the file
-// or the key when absent. It answers the value's length.
+// or the key when absent. The path is checked against the creation rule
+// before the value is read, so a producer's credential is not spent on a
+// write that could not happen. It answers the value's length.
 func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
 	if dst.Op != "" || dst.IsSource() || dst.Path == "" {
 		return 0, fmt.Errorf("%s: one value goes to a SOPS path, file#path", dst)
+	}
+	doc, dst, err := o.target(ctx, dst, nil)
+	if err != nil {
+		return 0, err
 	}
 	v, err := o.encoded(ctx, src)
 	if err != nil {
 		return 0, err
 	}
-	return len(v), o.put(ctx, dst, v)
+	return len(v), o.write(ctx, doc, dst, v)
 }
 
 // Pair is one value of a copy into a new file: the reference it is read
@@ -163,7 +169,7 @@ func ParsePair(s string) (Pair, error) {
 	p := Pair{Src: src, Path: s[i+1:]}
 	switch {
 	case !src.Single():
-		return Pair{}, fmt.Errorf("%q: name one value (file#path, op://…, k8s://… or file://…#path), not a whole file", s)
+		return Pair{}, fmt.Errorf("%q: name one value (file#path, op://…, k8s://…, file://…#path or cmd://…), not a whole file", s)
 	case p.Path == "" || strings.ContainsAny(p.Path, "#/"):
 		return Pair{}, fmt.Errorf("%q: the path after = is a dotted key of the new file", s)
 	}
@@ -220,15 +226,6 @@ func (o *Ops) CopyValues(ctx context.Context, pairs []Pair, file string, nw *New
 		return nil, err
 	}
 	return doc.keys(), nil
-}
-
-// put writes v at dst's path, the rest of its file kept.
-func (o *Ops) put(ctx context.Context, dst Ref, v string) error {
-	doc, dst, err := o.target(ctx, dst, nil)
-	if err != nil {
-		return err
-	}
-	return o.write(ctx, doc, dst, v)
 }
 
 // target is the document a value for dst goes into and the path it takes
