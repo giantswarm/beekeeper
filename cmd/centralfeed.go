@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/feed"
@@ -101,10 +103,21 @@ func (w *watcher) readFeed(ctx context.Context) {
 		if ev.ID <= last {
 			continue
 		}
-		w.emitNow(feedKey, "CENTRAL %s [%s on %s]", ev.Line, cmp.Or(ev.Actor.Person, "?"), cmp.Or(ev.Actor.Host, "?"))
+		w.emitNow(feedKey, "CENTRAL %s [%s on %s]", printable(ev.Line), printable(cmp.Or(ev.Actor.Person, "?")), printable(cmp.Or(ev.Actor.Host, "?")))
 		last = ev.ID
 	}
 	w.markFeed(last)
+}
+
+// printable is another machine's text as one line of the watch: a control
+// character or escape is a space, so it forges no line and moves no cursor.
+func printable(s string) string {
+	return oneLine(strings.Map(func(r rune) rune {
+		if !unicode.IsPrint(r) {
+			return ' '
+		}
+		return r
+	}, s))
 }
 
 // markFeed keeps id as the last event the watch printed, in its mark at
