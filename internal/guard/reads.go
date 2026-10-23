@@ -346,7 +346,7 @@ func (r *reader) safe(p string) string {
 		return ""
 	}
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
-		if secretName.MatchString(part) || part == ".git" {
+		if secretName.MatchString(part) || part == gitDir {
 			return ""
 		}
 	}

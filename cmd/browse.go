@@ -1731,11 +1731,7 @@ func uploadRoots(cwd, dir, stateDir, session string) []string {
 			roots = append(roots, r)
 		}
 	}
-	if session != "" && !strings.ContainsAny(session, `/\*?[`) {
-		pads, _ := filepath.Glob(filepath.Join(os.TempDir(), "claude-"+strconv.Itoa(os.Getuid()), "*", session))
-		roots = append(roots, pads...)
-	}
-	return roots
+	return append(roots, guard.SessionDirs(session)...)
 }
 
 // resolved is path made absolute, its links resolved as far as it exists.

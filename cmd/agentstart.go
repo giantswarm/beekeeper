@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -430,6 +431,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if id == "" {
 		id = uuid.NewString()
 	}
+	sp.brief = fillScratchpad(sp.brief, dir, id)
 	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model}
 	var reg registration
 	var handed []string
@@ -1475,6 +1477,17 @@ func readBrief(path string) (string, error) {
 // brief, enclosed so that a hand-over passes on the brief alone.
 func taskPrompt(brief string) string {
 	return "Your task:\n" + briefOpen + "\n" + brief + "\n" + briefClose
+}
+
+// scratchpadMark stands in the worker rules for the started session's
+// scratchpad, which agents start fills in by absolute path once it knows
+// the session's id.
+const scratchpadMark = "<scratchpad>"
+
+// fillScratchpad names, in a first prompt, the scratchpad of the session id
+// started in dir by absolute path.
+func fillScratchpad(prompt, dir, id string) string {
+	return strings.ReplaceAll(prompt, scratchpadMark, guard.Scratchpad(dir, id))
 }
 
 // workerPrompt is a worker's first prompt: the worker rules beekeeper

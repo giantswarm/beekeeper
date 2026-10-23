@@ -434,6 +434,12 @@ type Hooks struct {
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
+	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
+	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
+	// session would create directly in one, and one git neither tracks nor
+	// ignores in the main working tree of a checkout that sits directly in
+	// one; scratch files go in the session's scratchpad. Empty, off.
+	PersonFolders []string `yaml:"personFolders"`
 }
 
 // HookScope is where the hooks act: in a session beekeeper started or
@@ -1923,6 +1929,12 @@ func (c *Config) defaults() error {
 	for i, d := range c.Hooks.Scope.Dirs {
 		c.Hooks.Scope.Dirs[i] = filepath.Clean(homePath(home, d))
 	}
+	for i, d := range c.Hooks.PersonFolders {
+		if d == "~" {
+			d = home
+		}
+		c.Hooks.PersonFolders[i] = filepath.Clean(homePath(home, d))
+	}
 	setInt(&c.Scan.MinLength, 12)
 	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
 	for i, f := range c.Secret.Files {
@@ -2272,6 +2284,11 @@ func (c *Config) validate() error {
 			if _, err := filepath.Match(g, ""); err != nil {
 				return fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err)
 			}
+		}
+	}
+	for _, g := range c.Hooks.PersonFolders {
+		if _, err := filepath.Match(g, ""); err != nil {
+			return fmt.Errorf("hooks.personFolders: %q: %w", g, err)
 		}
 	}
 	for _, g := range c.Outbound.Paths {
