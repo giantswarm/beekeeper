@@ -17,13 +17,14 @@ const (
 	slackClient   = "2171500629.8349188396579"
 	slackChannel  = "team-bumblebee"
 	slackTitle    = "Allow Swarmgeist to access Slack | Giant Swarm Slack"
-	slackScopes   = "&scope=usergroups%3Aread%2Cchat%3Awrite%2Cincoming-webhook&user_scope=&redirect_uri=&state=&granular_bot_scope=1&install_redirect=install-on-team&original_team=T0251EQJH&team=1"
-	slackInstall  = "https://" + slackWS + "/oauth?client_id=" + slackClient + slackScopes
+	slackQuery    = "&scope=usergroups%3Aread%2Cchat%3Awrite%2Cincoming-webhook&user_scope=&redirect_uri=&state=&granular_bot_scope=1&install_redirect=install-on-team&original_team=T0251EQJH&team=1"
+	slackInstall  = "https://" + slackWS + "/oauth?client_id=" + slackClient + slackQuery
 	slackSettings = "https://api.slack.com/apps/" + slackAppID + "/install-on-team"
 	slackAllow    = "Clicks Allow"
 	notChosen     = "is not chosen yet"
 	reinstall     = "Clicks Reinstall to Giant Swarm"
 	otherChannel  = "general"
+	noChannel     = "--webhook-channel"
 )
 
 func slackRec() App {
@@ -48,27 +49,31 @@ func TestSlackConsent(t *testing.T) {
 		words        string
 		want, naming string
 	}{
-		"opens the picker":                   {[]App{rec}, slackInstall, slackTitle, "", "Opens the Channel for webhook picker", Allow, keep},
-		"chooses its channel":                {[]App{rec}, slackInstall, slackTitle, "", "Chooses #team-bumblebee", Allow, keep},
-		"Allow once chosen":                  {[]App{rec}, slackInstall, slackTitle, slackChannel, "Clicks Allow to reinstall Swarmgeist", Allow, "own Slack app Swarmgeist"},
-		"Allow before the choice":            {[]App{rec}, slackInstall, slackTitle, "", "Clicks Allow to reinstall Swarmgeist", Deny, notChosen},
-		"Allow naming the channel, unpicked": {[]App{rec}, slackInstall, slackTitle, "", "Clicks Allow keeping #team-bumblebee", Deny, notChosen},
-		"another click before the choice":    {[]App{rec}, slackInstall, slackTitle, "", "Confirms the re-install", Deny, notChosen},
-		"Allow after another pick":           {[]App{rec}, slackInstall, slackTitle, otherChannel, slackAllow, Deny, notChosen},
-		"another channel":                    {[]App{rec}, slackInstall, slackTitle, "", "Chooses #general in the channel picker", Deny, "#general"},
-		"Allow naming another channel":       {[]App{rec}, slackInstall, slackTitle, slackChannel, "Clicks Allow with #general", Deny, "#general"},
-		"a webhook, no channel on record":    {[]App{bare}, slackInstall, slackTitle, "", slackAllow, Deny, "--webhook-channel"},
-		"no webhook, no channel on record":   {[]App{bare}, strings.Replace(slackInstall, "%2Cincoming-webhook", "", 1), slackTitle, "", slackAllow, Allow, slackName},
-		"a redacted client id, its title":    {[]App{rec}, strings.Replace(slackInstall, slackClient, chromeRedacted, 1), slackTitle, slackChannel, slackAllow, Allow, slackName},
-		"a redacted client id, other title":  {[]App{rec}, strings.Replace(slackInstall, slackClient, chromeRedacted, 1), "Allow Other to access Slack", slackChannel, slackAllow, Deny, SlackForm},
-		"another client id":                  {[]App{rec}, strings.Replace(slackInstall, slackClient, "1.2", 1), slackTitle, slackChannel, slackAllow, Deny, "of client id 1.2"},
-		"another workspace":                  {[]App{rec}, strings.Replace(slackInstall, slackWS, "other.slack.com", 1), slackTitle, slackChannel, slackAllow, Deny, SlackForm},
-		"no record":                          {nil, slackInstall, slackTitle, slackChannel, slackAllow, Deny, SlackForm},
-		"the v2 authorize path":              {[]App{rec}, strings.Replace(slackInstall, "/oauth?", "/oauth/v2/authorize?", 1), slackTitle, slackChannel, slackAllow, Allow, slackName},
-		"its Reinstall":                      {[]App{rec}, slackSettings, "Slack API: Applications", "", reinstall, Allow, "Install App page"},
-		"its Reinstall under app-settings":   {[]App{rec}, "https://app.slack.com/app-settings/T0251EQJH/" + slackAppID + "/install-on-team", "", "", reinstall, Allow, "Install App page"},
-		"another app's Reinstall":            {[]App{rec}, "https://api.slack.com/apps/A0OTHER123/install-on-team", "", "", reinstall, "", ""},
-		"another click on its settings":      {[]App{rec}, slackSettings, "", "", "Clicks Revoke All OAuth Tokens", "", ""},
+		"opens the picker":                     {[]App{rec}, slackInstall, slackTitle, "", "Opens the Channel for webhook picker", Allow, keep},
+		"chooses its channel":                  {[]App{rec}, slackInstall, slackTitle, "", "Chooses #team-bumblebee", Allow, keep},
+		"Allow once chosen":                    {[]App{rec}, slackInstall, slackTitle, slackChannel, "Clicks Allow to reinstall Swarmgeist", Allow, "own Slack app Swarmgeist"},
+		"Allow before the choice":              {[]App{rec}, slackInstall, slackTitle, "", "Clicks Allow to reinstall Swarmgeist", Deny, notChosen},
+		"Allow naming the channel, unpicked":   {[]App{rec}, slackInstall, slackTitle, "", "Clicks Allow keeping #team-bumblebee", Deny, notChosen},
+		"another click before the choice":      {[]App{rec}, slackInstall, slackTitle, "", "Confirms the re-install", Deny, notChosen},
+		"Allow after another pick":             {[]App{rec}, slackInstall, slackTitle, otherChannel, slackAllow, Deny, notChosen},
+		"another channel":                      {[]App{rec}, slackInstall, slackTitle, "", "Chooses #general in the channel picker", Deny, "#general"},
+		"Allow naming another channel":         {[]App{rec}, slackInstall, slackTitle, slackChannel, "Clicks Allow with #general", Deny, "#general"},
+		"a webhook, no channel on record":      {[]App{bare}, slackInstall, slackTitle, "", slackAllow, Deny, noChannel},
+		"no webhook, no channel on record":     {[]App{bare}, strings.Replace(slackInstall, "%2Cincoming-webhook", "", 1), slackTitle, "", slackAllow, Allow, slackName},
+		"a redacted client id, its title":      {[]App{rec}, strings.Replace(slackInstall, slackClient, chromeRedacted, 1), slackTitle, slackChannel, slackAllow, Deny, "redacted or absent"},
+		"a redacted client id, other title":    {[]App{rec}, strings.Replace(slackInstall, slackClient, chromeRedacted, 1), "Allow Other to access Slack", slackChannel, slackAllow, Deny, SlackForm},
+		"no scopes, no channel on record":      {[]App{bare}, "https://" + slackWS + "/oauth?client_id=" + slackClient, slackTitle, "", slackAllow, Deny, noChannel},
+		"a user scope webhook, no channel":     {[]App{bare}, "https://" + slackWS + "/oauth?client_id=" + slackClient + "&scope=chat%3Awrite&user_scope=incoming-webhook", slackTitle, "", slackAllow, Deny, noChannel},
+		"its token's revoke":                   {[]App{rec}, slackSettings, "", "", "Clicks Revoke and reinstall the token", Deny, "another control"},
+		"its Install App page on another host": {[]App{rec}, "https://evil.example.org/apps/" + slackAppID + "/install-on-team", "", "", reinstall, "", ""},
+		"another client id":                    {[]App{rec}, strings.Replace(slackInstall, slackClient, "1.2", 1), slackTitle, slackChannel, slackAllow, Deny, "of client id 1.2"},
+		"another workspace":                    {[]App{rec}, strings.Replace(slackInstall, slackWS, "other.slack.com", 1), slackTitle, slackChannel, slackAllow, Deny, SlackForm},
+		"no record":                            {nil, slackInstall, slackTitle, slackChannel, slackAllow, Deny, SlackForm},
+		"the v2 authorize path":                {[]App{rec}, strings.Replace(slackInstall, "/oauth?", "/oauth/v2/authorize?", 1), slackTitle, slackChannel, slackAllow, Allow, slackName},
+		"its Reinstall":                        {[]App{rec}, slackSettings, "Slack API: Applications", "", reinstall, Allow, "Install App page"},
+		"its Reinstall under app-settings":     {[]App{rec}, "https://app.slack.com/app-settings/T0251EQJH/" + slackAppID + "/install-on-team", "", "", reinstall, Allow, "Install App page"},
+		"another app's Reinstall":              {[]App{rec}, "https://api.slack.com/apps/A0OTHER123/install-on-team", "", "", reinstall, "", ""},
+		"another click on its settings":        {[]App{rec}, slackSettings, "", "", "Clicks Revoke All OAuth Tokens", "", ""},
 	} {
 		d := Click(tc.apps, Page{URL: tc.url, Title: tc.title, Picked: tc.picked}, tc.words)
 		if d.Decision != tc.want || !strings.Contains(d.Reason, tc.naming) {
@@ -92,8 +97,11 @@ func TestTypedSlack(t *testing.T) {
 			t.Errorf("typed %q: %+v, want %s", text, d, want)
 		}
 	}
-	if d := typedSlack(apps, Page{URL: slackSettings}, "general", ok); d != ok {
-		t.Errorf("typed on its settings page: %+v, want the decision kept", d)
+	if d := typedSlack(apps, Page{URL: "https://example.org/form"}, otherChannel, ok); d != ok {
+		t.Errorf("typed on another page: %+v, want the decision kept", d)
+	}
+	if d := typedSlack(apps, Page{URL: slackSettings}, keyEnter, ok); d.Decision != Deny {
+		t.Errorf("a key on its Install App page: %+v, want it refused", d)
 	}
 }
 
@@ -119,10 +127,11 @@ func TestSlackPickedFromTheTranscript(t *testing.T) {
 	}{
 		"its channel chosen": {[]string{use("a", click("Opens the channel picker")), result("a", slackInstall),
 			use("b", click("Chooses #team-bumblebee")), result("b", slackInstall)}, slackChannel},
-		"a later choice": {[]string{use("a", click("Chooses #team-bumblebee")), result("a", slackInstall), use("b", click("Chooses #General")), result("b", slackInstall)}, "general"},
-		"on another URL": {[]string{use("a", click("Chooses #team-bumblebee")), result("a", slackSettings), use("b", click("Reinstalls")), result("b", slackInstall)}, ""},
-		"no result":      {[]string{use("a", click("Chooses #team-bumblebee"))}, ""},
-		"none named":     {[]string{use("a", click("Opens the channel picker")), result("a", slackInstall)}, ""},
+		"a later click naming none": {[]string{use("a", click("Chooses #team-bumblebee")), result("a", slackInstall), use("b", click("Opens the channel picker")), result("b", slackInstall)}, ""},
+		"a later choice":            {[]string{use("a", click("Chooses #team-bumblebee")), result("a", slackInstall), use("b", click("Chooses #General")), result("b", slackInstall)}, "general"},
+		"on another URL":            {[]string{use("a", click("Chooses #team-bumblebee")), result("a", slackSettings), use("b", click("Reinstalls")), result("b", slackInstall)}, ""},
+		"no result":                 {[]string{use("a", click("Chooses #team-bumblebee"))}, ""},
+		"none named":                {[]string{use("a", click("Opens the channel picker")), result("a", slackInstall)}, ""},
 	} {
 		path := filepath.Join(t.TempDir(), "t.jsonl")
 		if err := os.WriteFile(path, []byte(strings.Join(tc.lines, "\n")+"\n"), 0o600); err != nil {

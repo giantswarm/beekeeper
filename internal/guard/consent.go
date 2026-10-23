@@ -543,11 +543,17 @@ func lastPages(transcript string) map[string]Page {
 				delete(forms, m[1])
 			}
 			// On Slack's install consent page the channel the call's own
-			// words name is the one it chose in the webhook picker.
+			// words name is the one it chose in the webhook picker; a later
+			// call that acts on the tab and names none may have changed it.
 			if ok && SlackConsentURL(p.URL) {
 				for _, c := range chromeCalls(call.name, call.input) {
-					if ch := slackChannelOf(c.words); ch != "" && (c.tab == "" || c.tab == m[1]) {
+					if c.tab != "" && c.tab != m[1] {
+						continue
+					}
+					if ch := slackChannelOf(c.words); ch != "" {
 						picks[m[1]] = pagePick{p.URL, ch}
+					} else {
+						delete(picks, m[1])
 					}
 				}
 			}

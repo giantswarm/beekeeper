@@ -16,15 +16,18 @@ import (
 // for webhook"), without which Allow stays disabled. A re-install that adds a
 // scope is the same page. The hook decides a call on it from the Slack apps
 // on record (App.Slack), on the person's word: for the app whose client id
-// the URL carries (or whose name the page's title carries, where the Chrome
-// tools redacted the id) on the recorded workspace, typing a part of the
+// the URL carries on the recorded workspace (the app's name, which its owner
+// chooses, identifies nothing; a redacted id is refused), typing a part of the
 // recorded webhook channel's name, the picker's keys and its clicks are
 // allowed, a call that names another channel is refused, and Allow, or any
 // click that does not name the channel field, is allowed only once a call on
 // the tab named the recorded channel (Page.Picked), so the install keeps it;
-// the page of any other app or workspace is refused. On the app's Install
-// App page (api.slack.com/apps/<id>/install-on-team) the hook allows the
-// recorded app's Install or Reinstall click, which opens that page.
+// the page of any other app or workspace is refused, and so is an app
+// without a channel on record unless the page's scopes, as parsed, ask for
+// no webhook. On the app's Install App page
+// (api.slack.com/apps/<id>/install-on-team) the hook allows the recorded
+// app's Install or Reinstall click, which opens that page, and refuses
+// anything typed there and a click that names a token, a revoke or a copy.
 
 // SlackForm is how the install consent of a Slack app the person owns and
 // asked for is recorded.
@@ -45,12 +48,16 @@ var slackInstallPage = regexp.MustCompile(`^/(?:apps|app-settings/T[A-Z0-9]+)/(A
 // consent: Install to <workspace>, Reinstall to <workspace>.
 var slackInstallWords = regexp.MustCompile(`(?i)\b(re-?)?install`)
 
+// slackInstallOther names the Install App page's other controls: its
+// tokens, their revoke, regeneration and copy.
+var slackInstallOther = regexp.MustCompile(`(?i)token|revoke|regenerat|copy|delete|remove|uninstall`)
+
 // slackChannelNamed is a channel a call's words name, "#name".
 var slackChannelNamed = regexp.MustCompile(`#([A-Za-z0-9][A-Za-z0-9._-]*)`)
 
 // slackFieldWords name the webhook channel's field: a click that opens the
 // picker or chooses in it.
-var slackFieldWords = regexp.MustCompile(`(?i)channel|webhook|picker|dropdown|select`)
+var slackFieldWords = regexp.MustCompile(`(?i)channel|webhook|picker`)
 
 // slackKeys are the keys pressed in the channel picker: moving through its
 // options, choosing one, closing it.
@@ -96,16 +103,31 @@ func slackClick(apps []App, u *url.URL, page Page, words string) (Decision, bool
 	if slackConsentPage(u) {
 		return slackConsent(apps, u, page, words), true
 	}
-	m := slackInstallPage.FindStringSubmatch(u.Path)
-	if m == nil || !slackInstallWords.MatchString(words) {
+	a := slackInstallRecord(apps, u)
+	if a == nil || !slackInstallWords.MatchString(words) {
 		return Decision{}, false
 	}
-	for _, a := range apps {
-		if a.Slack != "" && a.SlackApp == m[1] {
-			return Decision{Allow, "beekeeper allows the click: the Install App page of " + slackWords(a)}, true
+	if slackInstallOther.MatchString(words) {
+		return Decision{Deny, fmt.Sprintf("Refused: on the Install App page of %s only Install or Reinstall is on record; the call %q names "+
+			"another control there (a token, its revoke or copy, an uninstall).", slackWords(*a), short(words))}, true
+	}
+	return Decision{Allow, "beekeeper allows the click: the Install App page of " + slackWords(*a)}, true
+}
+
+// slackInstallRecord is the Slack app on record whose Install App page u
+// is, nil for none.
+func slackInstallRecord(apps []App, u *url.URL) *App {
+	host := strings.ToLower(u.Hostname())
+	m := slackInstallPage.FindStringSubmatch(u.Path)
+	if m == nil || (host != "api.slack.com" && host != "app.slack.com") {
+		return nil
+	}
+	for i := range apps {
+		if a := &apps[i]; a.Slack != "" && a.SlackApp == m[1] {
+			return a
 		}
 	}
-	return Decision{}, false
+	return nil
 }
 
 // slackConsent decides a call in words on Slack's install consent page u,
@@ -114,20 +136,21 @@ func slackConsent(apps []App, u *url.URL, page Page, words string) Decision {
 	host := strings.ToLower(u.Hostname())
 	q := u.Query()
 	clientID := q.Get("client_id")
-	a := slackRecord(apps, host, clientID, page.Title)
+	a := slackRecord(apps, host, clientID)
 	if a == nil {
 		which := "of client id " + clientID
 		if clientID == "" || clientID == chromeRedacted {
-			which = strconv.Quote(page.Title)
+			which = strconv.Quote(page.Title) + " (its client id redacted or absent: the hook answers only the client id the URL carries)"
 		}
 		return Decision{Deny, fmt.Sprintf("Refused: Slack's install consent page %s on %s names a Slack app beekeeper has no record of on that workspace. "+
 			"A consent is a grant of the person's identity, answered only for an app the person owns and asked for, which %s "+
 			"records on their word; every other grant stays refused.", which, host, SlackForm)}
 	}
-	webhook := slices.Contains(strings.Split(q.Get("scope"), ","), "incoming-webhook")
-	if webhook && a.Channel == "" {
-		return Decision{Deny, fmt.Sprintf("Refused: Slack's install consent page of %s asks for a channel for its webhook (incoming-webhook), and the record "+
-			"names none to keep: record it with --webhook-channel <#channel>, the channel the app's webhook posts to now (%s).", slackWords(*a), SlackForm)}
+	scopes := slackScopes(q)
+	if a.Channel == "" && (len(scopes) == 0 || slices.Contains(scopes, "incoming-webhook")) {
+		return Decision{Deny, fmt.Sprintf("Refused: Slack's install consent page of %s asks for a channel for its webhook (incoming-webhook), or its URL "+
+			"names no scopes to tell, and the record names no channel to keep: record it with --webhook-channel <#channel>, the channel the app's "+
+			"webhook posts to now (%s).", slackWords(*a), SlackForm)}
 	}
 	for _, m := range slackChannelNamed.FindAllStringSubmatch(words, -1) {
 		if c := strings.ToLower(m[1]); c != a.Channel {
@@ -145,20 +168,27 @@ func slackConsent(apps []App, u *url.URL, page Page, words string) Decision {
 }
 
 // slackRecord is the Slack app on record on workspace host whose client id
-// is clientID, or, where the Chrome tools redacted it, whose name title
-// carries ("Allow <name> to access Slack"); nil for none.
-func slackRecord(apps []App, host, clientID, title string) *App {
+// is clientID; nil for none, a redacted id too.
+func slackRecord(apps []App, host, clientID string) *App {
 	for i := range apps {
 		a := &apps[i]
-		if a.Slack == "" || !strings.EqualFold(a.Slack, host) {
-			continue
-		}
-		if (clientID != "" && clientID == a.ClientID) ||
-			(clientID == chromeRedacted && strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), strings.ToLower("Allow "+a.Name+" to access"))) {
+		if a.Slack != "" && strings.EqualFold(a.Slack, host) && clientID != "" && clientID != chromeRedacted && clientID == a.ClientID {
 			return a
 		}
 	}
 	return nil
+}
+
+// slackScopes are the scopes an install URL asks for, bot and user, each
+// token trimmed: split on commas, spaces and pluses.
+func slackScopes(q url.Values) []string {
+	var out []string
+	for _, k := range []string{"scope", "user_scope"} {
+		for _, v := range q[k] {
+			out = append(out, strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' || r == '+' })...)
+		}
+	}
+	return out
 }
 
 // typedSlack decides text typed or set on page, which d allowed: on Slack's
@@ -166,10 +196,17 @@ func slackRecord(apps []App, host, clientID, title string) *App {
 // typed, or a key of its picker; d stands for any other page.
 func typedSlack(apps []App, page Page, text string, d Decision) Decision {
 	u, err := url.Parse(strings.TrimSpace(page.URL))
-	if err != nil || !slackConsentPage(u) {
+	if err != nil {
 		return d
 	}
-	a := slackRecord(apps, strings.ToLower(u.Hostname()), u.Query().Get("client_id"), page.Title)
+	if a := slackInstallRecord(apps, u); a != nil && d.Decision == Allow {
+		return Decision{Deny, fmt.Sprintf("Refused: on the Install App page of %s only the Install or Reinstall click is on record; "+
+			"nothing is typed or pressed there.", slackWords(*a))}
+	}
+	if !slackConsentPage(u) {
+		return d
+	}
+	a := slackRecord(apps, strings.ToLower(u.Hostname()), u.Query().Get("client_id"))
 	if a == nil {
 		return d
 	}
