@@ -719,13 +719,15 @@ List every open note, whoever it is for or filed it: decisions and sign-ins.
 
 ```text
 Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.
+
+After an id, every event above it the instance still holds; gap set when it no longer holds that event, so events right after it may have aged out.
 ```
 
 ```json
 {
   "properties": {
     "after": {
-      "description": "only the events whose id is above this one",
+      "description": "only the events whose id is above this one, all of them the instance still holds",
       "type": "string"
     },
     "agent": {

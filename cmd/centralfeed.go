@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -29,13 +31,16 @@ const feedRetry = time.Minute
 // watchFeed prints the central instance's feed while ctx lasts: it
 // subscribes to beekeeper://feed through muster as the person and reads
 // the feed (read_feed) once the subscription stands and on each update,
-// printing each
-// event above the last one it printed. A subscription that ends on an
+// printing each event above the last one it printed. The first read of a
+// subscription says CENTRAL FEED GAP when events after the last one may
+// have aged out of the feed meanwhile; a standing one read them all as
+// they came. A subscription that ends on an
 // unreachable central instance is the CENTRAL UNREACHABLE line, one the
 // instance refused CENTRAL FEED REFUSED; either is opened again after
 // feedRetry, and the events meanwhile are printed once it stands.
 func (w *watcher) watchFeed(ctx context.Context) {
 	kick := make(chan struct{}, 1)
+	var resumed atomic.Bool
 	signal := func() {
 		select {
 		case kick <- struct{}{}:
@@ -51,7 +56,9 @@ func (w *watcher) watchFeed(ctx context.Context) {
 				return
 			case <-kick:
 			}
-			w.readFeed(ctx)
+			if resume := resumed.Swap(false); !w.readFeed(ctx, resume) && resume {
+				resumed.Store(true)
+			}
 		}
 	}()
 	defer func() { <-done }()
@@ -59,6 +66,7 @@ func (w *watcher) watchFeed(ctx context.Context) {
 		err := w.app.hub().Listen(ctx, []string{resourceFeed}, func() {
 			w.clear(centralKey)
 			w.clear(feedKey)
+			resumed.Store(true)
 			signal()
 		}, func(uri string) {
 			if uri == resourceFeed {
@@ -87,8 +95,10 @@ func (w *watcher) watchFeed(ctx context.Context) {
 // one the watch printed, with its actor's person and host, and keeps the
 // last one's id in the watch's mark: a restarted watch prints none twice.
 // A watch with no last id starts at the feed's newest event, printing
-// none of the past.
-func (w *watcher) readFeed(ctx context.Context) {
+// none of the past. With resume, a feed that no longer holds the last
+// event is the CENTRAL FEED GAP line before the events. It reports
+// whether the feed was read.
+func (w *watcher) readFeed(ctx context.Context, resume bool) bool {
 	w.mu.Lock()
 	last := w.feedID
 	w.mu.Unlock()
@@ -97,15 +107,20 @@ func (w *watcher) readFeed(ctx context.Context) {
 	if _, err := w.callCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
 			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.cfg.Central.Context, u.Reason)
-			return
+			return false
 		}
 		w.emit(feedKey, "CENTRAL FEED UNREADABLE %s: %v", w.cfg.Central.Context, err)
-		return
+		return false
 	}
 	w.clear(feedKey)
-	if last == "" && len(f.Events) > 0 {
-		w.markFeed(f.Events[len(f.Events)-1].ID)
-		return
+	if last == "" {
+		if len(f.Events) > 0 {
+			w.markFeed(f.Events[len(f.Events)-1].ID)
+		}
+		return true
+	}
+	if resume && f.Gap {
+		w.emitNow(feedKey, "CENTRAL FEED GAP %s: events after %s may be missing: the central instance no longer holds them", w.cfg.Central.Context, feedTime(last))
 	}
 	for _, ev := range f.Events {
 		if ev.ID <= last {
@@ -115,6 +130,17 @@ func (w *watcher) readFeed(ctx context.Context) {
 		last = ev.ID
 	}
 	w.markFeed(last)
+	return true
+}
+
+// feedTime is when the event of a feed id happened, the id itself if it
+// names no time.
+func feedTime(id string) string {
+	nanos, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return id
+	}
+	return time.Unix(0, nanos).UTC().Format(time.RFC3339)
 }
 
 // printable is another machine's text as one line of the watch: a control

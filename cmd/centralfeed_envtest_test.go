@@ -2,11 +2,17 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
+	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/state/kube"
 )
 
 // feedWatch is ana's watch of the central feed, keeping its mark in her
@@ -45,7 +51,7 @@ func soon(t *testing.T, what string, cond func() bool) {
 func TestCentralFeedEnvtest(t *testing.T) {
 	e := newServeEnv(t)
 	m := centraltest.New(t, e.url, "beekeeper")
-	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, "ana-laptop", anaAgent)
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, anaLaptop, anaAgent)
 	pia := newPerson(t, m, e.token(t, piaEmail, "giantswarm:team-planeteers"), piaEmail, piaTeam, "pia-laptop", "pia-agent")
 
 	if out, code := ana.run("lease", "claim", glean, "-p", "before the watch"); code != 0 {
@@ -95,7 +101,75 @@ func TestCentralFeedEnvtest(t *testing.T) {
 	dead := centraltest.New(t, e.url, "beekeeper")
 	dead.Close()
 	var down syncBuffer
-	_, stop3 := newPerson(t, dead, "token", anaEmail, ourTeam, "ana-laptop", anaAgent).feedWatch(&down)
+	_, stop3 := newPerson(t, dead, "token", anaEmail, ourTeam, anaLaptop, anaAgent).feedWatch(&down)
 	defer stop3()
 	soon(t, "the unreachable line", func() bool { return strings.Contains(down.String(), "CENTRAL UNREACHABLE lab: ") })
+}
+
+// A watch down through more than feedLength events prints every one of
+// them after its restart, and one down until the feed no longer holds the
+// last event it printed says CENTRAL FEED GAP before the events since.
+func TestCentralFeedResumeEnvtest(t *testing.T) {
+	e := newServeEnv(t)
+	m := centraltest.New(t, e.url, "beekeeper")
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, anaLaptop, anaAgent)
+	by := state.Party{Name: anaAgent, Person: anaEmail, Team: ourTeam, Host: anaLaptop}
+	burst := func(from, n int) {
+		t.Helper()
+		for i := from; i < from+n; i++ {
+			if err := e.store.Audit(kube.EnvironmentObject(graveler), ourTeam, state.Event{At: time.Now(), By: by, Verb: "test.burst", Detail: fmt.Sprintf("event %03d", i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	burst(0, 1)
+	var first syncBuffer
+	w, stop := ana.feedWatch(&first)
+	soon(t, "the first read", func() bool { w.mu.Lock(); defer w.mu.Unlock(); return w.feedID != "" })
+	stop()
+
+	// Down through more than feedLength events: all of them, no gap.
+	n := feedLength + 50
+	burst(1, n)
+	var resumed syncBuffer
+	_, stop2 := ana.feedWatch(&resumed)
+	last := fmt.Sprintf("CENTRAL test.burst (%s): event %03d", anaAgent, n)
+	soon(t, "the last event's line", func() bool { return strings.Contains(resumed.String(), last) })
+	stop2()
+	if got := strings.Count(resumed.String(), "CENTRAL test.burst "); got != n {
+		t.Errorf("the restarted watch printed %d of the %d events it missed:\n%s", got, n, resumed.String())
+	}
+	if strings.Contains(resumed.String(), "CENTRAL FEED GAP") {
+		t.Errorf("a gap though the feed held every event:\n%s", resumed.String())
+	}
+
+	// Down until the events aged out: the gap, then the event since.
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ctrlclient.New(e.rc, ctrlclient.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	evs := &corev1.EventList{}
+	if err := c.List(ctx, evs, ctrlclient.MatchingLabels(kube.EventLabels())); err != nil {
+		t.Fatal(err)
+	}
+	for i := range evs.Items {
+		if err := c.Delete(ctx, &evs.Items[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	burst(n+1, 1)
+	var gapped syncBuffer
+	_, stop3 := ana.feedWatch(&gapped)
+	defer stop3()
+	since := fmt.Sprintf("CENTRAL test.burst (%s): event %03d", anaAgent, n+1)
+	soon(t, "the event since", func() bool { return strings.Contains(gapped.String(), since) })
+	out := gapped.String()
+	if gap := strings.Index(out, "CENTRAL FEED GAP lab: events after "); gap < 0 || gap > strings.Index(out, since) {
+		t.Errorf("no CENTRAL FEED GAP line before the event since:\n%s", out)
+	}
 }

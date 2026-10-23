@@ -2764,8 +2764,11 @@ Every watch prints the central instance's feed. It subscribes to `beekeeper://fe
 muster as the person and, once the subscription stands and on each update, reads it (`read_feed`
 through muster's `call_tool`): each event the person may read prints once, as `CENTRAL <line> [<person> on
 <host>]` with the actor's person and host. A session's watch keeps the last event's id in its
-mark, so a restarted watch prints what happened while it was down and nothing twice; a watch
-without one starts at the newest event. A subscription that ends on an unreachable central
+mark, so a restarted watch prints what happened while it was down and nothing twice, however many
+events that was; a watch without one starts at the newest event. When the central instance no longer
+holds the last event it printed (down longer than the API server keeps Events), the first read of a
+subscription says `CENTRAL FEED GAP <context>: events after <time> may be missing` before the events
+since. A subscription that ends on an unreachable central
 instance is the `CENTRAL UNREACHABLE` line, one the instance refused `CENTRAL FEED REFUSED`; the
 watch subscribes again after a minute.
 

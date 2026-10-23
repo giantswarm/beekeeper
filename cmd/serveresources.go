@@ -29,7 +29,8 @@ const (
 	resourceMailbox      = resourceScheme + "mailbox/"
 	resourceRoster       = resourceScheme + "roster"
 	resourceFeed         = resourceScheme + "feed"
-	// feedLength is how many of the most recent events the feed holds.
+	// feedLength is how many of the most recent events the feed shows a
+	// reader that asks for no events after an id.
 	feedLength = 200
 )
 
@@ -165,7 +166,7 @@ func (s *server) addResources(m *mcpserver.MCPServer) {
 	m.AddResource(mcp.NewResource(resourceRoster, "roster", mcp.WithResourceDescription("The agent roster: your own local agents, your team's that work on a shared installation, and every remote agent."), mcp.WithMIMEType("application/json")),
 		s.read(func(_ context.Context, who identity.Caller, _ string) (any, error) { return s.roster(who) }))
 	m.AddResource(mcp.NewResource(resourceFeed, "feed", mcp.WithResourceDescription("The most recent events of the shared state you may read, oldest first, schema "+feed.Schema+"."), mcp.WithMIMEType("application/json")),
-		s.read(func(_ context.Context, who identity.Caller, _ string) (any, error) { return s.feed(who) }))
+		s.read(func(_ context.Context, who identity.Caller, _ string) (any, error) { return s.feed(who, "") }))
 	m.AddResourceTemplate(mcp.NewResourceTemplate(resourceEnvironments+"{name}", "environment", mcp.WithTemplateDescription("An installation's Environment: its holder, grants and upgrades."), mcp.WithTemplateMIMEType("application/json")),
 		s.readTemplate(func(_ context.Context, _ identity.Caller, uri string) (any, error) {
 			return s.environment(strings.TrimPrefix(uri, resourceEnvironments))
@@ -265,8 +266,12 @@ func (s *server) agentsFor(who identity.Caller, team bool) ([]addressedAgent, er
 	return agents, nil
 }
 
-// feed is the most recent events who reads, at most feedLength.
-func (s *server) feed(who identity.Caller) (*feed.Feed, error) {
+// feed is the events who reads: after an id, every one above it the store
+// holds, else the most recent, at most feedLength. The store holds the
+// Events the API server keeps (its --event-ttl), so the feed is bounded
+// by age; Gap says the store no longer holds the event after, nor any
+// older one, so events above it may have aged out unread.
+func (s *server) feed(who identity.Caller, after string) (*feed.Feed, error) {
 	sc, err := s.scope(who)
 	if err != nil {
 		return nil, err
@@ -281,14 +286,15 @@ func (s *server) feed(who identity.Caller) (*feed.Feed, error) {
 	}
 	out := []feed.Event{}
 	for _, ev := range evs {
-		if sc.readsEvent(ev, st.Agents) {
+		if ev.ID > after && sc.readsEvent(ev, st.Agents) {
 			out = append(out, ev)
 		}
 	}
-	if len(out) > feedLength {
+	if after == "" && len(out) > feedLength {
 		out = out[len(out)-feedLength:]
 	}
-	return &feed.Feed{Schema: feed.Schema, Events: out}, nil
+	gap := after != "" && (len(evs) == 0 || evs[0].ID > after)
+	return &feed.Feed{Schema: feed.Schema, Events: out, Gap: gap}, nil
 }
 
 // record is a resource's view of an Environment or MergeLane.
