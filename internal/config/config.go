@@ -991,7 +991,8 @@ type Serve struct {
 	// (a GitHub org's <org>:<team>, a directory's group name).
 	Organizations []string `yaml:"organizations"`
 	// Teams maps a Dex group to the team its members belong to; a caller
-	// in none is refused.
+	// in none is refused, a caller in several is the team of TeamGroups'
+	// first. A team's decisions are answered by DecidingGroups.
 	Teams map[string]string `yaml:"teams"`
 	// Supervisors maps a team to the Dex group of its supervisor role, which
 	// may release the team's leases and lift its holds.
@@ -1020,6 +1021,54 @@ type Serve struct {
 	// Gateway is the klaus-gateway that puts decisions to their addressee
 	// in Slack; without its URL, decisions stay in beekeeper.
 	Gateway Gateway `yaml:"gateway"`
+}
+
+// OrganizationGroups is every group that makes a caller a member:
+// Organization, then Organizations.
+func (s Serve) OrganizationGroups() []string {
+	var out []string
+	if s.Organization != "" {
+		out = append(out, s.Organization)
+	}
+	return append(out, s.Organizations...)
+}
+
+// TeamGroups are the groups in Teams, sorted, the most specific first: a
+// team's own groups before the organization-wide ones, so a member of both
+// a team's group and the organization's is the team's.
+func (s Serve) TeamGroups() []string {
+	org := s.OrganizationGroups()
+	var own, wide []string
+	for _, g := range slices.Sorted(maps.Keys(s.Teams)) {
+		if slices.Contains(org, g) {
+			wide = append(wide, g)
+		} else {
+			own = append(own, g)
+		}
+	}
+	return append(own, wide...)
+}
+
+// DecidingGroups are the groups whose members answer team's decisions: its
+// own groups in Teams, or, for a team that has none, the organization-wide
+// groups mapped to it. A team with its own group is never answered by
+// everyone in the organization.
+func (s Serve) DecidingGroups(team string) []string {
+	org := s.OrganizationGroups()
+	var own, wide []string
+	for _, g := range s.TeamGroups() {
+		switch {
+		case s.Teams[g] != team:
+		case slices.Contains(org, g):
+			wide = append(wide, g)
+		default:
+			own = append(own, g)
+		}
+	}
+	if len(own) > 0 {
+		return own
+	}
+	return wide
 }
 
 // Gateway configures the decisions' delivery through klaus-gateway's

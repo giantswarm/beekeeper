@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `beekeeper serve` gives a caller the team of their most specific group in `serve.teams`: a team's own group (`giantswarm-github:giantswarm:team-bumblebee`) before an organization-wide one (`serve.organization`, `serve.organizations`), instead of the alphabetically first. A team's decisions (`--for team:<name>`) are answered by the members of its own groups; an organization-wide group mapped to the team answers only for a team that has no group of its own, so a team with a Dex team group needs no `serve.groups` entry ([giantswarm/giantswarm#38789](https://github.com/giantswarm/giantswarm/issues/38789)).
+
 ### Added
 
 - `secret copy` takes a credential a producer generates as its source, `cmd://<producer>#<path>`: the producer runs in beekeeper's process, its stderr discarded, `#<path>` a dotted key of its JSON stdout. Only beekeeper's own list of producers runs, `az acr token credential generate` (without `--debug` or `--verbose`); any other command is refused, as `compare`, `fingerprint` and the agent sandbox refuse a `cmd://` source. `copy <ref> <file> --dockerconfigjson <registry> --username <user>` writes one value as the password of a `kubernetes.io/dockerconfigjson` Secret. A copy into a SOPS path now checks the path before it reads the value ([#1631](https://github.com/giantswarm/beekeeper/issues/1631)).
