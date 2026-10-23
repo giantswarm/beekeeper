@@ -210,10 +210,14 @@ func (r *recordedAnswer) line(n *state.Note) string {
 	return s
 }
 
-// answerer is who gave the answer: the person a note is for, a team's
-// member the caller, else the guide's person.
+// answerer is who gave the answer: on a central instance the caller's
+// verified email, which outlives the note on its answer.recorded event and
+// in its NOTE ANSWERED line; else the person a note is for, a team's member
+// the caller, else the guide's person.
 func (a *app) answerer(me state.Party, n *state.Note) string {
 	switch {
+	case a.central && me.Person != "":
+		return me.Person
 	case n != nil && n.For != "" && !strings.HasPrefix(n.For, teamPrefix):
 		return n.For
 	case n != nil:

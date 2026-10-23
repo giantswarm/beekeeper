@@ -191,14 +191,22 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	if _, closed := gw.seen(); len(closed) != 1 || closed[0] != "d1 answered: own — until Friday" {
 		t.Fatalf("closed %q", closed)
 	}
+	// The Note is gone; its answer.recorded Event keeps who answered, the
+	// verified email, and the filer's line names it.
+	if st, _ := e.store.Read(); slices.ContainsFunc(st.Notes, func(o state.Note) bool { return o.ID == n }) {
+		t.Fatalf("note #%d still open: %+v", n, st.Notes)
+	}
 	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == answerRecorded })
-	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "bo" via slack, note #`) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
+	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "`+boEmail+`" via slack, note #`) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
 		t.Fatalf("answer.recorded %+v %v", evs, err)
+	}
+	if an, ok := parseAnswered(evs[0]); !ok || an.For != boEmail || an.ID != n {
+		t.Fatalf("answer.recorded read back %+v", an)
 	}
 	if len(f.comments) != 0 {
 		t.Fatalf("posted on GitHub: %q", f.comments)
 	}
-	if got := heard(); len(got) != 1 || got[0] != fmt.Sprintf("NOTE ANSWERED #%d by bo: own — until Friday (on %s)", n, privateThread) {
+	if got := heard(); len(got) != 1 || got[0] != fmt.Sprintf("NOTE ANSWERED #%d by %s: own — until Friday (on %s)", n, boEmail, privateThread) {
 		t.Fatalf("the filer heard %q", got)
 	}
 
@@ -210,7 +218,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	}
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramText: portalLane}, true, "only its addressee")
 	e.expect(t, kim, "note_answer", map[string]any{paramNote: n, paramText: "portal, after the release"}, false, "answered and closed")
-	if got := heard(); len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprintf("NOTE ANSWERED #%d by ", n)) || !strings.Contains(got[0], ": portal, after the release") {
+	if got := heard(); len(got) != 1 || got[0] != fmt.Sprintf("NOTE ANSWERED #%d by kim@example.com: portal, after the release (on %s)", n, privateThread) {
 		t.Fatalf("the filer heard %q", got)
 	}
 
@@ -234,7 +242,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	// An answer after the default replaces it; a second one finds it closed.
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 1}, false, "the answer replaces")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 2}, true, "not open")
-	if got := heard(); len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprintf("NOTE ANSWERED #%d by bo: portal (replaces the default applied: %s)", n, ownLane)) {
+	if got := heard(); len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprintf("NOTE ANSWERED #%d by %s: portal (replaces the default applied: %s)", n, boEmail, ownLane)) {
 		t.Fatalf("the filer heard %q", got)
 	}
 	if _, closed := gw.seen(); len(closed) != 6 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d5 defaulted: "+ownLane || closed[5] != "d4 answered: portal" {
@@ -319,7 +327,7 @@ func TestEnvtestCentralNoteAdd(t *testing.T) {
 	raw, _ := json.Marshal(msgs[0].(map[string]any)["envelope"])
 	var env mailEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil || env.To != localPrefix+"ana-laptop/"+anaAgent ||
-		env.Message.text() != fmt.Sprintf("NOTE ANSWERED #%d by bo: own (on %s)", n, privateThread) {
+		env.Message.text() != fmt.Sprintf("NOTE ANSWERED #%d by %s: own (on %s)", n, boEmail, privateThread) {
 		t.Fatalf("ana's delivery %+v: %v", env, err)
 	}
 }
