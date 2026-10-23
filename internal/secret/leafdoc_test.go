@@ -19,7 +19,7 @@ import (
 // dex-operator's provider credentials: a block scalar holding a YAML
 // document that mixes public configuration with the client's secret.
 const (
-	dexClientSecret = "planted-Dex-Secret-7c1e40a9" //nolint:gosec // a planted test value
+	dexClientSecret = "planted-Dex-Secret-7c1e40a9" //nolint:gosec // a planted test value, gitleaks:allow
 	dexCredentials  = `client-id: dex-public-client
 client-secret: ` + dexClientSecret + `
 # the GitHub organisation
