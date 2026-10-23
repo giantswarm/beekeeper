@@ -527,7 +527,9 @@ func TestEnvtestConcurrentNoteAdds(t *testing.T) {
 	a, b, c := envtestStore(t)
 	namespace(t, c, team)
 	namespace(t, c, pia.Team)
-	const each = 4
+	// Each round of reruns has a winner, so of 2*each writers none loses
+	// more than 2*each-1 races: fewer than the store's attempts.
+	const each = 2
 	var mu sync.Mutex
 	var got []int
 	var wg sync.WaitGroup
