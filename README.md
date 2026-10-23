@@ -2735,8 +2735,8 @@ answers again; what was not published meanwhile is published then. A watch with 
 publish asks every five minutes.
 
 Every watch prints the central instance's feed. It subscribes to `beekeeper://feed` through
-muster as the person and, once the subscription stands and on each update, reads it (muster's
-`get_resource`): each event the person may read prints once, as `CENTRAL <line> [<person> on
+muster as the person and, once the subscription stands and on each update, reads it (`read_feed`
+through muster's `call_tool`): each event the person may read prints once, as `CENTRAL <line> [<person> on
 <host>]` with the actor's person and host. A session's watch keeps the last event's id in its
 mark, so a restarted watch prints what happened while it was down and nothing twice; a watch
 without one starts at the newest event. A subscription that ends on an unreachable central
