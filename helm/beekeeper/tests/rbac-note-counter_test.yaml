@@ -1,0 +1,33 @@
+suite: rbac-note-counter
+templates:
+  - rbac-note-counter.yaml
+tests:
+  - it: lets the ServiceAccount read and update the note counter only, in its own namespace
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              resourceNames: ["beekeeper-note-counter"]
+              verbs: ["get", "update"]
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["create"]
+  - it: binds it to beekeeper's ServiceAccount only
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: RELEASE-NAME
+              namespace: NAMESPACE

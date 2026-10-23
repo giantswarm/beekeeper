@@ -39,6 +39,10 @@ spec:
               value: /etc/beekeeper/config.yaml
             - name: HOME
               value: /tmp
+            - name: BEEKEEPER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             {{- with .Values.database.secretName }}
             - name: BEEKEEPER_DATABASE_URL
               valueFrom:

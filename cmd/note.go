@@ -301,8 +301,14 @@ note.overtaken with the reason, as the watch does.`,
 			var closed []state.Note
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				evs, closed = nil, nil
+				// Two teams' notes of one number (numbered before the
+				// shared note counter): the caller's team's is the one meant.
+				teams := map[int]int{}
+				for _, n := range st.Notes {
+					teams[n.ID]++
+				}
 				st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
-					if slices.Contains(ids, n.ID) {
+					if slices.Contains(ids, n.ID) && (teams[n.ID] == 1 || n.By.Team == me.Team) {
 						closed = append(closed, n)
 						if why != "" {
 							evs = append(evs, overtakenEvent(me, n, why))

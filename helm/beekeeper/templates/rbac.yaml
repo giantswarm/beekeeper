@@ -1,6 +1,7 @@
 # beekeeper's ServiceAccount is the only writer of the beekeeper.giantswarm.io
 # resources and their Events; it reads the namespaces to audit a list in the
-# caller's team namespace. Nothing else.
+# caller's team namespace; in its own namespace it keeps the note counter
+# (rbac-note-counter.yaml). Nothing else.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

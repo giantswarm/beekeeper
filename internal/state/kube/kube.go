@@ -5,8 +5,9 @@
 // Each record kind of the state document is a kind of its own: the grants
 // and the release time of an installation are its Environment, a lane's
 // merges its MergeLane, a hold a Hold, a note a Note in the filer's team
-// namespace, an agent a RosterEntry in its team's namespace. Concurrency is
-// per object: an update writes the one object it changes, or the Notes it
+// namespace, an agent a RosterEntry in its team's namespace, the last note
+// number handed out the note counter, a ConfigMap of serve's own namespace.
+// Concurrency is per object: an update writes the one object it changes, or the Notes it
 // changes one by one, under the resourceVersion it read, so updates of
 // different installations never contend, and a lost race reruns the update
 // on what won it.
@@ -57,6 +58,8 @@ type Store struct {
 	timeout time.Duration
 	// attempts bounds the reruns of one Update after lost races.
 	attempts int
+	// home is the namespace of the store's own objects: the note counter.
+	home string
 
 	// idMu guards lastID, the id of the last Event recorded or found: ids
 	// only grow, across restarts too (the first record reads the Events'
@@ -98,7 +101,20 @@ func Scheme() (*runtime.Scheme, error) {
 
 // New returns the store over c, whose scheme knows beekeeper's kinds.
 func New(c client.Client) *Store {
-	return &Store{c: c, timeout: 30 * time.Second, attempts: 5}
+	return &Store{c: c, timeout: 30 * time.Second, attempts: 5, home: DefaultNamespace}
+}
+
+// DefaultNamespace is the namespace of the store's own objects unless
+// InNamespace names another: the chart's.
+const DefaultNamespace = "beekeeper"
+
+// InNamespace keeps the store's own objects (the note counter) in ns, serve's
+// namespace; an empty ns keeps DefaultNamespace.
+func (s *Store) InNamespace(ns string) *Store {
+	if ns != "" {
+		s.home = ns
+	}
+	return s
 }
 
 // NewForConfig returns the store over the API server cfg names.
@@ -142,6 +158,11 @@ func (s *Store) Peek() (*state.State, error) { return s.Read() }
 // written before it included. An update that changes more than one object
 // other than Notes, or anything without a home in the resources, is refused
 // with nothing written.
+//
+// A note number above the last one handed out (State.NextNote) advances the
+// note counter first, under the resourceVersion read: of two concurrent
+// note adds one reruns and takes the next number, and a closed note's
+// number, any team's, is never handed out again.
 func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
@@ -163,18 +184,30 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 			return err
 		}
 		changes := snap.diff(want)
+		issue := want.issued > snap.next()
 		switch {
-		case len(changes) == 0:
-			if len(events) > 0 {
-				return fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
-			}
+		case len(changes) == 0 && len(events) > 0:
+			return fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
+		case len(changes) == 0 && !issue:
 			return nil
-		case len(changes) > 1 && !allNotes(changes):
-			names := make([]string, len(changes))
-			for i, c := range changes {
-				names[i] = c.ref()
+		case (len(changes) > 1 || issue) && !allNotes(changes):
+			var names []string
+			if issue {
+				names = append(names, "the note counter")
+			}
+			for _, c := range changes {
+				names = append(names, c.ref())
 			}
 			return fmt.Errorf("the update changes %s; the Kubernetes store writes one object per update, or several Notes", strings.Join(names, ", "))
+		}
+		if issue {
+			err := s.issue(ctx, snap.counter, want.issued)
+			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+				continue // another writer took the number: the rerun takes the next
+			}
+			if err != nil {
+				return fmt.Errorf("the note counter: %w", err)
+			}
 		}
 		var written []client.Object
 		for _, c := range changes {
@@ -198,6 +231,23 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		return s.record(ctx, written, events, true)
 	}
 	return fmt.Errorf("the update lost %d races in a row", s.attempts)
+}
+
+// issue makes n the last note number handed out: the counter's create, or
+// its update under the resourceVersion read.
+func (s *Store) issue(ctx context.Context, counter *corev1.ConfigMap, n int) error {
+	if counter == nil {
+		return s.c.Create(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: s.home, Name: noteCounter, Labels: map[string]string{managedBy: beekeeper}},
+			Data:       map[string]string{issuedKey: strconv.Itoa(n)},
+		})
+	}
+	counter = counter.DeepCopy()
+	if counter.Data == nil {
+		counter.Data = map[string]string{}
+	}
+	counter.Data[issuedKey] = strconv.Itoa(n)
+	return s.c.Update(ctx, counter)
 }
 
 // allNotes says whether every change is a Note's: the one batch the store
@@ -532,6 +582,10 @@ const (
 	noteDefaulted = "defaulted"
 	// noteOpen is the state of a Note open for its answer.
 	noteOpen = "open"
+	// noteCounter is the ConfigMap of the last note number handed out,
+	// under issuedKey.
+	noteCounter = "beekeeper-note-counter"
+	issuedKey   = "issued"
 )
 
 // noteRef is the note number an event's detail names first (#12).
@@ -631,6 +685,10 @@ type snapshot struct {
 	holds  map[string]*v1alpha1.Hold
 	notes  map[string]*v1alpha1.Note
 	roster map[string]*v1alpha1.RosterEntry
+	// counter is the note counter, nil before the first number it handed
+	// out; issued is the last number handed out.
+	counter *corev1.ConfigMap
+	issued  int
 }
 
 func (s *Store) load(ctx context.Context) (*snapshot, error) {
@@ -664,14 +722,54 @@ func (s *Store) load(ctx context.Context) (*snapshot, error) {
 	for i := range roster.Items {
 		snap.roster[key(&roster.Items[i])] = &roster.Items[i]
 	}
-	return snap, nil
+	return snap, s.loadCounter(ctx, snap)
+}
+
+// loadCounter reads the note counter. Before its first number the Notes'
+// Events stand in for it: a number whose note closed since stays handed out.
+func (s *Store) loadCounter(ctx context.Context, snap *snapshot) error {
+	counter := &corev1.ConfigMap{}
+	err := s.c.Get(ctx, client.ObjectKey{Namespace: s.home, Name: noteCounter}, counter)
+	if err == nil {
+		snap.counter = counter
+		if snap.issued, err = strconv.Atoi(counter.Data[issuedKey]); err != nil {
+			return fmt.Errorf("the note counter %s/%s: %s: %w", s.home, noteCounter, issuedKey, err)
+		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("the note counter %s/%s: %w", s.home, noteCounter, err)
+	}
+	events := &corev1.EventList{}
+	if err := s.c.List(ctx, events, client.MatchingLabels{managedBy: beekeeper}); err != nil {
+		return err
+	}
+	for _, ev := range events.Items {
+		if m := noteName.FindStringSubmatch(ev.InvolvedObject.Name); ev.InvolvedObject.Kind == "Note" && m != nil {
+			id, _ := strconv.Atoi(m[1])
+			snap.issued = max(snap.issued, id)
+		}
+	}
+	return nil
+}
+
+var noteName = regexp.MustCompile(`^note-(\d+)$`)
+
+// next is the last note number handed out: the counter's, or a higher
+// note's of the snapshot.
+func (snap *snapshot) next() int {
+	n := snap.issued
+	for _, note := range snap.notes {
+		n = max(n, note.Spec.ID)
+	}
+	return n
 }
 
 func key(o client.Object) string { return o.GetNamespace() + "/" + o.GetName() }
 
 // state renders the snapshot as the state document, in a canonical order.
 func (snap *snapshot) state() *state.State {
-	st := &state.State{}
+	st := &state.State{NextNote: snap.next()}
 	for _, name := range sortedKeys(snap.envs) {
 		env := snap.envs[name]
 		for _, g := range env.Status.Queue {
@@ -704,6 +802,9 @@ func (snap *snapshot) state() *state.State {
 	}
 	for _, k := range sortedKeys(snap.notes) {
 		n := snap.notes[k]
+		if n.Status.State == "" {
+			continue // created, its status (filer, state) not yet written: the creator's
+		}
 		note := state.Note{ID: n.Spec.ID, For: n.Spec.For, Text: n.Spec.Text, Due: timeOf(n.Spec.Due),
 			Default: n.Spec.Default, By: party(n.Status.By), At: n.Status.At.Time, Fired: timeOf(n.Status.Fired),
 			Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
@@ -713,7 +814,6 @@ func (snap *snapshot) state() *state.State {
 		} else {
 			st.Notes = append(st.Notes, note)
 		}
-		st.NextNote = max(st.NextNote, n.Spec.ID)
 	}
 	for _, k := range sortedKeys(snap.roster) {
 		st.Agents = append(st.Agents, agentOf(snap.roster[k]))
@@ -742,7 +842,8 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 	want := &snapshot{
 		envs: map[string]*v1alpha1.Environment{}, lanes: map[string]*v1alpha1.MergeLane{},
 		holds: map[string]*v1alpha1.Hold{}, notes: map[string]*v1alpha1.Note{},
-		roster: map[string]*v1alpha1.RosterEntry{},
+		roster:  map[string]*v1alpha1.RosterEntry{},
+		counter: snap.counter, issued: max(snap.next(), st.NextNote),
 	}
 	for name, env := range snap.envs {
 		env = env.DeepCopy()
@@ -819,6 +920,11 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		want.holds[name] = hold
 	}
 
+	for k, cur := range snap.notes {
+		if cur.Status.State == "" {
+			want.notes[k] = cur // awaiting its status, which its creator writes
+		}
+	}
 	defaulted := len(st.Notes)
 	for i, n := range slices.Concat(st.Notes, st.Defaulted) {
 		if n.By.Team == "" {
@@ -843,6 +949,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			note.Status.State = noteOpen
 		}
 		want.notes[k] = note
+		want.issued = max(want.issued, n.ID)
 	}
 
 	for _, a := range st.Agents {
@@ -889,7 +996,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 func homeless(had, kept *state.State) error {
 	had = clone(had)
 	canonical(had)
-	// The next note number follows from the notes present.
+	// The note counter only grows: a number lowered keeps the counter's.
 	had.NextNote = kept.NextNote
 	a, err := members(had)
 	if err != nil {
