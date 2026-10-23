@@ -99,23 +99,39 @@ func (g *gateway) close(ctx context.Context, id, outcome, text string) error {
 	return g.do(ctx, "/decisions/"+url.PathEscape(id)+"/close", body, nil)
 }
 
-// do posts body as JSON with the ServiceAccount token and decodes the
-// answer into out; a status other than 2xx is an error carrying the
-// gateway's reason.
+// member reports whether the person with email is in the Slack user group
+// whose handle is group.
+func (g *gateway) member(ctx context.Context, group, email string) (bool, error) {
+	var m struct {
+		Member bool `json:"member"`
+	}
+	err := g.do(ctx, "/groups/"+url.PathEscape(group)+"/members/"+url.PathEscape(email), nil, &m)
+	return m.Member, err
+}
+
+// do posts body as JSON, or without a body GETs path, with the
+// ServiceAccount token and decodes the answer into out; a status other than
+// 2xx is an error carrying the gateway's reason.
 func (g *gateway) do(ctx context.Context, path string, body, out any) error {
 	token, err := os.ReadFile(g.cfg.TokenFile) //nolint:gosec // the configured token file
 	if err != nil {
 		return fmt.Errorf("klaus-gateway token: %w", err)
 	}
-	b, err := json.Marshal(body)
+	method, payload := http.MethodGet, io.Reader(nil)
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		method, payload = http.MethodPost, bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(g.cfg.URL, "/")+path, payload) //nolint:gosec // the configured klaus-gateway
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.URL, "/")+path, bytes.NewReader(b)) //nolint:gosec // the configured klaus-gateway
-	if err != nil {
-		return err
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	resp, err := g.http.Do(req) //nolint:gosec // the configured klaus-gateway
 	if err != nil {
@@ -169,6 +185,21 @@ func personEmail(cfg config.Serve, name string) string {
 		return name
 	}
 	return ""
+}
+
+// decides reports whether who is n's addressee. A team with a Slack group
+// (serve.groups) is its group's members, as klaus-gateway answers; any other
+// addressee is decidesNote's.
+func (s *server) decides(ctx context.Context, n *state.Note, who identity.Caller) (bool, error) {
+	if t, ok := strings.CutPrefix(n.For, teamPrefix); ok {
+		if group, slack := s.cfg.Serve.Groups[t]; slack {
+			if s.gw == nil {
+				return false, fmt.Errorf("team %s's members are its Slack group @%s, and serve has no klaus-gateway to ask (serve.gateway.url)", t, group)
+			}
+			return s.gw.member(ctx, group, who.Email)
+		}
+	}
+	return decidesNote(s.cfg.Serve, n, who), nil
 }
 
 // decidesNote reports whether who is n's addressee: the person it names, or a

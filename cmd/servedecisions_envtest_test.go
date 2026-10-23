@@ -46,6 +46,8 @@ type fakeGateway struct {
 	opened []conversation
 	said   []string
 	gone   map[string]bool
+	// groups maps a Slack user group's handle to its members' emails.
+	groups map[string][]string
 }
 
 func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +56,14 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.tokens = append(g.tokens, r.Header.Get("Authorization"))
 	body, _ := io.ReadAll(r.Body)
 	switch {
+	case strings.HasPrefix(r.URL.Path, "/groups/") && r.Method == http.MethodGet:
+		handle, email, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/groups/"), "/members/")
+		members, ok := g.groups[handle]
+		if !ok {
+			http.Error(w, "no group @"+handle+" in the workspace", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"member": slices.Contains(members, email)})
 	case r.URL.Path == "/decisions" && g.refuses:
 		http.Error(w, "person: no Slack user has this email", http.StatusUnprocessableEntity)
 	case r.URL.Path == "/decisions":
@@ -330,4 +340,26 @@ func TestEnvtestCentralNoteAdd(t *testing.T) {
 		env.Message.text() != fmt.Sprintf("NOTE ANSWERED #%d by %s: own (on %s)", n, boEmail, privateThread) {
 		t.Fatalf("ana's delivery %+v: %v", env, err)
 	}
+}
+
+// A team whose Dex group others share names its Slack group: only the
+// group's members answer its decisions, a holder of the Dex group alone is
+// refused, and a group Slack does not know refuses everyone.
+func TestEnvtestServeDecisionsTeamGroup(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{groups: map[string][]string{"team-" + ourTeam: {"ana@example.com"}}}
+	decisionsVia(t, e, gw)
+	stubAnswerGH(t, &answerGH{})
+	e.srv.cfg.Serve.Groups = map[string]string{ourTeam: "team-" + ourTeam}
+
+	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
+	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
+	args := decisionFor(museLane, "team:"+ourTeam)
+	n, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
+	e.expect(t, kim, "note_answer", map[string]any{paramNote: int(n), paramText: portalLane}, true, "only its addressee")
+	e.expect(t, ana, "note_answer", map[string]any{paramNote: int(n), paramText: ownLane}, false, "answered and closed")
+
+	e.srv.cfg.Serve.Groups[ourTeam] = "team-gone"
+	n, _ = e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
+	e.expect(t, ana, "note_answer", map[string]any{paramNote: int(n), paramText: ownLane}, true, "could not be checked")
 }

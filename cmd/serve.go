@@ -66,8 +66,9 @@ Slack message through klaus-gateway (serve.gateway, POST /decisions, with
 the projected ServiceAccount token): a direct message, or the team's
 channel. A click, the modal or a thread reply calls note_answer through
 muster as the person who answered; only the addressee answers (the
-person's email, or a member of the team's Dex group in serve.teams; the
-first answer closes a team's). A decision klaus-gateway does not take is
+person's email, or a member of the team: of its Slack user group in
+serve.groups, as klaus-gateway answers, else of its Dex group in serve.teams;
+the first answer closes a team's). A decision klaus-gateway does not take is
 withdrawn at once. Its message is closed on every path: answered, withdrawn
 (note_done) or at its due time, when serve closes it with its default
 (note.defaulted). The agent that filed it (note_add's agent and host) is

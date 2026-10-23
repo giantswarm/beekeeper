@@ -2599,6 +2599,10 @@
                         }
                     }
                 },
+                "groups": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "issuer": {
                     "type": "string"
                 },

@@ -812,7 +812,11 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	n, _ := answerable(st, id, c.app.now)
 	if n != nil {
 		c.concern = kube.NoteObject(n.By.Team, id)
-		if !decidesNote(c.s.cfg.Serve, n, c.who) {
+		decides, err := c.s.decides(c.ctx, n, c.who)
+		if err != nil {
+			return nil, fmt.Errorf("note #%d is for %s, and who answers it could not be checked: %w", id, n.For, err)
+		}
+		if !decides {
 			return nil, refused("note #%d is for %s: only its addressee answers it", id, cmp.Or(n.For, "nobody named"))
 		}
 	}
