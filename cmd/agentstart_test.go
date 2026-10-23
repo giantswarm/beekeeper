@@ -432,6 +432,105 @@ func TestShowBrieflyHeldByFocus(t *testing.T) {
 	}
 }
 
+// A show sends the desktop's window back to the session it showed before,
+// unless that is a relieved role run's or a hand-over's predecessor's: the
+// desktop warms the CLI of the session its window shows, which the watch
+// stops as revived, so a window sent back there would revive it on every
+// start, reopen and wake (the doctor's archive asks among them).
+func TestShowBrieflyLeavesASupersededSession(t *testing.T) {
+	taken := time.Now().Add(-time.Hour)
+	guide38 := state.Party{Session: "guide-38", HostSession: "local_guide-38", Name: guideRole.runName(38)}
+	guide39 := state.Party{Session: "guide-39", HostSession: "local_guide-39", Name: guideRole.runName(39)}
+	handedOff := state.Party{Session: "ws-old", HostSession: "local_ws-old", Name: "WS 1 workspaces"}
+	followUp := state.Party{Session: "ws-new", HostSession: "local_ws-new", Name: "WS 1 workspaces"}
+	person := state.Party{Session: "own-1", HostSession: "local_own-1", Name: "a session of its own"}
+	for _, tc := range []struct {
+		name, prev string
+		back       bool
+	}{
+		{"a relieved guide run", guide38.HostSession, false},
+		{"a hand-over's predecessor", handedOff.HostSession, false},
+		{"the role's holder", guide39.HostSession, true},
+		{"a session beekeeper did not start", person.HostSession, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.cfg.Claude.DesktopLog = filepath.Join(t.TempDir(), "main.log")
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Starts = []state.Start{
+					{Party: guide38, At: taken.Add(-time.Hour)}, {Party: guide39, At: taken.Add(-time.Minute)},
+					{Party: handedOff, At: taken.Add(-time.Hour)}, {Party: followUp, At: taken},
+				}
+				st.Agents = []state.Agent{{Party: followUp, Task: "workspaces"}}
+				guideRole.set(st, state.Role{
+					Holder:   &state.Supervisor{Party: guide39, Since: taken},
+					Relieved: []state.Relief{{Party: guide38, By: guide39, At: taken.Add(-time.Minute), Taken: taken}},
+				})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			saved := desktopWindowActive
+			t.Cleanup(func() { desktopWindowActive = saved })
+			desktopWindowActive = func(context.Context) (bool, error) { return false, nil }
+			plat.Machine = tableMachine{plat.Machine}
+			o := &focusOpener{log: a.cfg.Claude.DesktopLog}
+			plat.Opener = o
+			o.focus(t, tc.prev)
+			const host = "local_new-worker"
+			prev, err := a.showBriefly(t.Context(), desk{quiet: -1}, resumeURL("new-worker"), host, "", true, 0, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{resumeURL("new-worker")}
+			if tc.back {
+				want = append(want, continueURL(tc.prev))
+			}
+			if !slices.Equal(o.opened, want) {
+				t.Errorf("opened %v, want %v", o.opened, want)
+			}
+			if back := prev != ""; back != tc.back {
+				t.Errorf("showBriefly went back to %q, want back %v", prev, tc.back)
+			}
+		})
+	}
+}
+
+// focusOpener is a running desktop whose window shows the session of each
+// link it opens, as its log's focus line says.
+type focusOpener struct {
+	recordingOpener
+	log string
+}
+
+func (o *focusOpener) Open(ctx context.Context, url string, running bool) error {
+	_, id, _ := strings.Cut(url, "session=")
+	if !strings.HasPrefix(id, "local_") {
+		id = "local_" + id
+	}
+	if err := o.write(id); err != nil {
+		return err
+	}
+	return o.recordingOpener.Open(ctx, url, running)
+}
+
+func (o *focusOpener) focus(t *testing.T, host string) {
+	t.Helper()
+	if err := o.write(host); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (o *focusOpener) write(host string) error {
+	f, err := os.OpenFile(filepath.Clean(o.log), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close() //nolint:errcheck // test
+	_, err = fmt.Fprintf(f, "x [CCD] LocalSessions.setFocusedSession: sessionId=%s\n", host)
+	return err
+}
+
 // A reopen right after its start's import waits for the start's switch back
 // before it records where to return to.
 func TestAwaitFocusOff(t *testing.T) {

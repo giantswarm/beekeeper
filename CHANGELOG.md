@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A relieved role run's or a hand-over predecessor's CLI no longer comes back after every start, reopen, wake or doctor's archive request: the show that imports or warms a session sends the desktop's window back to the session it showed before only when that session's work has not ended. The desktop warms the CLI of the session its window shows, so a window left on "Guide run 38" was sent back there after each show, the desktop warmed its CLI again, and the watch stopped it as REVIVED, several times a minute while sessions started ([#1611](https://github.com/giantswarm/beekeeper/issues/1611)).
 - `beekeeper watch` reads the central feed through the new tool `read_feed` (muster's `call_tool`, with `after`, the last event id it printed): muster's `get_resource` reads no resource of a server reached with the caller's own token, so on gazelle the feed's subscription stood and its read failed, `CENTRAL UNREACHABLE … server beekeeper has no active client` ([#360](https://github.com/giantswarm/beekeeper/issues/360)).
 
 ### Added
