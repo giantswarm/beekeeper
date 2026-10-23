@@ -184,8 +184,11 @@ type Role struct {
 	// Run is the highest run of the role numbered: "<Role> run <Run>".
 	Run int `json:"run,omitempty"`
 	// Asking is the note the guide asks its person now (beekeeper guide
-	// next): served again until it is answered or done.
-	Asking int `json:"asking,omitempty"`
+	// next): served again until it is answered or done. AskingFrom is the
+	// muster context of the central instance that holds it, empty for the
+	// machine's own.
+	Asking     int    `json:"asking,omitempty"`
+	AskingFrom string `json:"askingFrom,omitempty"`
 
 	rest rest
 }
@@ -200,6 +203,15 @@ func (st *State) SetSupervisorRole(r Role) {
 	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue, st.SupervisorRun = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue, r.Run
 }
 
+// LocalAsking is the machine's own note the guide asks now, 0 when it
+// asks none or a central instance's.
+func (r Role) LocalAsking() int {
+	if r.AskingFrom != "" {
+		return 0
+	}
+	return r.Asking
+}
+
 // GuideRole is the guide's record.
 func (st *State) GuideRole() Role {
 	if st.Guide == nil {
@@ -210,7 +222,7 @@ func (st *State) GuideRole() Role {
 
 // SetGuideRole stores the guide's record, none when it is empty.
 func (st *State) SetGuideRole(r Role) {
-	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 && r.Run == 0 && r.Asking == 0 {
+	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 && r.Run == 0 && r.Asking == 0 && r.AskingFrom == "" {
 		st.Guide = nil
 		return
 	}
@@ -459,6 +471,10 @@ type Note struct {
 	// back. nil and empty for a note that holds nothing.
 	Held     *ItemHold  `json:"held,omitempty"`
 	AlsoHeld []ItemHold `json:"alsoHeld,omitempty"`
+	// Central is the muster context of the central instance that holds
+	// the note, as a machine lists it beside its own; empty for the
+	// machine's own note, and never stored.
+	Central string `json:"central,omitempty"`
 
 	rest rest
 }

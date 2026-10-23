@@ -44,7 +44,7 @@ func serveNext(t *testing.T, a *app) (int, string, error) {
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		var err error
-		it, lines, evs, err = a.guideNext(st, nil, me)
+		it, lines, evs, err = a.guideNext(st, nil, me, nil)
 		return evs, err
 	})
 	if it == nil {
