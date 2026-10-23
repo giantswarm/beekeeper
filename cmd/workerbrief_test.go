@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,6 +14,20 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/plugin"
 )
+
+// The worker rules name the started session's scratchpad by absolute path,
+// and a cd to a variable that stops on an empty one.
+func TestWorkerPromptNamesTheScratchpad(t *testing.T) {
+	t.Setenv("TMPDIR", "/tmp")
+	p := fillScratchpad(workerPrompt(taskPrompt("BK 1 thing")), "/home/u/projects/klaus-lab", "8bf5cba8-50ec-4608-b1bc-a266c56e1e6a")
+	pad := filepath.Join("/tmp", "claude-"+strconv.Itoa(os.Getuid()), "-home-u-projects-klaus-lab", "8bf5cba8-50ec-4608-b1bc-a266c56e1e6a", "scratchpad")
+	if !strings.Contains(p, "Scratch goes in `"+pad+"`") || strings.Contains(p, scratchpadMark) {
+		t.Errorf("the prompt does not name the scratchpad %s:\n%s", pad, p)
+	}
+	if !strings.Contains(p, `cd "${dir:?}"`) {
+		t.Error(`the rules do not say cd "${dir:?}"`)
+	}
+}
 
 // A worker's first prompt is the shipped rules, then its task; a hand-over
 // passes on the task alone and puts the rules ahead of it again.

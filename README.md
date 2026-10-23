@@ -298,6 +298,22 @@ beekeeper lease release model-server
   audio and images), and the agentlab tests in `ollama.labTests`. `ollama ps`,
   `ollama stop`, `/api/ps`, `lemonade list|unload` and `/api/v1/health` pass.
 
+## The person's folders
+
+`hooks.personFolders` names the person's folders (`~/` and globs: `[~, ~/projects, ~/projects/*]`;
+unset, the guard is off). The PreToolUse hook refuses a Write, Edit, MultiEdit or NotebookEdit, and a
+Bash command's output redirection (`>`, `>|`, `>>`, `&>`, `n>`) or `tee` target, that creates a file
+directly in one of them (an existing dotfile there is written in place), or writes a file in the main
+working tree of a git checkout that sits directly in one which git neither tracks nor ignores: a draft
+there overwrites the person's own untracked file of the same name. A linked worktree, a tracked or
+ignored file and a file under a dot-directory (`.config/`, `.claude/`) pass; the path counts as written,
+not through its links. Redirection targets are resolved against the command's `cd`s (a `cd` after `||`
+may not run, so both ways count), its assignments, `$PWD` and the environment; an unset `$NAME` is empty,
+as the shell takes it (`cd "$TMPDIR"` with `TMPDIR` unset stays in the checkout), and a command
+substitution or an expansion with an operator (`${dir:?}`) is unknown and passes. The refusal names the
+session's scratchpad by absolute path and `~/.local/state/<program>/`. `agents start` names the started
+session's scratchpad in the worker rules.
+
 ## Kube contexts and production writes
 
 With `kube.production` set, the machine kubeconfig (`~/.kube/config`) keeps no current context: a

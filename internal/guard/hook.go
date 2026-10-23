@@ -222,6 +222,11 @@ type Hook struct {
 	// GraphQL is the GraphQL budget as beekeeper last read it, for a
 	// board-read refusal; nil or "", unknown.
 	GraphQL func() string
+	// PersonFolders are the person's folders (hooks.personFolders, absolute
+	// globs): no file is created directly in one, nor an untracked one in the
+	// main working tree of a checkout that sits directly in one (folders.go);
+	// empty, the guard is off.
+	PersonFolders []string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
@@ -318,6 +323,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := h.secretFileRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.folderRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if w := h.Upstream.connectorWrite(ev.ToolName, ev.ToolInput); w != nil {
