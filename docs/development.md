@@ -9,6 +9,15 @@ A plain build reports the version Go derives from the checkout's tag (`v0.2.0+di
 binary `dev`, which `self-update` refuses. To try `self-update` against the latest release, stamp
 an older version: `go build -ldflags "-X github.com/giantswarm/beekeeper/pkg/project.version=0.0.1" .`
 
+A merge to `main` cuts a release candidate, `vX.Y.Z-rc.N` (a GitHub pre-release with signed assets);
+`devctl release promote giantswarm/beekeeper` makes the stable release, and `self-update` installs
+stable releases only. To run a candidate before its promotion, build it from its tag:
+`go install github.com/giantswarm/beekeeper@<tag>` is refused because `go.mod` carries `replace`
+directives, so check the tag out (`git worktree add <dir> <tag>`) and run `go install .` there; the
+binary reports the tag's version. A binary installed by hand gets none of `self-update`'s restarts:
+restart the standby watch and the sandbox broker onto it yourself
+(`systemctl --user restart beekeeper-notify.service beekeeper-sandbox.service`).
+
 CI (`architect/go-build`) runs `make test` and cross-compiles for Linux, macOS and Windows, so
 every package has to compile everywhere. Everything beekeeper reads or starts on the machine goes
 through `internal/platform`: its `Machine`, `Launcher`, `Capper`, `Opener` and `Notifier`
