@@ -35,7 +35,7 @@ func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 	a, tools, repo := secretApp(t)
 	prod := fakeProducer(t, false)
 	file := filepath.Join(repo, "pull.sops.yaml")
-	out, err := runSecret(a, captureOp, file, "--dockerconfigjson", "registry.example.io", "--username", "pull-token",
+	out, err := runSecret(a, captureOp, file, dockerFlag, testRegistry, usernameFlag, "pull-token",
 		nameFlag, "pull", namespaceFlag, "flux-system", vaultFlag, "op://Shared/pull/password", "--jq", ".passwords[0].value", "--", prod, "--password1")
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 	}{
 		{[]string{captureOp, file + "#stringData.x", "--", fakeProducer(t, true)}, ExitRefused},
 		{[]string{captureOp, file + "#stringData.x", "--jq", ".passwords", "--", prod}, ExitRefused},
-		{[]string{captureOp, file, "--dockerconfigjson", "registry.example.io", "--", prod}, ExitUsage},
+		{[]string{captureOp, file, dockerFlag, testRegistry, "--", prod}, ExitUsage},
 		{[]string{captureOp, file + "#stringData.x", prod}, ExitUsage},
 	} {
 		a.out = &bytes.Buffer{}
@@ -98,7 +98,7 @@ func TestSecretCaptureHelp(t *testing.T) {
 	}
 	a.out = &bytes.Buffer{}
 	out, err = runSecret(a, captureOp, "--help")
-	for _, want := range []string{"--jq", "--dockerconfigjson", "--username", vaultFlag, "--encode", "kubernetes.io/dockerconfigjson", "secret.env"} {
+	for _, want := range []string{"--jq", dockerFlag, usernameFlag, vaultFlag, "--encode", "kubernetes.io/dockerconfigjson", "secret.env"} {
 		if err != nil || !strings.Contains(out, want) {
 			t.Errorf("capture --help lacks %q: %v", want, err)
 		}

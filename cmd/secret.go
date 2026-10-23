@@ -291,6 +291,9 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if inSandbox && dash >= 0 {
 		return refused("the agent sandbox runs no consumer or producer on the host: copy, set or capture with -- <command> runs outside the sandbox only")
 	}
+	if inSandbox && slices.ContainsFunc(args, func(s string) bool { return strings.HasPrefix(s, secret.CmdRef) }) {
+		return refused("the agent sandbox runs no producer on the host: copy from cmd:// runs outside the sandbox only")
+	}
 	if dash < 0 {
 		dash = len(args)
 	}
@@ -355,11 +358,11 @@ func vaultExit(err error) error {
 }
 
 func (a *app) secretCopyCmd() *cobra.Command {
-	var name, namespace, toSecret, encode, gitUser string
+	var name, namespace, toSecret, encode, gitUser, registry, username string
 	var gitAskpass bool
 	var in secret.Stdin
 	c := &cobra.Command{
-		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --git-askpass -- git … | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
+		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --git-askpass -- git … | copy <from> --to-secret <context>/<namespace>/<name>/<key> | copy <from> <file> --dockerconfigjson <registry> --username <user>",
 		Short: "Copy a SOPS file, values into a new SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
 		Long: `copy <src.sops.yaml> <dst.sops.yaml> writes a new SOPS file with the
 values of src, encrypted under dst's creation rules; --name and --namespace
@@ -404,6 +407,26 @@ path that reaches nothing fails in one line naming it, never a value:
 
   beekeeper secret copy 'file://<codex home>/auth.json#tokens.access_token' \
     --to-secret kind-<lab>/<namespace>/<name>/<key>
+
+The source may also be a credential an allowed producer generates,
+cmd://<producer>#<path>: beekeeper's own list, az acr token credential
+generate alone; any other command, and --debug or --verbose, is refused
+before it runs. The producer runs in beekeeper's process without the
+variables that carry a secret (secret.env), its stderr discarded, a
+failure naming its exit code alone; #<path> is a dotted key of its JSON or
+YAML stdout, none the whole stdout. compare and fingerprint refuse it, a
+run generating a new credential each time.
+
+copy <ref> <file> --dockerconfigjson <registry> --username <user> writes
+one value as the password of a kubernetes.io/dockerconfigjson Secret, its
+stringData..dockerconfigjson the registry's auths entry; --name and
+--namespace start an absent file as that Secret. Every check runs before
+the value is read:
+
+  beekeeper secret copy 'cmd://az acr token credential generate --registry <r> \
+    --name <token> --password1 -o json#passwords.0.value' pull-secret.enc.yaml \
+    --dockerconfigjson <r>.azurecr.io --username <token> \
+    --name <name> --namespace flux-giantswarm
 
 copy <ref>=<path> [<ref>=<path>…] <new-file> writes several values, each
 <ref> one value (op://<vault>/<item>/<field>, k8s://…, file#path), into a new SOPS
@@ -514,7 +537,11 @@ failing or answering nothing within a minute) exits 78.`,
 			if err != nil {
 				return usageErr("%v", err)
 			}
-			if cmd.ArgsLenAtDash() < 0 && !cmd.Flags().Changed("to-secret") {
+			docker := registry != "" || username != ""
+			if docker && (cmd.ArgsLenAtDash() >= 0 || cmd.Flags().Changed("to-secret") || len(args) != 2) {
+				return usageErr("--dockerconfigjson writes a Secret's .dockerconfigjson in a SOPS file: copy <ref> <file> --dockerconfigjson <registry> --username <user>")
+			}
+			if cmd.ArgsLenAtDash() < 0 && !cmd.Flags().Changed("to-secret") && !docker {
 				if pairs, err := copyPairs(args); err == nil {
 					if !enc.IsZero() {
 						return usageErr("--encode encodes one value: copy <ref> <file#path>, copy <ref> -- <consumer…> or copy <ref> --to-secret …")
@@ -527,7 +554,7 @@ failing or answering nothing within a minute) exits 78.`,
 				return err
 			}
 			if !enc.IsZero() && !src[0].Single() {
-				return usageErr("--encode encodes one value: file#path, op://…, k8s://… or file://…#path, not a whole file")
+				return usageErr("--encode encodes one value: file#path, op://…, k8s://…, file://…#path or cmd://…, not a whole file")
 			}
 			if err := a.checkKubeSources(src); err != nil {
 				return err
@@ -539,8 +566,11 @@ failing or answering nothing within a minute) exits 78.`,
 			if err != nil {
 				return err
 			}
-			ops.Encode = enc
+			ops.Encode, ops.Produce = enc, true
 			ctx := cmd.Context()
+			if docker {
+				return a.secretCopyDocker(ctx, ops, src[0], args[1], secret.DockerConfig{Registry: registry, Username: username}, name, namespace)
+			}
 			if cmd.Flags().Changed("to-secret") {
 				if name != "" || namespace != "" {
 					return usageErr("--name and --namespace rewrite a copied file, not a Secret's key")
@@ -615,6 +645,8 @@ failing or answering nothing within a minute) exits 78.`,
 	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	c.Flags().BoolVar(&gitAskpass, "git-askpass", false, "run git with the value as the password its askpass helper answers: copy <ref> --git-askpass -- git …")
 	c.Flags().StringVar(&gitUser, "git-user", secret.GitUser, "the user name the askpass helper answers")
+	c.Flags().StringVar(&registry, "dockerconfigjson", "", "write the value as the password of a kubernetes.io/dockerconfigjson Secret for this registry")
+	c.Flags().StringVar(&username, "username", "", "the user of --dockerconfigjson")
 	stdinFlags(c, &in)
 	encodeFlag(c, &encode)
 	return c
@@ -666,6 +698,7 @@ func (a *app) secretCopyValues(ctx context.Context, pairs []secret.Pair, file, n
 	if err != nil {
 		return err
 	}
+	ops.Produce = true
 	keys, err := ops.CopyValues(ctx, pairs, file, nw)
 	if err := a.secretLog(err, "copy", "%s to %s: %s", strings.Join(from, " and "), file, outcome(err, fmt.Sprintf("%d keys", len(keys)))); err != nil {
 		return err
@@ -676,6 +709,40 @@ func (a *app) secretCopyValues(ctx context.Context, pairs []secret.Pair, file, n
 		fmt.Fprintf(&b, "  %-58s %d bytes\n", k.Name, k.Bytes)
 	}
 	return a.secretPrint(keys, b.String())
+}
+
+// secretCopyDocker is copy --dockerconfigjson: one value as the password
+// of a kubernetes.io/dockerconfigjson Secret in a SOPS file.
+func (a *app) secretCopyDocker(ctx context.Context, ops *secret.Ops, src secret.Ref, file string, d secret.DockerConfig, name, namespace string) error {
+	if d.Registry == "" || d.Username == "" {
+		return usageErr("--dockerconfigjson and --username shape a registry's pull credential together")
+	}
+	dst, err := parseRefs(file)
+	if err != nil {
+		return err
+	}
+	if dst[0].Op != "" || dst[0].IsSource() || dst[0].Path != "" {
+		return usageErr("%s: --dockerconfigjson writes the Secret's .dockerconfigjson, name the SOPS file alone", dst[0])
+	}
+	var nw *secret.NewSecret
+	if name != "" || namespace != "" {
+		if name == "" || namespace == "" {
+			return usageErr("--name and --namespace start a new Secret together")
+		}
+		nw = &secret.NewSecret{Name: name, Namespace: namespace}
+	}
+	if err := a.sandboxFiles(nil, dst); err != nil {
+		return err
+	}
+	n, err := ops.CopyDocker(ctx, src, dst[0].File, d, nw)
+	if err != nil && !errors.Is(err, secret.ErrVault) {
+		err = refused("%v", err)
+	}
+	if err := a.secretLog(err, "copy", "%s to %s as the dockerconfigjson of %s: %s", src, dst[0].File, d.Registry, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
+		return err
+	}
+	return a.secretPrint(secret.Key{Name: dst[0].File + "#stringData..dockerconfigjson", Bytes: n},
+		fmt.Sprintf("wrote %s: stringData..dockerconfigjson for %s, %d bytes\n", dst[0].File, d.Registry, n))
 }
 
 // stdinFlags are the flags that shape a consumer's stdin.
@@ -1182,7 +1249,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
 	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Vaults: a.cfg.Secret.Vaults, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
-		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames(), FileRoots: a.cfg.Secret.FileRoots}
+		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames(), FileRoots: a.cfg.Secret.FileRoots, SecretEnv: a.cfg.Secret.Env}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}

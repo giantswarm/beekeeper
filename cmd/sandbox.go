@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -381,6 +382,9 @@ func brokeredSecretArgs(args []string, inSandbox, session bool) error {
 	for _, a := range args[1:] {
 		if a == "--" && inSandbox {
 			return errors.New("a consumer or producer runs on the host only: copy, set or capture with -- is not brokered")
+		}
+		if strings.HasPrefix(a, secret.CmdRef) && inSandbox {
+			return errors.New("a producer runs on the host only: copy from cmd:// is not brokered")
 		}
 	}
 	return brokeredFlags(args[1:])
