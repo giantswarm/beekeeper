@@ -2599,14 +2599,14 @@
                         }
                     }
                 },
+                "groups": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "issuer": {
                     "type": "string"
                 },
                 "kagent": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "members": {
                     "type": "object",
                     "additionalProperties": true
                 },

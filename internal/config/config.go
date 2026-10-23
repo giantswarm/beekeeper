@@ -1008,13 +1008,15 @@ type Serve struct {
 	// A --for that is an email needs no entry.
 	People map[string]string `yaml:"people"`
 	// Channels maps a team to the Slack channel ID its decisions (--for
-	// team:<name>) are posted to; any member of the team (members, else its
-	// Dex group in teams) may answer.
+	// team:<name>) are posted to; any member of the team (its Slack group in
+	// groups, else its Dex group in teams) may answer.
 	Channels map[string]string `yaml:"channels"`
-	// Members maps a team to the emails of its members, for a team whose
-	// Dex group is shared with others (an organization-wide group): only
-	// they answer its decisions. A team without an entry is its Dex group's.
-	Members map[string][]string `yaml:"members"`
+	// Groups maps a team to the handle of its Slack user group
+	// (team-bumblebee for @team-bumblebee), for a team whose Dex group others
+	// share (an organization-wide group): only the group's members answer its
+	// decisions, as klaus-gateway finds them by their email. A team without
+	// an entry is its Dex group's.
+	Groups map[string]string `yaml:"groups"`
 	// Gateway is the klaus-gateway that puts decisions to their addressee
 	// in Slack; without its URL, decisions stay in beekeeper.
 	Gateway Gateway `yaml:"gateway"`
