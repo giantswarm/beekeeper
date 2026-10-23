@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/itchyny/gojq"
@@ -310,14 +311,19 @@ func jsonKind(v any) string {
 	return "number"
 }
 
-// ProducerEnv is environ without the variables that carry a secret: the
+// producerLoaders are the variables that make an allowed producer load
+// code of the caller's choosing: openssl's configuration, engines and
+// providers.
+var producerLoaders = []string{"OPENSSL_CONF", "OPENSSL_ENGINES", "OPENSSL_MODULES"}
+
+// ProducerEnv is environ without the variables that carry a secret (the
 // vault's credentials, sops' age identity and those whose names match one
-// of the globs of drop (secret.env).
+// of the globs of drop, secret.env) and those of producerLoaders.
 func ProducerEnv(environ, drop []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		if guard.VaultVar.MatchString(name) || name == envAgeKey || globbed(drop, name) {
+		if guard.VaultVar.MatchString(name) || name == envAgeKey || slices.Contains(producerLoaders, name) || globbed(drop, name) {
 			continue
 		}
 		out = append(out, kv)

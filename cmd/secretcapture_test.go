@@ -17,11 +17,11 @@ const captureOp = "capture"
 
 // fakeProducer puts an az on PATH that prints a token's JSON, the password
 // once, and the password on stderr too (as --debug would); called with
-// --fail it exits 2 instead. It answers the allowed argv that runs it.
+// --password2 it exits 2 instead. It answers the allowed argv that runs it.
 func fakeProducer(t *testing.T) []string {
 	t.Helper()
 	dir := t.TempDir()
-	script := fmt.Sprintf("#!/bin/sh\necho 'response: %s' >&2\ncase \" $* \" in *' --fail '*) exit 2;; esac\nprintf '{\"passwords\":[{\"value\":\"%s\"}]}\\n'\n", secretValue, secretValue)
+	script := fmt.Sprintf("#!/bin/sh\necho 'response: %s' >&2\ncase \" $* \" in *' --password2 '*) exit 2;; esac\nprintf '{\"passwords\":[{\"value\":\"%s\"}]}\\n'\n", secretValue, secretValue)
 	if err := os.WriteFile(filepath.Join(dir, "az"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 		args []string
 		code int
 	}{
-		{append(producing(captureOp, file+"#stringData.x"), "--fail"), ExitRefused},
+		{append(producing(captureOp, file+"#stringData.x"), "--password2"), ExitRefused},
 		{producing(captureOp, file+"#stringData.x", "--jq", ".passwords"), ExitRefused},
 		{[]string{captureOp, file + "#stringData.x", "--", "sh", "-c", strings.Join(prod, " ")}, ExitRefused},
 		{append(producing(captureOp, file+"#stringData.x"), "--debug"), ExitRefused},
