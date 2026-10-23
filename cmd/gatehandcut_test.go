@@ -5,6 +5,8 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -143,17 +145,16 @@ func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 	}
 }
 
-// A SIGTERM aimed at the gate, its caller still there, stops devctl too:
-// the run ends as one ended by a signal and GitHub judges it.
+// A SIGTERM aimed at the gate, its caller still there, stops devctl too,
+// one sent while devctl starts as well: the run ends as one ended by a
+// signal and GitHub judges it. devctl sends it once it runs, as early as
+// the gate may still be starting it.
 func TestASIGTERMToTheGateStopsItsDevctl(t *testing.T) {
 	noSystemd(t)
-	fakeDevctl(t, `echo "waiting for the release" >&2; exec sleep 30`)
+	t.Setenv("BEEKEEPER_TEST_GATE", strconv.Itoa(os.Getpid()))
+	fakeDevctl(t, `kill -TERM "$BEEKEEPER_TEST_GATE"; echo "waiting for the release" >&2; exec sleep 30`)
 	stubGitHub(t, github.Merged, "")
 	g := runningMerge(t, scratchRepo, config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}})
-	go func() {
-		time.Sleep(600 * time.Millisecond)
-		_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
-	}()
 	done := time.Now()
 	if err := g.runMerge(); Code(err) != 128+int(syscall.SIGTERM) {
 		t.Fatalf("exit %d, want 143", Code(err))

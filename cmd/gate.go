@@ -341,6 +341,9 @@ type gateRun struct {
 	// requeued says a hold took the running merge back out of its lane
 	// (requeue): its wait for the turn starts again.
 	requeued bool
+	// sig hears the signals aimed at the gate from before devctl starts
+	// (followSignals), so that none sent while it starts is lost.
+	sig <-chan os.Signal
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool) error {
@@ -518,6 +521,7 @@ func (g *gateRun) stateRefused(err error) error {
 // followed to its end all the same, its outcome the caller's.
 func (g *gateRun) resumeMerge(running string) error {
 	defer outliveCaller()()
+	defer g.followSignals()()
 	pidText, offsetText, _ := strings.Cut(running, ":")
 	pid, err := strconv.Atoi(pidText)
 	offset, oerr := strconv.ParseInt(offsetText, 10, 64)
@@ -1499,6 +1503,7 @@ func (g *gateRun) unstart() {
 // run that does not start is recorded as one without a document.
 func (g *gateRun) runMerge() error {
 	defer outliveCaller()()
+	defer g.followSignals()()
 	if !g.runsDevctl() {
 		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
 			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
@@ -1612,7 +1617,7 @@ func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun
 		if pid, rc = g.launch(base); rc != 0 {
 			return childRun{rc: rc}, pid
 		}
-		run = followChild(base, pid, 0, g.bin, g.retried(try+1), g.leaveAt, false)
+		run = followChild(base, pid, 0, g.bin, g.retried(try+1), g.leaveAt, false, g.sig)
 	}
 	return run, pid
 }
@@ -1658,7 +1663,7 @@ func (g *gateRun) acceptRedRun(base string, pid int, run childRun) (childRun, in
 	if pid, rc = g.launch(base); rc != 0 {
 		return childRun{rc: rc}, pid
 	}
-	return g.retryServerError(base, pid, followChild(base, pid, 0, g.bin, g.retried(0), g.leaveAt, false))
+	return g.retryServerError(base, pid, followChild(base, pid, 0, g.bin, g.retried(0), g.leaveAt, false, g.sig))
 }
 
 // judgeRed judges a red document against the base branch it names; a base
@@ -1680,8 +1685,18 @@ func (g *gateRun) judgeRed(ctx context.Context, doc []byte) merge.RedJudgement {
 // run: sent again on a 5xx of its merge call (retryServerError), and with
 // the red checks the gate lets through accepted (acceptRedRun).
 func (g *gateRun) followRun(base string, pid int, offset int64, bin binary) (childRun, int) {
-	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, bin, g.retried(0), g.leaveAt, false))
+	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, bin, g.retried(0), g.leaveAt, false, g.sig))
 	return g.acceptRedRun(base, pid, run)
+}
+
+// followSignals has g.sig hear SIGINT, SIGTERM and SIGHUP from now on, for
+// every followChild of the merge's devctl: a signal sent while devctl
+// starts waits there for the follow; the returned func stops it.
+func (g *gateRun) followSignals() func() {
+	sig := make(chan os.Signal, 4)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	g.sig = sig
+	return func() { signal.Stop(sig); g.sig = nil }
 }
 
 // follow copies the merge's devctl (its merge-child pid) stderr on from

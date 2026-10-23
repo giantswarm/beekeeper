@@ -325,7 +325,7 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
-	return followChild(base, pid, 0, nil, nil, leave, spec.WithCaller)
+	return followChild(base, pid, 0, nil, nil, leave, spec.WithCaller, nil)
 }
 
 // followChild follows the devctl that merge-child pid runs outside its
@@ -352,12 +352,16 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 // document it takes off the stdout (held), for the gate to decide. leave,
 // when set, is when the follow returns with left set while the run goes on
 // (the gate's tool limit), its files in place for its merge-child and the
-// watch.
-func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool) (r childRun) {
+// watch. sig, when given, hears the signals from before devctl started
+// (gateRun.followSignals); else the follow hears them from its start on.
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) (r childRun) {
 	r.rc = guard.ExitNotFound
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sig)
+	if sig == nil {
+		own := make(chan os.Signal, 1)
+		signal.Notify(own, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		defer signal.Stop(own)
+		sig = own
+	}
 	log, err := os.Open(base + ".log") //nolint:gosec // the gate's own file under the state directory
 	if err == nil {
 		defer func() { _ = log.Close() }()
