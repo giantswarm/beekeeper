@@ -44,7 +44,7 @@ func TestEnvtestCentralNotesTwoPersons(t *testing.T) {
 	stubAnswerGH(t, &answerGH{})
 	m := centraltest.New(t, e.url, "beekeeper")
 	anaToken := e.token(t, anaEmail, teamGroup)
-	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, "ana-laptop", anaAgent)
+	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, anaLaptop, anaAgent)
 	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
 	f, err := os.OpenFile(bo.cfg, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -159,7 +159,7 @@ func TestEnvtestCentralAnswerLong(t *testing.T) {
 	stubAnswerGH(t, &answerGH{})
 	m := centraltest.New(t, e.url, "beekeeper")
 	anaToken := e.token(t, anaEmail, teamGroup)
-	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, "ana-laptop", anaAgent)
+	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, anaLaptop, anaAgent)
 	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
 
 	for _, size := range []int{470, 1000} {
@@ -203,7 +203,7 @@ func TestEnvtestCentralParkAndFold(t *testing.T) {
 	decisionsVia(t, e, &fakeGateway{})
 	stubAnswerGH(t, &answerGH{})
 	m := centraltest.New(t, e.url, "beekeeper")
-	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, "ana-laptop", anaAgent)
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, anaLaptop, anaAgent)
 	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
 	local, err := state.Open(ana.state)
 	if err != nil {

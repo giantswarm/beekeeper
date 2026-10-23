@@ -308,7 +308,7 @@ func TestEnvtestCentralNoteAdd(t *testing.T) {
 	stubAnswerGH(t, &answerGH{})
 	m := centraltest.New(t, e.url, "beekeeper")
 	anaToken := e.token(t, anaEmail, teamGroup)
-	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, "ana-laptop", anaAgent)
+	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, anaLaptop, anaAgent)
 
 	out, code := ana.run("note", "add", "--for", "bo", "--due", "3h", "--default", ownLane, "--status-quo", noMuseLane,
 		"--why", "only its owners pick its lane", "--option", "portal: it rolls with backstage", "--option", "own: a lane of its own",

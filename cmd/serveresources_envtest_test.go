@@ -29,9 +29,10 @@ const (
 	keyRole      = "role"
 	purposeProof = "proof"
 	// piaTeam is the other team; laptop, boAgent and sessionID the
-	// tests' other agents' host and names.
+	// tests' other agents' host and names; anaLaptop ana's host.
 	piaTeam   = "planeteers"
 	laptop    = "laptop"
+	anaLaptop = "ana-laptop"
 	boAgent   = "bo-agent"
 	sessionID = "sess-1"
 )
@@ -303,7 +304,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	e.expect(t, ana, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: lab}, false, "register: ana-agent idle")
 
 	// ana's agent on her laptop messages her agent on the lab.
-	sent := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello"), paramAgent: "ana-laptop", paramHost: laptop}, false, "delivery")
+	sent := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello"), paramAgent: anaLaptop, paramHost: laptop}, false, "delivery")
 	again := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello")}, false, "not queued again")
 	if again["duplicate"] != true || again["id"] != sent["id"] {
 		t.Errorf("the resend %v of %v", again, sent)
@@ -324,7 +325,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	}
 	first := msgs[0].(map[string]any)
 	env := first["envelope"].(map[string]any)
-	if from := env["from"].(map[string]any); from["person"] != anaEmail || from["agent"] != "ana-laptop" || from["host"] != laptop ||
+	if from := env["from"].(map[string]any); from["person"] != anaEmail || from["agent"] != anaLaptop || from["host"] != laptop ||
 		env["to"] != anaAddress || env[paramMessage].(map[string]any)["messageId"] != "m1" {
 		t.Errorf("the envelope %v", env)
 	}
