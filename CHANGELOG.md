@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `secret copy` takes a credential a producer generates as its source, `cmd://<producer>#<path>`: the producer runs in beekeeper's process, its stderr discarded, `#<path>` a dotted key of its JSON stdout. Only beekeeper's own list of producers runs, `az acr token credential generate` (without `--debug` or `--verbose`); any other command is refused, as `compare`, `fingerprint` and the agent sandbox refuse a `cmd://` source. `copy <ref> <file> --dockerconfigjson <registry> --username <user>` writes one value as the password of a `kubernetes.io/dockerconfigjson` Secret. A copy into a SOPS path now checks the path before it reads the value ([#1631](https://github.com/giantswarm/beekeeper/issues/1631)).
 - `serve.groups` (chart value `serve.groups`): a team mapped to the handle of its Slack user group (`team-bumblebee`). Only the group's members answer a `team:<name>` decision; holding the team's Dex group is no longer enough. serve asks klaus-gateway (`GET /groups/{group}/members/{email}`), and a check that fails refuses the answer. This is for a team whose Dex group others share, such as an organization-wide one ([giantswarm/giantswarm#37985](https://github.com/giantswarm/giantswarm/issues/37985)).
 
 ### Fixed

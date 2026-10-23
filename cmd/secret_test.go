@@ -29,6 +29,10 @@ const (
 	dbRef         = "op://Shared/db/password"
 	jsonFlag      = "--json"
 	copyOp        = "copy"
+	dockerFlag    = "--dockerconfigjson"
+	usernameFlag  = "--username"
+	copyVerb      = "secret.copy"
+	testRegistry  = "registry.example.io"
 	compareOp     = "compare"
 	fingerprintOp = "fingerprint"
 	sopsA         = "a.sops.yaml"
@@ -630,6 +634,37 @@ func TestSecretSetRefusesACredentialShapedLiteral(t *testing.T) {
 		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
 			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
 		}
+	}
+}
+
+func TestSecretCopyIntoADockerConfigJSONSecret(t *testing.T) {
+	a, _, repo := secretApp(t)
+	file := filepath.Join(repo, "pull-secret.enc.yaml")
+	docker := []string{dockerFlag, testRegistry, usernameFlag, "pull"}
+	out, err := runSecret(a, append([]string{copyOp, dbRef, file, nameFlag, "pull", namespaceFlag, "flux-giantswarm"}, docker...)...)
+	if err != nil || !strings.HasPrefix(out, "wrote "+file+": stringData..dockerconfigjson for "+testRegistry+", ") {
+		t.Fatalf("copy --dockerconfigjson = %q, %v", out, err)
+	}
+	noSecret(t, "copy", out)
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == copyVerb })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "as the dockerconfigjson of "+testRegistry) {
+		t.Fatalf("the copy logged %+v, %v", evs, err)
+	}
+	for _, args := range [][]string{
+		append([]string{copyOp, dbRef, file + "#stringData.x"}, docker...),
+		append([]string{copyOp, dbRef, toSecretOpt, "kind-agentlab/ns/s/k"}, docker...),
+		append(append([]string{copyOp, dbRef}, docker...), "--", "cat"),
+		{copyOp, dbRef, file, dockerFlag, testRegistry},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
+			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
+		}
+	}
+	// only an allowed producer is a source
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, copyOp, "cmd://sh -c true", file+"#stringData.x"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "producers") {
+		t.Errorf("copy from sh = %v, want a refusal naming the producers", err)
 	}
 }
 
