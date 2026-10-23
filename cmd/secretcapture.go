@@ -20,11 +20,14 @@ func (a *app) secretCaptureCmd() *cobra.Command {
 registry token's password, an API token created over an API, a cloud
 access key), which no caller could store without reading it. The producer
 is one beekeeper allows, no configuration widens the list: az acr token
-credential generate, openssl genpkey and openssl rand; --debug, --verbose
-and -out are refused, so is every other command (sh -c among them). It runs
+credential generate, openssl genpkey and openssl rand, each with the
+options it lists alone: --debug, --verbose, -out, -engine, -provider and
+every other one are refused, so is every other command (sh -c among them).
+It runs
 in beekeeper's process with the caller's environment minus every variable
 that carries a secret (the vault's credentials, SOPS_AGE_KEY and the names
-secret.env lists), its stderr discarded, a log there may carry the value: a
+secret.env lists) and OpenSSL's loaders (OPENSSL_CONF, OPENSSL_ENGINES,
+OPENSSL_MODULES), its stderr discarded, a log there may carry the value: a
 failure names its exit code alone. The value is its
 stdout without the line end, or with --jq <filter> the one string the
 filter picks from its JSON output; the value goes into the SOPS file's
