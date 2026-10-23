@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -33,7 +34,7 @@ logged with the thread and the words; --note <id> closes that note
 and tells the session that filed it; without a note, the sessions serving
 the thread (beekeeper sessions serve) are told. A decision its default
 closed within the last day is still answered: the answer replaces the
-default and its filer is told so.
+default and its filer is told so. The words are at most 3000 characters.
 
 Nothing is posted to GitHub: what shows there is the work's own result,
 the merge, the reply to a reviewer, the issue update. --post also records
@@ -95,6 +96,9 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 	}
 	var n *state.Note
 	text := strings.TrimSpace(words)
+	if n := utf8.RuneCountInString(text); n > answerMax {
+		return usageErr("the answer has %d characters, at most %d", n, answerMax)
+	}
 	if noteID != 0 {
 		st, err := a.store.Read()
 		if err != nil {
@@ -210,10 +214,14 @@ func (r *recordedAnswer) line(n *state.Note) string {
 	return s
 }
 
-// answerer is who gave the answer: the person a note is for, a team's
-// member the caller, else the guide's person.
+// answerer is who gave the answer: on a central instance the caller's
+// verified email, which outlives the note on its answer.recorded event and
+// in its NOTE ANSWERED line; else the person a note is for, a team's member
+// the caller, else the guide's person.
 func (a *app) answerer(me state.Party, n *state.Note) string {
 	switch {
+	case a.central && me.Person != "":
+		return me.Person
 	case n != nil && n.For != "" && !strings.HasPrefix(n.For, teamPrefix):
 		return n.For
 	case n != nil:

@@ -89,6 +89,7 @@ delivers it to the filing session.`,
 			if err != nil {
 				return err
 			}
+			store.InNamespace(os.Getenv(namespaceEnv))
 			ids, err := identity.New(ctx, a.cfg.Serve)
 			if err != nil {
 				return err
@@ -129,6 +130,10 @@ delivers it to the filing session.`,
 
 // databaseEnv names the URL of the beekeeper database: the mailboxes.
 const databaseEnv = "BEEKEEPER_DATABASE_URL"
+
+// namespaceEnv names serve's own namespace, where the note counter lives
+// (default kube.DefaultNamespace).
+const namespaceEnv = "BEEKEEPER_NAMESPACE"
 
 // server is beekeeper serve: the MCP tools and resources over the
 // Kubernetes store and the mailboxes.

@@ -445,6 +445,7 @@ Register it in ~/.claude/settings.json:
 				h.SecretFiles = slices.DeleteFunc(append(slices.Clone(a.cfg.Secret.Files), a.cfg.Secret.TokenFile), func(f string) bool { return f == "" })
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
+				h.PersonFolders = a.cfg.Hooks.PersonFolders
 			}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)

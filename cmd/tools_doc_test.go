@@ -42,7 +42,7 @@ func TestToolAnnotations(t *testing.T) {
 	read, add, remove := hint{true, false, true, false}, hint{false, false, true, false}, hint{false, true, true, false}
 	want := map[string]hint{
 		"lease_list": read, "hold_list": read, "lanes": read, "lane_turn": read,
-		"note_list": read, "list_agents": read, "snapshot": read, "receive_messages": read,
+		"note_list": read, "list_agents": read, "snapshot": read, "receive_messages": read, nameReadFeed: read,
 		"lease_claim": add, "lane_queue": add, "lane_settle": add, nameAgentsRegister: add,
 		"lease_release": remove, "hold_set": remove, "hold_lift": remove, "lane_leave": remove,
 		nameAgentsLeave: remove, "ack_messages": remove,

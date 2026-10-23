@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -282,14 +284,21 @@ filed nowhere else and exits 69.`,
 		Short: "Mark notes done",
 		Long: `Mark notes done. --overtaken "<why>" closes them as overtaken
 instead: what they ask about is settled without an answer, logged as
-note.overtaken with the reason, as the watch does.`,
+note.overtaken with the reason, as the watch does.
+
+On a machine with a central instance (central.context), <context>#<n>
+withdraws the central instance's note n (note_done, through muster as the
+person): its filer's, or the filer's team's supervisor role's. A bare <n>
+is the machine's note when it has one open, else the central instance's;
+one open on both is refused, naming both. --overtaken is the machine's
+notes' only.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
 			}
-			ids, err := parseIDs(args, "note")
+			named, err := a.parseNoteIDs(args)
 			if err != nil {
 				return err
 			}
@@ -297,12 +306,28 @@ note.overtaken with the reason, as the watch does.`,
 			if cmd.Flags().Changed("overtaken") && why == "" {
 				return usageErr("--overtaken needs the reason")
 			}
+			ids, centralIDs, err := a.doneSources(named)
+			if err != nil {
+				return err
+			}
+			if len(centralIDs) > 0 && why != "" {
+				return usageErr("--overtaken is for this machine's notes: a central note is withdrawn (note done %s#%d) without a reason", a.cfg.Central.Context, centralIDs[0])
+			}
+			if len(ids) == 0 {
+				return a.doneCentral(cmd.Context(), me, centralIDs)
+			}
 			var evs []state.Event
 			var closed []state.Note
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				evs, closed = nil, nil
+				// Two teams' notes of one number (numbered before the
+				// shared note counter): the caller's team's is the one meant.
+				teams := map[int]int{}
+				for _, n := range st.Notes {
+					teams[n.ID]++
+				}
 				st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
-					if slices.Contains(ids, n.ID) {
+					if slices.Contains(ids, n.ID) && (teams[n.ID] == 1 || n.By.Team == me.Team) {
 						closed = append(closed, n)
 						if why != "" {
 							evs = append(evs, overtakenEvent(me, n, why))
@@ -327,8 +352,11 @@ note.overtaken with the reason, as the watch does.`,
 					return err
 				}
 			}
+			if err := a.doneCentral(cmd.Context(), me, centralIDs); err != nil {
+				return err
+			}
 			if len(evs) < len(ids) {
-				return refused("%d of the %d notes were open", len(evs), len(ids))
+				return refused("%d of the %d notes were open", len(evs)+len(centralIDs), len(ids)+len(centralIDs))
 			}
 			return nil
 		},
@@ -342,17 +370,24 @@ note.overtaken with the reason, as the watch does.`,
 		Short: "Record a person's answer to a note, word for word, and close it",
 		Long: `beekeeper answer for a note: its thread is the note's first --ref. The
 answer is --choice <n>, one of its options (1-based), the person's own
-words, or both, with the way it came (--via, cli unless it came from
+words (at most 3000 characters), or both, with the way it came (--via, cli unless it came from
 Slack). It is logged as answer.recorded and the note closed; the session
 that filed it is told at once. A decision its default closed within the
 last day is answered all the same: the answer replaces the default.
 Nothing is posted to GitHub unless --post (as beekeeper answer says). A note a role's run filed (the
 supervisor's, the guide's) goes to the role's holder now; while none holds
 it, the answer waits for the role's next start. A note without a --ref is
-refused: beekeeper answer <owner/repo#n> --note <id> names its thread.`,
+refused: beekeeper answer <owner/repo#n> --note <id> names its thread.
+
+On a machine with a central instance (central.context), <context>#<n>
+answers the central instance's note n (note_answer, through muster as the
+person): only its addressee answers it, and the central instance closes
+its Slack message and tells its filer. A bare <n> is the machine's note
+when it has it, else the central instance's; one open on both is refused,
+naming both. --post is the machine's notes' only.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ids, err := parseIDs(args[:1], "note")
+			ids, err := a.parseNoteIDs(args[:1])
 			if err != nil {
 				return err
 			}
@@ -360,9 +395,24 @@ refused: beekeeper answer <owner/repo#n> --note <id> names its thread.`,
 			if err != nil {
 				return err
 			}
-			n, _ := answerable(st, ids[0], a.now)
+			n, _ := answerable(st, ids[0].ID, a.now)
+			if ids[0].Central {
+				n = nil
+			} else if a.centralNotesOn() && n != nil {
+				// The same number open centrally too is ambiguous; one
+				// the machine lacks is answered there, open or not.
+				central, cerr := a.listCentralNotes()
+				if ids[0], err = a.resolve(ids[0], true, central, cerr); err != nil {
+					return err
+				}
+			} else if a.centralNotesOn() {
+				ids[0].Central = true
+			}
+			if ids[0].Central {
+				return a.answerCentral(cmd.Context(), ids[0].ID, choice, via, strings.Join(args[1:], " "), post)
+			}
 			if n == nil {
-				return refused("note #%d is not open, nor closed by its default within %s", ids[0], shortDur(defaultedKeep))
+				return refused("note #%d is not open, nor closed by its default within %s", ids[0].ID, shortDur(defaultedKeep))
 			}
 			if len(n.Refs) == 0 {
 				return refused("note #%d links no issue or pull request (--ref) for its answer's thread: beekeeper answer <owner/repo#n> --note %d", n.ID, n.ID)
@@ -380,7 +430,12 @@ refused: beekeeper answer <owner/repo#n> --note <id> names its thread.`,
 text, every line of it, followed by its default and the issues and pull
 requests it names (owner/repo#n, from its text and its --ref links; a bare
 #n after the board owner's repository), so a scan sees what a note names
-without reading each one; with --json, --full adds each note's names.`
+without reading each one; with --json, --full adds each note's names.
+
+On a machine with a central instance (central.context), the central
+instance's open notes (note_list, through muster as the person) follow the
+machine's, each named <context>#<n> (in JSON its "central"); with the
+central instance unreachable, the list fails after the machine's notes.`
 	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
 	list.Flags().BoolVar(&full, "full", false, "each note's whole text and the issues and pull requests it names")
 	c.AddCommand(add, answer, done, list)
@@ -395,12 +450,16 @@ func (a *app) noteList(forWho string, full bool) error {
 		return err
 	}
 	notes := slices.Clone(st.Notes)
+	// The central instance's notes follow the machine's; unreachable, the
+	// list fails after the machine's.
+	central, cerr := a.listCentralNotes()
+	notes = append(notes, central...)
 	if forWho != "" {
 		notes = slices.DeleteFunc(notes, func(n state.Note) bool { return !strings.EqualFold(n.For, forWho) })
 	}
 	if a.json {
 		if !full {
-			return a.printJSON(notes)
+			return errors.Join(a.printJSON(notes), cerr)
 		}
 		named := make([]map[string]any, 0, len(notes))
 		for _, n := range notes {
@@ -410,14 +469,54 @@ func (a *app) noteList(forWho string, full bool) error {
 			}
 			named = append(named, m)
 		}
-		return a.printJSON(named)
+		return errors.Join(a.printJSON(named), cerr)
 	}
 	if full {
 		a.printNotesWith(notes, a.printNotesFull)
 	} else {
 		a.printNotes(notes)
 	}
-	return nil
+	return cerr
+}
+
+// listCentralNotes are the central instance's open notes as the caller
+// reads them, its error naming the instance.
+func (a *app) listCentralNotes() ([]state.Note, error) {
+	if !a.centralNotesOn() {
+		return nil, nil
+	}
+	me, _ := a.caller()
+	notes, err := a.centralNotes(context.Background(), me)
+	if err != nil {
+		return nil, lookupErr(err, "the central instance's notes (%s) are not listed", a.cfg.Central.Context)
+	}
+	return notes, nil
+}
+
+// doneSources splits the notes note done names into the machine's and the
+// central instance's (resolve).
+func (a *app) doneSources(named []noteID) (local, central []int, err error) {
+	var open []state.Note
+	var cerr error
+	if a.centralNotesOn() && slices.ContainsFunc(named, func(id noteID) bool { return id.Bare }) {
+		open, cerr = a.listCentralNotes()
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, id := range named {
+		has := slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id.ID })
+		if id, err = a.resolve(id, has, open, cerr); err != nil {
+			return nil, nil, err
+		}
+		if id.Central {
+			central = append(central, id.ID)
+		} else {
+			local = append(local, id.ID)
+		}
+	}
+	return local, central, nil
 }
 
 // namedNote is n's JSON object with the issues and pull requests it names
@@ -462,7 +561,7 @@ func (a *app) printNoteLines(notes []state.Note) {
 		if n.Default != "" {
 			dflt = " (default: " + n.Default + ")"
 		}
-		_, _ = fmt.Fprintf(a.out, "#%d%s %s%s\n", n.ID, a.noteTag(&n), n.Text, dflt)
+		_, _ = fmt.Fprintf(a.out, "%s%s %s%s\n", noteRef(&n), a.noteTag(&n), n.Text, dflt)
 	}
 }
 
@@ -470,7 +569,7 @@ func (a *app) printNoteLines(notes []state.Note) {
 // default and what it names, indented beneath.
 func (a *app) printNotesFull(notes []state.Note) {
 	for _, n := range notes {
-		_, _ = fmt.Fprintf(a.out, "#%d%s\n", n.ID, a.noteTag(&n))
+		_, _ = fmt.Fprintf(a.out, "%s%s\n", noteRef(&n), a.noteTag(&n))
 		for line := range strings.Lines(strings.TrimRight(n.Text, "\n")) {
 			_, _ = fmt.Fprintf(a.out, "  %s\n", strings.TrimRight(line, "\n"))
 		}

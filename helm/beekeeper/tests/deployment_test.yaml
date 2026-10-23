@@ -20,6 +20,16 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: RELEASE-NAME
+  - it: tells serve its namespace, where the note counter lives
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BEEKEEPER_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
   - it: adds the extra environment, volumes, mounts and init containers
     template: deployment.yaml
     set:

@@ -367,7 +367,7 @@ func archiveRequest(s steward, hosts []string, by, agreement string) string {
 	if slices.Contains(hosts, s.host) {
 		ids = append(ids, strconv.Quote(selfSession))
 	}
-	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, and archives their desktop sessions (reversible: the Archived list brings one back). Your operator agreed to that without being asked, for finished workers beekeeper started and never for a session they started themselves: %s. "+
+	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, a role's run a relay relieved among them, and archives their desktop sessions (reversible: the Archived list brings one back). Your operator agreed to that without being asked, for those sessions, this one included, and never for a session they started themselves: %s; a standing archive rule in your own instructions says the same, and a role's consent boundary yields to it. "+
 		"Run `beekeeper agents archivable %s` first: it confirms each session is such a finished worker. Call %s once for each session_id of %s it confirms (\"self\" is this session), in that order, with reason %q. Then end the turn without another tool call; if you archive none, reply with one line saying why.",
 		by, agreement, strings.Join(hosts, " "), archiveTool, strings.Join(ids, ", "), by)
 }
@@ -588,7 +588,7 @@ const stewardDeclineFor = 24 * time.Hour
 // archiveDesktops archives the desktop sessions of agents taken off the
 // roster by the command by, through one steward's turn (archiveSteward: an
 // idle CLI of another session, else one of the sessions' own, warmed for
-// it, never a role's past run's, whose role forbids it the call): only sessions
+// it, a relieved role run's own included): only sessions
 // beekeeper started, keeping no role (roleKeeps) and running no turn, and
 // only under the person's agreement (agents.archiveAgreement). An archive
 // counts once the desktop records it; the line names the steward whose
@@ -597,7 +597,7 @@ const stewardDeclineFor = 24 * time.Hour
 // outcome per agent.
 func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
 	out := make([]archiveOutcome, len(agents))
-	var hosts, roleRuns []string
+	var hosts []string
 	at := map[string]int{}
 	for i, ag := range agents {
 		out[i].agent = ag
@@ -616,9 +616,6 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		}
 		at[host] = i
 		hosts = append(hosts, host)
-		if keepsRole(st, ag) {
-			roleRuns = append(roleRuns, host)
-		}
 	}
 	if len(hosts) == 0 {
 		return out
@@ -634,7 +631,7 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	var errs []error
 	find := func(exclude []string) (steward, error) { return a.findSteward(hosts[0], slices.Concat(exclude, hosts)) }
 	for range stewardTries {
-		s, err := archiveSteward(ctx, left(), slices.Concat(declined, roleRuns, stewardHosts(asked)), find, a.warmSteward)
+		s, err := archiveSteward(ctx, left(), slices.Concat(declined, stewardHosts(asked)), find, a.warmSteward)
 		if err != nil {
 			errs = append(errs, err)
 			break

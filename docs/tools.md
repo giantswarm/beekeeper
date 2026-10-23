@@ -24,6 +24,7 @@ Generated from the registered tools of `beekeeper serve` (`make tools-doc`); thr
 | `note_answer` | write, destructive |
 | `note_done` | write, destructive |
 | `note_list` | read-only |
+| `read_feed` | read-only |
 | `receive_messages` | read-only |
 | `send_message` | write |
 | `snapshot` | read-only |
@@ -643,7 +644,7 @@ A decision its default closed stays answerable for 24h: the answer replaces the 
       "type": "number"
     },
     "text": {
-      "description": "the answer in the person's own words",
+      "description": "the answer in the person's own words, at most 3000 characters",
       "type": "string"
     },
     "via": {
@@ -696,6 +697,33 @@ List every open note, whoever it is for or filed it: decisions and sign-ins.
 ```json
 {
   "properties": {
+    "agent": {
+      "description": "the calling agent's name (default: your email)",
+      "type": "string"
+    },
+    "host": {
+      "description": "the machine or installation it runs on",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+## `read_feed`
+
+```text
+Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.
+```
+
+```json
+{
+  "properties": {
+    "after": {
+      "description": "only the events whose id is above this one",
+      "type": "string"
+    },
     "agent": {
       "description": "the calling agent's name (default: your email)",
       "type": "string"

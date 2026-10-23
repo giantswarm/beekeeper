@@ -223,6 +223,15 @@ func TestEnvtestServeFeed(t *testing.T) {
 		t.Errorf("the claim's event %+v", claim)
 	}
 
+	// read_feed is the feed as a tool, after an id the events above it.
+	got := e.expect(t, ana, nameReadFeed, map[string]any{paramAfter: claim.ID}, false, "lease.release (ana-agent): graveler")
+	if evs, _ := got["events"].([]any); len(evs) != 1 || got["schema"] != feed.Schema {
+		t.Errorf("read_feed after the claim: %v", got)
+	}
+	if got := e.expect(t, ana, nameReadFeed, map[string]any{}, false, "lease.claim (ana-agent): graveler"); len(got["events"].([]any)) != 2 {
+		t.Errorf("read_feed: %v", got)
+	}
+
 	// A restart: a fresh store's ids continue above the kept Events', even
 	// for an event dated before them.
 	fresh, err := kube.NewForConfig(e.rc)

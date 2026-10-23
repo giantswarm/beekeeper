@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/central"
@@ -68,4 +71,147 @@ func (a *app) fileCentral(ctx context.Context, stderr io.Writer, me state.Party,
 	}
 	_, err = fmt.Fprintln(a.out, "note #"+strconv.Itoa(id)+" (central "+ctxName+": put to "+n.For+" in Slack, its answer reaches this session)")
 	return true, err
+}
+
+// The verbs a machine logs for what it did to a central note: its
+// number is the central instance's, never one of the machine's notes.
+const (
+	noteCentralAnswer = "note.central-answer"
+	noteCentralDone   = "note.central-done"
+)
+
+// centralNotesOn says whether the machine lists and acts on the central
+// instance's notes beside its own: a machine with one, not the central
+// instance itself.
+func (a *app) centralNotesOn() bool { return !a.central && a.cfg.Central.Enabled() }
+
+// centralNotes are the central instance's open notes (note_list), each
+// marked with its context; none on a machine without one.
+func (a *app) centralNotes(ctx context.Context, me state.Party) ([]state.Note, error) {
+	if !a.centralNotesOn() {
+		return nil, nil
+	}
+	var v struct {
+		Notes []state.Note `json:"notes"`
+	}
+	if _, err := a.callCentral(ctx, me, "note_list", map[string]any{}, &v); err != nil {
+		return nil, err
+	}
+	for i := range v.Notes {
+		v.Notes[i].Central = a.cfg.Central.Context
+	}
+	return v.Notes, nil
+}
+
+// noteRef names n as the CLI takes it: #<n> for the machine's own note,
+// <context>#<n> for a central instance's.
+func noteRef(n *state.Note) string { return n.Central + "#" + strconv.Itoa(n.ID) }
+
+// noteID is a note the CLI names: the machine's or, Central set, the
+// central instance's; a bare number may be either.
+type noteID struct {
+	ID      int
+	Central bool
+	Bare    bool
+}
+
+// parseNoteIDs reads note ids: <n> or #<n>, either source, and
+// <context>#<n>, the central instance's.
+func (a *app) parseNoteIDs(args []string) ([]noteID, error) {
+	ids := make([]noteID, 0, len(args))
+	for _, s := range args {
+		src, num, ok := strings.Cut(s, "#")
+		if !ok {
+			src, num = "", s
+		}
+		n, err := strconv.Atoi(num)
+		if err != nil || n <= 0 {
+			return nil, usageErr("%q is not a note id: <n>, or <context>#<n> for a central instance's", s)
+		}
+		switch {
+		case src == "":
+			ids = append(ids, noteID{ID: n, Bare: true})
+		case a.centralNotesOn() && strings.EqualFold(src, a.cfg.Central.Context):
+			ids = append(ids, noteID{ID: n, Central: true})
+		case a.centralNotesOn():
+			return nil, usageErr("%q names no central instance of this machine's: its notes are %s#<n>", s, a.cfg.Central.Context)
+		default:
+			return nil, usageErr("%q names a central instance, and this machine has none (central.context)", s)
+		}
+	}
+	return ids, nil
+}
+
+// resolve settles a bare id: the machine's when local says it has it, the
+// central instance's when only that one does. One both have is refused,
+// naming both; one neither has stays the machine's, which refuses it.
+func (a *app) resolve(id noteID, local bool, central []state.Note, cerr error) (noteID, error) {
+	if !id.Bare || !a.centralNotesOn() {
+		return id, nil
+	}
+	there := slices.ContainsFunc(central, func(n state.Note) bool { return n.ID == id.ID })
+	switch {
+	case local && there:
+		return id, refused("note #%d is open on this machine and on the central instance: name it #%d or %s#%d", id.ID, id.ID, a.cfg.Central.Context, id.ID)
+	case local:
+		return id, nil
+	case there:
+		id.Central = true
+	case cerr != nil:
+		return id, cerr
+	}
+	return id, nil
+}
+
+// answerCentral answers central note id as the person (note_answer through
+// muster): its addressee answers it, and the central instance tells its
+// filer.
+func (a *app) answerCentral(ctx context.Context, id, choice int, via, words string, post bool) error {
+	ref := a.cfg.Central.Context + "#" + strconv.Itoa(id)
+	switch {
+	case post:
+		return usageErr("--post is for this machine's notes: the central instance records %s's answer", ref)
+	case via != viaCLI && via != viaSlack:
+		return usageErr("--via %q is none of %s, %s", via, viaCLI, viaSlack)
+	case choice == 0 && strings.TrimSpace(words) == "":
+		return usageErr("an answer is --choice <n>, the person's words, or both")
+	}
+	me, err := a.caller()
+	if err != nil {
+		return err
+	}
+	args := map[string]any{paramNote: id, paramVia: via}
+	if choice != 0 {
+		args[paramChoice] = choice
+	}
+	if w := strings.TrimSpace(words); w != "" {
+		args[paramText] = w
+	}
+	var v struct {
+		Answer     string `json:"answer"`
+		AnsweredBy string `json:"answeredBy"`
+	}
+	if _, err := a.callCentral(ctx, me, "note_answer", args, &v); err != nil {
+		return err
+	}
+	_ = a.store.Log(event(me, noteCentralAnswer, "%s answered as %s: %s", ref, v.AnsweredBy, v.Answer))
+	_, err = fmt.Fprintf(a.out, "note %s answered as %s: %s\n", ref, cmp.Or(v.AnsweredBy, me.Person), v.Answer)
+	return err
+}
+
+// doneCentral withdraws central notes ids (note_done through muster): each
+// its filer's, or its filer's team's supervisor role's, as the central
+// instance decides. It stops at the first refused.
+func (a *app) doneCentral(ctx context.Context, me state.Party, ids []int) error {
+	for _, id := range ids {
+		ref := a.cfg.Central.Context + "#" + strconv.Itoa(id)
+		if _, err := a.callCentral(ctx, me, "note_done", map[string]any{paramNote: id}, nil); err != nil {
+			return err
+		}
+		_ = a.store.Log(event(me, noteCentralDone, "%s withdrawn", ref))
+		if _, err := fmt.Fprintf(a.out, "note %s done\n", ref); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -430,6 +431,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if id == "" {
 		id = uuid.NewString()
 	}
+	sp.brief = fillScratchpad(sp.brief, dir, id)
 	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model}
 	var reg registration
 	var handed []string
@@ -865,8 +867,9 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 
 // showBriefly opens url, which shows host in the desktop's main window, and
 // once it does, shows the session the window showed before again and
-// returns it; empty when there was none to go back to, or it was host or
-// follow. A running desktop gets the link only once d takes it, waiting up
+// returns it; empty when there was none to go back to, or it was host,
+// follow or a superseded session's (supersededHost), whose CLI a show would
+// warm again. A running desktop gets the link only once d takes it, waiting up
 // to away (zero: the caller's wait stands): errDesktopInUse or errTyping
 // when it did not. ready, unless nil,
 // is asked right before the link opens, and its error ends the show.
@@ -893,13 +896,33 @@ func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string,
 	if err := plat.Opener.Open(ctx, url, running); err != nil {
 		return "", err
 	}
-	if prev == "" || prev == host || prev == follow || !awaitFocus(ctx, a.cfg.Claude.DesktopLog, host, focusWait) {
+	if prev == "" || prev == host || prev == follow || a.supersededHost(prev) || !awaitFocus(ctx, a.cfg.Claude.DesktopLog, host, focusWait) {
 		return "", nil
 	}
 	if err := plat.Opener.Open(ctx, continueURL(prev), true); err != nil {
 		return "", fmt.Errorf("showing %s again: %w", prev, err)
 	}
 	return prev, nil
+}
+
+// supersededHost reports whether the desktop session host is one beekeeper
+// started whose work ended: a relieved role run's or a hand-over's
+// predecessor's (superseded). The desktop warms the CLI of the session its
+// window shows, which the watch stops as revived; a window sent back to it
+// after each show would warm it again on every start, reopen and wake.
+func (a *app) supersededHost(host string) bool {
+	st, err := a.store.Read()
+	if err != nil {
+		return false
+	}
+	i := slices.IndexFunc(st.Starts, func(x state.Start) bool {
+		return x.HostSession == host || x.Session != "" && "local_"+x.Session == host
+	})
+	if i < 0 {
+		return false
+	}
+	by, _ := superseded(st, st.Starts[i].Party, time.Now())
+	return by != ""
 }
 
 // agentReopenCmd runs once a start's or wake's headless turn has ended: it
@@ -1454,6 +1477,17 @@ func readBrief(path string) (string, error) {
 // brief, enclosed so that a hand-over passes on the brief alone.
 func taskPrompt(brief string) string {
 	return "Your task:\n" + briefOpen + "\n" + brief + "\n" + briefClose
+}
+
+// scratchpadMark stands in the worker rules for the started session's
+// scratchpad, which agents start fills in by absolute path once it knows
+// the session's id.
+const scratchpadMark = "<scratchpad>"
+
+// fillScratchpad names, in a first prompt, the scratchpad of the session id
+// started in dir by absolute path.
+func fillScratchpad(prompt, dir, id string) string {
+	return strings.ReplaceAll(prompt, scratchpadMark, guard.Scratchpad(dir, id))
 }
 
 // workerPrompt is a worker's first prompt: the worker rules beekeeper

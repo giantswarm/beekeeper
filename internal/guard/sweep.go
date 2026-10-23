@@ -36,7 +36,7 @@ func Sweep(roots []string, depth int) []Exposure {
 				return nil //nolint:nilerr // an unreadable entry is passed over
 			}
 			if d.IsDir() {
-				if d.Name() == ".git" {
+				if d.Name() == gitDir {
 					if remoteCredential.MatchString(readFile(filepath.Join(p, "config"), "")) {
 						out = append(out, Exposure{filepath.Join(p, "config"), "a git remote URL with a credential"})
 					}

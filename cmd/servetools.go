@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
@@ -42,6 +43,7 @@ const (
 	paramOptions     = "options"
 	paramRecommend   = "recommend"
 	paramFor         = "for"
+	paramAfter       = "after"
 	paramKind        = "kind"
 	paramText        = "text"
 	paramMessage     = "message"
@@ -147,7 +149,7 @@ func (s *server) tools() []serveTool {
 			fmt.Sprintf("A decision its default closed stays answerable for %s: the answer replaces the default.", shortDur(defaultedKeep)), hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
 			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
-			mcp.WithString(paramText, mcp.Description("the answer in the person's own words")),
+			mcp.WithString(paramText, mcp.Description(fmt.Sprintf("the answer in the person's own words, at most %d characters", answerMax))),
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
 		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
 			"", hints{destructive: true, idempotent: true, openWorld: true},
@@ -162,6 +164,8 @@ func (s *server) tools() []serveTool {
 		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintRead,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
 		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintRead), toolSnapshot},
+		{newTool(nameReadFeed, "Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.", "", hintRead,
+			mcp.WithString(paramAfter, mcp.Description("only the events whose id is above this one"))), toolReadFeed},
 	}
 }
 
@@ -767,12 +771,15 @@ func (c *call) note(id int) (*state.Note, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Two teams' notes of one number (numbered before the shared note
+	// counter): the caller's team's is the one meant, as note done's.
+	var found *state.Note
 	for _, n := range st.Notes {
-		if n.ID == id {
-			return &n, nil
+		if n.ID == id && (found == nil || n.By.Team == c.me.Team) {
+			found = &n
 		}
 	}
-	return nil, nil
+	return found, nil
 }
 
 func toolNoteList(c *call, _ mcp.CallToolRequest) (any, error) {
@@ -977,6 +984,26 @@ type snapshotView struct {
 	Lanes  []centralLane    `json:"lanes"`
 	Notes  []state.Note     `json:"notes"`
 	Agents []addressedAgent `json:"agents"`
+}
+
+// toolReadFeed is beekeeper://feed as a tool: muster's get_resource reads
+// no resource of a server its callers reach with their own token, its
+// call_tool does.
+func toolReadFeed(c *call, req mcp.CallToolRequest) (any, error) {
+	f, err := c.s.feed(c.who)
+	if err != nil {
+		return nil, err
+	}
+	if after := req.GetString(paramAfter, ""); after != "" {
+		f.Events = slices.DeleteFunc(f.Events, func(ev feed.Event) bool { return ev.ID <= after })
+	}
+	for _, ev := range f.Events {
+		_, _ = fmt.Fprintf(c.out, "%s %s\n", ev.ID, ev.Line)
+	}
+	if len(f.Events) == 0 {
+		_, _ = fmt.Fprintln(c.out, "no event")
+	}
+	return f, nil
 }
 
 func toolSnapshot(c *call, _ mcp.CallToolRequest) (any, error) {

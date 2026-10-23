@@ -157,34 +157,6 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v a
 	return c.result(tool, res, v)
 }
 
-// Read reads the central instance's resource uri through muster's
-// get_resource as the person and decodes its JSON into v. A read muster or
-// the instance did not answer is *Unreachable, naming muster's reason.
-func (c *Client) Read(ctx context.Context, uri string, v any) error {
-	ctx, cancel, deadline := c.bound(ctx)
-	defer cancel()
-	mc, closeMC, err := c.connect(ctx, deadline)
-	if err != nil {
-		return err
-	}
-	defer closeMC()
-	req := mcp.CallToolRequest{}
-	req.Params.Name = "get_resource"
-	req.Params.Arguments = map[string]any{"uri": uri, "server": c.cfg.Server}
-	res, err := mc.CallTool(ctx, req)
-	if err != nil {
-		return c.timedOut(ctx, stageToolCall, deadline, c.unreachable("muster: get_resource %s: %v", uri, err))
-	}
-	text := envelopeText(res)
-	if res.IsError {
-		return c.unreachable("muster: get_resource %s: %s", uri, firstLine(text))
-	}
-	if err := json.Unmarshal([]byte(text), v); err != nil {
-		return fmt.Errorf("%s: %w", uri, err)
-	}
-	return nil
-}
-
 // bound is ctx bounded by the call timeout, and the deadline a timeout
 // names: the call timeout, or ctx's own when that comes first.
 func (c *Client) bound(ctx context.Context) (context.Context, context.CancelFunc, time.Duration) {

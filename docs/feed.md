@@ -39,7 +39,9 @@ anyone else the agent is `not on the roster`, or, where they read it, refused as
 
 Schema `beekeeper.giantswarm.io/feed/v1`. The feed holds the 200 most recent events of the
 shared state, oldest first: the changes (a claim, a release, a note, an expired message), not the
-audit of calls that changed nothing.
+audit of calls that changed nothing. The tool `read_feed` returns the same document, only the
+events above `after` when given: through muster a client reads the feed with `call_tool`, since
+muster's `get_resource` reads no resource of a server reached with the caller's own token.
 
 ```json
 {
@@ -68,7 +70,8 @@ audit of calls that changed nothing.
 
 Each event is a Kubernetes Event on its subject (`kubectl describe` shows it), carrying its id in
 the annotation `beekeeper.giantswarm.io/id`; after a restart the ids continue above the highest
-of the Events kept.
+of the Events kept. A detail over the API server's 1024 bytes for a message is kept whole in the
+annotation `beekeeper.giantswarm.io/detail`, the message clipped with `…`; `line` reads the whole.
 
 Within `v1` a change only adds optional fields. Anything else is `v2`, served beside `v1` until
 its readers moved.

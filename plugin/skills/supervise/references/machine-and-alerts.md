@@ -35,7 +35,8 @@ or a page.
   come (a place whose pull request merged or closed leaves by itself). At `HANDOVER DUE "<agent>"`, `beekeeper agents handover "<agent>"` hands that agent to a
   fresh session in its place.
 - **Consent boundaries.** Bounding or waiting beats killing; never kill a busy session's work; never
-  archive or stop a session or take over a held lab without the person's explicit ask. RAM-backed
-  scratch is deleted only for *dead* sessions (CLI gone, PR merged, no worktree) and only after
+  archive or stop a session or take over a held lab without the person's explicit ask; the doctor's
+  archive request under the person's standing archive rule is that ask, a relieved run's own session
+  included. RAM-backed scratch is deleted only for *dead* sessions (CLI gone, PR merged, no worktree) and only after
   looking at what is there. A kill of a runaway process names an explicit PID from the live process
   list, never a pattern.

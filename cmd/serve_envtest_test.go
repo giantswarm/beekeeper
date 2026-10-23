@@ -91,6 +91,7 @@ func newServeEnv(t *testing.T) *serveEnv {
 	rc, store, c := envtestKube(t)
 	ctx := context.Background()
 	for _, o := range []ctrlclient.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: kube.DefaultNamespace}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beekeeper-bumblebee"}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beekeeper-planeteers"}},
 		&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: graveler}, Spec: v1alpha1.EnvironmentSpec{Installation: graveler, Team: ourTeam}},

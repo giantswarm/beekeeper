@@ -10,11 +10,17 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/feed"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // feedKey is the watch's condition of a feed subscription the central
 // instance refused or could not read.
 const feedKey = centralKey + " feed"
+
+// nameReadFeed is beekeeper serve's tool that reads the feed: muster's
+// get_resource reads no resource of a server reached with the caller's own
+// token.
+const nameReadFeed = "read_feed"
 
 // feedRetry is how long the feed watch waits before it subscribes again
 // after the subscription ended.
@@ -22,7 +28,8 @@ const feedRetry = time.Minute
 
 // watchFeed prints the central instance's feed while ctx lasts: it
 // subscribes to beekeeper://feed through muster as the person and reads
-// the feed once the subscription stands and on each update, printing each
+// the feed (read_feed) once the subscription stands and on each update,
+// printing each
 // event above the last one it printed. A subscription that ends on an
 // unreachable central instance is the CENTRAL UNREACHABLE line, one the
 // instance refused CENTRAL FEED REFUSED; either is opened again after
@@ -82,8 +89,12 @@ func (w *watcher) watchFeed(ctx context.Context) {
 // A watch with no last id starts at the feed's newest event, printing
 // none of the past.
 func (w *watcher) readFeed(ctx context.Context) {
+	w.mu.Lock()
+	last := w.feedID
+	w.mu.Unlock()
 	var f feed.Feed
-	if err := w.app.hub().Read(ctx, resourceFeed, &f); err != nil {
+	me := state.Party{Name: w.cfg.Identity.Person, Host: w.cfg.Identity.Host}
+	if _, err := w.callCentralRaw(ctx, me, nameReadFeed, map[string]any{paramAfter: last}, &f); err != nil {
 		if u := (*central.Unreachable)(nil); errors.As(err, &u) {
 			w.emit(centralKey, "CENTRAL UNREACHABLE %s: %s", w.cfg.Central.Context, u.Reason)
 			return
@@ -92,9 +103,6 @@ func (w *watcher) readFeed(ctx context.Context) {
 		return
 	}
 	w.clear(feedKey)
-	w.mu.Lock()
-	last := w.feedID
-	w.mu.Unlock()
 	if last == "" && len(f.Events) > 0 {
 		w.markFeed(f.Events[len(f.Events)-1].ID)
 		return
