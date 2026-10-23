@@ -153,6 +153,14 @@ first and tells the stopping session whether the merge was cancelled or
 landed before the stop). A merge call GitHub
 answers with a 5xx is sent again while the pull request is open, up to
 three times (10s, 30s, 1m apart); the caller reads the last document. A
+merge with --update-branch whose base moved during every one of devctl's
+update waits (exit 3, "after 3 waits") keeps its lane place, so no other
+gated merge of the repository moves the base, and its merge-child runs
+devctl again after a pause (1m, 2m, 5m, then 10m each), which updates the
+branch once its checks are green, until it lands or merge.busyBudget
+(default 4h from devctl's first run) is spent; each run's line names the
+budget spent, and a spent budget ends the run with devctl's exit 3, its
+reason naming the budget. A
 red run whose every red check is let through runs again with devctl's
 --accept-red for each: a check the base branch does not require (branch
 protection or a ruleset), no security scan (nancy, gitleaks, govulncheck,
@@ -1548,7 +1556,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 func (g *gateRun) launch(base string) (pid, rc int) {
 	argv, err := g.mergeArgv()
 	if err == nil {
-		pid, err = launchChild(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig(), HandCut: g.handCut()}, base)
+		pid, err = launchChild(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig(), HandCut: g.handCut(), BusyBudget: g.busyBudget(), BusyPauses: busyPauses}, base)
 	}
 	if err != nil {
 		gateLine("devctl does not start: %v", err)
@@ -1558,6 +1566,22 @@ func (g *gateRun) launch(base string) (pid, rc int) {
 	g.started(pid)
 	return pid, 0
 }
+
+// busyBudget is how long the merge's merge-child runs devctl again after a
+// run ends on a busy base (merge.BusyBase): merge.busyBudget for a pull
+// request's merge through devctl with --update-branch, which keeps its lane
+// place meanwhile, so no other gated merge of the repository moves its base;
+// zero, devctl runs once, for any other.
+func (g *gateRun) busyBudget() time.Duration {
+	if g.pr == 0 || !g.runsDevctl() || !merge.UpdatesBranch(g.argv) {
+		return 0
+	}
+	return max(g.cfg.Merge.BusyBudget.Duration, 0)
+}
+
+// busyPauses are the pauses before a busy base's next devctl run; a seam
+// for the tests.
+var busyPauses = merge.BusyPauses
 
 // serverRetries are the pauses before the gate sends a merge again whose
 // merge call GitHub answered with a 5xx (merge.ServerError), one per retry.

@@ -1344,7 +1344,13 @@ like a merge typed on the command line.
   branch update) GitHub answers with a 5xx, devctl's exit 7 naming `…/pulls/<n>/merge: 5xx`, is
   sent again while GitHub reports the pull request open, up to three times 10 s, 30 s and 1 m
   apart (`merge.retry` each), with the expected head as before; the caller reads one document,
-  the last run's. A red run (exit 1) is judged against its base branch: when every red check is
+  the last run's. A merge with `--update-branch` whose base moved during every one of devctl's
+  update waits (exit 3, "… moved during the wait) after 3 waits") keeps its lane place, so no
+  other gated merge of the repository moves the base, and its merge-child runs devctl again after
+  a pause (1m, 2m, 5m, then 10m each), which updates the branch once its checks are green, until
+  it lands or `merge.busyBudget` (4h from devctl's first run) is spent: each run's line names the
+  budget spent, a landing says so, and a spent budget ends the run with devctl's exit 3 and a reason
+  naming the budget (`busy-base budget spent: <n> devctl runs in <d>`). A red run (exit 1) is judged against its base branch: when every red check is
   neither required by the base (branch protection or a ruleset, read with `gh api`) nor a security
   scan (nancy, gitleaks, govulncheck, trivy, CodeQL, ...) and is red on the base branch's head too,
   devctl runs again with `--accept-red <check>` for each (`merge.acceptred`, naming the checks and

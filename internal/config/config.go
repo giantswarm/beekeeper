@@ -1202,6 +1202,11 @@ type Merge struct {
 	// when the gated command names none: devctl's own 30m is shorter than a
 	// repository's CI restarted from zero by --update-branch.
 	CITimeout Duration `yaml:"ciTimeout"`
+	// BusyBudget is how long a merge with --update-branch keeps its lane
+	// place running devctl again after a run ends on a busy base (its base
+	// moved during every one of devctl's update waits, exit 3), counted from
+	// devctl's first run. Negative: no second run.
+	BusyBudget Duration `yaml:"busyBudget"`
 	// ToolLimit is how long a foreground gate call runs before it exits 76
 	// and leaves the merge to run on outside it, its outcome waking the
 	// caller: below a desktop Bash call's 10-minute limit, which stops the
@@ -2111,6 +2116,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
 	setDur(&c.Merge.CITimeout, time.Hour)
+	setDur(&c.Merge.BusyBudget, 4*time.Hour)
 	setDur(&c.Merge.ToolLimit, 9*time.Minute)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
 	setDur(&c.Secret.SessionLifetime, 12*time.Hour)
