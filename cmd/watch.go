@@ -308,6 +308,9 @@ type watcher struct {
 	// set when they changed since it was written.
 	markFile string
 	dirty    bool
+	// feedID is the id of the last central feed event the watch printed,
+	// kept in its mark.
+	feedID string
 	lastPoll time.Time
 	// refusedSince is the newest hook.refused event said; zero before the
 	// first reading, which said none.
@@ -595,9 +598,12 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 			wg.Go(func() { w.watchDiscovery(ctx) })
 		}
 	}
-	if w.standby && w.cfg.Central.Enabled() {
-		w.hub() // made before the mailbox and the roster sync share it
-		wg.Go(func() { w.watchMailbox(ctx) })
+	if w.cfg.Central.Enabled() {
+		w.hub() // made before the feed, the mailbox and the roster sync share it
+		wg.Go(func() { w.watchFeed(ctx) })
+		if w.standby {
+			wg.Go(func() { w.watchMailbox(ctx) })
+		}
 	}
 	wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
 	w.loop(ctx, interval, false, func(ctx context.Context) {
@@ -868,6 +874,7 @@ type condition struct {
 type watchMark struct {
 	Conditions map[string]condition `json:"conditions"`
 	Reported   map[string]bool      `json:"reported"`
+	FeedID     string               `json:"feedID,omitempty"`
 }
 
 // newWatcher is a watch; one that keeps a mark resumes its caller's last
@@ -890,6 +897,7 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 		if found, err := a.store.ReadFile(w.markFile, &m); err == nil && found {
 			maps.Copy(w.active, m.Conditions)
 			maps.Copy(w.reported, m.Reported)
+			w.feedID = m.FeedID
 		}
 	}
 	return w
@@ -903,7 +911,7 @@ func (w *watcher) saveMark() {
 		return
 	}
 	w.dirty = false
-	_ = w.store.WriteFile(w.markFile, watchMark{Conditions: w.active, Reported: w.reported})
+	_ = w.store.WriteFile(w.markFile, watchMark{Conditions: w.active, Reported: w.reported, FeedID: w.feedID})
 }
 
 // notify sends one event that needs a person (--notify): a lasting kind

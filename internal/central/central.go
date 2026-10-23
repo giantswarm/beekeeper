@@ -136,37 +136,13 @@ func (c *Client) Tool(name string) string { return "x_" + c.cfg.Server + "_" + n
 // *Unreachable, naming the stage that timed out and its deadline. Each call
 // connects afresh: a stalled connection of an earlier call is never reused.
 func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v any) (string, error) {
-	deadline := c.cfg.Timeout.Duration
-	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < deadline {
-		deadline = time.Until(dl).Round(time.Millisecond)
-	}
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout.Duration)
+	ctx, cancel, deadline := c.bound(ctx)
 	defer cancel()
-	url, err := c.endpoint(ctx)
+	mc, closeMC, err := c.connect(ctx, deadline)
 	if err != nil {
-		return "", c.timedOut(ctx, stageConnect, deadline, err)
+		return "", err
 	}
-	token, err := c.token(ctx)
-	if err != nil {
-		return "", c.timedOut(ctx, stageAuth, deadline, err)
-	}
-	tr := baseTransport.Clone()
-	defer tr.CloseIdleConnections()
-	mc, err := client.NewStreamableHttpClient(url, transport.WithHTTPBasicClient(&http.Client{Transport: tr}),
-		transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
-	if err != nil {
-		return "", c.unreachable("%v", err)
-	}
-	defer func() { _ = mc.Close() }()
-	if err := mc.Start(ctx); err != nil {
-		return "", c.timedOut(ctx, stageConnect, deadline, c.unreachable("%v", err))
-	}
-	init := mcp.InitializeRequest{}
-	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	init.Params.ClientInfo = mcp.Implementation{Name: project.Name, Version: project.Version()}
-	if _, err := mc.Initialize(ctx, init); err != nil {
-		return "", c.timedOut(ctx, stageConnect, deadline, c.unreachable("muster at %s: %v", url, err))
-	}
+	defer closeMC()
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "call_tool"
 	req.Params.Arguments = map[string]any{"name": c.Tool(tool), "arguments": args}
@@ -179,6 +155,82 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v a
 		return "", err
 	}
 	return c.result(tool, res, v)
+}
+
+// Read reads the central instance's resource uri through muster's
+// get_resource as the person and decodes its JSON into v. A read muster or
+// the instance did not answer is *Unreachable, naming muster's reason.
+func (c *Client) Read(ctx context.Context, uri string, v any) error {
+	ctx, cancel, deadline := c.bound(ctx)
+	defer cancel()
+	mc, closeMC, err := c.connect(ctx, deadline)
+	if err != nil {
+		return err
+	}
+	defer closeMC()
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "get_resource"
+	req.Params.Arguments = map[string]any{"uri": uri, "server": c.cfg.Server}
+	res, err := mc.CallTool(ctx, req)
+	if err != nil {
+		return c.timedOut(ctx, stageToolCall, deadline, c.unreachable("muster: get_resource %s: %v", uri, err))
+	}
+	text := envelopeText(res)
+	if res.IsError {
+		return c.unreachable("muster: get_resource %s: %s", uri, firstLine(text))
+	}
+	if err := json.Unmarshal([]byte(text), v); err != nil {
+		return fmt.Errorf("%s: %w", uri, err)
+	}
+	return nil
+}
+
+// bound is ctx bounded by the call timeout, and the deadline a timeout
+// names: the call timeout, or ctx's own when that comes first.
+func (c *Client) bound(ctx context.Context) (context.Context, context.CancelFunc, time.Duration) {
+	deadline := c.cfg.Timeout.Duration
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < deadline {
+		deadline = time.Until(dl).Round(time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout.Duration)
+	return ctx, cancel, deadline
+}
+
+// connect opens an initialized session with muster as the person, on a
+// connection of its own: a stalled connection of an earlier call is never
+// reused. The returned func closes it.
+func (c *Client) connect(ctx context.Context, deadline time.Duration) (*client.Client, func(), error) {
+	url, err := c.endpoint(ctx)
+	if err != nil {
+		return nil, nil, c.timedOut(ctx, stageConnect, deadline, err)
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return nil, nil, c.timedOut(ctx, stageAuth, deadline, err)
+	}
+	tr := baseTransport.Clone()
+	mc, err := client.NewStreamableHttpClient(url, transport.WithHTTPBasicClient(&http.Client{Transport: tr}),
+		transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
+	if err != nil {
+		tr.CloseIdleConnections()
+		return nil, nil, c.unreachable("%v", err)
+	}
+	closeMC := func() {
+		_ = mc.Close()
+		tr.CloseIdleConnections()
+	}
+	if err := mc.Start(ctx); err != nil {
+		closeMC()
+		return nil, nil, c.timedOut(ctx, stageConnect, deadline, c.unreachable("%v", err))
+	}
+	init := mcp.InitializeRequest{}
+	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	init.Params.ClientInfo = mcp.Implementation{Name: project.Name, Version: project.Version()}
+	if _, err := mc.Initialize(ctx, init); err != nil {
+		closeMC()
+		return nil, nil, c.timedOut(ctx, stageConnect, deadline, c.unreachable("muster at %s: %v", url, err))
+	}
+	return mc, closeMC, nil
 }
 
 // Listen subscribes to uris through muster's subscriptions/listen (MCP

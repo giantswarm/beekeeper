@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper watch` prints the central instance's feed: with `central.context` set it subscribes to `beekeeper://feed` through muster as the person and prints each event once as `CENTRAL <line> [<person> on <host>]`, resuming from the last event id in its mark across a restart; an ended subscription is the `CENTRAL UNREACHABLE` line, or `CENTRAL FEED REFUSED` ([#360](https://github.com/giantswarm/beekeeper/issues/360)).
 - `note add --for <person|team:name>` on a machine with a central instance (`central.context`) files the decision there (`note_add`, through muster as the person) once the local checks pass: it reaches Slack and the guide from the central instance, its answer or default reaches the filing session through the person's mailbox, and it prints the central note's number. A sign-in, `--holds` and `--fold-into` stay on the machine; with the central instance unreachable before the call went out the decision is filed on the machine as before, as stderr says, and a call sent and left unanswered is filed nowhere else (exit 69) ([#360](https://github.com/giantswarm/beekeeper/issues/360)).
 
 ### Fixed
