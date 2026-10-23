@@ -3,12 +3,12 @@
 package secret_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,16 +26,24 @@ const (
 	pullUser  = "pull-token"
 )
 
-// producer is a fake credential generator: a script that prints body on
-// stdout and a line on stderr, then exits with code.
-func producer(t *testing.T, body string, code int) string {
+// azGenerateArgs is the allowed producer the fakes stand in for.
+var azGenerateArgs = strings.Fields("az acr token credential generate --registry gsociprivate --name " + pullUser + " --password1")
+
+// notAllowed is the refusal of a producer outside the allowlist.
+const notAllowed = "runs only the producers"
+
+// producer is a fake credential generator: an az on PATH that prints body
+// on stdout and the password on stderr (as --debug would), then exits with
+// code. It answers the allowed argv that runs it.
+func producer(t *testing.T, body string, code int) []string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "generate")
-	script := fmt.Sprintf("#!/bin/sh\necho 'generating' >&2\ncat <<'EOF'\n%s\nEOF\nexit %d\n", body, code)
-	if err := os.WriteFile(p, []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
+	dir := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\necho 'response: %s' >&2\ncat <<'EOF'\n%s\nEOF\nexit %d\n", password, body, code)
+	if err := os.WriteFile(filepath.Join(dir, "az"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
 		t.Fatal(err)
 	}
-	return p
+	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	return azGenerateArgs
 }
 
 // tokenJSON is what a registry token's credential generation prints: the
@@ -53,9 +61,8 @@ func TestCaptureTakesTheWholeOutputOrOneFieldAndAnswersNoValue(t *testing.T) {
 			tools := secrettest.New(nil)
 			dir, _ := scratch(t)
 			dst := secret.Ref{File: filepath.Join(dir, "token.sops.yaml"), Path: pwPath}
-			var stderr bytes.Buffer
 			res, err := ops(tools).Capture(context.Background(), dst, secret.CaptureOptions{
-				Producer: []string{producer(t, c.body, 0)}, Stderr: &stderr, JQ: c.jq, Vault: secret.Ref{Op: appVault},
+				Producer: producer(t, c.body, 0), JQ: c.jq, Vault: secret.Ref{Op: appVault},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -64,9 +71,6 @@ func TestCaptureTakesTheWholeOutputOrOneFieldAndAnswersNoValue(t *testing.T) {
 				t.Errorf("result %+v", res)
 			}
 			noValue(t, "capture", res)
-			if stderr.String() != "generating\n" {
-				t.Errorf("the producer's stderr = %q, want it passed through", stderr.String())
-			}
 			if tools.Vault[appVault] != password {
 				t.Error("the vault does not hold the value")
 			}
@@ -82,13 +86,30 @@ func TestCaptureTakesTheWholeOutputOrOneFieldAndAnswersNoValue(t *testing.T) {
 	}
 }
 
+// An allowed openssl generates a value no fake stands in for.
+func TestCaptureRunsOpenSSL(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("no openssl")
+	}
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	dst := secret.Ref{File: filepath.Join(dir, "token.sops.yaml"), Path: pwPath}
+	res, err := ops(tools).Capture(context.Background(), dst, secret.CaptureOptions{Producer: []string{"openssl", "rand", "-hex", "16"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Bytes != 32 {
+		t.Errorf("bytes = %d, want 32 hex digits", res.Bytes)
+	}
+}
+
 func TestCaptureEncodes(t *testing.T) {
 	tools := secrettest.New(nil)
 	dir, _ := scratch(t)
 	dst := secret.Ref{File: filepath.Join(dir, "token.sops.yaml"), Path: pwPath}
 	o := ops(tools)
 	o.Encode = secret.Encoding{Base64: true, User: pullUser}
-	res, err := o.Capture(context.Background(), dst, secret.CaptureOptions{Producer: []string{producer(t, password, 0)}, Vault: secret.Ref{Op: appVault}})
+	res, err := o.Capture(context.Background(), dst, secret.CaptureOptions{Producer: producer(t, password, 0), Vault: secret.Ref{Op: appVault}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +127,7 @@ func TestCaptureWritesADockerConfigJSONSecret(t *testing.T) {
 	}
 	file := filepath.Join(dir, "pull.sops.yaml")
 	res, err := ops(tools).Capture(context.Background(), secret.Ref{File: file}, secret.CaptureOptions{
-		Producer: []string{producer(t, tokenJSON, 0)}, JQ: captureJQ,
+		Producer: producer(t, tokenJSON, 0), JQ: captureJQ,
 		Docker: &secret.DockerConfig{Registry: registry, Username: pullUser},
 		New:    &secret.NewSecret{Name: "pull", Namespace: "flux-system"},
 	})
@@ -152,19 +173,26 @@ func TestCaptureRefusesBeforeTheProducerRuns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(secretRules), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ran := filepath.Join(t.TempDir(), "ran")
-	prod := filepath.Join(t.TempDir(), "generate")
-	if err := os.WriteFile(prod, []byte("#!/bin/sh\ntouch "+ran+"\necho x\n"), 0o700); err != nil { //nolint:gosec // an executable the test runs
-		t.Fatal(err)
-	}
+	ran := fakeAz(t, 0)
 	file := filepath.Join(dir, "x.sops.yaml")
+	pw := secret.Ref{File: file, Path: pwPath}
 	docker := &secret.DockerConfig{Registry: registry, Username: pullUser}
+	with := func(args ...string) secret.CaptureOptions {
+		return secret.CaptureOptions{Producer: args}
+	}
 	for _, c := range []struct {
 		name string
 		dst  secret.Ref
 		opt  secret.CaptureOptions
 		want string
 	}{
+		{"shell", pw, with("sh", "-c", "az acr token credential generate --name x"), notAllowed},
+		{"other az", pw, with("az", "account", "get-access-token"), notAllowed},
+		{"az by path", pw, with("/usr/bin/az", "acr", "token", "credential", "generate"), notAllowed},
+		{"debug", pw, with(append(slices.Clone(azGenerateArgs), "--debug")...), "--debug"},
+		{"verbose", pw, with(append(slices.Clone(azGenerateArgs), "--verbose=true")...), "--verbose"},
+		{"out", pw, with("openssl", "genpkey", "-algorithm", "ed25519", "-out", "key.pem"), "-out"},
+		{"out, two dashes", pw, with("openssl", "rand", "--out=r", "32"), "--out"},
 		{"no path", secret.Ref{File: file}, secret.CaptureOptions{}, "file#path"},
 		{"plaintext path", secret.Ref{File: file, Path: "token"}, secret.CaptureOptions{}, "would stay plaintext"},
 		{"bad filter", secret.Ref{File: file, Path: pwPath}, secret.CaptureOptions{JQ: ".["}, "--jq"},
@@ -175,7 +203,9 @@ func TestCaptureRefusesBeforeTheProducerRuns(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tools := secrettest.New(nil)
-			c.opt.Producer = []string{prod}
+			if c.opt.Producer == nil {
+				c.opt.Producer = azGenerateArgs
+			}
 			_, err := ops(tools).Capture(context.Background(), c.dst, c.opt)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("capture = %v, want a refusal naming %q", err, c.want)
@@ -208,7 +238,7 @@ func TestCaptureRefusesAFailingOrSilentProducerAndAnUnfitFilter(t *testing.T) {
 			tools := secrettest.New(nil)
 			dir, _ := scratch(t)
 			dst := secret.Ref{File: filepath.Join(dir, "token.sops.yaml"), Path: pwPath}
-			_, err := ops(tools).Capture(context.Background(), dst, secret.CaptureOptions{Producer: []string{producer(t, c.body, c.code)}, JQ: c.jq, Vault: secret.Ref{Op: appVault}})
+			_, err := ops(tools).Capture(context.Background(), dst, secret.CaptureOptions{Producer: producer(t, c.body, c.code), JQ: c.jq, Vault: secret.Ref{Op: appVault}})
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("capture = %v, want %q", err, c.want)
 			}
