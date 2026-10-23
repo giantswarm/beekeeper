@@ -10,12 +10,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const captureOp = "capture"
 
-// fakeProducer puts an az on PATH that prints a token's JSON, the password
+// fakeProducer puts an az where producers resolve that prints a token's JSON, the password
 // once, and the password on stderr too (as --debug would); called with
 // --password2 it exits 2 instead. It answers the allowed argv that runs it.
 func fakeProducer(t *testing.T) []string {
@@ -25,7 +26,7 @@ func fakeProducer(t *testing.T) []string {
 	if err := os.WriteFile(filepath.Join(dir, "az"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	t.Cleanup(secret.UseProducersIn(dir))
 	return append(strings.Fields("az acr token credential generate"), nameFlag, "pull-token")
 }
 
@@ -99,7 +100,7 @@ func TestSecretCaptureHelp(t *testing.T) {
 	}
 	a.out = &bytes.Buffer{}
 	out, err = runSecret(a, captureOp, "--help")
-	for _, want := range []string{"--jq", dockerFlag, usernameFlag, vaultFlag, "--encode", "kubernetes.io/dockerconfigjson", "secret.env", "openssl genpkey", "stderr discarded"} {
+	for _, want := range []string{"--jq", dockerFlag, usernameFlag, vaultFlag, "--encode", "kubernetes.io/dockerconfigjson", "secret.env", "openssl genpkey", "never the\ncaller's PATH", "clean\nenvironment", "stderr is discarded"} {
 		if err != nil || !strings.Contains(out, want) {
 			t.Errorf("capture --help lacks %q: %v", want, err)
 		}

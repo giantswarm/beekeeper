@@ -24,10 +24,14 @@ credential generate, openssl genpkey and openssl rand, each with the
 options it lists alone: --debug, --verbose, -out, -engine, -provider and
 every other one are refused, so is every other command (sh -c among them).
 It runs
-in beekeeper's process with the caller's environment minus every variable
-that carries a secret (the vault's credentials, SOPS_AGE_KEY and the names
-secret.env lists) and OpenSSL's loaders (OPENSSL_CONF, OPENSSL_ENGINES,
-OPENSSL_MODULES), its stderr discarded, a log there may carry the value: a
+in beekeeper's process from the path beekeeper resolves itself, never the
+caller's PATH: the first of /usr/bin, /bin and /usr/local/bin that holds
+it, refused unless root owns it and every directory above it, none
+writable by a group or other users. It runs in / with a clean
+environment: PATH=/usr/bin:/bin, HOME from the user database, and of the
+caller's variables only the locale (LANG, LANGUAGE, LC_*) and TZ minus the
+names secret.env lists; no loader, interpreter, proxy or secret variable
+reaches it. Its stderr is discarded, a log there may carry the value: a
 failure names its exit code alone. The value is its
 stdout without the line end, or with --jq <filter> the one string the
 filter picks from its JSON output; the value goes into the SOPS file's

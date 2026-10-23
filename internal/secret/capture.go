@@ -8,13 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"os/user"
 	"path"
-	"slices"
 	"strings"
 
 	"github.com/itchyny/gojq"
-
-	"github.com/giantswarm/beekeeper/internal/guard"
 )
 
 // The key and the type of a kubernetes.io/dockerconfigjson Secret.
@@ -235,17 +233,25 @@ func compileJQ(filter string) (*gojq.Code, error) {
 	return code, nil
 }
 
-// produce runs the producer, one of [Producers], with its environment and
-// answers its stdout: a non-zero exit or nothing on stdout refuses. Its
-// stderr is discarded, a log there may carry the value: a failure names its
-// exit code alone.
+// produce runs the producer, one of [Producers], from the path beekeeper
+// resolves itself ([producerPath]), in the root directory, with its
+// environment, and answers its stdout: a non-zero exit or nothing on
+// stdout refuses. The caller's PATH and working directory never reach it:
+// a wrapper there, or a module a python producer would import from its
+// working directory, could read the value. Its stderr is discarded, a log
+// there may carry the value: a failure names its exit code alone.
 func produce(ctx context.Context, opt CaptureOptions) ([]byte, error) {
 	if err := checkProducer(opt.Producer); err != nil {
 		return nil, err
 	}
 	name := opt.Producer[0]
-	c := exec.CommandContext(ctx, name, opt.Producer[1:]...) //nolint:gosec // an allowlisted producer is the purpose
+	bin, err := producerPath(name)
+	if err != nil {
+		return nil, err
+	}
+	c := exec.CommandContext(ctx, bin, opt.Producer[1:]...) //nolint:gosec // an allowlisted producer is the purpose
 	c.Env = opt.Env
+	c.Dir = "/"
 	var out bytes.Buffer
 	c.Stdout = &out
 	if err := c.Run(); err != nil {
@@ -311,22 +317,31 @@ func jsonKind(v any) string {
 	return "number"
 }
 
-// producerLoaders are the variables that make an allowed producer load
-// code of the caller's choosing: openssl's configuration, engines and
-// providers.
-var producerLoaders = []string{"OPENSSL_CONF", "OPENSSL_ENGINES", "OPENSSL_MODULES"}
+// producerPATH is a producer's PATH: the interpreter a producer's script
+// names through env (az's bash) is the system's too.
+const producerPATH = "/usr/bin:/bin"
 
-// ProducerEnv is environ without the variables that carry a secret (the
-// vault's credentials, sops' age identity and those whose names match one
-// of the globs of drop, secret.env) and those of producerLoaders.
+// producerVars are the globs of the caller's variables a producer keeps:
+// the locale and the time zone. Every other one stays behind, those that
+// carry a secret and those that make a producer run code or reach a host
+// of the caller's choosing: a loader's (LD_PRELOAD, DYLD_*), an
+// interpreter's (PYTHONPATH, BASH_ENV), openssl's configuration, engines
+// and providers, az's configuration directory, a proxy and its CA bundle.
+var producerVars = []string{"LANG", "LANGUAGE", "LC_*", "TZ"}
+
+// ProducerEnv is a producer's clean environment: [producerPATH], HOME from
+// the user database, never the caller's, and the variables of environ
+// whose names match one of [producerVars] and none of the globs of drop,
+// secret.env.
 func ProducerEnv(environ, drop []string) []string {
-	out := make([]string, 0, len(environ))
+	out := []string{"PATH=" + producerPATH}
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		out = append(out, "HOME="+u.HomeDir)
+	}
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		if guard.VaultVar.MatchString(name) || name == envAgeKey || slices.Contains(producerLoaders, name) || globbed(drop, name) {
-			continue
+		if name, _, _ := strings.Cut(kv, "="); globbed(producerVars, name) && !globbed(drop, name) {
+			out = append(out, kv)
 		}
-		out = append(out, kv)
 	}
 	return out
 }
