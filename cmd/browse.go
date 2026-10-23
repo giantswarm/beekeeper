@@ -105,6 +105,11 @@ const (
 		"grants access, and stop on the consent page for any other account or client. "
 	oauthDeviceWords = "On its device-code page (%s) type only the device code the steps give and click Continue once, naming the account " +
 		"in each call's summary; never type a credential there. "
+	slackConsentWords = "The person's own Slack app %s (%s) is on record for its install on %s: on its Install App page click Install or Reinstall " +
+		"once; on Slack's page 'Allow %s to access Slack' on %s %sclick Allow once, naming the app in each call's summary; click nothing else that " +
+		"grants access, and stop on the install page of any other app or workspace. "
+	slackChannelWords = "in the 'Channel for webhook' picker choose exactly #%s, the channel the app's webhook posts to now, never another, typing " +
+		"only a part of its name and naming #%s in that call's summary, in a call of its own before Allow; then "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.<n>.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
@@ -298,6 +303,17 @@ account, and refuses it for any other account, a client on no record or
 other text typed there. A
 turn whose steps name the record or its sign-in host runs with its auto
 mode rule, and "allowed consent: <name> (<client>, …)" goes below the
+report.
+
+A Slack app the person owns and asked to install or re-install is recorded
+with "beekeeper app allow <name> --slack <workspace>.slack.com --app-id <id>
+--client-id <id> --webhook-channel <#channel> --word '<the person's
+words>'". The hook answers Install or Reinstall on its Install App page and,
+on Slack's install consent page of that app on that workspace, the webhook
+channel's picker, the recorded channel chosen there and Allow once it is
+chosen; another channel, other text typed and any other app's page are
+refused. A turn whose steps name the app, its id or its workspace runs with
+its auto mode rule, and "allowed consent: <name> (Slack, …)" goes below the
 report.
 
 A sign-in or consent page of the lab's own identity provider on a loopback
@@ -758,7 +774,7 @@ var grantWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|a
 // consentHint names the record forms below a grant refusal of a run whose
 // steps name no App on record.
 const consentHint = "a consent for an App the person owns and asked for is recorded with " + guard.AllowForm +
-	" (a Google OAuth client's with " + guard.GoogleForm + ", a third party's OAuth client's with " + guard.OAuthForm + ")" +
+	" (a Google OAuth client's with " + guard.GoogleForm + ", a Slack app's with " + guard.SlackForm + ", a third party's OAuth client's with " + guard.OAuthForm + ")" +
 	", one change of such an App's permissions with " + guard.PermissionForm + ", one callback URL with " + guard.CallbackForm +
 	", an App's deletion with " + guard.DeleteForm +
 	" (its creation and installation are answered while " + guard.CreateForm + " runs for it), after which the hook answers the click on its consent page, " +
@@ -1008,7 +1024,11 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
 	}
 	for _, c := range consents {
-		if c.OAuth != "" {
+		if c.Slack != "" {
+			out = append(out, fmt.Sprintf("allowed consent: %s (Slack, app %s on %s, client %s%s, %s): the hook answers its Install or Reinstall and "+
+				"Allow on Slack's install page and the turn's auto mode allows them, on record since %s by %s: %s", c.Name, c.SlackApp, c.Slack, c.ClientID,
+				slackChannelNote(c), c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		} else if c.OAuth != "" {
 			out = append(out, fmt.Sprintf("allowed consent: %s (%s, client %s, account %s, %s): the hook answers the Continue on %s for that account "+
 				"and the turn's auto mode allows it, on record since %s by %s: %s", c.Name, thirdParty(c).Name, c.ClientID, c.Account, c.Declared,
 				oauthPages(c), c.At.UTC().Format("2006-01-02"), c.By, c.Word))
@@ -1324,7 +1344,9 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 		p += fmt.Sprintf(deployWords, deploy)
 	}
 	for _, c := range consents {
-		if c.OAuth != "" {
+		if c.Slack != "" {
+			p += fmt.Sprintf(slackConsentWords, c.Name, c.SlackApp, c.Slack, c.Name, c.Slack, slackChannelStep(c))
+		} else if c.OAuth != "" {
 			p += fmt.Sprintf(oauthConsentWords, thirdParty(c).Name, c.Account, consentPage(c))
 			if d := devicePage(c); d != "" {
 				p += fmt.Sprintf(oauthDeviceWords, d)
@@ -1363,7 +1385,9 @@ func browseRules(deploy string, consents []guard.App, lab bool) []string {
 		rules = append(rules, allowDeployRule(deploy))
 	}
 	for _, c := range consents {
-		if c.OAuth != "" {
+		if c.Slack != "" {
+			rules = append(rules, slackConsentRule(c))
+		} else if c.OAuth != "" {
 			rules = append(rules, oauthConsentRule(c))
 		} else if c.Google {
 			rules = append(rules, googleConsentRule(c))
@@ -1448,6 +1472,37 @@ func oauthConsentRule(a guard.App) string {
 		"that names it is no grant request; beekeeper's own hook verifies the page and the account and answers the click. Not covered: the consent "+
 		"for any other account or client, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
 		thirdParty(a).Name, a.ClientID, a.Account, consentPage(a), device)
+}
+
+// slackConsentRule is the auto mode allow rule of a Slack app on record:
+// the person's pre-authorization of its Install or Reinstall and of Allow on
+// Slack's install page with the recorded webhook channel, which the hook
+// verifies; any other app, workspace or channel is not covered.
+func slackConsentRule(a guard.App) string {
+	return fmt.Sprintf("Own Slack App Install: The person owns the Slack app %s (app id %s, client id %s) and asked, on record with beekeeper, "+
+		"for its install or re-install on %s: Install or Reinstall on its Install App page and, on Slack's page 'Allow %s to access Slack'%s, "+
+		"the Allow click are pre-authorized and no Permission Grant to refuse, and a step that names them is no grant request; beekeeper's own "+
+		"hook verifies the page, the app and the channel and answers each click. Not covered: the install page of any other app or workspace, "+
+		"another webhook channel, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
+		a.Name, a.SlackApp, a.ClientID, a.Slack, a.Name, slackChannelNote(a))
+}
+
+// slackChannelStep is the prompt's step that keeps a Slack app's webhook
+// channel, "" for an app without one.
+func slackChannelStep(a guard.App) string {
+	if a.Channel == "" {
+		return ""
+	}
+	return fmt.Sprintf(slackChannelWords, a.Channel, a.Channel)
+}
+
+// slackChannelNote names the webhook channel a Slack app's install keeps,
+// "" for an app without one.
+func slackChannelNote(a guard.App) string {
+	if a.Channel == "" {
+		return ""
+	}
+	return ", keeping the webhook channel #" + a.Channel
 }
 
 // thirdParty is the known client a third-party consent on record is to.
@@ -1573,7 +1628,7 @@ const labRule = "Lab Identity Provider: a sign-in or consent page on a loopback 
 
 // appsNamed are the Apps the hook decides from that the steps name, by
 // name, by slug, by one of their callback hosts, by the sign-in host of a
-// third-party consent, or by the loopback listener of their running app
+// third-party consent, by a Slack app's workspace or app id, or by the loopback listener of their running app
 // create.
 func appsNamed(apps []guard.App, steps string) []guard.App {
 	s := strings.ToLower(steps)
@@ -1582,6 +1637,7 @@ func appsNamed(apps []guard.App, steps string) []guard.App {
 		if strings.Contains(s, strings.ToLower(x.Name)) || strings.Contains(s, guard.AppSlug(x.Name)) ||
 			slices.ContainsFunc(x.Callbacks, func(h string) bool { return strings.Contains(s, h) }) ||
 			x.OAuth != "" && strings.Contains(s, x.OAuth) ||
+			x.Slack != "" && (strings.Contains(s, x.Slack) || strings.Contains(s, strings.ToLower(x.SlackApp))) ||
 			x.Run != nil && strings.Contains(s, x.Run.Listener) {
 			named = append(named, x)
 		}
