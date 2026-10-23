@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,7 +33,7 @@ var azGenerateArgs = strings.Fields("az acr token credential generate --registry
 // notAllowed is the refusal of a producer outside the allowlist.
 const notAllowed = "runs only the producers"
 
-// producer is a fake credential generator: an az on PATH that prints body
+// producer is a fake credential generator: an az producers resolve to that prints body
 // on stdout and the password on stderr (as --debug would), then exits with
 // code. It answers the allowed argv that runs it.
 func producer(t *testing.T, body string, code int) []string {
@@ -42,7 +43,7 @@ func producer(t *testing.T, body string, code int) []string {
 	if err := os.WriteFile(filepath.Join(dir, "az"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	t.Cleanup(secret.UseProducersIn(dir))
 	return azGenerateArgs
 }
 
@@ -261,10 +262,19 @@ func TestCaptureRefusesAFailingOrSilentProducerAndAnUnfitFilter(t *testing.T) {
 	}
 }
 
-func TestProducerEnvDropsTheSecrets(t *testing.T) {
-	env := secret.ProducerEnv([]string{"PATH=/bin", "OP_SESSION_abc=x", "OP_SERVICE_ACCOUNT_TOKEN=x", "SOPS_AGE_KEY=x", "OPENSSL_CONF=/c", "OPENSSL_MODULES=/m", "GITHUB_TOKEN=x", "HOME=/h", "AZURE_CONFIG_DIR=/a"},
+// The producer's environment is an allowlist: the system's PATH, the
+// user database's HOME, the locale and the time zone; the caller's PATH,
+// HOME, secrets, loaders and interpreters stay behind.
+func TestProducerEnvKeepsOnlyTheAllowlist(t *testing.T) {
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := secret.ProducerEnv([]string{"PATH=/session/bin:/usr/bin", "HOME=/session", "OP_SESSION_abc=x", "OP_SERVICE_ACCOUNT_TOKEN=x", "SOPS_AGE_KEY=x",
+		"OPENSSL_CONF=/c", "OPENSSL_MODULES=/m", "GITHUB_TOKEN=x", "AZURE_CONFIG_DIR=/a", "LD_PRELOAD=/x.so", "LD_LIBRARY_PATH=/l", "DYLD_INSERT_LIBRARIES=/d",
+		"PYTHONPATH=/p", "PYTHONSTARTUP=/s", "BASH_ENV=/b", "HTTPS_PROXY=http://p", "REQUESTS_CA_BUNDLE=/ca", "LANG=C.UTF-8", "LC_ALL=C", "LC_TOKEN=x", "TZ=UTC"},
 		[]string{"*_TOKEN"})
-	if want := []string{"PATH=/bin", "HOME=/h", "AZURE_CONFIG_DIR=/a"}; !slices.Equal(env, want) {
+	if want := []string{"PATH=/usr/bin:/bin", "HOME=" + u.HomeDir, "LANG=C.UTF-8", "LC_ALL=C", "TZ=UTC"}; !slices.Equal(env, want) {
 		t.Errorf("env = %q, want %q", env, want)
 	}
 }

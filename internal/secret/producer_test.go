@@ -22,7 +22,7 @@ var fluxPull = &secret.NewSecret{Name: pullUser, Namespace: "flux-giantswarm"}
 
 const azGenerate = "cmd://az acr token credential generate --registry gsociprivate --name " + pullUser + " --password1 -o json#passwords.0.value"
 
-// fakeAz puts an az on PATH that prints the token's JSON on stdout, the
+// fakeAz puts an az where producers resolve that prints the token's JSON on stdout, the
 // password on stderr too (as --debug would), records that it ran, and
 // exits with code.
 func fakeAz(t *testing.T, code int) (ran string) {
@@ -33,7 +33,7 @@ func fakeAz(t *testing.T, code int) (ran string) {
 	if err := os.WriteFile(filepath.Join(dir, "az"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	t.Cleanup(secret.UseProducersIn(dir))
 	return ran
 }
 

@@ -105,9 +105,9 @@ func checkProducer(words []string) error {
 	return nil
 }
 
-// readCmd runs the producer a cmd:// reference names, with the
-// environment minus every variable that carries a secret ([ProducerEnv]),
-// and reads the value at its path in the producer's stdout. The producer's
+// readCmd runs the producer a cmd:// reference names, from the path
+// beekeeper resolves and with a clean environment ([ProducerEnv]), and
+// reads the value at its path in the producer's stdout. The producer's
 // stderr is discarded, never answered: a failure names its exit code alone.
 func (o *Ops) readCmd(ctx context.Context, r Ref) (string, error) {
 	if !o.Produce {
