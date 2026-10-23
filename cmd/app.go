@@ -132,8 +132,10 @@ Without a subcommand, lists the Apps on record.`,
 		Use:   "allow <name>",
 		Short: "Record an App the organisation declares and the person asked a grant for (a consent, a permission change, a callback URL, a deletion), on their word",
 		Long: `allow records the App <name> the organisation declares, on the person's
-word, for the grant the person asked for; a record of the same name is
-replaced:
+word, for the grant the person asked for. An App holds several records: a
+grant recorded again (its consent, a permission's scope, a callback URL,
+its deletion) replaces that grant of the App's earlier records, and its
+other grants stay on record:
 
   --client-id <id>: a consent, GitHub's page "Authorize <name>" redirecting
   to one of the manifest's callback_urls. An App without callback URLs,
@@ -142,7 +144,8 @@ replaced:
   e.g. "Members: Read-only": the navigation to its permissions page under
   the organisation's settings, the clicks there that select that level for
   that permission and Save changes, and the installation's Review request
-  and Accept new permissions. A record carries one change.
+  and Accept new permissions. A record carries one change; another
+  permission of the App is a record of its own.
   --callback-url <url>: one callback URL added to the App's settings, on a
   callback host its manifest's callback_urls declare: the navigation to its
   settings page under the organisation's settings, the clicks there that
@@ -247,8 +250,7 @@ Any of them, with --word, the person's words that asked for it.`,
 			}
 			rec.By, rec.At = me, a.now.UTC()
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Apps = slices.DeleteFunc(st.Apps, func(x state.App) bool { return strings.EqualFold(x.Name, rec.Name) })
-				st.Apps = append(st.Apps, rec)
+				st.Apps = append(supersede(st.Apps, rec), rec)
 				return []state.Event{event(me, appAllowed, "%s: %s: %s", rec.Name, strings.Join(recordParts(rec), ", "), rec.Word)}, nil
 			})
 			if err != nil {
@@ -302,7 +304,7 @@ Any of them, with --word, the person's words that asked for it.`,
 	allow.Flags().StringVar(&rec.OAuth, "oauth", "", "a consent to a third party's OAuth client as the person's own account there: its sign-in host, with --client-id and --account")
 	revoke := &cobra.Command{
 		Use:   "revoke <name>",
-		Short: "Take an App off the record: its consent page is refused again",
+		Short: "Take an App off the record, every grant of it: its consent page is refused again",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
@@ -311,13 +313,18 @@ Any of them, with --word, the person's words that asked for it.`,
 				return err
 			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Apps, func(x state.App) bool { return strings.EqualFold(x.Name, name) })
-				if i < 0 {
+				var evs []state.Event
+				st.Apps = slices.DeleteFunc(st.Apps, func(x state.App) bool {
+					if !strings.EqualFold(x.Name, name) {
+						return false
+					}
+					evs = append(evs, event(me, appRevoked, "%s: %s", x.Name, strings.Join(recordParts(x), ", ")))
+					return true
+				})
+				if len(evs) == 0 {
 					return nil, refused("no App %s is on record", name)
 				}
-				r := st.Apps[i]
-				st.Apps = slices.Delete(st.Apps, i, i+1)
-				return []state.Event{event(me, appRevoked, "%s: %s", r.Name, strings.Join(recordParts(r), ", "))}, nil
+				return evs, nil
 			})
 			if err != nil {
 				return err
@@ -656,6 +663,58 @@ func permissionChange(flag string) (string, error) {
 
 // recordParts name a record's facts: its client id and callback hosts for
 // a consent, its permission change, and where the App is declared.
+// supersede is apps with rec's grants taken off the records of rec's
+// name: the same consent, a permission of the same scope, the same
+// callback URL, the deletion. A record left without a grant goes; the
+// App's other grants stay on record.
+func supersede(apps []state.App, rec state.App) []state.App {
+	out := make([]state.App, 0, len(apps))
+	for _, x := range apps {
+		if !strings.EqualFold(x.Name, rec.Name) {
+			out = append(out, x)
+			continue
+		}
+		if c := consentOf(x); c != "" && c == consentOf(rec) {
+			x.ClientID, x.Callbacks, x.Google, x.Account, x.GitLab, x.OAuth, x.Slack, x.SlackApp, x.WebhookChannel = "", nil, false, "", "", "", "", "", ""
+		}
+		if x.Permission != "" && strings.EqualFold(permissionScope(x.Permission), permissionScope(rec.Permission)) {
+			x.Permission = ""
+		}
+		if x.CallbackURL == rec.CallbackURL {
+			x.CallbackURL = ""
+		}
+		x.Delete = x.Delete && !rec.Delete
+		if consentOf(x) != "" || x.Permission != "" || x.CallbackURL != "" || x.Delete {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// consentOf names the consent a record carries, "" for none: a GitHub
+// App's own, or of the provider and client it names.
+func consentOf(x state.App) string {
+	switch {
+	case x.Google:
+		return "google"
+	case x.GitLab != "":
+		return "gitlab " + x.GitLab
+	case x.OAuth != "":
+		return "oauth " + x.OAuth + " " + x.ClientID
+	case x.Slack != "":
+		return "slack " + x.Slack + " " + x.SlackApp
+	case x.ClientID != "":
+		return "github consent"
+	}
+	return ""
+}
+
+// permissionScope is the scope of a permission change "<scope>: <level>".
+func permissionScope(change string) string {
+	scope, _, _ := strings.Cut(change, ":")
+	return strings.TrimSpace(scope)
+}
+
 func recordParts(x state.App) []string {
 	var parts []string
 	if x.Google {

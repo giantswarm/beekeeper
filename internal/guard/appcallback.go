@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -44,11 +45,11 @@ func callbackNavigation(apps []App, path string) (Decision, bool) {
 	if m == nil {
 		return Decision{}, false
 	}
-	a := callbackRecord(apps, m[1], m[2])
-	if a == nil {
+	recs := callbackRecords(apps, m[1], m[2])
+	if len(recs) == 0 {
 		return Decision{}, false
 	}
-	return Decision{Allow, "beekeeper allows it: the settings page of " + callbackWords(a)}, true
+	return Decision{Allow, "beekeeper allows it: the settings page of " + callbackWords(recs[0])}, true
 }
 
 // callbackClick decides a call in words on GitHub's page u when it is the
@@ -59,15 +60,17 @@ func callbackClick(apps []App, u *url.URL, words string) (Decision, bool) {
 	if m == nil {
 		return Decision{}, false
 	}
-	a := callbackRecord(apps, m[1], m[2])
-	if a == nil {
+	recs := callbackRecords(apps, m[1], m[2])
+	if len(recs) == 0 {
 		return Decision{}, false
 	}
-	if addsCallback(a, words) {
-		return Decision{Allow, "beekeeper allows the call: the settings page of " + callbackWords(a)}, true
+	for _, a := range recs {
+		if addsCallback(a, words) {
+			return Decision{Allow, "beekeeper allows the call: the settings page of " + callbackWords(a)}, true
+		}
 	}
-	return Decision{Deny, fmt.Sprintf("Refused: on the settings page of the person's own App %s the call %q is neither the one callback URL "+
-		"on record (%s), Add Callback URL nor Save changes; every other change there stays refused.", a.Name, short(words), a.CallbackURL)}, true
+	return Decision{Deny, fmt.Sprintf("Refused: on the settings page of the person's own App %s the call %q is neither a callback URL "+
+		"on record (%s), Add Callback URL nor Save changes; every other change there stays refused.", recs[0].Name, short(words), callbackURLs(recs))}, true
 }
 
 // addsCallback reports whether a call's words are a step of adding the
@@ -108,12 +111,12 @@ func typedCallback(apps []App, page Page, text string, d Decision) Decision {
 	if m == nil {
 		return d
 	}
-	a := callbackRecord(apps, m[1], m[2])
-	if a == nil || strings.TrimSpace(text) == a.CallbackURL {
+	recs := callbackRecords(apps, m[1], m[2])
+	if len(recs) == 0 || slices.ContainsFunc(recs, func(a *App) bool { return strings.TrimSpace(text) == a.CallbackURL }) {
 		return d
 	}
-	return Decision{Deny, fmt.Sprintf("Refused: on the settings page of the person's own App %s the input %q is not the one callback URL on record "+
-		"(%s); only that URL is typed there.", a.Name, short(text), a.CallbackURL)}
+	return Decision{Deny, fmt.Sprintf("Refused: on the settings page of the person's own App %s the input %q is not a callback URL on record "+
+		"(%s); only such a URL is typed there.", recs[0].Name, short(text), callbackURLs(recs))}
 }
 
 // CanonicalCallback reports whether raw is a callback URL as a record keeps
@@ -142,15 +145,26 @@ func sameURL(a, b string) bool {
 	return norm(a) == norm(b)
 }
 
-// callbackRecord is the App on record for a callback URL whose settings
-// page under org's settings slug names, nil for none.
-func callbackRecord(apps []App, org, slug string) *App {
+// callbackRecords are the records of callback URLs of the App whose
+// settings page under org's settings slug names, none for an App on no
+// such record.
+func callbackRecords(apps []App, org, slug string) []*App {
+	var out []*App
 	for i := range apps {
 		if a := &apps[i]; a.CallbackURL != "" && strings.EqualFold(a.Org, org) && strings.EqualFold(AppSlug(a.Name), slug) {
-			return a
+			out = append(out, a)
 		}
 	}
-	return nil
+	return out
+}
+
+// callbackURLs name the callback URLs of recs.
+func callbackURLs(recs []*App) string {
+	urls := make([]string, 0, len(recs))
+	for _, a := range recs {
+		urls = append(urls, a.CallbackURL)
+	}
+	return strings.Join(urls, " ")
 }
 
 // callbackWords name the record of a callback URL: the App, where it is

@@ -71,8 +71,8 @@ func Navigation(apps []App, rawURL string) Decision {
 	if m == nil {
 		return Decision{}
 	}
-	if a := permissionRecord(apps, m[1], m[2]); a != nil {
-		return Decision{Allow, "beekeeper allows it: the permissions page of " + changeWords(a)}
+	if recs := permissionRecords(apps, m[1], m[2]); len(recs) > 0 {
+		return Decision{Allow, "beekeeper allows it: the permissions page of " + changeWords(recs[0])}
 	}
 	return Decision{Deny, otherPermissionsPage(m[1], m[2])}
 }
@@ -82,15 +82,19 @@ func Navigation(apps []App, rawURL string) Decision {
 // installation's; no decision for any other page of github.com.
 func permissionClick(apps []App, u *url.URL, title, words string) Decision {
 	if m := permissionsPath.FindStringSubmatch(u.Path); m != nil {
-		a := permissionRecord(apps, m[1], m[2])
-		if a == nil {
+		recs := permissionRecords(apps, m[1], m[2])
+		if len(recs) == 0 {
 			return Decision{Deny, otherPermissionsPage(m[1], m[2])}
 		}
-		if savesChanges(words) || namesChange(a, words) {
-			return Decision{Allow, "beekeeper allows the call: the permissions page of " + changeWords(a)}
+		changes := make([]string, 0, len(recs))
+		for _, a := range recs {
+			if savesChanges(words) || namesChange(a, words) {
+				return Decision{Allow, "beekeeper allows the call: the permissions page of " + changeWords(a)}
+			}
+			changes = append(changes, a.Permission)
 		}
-		return Decision{Deny, fmt.Sprintf("Refused: on the permissions page of the person's own App %s the call %q is neither the one permission change "+
-			"on record (%s) nor Save changes; every other change there stays refused.", a.Name, short(words), a.Permission)}
+		return Decision{Deny, fmt.Sprintf("Refused: on the permissions page of the person's own App %s the call %q is neither a permission change "+
+			"on record (%s) nor Save changes; every other change there stays refused.", recs[0].Name, short(words), strings.Join(changes, "; "))}
 	}
 	if m := installationPath.FindStringSubmatch(u.Path); m != nil && reviewWords.MatchString(words) {
 		for i := range apps {
@@ -102,15 +106,17 @@ func permissionClick(apps []App, u *url.URL, title, words string) Decision {
 	return Decision{}
 }
 
-// permissionRecord is the App on record for a permission change whose
-// permissions page under org's settings slug names, nil for none.
-func permissionRecord(apps []App, org, slug string) *App {
+// permissionRecords are the records of permission changes of the App
+// whose permissions page under org's settings slug names, none for an App
+// on no such record.
+func permissionRecords(apps []App, org, slug string) []*App {
+	var out []*App
 	for i := range apps {
 		if a := &apps[i]; a.Permission != "" && strings.EqualFold(a.Org, org) && strings.EqualFold(AppSlug(a.Name), slug) {
-			return a
+			out = append(out, a)
 		}
 	}
-	return nil
+	return out
 }
 
 // changeWords name the record of a permission change: the App, where it is
