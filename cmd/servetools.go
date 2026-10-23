@@ -771,12 +771,15 @@ func (c *call) note(id int) (*state.Note, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Two teams' notes of one number (numbered before the shared note
+	// counter): the caller's team's is the one meant, as note done's.
+	var found *state.Note
 	for _, n := range st.Notes {
-		if n.ID == id {
-			return &n, nil
+		if n.ID == id && (found == nil || n.By.Team == c.me.Team) {
+			found = &n
 		}
 	}
-	return nil, nil
+	return found, nil
 }
 
 func toolNoteList(c *call, _ mcp.CallToolRequest) (any, error) {
