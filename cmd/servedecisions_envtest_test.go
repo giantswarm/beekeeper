@@ -219,6 +219,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	n = ask("bo", "3h")
 	e.expect(t, bo, "note_done", map[string]any{paramNote: n}, true, "only that person")
 	e.expect(t, ana, "note_done", map[string]any{paramNote: n}, false, "done")
+	withdrawn := n
 	if got := heard(); len(got) != 0 {
 		t.Fatalf("the filer heard of its own withdrawal: %q", got)
 	}
@@ -260,6 +261,21 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("refused by the gateway: %v %s", failed, text)
 	}
 	if st, _ := e.store.Read(); len(st.Notes) != 0 {
+		t.Fatalf("open notes %+v", st.Notes)
+	}
+
+	// Every note closed: the next decision takes a number never handed out,
+	// and a late answer or withdrawal of a closed one is refused and leaves
+	// it alone.
+	gw.mu.Lock()
+	gw.refuses = false
+	gw.mu.Unlock()
+	if next := ask("bo", "3h"); next <= n2+1 {
+		t.Fatalf("a new decision after #%d closed is #%d", n2+1, next)
+	}
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: withdrawn, paramChoice: 1}, true, "not open")
+	e.expect(t, ana, "note_done", map[string]any{paramNote: withdrawn}, true, "not open")
+	if st, _ := e.store.Read(); len(st.Notes) != 1 {
 		t.Fatalf("open notes %+v", st.Notes)
 	}
 }
