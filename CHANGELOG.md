@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `beekeeper watch` reads the central feed through the new tool `read_feed` (muster's `call_tool`, with `after`, the last event id it printed): muster's `get_resource` reads no resource of a server reached with the caller's own token, so on gazelle the feed's subscription stood and its read failed, `CENTRAL UNREACHABLE … server beekeeper has no active client` ([#360](https://github.com/giantswarm/beekeeper/issues/360)).
+
 ### Added
 
 - `beekeeper watch` prints the central instance's feed: with `central.context` set it subscribes to `beekeeper://feed` through muster as the person and prints each event once as `CENTRAL <line> [<person> on <host>]`, resuming from the last event id in its mark across a restart; an ended subscription is the `CENTRAL UNREACHABLE` line, or `CENTRAL FEED REFUSED` ([#360](https://github.com/giantswarm/beekeeper/issues/360)).

@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
@@ -42,6 +43,7 @@ const (
 	paramOptions     = "options"
 	paramRecommend   = "recommend"
 	paramFor         = "for"
+	paramAfter       = "after"
 	paramKind        = "kind"
 	paramText        = "text"
 	paramMessage     = "message"
@@ -162,6 +164,8 @@ func (s *server) tools() []serveTool {
 		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintRead,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
 		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintRead), toolSnapshot},
+		{newTool(nameReadFeed, "Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.", "", hintRead,
+			mcp.WithString(paramAfter, mcp.Description("only the events whose id is above this one"))), toolReadFeed},
 	}
 }
 
@@ -977,6 +981,26 @@ type snapshotView struct {
 	Lanes  []centralLane    `json:"lanes"`
 	Notes  []state.Note     `json:"notes"`
 	Agents []addressedAgent `json:"agents"`
+}
+
+// toolReadFeed is beekeeper://feed as a tool: muster's get_resource reads
+// no resource of a server its callers reach with their own token, its
+// call_tool does.
+func toolReadFeed(c *call, req mcp.CallToolRequest) (any, error) {
+	f, err := c.s.feed(c.who)
+	if err != nil {
+		return nil, err
+	}
+	if after := req.GetString(paramAfter, ""); after != "" {
+		f.Events = slices.DeleteFunc(f.Events, func(ev feed.Event) bool { return ev.ID <= after })
+	}
+	for _, ev := range f.Events {
+		_, _ = fmt.Fprintf(c.out, "%s %s\n", ev.ID, ev.Line)
+	}
+	if len(f.Events) == 0 {
+		_, _ = fmt.Fprintln(c.out, "no event")
+	}
+	return f, nil
 }
 
 func toolSnapshot(c *call, _ mcp.CallToolRequest) (any, error) {
