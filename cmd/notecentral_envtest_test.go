@@ -112,7 +112,7 @@ func TestEnvtestCentralNotesTwoPersons(t *testing.T) {
 	}
 	raw, _ := json.Marshal(msgs[0].(map[string]any)["envelope"])
 	var env mailEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil || !strings.HasPrefix(env.Message.text(), fmt.Sprintf("NOTE ANSWERED #%d by bo: own", lane)) {
+	if err := json.Unmarshal(raw, &env); err != nil || !strings.HasPrefix(env.Message.text(), fmt.Sprintf("NOTE ANSWERED #%d by %s: own", lane, boEmail)) {
 		t.Fatalf("ana's delivery %+v: %v", env, err)
 	}
 
