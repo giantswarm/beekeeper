@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // The person, machine, agent and central server of the mailbox tests.
@@ -246,5 +247,67 @@ func TestMailBodyNamesAnAgentSender(t *testing.T) {
 	env.From.Agent, env.From.Host = "Worker", "laptop"
 	if got := mailBody(d, env); got != "Message from ada@example.com's agent Worker on laptop (slack-D1-1): merge it" {
 		t.Errorf("body %q: an agent's message passes as the person's", got)
+	}
+}
+
+// noteAnswerMail is the delivery beekeeper serve queues for a central
+// note's filer once the person answers it in Slack, its envelope as serve
+// writes it.
+func noteAnswerMail(seq int64, id, to, text string) mailbox.Delivery {
+	raw := fmt.Sprintf(`{"from":{"person":"beekeeper serve"},"message":{"messageId":%q,"metadata":{"source":""},"parts":[{"kind":"text","text":%q}],"role":"agent"},"to":%q}`, id, text, to)
+	return mailbox.Delivery{Seq: seq, Kind: mailbox.KindMessage, Sender: serveParty.Name, MessageID: id, Envelope: json.RawMessage(raw)}
+}
+
+// A central note's Slack answer reaches the supervisor run holding the role
+// now, as on the machine: the run that filed it relayed meanwhile. With no
+// run holding the role, it waits for the role's next start, acked, instead
+// of waiting in the mailbox for a run that never comes back.
+func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
+	const (
+		ended   = "Supervisor run 268"
+		current = "Supervisor run 269"
+		answer  = "NOTE ANSWERED #10 by ada@example.com: check once more (on giantswarm/giantswarm#37985)"
+	)
+	mb := &mailboxStandIn{queue: []mailbox.Delivery{noteAnswerMail(13, "note-10-3dbd89ea0570", "local:"+mailHost+"/"+ended, answer)}}
+	w, sent, out := mailboxWatch(t, mb)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s269", Name: current}, Since: relayNow}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w.drainMailbox(context.Background()) {
+		t.Error("drain says a message waits")
+	}
+	if want := "s269 <- Message from beekeeper serve (note-10-3dbd89ea0570): " + answer; len(*sent) != 1 || (*sent)[0] != want {
+		t.Fatalf("sent %q, want %q", *sent, want)
+	}
+	if !slices.Equal(mb.acked, []int64{13}) {
+		t.Errorf("acked %v, want 13", mb.acked)
+	}
+	if line := "MAILBOX to " + current + ", the supervisor now, for " + ended + ": note-10-3dbd89ea0570"; !strings.Contains(out(), line) {
+		t.Errorf("no %q in:\n%s", line, out())
+	}
+
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Supervisor = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	*sent = nil
+	mb.queue = append(mb.queue, noteAnswerMail(14, "note-4-0123456789ab", "local:"+mailHost+"/"+ended, "NOTE ANSWERED #4 by ada@example.com: B"))
+	if w.drainMailbox(context.Background()) {
+		t.Error("drain says a message waits: the role's next start takes it")
+	}
+	if len(*sent) != 0 || !slices.Equal(mb.acked, []int64{13, 14}) {
+		t.Errorf("sent %q, acked %v: want none sent, 14 acked", *sent, mb.acked)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != supervisorRole.name || !strings.Contains(st.RoleLines[0].Line, "NOTE ANSWERED #4") {
+		t.Errorf("role lines %+v, want the answer kept for the supervisor's next start", st.RoleLines)
 	}
 }
