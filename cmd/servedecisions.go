@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -203,15 +204,11 @@ func (s *server) decides(ctx context.Context, n *state.Note, who identity.Caller
 }
 
 // decidesNote reports whether who is n's addressee: the person it names, or a
-// member of the Dex group of the team it names.
+// member of a deciding Dex group of the team it names: the team's own group,
+// never an organization-wide one when it has its own.
 func decidesNote(cfg config.Serve, n *state.Note, who identity.Caller) bool {
 	if t, ok := strings.CutPrefix(n.For, teamPrefix); ok {
-		for group, team := range cfg.Teams {
-			if team == t && who.In(group) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(cfg.DecidingGroups(t), who.In)
 	}
 	email := personEmail(cfg, n.For)
 	return email != "" && strings.EqualFold(email, who.Email)

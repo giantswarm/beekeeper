@@ -43,7 +43,8 @@ command prints and the same as structured content.
 Every request carries a Dex ID token (muster forwards the person's): it is
 validated against serve.issuer's keys and serve.clientIDs, and the caller is
 the token's verified email, a member of serve.organization, of the team its
-group in serve.teams names. Releasing another person's lease or lifting
+most specific group in serve.teams names (a team's own group before an
+organization-wide one). Releasing another person's lease or lifting
 their hold is that person's, or the owning team's supervisor role's
 (serve.supervisors). Every call leaves one Kubernetes Event on the resource
 it concerns (the caller's team namespace for a list) and one log line.
@@ -67,7 +68,8 @@ the projected ServiceAccount token): a direct message, or the team's
 channel. A click, the modal or a thread reply calls note_answer through
 muster as the person who answered; only the addressee answers (the
 person's email, or a member of the team: of its Slack user group in
-serve.groups, as klaus-gateway answers, else of its Dex group in serve.teams;
+serve.groups, as klaus-gateway answers, else of its own Dex group in
+serve.teams, an organization-wide group only for a team without one;
 the first answer closes a team's). A decision klaus-gateway does not take is
 withdrawn at once. Its message is closed on every path: answered, withdrawn
 (note_done) or at its due time, when serve closes it with its default

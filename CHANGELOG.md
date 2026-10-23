@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `beekeeper serve` gives a caller the team of their most specific group in `serve.teams`: a team's own group (`giantswarm-github:giantswarm:team-bumblebee`) before an organization-wide one (`serve.organization`, `serve.organizations`), instead of the alphabetically first. A team's decisions (`--for team:<name>`) are answered by the members of its own groups; an organization-wide group mapped to the team answers only for a team that has no group of its own, so a team with a Dex team group needs no `serve.groups` entry ([giantswarm/giantswarm#38789](https://github.com/giantswarm/giantswarm/issues/38789)).
+
 ### Added
 
 - `secret set` (and `copy`) into a path through a string leaf holding a YAML mapping document, such as dex-operator's provider `credentials` block scalar, set one top-level key inside it: its line is rewritten in place, an absent key appended as one line, every other line kept byte for byte, and the edit is refused unless that key alone changed, naming keys, never a value. `reveal`, `compare` and `fingerprint` read a key inside such a document; a leaf holding none is refused by its shape ([#1645](https://github.com/giantswarm/beekeeper/issues/1645)).
