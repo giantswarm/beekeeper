@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,10 @@ func (p *person) run(args ...string) (string, int) {
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
-	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd, "note": a.noteCmd}[args[0]]()
+	if i := slices.Index(args, "--json"); i > 0 {
+		a.json, args = true, slices.Delete(slices.Clone(args), i, i+1)
+	}
+	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd, "note": a.noteCmd, "guide": a.guideCmd}[args[0]]()
 	cmd.SetArgs(args[1:])
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
