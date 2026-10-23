@@ -307,3 +307,20 @@ func TestEnvtestCentralNoteAdd(t *testing.T) {
 		t.Fatalf("ana's delivery %+v: %v", env, err)
 	}
 }
+
+// A team whose Dex group others share names its members: only they answer
+// its decisions, a holder of the group alone is refused.
+func TestEnvtestServeDecisionsTeamMembers(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{}
+	decisionsVia(t, e, gw)
+	stubAnswerGH(t, &answerGH{})
+	e.srv.cfg.Serve.Members = map[string][]string{ourTeam: {"Ana@Example.com"}}
+
+	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
+	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
+	args := decisionFor(museLane, "team:"+ourTeam)
+	n, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
+	e.expect(t, kim, "note_answer", map[string]any{paramNote: int(n), paramText: portalLane}, true, "only its addressee")
+	e.expect(t, ana, "note_answer", map[string]any{paramNote: int(n), paramText: ownLane}, false, "answered and closed")
+}

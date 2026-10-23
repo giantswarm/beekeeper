@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -172,9 +173,12 @@ func personEmail(cfg config.Serve, name string) string {
 }
 
 // decidesNote reports whether who is n's addressee: the person it names, or a
-// member of the Dex group of the team it names.
+// member of the team it names (its serve.members, else its Dex group).
 func decidesNote(cfg config.Serve, n *state.Note, who identity.Caller) bool {
 	if t, ok := strings.CutPrefix(n.For, teamPrefix); ok {
+		if members, listed := cfg.Members[t]; listed {
+			return slices.ContainsFunc(members, func(m string) bool { return strings.EqualFold(m, who.Email) })
+		}
 		for group, team := range cfg.Teams {
 			if team == t && who.In(group) {
 				return true

@@ -2606,6 +2606,10 @@
                     "type": "object",
                     "additionalProperties": true
                 },
+                "members": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "muster": {
                     "type": "string"
                 },

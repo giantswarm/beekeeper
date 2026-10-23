@@ -207,6 +207,15 @@ func TestDecisionAddressee(t *testing.T) {
 			t.Errorf("%s answered by %s: %v, want %v", c.forWho, c.who.Email, got, c.want)
 		}
 	}
+	cfg.Members = map[string][]string{ourTeam: {"Pat@Example.com"}}
+	for _, c := range []struct {
+		who  identity.Caller
+		want bool
+	}{{patCaller, true}, {member, false}} {
+		if got := decidesNote(cfg, &state.Note{For: "team:" + ourTeam}, c.who); got != c.want {
+			t.Errorf("team:%s with members answered by %s: %v, want %v", ourTeam, c.who.Email, got, c.want)
+		}
+	}
 	if email, _, _, err := addressee(cfg, notePerson); email != patEmail || err != nil {
 		t.Errorf("%s: %q %v", notePerson, email, err)
 	}
