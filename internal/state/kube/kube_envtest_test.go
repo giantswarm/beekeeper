@@ -78,10 +78,13 @@ const (
 	team     = "bumblebee"
 	graveler = "graveler"
 	muster   = "giantswarm/muster"
+	labHost  = "lab"
+	asked    = "merge?"
 )
 
 var (
-	ana = state.Party{Session: "s-ana", Name: "Agent one", Person: "ana@example.com", Team: team, Host: "lab"}
+	ana = state.Party{Session: "s-ana", Name: "Agent one", Person: "ana@example.com", Team: team, Host: labHost}
+	pia = state.Party{Session: "s-pia", Name: "Agent three", Person: "pia@example.com", Team: "planeteers", Host: labHost}
 	bo  = state.Party{Session: "s-bo", Name: "Agent two", Person: "bo@example.com", Team: team, Host: "laptop"}
 )
 
@@ -339,7 +342,7 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 	a, _, c := envtestStore(t)
 	namespace(t, c, team)
 	ctx := context.Background()
-	for id, text := range map[int]string{1: "merge?", 2: "ship?"} {
+	for id, text := range map[int]string{1: asked, 2: "ship?"} {
 		if err := a.Update(func(st *state.State) ([]state.Event, error) {
 			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: text, By: ana, At: time.Now().Truncate(time.Second)})
 			return nil, nil
@@ -393,7 +396,7 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 	ctx := context.Background()
 	for id := 1; id <= 3; id++ {
 		if err := a.Update(func(st *state.State) ([]state.Event, error) {
-			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: "merge?", By: ana, At: time.Now().Truncate(time.Second)})
+			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: asked, By: ana, At: time.Now().Truncate(time.Second)})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -480,7 +483,7 @@ func addNote(t *testing.T, s *Store, by state.Party) int {
 	if err := s.Update(func(st *state.State) ([]state.Event, error) {
 		st.NextNote++
 		id = st.NextNote
-		st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: "merge?", By: by, At: time.Now().Truncate(time.Second)})
+		st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: asked, By: by, At: time.Now().Truncate(time.Second)})
 		return []state.Event{{By: by, Verb: "note.add", Detail: "#" + strconv.Itoa(id) + " merge?"}}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -502,7 +505,6 @@ func closeNote(t *testing.T, s *Store, id int) {
 // another writer's or a restarted one's.
 func TestEnvtestNoteNumbersAreNotReused(t *testing.T) {
 	a, b, c := envtestStore(t)
-	pia := state.Party{Session: "s-pia", Name: "Agent three", Person: "pia@example.com", Team: "planeteers", Host: "lab"}
 	namespace(t, c, team)
 	namespace(t, c, pia.Team)
 	first := addNote(t, a, ana)
@@ -523,7 +525,6 @@ func TestEnvtestNoteNumbersAreNotReused(t *testing.T) {
 // their own.
 func TestEnvtestConcurrentNoteAdds(t *testing.T) {
 	a, b, c := envtestStore(t)
-	pia := state.Party{Session: "s-pia", Name: "Agent three", Person: "pia@example.com", Team: "planeteers", Host: "lab"}
 	namespace(t, c, team)
 	namespace(t, c, pia.Team)
 	const each = 4
