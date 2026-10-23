@@ -514,8 +514,8 @@ line:
   -p --resume <id>, a wake's): that turn is its CLI; the watch leaves such
   a warmed CLI of a handed-over session running 5 minutes for
   its archive call instead of stopping it as REVIVED; a relieved run of the
-  supervisor or the guide is never asked about itself and waits for
-  another steward; a steward that declined is asked for no archive for
+  supervisor or the guide archives itself the same way, its own CLI
+  warmed when no other steward is idle; a steward that declined is asked for no archive for
   24h; a run that asks no steward counts no turn and waits 10 minutes;
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
