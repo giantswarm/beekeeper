@@ -371,7 +371,7 @@ func TestAppPermissionRecord(t *testing.T) {
 		"the navigation to its permissions page": {[]string{appCheck, permissionsPage, navigateFlag}, "allow: beekeeper allows it: the permissions page of the person's own App " + deviceApp + ", declared in " + deviceDeclared + ", on record for the change " + deviceChange + " since "},
 		"the click that selects the level":       {[]string{appCheck, permissionsPage, titleFlag, permissionsTitle, wordsFlag, selectsReadOnly}, "allow: beekeeper allows the call: the permissions page of the person's own App " + deviceApp},
 		"Save changes":                           {[]string{appCheck, permissionsPage, wordsFlag, "Clicks Save changes"}, checkAllow},
-		"another level":                          {[]string{appCheck, permissionsPage, wordsFlag, "Selects Read and write for Members access"}, "refuse: Refused: on the permissions page of the person's own App " + deviceApp + " the call \"Selects Read and write for Members access\" is neither the one permission change on record (" + deviceChange + ") nor Save changes"},
+		"another level":                          {[]string{appCheck, permissionsPage, wordsFlag, "Selects Read and write for Members access"}, "refuse: Refused: on the permissions page of the person's own App " + deviceApp + " the call \"Selects Read and write for Members access\" is neither a permission change on record (" + deviceChange + ") nor Save changes"},
 		"another App's page":                     {[]string{appCheck, strings.Replace(permissionsPage, deviceApp, "other-app", 1), navigateFlag}, "refuse: Refused: the permissions page of the App other-app of example is not on record for a permission change"},
 		"the consent page, no consent on record": {[]string{appCheck, recordedConsent, titleFlag, recordedTitle}, checkRefuse},
 		"another navigation":                     {[]string{appCheck, "https://github.com/organizations/example/settings/installations", navigateFlag}, checkNone},
@@ -687,4 +687,101 @@ func TestAppSlackRecord(t *testing.T) {
 	if apps := a.allowedApps(); len(apps) != 1 || apps[0].Slack != ws || apps[0].SlackApp != appID || apps[0].Channel != "team-bumblebee" {
 		t.Errorf("allowedApps = %+v", apps)
 	}
+}
+
+// An App holds several grants: a second permission recorded for it keeps
+// the first, the same scope recorded again replaces only that change, a
+// Slack app's consent under the App's name keeps its GitHub grants, and
+// revoke takes every grant of the App off the record.
+func TestAppAllowKeepsGrants(t *testing.T) {
+	a, _ := stubApp(t)
+	declareApps(t, a, map[string]string{"apps/" + deviceApp + "/manifest.json": deviceManifest, "apps/" + recordedApp + "/manifest.json": recordedManifest})
+	const (
+		actions       = "Actions: Read and write"
+		selectsAction = "Selects Read and write for Actions access"
+		ws            = "gigantic.slack.com"
+		slackInstall  = "https://" + ws + "/oauth?client_id=2171500629.8349188396579&scope=usergroups%3Aread"
+	)
+	allow := func(args ...string) {
+		t.Helper()
+		if out, err := runApp(t, a, append([]string{appAllow}, append(args, wordFlag, personsWord)...)...); err != nil {
+			t.Fatalf("app allow %q = %q, %v", args, out, err)
+		}
+	}
+	check := func(want string, args ...string) {
+		t.Helper()
+		if out, err := runApp(t, a, append([]string{appCheck}, args...)...); err != nil || !strings.HasPrefix(out, want) {
+			t.Errorf("app check %q = %q, %v; want %q", args, out, err, want)
+		}
+	}
+	permissions := func() []string {
+		t.Helper()
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, x := range st.Apps {
+			if x.Name == deviceApp {
+				out = append(out, x.Permission)
+			}
+		}
+		return out
+	}
+
+	allow(deviceApp, permissionFlag, deviceChange)
+	allow(deviceApp, permissionFlag, actions)
+	if got := permissions(); !slices.Equal(got, []string{deviceChange, actions}) {
+		t.Fatalf("permissions on record after two = %q", got)
+	}
+	check(checkAllow, permissionsPage, wordsFlag, selectsReadOnly)
+	check(checkAllow, permissionsPage, wordsFlag, selectsAction)
+	check(checkRefuse+"Refused: on the permissions page of the person's own App "+deviceApp+" the call \"Selects Read and write for Members access\" is neither a "+
+		"permission change on record ("+deviceChange+"; "+actions+")", permissionsPage, wordsFlag, "Selects Read and write for Members access")
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, "permission "+deviceChange) || !strings.Contains(out, "permission "+actions) {
+		t.Errorf("list of both = %q", out)
+	}
+
+	allow(deviceApp, permissionFlag, "Members: Read and write")
+	if got := permissions(); !slices.Equal(got, []string{actions, "Members: Read and write"}) {
+		t.Fatalf("permissions on record after the scope again = %q", got)
+	}
+	check(checkRefuse, permissionsPage, wordsFlag, selectsReadOnly)
+	check(checkAllow, permissionsPage, wordsFlag, selectsAction)
+
+	allow(recordedApp, clientIDFlag, recordedClientID, permissionFlag, actions)
+	allow(recordedApp, "--slack", ws, "--app-id", "A08A95JBNH1", clientIDFlag, "2171500629.8349188396579")
+	allow(recordedApp, permissionFlag, "Administration: Read-only")
+	check(checkAllow, recordedConsent, titleFlag, recordedTitle)
+	check(checkAllow, slackInstall, wordsFlag, "Clicks Allow")
+	recordedPermissions := strings.Replace(permissionsPage, deviceApp, recordedApp, 1)
+	check(checkAllow, recordedPermissions, wordsFlag, selectsAction)
+	check(checkAllow, recordedPermissions, wordsFlag, "Selects Read-only for Administration access")
+	allow(recordedApp, clientIDFlag, recordedClientID)
+	check(checkAllow, recordedConsent, titleFlag, recordedTitle)
+	check(checkAllow, recordedPermissions, wordsFlag, selectsAction)
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded []string
+	for _, x := range st.Apps {
+		if x.Name == recordedApp {
+			recorded = append(recorded, strings.Join(recordParts(x), ", "))
+		}
+	}
+	if len(recorded) != 4 {
+		t.Errorf("records of %s = %q, want the Actions change, the Slack consent, the Administration change and the GitHub consent", recordedApp, recorded)
+	}
+
+	if out, err := runApp(t, a, "revoke", deviceApp); err != nil || !strings.Contains(out, "off the record") {
+		t.Fatalf("app revoke = %q, %v", out, err)
+	}
+	if got := permissions(); len(got) != 0 {
+		t.Errorf("permissions on record after the revoke = %q", got)
+	}
+	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == appRevoked }); len(evs) != 2 {
+		t.Errorf("app.revoke events = %+v, want one per grant", evs)
+	}
+	check(checkRefuse, permissionsPage, navigateFlag)
 }

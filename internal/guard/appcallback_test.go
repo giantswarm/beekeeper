@@ -15,10 +15,10 @@ const (
 	callbackURL     = "https://agents.example.org/callback/github"
 	callbackDecl    = "example/github@0123456789ab:apps/" + callbackSlug + "/manifest.json"
 	settingsPage    = "https://github.com/organizations/" + deviceOrg + "/settings/apps/" + callbackSlug
-	notTheCallback  = "neither the one callback URL"
+	notTheCallback  = "neither a callback URL"
 	addsCallbackURL = "Clicks Add Callback URL for " + callbackApp
 	byGuide         = "the guide"
-	notTypedURL     = "is not the one callback URL on record"
+	notTypedURL     = "is not a callback URL on record"
 )
 
 var callbackRecorded = []App{{Name: callbackApp, Org: deviceOrg, CallbackURL: callbackURL, Declared: callbackDecl,
