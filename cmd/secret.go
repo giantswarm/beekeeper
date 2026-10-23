@@ -845,6 +845,17 @@ answers its key, length and fingerprint. A literal with the shape of a
 credential (a private key, a token's prefix) is refused naming the shape;
 no vault holds a literal.
 
+A path through a string leaf holding a YAML mapping document (dex-operator's
+provider credentials, a block scalar mixing a client secret with its teams)
+sets one top-level key inside that document: its line is rewritten in place
+(indent, key and comment kept), an absent key appended as one line, every
+other line of the leaf kept byte for byte, and the leaf re-encrypted; the
+edit is read again and refused unless that key alone changed. A leaf holding
+no such document is refused by its shape, never its value:
+
+  beekeeper secret set secret-values.yaml.patch \
+    oidc.giantswarm.providers.0.credentials.teams --literal a,b
+
 --vault op://<vault>/<item>/<field> writes the shared vault's field first
 (creating the item or the field when absent), then the SOPS path.
 

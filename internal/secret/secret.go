@@ -303,7 +303,9 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 	}
 	v, ok := doc.get(r.Path)
 	if !ok {
-		return nil, fmt.Errorf("%s: no value at %s", r.File, r.Path)
+		if v, err = doc.leafValue(r.Path); err != nil {
+			return nil, fmt.Errorf("%s: %w", r.File, err)
+		}
 	}
 	return map[string]string{r.String(): v}, nil
 }
