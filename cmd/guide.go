@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"regexp"
@@ -177,6 +178,39 @@ func reported(st *state.State, r *state.Record) bool {
 	return i >= 0 && (st.Agents[i].Done || st.Agents[i].IdleSince.After(r.At))
 }
 
+// withCentral puts the central instance's notes for person into q after
+// the machine's notes, before the sessions that wait: an owner runs here
+// only when it filed from this machine, host.
+func withCentral(q []queueItem, central []state.Note, sessions []*claude.Session, person, host string) []queueItem {
+	var items []queueItem
+	for i := range central {
+		n := &central[i]
+		if !guides(person, n) {
+			continue
+		}
+		live := false
+		if n.By.Host == "" || strings.EqualFold(n.By.Host, host) {
+			_, live = claude.Live(sessions, n.By)
+		}
+		items = append(items, queueItem{Note: n, Owner: n.By.Name, OwnerLive: live, Key: "note:" + noteRef(n)})
+	}
+	at := slices.IndexFunc(q, func(it queueItem) bool { return it.Note == nil })
+	if at < 0 {
+		at = len(q)
+	}
+	return slices.Insert(q, at, items...)
+}
+
+// centralQueue is the guide's queue with the central instance's notes for
+// its person; an unreachable central instance leaves them out with a
+// warning on stderr.
+func (a *app) centralQueue(stderr io.Writer, q []queueItem, central []state.Note, cerr error, sessions []*claude.Session) []queueItem {
+	if cerr != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: %v\n", cerr)
+	}
+	return withCentral(q, central, sessions, a.cfg.Guide.Person, a.cfg.Identity.Host)
+}
+
 // waitsOn reads a record's --waits as an ask of person: "<person>: <ask>",
 // person in any case, gives the ask and true; with person unset, every
 // non-empty wait is one.
@@ -230,7 +264,10 @@ func (a *app) queueText(q queueItem) string {
 	if !q.OwnerLive && (n.By.Session != "" || n.By.HostSession != "") { // a person or script does not end
 		owner += " (ended)"
 	}
-	s := fmt.Sprintf("#%d for %s %s", n.ID, who, owner)
+	if n.Central != "" && n.By.Host != "" {
+		owner += " on " + n.By.Host
+	}
+	s := fmt.Sprintf("%s for %s %s", noteRef(n), who, owner)
 	if !n.Due.IsZero() {
 		s += ", due " + clock(a.now, n.Due)
 		if !n.Due.After(a.now) {
@@ -259,9 +296,14 @@ an archived one, a test (titled "test: …") and an agent that reported its
 task after the wait (agents idle, or off the roster). The sessions stopped
 longer ago fold into one line; --full lists them. With guide.person unset,
 every note filed --for anyone, and a line that says so. A caller that has
-read the queue before gets only what changed.`,
+read the queue before gets only what changed.
+
+On a machine with a central instance (central.context), the central
+instance's open notes for the person (note_list, through muster as the
+person) follow the machine's, each named <context>#<n>; with the central
+instance unreachable, a warning says so and the machine's queue stands.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -270,7 +312,9 @@ read the queue before gets only what changed.`,
 			if err != nil {
 				return err
 			}
+			central, cerr := a.listCentralNotes()
 			q, stopped := a.guideQueue(st, sessions)
+			q = a.centralQueue(cmd.ErrOrStderr(), q, central, cerr, sessions)
 			if a.json {
 				if full {
 					q = append(q, stopped...)
@@ -310,11 +354,14 @@ the open note filed for the person that is due first (by due time, then the
 undated in filing order). The same note is
 served again until it is answered (` + "`beekeeper note answer <id> <answer>`" + `, its
 thread's beekeeper answer) or
-closed (note done); only then comes the next. Only the guide's session
+closed (note done); only then comes the next. On a machine with a central
+instance (central.context), the central instance's open notes for the
+person are served beside the machine's, named <context>#<n> and answered
+there as the person (note answer <context>#<n>). Only the guide's session
 serves decisions. With no open note it says so, and names how many sessions
 wait on the person (` + "`beekeeper guide queue`" + `).`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -323,11 +370,14 @@ wait on the person (` + "`beekeeper guide queue`" + `).`,
 			if err != nil {
 				return err
 			}
+			central, cerr := a.listCentralNotes()
 			var lines []string
 			var item *queueItem
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				var evs []state.Event
-				item, lines, evs, err = a.guideNext(st, sessions, me)
+				item, lines, evs, err = a.guideNext(st, sessions, me, func(q []queueItem) []queueItem {
+					return a.centralQueue(cmd.ErrOrStderr(), q, central, cerr, sessions)
+				})
 				return evs, err
 			})
 			if err != nil {
@@ -343,16 +393,20 @@ wait on the person (` + "`beekeeper guide queue`" + `).`,
 }
 
 // guideNext serves me, the guide, the decision to ask now (nextDecision),
-// marks it in st and returns it with its lines and events.
-func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Party) (*queueItem, []string, []state.Event, error) {
+// marks it in st and returns it with its lines and events; more, when set,
+// adds to the machine's queue (the central instance's notes).
+func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Party, more func([]queueItem) []queueItem) (*queueItem, []string, []state.Event, error) {
 	r := guideRole.get(st)
 	if r.Holder == nil || !r.Holder.Is(me) {
 		return nil, nil, nil, refused("only the guide serves its person's decisions: `beekeeper guide status` names it")
 	}
 	q, _ := a.guideQueue(st, sessions)
-	it := nextDecision(q, r.Asking)
+	if more != nil {
+		q = more(q)
+	}
+	it := nextDecision(q, r.AskingFrom+"#"+strconv.Itoa(r.Asking))
 	if it == nil {
-		r.Asking = 0
+		r.Asking, r.AskingFrom = 0, ""
 		guideRole.set(st, r)
 		waiting := len(q)
 		line := "no open decision for " + cmp.Or(a.cfg.Guide.Person, "the person")
@@ -363,28 +417,29 @@ func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Pa
 	}
 	n := *it.Note
 	it.Note = &n
+	ref := strings.TrimPrefix(noteRef(&n), "#")
 	lines := []string{"asking " + a.queueText(*it),
-		fmt.Sprintf("record the answer word for word: beekeeper note answer %d \"<answer>\"; the next decision comes after it", n.ID)}
-	if n.ID == r.Asking {
+		fmt.Sprintf("record the answer word for word: beekeeper note answer %s \"<answer>\"; the next decision comes after it", ref)}
+	if n.ID == r.Asking && n.Central == r.AskingFrom {
 		lines[0] = "still " + lines[0]
 		return it, lines, nil, nil
 	}
-	r.Asking = n.ID
+	r.Asking, r.AskingFrom = n.ID, n.Central
 	guideRole.set(st, r)
-	return it, lines, []state.Event{event(me, "guide.asking", "#%d %s", n.ID, n.Text)}, nil
+	return it, lines, []state.Event{event(me, "guide.asking", "%s %s", noteRef(&n), n.Text)}, nil
 }
 
-// nextDecision is the note the guide asks now: asking while it is open in
-// q, else the note in q due first, by due time, then the undated in filing
-// order; nil when q holds no note.
-func nextDecision(q []queueItem, asking int) *queueItem {
+// nextDecision is the note the guide asks now: asking (its noteRef) while
+// it is open in q, else the note in q due first, by due time, then the
+// undated in filing order; nil when q holds no note.
+func nextDecision(q []queueItem, asking string) *queueItem {
 	var next *queueItem
 	for i := range q {
 		it := &q[i]
 		switch {
 		case it.Note == nil:
 			continue
-		case it.Note.ID == asking:
+		case noteRef(it.Note) == asking:
 			return it
 		case next == nil, dueBefore(it.Note, next.Note):
 			next = it
