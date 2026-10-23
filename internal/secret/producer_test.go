@@ -51,6 +51,9 @@ func TestCmdRefRunsOnlyAnAllowedProducer(t *testing.T) {
 	if r.String() != azGenerate || !r.IsSource() || !r.Single() {
 		t.Errorf("ref = %+v (%s)", r, r)
 	}
+	if _, err := secret.ParseRef("cmd://openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256"); err != nil {
+		t.Errorf("openssl genpkey: %v", err)
+	}
 	for _, s := range []string{
 		"cmd://sh -c 'cat /etc/passwd'",
 		"cmd://az account get-access-token",
@@ -59,6 +62,8 @@ func TestCmdRefRunsOnlyAnAllowedProducer(t *testing.T) {
 		"cmd://",
 		"cmd://az acr token credential generate --name x --debug",
 		"cmd://az acr token credential generate --name x --verbose=true",
+		"cmd://openssl genpkey -algorithm ed25519 -out key.pem",
+		"cmd://openssl req -new",
 	} {
 		if _, err := secret.ParseRef(s); err == nil {
 			t.Errorf("%s: allowed", s)

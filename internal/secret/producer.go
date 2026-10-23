@@ -15,17 +15,20 @@ import (
 // (none: the whole stdout without its line end).
 const CmdRef = "cmd://"
 
-// Producers are the commands a cmd:// reference may run, each the words
-// its argv starts with; every other command is refused. The list is
-// beekeeper's own, no configuration widens it.
+// Producers are the commands a cmd:// reference and secret capture may
+// run, each the words its argv starts with; every other command is
+// refused. The list is beekeeper's own, no configuration widens it.
 var Producers = [][]string{
 	{"az", "acr", "token", "credential", "generate"},
+	{"openssl", "genpkey"},
+	{"openssl", "rand"},
 }
 
-// producerDenied are the arguments that make an allowed producer print
-// more than its answer: az's request and response log, the generated
-// password in it, goes to stderr.
-var producerDenied = []string{"--debug", "--verbose"}
+// producerDenied are the options, with one dash or two, that make an
+// allowed producer put its answer anywhere but its stdout: az's request
+// and response log on stderr, the generated password in it; openssl's
+// file a session could read.
+var producerDenied = []string{"debug", "verbose", "out"}
 
 // parseCmdRef reads cmd://<command>#<path>.
 func parseCmdRef(s string) (Ref, error) {
@@ -52,7 +55,7 @@ func checkProducer(words []string) error {
 	}
 	for _, w := range words {
 		flag, _, _ := strings.Cut(w, "=")
-		if slices.Contains(producerDenied, flag) {
+		if name := strings.TrimLeft(flag, "-"); name != flag && slices.Contains(producerDenied, name) {
 			return fmt.Errorf("%s: a producer runs without it, it logs the credential", flag)
 		}
 	}

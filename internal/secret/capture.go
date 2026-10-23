@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"path"
 	"strings"
@@ -76,12 +75,11 @@ func (d DockerConfig) value(password string) (string, error) {
 // CaptureOptions are the producer whose stdout a capture takes the value
 // from and where the value goes besides the SOPS path.
 type CaptureOptions struct {
-	// Producer is the command that prints the value, run in this process.
+	// Producer is the command that prints the value, one of [Producers],
+	// run in this process.
 	Producer []string
 	// Env is the producer's environment ([ProducerEnv]).
 	Env []string
-	// Stderr receives the producer's stderr; nil discards it.
-	Stderr io.Writer
 	// JQ is a jq filter that picks the value out of the producer's JSON
 	// output, one string; empty takes the whole output, its line end
 	// trimmed.
@@ -107,9 +105,10 @@ type CaptureResult struct {
 // its JSON output with opt.JQ) to the shared vault's field first when one
 // is given, then into the SOPS path in o.Encode, or as a Secret's
 // .dockerconfigjson with opt.Docker. Every check (the references, the
-// creation rule, the filter) runs before the producer does: a credential
-// that is printed once is not spent on a call that could not store it. The
-// producer's stdout is never answered.
+// creation rule, the filter, the producer against [Producers]) runs before
+// the producer does: a credential that is printed once is not spent on a
+// call that could not store it. Neither the producer's stdout nor its
+// stderr is ever answered.
 func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (CaptureResult, error) {
 	switch {
 	case dst.Op != "" || dst.IsSource():
@@ -120,6 +119,9 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 		return CaptureResult{}, fmt.Errorf("%s: --dockerconfigjson writes the Secret's %s, name the file alone", dst, dockerConfigKey)
 	case len(opt.Producer) == 0:
 		return CaptureResult{}, errors.New("no producer: capture <file#path> -- <producer…>")
+	}
+	if err := checkProducer(opt.Producer); err != nil {
+		return CaptureResult{}, err
 	}
 	if opt.Docker != nil {
 		if !o.Encode.IsZero() {
@@ -232,13 +234,17 @@ func compileJQ(filter string) (*gojq.Code, error) {
 	return code, nil
 }
 
-// produce runs the producer with its environment, its stderr passed on,
-// and answers its stdout: a non-zero exit or nothing on stdout refuses.
+// produce runs the producer, one of [Producers], with its environment and
+// answers its stdout: a non-zero exit or nothing on stdout refuses. Its
+// stderr is discarded, a log there may carry the value: a failure names its
+// exit code alone.
 func produce(ctx context.Context, opt CaptureOptions) ([]byte, error) {
+	if err := checkProducer(opt.Producer); err != nil {
+		return nil, err
+	}
 	name := opt.Producer[0]
-	c := exec.CommandContext(ctx, name, opt.Producer[1:]...) //nolint:gosec // the caller's producer is the purpose
+	c := exec.CommandContext(ctx, name, opt.Producer[1:]...) //nolint:gosec // an allowlisted producer is the purpose
 	c.Env = opt.Env
-	c.Stderr = opt.Stderr
 	var out bytes.Buffer
 	c.Stdout = &out
 	if err := c.Run(); err != nil {
