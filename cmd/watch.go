@@ -2228,6 +2228,9 @@ func parkOnPerson(p *state.Park, person string) bool {
 	if _, note := parkNote(p.On); note {
 		return true
 	}
+	if _, _, note := parkCentralNote(p.On); note {
+		return true
+	}
 	if _, lease := parkLease(p.On); lease {
 		return false
 	}

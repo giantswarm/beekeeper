@@ -24,11 +24,15 @@ func (a *app) centralNote(n *state.Note, holds bool, foldInto int) bool {
 
 // addCentral files the checked decision n in the central instance
 // (note_add), which puts it to its addressee in Slack and tells the filer
-// its outcome through the person's mailbox. It returns the central note's
-// number; an unreachable central instance is *central.Unreachable.
-func (a *app) addCentral(ctx context.Context, me state.Party, n *state.Note, d noteDraft) (int, error) {
+// its outcome through the person's mailbox, or, into not 0, folds it into
+// the central note into. It returns the central note's number; an
+// unreachable central instance is *central.Unreachable.
+func (a *app) addCentral(ctx context.Context, me state.Party, n *state.Note, d noteDraft, into int) (int, error) {
 	args := map[string]any{paramText: n.Question, paramFor: n.For, paramKind: n.Kind,
 		paramDue: n.Due.UTC().Format(time.RFC3339), paramDefault: d.Default, paramRefs: n.Refs}
+	if into != 0 {
+		args[paramFoldInto] = into
+	}
 	for k, v := range map[string]string{paramStatusQuo: d.StatusQuo, paramWhy: d.Why, paramChecked: d.Checked} {
 		if v != "" {
 			args[k] = v
@@ -54,7 +58,7 @@ func (a *app) addCentral(ctx context.Context, me state.Party, n *state.Note, d n
 // check found, on the machine. filed is false when the central instance is
 // unreachable: the caller files n on the machine instead, as stderr says.
 func (a *app) fileCentral(ctx context.Context, stderr io.Writer, me state.Party, n *state.Note, d noteDraft, stage planStage) (filed bool, err error) {
-	id, err := a.addCentral(ctx, me, n, d)
+	id, err := a.addCentral(ctx, me, n, d, 0)
 	if u := (*central.Unreachable)(nil); errors.As(err, &u) && u.Sent {
 		return false, &exitError{code: ExitCentral, msg: u.Error() + ": the decision may be filed there, so it is not filed on this machine too; file it again once the central instance answers"}
 	} else if u != nil {
@@ -71,6 +75,66 @@ func (a *app) fileCentral(ctx context.Context, stderr io.Writer, me state.Party,
 	}
 	_, err = fmt.Fprintln(a.out, "note #"+strconv.Itoa(id)+" (central "+ctxName+": put to "+n.For+" in Slack, its answer reaches this session)")
 	return true, err
+}
+
+// foldCentral folds the checked decision n into the central note into
+// (note_add's fold_into): that note's default and recommendation stand, and
+// its answer reaches its filer. Nothing is filed on the machine instead.
+func (a *app) foldCentral(ctx context.Context, me state.Party, n *state.Note, d noteDraft, into int) error {
+	ref := a.cfg.Central.Context + "#" + strconv.Itoa(into)
+	id, err := a.addCentral(ctx, me, n, d, into)
+	if err != nil {
+		return centralErr(err)
+	}
+	if id != into {
+		return refused("the central instance (%s) filed this decision as its note #%d instead of folding it into #%d: it runs a beekeeper without note_add's fold_into; withdraw it with beekeeper note done %s#%d", a.cfg.Central.Context, id, into, a.cfg.Central.Context, id)
+	}
+	_ = a.store.Log(event(me, "note.folded", "into %s (--fold-into): %s", ref, n.Text))
+	_, err = fmt.Fprintf(a.out, "note %s (folded: --fold-into: its default and recommendation stand)\n", ref)
+	return err
+}
+
+// noteNamed settles s (<n>, #<n> or <context>#<n>) to the machine's or
+// the central instance's note, as note done does: a bare number is the
+// machine's while it has it open, and stays the machine's when neither has.
+func (a *app) noteNamed(s string) (noteID, error) {
+	named, err := a.parseNoteIDs([]string{s})
+	if err != nil {
+		return noteID{}, err
+	}
+	_, central, err := a.doneSources(named)
+	id := named[0]
+	id.Central, id.Bare = len(central) > 0, false
+	return id, err
+}
+
+// parkCentralNote reads a park's On as a central note, <context>#<n>.
+func parkCentralNote(on string) (ctx string, id int, ok bool) {
+	ctx, num, found := strings.Cut(on, "#")
+	n, err := strconv.Atoi(num)
+	return ctx, n, found && err == nil && n > 0 && ctx != "" && !strings.ContainsAny(ctx, "/ ")
+}
+
+// parkNoteOn is the On of a park on the note s names: #<n> for the
+// machine's, checked open as the park is set, <context>#<n> for an open
+// note of the central instance's (note_list).
+func (a *app) parkNoteOn(s string) (string, error) {
+	id, err := a.noteNamed(s)
+	if err != nil {
+		return "", err
+	}
+	if !id.Central {
+		return "#" + strconv.Itoa(id.ID), nil
+	}
+	notes, err := a.listCentralNotes()
+	if err != nil {
+		return "", err
+	}
+	ref := a.cfg.Central.Context + "#" + strconv.Itoa(id.ID)
+	if !slices.ContainsFunc(notes, func(n state.Note) bool { return n.ID == id.ID }) {
+		return "", refused("note %s is not open: its answer reached its filer as NOTE ANSWERED", ref)
+	}
+	return ref, nil
 }
 
 // The verbs a machine logs for what it did to a central note: its
