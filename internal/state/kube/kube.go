@@ -32,6 +32,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -474,7 +475,7 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 	}
 	var out []state.Event
 	for _, ev := range list.Items {
-		e := state.Event{At: ev.EventTime.Time, Verb: ev.Reason, Detail: ev.Message}
+		e := state.Event{At: ev.EventTime.Time, Verb: ev.Reason, Detail: eventDetail(&ev)}
 		if raw := ev.Annotations[byAnnotation]; raw != "" {
 			var p v1alpha1.Party
 			if err := json.Unmarshal([]byte(raw), &p); err == nil {
@@ -503,7 +504,7 @@ func FeedEvent(ev *corev1.Event) (feed.Event, error) {
 	actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
 	return feed.Event{
 		ID: eventID(ev), Kind: ev.Reason, Subject: ev.InvolvedObject.Kind + "/" + ev.InvolvedObject.Name,
-		Actor: actor, Time: ev.EventTime.UTC(), Line: feed.Line(ev.Reason, actor, ev.Message),
+		Actor: actor, Time: ev.EventTime.UTC(), Line: feed.Line(ev.Reason, actor, eventDetail(ev)),
 	}, nil
 }
 
@@ -577,6 +578,12 @@ const (
 	beekeeper    = "beekeeper"
 	byAnnotation = "beekeeper.giantswarm.io/by"
 	idAnnotation = "beekeeper.giantswarm.io/id"
+	// detailAnnotation holds an event's whole detail when it exceeds the
+	// message's messageMax bytes.
+	detailAnnotation = "beekeeper.giantswarm.io/detail"
+	// messageMax is the API server's limit on a dated Event's message.
+	messageMax = 1024
+	ellipsis   = "…"
 	// noteDefaulted is the state of a Note closed by its default and kept
 	// answerable (state.State's Defaulted).
 	noteDefaulted = "defaulted"
@@ -662,12 +669,15 @@ func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) 
 			ResourceVersion: obj.GetResourceVersion(),
 		},
 		Reason:              e.Verb,
-		Message:             e.Detail,
+		Message:             clipMessage(e.Detail),
 		Type:                corev1.EventTypeNormal,
 		EventTime:           metav1.MicroTime{Time: at},
 		ReportingController: "beekeeper.giantswarm.io/serve",
 		ReportingInstance:   e.By.Host,
 		Action:              e.Verb,
+	}
+	if ev.Message != e.Detail {
+		ev.Annotations[detailAnnotation] = e.Detail
 	}
 	if ev.ReportingInstance == "" {
 		ev.ReportingInstance = beekeeper
@@ -676,6 +686,30 @@ func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) 
 		return fmt.Errorf("recording %s on %s: %w", e.Verb, obj.GetName(), err)
 	}
 	return nil
+}
+
+// clipMessage is detail within the API server's limit on an Event's
+// message, messageMax bytes: whole when it fits, else cut at a character
+// boundary and ended by an ellipsis. The whole detail is then the Event's
+// detailAnnotation (eventDetail).
+func clipMessage(detail string) string {
+	if len(detail) <= messageMax {
+		return detail
+	}
+	cut := messageMax - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(detail[cut]) {
+		cut--
+	}
+	return detail[:cut] + ellipsis
+}
+
+// eventDetail is the detail ev was recorded with: its detailAnnotation when
+// the message was clipped, else the message.
+func eventDetail(ev *corev1.Event) string {
+	if d, ok := ev.Annotations[detailAnnotation]; ok {
+		return d
+	}
+	return ev.Message
 }
 
 // snapshot is every object of the shared state as one read saw it.

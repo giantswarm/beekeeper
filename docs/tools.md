@@ -644,7 +644,7 @@ A decision its default closed stays answerable for 24h: the answer replaces the 
       "type": "number"
     },
     "text": {
-      "description": "the answer in the person's own words",
+      "description": "the answer in the person's own words, at most 3000 characters",
       "type": "string"
     },
     "via": {

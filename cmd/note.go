@@ -370,7 +370,7 @@ notes' only.`,
 		Short: "Record a person's answer to a note, word for word, and close it",
 		Long: `beekeeper answer for a note: its thread is the note's first --ref. The
 answer is --choice <n>, one of its options (1-based), the person's own
-words, or both, with the way it came (--via, cli unless it came from
+words (at most 3000 characters), or both, with the way it came (--via, cli unless it came from
 Slack). It is logged as answer.recorded and the note closed; the session
 that filed it is told at once. A decision its default closed within the
 last day is answered all the same: the answer replaces the default.

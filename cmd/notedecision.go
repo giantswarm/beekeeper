@@ -22,6 +22,9 @@ const (
 	statusQuoMax = 3000
 	optionsMax   = 10
 	labelMax     = 75
+	// answerMax bounds a person's words of an answer, shown in the closed
+	// decision's section.
+	answerMax = 3000
 )
 
 // The events of a decision's close by its default, and the ways an answer
