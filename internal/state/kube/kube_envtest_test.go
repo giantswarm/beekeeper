@@ -522,14 +522,12 @@ func TestEnvtestNoteNumbersAreNotReused(t *testing.T) {
 }
 
 // Concurrent adds of two teams, through two stores, all get numbers of
-// their own.
+// their own: the losers of each round back off and rerun until they win.
 func TestEnvtestConcurrentNoteAdds(t *testing.T) {
 	a, b, c := envtestStore(t)
 	namespace(t, c, team)
 	namespace(t, c, pia.Team)
-	// Each round of reruns has a winner, so of 2*each writers none loses
-	// more than 2*each-1 races: fewer than the store's attempts.
-	const each = 2
+	const each = 6
 	var mu sync.Mutex
 	var got []int
 	var wg sync.WaitGroup
@@ -553,6 +551,35 @@ func TestEnvtestConcurrentNoteAdds(t *testing.T) {
 	notes := &v1alpha1.NoteList{}
 	if err := c.List(context.Background(), notes); err != nil || len(notes.Items) != 2*each {
 		t.Fatalf("%d Notes: %v", len(notes.Items), err)
+	}
+}
+
+// A note add that keeps losing the counter to another writer gives up at
+// the store's deadline with ErrContended, its note not written.
+func TestEnvtestNoteAddPastTheDeadline(t *testing.T) {
+	a, b, c := envtestStore(t)
+	namespace(t, c, team)
+	namespace(t, c, pia.Team)
+	addNote(t, a, ana) // the stores' first writes, slow on a fresh API server
+	addNote(t, b, pia)
+	a.retryFor = 2 * time.Second
+	runs := 0
+	err := a.Update(func(st *state.State) ([]state.Event, error) {
+		runs++
+		addNote(t, b, pia) // wins the counter before a writes it
+		st.NextNote++
+		st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: ana.Person, Kind: state.NoteDecision, Text: asked, By: ana, At: time.Now().Truncate(time.Second)})
+		return nil, nil
+	})
+	if !errors.Is(err, ErrContended) || !strings.Contains(err.Error(), "the update lost "+strconv.Itoa(runs)+" races") {
+		t.Fatalf("after %d lost races: %v", runs, err)
+	}
+	if runs < 2 {
+		t.Fatalf("gave up after %d run: %v", runs, err)
+	}
+	notes := &v1alpha1.NoteList{}
+	if err := c.List(context.Background(), notes); err != nil || len(notes.Items) != 2+runs {
+		t.Fatalf("%d Notes, the other writer's %d past the first two: %v", len(notes.Items), runs, err)
 	}
 }
 
