@@ -21,7 +21,11 @@ serve:
   # token carries.
   organizations: []  # @schema item: string
   # Dex group -> team. Each team gets its namespace, beekeeper-<team>, for its
-  # notes and agents (teamNamespaces.create).
+  # notes and agents (teamNamespaces.create). A caller in several is the team
+  # of its most specific: a team's own group before an organization-wide one
+  # (organization, organizations). A team's decisions are answered by its own
+  # groups' members; by an organization-wide group's only for a team without
+  # one.
   teams: {}  # @schema additionalProperties: true
   # Team -> the Dex group of its supervisor role (may release the team's
   # leases and lift its holds).
