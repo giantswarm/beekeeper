@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -15,20 +17,39 @@ import (
 // (none: the whole stdout without its line end).
 const CmdRef = "cmd://"
 
-// Producers are the commands a cmd:// reference and secret capture may
-// run, each the words its argv starts with; every other command is
-// refused. The list is beekeeper's own, no configuration widens it.
-var Producers = [][]string{
-	{"az", "acr", "token", "credential", "generate"},
-	{"openssl", "genpkey"},
-	{"openssl", "rand"},
+// Producer is a command a cmd:// reference and secret capture may run:
+// the words its argv starts with and every option it may take after them.
+type Producer struct {
+	Words []string
+	// Options are the options it takes, exactly as spelled; true takes a
+	// value, as the next word or after "=".
+	Options map[string]bool
+	// Operand, when set, accepts the one operand it takes.
+	Operand func(string) bool
 }
 
-// producerDenied are the options, with one dash or two, that make an
-// allowed producer put its answer anywhere but its stdout: az's request
-// and response log on stderr, the generated password in it; openssl's
-// file a session could read.
-var producerDenied = []string{"debug", "verbose", "out"}
+// Producers are the commands a cmd:// reference and secret capture may
+// run; every other command, and every option a producer does not list, is
+// refused: az's --debug and --verbose log the generated password on
+// stderr, openssl's -out writes a file a session could read, its -engine,
+// -provider and -config load code. The list is beekeeper's own, no
+// configuration widens it.
+var Producers = []Producer{
+	{Words: []string{"az", "acr", "token", "credential", "generate"}, Options: map[string]bool{
+		"--registry": true, "-r": true, "--name": true, "-n": true, "--resource-group": true, "-g": true,
+		"--subscription": true, "--password1": false, "--password2": false,
+		"--expiration": true, "--expiration-in-days": true,
+		"--output": true, "-o": true, "--query": true, "--only-show-errors": false,
+	}},
+	{Words: []string{"openssl", "genpkey"}, Options: map[string]bool{"-algorithm": true, "-pkeyopt": true}},
+	{Words: []string{"openssl", "rand"}, Options: map[string]bool{"-hex": false, "-base64": false}, Operand: isCount},
+}
+
+// isCount reports whether s is a positive decimal number.
+func isCount(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n > 0
+}
 
 // parseCmdRef reads cmd://<command>#<path>.
 func parseCmdRef(s string) (Ref, error) {
@@ -41,23 +62,44 @@ func parseCmdRef(s string) (Ref, error) {
 }
 
 // checkProducer refuses a command none of [Producers] starts, and an
-// argument of producerDenied.
+// option or operand that producer does not take.
 func checkProducer(words []string) error {
-	allowed := slices.ContainsFunc(Producers, func(p []string) bool {
-		return len(words) >= len(p) && slices.Equal(words[:len(p)], p)
+	i := slices.IndexFunc(Producers, func(p Producer) bool {
+		return len(words) >= len(p.Words) && slices.Equal(words[:len(p.Words)], p.Words)
 	})
-	if !allowed {
+	if i < 0 {
 		names := make([]string, len(Producers))
 		for i, p := range Producers {
-			names[i] = strings.Join(p, " ")
+			names[i] = strings.Join(p.Words, " ")
 		}
 		return fmt.Errorf("beekeeper runs only the producers %q", names)
 	}
-	for _, w := range words {
-		flag, _, _ := strings.Cut(w, "=")
-		if name := strings.TrimLeft(flag, "-"); name != flag && slices.Contains(producerDenied, name) {
-			return fmt.Errorf("%s: a producer runs without it, it logs the credential", flag)
+	p := Producers[i]
+	operands := 0
+	for args := words[len(p.Words):]; len(args) > 0; args = args[1:] {
+		w := args[0]
+		if !strings.HasPrefix(w, "-") {
+			if operands++; p.Operand == nil || operands > 1 || !p.Operand(w) {
+				return fmt.Errorf("%q: %s takes no such operand", w, strings.Join(p.Words, " "))
+			}
+			continue
 		}
+		name, _, inline := strings.Cut(w, "=")
+		takes, ok := p.Options[name]
+		switch {
+		case !ok:
+			return fmt.Errorf("%s: %s runs only with the options %q", name, strings.Join(p.Words, " "), slices.Sorted(maps.Keys(p.Options)))
+		case !takes && inline:
+			return fmt.Errorf("%s takes no value", name)
+		case takes && !inline:
+			if len(args) < 2 {
+				return fmt.Errorf("%s takes a value", name)
+			}
+			args = args[1:]
+		}
+	}
+	if p.Operand != nil && operands == 0 {
+		return fmt.Errorf("%s takes an operand", strings.Join(p.Words, " "))
 	}
 	return nil
 }

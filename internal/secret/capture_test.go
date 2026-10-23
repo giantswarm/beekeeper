@@ -193,6 +193,11 @@ func TestCaptureRefusesBeforeTheProducerRuns(t *testing.T) {
 		{"verbose", pw, with(append(slices.Clone(azGenerateArgs), "--verbose=true")...), "--verbose"},
 		{"out", pw, with("openssl", "genpkey", "-algorithm", "ed25519", "-out", "key.pem"), "-out"},
 		{"out, two dashes", pw, with("openssl", "rand", "--out=r", "32"), "--out"},
+		{"engine", pw, with("openssl", "genpkey", "-engine", "x", "-algorithm", "ed25519"), "-engine"},
+		{"provider", pw, with("openssl", "rand", "-provider-path", ".", "-hex", "32"), "-provider-path"},
+		{"no count", pw, with("openssl", "rand", "-hex"), "takes an operand"},
+		{"two counts", pw, with("openssl", "rand", "-hex", "32", "33"), "no such operand"},
+		{"option without its value", pw, with("az", "acr", "token", "credential", "generate", "--name"), "takes a value"},
 		{"no path", secret.Ref{File: file}, secret.CaptureOptions{}, "file#path"},
 		{"plaintext path", secret.Ref{File: file, Path: "token"}, secret.CaptureOptions{}, "would stay plaintext"},
 		{"bad filter", secret.Ref{File: file, Path: pwPath}, secret.CaptureOptions{JQ: ".["}, "--jq"},
@@ -256,7 +261,7 @@ func TestCaptureRefusesAFailingOrSilentProducerAndAnUnfitFilter(t *testing.T) {
 }
 
 func TestProducerEnvDropsTheSecrets(t *testing.T) {
-	env := secret.ProducerEnv([]string{"PATH=/bin", "OP_SESSION_abc=x", "OP_SERVICE_ACCOUNT_TOKEN=x", "SOPS_AGE_KEY=x", "GITHUB_TOKEN=x", "HOME=/h", "AZURE_CONFIG_DIR=/a"},
+	env := secret.ProducerEnv([]string{"PATH=/bin", "OP_SESSION_abc=x", "OP_SERVICE_ACCOUNT_TOKEN=x", "SOPS_AGE_KEY=x", "OPENSSL_CONF=/c", "OPENSSL_MODULES=/m", "GITHUB_TOKEN=x", "HOME=/h", "AZURE_CONFIG_DIR=/a"},
 		[]string{"*_TOKEN"})
 	if want := []string{"PATH=/bin", "HOME=/h", "AZURE_CONFIG_DIR=/a"}; !slices.Equal(env, want) {
 		t.Errorf("env = %q, want %q", env, want)

@@ -410,8 +410,9 @@ path that reaches nothing fails in one line naming it, never a value:
 
 The source may also be a credential an allowed producer generates,
 cmd://<producer>#<path>: beekeeper's own list, az acr token credential
-generate, openssl genpkey and openssl rand; any other command, and
---debug, --verbose or -out, is refused before it runs. The producer runs in beekeeper's process without the
+generate, openssl genpkey and openssl rand, each with the options it lists
+alone; any other command or option (--debug, --verbose, -out, -engine) is
+refused before it runs. The producer runs in beekeeper's process without the
 variables that carry a secret (secret.env), its stderr discarded, a
 failure naming its exit code alone; #<path> is a dotted key of its JSON or
 YAML stdout, none the whole stdout. compare and fingerprint refuse it, a
