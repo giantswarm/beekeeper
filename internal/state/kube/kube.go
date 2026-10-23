@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"slices"
 	"sort"
@@ -57,8 +58,9 @@ type Store struct {
 	c client.Client
 	// timeout bounds each call against the API server.
 	timeout time.Duration
-	// attempts bounds the reruns of one Update after lost races.
-	attempts int
+	// retryFor bounds the reruns of one update after lost races: each waits
+	// a growing, jittered backoff, and past retryFor the update gives up.
+	retryFor time.Duration
 	// home is the namespace of the store's own objects: the note counter.
 	home string
 
@@ -102,7 +104,7 @@ func Scheme() (*runtime.Scheme, error) {
 
 // New returns the store over c, whose scheme knows beekeeper's kinds.
 func New(c client.Client) *Store {
-	return &Store{c: c, timeout: 30 * time.Second, attempts: 5, home: DefaultNamespace}
+	return &Store{c: c, timeout: 30 * time.Second, retryFor: 20 * time.Second, home: DefaultNamespace}
 }
 
 // DefaultNamespace is the namespace of the store's own objects unless
@@ -167,30 +169,30 @@ func (s *Store) Peek() (*state.State, error) { return s.Read() }
 func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
-	for range s.attempts {
+	return s.rerun(ctx, "the update", func() (bool, error) {
 		snap, err := s.load(ctx)
 		if err != nil {
-			return err
+			return false, err
 		}
 		st := snap.state()
 		events, err := fn(st)
 		if err != nil {
-			return err
+			return false, err
 		}
 		want, err := snap.apply(st)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := homeless(st, want.state()); err != nil {
-			return err
+			return false, err
 		}
 		changes := snap.diff(want)
 		issue := want.issued > snap.next()
 		switch {
 		case len(changes) == 0 && len(events) > 0:
-			return fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
+			return false, fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
 		case len(changes) == 0 && !issue:
-			return nil
+			return false, nil
 		case (len(changes) > 1 || issue) && !allNotes(changes):
 			var names []string
 			if issue {
@@ -199,15 +201,15 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 			for _, c := range changes {
 				names = append(names, c.ref())
 			}
-			return fmt.Errorf("the update changes %s; the Kubernetes store writes one object per update, or several Notes", strings.Join(names, ", "))
+			return false, fmt.Errorf("the update changes %s; the Kubernetes store writes one object per update, or several Notes", strings.Join(names, ", "))
 		}
 		if issue {
 			err := s.issue(ctx, snap.counter, want.issued)
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
-				continue // another writer took the number: the rerun takes the next
+				return true, nil // another writer took the number: the rerun takes the next
 			}
 			if err != nil {
-				return fmt.Errorf("the note counter: %w", err)
+				return false, fmt.Errorf("the note counter: %w", err)
 			}
 		}
 		var written []client.Object
@@ -217,7 +219,7 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 				break
 			}
 			if err != nil {
-				return errors.Join(err, s.record(ctx, written, events, false))
+				return false, errors.Join(err, s.record(ctx, written, events, false))
 			}
 			written = append(written, obj)
 		}
@@ -225,13 +227,55 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 			// a lost race: the rerun judges the notes written so far as
 			// the state it reads
 			if err := s.record(ctx, written, events, false); err != nil {
-				return err
+				return false, err
 			}
-			continue
+			return true, nil
 		}
-		return s.record(ctx, written, events, true)
+		return false, s.record(ctx, written, events, true)
+	})
+}
+
+// ErrContended is the refusal of an update that kept losing races to other
+// writers until the store's retry deadline: running it again later may win.
+var ErrContended = errors.New("other writers kept winning the race; try again")
+
+// The backoff between the reruns after lost races: it starts at minBackoff
+// and doubles up to maxBackoff, and each wait is drawn at random below it,
+// so writers that lost together spread out.
+const (
+	minBackoff = 10 * time.Millisecond
+	maxBackoff = time.Second
+)
+
+// rerun runs try until it reports no lost race, waiting a backoff after each
+// lost one, until s.retryFor has passed or ctx is done: then it returns
+// ErrContended, named by what.
+func (s *Store) rerun(ctx context.Context, what string, try func() (lost bool, err error)) error {
+	start := time.Now()
+	backoff := minBackoff
+	for races := 1; ; races++ {
+		lost, err := try()
+		if !lost || err != nil {
+			return err
+		}
+		wait := rand.N(backoff) //nolint:gosec // jitter, no secret
+		if time.Since(start)+wait > s.retryFor || !sleep(ctx, wait) {
+			return fmt.Errorf("%s lost %d races in %s: %w", what, races, time.Since(start).Round(time.Millisecond), ErrContended)
+		}
+		backoff = min(2*backoff, maxBackoff)
 	}
-	return fmt.Errorf("the update lost %d races in a row", s.attempts)
+}
+
+// sleep waits d, false when ctx is done first.
+func sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // issue makes n the last note number handed out: the counter's create, or
@@ -429,26 +473,25 @@ func TeamNamespace(team string) string { return teamNamespace(team) }
 func (s *Store) holder(name string, change func(*v1alpha1.Environment) (bool, error), event state.Event) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
-	for range s.attempts {
+	return s.rerun(ctx, name+": the claim", func() (bool, error) {
 		env := &v1alpha1.Environment{}
 		if err := s.c.Get(ctx, client.ObjectKey{Name: name}, env); err != nil {
-			return environmentErr(name, err)
+			return false, environmentErr(name, err)
 		}
 		changed, err := change(env)
 		if err != nil || !changed {
-			return err
+			return false, err
 		}
 		env.Status.ObservedGeneration = env.Generation
 		err = s.c.Status().Update(ctx, env)
 		if apierrors.IsConflict(err) {
-			continue
+			return true, nil
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
-		return s.recordOn(ctx, env, event)
-	}
-	return fmt.Errorf("%s: the claim lost %d races in a row", name, s.attempts)
+		return false, s.recordOn(ctx, env, event)
+	})
 }
 
 func environmentErr(name string, err error) error {
