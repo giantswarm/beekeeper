@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -113,9 +114,10 @@ func (g *fakeGateway) seen() ([]decision, []string) {
 	return append([]decision{}, g.posted...), append([]string{}, g.closed...)
 }
 
-func TestEnvtestServeDecisions(t *testing.T) {
-	e := newServeEnv(t)
-	gw := &fakeGateway{}
+// decisionsVia puts e's decisions to people through gw: bo is a person of
+// serve.people, our team's channel teamChannel.
+func decisionsVia(t *testing.T, e *serveEnv, gw *fakeGateway) {
+	t.Helper()
 	srv := httptest.NewServer(gw)
 	t.Cleanup(srv.Close)
 	tokenFile := filepath.Join(t.TempDir(), "token")
@@ -126,6 +128,12 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	e.srv.cfg.Serve.Channels = map[string]string{ourTeam: teamChannel}
 	e.srv.cfg.Serve.Gateway = config.Gateway{URL: srv.URL, TokenFile: tokenFile, AnswerTool: "x_beekeeper_note_answer"}
 	e.srv.gw = newGateway(e.srv.cfg.Serve.Gateway)
+}
+
+func TestEnvtestServeDecisions(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{}
+	decisionsVia(t, e, gw)
 	f := stubAnswerGH(t, &answerGH{})
 
 	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
@@ -253,5 +261,49 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	}
 	if st, _ := e.store.Read(); len(st.Notes) != 0 {
 		t.Fatalf("open notes %+v", st.Notes)
+	}
+}
+
+// A decision a person's machine files with note add goes to the central
+// instance through muster as the person: put to its addressee, answered
+// there, its answer queued for the filing agent on its machine.
+func TestEnvtestCentralNoteAdd(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{}
+	decisionsVia(t, e, gw)
+	stubAnswerGH(t, &answerGH{})
+	m := centraltest.New(t, e.url, "beekeeper")
+	anaToken := e.token(t, anaEmail, teamGroup)
+	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, "ana-laptop", anaAgent)
+
+	out, code := ana.run("note", "add", "--for", "bo", "--due", "3h", "--default", ownLane, "--status-quo", noMuseLane,
+		"--why", "only its owners pick its lane", "--option", "portal: it rolls with backstage", "--option", "own: a lane of its own",
+		"--recommend", "2", "--ref", privateThread, museLane)
+	if code != 0 || !strings.HasPrefix(out, "note #") || !strings.Contains(out, "(central lab") {
+		t.Fatalf("ana's note add: exit %d: %s", code, out)
+	}
+	n, _ := strconv.Atoi(strings.TrimPrefix(strings.Fields(out)[1], "#"))
+	posted, _ := gw.seen()
+	if len(posted) != 1 || posted[0].Person != boEmail || posted[0].Question != museLane || posted[0].Note != strconv.Itoa(n) ||
+		posted[0].AskedBy != anaEmail+"/"+anaAgent+" on ana-laptop" || len(posted[0].Options) != 2 || posted[0].Recommend != 2 {
+		t.Fatalf("posted %+v", posted)
+	}
+	if local, _ := state.Open(ana.state); local != nil {
+		if st, _ := local.Read(); len(st.Notes) != 0 {
+			t.Errorf("ana's machine keeps %+v: the decision is the central instance's", st.Notes)
+		}
+	}
+
+	bo := e.as(t, e.token(t, boEmail, "giantswarm:team-planeteers"))
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 2, paramVia: viaSlack}, false, "answered and closed")
+	msgs, _ := e.expect(t, e.as(t, anaToken), "receive_messages", map[string]any{}, false, "")["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("ana's mailbox %+v, want the answer", msgs)
+	}
+	raw, _ := json.Marshal(msgs[0].(map[string]any)["envelope"])
+	var env mailEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil || env.To != localPrefix+"ana-laptop/"+anaAgent ||
+		env.Message.text() != fmt.Sprintf("NOTE ANSWERED #%d by bo: own (on %s)", n, privateThread) {
+		t.Fatalf("ana's delivery %+v: %v", env, err)
 	}
 }

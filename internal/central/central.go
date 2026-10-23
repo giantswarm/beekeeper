@@ -33,6 +33,9 @@ import (
 type Unreachable struct {
 	Context string
 	Reason  string
+	// Sent marks a tool call that went out unanswered: the central
+	// instance may have acted on it.
+	Sent bool
 }
 
 func (e *Unreachable) Error() string {
@@ -169,7 +172,11 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v a
 	req.Params.Arguments = map[string]any{"name": c.Tool(tool), "arguments": args}
 	res, err := mc.CallTool(ctx, req)
 	if err != nil {
-		return "", c.timedOut(ctx, stageToolCall, deadline, c.unreachable("muster: %s: %v", c.Tool(tool), err))
+		err = c.timedOut(ctx, stageToolCall, deadline, c.unreachable("muster: %s: %v", c.Tool(tool), err))
+		if u := (*Unreachable)(nil); errors.As(err, &u) {
+			u.Sent = true
+		}
+		return "", err
 	}
 	return c.result(tool, res, v)
 }

@@ -107,7 +107,16 @@ team. It is refused unless it renders: the question one line of at most 150
 characters, --status-quo at most 3000, at most 10 --option with labels of at
 most 75 characters, --recommend <n> naming one of them. At its due time
 beekeeper watch closes it with its default (note.defaulted, NOTE DEFAULTED)
-and tells the session that filed it.`,
+and tells the session that filed it.
+
+On a machine with a central instance (central.context), a decision is filed
+there (note_add, through muster as the person) once its checks pass: the
+central instance puts it in Slack and its answer or default reaches the
+filing session through the person's mailbox. Its number is the central
+note's. A sign-in, --holds and --fold-into stay on the machine. With the
+central instance unreachable before the call went out, the decision is
+filed on the machine, as stderr says; one sent and left unanswered is
+filed nowhere else and exits 69.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
@@ -185,6 +194,11 @@ and tells the session that filed it.`,
 			}
 			if err := a.warnAnswered(cmd, n); err != nil {
 				return err
+			}
+			if a.centralNote(&n, holds, foldInto) {
+				if filed, err := a.fileCentral(cmd.Context(), cmd.ErrOrStderr(), me, &n, draft, stage); filed || err != nil {
+					return err
+				}
 			}
 			if holds {
 				st, err := a.store.Read()
