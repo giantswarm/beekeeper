@@ -225,14 +225,19 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 		}
 		why = fmt.Sprintf("the %s, %q, cannot be told (%v)", rl.name, h.Name, err)
 	}
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.RoleLines = append(st.RoleLines, state.RoleLine{Role: rl.name, Line: line, At: a.now.UTC()})
-		return nil, nil
-	}); err != nil {
+	if err := a.keepRoleLine(rl, line); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "note #%d: keeping the line for the %s failed (%v): %s\n", n.ID, rl.name, err, line)
 		return ""
 	}
 	return fmt.Sprintf("note #%d: %s: the answer waits for its next start (beekeeper %s start)", n.ID, why, rl.name)
+}
+
+// keepRoleLine keeps line for rl's next holder, said at its start.
+func (a *app) keepRoleLine(rl role, line string) error {
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.RoleLines = append(st.RoleLines, state.RoleLine{Role: rl.name, Line: line, At: a.now.UTC()})
+		return nil, nil
+	})
 }
 
 // quietWake wakes the agent q with line from by, its own report discarded:

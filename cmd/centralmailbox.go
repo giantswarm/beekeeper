@@ -131,6 +131,8 @@ func (w *watcher) drainMailbox(ctx context.Context) bool {
 	if deliver == nil {
 		deliver = func(ctx context.Context, q, msg string) error { return quiet.wakeAgent(ctx, mailboxParty, q, msg, "") }
 	}
+	// An unreadable state delivers each message to the agent it names.
+	st, _ := w.store.Read()
 	var acks []int64
 	held := map[string]bool{}
 	for _, d := range got.Messages {
@@ -146,15 +148,37 @@ func (w *watcher) drainMailbox(ctx context.Context) bool {
 			continue
 		}
 		key := mailboxKey + " " + name
-		if err := deliver(ctx, name, mailBody(d, env)); err != nil {
+		body := mailBody(d, env)
+		to, holder, rl, inRole := mailAddressee(st, name)
+		var err error
+		if to == "" {
+			err = fmt.Errorf("no session holds the %s's role", rl.name)
+		} else {
+			err = deliver(ctx, to, body)
+		}
+		if err != nil && inRole {
+			// As a note's answer on the machine: the role's next holder
+			// is told at its start.
+			if kerr := w.keepRoleLine(rl, body); kerr == nil {
+				w.clear(key)
+				acks = append(acks, d.Seq)
+				_ = w.store.Log(event(mailboxParty, "mailbox.kept", "%s: %s from %s%s, for the %s's next start: %v", name, d.MessageID, d.Sender, via(d.Envelope), rl.name, err))
+				w.emitNow(mailboxKey, "MAILBOX %s to %s waits for the %s's next start (%v): %s", d.MessageID, name, rl.name, err, firstLine(env.Message.text()))
+				continue
+			}
+		}
+		if err != nil {
 			held[name] = true
 			w.check(key, true, "MAILBOX %s waits for %s, delivered once it takes it: %s", d.MessageID, name, unreadableReason(err))
 			continue
 		}
 		w.clear(key)
 		acks = append(acks, d.Seq)
-		_ = w.store.Log(event(mailboxParty, "mailbox.delivered", "%s: %s from %s%s", name, d.MessageID, d.Sender, via(d.Envelope)))
-		w.emitNow(mailboxKey, "MAILBOX to %s: %s from %s%s: %s", name, d.MessageID, d.Sender, via(d.Envelope), firstLine(env.Message.text()))
+		if holder != name {
+			holder = fmt.Sprintf("%s, the %s now, for %s", holder, rl.name, name)
+		}
+		_ = w.store.Log(event(mailboxParty, "mailbox.delivered", "%s: %s from %s%s", holder, d.MessageID, d.Sender, via(d.Envelope)))
+		w.emitNow(mailboxKey, "MAILBOX to %s: %s from %s%s: %s", holder, d.MessageID, d.Sender, via(d.Envelope), firstLine(env.Message.text()))
 	}
 	if len(acks) > 0 {
 		// A watch that stops meanwhile still acks what it delivered.
@@ -163,6 +187,27 @@ func (w *watcher) drainMailbox(ctx context.Context) bool {
 		}
 	}
 	return len(held) > 0
+}
+
+// mailAddressee is the session a message to the machine's agent name
+// reaches, as tellFiler tells a note's filer on the machine: name itself,
+// or, name having filed in a role (a run of the supervisor's or the
+// guide's), the role's holder now, since a relayed run answers nothing.
+// holder is the name of the one told; to is empty while no session holds
+// the role.
+func mailAddressee(st *state.State, name string) (to, holder string, rl role, inRole bool) {
+	if st == nil {
+		return name, name, role{}, false
+	}
+	rl, ok := filedRole(st, state.Party{Name: name})
+	if !ok {
+		return name, name, role{}, false
+	}
+	h := rl.get(st).Holder
+	if h == nil {
+		return "", "", rl, true
+	}
+	return cmp.Or(h.Session, h.Name), h.Name, rl, true
 }
 
 // mailBody is the turn a delivered message is: its text stamped with its
