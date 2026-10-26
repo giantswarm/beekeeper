@@ -256,6 +256,12 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"beekeeper secret compare a.sops.yaml b.sops.yaml#data.password", ""},
 	{"beekeeper secret fingerprint op://Shared/item/password", ""},
 	{"beekeeper secret copy op://Shared/item/password -- gh secret set TOKEN --repo o/r", ""},
+	// a file on a host: the value on ssh's stdin inside beekeeper passes,
+	// the pipe through the session's shell stays refused
+	{"beekeeper secret copy k8s://ctx/ns/app/token ssh://host.example/etc/example/token --mode 0600 --owner app:app --sudo", ""},
+	{"beekeeper secret copy op://Shared/item/password ssh://deploy@host.example:2222/etc/example/env --template $'URL=https://api.example\\nTOKEN={{value}}\\n'", ""},
+	{"kubectl get secret app -o jsonpath='{.data.token}' | base64 -d | ssh host.example 'cat > /etc/example/token'", "ssh://<host>/<path>"},
+	{"kubectl get secret app -o jsonpath='{.data.token}' | base64 -d | ssh host.example 'sudo install -m 600 /dev/stdin /etc/example/token'", "ssh://<host>/<path>"},
 	{"beekeeper secret set a.sops.yaml stringData.password --generate --vault op://Shared/item/password", ""},
 }
 

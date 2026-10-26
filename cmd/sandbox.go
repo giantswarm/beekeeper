@@ -386,6 +386,9 @@ func brokeredSecretArgs(args []string, inSandbox, session bool) error {
 		if strings.HasPrefix(a, secret.CmdRef) && inSandbox {
 			return errors.New("a producer runs on the host only: copy from cmd:// is not brokered")
 		}
+		if secret.IsSSH(a) && inSandbox {
+			return errors.New("ssh runs on the host only: copy to ssh:// is not brokered")
+		}
 	}
 	return brokeredFlags(args[1:])
 }
