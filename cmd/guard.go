@@ -792,12 +792,16 @@ func (a *app) reportCheck(raw []byte) []byte {
 	if a.loadConfig() == nil {
 		tz = a.cfg.Reporter.TZ
 	}
+	now := a.now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	return guard.ReportCheck(raw, func(msg string) []string {
 		zone, err := reportZone(tz, a.zone)
 		if err != nil {
 			return []string{err.Error()}
 		}
-		return post.Report(msg, zone, time.Now())
+		return post.Report(msg, zone, now)
 	})
 }
 

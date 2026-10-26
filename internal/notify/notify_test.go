@@ -73,6 +73,18 @@ func TestOneNotificationPerEventAcrossWatches(t *testing.T) {
 	}
 }
 
+// TestClaimsExpireOnTheCallersClock checks that a claim lasts keepSent on the
+// clock it was stamped with, whatever the wall clock says.
+func TestClaimsExpireOnTheCallersClock(t *testing.T) {
+	n, _, _ := newNotifier(t, t.TempDir(), Policy{})
+	if got := n.Claim(ctx, noon, StaleLease, "1@1"); len(got) != 1 {
+		t.Fatalf("fresh claim: %v", got)
+	}
+	if got := n.Claim(ctx, noon.Add(keepSent-time.Hour), StaleLease, "1@1"); len(got) != 0 {
+		t.Fatalf("claim within keepSent: %v, want none", got)
+	}
+}
+
 func TestKindsLeftOutNeverNotify(t *testing.T) {
 	n, s, _ := newNotifier(t, t.TempDir(), Policy{Kinds: []string{Due}})
 	n.Notify(ctx, noon, Budget, "", "s", "GITHUB BUDGET")
