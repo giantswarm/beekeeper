@@ -181,28 +181,6 @@ func TestOOMOwnerNamesATestKill(t *testing.T) {
 	}
 }
 
-func TestIsWait(t *testing.T) {
-	const devctl = "devctl"
-	yes := [][]string{
-		{devctl, "pr", "merge", "giantswarm/x", "1"},
-		{devctl, "release", "wait", "giantswarm/x", "--pr", "1"},
-		{"gh", "pr", "checks", "1", "--watch"},
-		{"docker", "image", "save", "x"},
-		{kubectlBin, "port-forward", "svc/x", "8080"},
-	}
-	no := [][]string{{devctl, "version"}, {"gh", "pr", "view", "1"}, {kubectlBin, "get", "pods"}}
-	for _, args := range yes {
-		if !isWait(&proc.Process{Comm: args[0], Args: args}) {
-			t.Errorf("%v is a wait", args)
-		}
-	}
-	for _, args := range no {
-		if isWait(&proc.Process{Comm: args[0], Args: args}) {
-			t.Errorf("%v is no wait", args)
-		}
-	}
-}
-
 // A watch's kept port-forwards are the watch's, no session's wait.
 func TestFindWaitsLeavesTheWatchsForwardsOut(t *testing.T) {
 	tab := named(table(

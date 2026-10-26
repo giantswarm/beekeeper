@@ -357,7 +357,7 @@ func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 func findWaits(t *proc.Table, sessions []*claude.Session, now time.Time) []wait {
 	var out []wait
 	for _, p := range t.ByPID {
-		if !isWait(p) || slices.ContainsFunc(t.Ancestors(p.PID), isWatch) {
+		if !claude.IsWait(p) || slices.ContainsFunc(t.Ancestors(p.PID), isWatch) {
 			continue
 		}
 		w := wait{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(now).Round(time.Second), Ungated: ungatedProcess(t, p)}
@@ -368,30 +368,6 @@ func findWaits(t *proc.Table, sessions []*claude.Session, now time.Time) []wait 
 	}
 	slices.SortFunc(out, func(x, y wait) int { return int(y.Elapsed - x.Elapsed) })
 	return out
-}
-
-func isWait(p *proc.Process) bool {
-	has := func(words ...string) bool {
-		for _, w := range words {
-			if !slices.Contains(p.Args, w) {
-				return false
-			}
-		}
-		return true
-	}
-	switch p.Comm {
-	case "devctl":
-		return has("pr", "wait") || has("pr", "merge") || has("release", "wait")
-	case "gh":
-		return has("--watch") || has("run", "watch")
-	case "ctr":
-		return has("import")
-	case "docker":
-		return len(p.Args) > 1 && (p.Args[1] == "save" || p.Args[1] == "load" || has("image", "save") || has("image", "load"))
-	case "kubectl":
-		return has("port-forward")
-	}
-	return false
 }
 
 var memcapScope = regexp.MustCompile(guard.ScopePrefix + `(\d+)-`)

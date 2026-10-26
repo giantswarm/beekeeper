@@ -375,7 +375,7 @@ func invokesGitHub(cmd string) bool {
 // isGitHubCLI says a command word runs gh or devctl.
 func isGitHubCLI(w string) bool {
 	w = path.Base(w)
-	return w == "gh" || w == "devctl"
+	return w == "gh" || w == devctlComm
 }
 
 // Price sets the costs and the context window from the configured models.

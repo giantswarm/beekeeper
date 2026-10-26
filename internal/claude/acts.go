@@ -234,7 +234,7 @@ func (a *Acts) cli(id string, w []string, dir string) {
 		a.creates[id] = true
 	case tool == "gh" && (sub == "pr" || sub == "issue") && verb != "list" && verb != "status":
 		nums = nums[:min(1, len(nums))]
-	case tool == "devctl" && sub == "pr", pr != "":
+	case tool == devctlComm && sub == "pr", pr != "":
 	default:
 		nums = nil
 	}

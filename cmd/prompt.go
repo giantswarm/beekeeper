@@ -20,7 +20,7 @@ import (
 // values that go stale within minutes.
 var liveCommands = [][2]string{
 	{"beekeeper sessions", "the running sessions, what each is on and runs, their memory"},
-	{"beekeeper capacity", "the busy agents against the floor and ceiling, the headroom and whether a start fits"},
+	{"beekeeper capacity", "the busy agents against the floor and ceiling (parked and waiting ones apart), the headroom and whether a start fits"},
 	{"beekeeper snapshot", "the machine's memory, swap, load and OOM kills, and what changed"},
 	{"beekeeper watch", "one line per change, silent otherwise: the source of a Monitor"},
 	{"beekeeper lanes", "the merge lanes now: the running merge, the settling rollout, who is next"},
@@ -28,7 +28,7 @@ var liveCommands = [][2]string{
 	{"beekeeper alerts snapshot", "the installations' current alerts"},
 	{"beekeeper budget", "the GitHub budget and who draws on it"},
 	{"beekeeper priority", "the priority list now, with each epic's hold"},
-	{"beekeeper board next", "the next free board item, every held one above it with what holds it"},
+	{"beekeeper board next", "the next free board item, every held one above it with what holds it, each ranked epic without a worker (EPIC UNSTAFFED)"},
 	{"beekeeper log", "the latest events"},
 	{"beekeeper self-update --check", "whether a newer beekeeper is released"},
 	{"gh issue view / gh pr view <n> --repo <owner/repo>", "an issue's or a pull request's state"},
