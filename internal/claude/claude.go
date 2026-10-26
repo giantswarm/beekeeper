@@ -39,11 +39,15 @@ type Session struct {
 	Branch     string    `json:"branch,omitempty"`
 	Transcript string    `json:"transcript,omitempty"`
 	LastActive time.Time `json:"lastActive,omitzero"`
-	Started    time.Time `json:"started"`
-	Commands   []Command `json:"commands,omitempty"`
-	MemMiB     int       `json:"memMiB"`
-	Permission string    `json:"permissionMode,omitempty"`
-	Model      string    `json:"model,omitempty"`
+	// LastSubagent is the latest write of its subagents' transcripts
+	// (LastSubagentWrite): a subagent works while the session's own
+	// transcript stays quiet.
+	LastSubagent time.Time `json:"lastSubagent,omitzero"`
+	Started      time.Time `json:"started"`
+	Commands     []Command `json:"commands,omitempty"`
+	MemMiB       int       `json:"memMiB"`
+	Permission   string    `json:"permissionMode,omitempty"`
+	Model        string    `json:"model,omitempty"`
 	// Waiting is what the session waits on its person for, as the desktop
 	// recorded it after its last turn; "" when it waits on nobody.
 	Waiting *Waiting `json:"waiting,omitempty"`
@@ -426,6 +430,7 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 		if fi, err := os.Stat(s.Transcript); err == nil {
 			s.LastActive = fi.ModTime()
 		}
+		s.LastSubagent = LastSubagentWrite(s.Transcript)
 	}
 	s.MemMiB, s.Commands = processTree(t, p.PID, clis, now)
 	return s

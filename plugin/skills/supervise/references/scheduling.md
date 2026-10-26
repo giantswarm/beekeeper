@@ -6,10 +6,14 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   waiting. The supervisor, the guide, parked agents, agents waiting on the person and agents
   waiting in a wait of their own do not count; planning sessions do. A wait of its own is a
   session whose tool commands are only waits (a timer's or polling loop's `sleep`, a CI watch, a
-  merge's turn at the gate) and whose transcript has been quiet for five minutes. Such an agent
-  does no work and spends next to no budget, so it never holds a slot: `beekeeper capacity`
-  lists it under `waiting` and counts only the busy against the ceiling. The supervisor reads
-  that verdict and never counts sessions by hand. At every tick below five, the supervisor fills the free slots in the same turn,
+  merge's turn at the gate) and whose transcript and its subagents' transcripts have been quiet
+  for five minutes. Such an agent does no work and spends next to no budget, so it never holds a
+  slot: `beekeeper capacity` lists it under `waiting` and counts only the busy against the
+  ceiling. The supervisor reads that verdict and never counts sessions by hand. Waiters that
+  wake can push busy over the ceiling. No agent is stopped or parked for that: each one finishes
+  its work. `capacity` says `no start: <n> busy at the ceiling of <m>` and the watch says
+  CAPACITY FULL until busy drops under the ceiling. Until then the supervisor starts nothing, an
+  unstaffed epic included (below). At every tick below five, the supervisor fills the free slots in the same turn,
   within the memory guards (`MemAvailable` well above the watch's floor, machine swap not growing,
   a free build slot, the kind clusters under `maxKindClusters`), and never starts past ten. A task
   that needs a held lease queues behind the lease without holding the others back. The slots are

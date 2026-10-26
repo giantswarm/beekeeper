@@ -1802,7 +1802,7 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   (`agents keep`), one parked on a decision (`agents park`), one a timer wakes and one whose session
   waits on its person are parked; one whose session runs only waits (a `sleep` or a polling
   loop's, `gh run watch` or `--watch`, `devctl pr wait`, `pr merge` or `release wait`, `beekeeper
-  gate` or `lease … --wait`) and whose transcript has been quiet for 5 minutes is waiting, listed
+  gate` or `lease … --wait`) and whose transcript and its subagents' have been quiet for 5 minutes is waiting, listed
   apart (`waiting: <agent> (waits: <command>)`, `--json` `waiting`). Parked and waiting agents do no
   work and never hold a slot: only the busy count against the ceiling, in `capacity`, the start
   gate and the watch's CAPACITY lines. The

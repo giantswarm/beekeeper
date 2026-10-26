@@ -357,8 +357,9 @@ with a task that is neither parked, kept nor waiting: an agent kept on
 purpose (agents keep), one a timer wakes and one whose session waits on its
 person are parked; one whose session runs only waits (a sleep or a polling
 loop's sleep, gh run watch or --watch, devctl pr wait, pr merge or release
-wait, beekeeper gate or lease --wait, ...) and whose transcript has been
-quiet for 5 minutes is waiting, listed apart with what it waits on; one
+wait, beekeeper gate, beekeeper lease --wait) and whose transcript and its
+subagents' transcripts have been quiet for 5 minutes is waiting, listed
+apart with what it waits on; one
 without a task, or done, is idle. Only busy agents hold a slot: parked and
 waiting agents do no work, spend next to no budget and never block a start.
 The supervisor, the guide and a role's successor are not counted.
