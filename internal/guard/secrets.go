@@ -72,7 +72,7 @@ type leak struct {
 const secretOps = "Equality, the one comparison an agent runs: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`, " +
 	"whose broker compares out of the session, no value reaching it; any other comparison of a value (a hash, a diff, `grep -c|-q`) stays refused. " +
 	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
-	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate [--name n --namespace ns] [--vault op://…] [--to-secret … | -- <consumer>]`, " +
+	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `copy <ref> ssh://<host>/<path> [--mode 0600] [--owner user:group] [--sudo] [--template …]` (a file on a host, the value on ssh's stdin), `set <file> <path> --generate [--name n --namespace ns] [--vault op://…] [--to-secret … | -- <consumer>]`, " +
 	"`unset <file> <path>… --write` (keys out of a SOPS file); configuration a SOPS file encrypts (ids, URLs, peers): `reveal <file> <path>…`; " +
 	"a consumer reads the value on stdin, in a pod through `kubectl exec -i --context <context> <pod> -- <consumer>` (`--stdin-json`/`--stdin-field` wrap it in a JSON request). " +
 	"Rotations: `beekeeper secret rotate op://… --generate` (a value beekeeper made), `rotate op://…` (a value its issuer " +
@@ -105,7 +105,8 @@ var (
 		"  kubectl get secrets -o name\n" +
 		"  kubectl describe secret <name>   (sizes only)\n" +
 		"  kubectl get secret <name> -o jsonpath='{.data.<key>}' | base64 -d | wc -c   (the length)\n" +
-		"  beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>[#<path>] <file.sops.yaml#path>   (the value into a SOPS path, in beekeeper)"
+		"  beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>[#<path>] <file.sops.yaml#path>   (the value into a SOPS path, in beekeeper)\n" +
+		"  beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>[#<path>] ssh://<host>/<path> [--mode 0600] [--owner user:group] [--sudo]   (the value into a file on a host, on ssh's stdin)"
 	sopsSafe = "  sops runs only in beekeeper, never in an agent session, encryption included.\n" +
 		"  yq '.stringData|keys' <file>   (a SOPS file keeps its key names in plaintext)"
 	opSafe      = "  op runs only in beekeeper, never in an agent session (op run included): beekeeper secret reads the shared vault."

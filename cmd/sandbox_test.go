@@ -97,6 +97,14 @@ func TestBrokeredSecretArgs(t *testing.T) {
 	if err := brokeredSecretArgs(producer, true, false); err == nil || !strings.Contains(err.Error(), "cmd://") {
 		t.Errorf("%q in the sandbox: %v, want a refusal", producer, err)
 	}
+	// ssh to a host runs on the host like a consumer
+	remote := []string{copyOp, "--mode=0600", "op://Shared/x/y", "ssh://host.example/etc/example/token"}
+	if err := brokeredSecretArgs(remote, false, true); err != nil {
+		t.Errorf("%q outside the sandbox: %v", remote, err)
+	}
+	if err := brokeredSecretArgs(remote, true, false); err == nil || !strings.Contains(err.Error(), "ssh://") {
+		t.Errorf("%q in the sandbox: %v, want a refusal", remote, err)
+	}
 	// import reads the person's own vault: brokered in session mode only
 	imp := []string{"import", "--recipient=age1x", "op://Private/x/y"}
 	if err := brokeredSecretArgs(imp, true, true); err != nil {

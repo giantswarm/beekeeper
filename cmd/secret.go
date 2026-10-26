@@ -294,6 +294,9 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if inSandbox && slices.ContainsFunc(args, func(s string) bool { return strings.HasPrefix(s, secret.CmdRef) }) {
 		return refused("the agent sandbox runs no producer on the host: copy from cmd:// runs outside the sandbox only")
 	}
+	if inSandbox && slices.ContainsFunc(args, secret.IsSSH) {
+		return refused("the agent sandbox runs no ssh on the host: copy to ssh:// runs outside the sandbox only")
+	}
 	if dash < 0 {
 		dash = len(args)
 	}
@@ -361,9 +364,10 @@ func (a *app) secretCopyCmd() *cobra.Command {
 	var name, namespace, toSecret, encode, gitUser, registry, username string
 	var gitAskpass bool
 	var in secret.Stdin
+	var remote secret.RemoteFile
 	c := &cobra.Command{
-		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --git-askpass -- git … | copy <from> --to-secret <context>/<namespace>/<name>/<key> | copy <from> <file> --dockerconfigjson <registry> --username <user>",
-		Short: "Copy a SOPS file, values into a new SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
+		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --git-askpass -- git … | copy <from> --to-secret <context>/<namespace>/<name>/<key> | copy <from> <file> --dockerconfigjson <registry> --username <user> | copy <from> ssh://<host>/<path> [--mode 0600] [--owner user:group] [--sudo] [--template …]",
+		Short: "Copy a SOPS file, values into a new SOPS file, or one value into a SOPS path, a consumer's stdin, a lab's Secret or a file on a host over ssh",
 		Long: `copy <src.sops.yaml> <dst.sops.yaml> writes a new SOPS file with the
 values of src, encrypted under dst's creation rules; --name and --namespace
 rewrite a Kubernetes object's metadata.name and metadata.namespace on the
@@ -501,6 +505,27 @@ the fingerprint a delivery is checked against:
   beekeeper secret copy op://<vault>/<item>/<field> --encode basic:x-access-token \
     --to-secret kind-<lab>/<namespace>/<name>/<key>
 
+copy <ref> ssh://[<user>@]<host>[:<port>]/<path> writes one value into a
+file on a host reached by ssh (the host's name or an alias of the ssh
+configuration, its keys authenticating, no prompt). The value travels on
+ssh's stdin alone, never on a command line: the remote command is a fixed
+script that writes a temp file next to the path under umask 077, checks
+its length against what was sent (a dropped connection ends the stream
+early), sets --owner user[:group] and then --mode (default 0600), and
+moves it into place; a path that is a directory is refused. A failure or a signal removes the temp file and leaves the
+path as it was; a source that resolves to nothing, or to an empty value,
+fails before ssh runs. --sudo runs the script under sudo -n, for a path
+only root writes, by the host's own sudo rules. --template '<content>'
+writes a file whose other lines are public, the value at {{value}} (once);
+a template with the shape of a credential is refused. It answers the file,
+mode, owner, bytes and the value's keyed fingerprint, the one fingerprint
+<ref> answers:
+
+  beekeeper secret copy k8s://<context>/<namespace>/<name>/<key> \
+    ssh://host.example/etc/example/token --mode 0600 --owner app:app --sudo
+  beekeeper secret copy op://<vault>/<item>/<field> ssh://host.example/etc/example/env \
+    --sudo --owner app --template $'URL=https://api.example/push\nTOKEN={{value}}\n'
+
 An op:// value the shared vault cannot give (none configured, no token, op
 failing or answering nothing within a minute) exits 78.`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -539,10 +564,17 @@ failing or answering nothing within a minute) exits 78.`,
 				return usageErr("%v", err)
 			}
 			docker := registry != "" || username != ""
+			toRemote := cmd.ArgsLenAtDash() < 0 && len(args) == 2 && secret.IsSSH(args[1])
+			if !toRemote && slices.ContainsFunc([]string{"mode", "owner", "sudo", "template"}, cmd.Flags().Changed) {
+				return usageErr("--mode, --owner, --sudo and --template shape a file on a host: copy <ref> ssh://<host>/<path>")
+			}
+			if toRemote && (docker || cmd.Flags().Changed("to-secret") || name != "" || namespace != "") {
+				return usageErr("copy <ref> ssh://<host>/<path> writes one value into a file, no --to-secret, --dockerconfigjson, --name or --namespace")
+			}
 			if docker && (cmd.ArgsLenAtDash() >= 0 || cmd.Flags().Changed("to-secret") || len(args) != 2) {
 				return usageErr("--dockerconfigjson writes a Secret's .dockerconfigjson in a SOPS file: copy <ref> <file> --dockerconfigjson <registry> --username <user>")
 			}
-			if cmd.ArgsLenAtDash() < 0 && !cmd.Flags().Changed("to-secret") && !docker {
+			if cmd.ArgsLenAtDash() < 0 && !cmd.Flags().Changed("to-secret") && !docker && !toRemote {
 				if pairs, err := copyPairs(args); err == nil {
 					if !enc.IsZero() {
 						return usageErr("--encode encodes one value: copy <ref> <file#path>, copy <ref> -- <consumer…> or copy <ref> --to-secret …")
@@ -562,6 +594,9 @@ failing or answering nothing within a minute) exits 78.`,
 			}
 			if err := a.sandboxFiles(src, nil); err != nil {
 				return err
+			}
+			if toRemote {
+				return a.secretCopyToRemote(cmd.Context(), src[0], enc, args[1], remote)
 			}
 			ops, err := a.secretOps()
 			if err != nil {
@@ -648,9 +683,43 @@ failing or answering nothing within a minute) exits 78.`,
 	c.Flags().StringVar(&gitUser, "git-user", secret.GitUser, "the user name the askpass helper answers")
 	c.Flags().StringVar(&registry, "dockerconfigjson", "", "write the value as the password of a kubernetes.io/dockerconfigjson Secret for this registry")
 	c.Flags().StringVar(&username, "username", "", "the user of --dockerconfigjson")
+	c.Flags().StringVar(&remote.Mode, "mode", "", "the octal mode of the file on the host (default 0600)")
+	c.Flags().StringVar(&remote.Owner, "owner", "", "the owner of the file on the host, user[:group]")
+	c.Flags().BoolVar(&remote.Sudo, "sudo", false, "write the file on the host under sudo -n, by its sudo rules")
+	c.Flags().StringVar(&remote.Template, "template", "", "the file's content on the host, the value at "+secret.TemplateValue+" (public lines only)")
 	stdinFlags(c, &in)
 	encodeFlag(c, &encode)
 	return c
+}
+
+// secretCopyToRemote is copy <ref> ssh://<host>/<path>: one value into a
+// file on a host, on ssh's stdin alone.
+func (a *app) secretCopyToRemote(ctx context.Context, src secret.Ref, enc secret.Encoding, spec string, opt secret.RemoteFile) error {
+	f, err := secret.ParseRemoteFile(spec)
+	if err != nil {
+		return usageErr("%v", err)
+	}
+	f.Mode, f.Owner, f.Sudo, f.Template = opt.Mode, opt.Owner, opt.Sudo, opt.Template
+	if err := f.Check(); err != nil {
+		return usageErr("%v", err)
+	}
+	ops, err := a.secretOpsKeyed()
+	if err != nil {
+		return err
+	}
+	ops.Encode, ops.Produce = enc, true
+	res, err := ops.CopyToRemote(ctx, src, f)
+	if err != nil && !errors.Is(err, secret.ErrVault) {
+		err = refused("%v", err)
+	}
+	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(enc), f, outcome(err, fmt.Sprintf("%d bytes, mode %s, %s", res.Bytes, res.Mode, res.Fingerprint))); err != nil {
+		return err
+	}
+	own := ""
+	if res.Owner != "" {
+		own = ", owner " + res.Owner
+	}
+	return a.secretPrint(res, fmt.Sprintf("wrote %s: %d bytes, mode %s%s, value %d bytes, fingerprint %s\n", res.File, res.Bytes, res.Mode, own, res.Length, res.Fingerprint))
 }
 
 // copyPairs are the <ref>=<path> pairs of copy into a new file: every
