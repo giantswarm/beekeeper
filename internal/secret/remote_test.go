@@ -1,3 +1,5 @@
+//go:build unix
+
 package secret_test
 
 import (
@@ -11,7 +13,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
@@ -57,6 +61,17 @@ func TestParseRemoteFile(t *testing.T) {
 	}
 	if s := f.String(); s != "ssh://deploy@host.example:2222/etc/example/token" {
 		t.Errorf("String() = %q", s)
+	}
+	for spec, host := range map[string]string{
+		"ssh://[2001:db8::1]/etc/example/token":    "2001:db8::1",
+		"ssh://[::1]:2222/etc/example/token":       "::1",
+		"ssh://192.0.2.10/etc/example/token":       "192.0.2.10",
+		"ssh://deploy@[2001:db8::1]/etc/example/x": "2001:db8::1",
+	} {
+		f, err := secret.ParseRemoteFile(spec)
+		if err != nil || f.Host != host || f.String() != spec {
+			t.Errorf("%q parsed %+v (%q), %v", spec, f, f.String(), err)
+		}
 	}
 	for _, bad := range []string{
 		"ssh://host.example",                         // no path
@@ -278,5 +293,110 @@ func TestRemoteScriptWritesAndCleansUp(t *testing.T) {
 	}
 	if l := leftovers(t, dir, "token"); l != nil {
 		t.Errorf("a failure left %v", l)
+	}
+}
+
+// TestRemoteScriptRefusesADirectory: a target that is a directory is
+// refused, nothing written into it and no temp file left beside it.
+func TestRemoteScriptRefusesADirectory(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "token")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := secret.RemoteFile{Host: remoteHost, Path: target}
+	if err := runScript(t, f, len(token), token); err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Errorf("a directory target: %v", err)
+	}
+	if es, _ := os.ReadDir(target); len(es) != 0 {
+		t.Errorf("wrote into the directory: %v", es)
+	}
+	if l := leftovers(t, dir, "token"); l != nil {
+		t.Errorf("left %v", l)
+	}
+}
+
+// TestRemoteScriptKeepsSpecialBits: the owner is set before the mode, so
+// chown does not clear the setuid and setgid bits the answer reports.
+func TestRemoteScriptKeepsSpecialBits(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "tool")
+	f := secret.RemoteFile{Host: remoteHost, Path: target, Mode: "6750", Owner: strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())}
+	if err := runScript(t, f, len(token), token); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := os.ModeSetuid | os.ModeSetgid | 0o750; st.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModePerm) != want {
+		t.Errorf("mode %v, want %v", st.Mode(), want)
+	}
+}
+
+// TestRemoteScriptHangupCleansUp: a hangup while the value streams in (ssh
+// dropping the session) removes the temp file and leaves the target.
+func TestRemoteScriptHangupCleansUp(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "token")
+	if err := os.WriteFile(target, []byte(password), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := secret.RemoteFile{Host: remoteHost, Path: target}
+	c := exec.Command("sh", "-c", f.Script(len(token))) //nolint:gosec // the script under test
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(in, token[:5]); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for leftovers(t, dir, "token") == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("no temp file appeared")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(-c.Process.Pid, syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Wait(); err == nil {
+		t.Error("a hangup exits 0")
+	}
+	_ = in.Close()
+	if l := leftovers(t, dir, "token"); l != nil {
+		t.Errorf("a hangup left %v", l)
+	}
+	if got, _ := os.ReadFile(target); string(got) != password { //nolint:gosec // the test's temp file
+		t.Errorf("a hangup changed the target: %q", got)
+	}
+}
+
+// TestRemoteScriptReadsInAnyLoginShell: the command ssh hands the login
+// shell is sh -c and one quoted script whose quoted parts hold no
+// backslash, newline or "!", which fish and csh read like a POSIX shell.
+func TestRemoteScriptReadsInAnyLoginShell(t *testing.T) {
+	f := secret.RemoteFile{Host: remoteHost, Path: "/etc/ex@mple/a%b+c=d:e,f/token", Mode: "0640", Owner: remoteOwner, Template: "x={{value}}"}
+	for _, sudo := range []bool{false, true} {
+		f.Sudo = sudo
+		cmd := f.Script(7)
+		rest, ok := strings.CutPrefix(cmd, "sh -c '")
+		if sudo {
+			rest, ok = strings.CutPrefix(cmd, "sudo -n sh -c '")
+		}
+		if !ok || !strings.HasSuffix(rest, "'") {
+			t.Fatalf("%q: not sh -c '<script>'", cmd)
+		}
+		inner := strings.ReplaceAll(rest, `'\''`, "")
+		if strings.ContainsAny(inner, "\\\n!") {
+			t.Errorf("the quoted script holds a backslash, a newline or a !: %q", cmd)
+		}
+		if out, err := exec.Command("sh", "-n", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // the script under test
+			t.Errorf("sh -n: %v %s", err, out)
+		}
 	}
 }

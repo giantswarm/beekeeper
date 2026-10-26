@@ -511,8 +511,8 @@ configuration, its keys authenticating, no prompt). The value travels on
 ssh's stdin alone, never on a command line: the remote command is a fixed
 script that writes a temp file next to the path under umask 077, checks
 its length against what was sent (a dropped connection ends the stream
-early), sets --mode (default 0600) and --owner user[:group], and moves it
-into place. A failure or a signal removes the temp file and leaves the
+early), sets --owner user[:group] and then --mode (default 0600), and
+moves it into place; a path that is a directory is refused. A failure or a signal removes the temp file and leaves the
 path as it was; a source that resolves to nothing, or to an empty value,
 fails before ssh runs. --sudo runs the script under sudo -n, for a path
 only root writes, by the host's own sudo rules. --template '<content>'

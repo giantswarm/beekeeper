@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"regexp"
@@ -71,8 +72,8 @@ func ParseRemoteFile(s string) (RemoteFile, error) {
 		}
 	}
 	switch {
-	case !sshHost.MatchString(f.Host):
-		return RemoteFile{}, fmt.Errorf("%s: host %q: a name or address that starts with a letter or digit", s, f.Host)
+	case !sshHost.MatchString(f.Host) && net.ParseIP(f.Host) == nil:
+		return RemoteFile{}, fmt.Errorf("%s: host %q: a name or an IPv4 address that starts with a letter or digit, or an IPv6 address in brackets", s, f.Host)
 	case f.Port != "":
 		if p, err := strconv.Atoi(f.Port); err != nil || p < 1 || p > 65535 {
 			return RemoteFile{}, fmt.Errorf("%s: port %q", s, f.Port)
@@ -86,6 +87,9 @@ func ParseRemoteFile(s string) (RemoteFile, error) {
 
 func (f RemoteFile) String() string {
 	host := f.Host
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
 	if f.User != "" {
 		host = f.User + "@" + host
 	}
@@ -148,21 +152,30 @@ func (f RemoteFile) Argv(n int) []string {
 
 // Script is the remote command that writes n bytes from stdin into f: a
 // temp file next to the target under umask 077, its length checked against
-// n (a dropped connection ends the stream early), mode and owner set, then
-// moved into place. A failure or a signal removes the temp file and leaves
-// the target as it was; on success it prints nothing.
+// n (a dropped connection ends the stream early), owner then mode set (chown
+// clears setuid and setgid, so chmod comes last), then moved into place. A
+// target that is a directory is refused before the write and again before
+// the move, which would put the file inside it. A failure or a signal
+// removes the temp file and leaves the target as it was; on success it
+// prints nothing.
+//
+// The login shell of the ssh user parses the command before sh runs it:
+// "sh -c '<script>'" with the script holding no backslash, newline or "!",
+// and its own quotes outside the quoted parts ('\''), reads the same in a
+// POSIX shell, fish and csh.
 func (f RemoteFile) Script(n int) string {
 	dir, base := path.Split(f.Path)
 	chown := ""
 	if f.Owner != "" {
 		chown = "chown " + shellQuote(f.Owner) + ` "$t"; `
 	}
-	s := "set -eu; umask 077; " +
+	notDir := "if [ -d " + shellQuote(f.Path) + ` ]; then echo "the target is a directory: nothing changed" >&2; exit 1; fi; `
+	s := "set -eu; umask 077; " + notDir +
 		"t=$(mktemp " + shellQuote(dir+"."+base+".beekeeper.XXXXXX") + "); " +
 		`trap 'rm -f -- "$t"' EXIT; trap 'exit 1' HUP INT TERM PIPE; ` +
 		`cat >"$t"; ` +
 		`[ "$(wc -c <"$t" | tr -d " ")" = ` + strconv.Itoa(n) + ` ] || { echo "short stream: nothing changed" >&2; exit 1; }; ` +
-		"chmod " + f.mode() + ` "$t"; ` + chown +
+		chown + "chmod " + f.mode() + ` "$t"; ` + notDir +
 		`mv -f -- "$t" ` + shellQuote(f.Path) + "; trap - EXIT"
 	sh := "sh -c " + shellQuote(s)
 	if f.Sudo {
