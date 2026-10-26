@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -855,5 +856,76 @@ func TestSecretImportForTakesTheRecipientFromTheSOPSFile(t *testing.T) {
 	a.out = &bytes.Buffer{}
 	if _, err := runSecret(a, importOp, src, otherSrc, "--for", dir); Code(err) != ExitUsage {
 		t.Errorf("import --for with a destination = %v, want a usage error", err)
+	}
+}
+
+// TestSecretCopyToARemoteFile writes a value into a file on a host over
+// ssh: the value on ssh's stdin alone, never on its command line, in the
+// answer or in the log, the answer's fingerprint the source's; the flags
+// of a remote file go with an ssh:// target alone, and a failing ssh is
+// refused without the value.
+func TestSecretCopyToARemoteFile(t *testing.T) {
+	a, tools, _ := secretApp(t)
+	var argv []string
+	var stdin string
+	var fail error
+	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name != "ssh" {
+			return tools.Run(ctx, dir, env, in, name, args...)
+		}
+		b, _ := io.ReadAll(in)
+		argv, stdin = append([]string{name}, args...), string(b)
+		return nil, fail
+	}
+	const target = "ssh://host.example/etc/example/token"
+	out, err := runSecret(a, copyOp, dbRef, target, "--mode", "0640", "--owner", "app:app", "--sudo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdin != secretValue {
+		t.Errorf("ssh's stdin %q, want the value", stdin)
+	}
+	if strings.Contains(strings.Join(argv, " "), secretValue) || len(argv) == 0 || !strings.HasPrefix(argv[len(argv)-1], "sudo -n sh -c ") {
+		t.Errorf("ssh's command line %q", argv)
+	}
+	a.out = &bytes.Buffer{}
+	fp, err := runSecret(a, fingerprintOp, dbRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("wrote %s: %d bytes, mode 0640, owner app:app, value %d bytes, fingerprint %s\n", target, len(secretValue), len(secretValue), strings.Fields(fp)[1])
+	if out != want {
+		t.Errorf("copy answers %q, want %q", out, want)
+	}
+	for _, args := range [][]string{
+		{copyOp, dbRef, "x.sops.yaml#a", "--mode", "0600"},
+		{copyOp, dbRef, "--sudo", "--", "gh", ghSecret, setOp, "X"},
+		{copyOp, dbRef, target, toSecretOpt, "kind-agentlab/ns/n/k"},
+		{copyOp, dbRef, target, nameFlag, "x"},
+		{copyOp, dbRef, target, "--mode", "0999"},
+		{copyOp, dbRef, "ssh://host.example/etc/../shadow"},
+		{copyOp, dbRef, "ssh://-oProxyCommand=x/etc/example/token"},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
+			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
+		}
+	}
+	argv, fail = nil, fmt.Errorf("ssh: exit 1 (sudo: a password is required %s)", secretValue)
+	a.out = &bytes.Buffer{}
+	out, err = runSecret(a, copyOp, dbRef, target)
+	if Code(err) != ExitRefused || argv == nil {
+		t.Errorf("a failing ssh = %v, want refused after ssh ran", err)
+	}
+	noSecret(t, "a failure", fmt.Sprint(out, err))
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret.copy" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 || !strings.Contains(evs[0].Detail, target) {
+		t.Errorf("logged %+v", evs)
+	}
+	for _, e := range evs {
+		noSecret(t, "the log", e.Detail)
 	}
 }
