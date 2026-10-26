@@ -62,7 +62,7 @@ func TestParseRemoteFile(t *testing.T) {
 	if s := f.String(); s != "ssh://deploy@host.example:2222/etc/example/token" {
 		t.Errorf("String() = %q", s)
 	}
-	for spec, host := range map[string]string{
+	for spec, host := range map[string]string{ //nolint:gosec // hosts and paths, no credential
 		"ssh://[2001:db8::1]/etc/example/token":    "2001:db8::1",
 		"ssh://[::1]:2222/etc/example/token":       "::1",
 		"ssh://192.0.2.10/etc/example/token":       "192.0.2.10",
