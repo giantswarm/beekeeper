@@ -256,6 +256,14 @@ is involved and no import happens.`,
 			if _, err := a.startMode(mode); err != nil {
 				return err
 			}
+			if strings.TrimSpace(mode) == config.ModeBackground {
+				switch {
+				case desktop:
+					return usageErr("--mode background and --desktop: a background session has no desktop turn")
+				case harness == omp.Harness:
+					return usageErr("--mode background and --harness omp: an omp agent is no Claude Code background session")
+				}
+			}
 			gaps := pluginGaps(cmd.Context())
 			if dryRun && harness != omp.Harness {
 				if builds {

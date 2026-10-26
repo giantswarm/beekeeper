@@ -284,7 +284,7 @@ func (w *watcher) standIn(ctx context.Context, rl role, st *state.State, holder 
 	if started(st, holder) {
 		if c.revived != key && w.stand.revive != nil {
 			c.revived = key
-			return w.reviveGone(ctx, rl, holder, w.backgroundAgent(st, holder))
+			return w.reviveGone(ctx, rl, holder, w.backgroundAgent(ctx, st, holder))
 		}
 		if c.failed != key {
 			c.failed, c.failures = key, c.failures+1
@@ -367,7 +367,7 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 	if holder.Session == "" {
 		return fmt.Errorf("%s has no session id to reach", holder.Name)
 	}
-	if st, err := a.store.Read(); err == nil && a.backgroundAgent(st, holder) {
+	if st, err := a.store.Read(); err == nil && a.backgroundAgent(ctx, st, holder) {
 		return a.reviveBackground(ctx, holder, msg)
 	}
 	host := "local_" + holder.Session

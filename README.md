@@ -2542,7 +2542,9 @@ background` (or passes `agents start --mode background` per start). Every sessio
 starts then is a Claude Code background session with Remote Control, run by the claude daemon,
 which `claude agents`, `claude attach` and Remote Control show:
 
-- **Start.** `agents start`, `agents handover` and a role's successor run `claude --bg
+- **Start.** `agents start`, `agents handover` (whose follow-up is a background session too,
+  listed without a desktop id and reported without the desktop's title and model lines) and a
+  role's successor run `claude --bg
   --remote-control <name> --permission-mode bypassPermissions -n <name> [--model m]` in the
   agent's directory, under the worker profile's flags, with the worker prompt as the first prompt,
   which the first turn works. The model is `--model`, else `agents.model`, else Claude Code's
@@ -2552,10 +2554,16 @@ which `claude agents`, `claude attach` and Remote Control show:
   and holds are booked under its own name.
 - **On the roster at once.** The daemon chooses the session id (`--bg` ignores `--session-id`);
   `agents start` reads it from `claude agents --json` and records the start (`background: true`)
-  and the roster entry, busy with `--task`, before it returns. No `agents assign` follows.
+  and the roster entry, busy with `--task`, before it returns. No `agents assign` follows. The
+  session's first turn starts as `claude --bg` returns, a moment before the start is recorded
+  (within `claude agents`' listing, a minute at most): a beekeeper command of that first moment
+  can find the session off the roster, and a brief does not open with one.
 - **Wakes by messaging.** `agents wake`, and every wake beekeeper sends itself (a note's answer, a
   timer, the gate's word, a parked agent's resume, `agents resume`), sends a running background session the
-  message by name. A stopped one is continued by `claude --bg --resume <id> <message>` with no
+  message by name. A session counts as a background one when beekeeper started it so, or, under
+  `agents.mode: background`, when it has no desktop session and `claude agents --json --all`
+  lists it as a background session; a session the person runs in a terminal keeps the headless
+  route. A stopped one is continued by `claude --bg --resume <id> <message>` with no
   other flag: the session keeps the Remote Control, mode, name and model it was started with,
   where any flag would start a copy under a new id (beekeeper fails such a wake, naming the
   copy). The standby watch continues a stopped role holder the same way.

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,7 +45,7 @@ func stubBackground(t *testing.T, out string, rows ...bgSession) *[]bgCall {
 		calls = append(calls, bgCall{dir: dir, env: env, argv: argv})
 		return out, nil
 	}
-	bgList = func(context.Context, string, []string) ([]bgSession, error) { return rows, nil }
+	bgList = func(context.Context, string, []string, bool) ([]bgSession, error) { return rows, nil }
 	bgPoll = time.Millisecond
 	return &calls
 }
@@ -147,7 +148,7 @@ func TestStartBackgroundIsOnTheRosterAtOnce(t *testing.T) {
 	if j < 0 || st.Agents[j].Name != bgName || st.Agents[j].Task != bgTask || st.Agents[j].HostSession != "" {
 		t.Errorf("roster %+v", st.Agents)
 	}
-	if !a.backgroundAgent(st, st.Agents[j].Party) || desktopStarted(st, st.Agents[j].Party) {
+	if !a.backgroundAgent(t.Context(), st, st.Agents[j].Party) || desktopStarted(st, st.Agents[j].Party) {
 		t.Errorf("a background start counts as a desktop one")
 	}
 	if _, ok := rowlessCandidate(st, st.Agents[j], time.Now().Add(time.Hour)); ok {
@@ -211,6 +212,7 @@ func TestAgentsDesktopRefusesABackgroundSession(t *testing.T) {
 	a, _ := stubApp(t)
 	a.cfg.Agents.Mode = config.ModeBackground
 	rosterAgent(t, a, state.Agent{Party: state.Party{Session: bgID, Name: bgName}, Task: bgTask})
+	stubBackground(t, "", bgSession{ID: bgShortID, SessionID: bgID, Kind: bgKind})
 	c := a.agentDesktopCmd()
 	c.SetArgs([]string{bgName})
 	c.SetContext(t.Context())
@@ -265,5 +267,87 @@ func TestBackgroundSuccessor(t *testing.T) {
 	}
 	if i := st.StartIndex(to); i < 0 || !st.Starts[i].Background {
 		t.Errorf("starts %+v", st.Starts)
+	}
+}
+
+// A hand-over in background mode starts the follow-up as a background
+// session: its roster row has no desktop id, and the hand-over says
+// nothing of a desktop, a title or a claude:// link.
+func TestHandoverInBackgroundMode(t *testing.T) {
+	a, out := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	l := &startRecorder{Launcher: plat.Launcher}
+	useLauncher(t, l)
+	a.cfg.Agents.Mode, a.cfg.Agents.NoteWait.Duration = config.ModeBackground, 100*time.Millisecond
+	writeFile(t, filepath.Join(filepath.Dir(a.cfg.Claude.ProjectsDir), "settings.json"),
+		`{"hooks":{"PermissionRequest":[{"matcher":"*","hooks":[{"type":"command","command":"beekeeper hook permissionrequest"}]}]}}`)
+	dir := t.TempDir()
+	old := state.Party{Session: "0ld-background", Name: bgName}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: old, Mode: state.ModeBypass, Dir: dir, At: time.Now(), Background: true})
+		st.Agents = append(st.Agents, state.Agent{Party: old, Task: bgTask})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stubBackground(t, "backgrounded · "+bgShortID+" · "+bgName+"\n", bgSession{ID: bgShortID, SessionID: bgID, Kind: bgKind})
+	if err := a.handOver(t.Context(), handover{agent: state.Agent{Party: old, Task: bgTask}, dir: dir}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, not := range []string{"local_", "claude://", "desktop", "set_model"} {
+		if strings.Contains(out.String(), not) {
+			t.Errorf("the hand-over says %q:\n%s", not, out)
+		}
+	}
+	if !strings.Contains(out.String(), "background session "+bgID) {
+		t.Errorf("output:\n%s", out)
+	}
+	if len(l.started) > 0 {
+		t.Errorf("units %v", l.started)
+	}
+	st, _ := a.store.Read()
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == bgName })
+	if i < 0 || st.Agents[i].Session != bgID || st.Agents[i].HostSession != "" || st.Agents[i].Task != bgTask {
+		t.Errorf("roster %+v", st.Agents)
+	}
+}
+
+// Under agents.mode background a registered session without a desktop
+// session takes the background route only when the claude daemon ran it:
+// a session run in a terminal keeps the headless one.
+func TestBackgroundAgentAsksTheDaemon(t *testing.T) {
+	a, _ := stubApp(t)
+	st := &state.State{}
+	p := state.Party{Session: bgID, Name: bgName}
+	stubBackground(t, "", bgSession{ID: bgShortID, SessionID: bgID, Kind: bgKind}, bgSession{ID: "7e2", SessionID: "7e2-terminal", Kind: "interactive"})
+	if a.backgroundAgent(t.Context(), st, p) {
+		t.Error("desktop mode takes the background route")
+	}
+	a.cfg.Agents.Mode = config.ModeBackground
+	if !a.backgroundAgent(t.Context(), st, p) {
+		t.Error("a session the daemon ran")
+	}
+	if a.backgroundAgent(t.Context(), st, state.Party{Session: "7e2-terminal", Name: "terminal"}) {
+		t.Error("a terminal session takes the background route")
+	}
+	if a.backgroundAgent(t.Context(), st, state.Party{Session: bgID, HostSession: "local_" + bgID}) {
+		t.Error("a desktop session takes the background route")
+	}
+}
+
+// --mode background is refused beside --desktop or --harness omp, which it
+// would silently override or be ignored by.
+func TestModeBackgroundRefusesDesktopAndOmp(t *testing.T) {
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	writeFile(t, brief, "# a task\n")
+	for _, extra := range [][]string{{"--desktop"}, {"--harness", "omp"}} {
+		a, _ := stubApp(t)
+		c := a.agentStartCmd()
+		c.SetArgs(append([]string{bgName, brief, modeFlag, config.ModeBackground}, extra...))
+		c.SetContext(t.Context())
+		var ee *exitError
+		if err := c.Execute(); !errors.As(err, &ee) || ee.code != ExitUsage || !strings.Contains(ee.msg, extra[0]) {
+			t.Errorf("%v: err = %v", extra, err)
+		}
 	}
 }

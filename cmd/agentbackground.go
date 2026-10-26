@@ -27,6 +27,8 @@ import (
 const (
 	bgFlag            = "--bg"
 	remoteControlFlag = "--remote-control"
+	// modeFlag is agents start's --mode.
+	modeFlag = "--mode"
 )
 
 // startMode is the mode a start runs in: the --mode flag, else
@@ -41,13 +43,32 @@ func (a *app) startMode(flag string) (string, error) {
 
 // backgroundAgent reports whether the wakes of p go the background route:
 // beekeeper started it as a background session, or the desk runs in
-// background mode and p has no desktop session.
-func (a *app) backgroundAgent(st *state.State, p state.Party) bool {
+// background mode and p, with no desktop session, is one the claude daemon
+// ran (claude agents --json --all), never a session the person runs in a
+// terminal.
+func (a *app) backgroundAgent(ctx context.Context, st *state.State, p state.Party) bool {
 	if i := st.StartIndex(p); i >= 0 && st.Starts[i].Background {
 		return true
 	}
-	return a.cfg.Agents.Mode == config.ModeBackground && !strings.HasPrefix(p.HostSession, "local_")
+	if a.cfg.Agents.Mode != config.ModeBackground || strings.HasPrefix(p.HostSession, "local_") || p.Session == "" {
+		return false
+	}
+	return daemonRan(ctx, p.Session)
 }
+
+// daemonRan reports whether the claude daemon lists session id as a
+// background session, running or stopped.
+func daemonRan(ctx context.Context, id string) bool {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return false
+	}
+	rows, err := bgList(ctx, bin, cleanEnv(os.Environ(), ""), true)
+	return err == nil && slices.ContainsFunc(rows, func(r bgSession) bool { return r.SessionID == id && r.Kind == bgKind })
+}
+
+// bgKind is the kind claude agents gives a session the daemon runs.
+const bgKind = "background"
 
 // desktopStarted reports whether p's session is one of beekeeper's starts
 // that the desktop shows: a background start has no desktop row to miss.
@@ -127,12 +148,16 @@ type bgSession struct {
 	PID       int    `json:"pid"`
 }
 
-// bgList lists the running sessions the claude daemon knows (claude agents
-// --json); tests replace it.
-var bgList = func(ctx context.Context, bin string, env []string) ([]bgSession, error) {
+// bgList lists the running sessions claude knows (claude agents --json),
+// with all its stopped background ones too; tests replace it.
+var bgList = func(ctx context.Context, bin string, env []string, all bool) ([]bgSession, error) {
 	ctx, cancel := context.WithTimeout(ctx, bgWait)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "agents", "--json") //nolint:gosec // claude's own command line
+	args := []string{agentsName, "--json"}
+	if all {
+		args = append(args, "--all")
+	}
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // claude's own command line
 	cmd.Env = env
 	out, err := cmd.Output()
 	if err != nil {
@@ -165,7 +190,7 @@ func bgSessionID(ctx context.Context, bin string, env []string, short string) (s
 	defer cancel()
 	var last error
 	for {
-		rows, err := bgList(ctx, bin, env)
+		rows, err := bgList(ctx, bin, env, false)
 		last = err
 		for _, r := range rows {
 			if r.SessionID != "" && (r.ID == short || strings.HasPrefix(r.SessionID, short)) {
