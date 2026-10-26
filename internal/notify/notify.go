@@ -174,7 +174,7 @@ func (n *Notifier) Claim(ctx context.Context, now time.Time, kind string, keys .
 		keys = []string{kind}
 	}
 	var fresh []string
-	err := n.ledger.update(ctx, func(l *ledger) {
+	err := n.ledger.update(ctx, now, func(l *ledger) {
 		for _, k := range keys {
 			id := kind + ":" + k
 			if lasting[kind] {
@@ -206,7 +206,7 @@ func (n *Notifier) Notify(ctx context.Context, now time.Time, kind, key, summary
 func (n *Notifier) Send(ctx context.Context, now time.Time, kind, summary, body string) {
 	m := Message{Summary: summary, Body: body, Urgency: n.policy.urgency(kind)}
 	if m.Urgency != Critical && n.policy.Quiet.Covers(now) {
-		err := n.ledger.update(ctx, func(l *ledger) {
+		err := n.ledger.update(ctx, now, func(l *ledger) {
 			l.Held = append(l.Held, Delivery{At: now.UTC(), Kind: kind, Summary: summary, Body: body, Urgency: m.Urgency})
 			l.log(Delivery{At: now.UTC(), Kind: kind, Summary: summary, Urgency: m.Urgency, Held: true})
 		})
@@ -225,7 +225,7 @@ func (n *Notifier) Flush(ctx context.Context, now time.Time) {
 		return
 	}
 	var held []Delivery
-	if err := n.ledger.update(ctx, func(l *ledger) { held, l.Held = l.Held, nil }); err != nil || len(held) == 0 {
+	if err := n.ledger.update(ctx, now, func(l *ledger) { held, l.Held = l.Held, nil }); err != nil || len(held) == 0 {
 		return
 	}
 	m := Message{Summary: fmt.Sprintf("beekeeper: %d held during quiet hours", len(held)), Urgency: Normal}
@@ -263,7 +263,7 @@ func (n *Notifier) deliver(ctx context.Context, now time.Time, kind string, m Me
 	if err != nil {
 		d.Error = err.Error()
 	}
-	_ = n.ledger.update(ctx, func(l *ledger) { l.log(d) })
+	_ = n.ledger.update(ctx, now, func(l *ledger) { l.log(d) })
 }
 
 // sendTimeout bounds one notification: a wedged bus must not stall a poll.

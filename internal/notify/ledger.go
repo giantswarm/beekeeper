@@ -69,8 +69,10 @@ func (l *Ledger) Path() string { return filepath.Join(l.dir, "notify.json") }
 // lockTimeout bounds the wait for another watch's change of the ledger.
 const lockTimeout = 10 * time.Second
 
-// update changes the ledger under its lock with one rename.
-func (l *Ledger) update(ctx context.Context, fn func(*ledger)) error {
+// update changes the ledger under its lock with one rename. Claims older
+// than keepSent at now are dropped: now is the caller's clock, the one its
+// claims were stamped with.
+func (l *Ledger) update(ctx context.Context, now time.Time, fn func(*ledger)) error {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {
 		return err
 	}
@@ -87,7 +89,7 @@ func (l *Ledger) update(ctx context.Context, fn func(*ledger)) error {
 	}
 	fn(st)
 	for k, t := range st.Sent {
-		if time.Since(t) > keepSent {
+		if now.Sub(t) > keepSent {
 			delete(st.Sent, k)
 		}
 	}
