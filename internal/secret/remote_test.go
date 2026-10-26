@@ -95,7 +95,7 @@ func TestRemoteFileCheck(t *testing.T) {
 		{Mode: "0800"}, {Mode: "u+rw"}, {Mode: "0600; id"},
 		{Owner: "app:app:x"}, {Owner: "app;id"}, {Owner: "-R"},
 		{Template: "no placeholder"}, {Template: "{{value}}{{value}}"},
-		{Template: "OTHER=ghp_0123456789abcdefghijABCDEFGHIJ012345\nTOKEN={{value}}"},
+		{Template: "OTHER=" + "ghp_" + strings.Repeat("a1B2", 9) + "\nTOKEN={{value}}"},
 	} {
 		g := f
 		g.Mode, g.Owner, g.Template = bad.Mode, bad.Owner, bad.Template
