@@ -766,6 +766,10 @@ type Start struct {
 	// Model is the model the session was started on (--model, as its first
 	// reply names it), which its turns keep; empty: none was chosen.
 	Model string `json:"model,omitempty"`
+	// Background says the session runs as a Claude Code background session
+	// (agents.mode background): it has no desktop session, and its wakes go
+	// by its messaging, a stopped one's by claude --bg --resume.
+	Background bool `json:"background,omitempty"`
 
 	rest rest
 }

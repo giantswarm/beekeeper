@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -103,11 +104,11 @@ func screenLocked() bool { return screenLocker() != "" }
 var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
-	var model, dir, task, harness string
+	var model, dir, task, harness, mode string
 	var desktop, builds, force, dryRun bool
 	c := &cobra.Command{
 		Use:   agentStartName + " <name> <brief file>",
-		Short: "Start an agent session in bypass from the command line and import it into the desktop",
+		Short: "Start an agent session in bypass: imported into the desktop, or a background session with Remote Control",
 		Long: `start starts a Claude Code session without a click and runs it in
 Claude Desktop from its first turn. Before the session exists, beekeeper
 records its id as one of its starts and registers it on the roster under
@@ -203,6 +204,23 @@ start says which Chrome mode the desktop recorded, and agents shows it per
 agent (BROWSER asks or skips). --desktop
 is kept for scripts: every start imports past the window's focus now.
 
+--mode background (default: agents.mode, else desktop) starts the session
+as a Claude Code background session instead: "claude --bg" with Remote
+Control under <name>, in bypassPermissions, on --model (default:
+agents.model), under the worker profile's flags, with the brief as its
+first prompt, which its first turn works. No desktop is involved: no
+seed turn, no import, no claude:// link and no reopen unit. The call runs
+with none of the caller's CLAUDE* or CCD* variables, so the session is
+its own, never the caller's: its commands, notes and holds are booked
+under <name>. The claude daemon chooses the session id; start reads it
+from claude agents and has the session on the roster under <name>, busy
+with --task, when it returns, so no agents assign follows. agents wake,
+and every wake beekeeper sends (a note's answer, a timer, the gate's
+word, a parked agent's resume), messages a running background session by name, and
+continues a stopped one with "claude --bg --resume <id> <message>", which
+keeps its Remote Control, mode, name and model. A role's successor and
+agents handover start in the mode agents.mode names.
+
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
 in yolo approval mode on --model (default: omp.model; with neither, or a
 model omp does not list as provider/id, the start is refused), in
@@ -235,6 +253,9 @@ is involved and no import happens.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
+			if _, err := a.startMode(mode); err != nil {
+				return err
+			}
 			gaps := pluginGaps(cmd.Context())
 			if dryRun && harness != omp.Harness {
 				if builds {
@@ -242,7 +263,7 @@ is involved and no import happens.`,
 						return err
 					}
 				}
-				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model}, gaps)
+				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
@@ -269,7 +290,7 @@ is involved and no import happens.`,
 					return err
 				}
 			}
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop}
+			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
 			switch harness {
 			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
@@ -279,6 +300,11 @@ is involved and no import happens.`,
 			}
 			sa, err := a.startAgent(cmd.Context(), sp)
 			if err != nil {
+				return err
+			}
+			if sa.background {
+				_, err = fmt.Fprintf(a.out, "started %s: background session %s with Remote Control, in %s, busy with %q\n%s\nits turns run on %s\n",
+					name, sa.id, sa.dir, sa.task, sa.turn, cmp.Or(sa.want, "Claude Code's default model"))
 				return err
 			}
 			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, in %s, busy with %q\n%s\n",
@@ -305,6 +331,7 @@ is involved and no import happens.`,
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
+	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
 	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
@@ -334,6 +361,9 @@ type agentStart struct {
 	by *state.Party
 	// desktop asks for its desktop turn from the start (--desktop).
 	desktop bool
+	// mode is the start's mode (--mode): config.ModeDesktop or
+	// config.ModeBackground; empty: agents.mode.
+	mode string
 	// headless runs the brief as the session's first turn from the command
 	// line beside the import: a role's successor, whose first turn only takes
 	// the role and whose relay hands it its desktop turn. Otherwise the first
@@ -374,6 +404,9 @@ type startedAgent struct {
 	// handed are the leases and grants a hand-over gave it from the session
 	// it replaces (handClaims).
 	handed []string
+	// background says it runs as a background session (startBackground):
+	// no desktop fields are set.
+	background bool
 }
 
 // startAgent records and registers the session, starts its first turn in a
@@ -387,18 +420,11 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return startedAgent{}, usageErr("--dir %s: not a directory", dir)
 	}
-	// Watched from the start, the person's input has mostly been quiet
-	// for desktop.typingQuiet by the first reply, or not.
-	deskCtx, stopDesk := context.WithCancel(ctx)
-	defer stopDesk()
-	d, err := a.watchDesk(deskCtx)
+	mode, err := a.startMode(sp.mode)
 	if err != nil {
 		return startedAgent{}, err
 	}
-	bin, err := exec.LookPath("claude")
-	if err != nil {
-		return startedAgent{}, err
-	}
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.Model)
 	// A profiled session's task runs as a headless turn under its profile:
 	// the desktop spawns its own CLI for a desktop turn, with the person's
 	// whole tool surface, and no seed turn is needed before it.
@@ -426,6 +452,21 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		}
 		_, ok := claude.Live(sessions, p)
 		return ok
+	}
+	if mode == config.ModeBackground {
+		return a.startBackground(ctx, sp, dir, profiled, by, live)
+	}
+	// Watched from the start, the person's input has mostly been quiet
+	// for desktop.typingQuiet by the first reply, or not.
+	deskCtx, stopDesk := context.WithCancel(ctx)
+	defer stopDesk()
+	d, err := a.watchDesk(deskCtx)
+	if err != nil {
+		return startedAgent{}, err
+	}
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return startedAgent{}, err
 	}
 	id := sp.id
 	if id == "" {
@@ -1612,7 +1653,24 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 		return err
 	}
 	const id = "<session id>"
+	mode, err := a.startMode(sp.mode)
+	if err != nil {
+		return err
+	}
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.Model)
 	profile := profileName(a.cfg, sp.role)
+	if mode == config.ModeBackground {
+		var flags []string
+		if profile != "" {
+			if flags, err = a.profileFlags(ctx, profile); err != nil {
+				return err
+			}
+		}
+		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", flags...)
+		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s as a background session with Remote Control under %s, none of the caller's CLAUDE* variables, no desktop import\nstart: %s\n",
+			sp.name, dir, cmp.Or(profile, "no profile"), strings.Join(argv, " "))
+		return err
+	}
 	if profile == "" {
 		argv := agentArgv("claude", id, sp.name, sp.model, "<rules and brief>\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
 		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under no profile: a seed turn without tools, then its task as a desktop turn with the person's whole tool surface\nseed turn: %s\n",

@@ -49,6 +49,9 @@ the agent.`,
 				} else if i < 0 {
 					return nil, refused("this session is not registered: `beekeeper agents register` first")
 				}
+				if a.backgroundAgent(st, st.Agents[i].Party) {
+					return nil, refused("%s runs as a background session (agents.mode background): it has no desktop turn, Remote Control and claude attach show it", st.Agents[i].Name)
+				}
 				st.Agents[i].DesktopTurn = a.now.UTC()
 				ag = st.Agents[i]
 				return []state.Event{event(me, "agents.desktop", "%s asks for a desktop turn", ag.Name)}, nil

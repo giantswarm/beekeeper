@@ -773,7 +773,24 @@ type Agents struct {
 	// Profiles are the desk's tool profiles by name; one named minimal
 	// replaces the built-in one.
 	Profiles map[string]Profile `yaml:"profiles"`
+	// Mode is how beekeeper runs the sessions it starts (agents start,
+	// agents handover, a role's successor) and wakes: ModeDesktop (the
+	// default) imports them into Claude Desktop and wakes them through it;
+	// ModeBackground starts each as a Claude Code background session
+	// (claude --bg) with Remote Control and none of the caller's CLAUDE*
+	// variables, with no desktop import and no claude:// link, and wakes it
+	// by its messaging, a stopped one by claude --bg --resume.
+	Mode string `yaml:"mode"`
+	// Model is the model of a session beekeeper starts when the start names
+	// none (--model, a successor's holder's); empty: Claude Code's default.
+	Model string `yaml:"model"`
 }
+
+// The values of agents.mode.
+const (
+	ModeDesktop    = "desktop"
+	ModeBackground = "background"
+)
 
 // Profile is the tool surface of a session beekeeper starts: the headless
 // turns it launches get it on their command line (--tools, and --settings,
@@ -1984,6 +2001,7 @@ func (c *Config) defaults() error {
 		c.Agents.Shell.Unalias = DefaultUnalias
 	}
 	setStr(&c.Agents.Shell.Globs, GlobsLiteral)
+	setStr(&c.Agents.Mode, ModeDesktop)
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
 	for i, d := range c.Hooks.Scope.Dirs {
@@ -2273,6 +2291,9 @@ func (c *Config) validate() error {
 		if _, ok := c.Agents.ProfileFor(name); name != "" && !ok {
 			return fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile)
 		}
+	}
+	if m := c.Agents.Mode; m != "" && m != ModeDesktop && m != ModeBackground {
+		return fmt.Errorf("agents.mode: %q: want %s or %s", m, ModeDesktop, ModeBackground)
 	}
 	if g := c.Agents.Shell.Globs; g != "" && g != GlobsLiteral && g != GlobsShell {
 		return fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell)

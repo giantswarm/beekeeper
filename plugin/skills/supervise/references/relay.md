@@ -21,6 +21,10 @@ a numbered run, "Supervisor run N": its desktop title, roster name and the name 
   asked again. Once `beekeeper supervisor
   status` exits 4 in this session, it is relieved. A relay not taken expires after
   `supervisor.relayTTL` or is withdrawn with `supervisor relay --cancel`, and the watch carries on.
+- **Under `agents.mode: background`** the successor is a background session with Remote Control:
+  its one session takes the role and runs `beekeeper handover --prompt` itself, the relay prints
+  no SendMessage to make, and its watch runs in that session. The standby watch continues a
+  stopped background holder with `claude --bg --resume`. The desktop paragraphs below do not apply.
 - **Where the watch runs:** only in a desktop turn. A headless turn (a first turn, an `agents
   wake`) that arms a Monitor never ends, so the desktop never gets the session's CLI; such a turn
   takes the role or answers and ends. The one exception is the standby

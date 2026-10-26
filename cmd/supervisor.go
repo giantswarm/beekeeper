@@ -134,6 +134,12 @@ func (a *app) relayToSuccessor(ctx context.Context, rl role, me state.Party) err
 	if err != nil {
 		return err
 	}
+	if to.HostSession == "" {
+		// a background successor's one session takes the role and goes on
+		// with it: no desktop turn to hand it
+		_, err := fmt.Fprintf(a.out, "started %q (background session %s): it runs `beekeeper %s start`, then `%s`, in its own turn; send it nothing\n%s\n", to.Name, to.Session, rl.name, rl.handover, msg)
+		return err
+	}
 	if _, err := fmt.Fprintf(a.out, "started %q (session %s, desktop %s): its first turn runs `beekeeper %s start`\n%s\n", to.Name, to.Session, to.HostSession, rl.name, msg); err != nil {
 		return err
 	}

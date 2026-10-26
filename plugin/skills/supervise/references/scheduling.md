@@ -45,11 +45,15 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   <brief file> --task "<task>"`, a model chosen for the task and a brief that carries only the
   task: `agents start` puts the shipped worker rules ahead of it, and the worker reports to `the
   supervisor`, which reaches whoever holds the role then; it shows in the desktop's sidebar under its name and on
-  the roster busy from its start. Every new session starts that way, no session is kept in reserve
+  the roster busy from its start. Under `agents.mode: background` it starts as a background session
+  with Remote Control instead (`claude agents`, `claude attach <id>`), with none of this session's
+  `CLAUDE*` variables, and is on the roster when `agents start` returns: no `agents assign`, no
+  desktop import, no `claude://` link, and no launcher of the desk's own. Every new session starts that way, no session is kept in reserve
   or given a second task. An empty session the person started and registered with
   `/register-agent` takes one task by `beekeeper agents assign`. A message to an agent whose CLI
   may have stopped is `beekeeper agents wake <agent> "<message>"`, never a `SendMessage` to its
-  `local_` id, which the desktop caps when nobody types in the sender's session. Done, an agent
+  `local_` id, which the desktop caps when nobody types in the sender's session; a background
+  session gets it by name while it runs and is continued by `claude --bg --resume` once stopped. Done, an agent
   reports with `agents idle --done`, whose required `--report` the watch prints as `WORKER REPORT`
   and whose `--problem` lines as `PROBLEM FOUND`: each finding, and each one a worker messages on
   the way, becomes an issue in its owning repository and a worker; a code scan's finding only once

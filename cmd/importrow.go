@@ -77,7 +77,7 @@ func (a *app) importRow(ctx context.Context, id, name string) (string, error) {
 func (a *app) rowless(ctx context.Context, st *state.State, turning func(context.Context, string) bool) []state.Agent {
 	var out []state.Agent
 	for _, ag := range st.Agents {
-		if ag.Session == "" || !started(st, ag.Party) || a.hasRow(ag.Session) || !turning(ctx, ag.Session) {
+		if ag.Session == "" || !desktopStarted(st, ag.Party) || a.hasRow(ag.Session) || !turning(ctx, ag.Session) {
 			continue
 		}
 		out = append(out, ag)
@@ -150,7 +150,7 @@ func rowlessCandidate(st *state.State, ag state.Agent, now time.Time) (state.Sta
 		return state.Start{}, false
 	}
 	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Session == ag.Session })
-	if i < 0 || now.Sub(st.Starts[i].At) < rowGrace {
+	if i < 0 || st.Starts[i].Background || now.Sub(st.Starts[i].At) < rowGrace {
 		return state.Start{}, false
 	}
 	return st.Starts[i], true

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"regexp"
@@ -69,6 +70,23 @@ Once the desktop runs your CLI, a message tells you so there: then run `+"`%s`"+
 		roleSlash(cfg), name, rl.name, rl.duty, from, rl.name, rl.handover, name)
 }
 
+// backgroundSuccessorBrief is successorBrief for a background session
+// (agents.mode background): its turns all run in the one CLI the claude
+// daemon keeps, so its first turn takes the role and goes on with it.
+func (rl role) backgroundSuccessorBrief(cfg config.Role, name, from string) string {
+	return fmt.Sprintf(`%sYou are %q, the next %s run, a fresh background session beekeeper started to take over %s from %q.
+
+Take the role: run `+"`beekeeper %s start`"+`, then run `+"`%s`"+` and follow it. Peers message you as %q.`,
+		roleSlash(cfg), name, rl.name, rl.duty, from, rl.name, rl.handover, name)
+}
+
+// takesRelay reports whether me is the session a relay to to names: by its
+// ids, or by its run name while to has none, a background successor's
+// relay opened before the claude daemon chose its session id.
+func takesRelay(to, me state.Party) bool {
+	return to.Is(me) || to.Session == "" && to.HostSession == "" && to.Name != "" && strings.EqualFold(to.Name, me.Name)
+}
+
 // startSuccessor starts rl's next run as a fresh session and opens the
 // relay from from to it, so its `<role> start` takes the role; by is who
 // asks: the holder's relay, or the standby watch once from is gone. The
@@ -77,18 +95,24 @@ Once the desktop runs your CLI, a message tells you so there: then run `+"`%s`"+
 // line.
 func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party, dir string) (state.Party, string, error) {
 	id := uuid.NewString()
+	// A background successor's id is the claude daemon's: its relay names
+	// its run until the start records the id.
+	background := a.cfg.Agents.Mode == config.ModeBackground
 	var to state.Party
-	var msg, startDir string
+	var msg, startDir, startModel string
 	fromLabel := from.Name
 	// A machine without a process table shows no session carrying the title.
 	sessions, _, _ := a.sessions()
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if s, ok := st.BypassStartOf(from); ok {
-			startDir = s.Dir
+			startDir, startModel = s.Dir, s.Model
 		}
 		r := rl.get(st)
 		n := max(rl.lastRun(r), a.titledRun(rl, r.Holder)) + 1
 		to = state.Party{Session: id, HostSession: "local_" + id, Name: rl.runName(n)}
+		if background {
+			to = state.Party{Name: rl.runName(n)}
+		}
 		if err := titleTaken(sessions, to.Name, to); err != nil {
 			return nil, err
 		}
@@ -116,6 +140,23 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	}
 	if dir == "" {
 		dir = successorDir(rl.cfg(a.cfg), rec, startDir)
+	}
+	if background {
+		sa, err := a.startAgent(ctx, agentStart{by: &by, name: to.Name, role: rl.name, brief: rl.backgroundSuccessorBrief(rl.cfg(a.cfg), to.Name, fromLabel),
+			task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: cmp.Or(model, startModel), mode: config.ModeBackground})
+		if err != nil {
+			a.withdrawRelay(rl, to, by)
+			return state.Party{}, "", fmt.Errorf("starting %q: %w (its relay is withdrawn)", to.Name, err)
+		}
+		named := state.Party{Session: sa.id, Name: to.Name}
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if r := rl.get(st); r.Relay != nil && r.Relay.To.Is(to) {
+				r.Relay.To = named
+				rl.set(st, r)
+			}
+			return nil, nil
+		})
+		return named, msg, nil
 	}
 	// The successor's import goes ahead past the desktop window's focus, as
 	// a desktop turn's does: its role turn soon runs headless and may not
