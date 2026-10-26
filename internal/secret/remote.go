@@ -171,8 +171,11 @@ func (f RemoteFile) Script(n int) string {
 	}
 	notDir := "if [ -d " + shellQuote(f.Path) + ` ]; then echo "the target is a directory: nothing changed" >&2; exit 1; fi; `
 	s := "set -eu; umask 077; " + notDir +
+		// the traps come first, and a signal's removes the temp file itself
+		// rather than count on its exit running the EXIT trap
+		`t=; trap 'if [ -n "$t" ]; then rm -f -- "$t"; fi' EXIT; ` +
+		`trap 'if [ -n "$t" ]; then rm -f -- "$t"; fi; exit 1' HUP INT TERM PIPE; ` +
 		"t=$(mktemp " + shellQuote(dir+"."+base+".beekeeper.XXXXXX") + "); " +
-		`trap 'rm -f -- "$t"' EXIT; trap 'exit 1' HUP INT TERM PIPE; ` +
 		`cat >"$t"; ` +
 		`[ "$(wc -c <"$t" | tr -d " ")" = ` + strconv.Itoa(n) + ` ] || { echo "short stream: nothing changed" >&2; exit 1; }; ` +
 		chown + "chmod " + f.mode() + ` "$t"; ` + notDir +

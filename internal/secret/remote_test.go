@@ -342,7 +342,9 @@ func TestRemoteScriptHangupCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := secret.RemoteFile{Host: remoteHost, Path: target}
-	c := exec.Command("sh", "-c", f.Script(len(token))) //nolint:gosec // the script under test
+	// exec: Wait returns when the script's shell has cleaned up, not when
+	// a wrapping shell that dash keeps died of the hangup
+	c := exec.Command("sh", "-c", "exec "+f.Script(len(token))) //nolint:gosec // the script under test
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	in, err := c.StdinPipe()
 	if err != nil {
@@ -354,10 +356,17 @@ func TestRemoteScriptHangupCleansUp(t *testing.T) {
 	if _, err := io.WriteString(in, token[:5]); err != nil {
 		t.Fatal(err)
 	}
+	// cat has copied the first bytes: mktemp is done and the script waits
+	// on the stream, as when ssh drops mid-value
 	deadline := time.Now().Add(10 * time.Second)
-	for leftovers(t, dir, "token") == nil {
+	for {
+		if l := leftovers(t, dir, "token"); len(l) == 1 {
+			if b, _ := os.ReadFile(filepath.Join(dir, l[0])); len(b) == 5 { //nolint:gosec // the test's temp file
+				break
+			}
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("no temp file appeared")
+			t.Fatal("the temp file never held the first bytes")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
