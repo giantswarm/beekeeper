@@ -161,8 +161,8 @@ func (f RemoteFile) Argv(n int) []string {
 //
 // The login shell of the ssh user parses the command before sh runs it:
 // "sh -c '<script>'" with the script holding no backslash, newline or "!",
-// and its own quotes outside the quoted parts ('\''), reads the same in a
-// POSIX shell, fish and csh.
+// and each of its own single quotes closed, escaped and reopened outside
+// the quoted parts, reads the same in a POSIX shell, fish and csh.
 func (f RemoteFile) Script(n int) string {
 	dir, base := path.Split(f.Path)
 	chown := ""
