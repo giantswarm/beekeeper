@@ -140,6 +140,15 @@ read as absent: an item's missing fields as its missing ("<field>:
 <message>"), anything else on a line "unknown, GitHub answered with an
 error: …" and in --json's missing.
 
+An epic of the priority list that is not held, has a free item under it and
+has no session serving it or anything under it (a record, a busy or parked
+agent's task, a running session's work, as above) gets a line first, right
+after the changes: "EPIC UNSTAFFED priority <n> <epic URL> <title>: <k>
+free items under it and no session serves it, next <owner/repo#n>", in
+--json as unstaffed. The supervisor owes such an epic a worker within the
+capacity verdict before it fills the remaining slots in the order. A claim
+prints none.
+
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
 two concurrent claims never get the same item. It changes nothing on the
@@ -222,6 +231,11 @@ the whole walk.`,
 				res, err = claimNext(a.store, cands, sc, waits, open)
 			} else {
 				res = nextFree(st, cands, sc)
+				ranks := snap.Priorities.Ranks()
+				res.Unstaffed = unstaffedEpics(snap.Priorities, res, func(ref string) string {
+					_, epic := ranks.Of(ref, snap.Parent)
+					return epic
+				})
 			}
 			if err != nil {
 				return err
@@ -485,6 +499,86 @@ type nextResult struct {
 	// Changed are the changes of a ranked epic's Team or Priority that
 	// beekeeper did not write, since the last read of the priority list.
 	Changed []string `json:"changed,omitempty"`
+	// Unstaffed are the epics of the priority list with free work under
+	// them that no session serves (unstaffedEpics); none after a claim.
+	Unstaffed []unstaffedEpic `json:"unstaffed,omitempty"`
+	// owners is who serves each item a session serves (nextFree's owners),
+	// by its lower-cased ref.
+	owners map[string]string
+}
+
+// unstaffedEpic is an epic of the priority list, not held, with free work
+// under it and no session serving it or anything under it: the supervisor
+// owes it a worker within the capacity verdict.
+type unstaffedEpic struct {
+	Rank  int    `json:"rank"`
+	Ref   string `json:"ref"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
+	// Free is how many items under it are free, Next the first of them in
+	// the order.
+	Free int    `json:"free"`
+	Next string `json:"next"`
+}
+
+// line says the epic in one line, EPIC UNSTAFFED first.
+func (u unstaffedEpic) line() string {
+	plural := "s"
+	if u.Free == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("EPIC UNSTAFFED priority %d %s %s: %d free item%s under it and no session serves it, next %s",
+		u.Rank, u.URL, u.Title, u.Free, plural, u.Next)
+}
+
+// unstaffedEpics are the epics of list, held ones left out, that have a
+// free item of res under them (by the candidates' PriorityOf) while no
+// session serves the epic or anything under it: no candidate under it
+// skipped as served, and no owner's item ranked under it (epicOf, the
+// epic an item's rank is of, "" for none). A parked agent's item serves
+// its epic too: the epic has its worker, who waits.
+func unstaffedEpics(list board.Priorities, res nextResult, epicOf func(ref string) string) []unstaffedEpic {
+	all := res.walk()
+	served := map[string]bool{}
+	for ref := range res.owners {
+		if e := epicOf(ref); e != "" {
+			served[strings.ToLower(e)] = true
+		}
+	}
+	for _, c := range all {
+		if c.Skip != "" && c.PriorityOf != "" && skipKind(c.Skip) == kindServed {
+			served[strings.ToLower(c.PriorityOf)] = true
+		}
+	}
+	var out []unstaffedEpic
+	for _, e := range list {
+		if e.Held != "" || served[strings.ToLower(e.Ref)] {
+			continue
+		}
+		u := unstaffedEpic{Rank: e.Rank, Ref: e.Ref, URL: e.URL, Title: e.Title}
+		for _, c := range all {
+			if c.Skip == "" && strings.EqualFold(c.PriorityOf, e.Ref) {
+				if u.Free == 0 {
+					u.Next = c.Ref
+				}
+				u.Free++
+			}
+		}
+		if u.Free > 0 {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// walk is every candidate in the walk's order: the skipped above the pick,
+// the pick, every candidate behind it.
+func (res nextResult) walk() []board.Candidate {
+	out := slices.Clone(res.Skipped)
+	if res.Pick != nil {
+		out = append(out, *res.Pick)
+	}
+	return append(out, res.AfterPick...)
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
@@ -564,7 +658,7 @@ func heldByDecision(notes []state.Note, it board.Item) string {
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
 	owners := coverTitled(coverClosed(boardOwners(st, sc), sc.closes), titleOwners(st, sc), cands)
-	res := nextResult{SkippedBy: map[string]int{}}
+	res := nextResult{SkippedBy: map[string]int{}, owners: owners}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
 		if ok {
@@ -860,6 +954,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 	} else {
 		for _, l := range res.Changed {
 			_, _ = fmt.Fprintln(a.out, l)
+		}
+		for _, u := range res.Unstaffed {
+			_, _ = fmt.Fprintln(a.out, u.line())
 		}
 		if h := res.Held; h != nil {
 			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)

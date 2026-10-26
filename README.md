@@ -160,7 +160,7 @@ and a desk's own copy of a role skill carries the flag too.
 
 | Command | For |
 |---|---|
-| `beekeeper capacity [--builds]` | The busy, parked and idle agents against `capacity.floor` and `capacity.ceiling`, the headroom that bounds a new start (MemAvailable, disk swap's growth over the watch's readings weighed with memory pressure and MemAvailable, the 1-minute load against the watch's limit, the kind labs against their cap, and for a start that builds the free build slots) and one verdict: `room for N starts` or what blocks one, each guard that refuses named; a swap growth without pressure is a warning in parentheses after it. `--builds` judges a start whose task builds, tests or lints, which waits for a free build slot (`agents start --builds` waits its turn in the slot queue); without it the verdict is for a start that does not build, and a busy slot is a note after the verdict, never a `no start`. Read-only, no GitHub call. |
+| `beekeeper capacity [--builds]` | The busy, parked, waiting and idle agents against `capacity.floor` and `capacity.ceiling`, the headroom that bounds a new start (MemAvailable, disk swap's growth over the watch's readings weighed with memory pressure and MemAvailable, the 1-minute load against the watch's limit, the kind labs against their cap, and for a start that builds the free build slots) and one verdict: `room for N starts` or what blocks one, each guard that refuses named; a swap growth without pressure is a warning in parentheses after it. `--builds` judges a start whose task builds, tests or lints, which waits for a free build slot (`agents start --builds` waits its turn in the slot queue); without it the verdict is for a start that does not build, and a busy slot is a note after the verdict, never a `no start`. Read-only, no GitHub call. |
 | `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force, the notes and timers that are due and the busy agents against the target (`busy 4/5-10`). `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
 | `beekeeper sessions` | Every running session, Claude Code's and omp's (marked `omp busy` or `omp idle`, see [omp agents](#omp-agents)): the issues and pull requests its latest turns acted on (its `sessions serve` record, its `gh` and `devctl` commands and GitHub tool calls, what it created; a ref it only quoted or read is a mention, kept in `--json` as `mentioned`), when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, how full its context is, its last hour (turns, tool calls and their errors, GitHub calls, cost), role and leases, after `archived` or `test` for a session the guide's feed leaves out. Overlaps name what more than one session acts on. The session records follow: the running sessions', then the parked ones (a worker that runs no CLI while it stays on the roster parked or kept still serves its item; its line names the worker and its park reason, `--json` has them in `parked`), then the ended ones. `--all` adds the paused ones and the omp sessions of the last 24 hours no process runs: a message to them does not arrive. `--json` has every figure per session and their totals (see [Session metrics](#session-metrics)). |
 | `beekeeper tail <session>` | A session's last turns without tool calls: what it said and what it was told. The session is named as `sessions serve` names one: its desktop title, its roster name, a session id or a PID. |
@@ -1223,7 +1223,11 @@ session that relayed the word.
 its epic, its own or its nearest ranked ancestor's through GitHub's native sub-issue relation;
 ranked candidates come first by rank, the unranked after them, and each rank keeps the order
 `board.order` and the board's positions give. The pick prints the rank it applied
-(`priority 2 of epic <owner/repo#n>`).
+(`priority 2 of epic <owner/repo#n>`). A ranked epic that is not held, has a free item under it
+and has no session serving it or anything under it gets a first line, `EPIC UNSTAFFED priority
+<n> <epic URL> <title>: <k> free items under it and no session serves it, next <owner/repo#n>`
+(`--json` `unstaffed`; none after a `--claim`). The supervise skill gives each such epic a worker
+before the other slots are filled.
 
 A relay keeps the list and the holds without a memo: `handover` (its section `priorities`),
 `handover --prompt` and `guide handover --prompt` read them from GitHub with the read `board next`
@@ -1794,9 +1798,14 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
   resume at …`).
 - **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10).
-  Busy is a roster agent with a task that is neither parked nor kept: an agent kept on purpose
+  Busy is a roster agent with a task that is neither parked, kept nor waiting: an agent kept on purpose
   (`agents keep`), one parked on a decision (`agents park`), one a timer wakes and one whose session
-  waits on its person are parked; the
+  waits on its person are parked; one whose session runs only waits (a `sleep` or a polling
+  loop's, `gh run watch` or `--watch`, `devctl pr wait`, `pr merge` or `release wait`, `beekeeper
+  gate` or `lease … --wait`) and whose transcript and its subagents' have been quiet for 5 minutes is waiting, listed
+  apart (`waiting: <agent> (waits: <command>)`, `--json` `waiting`). Parked and waiting agents do no
+  work and never hold a slot: only the busy count against the ceiling, in `capacity`, the start
+  gate and the watch's CAPACITY lines. The
   supervisor, the guide and a role's successor are not counted. `beekeeper capacity` (and
   `--json`) prints the count, the headroom that bounds a new start (MemAvailable against
   `capacity.availMinMiB`, disk swap's growth over the watch's readings of `watch.swapWindow` against

@@ -39,18 +39,25 @@ type capacityView struct {
 }
 
 // agentCount sorts the roster: busy with a task, parked (kept on purpose, a
-// timer wakes it, or it waits on its person) and idle. The supervisor, the
-// guide, a role's successor and a role's run relieved since are none of them.
+// timer wakes it, or it waits on its person), waiting in a wait of its own
+// and idle. Only busy agents hold a slot. The supervisor, the guide, a
+// role's successor and a role's run relieved since are none of them.
 type agentCount struct {
-	Busy   []string `json:"busy"`
-	Parked []string `json:"parked"`
-	Idle   []string `json:"idle"`
+	Busy    []string `json:"busy"`
+	Parked  []string `json:"parked"`
+	Waiting []string `json:"waiting"`
+	Idle    []string `json:"idle"`
 }
 
+// waitQuiet is how long a session whose tool commands only wait must have
+// been quiet before its agent counts as waiting rather than busy: a turn
+// that still works writes its transcript between its commands.
+const waitQuiet = 5 * time.Minute
+
 // countAgents sorts st's roster at now; sessions say which agents wait on
-// their person (none known without them).
+// their person or in a wait of their own (none known without them).
 func countAgents(st *state.State, sessions []*claude.Session, now time.Time) agentCount {
-	c := agentCount{Busy: []string{}, Parked: []string{}, Idle: []string{}}
+	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}}
 	sup, guide := st.SupervisorRole(), st.GuideRole()
 	for _, ag := range st.Agents {
 		p := ag.Party
@@ -65,9 +72,16 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 			c.Parked = append(c.Parked, fmt.Sprintf("%s (%s)", ag.Name, k))
 			continue
 		}
-		if s, live := claude.Live(sessions, p); live && s.Waiting != nil {
+		s, live := claude.Live(sessions, p)
+		if live && s.Waiting != nil {
 			c.Parked = append(c.Parked, ag.Name+" (waits on its person)")
 			continue
+		}
+		if live {
+			if w := s.OwnWait(now, waitQuiet); w != "" {
+				c.Waiting = append(c.Waiting, fmt.Sprintf("%s (waits: %s)", ag.Name, w))
+				continue
+			}
 		}
 		c.Busy = append(c.Busy, ag.Name)
 	}
@@ -80,7 +94,7 @@ func (c agentCount) line(k config.Capacity) string {
 	if len(c.Busy) > 0 {
 		s += ": " + strings.Join(c.Busy, ", ")
 	}
-	return s + fmt.Sprintf("; %d parked, %d idle", len(c.Parked), len(c.Idle))
+	return s + fmt.Sprintf("; %d parked, %d waiting, %d idle", len(c.Parked), len(c.Waiting), len(c.Idle))
 }
 
 // headroom is what bounds a new start: MemAvailable, disk swap's growth
@@ -339,10 +353,16 @@ func (a *app) capacityCmd() *cobra.Command {
 		Short: "Busy agents against the target, the headroom for a start and the verdict",
 		Long: `Count the roster's agents against the supervisor's target (capacity.floor,
 capacity.ceiling) and say whether a new start fits. Busy is a roster agent
-with a task that is neither parked nor kept: an agent kept on purpose
-(agents keep), one a timer wakes and one whose session waits on its person
-are parked; one without a task, or done, is idle. The supervisor, the guide
-and a role's successor are not counted.
+with a task that is neither parked, kept nor waiting: an agent kept on
+purpose (agents keep), one a timer wakes and one whose session waits on its
+person are parked; one whose session runs only waits (a sleep or a polling
+loop's sleep, gh run watch or --watch, devctl pr wait, pr merge or release
+wait, beekeeper gate, beekeeper lease --wait) and whose transcript and its
+subagents' transcripts have been quiet for 5 minutes is waiting, listed
+apart with what it waits on; one
+without a task, or done, is idle. Only busy agents hold a slot: parked and
+waiting agents do no work, spend next to no budget and never block a start.
+The supervisor, the guide and a role's successor are not counted.
 
 The headroom bounds a start: MemAvailable against capacity.availMinMiB,
 disk swap's growth over the watch's readings of watch.swapWindow against
@@ -391,6 +411,9 @@ nothing; it makes no GitHub call.`,
 			p("capacity: %s", c.line(a.cfg.Capacity))
 			if len(c.Parked) > 0 {
 				p("parked: %s", strings.Join(c.Parked, ", "))
+			}
+			if len(c.Waiting) > 0 {
+				p("waiting: %s", strings.Join(c.Waiting, ", "))
 			}
 			if len(c.Idle) > 0 {
 				p("idle: %s", strings.Join(c.Idle, ", "))

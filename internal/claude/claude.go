@@ -39,11 +39,15 @@ type Session struct {
 	Branch     string    `json:"branch,omitempty"`
 	Transcript string    `json:"transcript,omitempty"`
 	LastActive time.Time `json:"lastActive,omitzero"`
-	Started    time.Time `json:"started"`
-	Commands   []Command `json:"commands,omitempty"`
-	MemMiB     int       `json:"memMiB"`
-	Permission string    `json:"permissionMode,omitempty"`
-	Model      string    `json:"model,omitempty"`
+	// LastSubagent is the latest write of its subagents' transcripts
+	// (LastSubagentWrite): a subagent works while the session's own
+	// transcript stays quiet.
+	LastSubagent time.Time `json:"lastSubagent,omitzero"`
+	Started      time.Time `json:"started"`
+	Commands     []Command `json:"commands,omitempty"`
+	MemMiB       int       `json:"memMiB"`
+	Permission   string    `json:"permissionMode,omitempty"`
+	Model        string    `json:"model,omitempty"`
 	// Waiting is what the session waits on its person for, as the desktop
 	// recorded it after its last turn; "" when it waits on nobody.
 	Waiting *Waiting `json:"waiting,omitempty"`
@@ -111,6 +115,9 @@ type Command struct {
 	Elapsed time.Duration `json:"elapsed"`
 	// Remaining is set for a `sleep`: when the bounded wait ends.
 	Remaining time.Duration `json:"remaining,omitempty"`
+	// Wait says the command only waits: a sleep, a CI watch, a merge's
+	// turn (onlyWaits).
+	Wait bool `json:"wait,omitempty"`
 }
 
 // Record is the part of a desktop session record beekeeper reads.
@@ -423,6 +430,7 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 		if fi, err := os.Stat(s.Transcript); err == nil {
 			s.LastActive = fi.ModTime()
 		}
+		s.LastSubagent = LastSubagentWrite(s.Transcript)
 	}
 	s.MemMiB, s.Commands = processTree(t, p.PID, clis, now)
 	return s
@@ -592,7 +600,7 @@ type ToolShell struct {
 func (sh ToolShell) Sleeping() bool {
 	return len(sh.Commands) > 0 && !slices.ContainsFunc(sh.Commands, func(c Command) bool {
 		f := strings.Fields(c.Args)
-		return len(f) == 0 || filepath.Base(f[0]) != "sleep"
+		return len(f) == 0 || filepath.Base(f[0]) != sleepComm
 	})
 }
 
@@ -647,8 +655,8 @@ func shellCommands(t *proc.Table, sh *proc.Process, now time.Time) []Command {
 			out = append(out, shellCommands(t, c, now)...)
 			continue
 		}
-		cmd := Command{PID: c.PID, Args: c.Cmdline(), Elapsed: c.Elapsed(now).Round(time.Second)}
-		if c.Comm == "sleep" && len(c.Args) > 1 {
+		cmd := Command{PID: c.PID, Args: c.Cmdline(), Elapsed: c.Elapsed(now).Round(time.Second), Wait: onlyWaits(c)}
+		if c.Comm == sleepComm && len(c.Args) > 1 {
 			if d, ok := sleepDuration(c.Args[1:]); ok && d > cmd.Elapsed {
 				cmd.Remaining = (d - cmd.Elapsed).Round(time.Second)
 			}

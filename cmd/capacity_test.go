@@ -70,6 +70,38 @@ func TestCountAgents(t *testing.T) {
 	}
 }
 
+// An agent whose session only waits in a wait of its own (a polling loop's
+// sleep, a CI watch) and has been quiet past waitQuiet is waiting, not
+// busy, and leaves its slot to a start; one quiet for less, or running a
+// build beside its wait, stays busy.
+func TestCountAgentsWaiting(t *testing.T) {
+	poll, ci, fresh, build := tasked("Poll"), tasked("CI"), tasked("Fresh"), tasked("Build")
+	st := &state.State{Agents: []state.Agent{poll, ci, fresh, build}}
+	quiet := keepNow.Add(-2 * waitQuiet)
+	sleep := claude.Command{Args: "sleep 30", Wait: true}
+	sessions := []*claude.Session{
+		{ID: "s-Poll", LastActive: quiet, Commands: []claude.Command{sleep}},
+		{ID: "s-CI", LastActive: quiet, Commands: []claude.Command{{Args: "gh run watch 7", Wait: true}}},
+		{ID: "s-Fresh", LastActive: keepNow.Add(-time.Minute), Commands: []claude.Command{sleep}},
+		{ID: "s-Build", LastActive: quiet, Commands: []claude.Command{sleep, {Args: "go test ./..."}}},
+	}
+	c := countAgents(st, sessions, keepNow)
+	if want := []string{"Fresh", "Build"}; !slices.Equal(c.Busy, want) {
+		t.Errorf("busy %v, want %v", c.Busy, want)
+	}
+	if want := []string{"Poll (waits: sleep 30)", "CI (waits: gh run watch 7)"}; !slices.Equal(c.Waiting, want) {
+		t.Errorf("waiting %v, want %v", c.Waiting, want)
+	}
+	k := config.Capacity{Floor: 1, Ceiling: 3}
+	if got := c.line(k); got != "2 busy of floor 1, ceiling 3: Fresh, Build; 0 parked, 2 waiting, 0 idle" {
+		t.Errorf("line %q", got)
+	}
+	// Four agents at a ceiling of three, two of them waiting: room for one.
+	if v := newCapacity(c, k, roomy(), false); v.Room != 1 {
+		t.Errorf("room %d (%s), want 1", v.Room, v.verdict())
+	}
+}
+
 // roomy is a headroom with memory, swap, pressure, load, slots and labs to
 // spare.
 func roomy() *headroom {
@@ -283,7 +315,7 @@ func TestPromptCapacity(t *testing.T) {
 	a := &app{out: &buf, now: keepNow, cfg: &config.Config{Capacity: config.Capacity{Floor: 5, Ceiling: 10}}}
 	a.promptCapacity(func(f string, args ...any) { buf.WriteString(fmt.Sprintf(f, args...) + "\n") }, st, sessions)
 	if p := buf.String(); !strings.Contains(p, "### Capacity") ||
-		!strings.Contains(p, "2 busy of floor 5, ceiling 10: "+busyOne+", "+busyTwo+"; 3 parked, 2 idle; `beekeeper capacity` says whether a start fits.") {
+		!strings.Contains(p, "2 busy of floor 5, ceiling 10: "+busyOne+", "+busyTwo+"; 3 parked, 0 waiting, 2 idle; `beekeeper capacity` says whether a start fits.") {
 		t.Errorf("prompt:\n%s", p)
 	}
 }

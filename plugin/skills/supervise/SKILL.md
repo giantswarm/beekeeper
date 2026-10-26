@@ -109,8 +109,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
 The rest of the role is in this skill's `references/` folder, each file read when its moment comes
 and all of them at the first tick:
 
-- `references/scheduling.md`: the five to ten busy agents, the board, a fresh worker per task, the
-  epics reported at a session's end. Read before filling free slots.
+- `references/scheduling.md`: the five to ten busy agents (waiting ones hold no slot), the board,
+  a worker for every ranked epic with open work, a fresh worker per task, the epics reported at a
+  session's end. Read before filling free slots.
 - `references/merges-and-collisions.md`: merges, holds, lanes and hand-overs by name, sessions that
   overlap. Read when sessions overlap, a lane stalls or a merge needs sequencing.
 - `references/machine-and-alerts.md`: the numbers that matter, the installations in play and their

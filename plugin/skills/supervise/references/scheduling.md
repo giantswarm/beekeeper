@@ -2,9 +2,18 @@
 
 The supervisor reads this at its first tick and whenever it fills free slots or a session ends.
 
-- **Five to ten agents are busy.** Busy is a roster agent with a task that is not parked; the
-  supervisor, the guide, parked agents and agents waiting on the person do not count, planning
-  sessions do. At every tick below five, the supervisor fills the free slots in the same turn,
+- **Five to ten agents are busy.** Busy is a roster agent with a task that is not parked or
+  waiting. The supervisor, the guide, parked agents, agents waiting on the person and agents
+  waiting in a wait of their own do not count; planning sessions do. A wait of its own is a
+  session whose tool commands are only waits (a timer's or polling loop's `sleep`, a CI watch, a
+  merge's turn at the gate) and whose transcript and its subagents' transcripts have been quiet
+  for five minutes. Such an agent does no work and spends next to no budget, so it never holds a
+  slot: `beekeeper capacity` lists it under `waiting` and counts only the busy against the
+  ceiling. The supervisor reads that verdict and never counts sessions by hand. Waiters that
+  wake can push busy over the ceiling. No agent is stopped or parked for that: each one finishes
+  its work. `capacity` says `no start: <n> busy at the ceiling of <m>` and the watch says
+  CAPACITY FULL until busy drops under the ceiling. Until then the supervisor starts nothing, an
+  unstaffed epic included (below). At every tick below five, the supervisor fills the free slots in the same turn,
   within the memory guards (`MemAvailable` well above the watch's floor, machine swap not growing,
   a free build slot, the kind clusters under `maxKindClusters`), and never starts past ten. A task
   that needs a held lease queues behind the lease without holding the others back. The slots are
@@ -15,6 +24,16 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   Backlog. When Up Next runs dry the supervisor pulls the top Backlog items itself and tells the
   guide in one line, which is the person's veto; with nothing startable at all, the guide gets one
   line `nothing startable: <reason>`. A teammate's item only after a one-line ask to that teammate.
+- **Every ranked epic with open work has a worker.** If an epic of `beekeeper priority` is not
+  held, has free work under it and has no session serving it, `beekeeper board next` prints it
+  first as `EPIC UNSTAFFED priority <n> <epic URL> …` (`--json`: `unstaffed`). At every tick,
+  each such epic gets a worker on its next item before any other slot is filled, highest rank
+  first, within the capacity verdict. When the verdict leaves no room, waiting and parked agents
+  do not hold the slots: only busy agents do. A busy agent on unranked work gives way first,
+  finishing its current step and parking. If an unstaffed epic still has no worker after that,
+  the guide gets one line `EPIC UNSTAFFED <epic URL>: <why no worker>`, and the person hears it
+  through the guide. A ranked epic is never left without a worker because its slots are taken by
+  sessions that only wait.
 - **Work comes from the roadmap board and stays on it.** `beekeeper board next` picks it, ranked by
   `beekeeper priority`; an epic's hold is `board block`, never a note. An epic entering Up Next with no plan gets
   a planning session of its own, started with `beekeeper agents start`, whose question rounds reach
