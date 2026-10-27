@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -27,11 +29,12 @@ func (a *app) budgetCmd() *cobra.Command {
 	var floor int
 	c := &cobra.Command{
 		Use:   "budget",
-		Short: "The GitHub REST and GraphQL budget every session draws from, and who is drawing",
+		Short: "The GitHub REST, GraphQL and search budget every session draws from, and who is drawing",
 		Long: `Read the person's GitHub core budget from the rate-limit headers of a real,
 conditional request (a 304 costs nothing; /rate_limit is exempt and lies),
 and the GraphQL limit from a real rateLimit query (one point, read again
-after merge.budgetFresh), and list the gh and devctl processes on the
+after merge.budgetFresh), the search and code-search limits from
+/rate_limit (free; a spent one names its reset), and list the gh and devctl processes on the
 machine with the session each runs under: the callers drawing on it. A
 GraphQL refusal shows even while its counter looks healthy (a secondary
 limit), with the time it ends when GitHub names one. The budget is shared
@@ -59,6 +62,7 @@ a "github" hold is set:
 			if err != nil {
 				return err
 			}
+			b.Search = probeSearch(cmd.Context())
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -89,6 +93,9 @@ a "github" hold is set:
 				}{b, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
+				for _, l := range searchLines(a, b.Search) {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
 				for _, l := range urgent {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
@@ -135,6 +142,43 @@ a "github" hold is set:
 	c.Flags().BoolVar(&gate, "gate", false, "exit 3 when GraphQL is refused, under the floor or held")
 	c.Flags().IntVar(&floor, "floor", 0, "the floor for this call (default github.floor)")
 	return c
+}
+
+// probeSearch reads the search limits; a failure is their Err.
+func probeSearch(ctx context.Context) *github.Searches {
+	token, err := github.Token(ctx)
+	if err != nil {
+		return &github.Searches{Err: err.Error()}
+	}
+	s := github.ProbeSearch(ctx, &http.Client{Timeout: 20 * time.Second}, token)
+	return &s
+}
+
+// searchLines are a row per search limit: its figures and reset, or that it
+// is spent and until when.
+func searchLines(a *app, s *github.Searches) []string {
+	if s == nil {
+		return nil
+	}
+	if s.Err != "" {
+		return []string{"search limits unknown (" + truncate(s.Err, 60) + ")"}
+	}
+	var out []string
+	for _, r := range []struct {
+		name string
+		l    *github.Limit
+	}{{"code search", s.CodeSearch}, {"search", s.Search}} {
+		if r.l == nil {
+			continue
+		}
+		reset := fmt.Sprintf("%s (in %s)", clock(a.now, r.l.Reset), dur(r.l.Reset.Sub(a.now)))
+		if r.l.Spent(a.now) {
+			out = append(out, fmt.Sprintf("%s: SPENT, 0 of %d left until %s", r.name, r.l.Limit, reset))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: %d of %d left, resets %s", r.name, r.l.Remaining, r.l.Limit, reset))
+	}
+	return out
 }
 
 // gatedParty is one party's gated merges: those whose devctl runs and polls

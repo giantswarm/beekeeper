@@ -9,11 +9,14 @@ import (
 	"time"
 )
 
+// bearerTok is the Authorization header of the fake token "tok".
+const bearerTok = "Bearer tok"
+
 // graphqlServer answers the GraphQL endpoint with status, headers and body.
 func graphqlServer(t *testing.T, status int, headers map[string]string, body string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/graphql" || r.Header.Get("Authorization") != "Bearer tok" {
+		if r.Method != http.MethodPost || r.URL.Path != "/graphql" || r.Header.Get("Authorization") != bearerTok {
 			t.Errorf("request %s %s, want an authorized POST /graphql", r.Method, r.URL.Path)
 		}
 		for k, v := range headers {
@@ -100,5 +103,65 @@ func TestBlocksEndsAtTheReset(t *testing.T) {
 	}
 	if (*GraphQL)(nil).Blocks(now) {
 		t.Error("no reading blocks")
+	}
+}
+
+func TestProbeSearch(t *testing.T) {
+	reset := time.Unix(1791258912, 0)
+	for name, tc := range map[string]struct {
+		status  int
+		body    string
+		want    Searches
+		wantErr string
+	}{
+		"both limits": {
+			status: 200,
+			body: `{"resources":{"core":{"limit":5000,"remaining":5000,"used":0,"reset":1791258912},` +
+				`"search":{"limit":30,"remaining":28,"used":2,"reset":1791258912},` +
+				`"code_search":{"limit":10,"remaining":0,"used":10,"reset":1791258912}}}`,
+			want: Searches{Search: &Limit{Limit: 30, Remaining: 28, Used: 2, Reset: reset},
+				CodeSearch: &Limit{Limit: 10, Remaining: 0, Used: 10, Reset: reset}},
+		},
+		"no search limits": {status: 200, body: `{"resources":{"core":{"limit":5000}}}`, wantErr: "no search limits"},
+		"a server error":   {status: 502, body: `bad gateway`, wantErr: "502"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/rate_limit" || r.Header.Get("Authorization") != bearerTok {
+					t.Errorf("request %s %s, want an authorized GET /rate_limit", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+			t.Setenv("BEEKEEPER_GITHUB_API", srv.URL)
+			got := ProbeSearch(t.Context(), http.DefaultClient, "tok")
+			if tc.wantErr != "" {
+				if !strings.Contains(got.Err, tc.wantErr) {
+					t.Fatalf("Err = %q, want it to name %q", got.Err, tc.wantErr)
+				}
+				return
+			}
+			if got.Err != "" || *got.Search != *tc.want.Search || *got.CodeSearch != *tc.want.CodeSearch {
+				t.Errorf("ProbeSearch = %+v %+v %q, want %+v %+v", got.Search, got.CodeSearch, got.Err, tc.want.Search, tc.want.CodeSearch)
+			}
+		})
+	}
+}
+
+func TestLimitSpent(t *testing.T) {
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		l    *Limit
+		want bool
+	}{
+		"nothing left before the reset": {&Limit{Limit: 10, Reset: now.Add(time.Second)}, true},
+		"nothing left past the reset":   {&Limit{Limit: 10, Reset: now.Add(-time.Second)}, false},
+		"one left":                      {&Limit{Limit: 10, Remaining: 1, Reset: now.Add(time.Second)}, false},
+		"no reading":                    {nil, false},
+	} {
+		if got := tc.l.Spent(now); got != tc.want {
+			t.Errorf("%s: Spent = %v, want %v", name, got, tc.want)
+		}
 	}
 }

@@ -16,7 +16,7 @@ func orgServer(t *testing.T, ownStatus int, ownState string) {
 	t.Helper()
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok" {
+		if r.Header.Get("Authorization") != bearerTok {
 			t.Errorf("%s without the token", r.URL.Path)
 		}
 		switch {
