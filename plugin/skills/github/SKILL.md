@@ -5,7 +5,8 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
 
 # github — GitHub, builds, the browser and waits
 
-- **Budget.** GitHub work stops while `beekeeper budget --gate` refuses, until the reset.
+- **Budget.** GitHub work stops while `beekeeper budget --gate` refuses, until the reset; code
+  search adds `--bucket code_search`.
 - **Membership** is `beekeeper person <login>`, never a members endpoint of `gh api`, which
   misreads a private member.
 - **Scans list each repository** (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr
@@ -14,14 +15,14 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
 - **A code scan** (govulncheck, trivy) runs in a fresh worktree of `origin/main`, never a shared
   clone; a finding names the commit and module versions it was raised on.
 - **A headless turn** (a first or `wake` turn) never ends on a background wait, which never wakes
-  it: it waits in the foreground (`devctl pr wait`, `devctl pr merge`, a bounded Bash) and ends
-  done or parked (`beekeeper:park`).
+  it: it waits in the foreground (`devctl pr wait`, a bounded Bash) and ends done or
+  parked (`beekeeper:park`).
 - **No @-mention** in a post (the hook refuses one): a ping is a question to the supervisor.
 - **Builds**, tests and lints run through `beekeeper run` (the hook does it): exit 75 is no slot,
   rerun in the background, never in a loop; exit 137 is the cap, bound the parallelism. No heavy
   work while `beekeeper watch` reports load or memory pressure.
 - **The browser never waits on a site approval.** A headless turn has the CLI's Claude in Chrome
   tools; a desktop turn, whose browser tools are refused, runs its steps through `beekeeper browse
-  "<steps>"` (a report, screenshots). Our own App's grant is recorded first (`beekeeper app
-  allow`); a refusal is a barrier, never the person's.
+  "<steps>"`. Our own App's grant is recorded first (`beekeeper app allow`); a refusal is a
+  barrier, never the person's.
 - **Subagents** only when the brief allows them, each told the force-push and secret rules.
