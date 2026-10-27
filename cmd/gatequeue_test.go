@@ -143,6 +143,12 @@ func sleeper(t *testing.T) int {
 	return c.Process.Pid
 }
 
+// queuedGate is the argv of a gate's run of its own up to the command: the
+// test binary's explicit configuration ($BEEKEEPER_CONFIG) goes with it.
+func queuedGate(self string) []string {
+	return []string{self, "--config", os.Getenv("BEEKEEPER_CONFIG"), "gate", "--queued", "--wait", "1h0m0s", "--"}
+}
+
 // A merge behind a busy lane does not end in a rerun: at its deadline the
 // gate hands its wait to a run of its own, the same gate under --queued with
 // the caller as owner, and exits 76.
@@ -156,7 +162,7 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
 	spec := launched()
-	want := append([]string{self, "gate", "--queued", "--wait", "1h0m0s", "--"}, mergeArgv(scratchRepo)...)
+	want := append(queuedGate(self), mergeArgv(scratchRepo)...)
 	if !slices.Equal(spec.Argv, want) || !slices.Equal(spec.Command, mergeArgv(scratchRepo)) {
 		t.Errorf("argv %q, command %q, want %q", spec.Argv, spec.Command, want)
 	}
@@ -188,7 +194,7 @@ func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
 	spec := launched()
-	want := append([]string{self, "gate", "--queued", "--wait", "1h0m0s", "--"}, mergeArgv(scratchRepo)...)
+	want := append(queuedGate(self), mergeArgv(scratchRepo)...)
 	if !slices.Equal(spec.Argv, want) || !slices.Equal(spec.Command, mergeArgv(scratchRepo)) {
 		t.Errorf("argv %q, command %q, want %q", spec.Argv, spec.Command, want)
 	}

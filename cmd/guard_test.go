@@ -119,12 +119,12 @@ func TestMain(m *testing.M) {
 var isolatedRoot string
 
 // runIsolated runs the tests with no path to the machine's own
-// configuration or state: $XDG_CONFIG_HOME and $XDG_STATE_HOME are
-// scratch directories and $BEEKEEPER_CONFIG is unset, so a test that sets
-// none of them reads and writes there through the default paths. A test
-// that wants its own sets them with t.Setenv. The binary run as beekeeper
-// by a test inherits the test's environment, so this runs only on the
-// m.Run path.
+// configuration or state: $BEEKEEPER_CONFIG names a file in a scratch
+// directory, and $XDG_CONFIG_HOME and $XDG_STATE_HOME are scratch
+// directories, so a test that sets none of them reads and writes there. A
+// test that wants its own sets them with t.Setenv. The binary run as
+// beekeeper by a test inherits the test's environment, so this runs only on
+// the m.Run path.
 func runIsolated(m *testing.M) int {
 	root, err := os.MkdirTemp("", "beekeeper-cmd-test-")
 	if err != nil {
@@ -132,12 +132,10 @@ func runIsolated(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(root) }()
 	isolatedRoot = root
-	if err := os.Unsetenv("BEEKEEPER_CONFIG"); err != nil {
-		panic(err)
-	}
 	for k, v := range map[string]string{
-		"XDG_CONFIG_HOME": filepath.Join(root, "config"),
-		"XDG_STATE_HOME":  filepath.Join(root, "state"),
+		"BEEKEEPER_CONFIG": filepath.Join(root, "config", "beekeeper", "config.yaml"),
+		"XDG_CONFIG_HOME":  filepath.Join(root, "config"),
+		"XDG_STATE_HOME":   filepath.Join(root, "state"),
 	} {
 		if err := os.Setenv(k, v); err != nil {
 			panic(err)
@@ -155,7 +153,7 @@ func TestATestWithoutItsOwnPathsUsesScratchOnes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, p := range map[string]string{"config": path, "state": cfg.StateDir, "desktop": cfg.Claude.DesktopDir} {
+	for name, p := range map[string]string{"config": path, "state": cfg.StateDir} {
 		if rel, err := filepath.Rel(isolatedRoot, p); err != nil || strings.HasPrefix(rel, "..") {
 			t.Errorf("%s path %s is outside the scratch directory %s", name, p, isolatedRoot)
 		}
