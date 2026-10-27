@@ -865,6 +865,7 @@ func (a *app) loadConfig() error {
 	if a.cfg, err = config.Load(path); err != nil {
 		return err
 	}
+	a.loadedCfg = path
 	if f := os.Getenv(stateFromEnv); f != "" {
 		if err := a.stateFrom(f); err != nil {
 			return err

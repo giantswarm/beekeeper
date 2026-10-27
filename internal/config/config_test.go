@@ -31,8 +31,8 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
-	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
-		t.Errorf("swap guard defaults = %s %d %g %d", w.SwapWindow, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+		t.Errorf("swap guard and capacity defaults = %s %d/%d %d %g %d", w.SwapWindow, k.Floor, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
 		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
@@ -199,6 +199,9 @@ func TestLoadRejects(t *testing.T) {
 		"omp key no ref":             "omp: {providers: {spark: {}}}",
 		"swap window under 5m":       "watch: {swapWindow: 2m}",
 		"negative swapPSIMax":        "capacity: {swapPSIMax: -1}",
+		"negative capacity floor":    "capacity: {floor: -1, ceiling: 0}",
+		"negative capacity ceiling":  "capacity: {ceiling: -1}",
+		"ceiling under floor":        "capacity: {floor: 5, ceiling: 0}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -694,5 +697,43 @@ func TestAppsTemplateOf(t *testing.T) {
 		if got := tc.apps.TemplateOf("portal"); got != tc.want {
 			t.Errorf("%+v.TemplateOf(portal) = %q, want %q", tc.apps, got, tc.want)
 		}
+	}
+}
+
+// A configured capacity.floor or capacity.ceiling of 0 is kept; unset takes
+// DefaultFloor (clamped to a lower configured ceiling) and DefaultCeiling.
+func TestCapacityZeroAndUnset(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		raw                string
+		wantFloor, wantMax int
+	}{
+		{"omitted", "", DefaultFloor, DefaultCeiling},
+		{"empty map", "capacity: {}\n", DefaultFloor, DefaultCeiling},
+		{"null keys", "capacity: {floor: null, ceiling: null}\n", DefaultFloor, DefaultCeiling},
+		{"both zero", "capacity: {floor: 0, ceiling: 0}\n", 0, 0},
+		{"ceiling zero alone", "capacity: {ceiling: 0}\n", 0, 0},
+		{"ceiling under default floor", "capacity: {ceiling: 3}\n", 3, 3},
+		{"floor zero alone", "capacity: {floor: 0}\n", 0, DefaultCeiling},
+		{"floor zero, ceiling set", "capacity: {floor: 0, ceiling: 4}\n", 0, 4},
+	} {
+		c, err := Load(writeTemp(t, tc.raw))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if c.Capacity.Floor != tc.wantFloor || c.Capacity.Ceiling != tc.wantMax {
+			t.Errorf("%s: got floor %d, ceiling %d; want %d, %d", tc.name, c.Capacity.Floor, c.Capacity.Ceiling, tc.wantFloor, tc.wantMax)
+		}
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	c, err := Set(p, []Setting{{"capacity.floor", "0"}, {"capacity.ceiling", "0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Capacity.Floor != 0 || c.Capacity.Ceiling != 0 {
+		t.Errorf("Set returned floor %d, ceiling %d; want 0, 0", c.Capacity.Floor, c.Capacity.Ceiling)
+	}
+	if loaded, err := Load(p); err != nil || loaded.Capacity.Floor != 0 || loaded.Capacity.Ceiling != 0 {
+		t.Errorf("Load after Set = %+v, %v; want floor 0, ceiling 0", loaded, err)
 	}
 }

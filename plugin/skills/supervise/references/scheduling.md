@@ -2,7 +2,7 @@
 
 The supervisor reads this at its first tick and whenever it fills free slots or a session ends.
 
-- **Five to ten agents are busy.** Busy is a roster agent with a task that is not parked or
+- **`capacity.floor` to `capacity.ceiling` agents are busy (`5` and `10` when unset).** Busy is a roster agent with a task that is not parked or
   waiting. The supervisor, the guide, parked agents, agents waiting on the person and agents
   waiting in a wait of their own do not count; planning sessions do. A wait of its own is a
   session whose tool commands are only waits (a timer's or polling loop's `sleep`, a CI watch, a
@@ -11,11 +11,16 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   slot: `beekeeper capacity` lists it under `waiting` and counts only the busy against the
   ceiling. The supervisor reads that verdict and never counts sessions by hand. Waiters that
   wake can push busy over the ceiling. No agent is stopped or parked for that: each one finishes
-  its work. `capacity` says `no start: <n> busy at the ceiling of <m>` and the watch says
-  CAPACITY FULL until busy drops under the ceiling. Until then the supervisor starts nothing, an
-  unstaffed epic included (below). At every tick below five, the supervisor fills the free slots in the same turn,
-  within the memory guards (`MemAvailable` well above the watch's floor, machine swap not growing,
-  a free build slot, the kind clusters under `maxKindClusters`), and never starts past ten. A task
+  its work. `capacity` says `no start: <n> busy at the ceiling of <m>` and, when `capacity.ceiling`
+  is positive, the watch says `CAPACITY FULL` until busy drops under `capacity.ceiling`; while
+  `capacity.ceiling` is `0`, `capacity` says `no start: ceiling 0`, `agents start` refuses without
+  `--force`, and the watch suppresses both `CAPACITY LOW` and `CAPACITY FULL` (`capacity.floor` of
+  `0` suppresses `CAPACITY LOW`; unset `capacity.floor` and `capacity.ceiling` default to `5` and
+  `10`). Until the verdict allows a start the supervisor starts nothing, an unstaffed epic included
+  (below). At every tick below `capacity.floor`, the supervisor fills the free slots in the same
+  turn, within the memory guards (`MemAvailable` well above the watch's floor, machine swap not
+  growing, a free build slot, the kind clusters under `maxKindClusters`), and never starts past
+  `capacity.ceiling`. A task
   that needs a held lease queues behind the lease without holding the others back. The slots are
   filled from, in order: pages and new alerts in our area; In Progress items with a closable
   remainder; Blocked items whose blocker is ours; Up Next items (an Up Next epic is in planning: its

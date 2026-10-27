@@ -1798,7 +1798,8 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   the supervisor or the guide: `parked on a person: …`) apart from one whose headless turn ended
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
   resume at …`).
-- **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10).
+- **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10
+  when unset; a ceiling of 0 refuses every unforced start with `no start: ceiling 0`).
   Busy is a roster agent with a task that is neither parked, kept nor waiting: an agent kept on purpose
   (`agents keep`), one parked on a decision (`agents park`), one a timer wakes and one whose session
   waits on its person are parked; one whose session runs only waits (a `sleep` or a polling
@@ -1837,8 +1838,9 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   refuses a start whose verdict has no room (exit 3, the guards named, no session created) unless
   `--force`, which starts it and records the verdict overridden (`agents.start` in the log).
   `watch` says `CAPACITY LOW <busy> of <floor>` once while busy stays under the
-  floor with room for a start, and `CAPACITY FULL <busy> of <ceiling>` at the ceiling, each with
-  the headroom line and one `ENDED` line when the count recovers. The `handover --prompt` carries
+  floor with room for a start, and `CAPACITY FULL <busy> of <ceiling>` at a positive ceiling, each with
+  the headroom line and one `ENDED` line when the count recovers; a ceiling of 0 suppresses both
+  `CAPACITY LOW` and `CAPACITY FULL` (a floor of 0 suppresses `CAPACITY LOW`). The `handover --prompt` carries
   the count, `status` shows `busy <n>/<floor>-<ceiling>`.
 
 The command-line send is one headless `claude -p` turn whose only tool is SendMessage, addressed

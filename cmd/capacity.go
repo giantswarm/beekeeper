@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -157,8 +158,12 @@ const (
 )
 
 // noFreeSlot is the build slot's guard: a block for a start that builds, a
-// note for one that does not.
-const noFreeSlot = "no free build slot"
+// note for one that does not. ceilingZero is the block when capacity.ceiling
+// is configured as 0.
+const (
+	noFreeSlot  = "no free build slot"
+	ceilingZero = "ceiling 0"
+)
 
 // blocks says what stops a new start: memory, swap, load and the labs stop
 // any; the build slot stops one that builds, which waits for it, while a
@@ -268,7 +273,10 @@ func (h *headroom) line() string {
 // pressure is a note, not a block.
 func newCapacity(c agentCount, k config.Capacity, h *headroom, builds bool) *capacityView {
 	v := &capacityView{agentCount: c, Floor: k.Floor, Ceiling: k.Ceiling, Headroom: h, Builds: builds}
-	if busy := len(c.Busy); busy >= k.Ceiling {
+	switch busy := len(c.Busy); {
+	case k.Ceiling == 0:
+		v.Blocks = append(v.Blocks, ceilingZero)
+	case busy >= k.Ceiling:
 		v.Blocks = append(v.Blocks, fmt.Sprintf("%d busy at the ceiling of %d", busy, k.Ceiling))
 	}
 	v.Blocks = append(v.Blocks, h.blocks(builds)...)
@@ -311,10 +319,22 @@ func (v *capacityView) verdict() string {
 	return s
 }
 
-// readHeadroom reads the machine's headroom now; swap is the watch's latest
-// reading, nil without a fresh one.
-func (a *app) readHeadroom(ctx context.Context, swap *swapReading) *headroom {
-	k := a.cfg.Capacity
+// liveCapacity returns the current Capacity from the active configuration
+// file (cfgPath or loadedCfg) without mutating a.cfg across goroutines; it
+// falls back to a.cfg.Capacity when no configuration file path is active or
+// on a read or parse error.
+func (a *app) liveCapacity() config.Capacity {
+	if p := cmp.Or(a.cfgPath, a.loadedCfg); p != "" {
+		if c, err := config.Load(p); err == nil {
+			return c.Capacity
+		}
+	}
+	return a.cfg.Capacity
+}
+
+// readHeadroom reads the machine's headroom now against k; swap is the
+// watch's latest reading, nil without a fresh one.
+func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapReading) *headroom {
 	slotDir, slots := a.slotView()
 	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
 	m, err := plat.Machine.Mem()
@@ -363,7 +383,10 @@ func (a *app) capacityCmd() *cobra.Command {
 		Use:   "capacity [--builds]",
 		Short: "Busy agents against the target, the headroom for a start and the verdict",
 		Long: `Count the roster's agents against the supervisor's target (capacity.floor,
-capacity.ceiling) and say whether a new start fits. Busy is a roster agent
+capacity.ceiling; unset, 5 and 10) and say whether a new start fits. A
+configured capacity.ceiling of 0 stops new starts ("no start: ceiling 0")
+and suppresses CAPACITY LOW and CAPACITY FULL in the watch; capacity.floor
+of 0 suppresses CAPACITY LOW. Busy is a roster agent
 with a task that is neither parked, kept nor waiting: an agent kept on
 purpose (agents keep), one a timer wakes and one whose session waits on its
 person are parked; one whose session runs only waits (a sleep or a polling
@@ -413,7 +436,8 @@ nothing; it makes no GitHub call.`,
 				return err
 			}
 			c := countAgents(st, sessions, a.now)
-			v := newCapacity(c, a.cfg.Capacity, a.readHeadroom(cmd.Context(), a.watchSwap()), builds).stopped(a, st.Stop)
+			k := a.liveCapacity()
+			v := newCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds).stopped(a, st.Stop)
 			if a.json {
 				return a.printJSON(struct {
 					*capacityView
@@ -421,7 +445,7 @@ nothing; it makes no GitHub call.`,
 				}{v, v.verdict()})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-			p("capacity: %s", c.line(a.cfg.Capacity))
+			p("capacity: %s", c.line(k))
 			if len(c.Parked) > 0 {
 				p("parked: %s", strings.Join(c.Parked, ", "))
 			}
@@ -548,7 +572,8 @@ func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, er
 		return nil, err
 	}
 	c := countAgents(st, sessions, a.now)
-	return newCapacity(c, a.cfg.Capacity, a.readHeadroom(ctx, a.watchSwap()), builds).stopped(a, st.Stop), nil
+	k := a.liveCapacity()
+	return newCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds).stopped(a, st.Stop), nil
 }
 
 // onlySlot reports whether the busy build slot alone stops the start.
@@ -566,14 +591,15 @@ func (w *watcher) keepSwap(r *swapReading) {
 }
 
 // capacity says CAPACITY LOW once while fewer agents are busy than the floor
-// and the headroom allows a start, and CAPACITY FULL once at the ceiling,
-// each with the headroom; each ends with one ENDED line when the count
-// recovers. The machine is read only at those edges.
+// and the headroom allows a start, and CAPACITY FULL once at a positive
+// ceiling, each with the headroom; each ends with one ENDED line when the
+// count recovers, and a ceiling of 0 clears both and stays silent. The
+// machine is read only at those edges.
 func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*claude.Session) {
-	k := w.cfg.Capacity
+	k := w.liveCapacity()
 	c := countAgents(st, sessions, w.now)
 	busy := len(c.Busy)
-	if (busy >= k.Floor && busy < k.Ceiling) || st.Stop != nil {
+	if k.Ceiling == 0 || (busy >= k.Floor && busy < k.Ceiling) || st.Stop != nil {
 		w.clear("capacity-low")
 		w.clear("capacity-full")
 		return
@@ -581,12 +607,14 @@ func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*cla
 	w.mu.Lock()
 	swap := w.swap
 	w.mu.Unlock()
-	read := w.readHeadroom
-	if read == nil {
-		read = w.app.readHeadroom
+	var h *headroom
+	if w.readHeadroom != nil {
+		h = w.readHeadroom(ctx, swap)
+	} else {
+		h = w.app.readHeadroom(ctx, k, swap)
 	}
 	// The watch weighs a start that does not build: a busy slot is a note.
-	v := newCapacity(c, k, read(ctx, swap), false)
+	v := newCapacity(c, k, h, false)
 	w.check("capacity-low", busy < k.Floor && v.Room > 0, "CAPACITY LOW %d of %d: %s; %s", busy, k.Floor, v.verdict(), v.Headroom.line())
 	w.check("capacity-full", busy >= k.Ceiling, "CAPACITY FULL %d of %d: %s", busy, k.Ceiling, v.Headroom.line())
 }

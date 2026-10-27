@@ -13,15 +13,30 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // The capacity tests' busy workers and their roomy verdict.
 const (
-	busyOne   = "W 1"
-	busyTwo   = "W 2"
-	roomSeven = "room for 7 starts"
+	busyOne            = "W 1"
+	busyTwo            = "W 2"
+	roomSeven          = "room for 7 starts"
+	noStartCeilingZero = "no start: ceiling 0"
 )
+
+type roomyMachine struct{ platform.Machine }
+
+func (roomyMachine) Mem() (machine.Mem, error) {
+	return machine.Mem{AvailableMiB: 45 << 10, TotalMiB: 96 << 10}, nil
+}
+func (roomyMachine) MemoryPressure() (float64, error) { return 0, nil }
+func (roomyMachine) Load() ([3]float64, error)        { return [3]float64{3, 3, 3}, nil }
+func (roomyMachine) Processes() (*proc.Table, error) {
+	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
+}
 
 // tasked is a roster entry with a task.
 func tasked(name string) state.Agent {
@@ -386,5 +401,212 @@ func TestDryRunSlotNamesTheWait(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(state, "slots", "queue")); len(entries) != 0 {
 		t.Errorf("the dry run left %d tickets in the queue", len(entries))
+	}
+}
+
+// A configured ceiling of 0 (and floor of 0) says "no start: ceiling 0",
+// refuses agents start without --force, and keeps the watch silent; unset
+// keeps the 5/10 defaults.
+func TestCapacityCeilingZeroAndUnset(t *testing.T) {
+	zero := config.Capacity{Floor: 0, Ceiling: 0}
+	for _, n := range []int{0, 2} {
+		v := newCapacity(countAgents(supervised(n), nil, keepNow), zero, roomy(), false)
+		if got := v.verdict(); got != noStartCeilingZero || v.Room != 0 {
+			t.Errorf("%d busy at ceiling 0: verdict %q (room %d), want %q", n, got, v.Room, noStartCeilingZero)
+		}
+	}
+	vTight := newCapacity(agentCount{}, zero, tight(), false)
+	if got, want := vTight.verdict(), noStartCeilingZero+"; MemAvailable 5.0 GiB under 20 GiB"; got != want {
+		t.Errorf("ceiling 0 and tight memory: %q, want %q", got, want)
+	}
+	vZero := newCapacity(agentCount{}, zero, roomy(), false)
+	if _, err := gateStart(vZero, false); Code(err) != ExitRefused || err.Error() != noStartCeilingZero+" (beekeeper capacity; --force starts anyway)" {
+		t.Errorf("gateStart without --force: exit %d, %v", Code(err), err)
+	}
+	if over, err := gateStart(vZero, true); err != nil || over != noStartCeilingZero {
+		t.Errorf("gateStart with --force: over %q, %v", over, err)
+	}
+
+	// End-to-end: config set capacity.floor 0 capacity.ceiling 0 -> capacity
+	// says "no start: ceiling 0" and agents start refuses without --force;
+	// an unset config keeps floor 5, ceiling 10.
+	orig := plat
+	plat = platform.Stub()
+	plat.Machine = roomyMachine{Machine: plat.Machine}
+	t.Cleanup(func() { plat = orig })
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	t.Setenv("HOME", dir)
+	t.Setenv("BEEKEEPER_CONFIG", cfgPath)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("MEMCAP_STATE", filepath.Join(dir, "memcap"))
+	t.Setenv("PATH", dir)
+
+	openApp := func(jsonOut bool) (*app, *bytes.Buffer) {
+		c, err := config.Load(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := state.OpenVersion(c.StateDir, "dev")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		return &app{cfgPath: cfgPath, cfg: c, store: store, now: keepNow, out: &out, as: agentOne, json: jsonOut}, &out
+	}
+
+	const (
+		floorKey        = "capacity.floor"
+		ceilingKey      = "capacity.ceiling"
+		verbAgentsStart = "agents.start"
+		lowTwoOfFive    = "CAPACITY LOW 2 of 5"
+	)
+	setCap := func(path, floor, ceiling string, extra ...config.Setting) {
+		t.Helper()
+		settings := append([]config.Setting{{Key: floorKey, Value: floor}, {Key: ceilingKey, Value: ceiling}}, extra...)
+		if _, err := config.Set(path, settings); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	aUnset, outUnset := openApp(false)
+	if err := aUnset.capacityCmd().Execute(); err != nil || !strings.Contains(outUnset.String(), "0 busy of floor 5, ceiling 10") || !strings.Contains(outUnset.String(), "room for 10 starts\n") {
+		t.Fatalf("unset capacity = %q, %v", outUnset.String(), err)
+	}
+	cfgCmd := aUnset.configCmd()
+	cfgCmd.SetArgs([]string{"set", floorKey, "0", ceilingKey, "0"})
+	if err := cfgCmd.Execute(); err != nil {
+		t.Fatalf("config set 0 = %v", err)
+	}
+	aZero, outZero := openApp(false)
+	if err := aZero.capacityCmd().Execute(); err != nil || !strings.Contains(outZero.String(), "0 busy of floor 0, ceiling 0") || !strings.Contains(outZero.String(), "\n"+noStartCeilingZero+"\n") {
+		t.Fatalf("ceiling 0 capacity = %q, %v", outZero.String(), err)
+	}
+	aJSON, outJSON := openApp(true)
+	if err := aJSON.capacityCmd().Execute(); err != nil || !strings.Contains(outJSON.String(), `"floor": 0`) || !strings.Contains(outJSON.String(), `"ceiling": 0`) || !strings.Contains(outJSON.String(), `"verdict": "`+noStartCeilingZero+`"`) {
+		t.Fatalf("ceiling 0 capacity --json = %q, %v", outJSON.String(), err)
+	}
+	brief := filepath.Join(dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startCmd := aZero.agentStartCmd()
+	startCmd.SilenceErrors = true
+	startCmd.SilenceUsage = true
+	startCmd.SetArgs([]string{busyOne, brief, "--dir", dir})
+	if err := startCmd.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), noStartCeilingZero) {
+		t.Errorf("agents start at ceiling 0 = exit %d (%v), want ExitRefused naming ceiling 0", Code(err), err)
+	}
+
+	// agents start --force goes through agentStartCmd and logs the overridden
+	// ceiling-0 verdict in the store.
+	stubBackground(t, "backgrounded · "+bgShortID+" · "+busyOne+"\n", bgSession{ID: bgShortID, SessionID: bgID, Name: busyOne})
+	outZero.Reset()
+	forceCmd := aZero.agentStartCmd()
+	forceCmd.SilenceErrors = true
+	forceCmd.SilenceUsage = true
+	forceCmd.SetArgs([]string{busyOne, brief, "--dir", dir, modeFlag, config.ModeBackground, "--force"})
+	if err := forceCmd.Execute(); err != nil {
+		t.Fatalf("agents start --force at ceiling 0 = %v", err)
+	}
+	wantOverLine := "started over " + noStartCeilingZero + " (--force)"
+	if !strings.Contains(outZero.String(), wantOverLine+"\n") {
+		t.Errorf("agents start --force output = %q, want %q", outZero.String(), wantOverLine)
+	}
+	evs, err := aZero.store.Events(0, func(e state.Event) bool { return e.Verb == verbAgentsStart })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(evs, func(e state.Event) bool { return strings.Contains(e.Detail, busyOne+": "+wantOverLine) }) {
+		t.Errorf("agents.start events = %+v, want %q", evs, busyOne+": "+wantOverLine)
+	}
+
+	// A queued agents start --builds reloads Capacity from cfgPath when its
+	// slot turn arrives, catching a ceiling: 0 written while it waited; it
+	// also passes the reloaded Capacity to readHeadroom.
+	setCap(cfgPath, "5", "10")
+	aQueued, _ := openApp(false)
+	// Clear the forced worker so 0 agents are busy when the build start enters.
+	if err := aQueued.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	holdSlots(t, filepath.Join(dir, "memcap"))
+	vInitial, err := aQueued.startCapacity(context.Background(), true)
+	if err != nil || !vInitial.onlySlot() {
+		t.Fatalf("initial build start = %+v, %v; want onlySlot", vInitial, err)
+	}
+	_, err = queueStart(vInitial, true, false, "8m",
+		func() (bool, int, error) {
+			_, serr := config.Set(cfgPath, []config.Setting{
+				{Key: floorKey, Value: "0"},
+				{Key: ceilingKey, Value: "0"},
+				{Key: "capacity.availMinMiB", Value: "61440"},
+			})
+			return serr == nil, 0, serr
+		},
+		func() (*capacityView, error) { return aQueued.startCapacity(context.Background(), false) })
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), noStartCeilingZero) || !strings.Contains(err.Error(), "MemAvailable 45.0 GiB under 60 GiB") {
+		t.Errorf("queued start after config set ceiling 0 = exit %d (%v), want ceiling 0 and reloaded availMinMiB", Code(err), err)
+	}
+
+	// Watch: reloads Capacity from watchCfg on each poll without mutating
+	// w.cfg; ceiling 0 clears open capacity conditions and suppresses new ones,
+	// a watcher started at ceiling 0 resumes emitting once a positive ceiling
+	// is restored, and floor 0 with a positive ceiling stays silent at 0 busy.
+	watchDir := t.TempDir()
+	watchCfg := filepath.Join(watchDir, "config.yaml")
+	w, _, out := notifyingWatch(t, watchDir, false)
+	w.cfgPath = watchCfg
+	reads := 0
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { reads++; return roomy() }
+	w.capacity(context.Background(), supervised(2), nil)
+	if !strings.Contains(out.String(), lowTwoOfFive) || reads != 1 {
+		t.Fatalf("before ceiling 0 (reads %d):\n%s", reads, out)
+	}
+	out.Reset()
+	setCap(watchCfg, "0", "0")
+	w.capacity(context.Background(), supervised(0), nil)
+	if !strings.Contains(out.String(), "ENDED "+lowTwoOfFive) || strings.Contains(out.String(), "CAPACITY FULL") || reads != 1 {
+		t.Fatalf("at ceiling 0 with 0 busy (reads %d):\n%s", reads, out)
+	}
+	if w.cfg.Capacity.Ceiling != config.DefaultCeiling {
+		t.Errorf("w.cfg.Capacity mutated to %+v", w.cfg.Capacity)
+	}
+	out.Reset()
+	w.capacity(context.Background(), supervised(2), nil)
+	if out.Len() != 0 || reads != 1 {
+		t.Fatalf("at ceiling 0 with 2 busy (reads %d):\n%s", reads, out)
+	}
+
+	// A watcher started at ceiling 0 speaks once watchCfg restores a positive ceiling.
+	wFromZero, _, outFromZero := notifyingWatch(t, t.TempDir(), false)
+	wFromZero.cfg.Capacity = zero
+	wFromZero.cfgPath = watchCfg
+	fromZeroReads := 0
+	wFromZero.readHeadroom = func(context.Context, *swapReading) *headroom { fromZeroReads++; return roomy() }
+	wFromZero.capacity(context.Background(), supervised(2), nil)
+	if outFromZero.Len() != 0 || fromZeroReads != 0 {
+		t.Fatalf("started at ceiling 0 (reads %d):\n%s", fromZeroReads, outFromZero)
+	}
+	setCap(watchCfg, "5", "10")
+	wFromZero.capacity(context.Background(), supervised(2), nil)
+	if !strings.Contains(outFromZero.String(), lowTwoOfFive) || fromZeroReads != 1 {
+		t.Fatalf("after restoring positive ceiling (reads %d):\n%s", fromZeroReads, outFromZero)
+	}
+
+	out.Reset()
+	setCap(watchCfg, "0", "10")
+	w.capacity(context.Background(), supervised(0), nil)
+	if out.Len() != 0 || reads != 1 {
+		t.Fatalf("at floor 0, ceiling 10 with 0 busy (reads %d):\n%s", reads, out)
+	}
+
+	// A broken configuration file falls back to w.cfg.Capacity.
+	if err := os.WriteFile(watchCfg, []byte("capacity: ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := wFromZero.liveCapacity(); got != zero {
+		t.Errorf("liveCapacity on broken file = %+v, want fallback %+v", got, zero)
 	}
 }
