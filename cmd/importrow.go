@@ -89,7 +89,7 @@ func (a *app) rowless(ctx context.Context, st *state.State, turning func(context
 // flight, each on its own: one held by the desktop never holds another
 // (standby watch).
 func (w *watcher) importRows(ctx context.Context, st *state.State) {
-	if w.stand.importRow == nil || w.stand.turning == nil {
+	if w.stand.importRow == nil || w.stand.turning == nil || st.Stop != nil {
 		return
 	}
 	for _, ag := range w.rowless(ctx, st, w.stand.turning) {
@@ -193,6 +193,9 @@ func (a *app) reopenRowless(ctx context.Context, st *state.State, t *proc.Table,
 	workers := a.rowlessWorkers(ctx, st, t, record)
 	if len(workers) == 0 {
 		return nil
+	}
+	if st.Stop != nil {
+		return []string{fmt.Sprintf("reopens none of %d workers without their desktop row: %s", len(workers), stoppedNothing)}
 	}
 	var lines []string
 	stays := func(w rowlessWorker, why string) {

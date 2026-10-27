@@ -237,6 +237,8 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
   swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
   swapPSIMax: 0             # the default; memory pressure (full avg60 of /proc/pressure/memory, %) up to which that growth is only a warning while MemAvailable is over availMinMiB
+stop:                       # beekeeper stop, besides beekeeper's own units and the standby service
+  units: [desk-guard.timer] # more user units the stop stops while they run and beekeeper resume starts again; default: none
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies
   faults:
     - name: registry-login  # an example: a login unit answering 401, fixed by a restart

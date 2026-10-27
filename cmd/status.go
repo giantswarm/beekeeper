@@ -20,7 +20,8 @@ func (a *app) statusCmd() *cobra.Command {
 		Short: "One line: the supervisor, the leases held, the holds, what is due and the busy agents",
 		Long: `Print the machine's coordination state in one line: who supervises, the
 leases held, the holds in force, the notes and timers that are due and the
-busy agents against capacity.floor and capacity.ceiling.
+busy agents against capacity.floor and capacity.ceiling; while beekeeper
+stop stands, the line starts with STOPPED and the stop's reason.
 
 --bar prints it for a desktop bar as one tab-separated row, the same shape
 as the rows of ` + "`free --summary`" + `, so one bar module reads both. The
@@ -84,6 +85,9 @@ type statusView struct {
 	// VaultWaits are the sessions whose calls wait on the person's unlock
 	// of the vault.
 	VaultWaits []string `json:"vaultWaits,omitempty"`
+	// Stopped says the standing beekeeper stop, with its reason; empty
+	// without one.
+	Stopped string `json:"stopped,omitempty"`
 }
 
 func (a *app) status() (*statusView, error) {
@@ -96,6 +100,9 @@ func (a *app) status() (*statusView, error) {
 		return nil, err
 	}
 	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now), Floor: a.cfg.Capacity.Floor, Ceiling: a.cfg.Capacity.Ceiling}
+	if st.Stop != nil {
+		v.Stopped = a.stopText(st.Stop)
+	}
 	sessions, _, err := a.sessions()
 	missing := platform.Missing(err)
 	if err != nil && !missing {
@@ -198,6 +205,9 @@ func (v *statusView) line() string {
 	line := fmt.Sprintf("%s; %s; %s; %d due; busy %d/%d-%d", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due, v.Busy, v.Floor, v.Ceiling)
 	if len(v.VaultWaits) > 0 {
 		line += "; vault locked: " + list(len(v.VaultWaits), "call waits", "calls wait", v.VaultWaits)
+	}
+	if v.Stopped != "" {
+		line = "STOPPED: " + v.Stopped + "; " + line
 	}
 	return line
 }

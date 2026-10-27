@@ -156,6 +156,9 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 		if reportDue(st.Report, st.ReportPause, rc, w.now, false, false) != action {
 			return nil, nil // another watch started it
 		}
+		if st.Stop != nil {
+			return nil, nil // the report starts after beekeeper resume
+		}
 		if final {
 			if st.Report != nil {
 				from = st.Report.Started

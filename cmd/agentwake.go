@@ -98,6 +98,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err != nil {
 		return err
 	}
+	if err := a.refuseStopped(st, "waking "+q); err != nil {
+		return err
+	}
 	i, err := findAgent(st, q)
 	if err != nil {
 		return err
