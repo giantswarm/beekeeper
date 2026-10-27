@@ -146,7 +146,7 @@ func sleeper(t *testing.T) int {
 // queuedGate is the argv of a gate's run of its own up to the command: the
 // test binary's explicit configuration ($BEEKEEPER_CONFIG) goes with it.
 func queuedGate(self string) []string {
-	return []string{self, "--config", os.Getenv("BEEKEEPER_CONFIG"), "gate", "--queued", "--wait", "1h0m0s", "--"}
+	return []string{self, "--" + configFlag, os.Getenv("BEEKEEPER_CONFIG"), "gate", "--queued", "--wait", "1h0m0s", "--"}
 }
 
 // A merge behind a busy lane does not end in a rerun: at its deadline the
