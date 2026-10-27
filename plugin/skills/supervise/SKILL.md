@@ -100,10 +100,10 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   OOMed, asking two sessions to coordinate, re-tuning the watch thresholds: yes. Fixing a session's
   failing test, merging its PR, re-running its CI, editing its branch: no, that is the session's.
 - **The person's stop is `beekeeper stop --reason "<their words>"`**, at once and nothing before
-  it: it holds merges and GitHub, ends every running merge's devctl, stops every turn, reopen and status report unit, the standby
-  service and `stop.units`, ends every worker session (never the person's own, the guide's or
-  this one), and refuses every start, wake, revive and import until `beekeeper resume`, which
-  runs only on the person's word. Then end this session's own Monitor on the watch; the
+  it: it holds merges and GitHub, ends every running merge's devctl, stops every turn, reopen
+  and status report unit, the standby service and `stop.units`, ends every worker session
+  (never the person's own, the guide's or this one), and refuses every start, wake, revive and
+  import until `beekeeper resume`, which runs only on the person's word. Then end this session's own Monitor on the watch; the
   sessions the stop ended wait for a wake after the resume (`resume` names them). A `FAILED`
   line (exit 1) is acted on and the command run again.
 - **Leave nothing running.** A relieved supervisor stops its Monitor and any scheduled loop,
