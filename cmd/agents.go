@@ -534,7 +534,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 				v.Reachable, v.HeadlessTurn = "live, "+turn+" running", true
 			}
 		}
-		if desktop && started(st, ag.Party) && !a.hasRow(ag.Session) {
+		if desktop && desktopStarted(st, ag.Party) && !a.hasRow(ag.Session) {
 			v.NoRow = true
 			v.Reachable += ", no desktop row"
 		}

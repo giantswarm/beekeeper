@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -405,8 +406,14 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if err != nil {
 		return err
 	}
-	a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
-	listed, err := a.listSuccessor(me, ag.Party, state.Party{Session: sa.id, HostSession: "local_" + sa.id, Name: ag.Name}, h.task())
+	follow := state.Party{Session: sa.id, HostSession: "local_" + sa.id, Name: ag.Name}
+	if sa.background {
+		follow.HostSession = ""
+		a.say("started %q: background session %s with Remote Control, in %s, busy with %q", ag.Name, sa.id, sa.dir, sa.task)
+	} else {
+		a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
+	}
+	listed, err := a.listSuccessor(me, ag.Party, follow, h.task())
 	if err != nil {
 		return fmt.Errorf("the follow-up %s is not on the roster, so session %s runs on: %w "+
 			"(beekeeper agents register in session %s lists it, beekeeper agents remove %q takes it off)", sa.id, ag.Session, err, sa.id, ag.Name)
@@ -418,13 +425,17 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		a.say("leases: session %s held and was granted none", ag.Session)
 	}
 	a.say("%s", sa.turn)
-	if sa.restored != "" {
-		a.say("%s", sa.restored)
-	}
-	a.say("%s", titleLine(ag.Name, sa.title))
-	a.say("%s", modelLine(sa.model, sa.want, "local_"+sa.id))
-	if sa.kept != "" {
-		a.say("the desktop still shows %s", sa.kept)
+	if sa.background {
+		a.say("its turns run on %s", cmp.Or(sa.want, "Claude Code's default model"))
+	} else {
+		if sa.restored != "" {
+			a.say("%s", sa.restored)
+		}
+		a.say("%s", titleLine(ag.Name, sa.title))
+		a.say("%s", modelLine(sa.model, sa.want, "local_"+sa.id))
+		if sa.kept != "" {
+			a.say("the desktop still shows %s", sa.kept)
+		}
 	}
 	if h.session != nil {
 		n, err := endSession(ctx, h.session)
@@ -442,7 +453,9 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	for _, l := range stopUnits(ctx, ag.Session) {
 		a.say("%s", l)
 	}
-	a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
+	if a.hasDesktopSession(ag.Party) {
+		a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
+	}
 	took := time.Since(began)
 	if err := a.store.Record(event(me, "agents.handover", "%s: session %s at %s tokens to %s, %s, in %s",
 		ag.Name, ag.Session, tokensText(h.context), sa.id, noted, dur(took))); err != nil {
@@ -509,6 +522,20 @@ func keepListed(st *state.State, to state.Party, task string, live func(state.Pa
 		ag.Task, ag.AssignedAt = task, now
 	}
 	return fmt.Sprintf("session %s had no row: registered again, busy with %q", to.Session, ag.Task), nil
+}
+
+// hasDesktopSession reports whether p has a desktop session to archive: its
+// own host id, or its start's. A background session has none.
+func (a *app) hasDesktopSession(p state.Party) bool {
+	if strings.HasPrefix(p.HostSession, "local_") {
+		return true
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return true
+	}
+	i := st.StartIndex(p)
+	return i >= 0 && !st.Starts[i].Background && st.Starts[i].HostSession != ""
 }
 
 // archiveHandedOver archives the desktop session of the handed-over p once

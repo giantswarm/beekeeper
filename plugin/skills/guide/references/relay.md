@@ -12,6 +12,9 @@ The guide reads this at `GUIDE RELAY DUE`, in a headless turn, and as a first gu
   `beekeeper guide status` exits 4 here, the guide stops its Monitor, leaves nothing running and
   ends. A relay not taken expires and the guide carries on. After a crash the standby unit starts
   the next run the same way. `beekeeper guide stop` runs only on the person's word.
+- **Under `agents.mode: background`** the successor is a background session with Remote Control
+  that takes the role and runs `beekeeper guide handover --prompt` itself: the relay prints no
+  SendMessage to make, and its watch runs in that session. The desktop paragraphs here do not apply.
 - **The watch runs in a desktop turn only.** A headless turn (a first turn, an `agents wake`) that
   arms a Monitor never ends, so the desktop never gets the session's CLI. The one exception is the standby
   watch's headless resume, whose message says the desktop runs no CLI of the session: that turn

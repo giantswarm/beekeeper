@@ -284,7 +284,7 @@ func (w *watcher) standIn(ctx context.Context, rl role, st *state.State, holder 
 	if started(st, holder) {
 		if c.revived != key && w.stand.revive != nil {
 			c.revived = key
-			return w.reviveGone(ctx, rl, holder)
+			return w.reviveGone(ctx, rl, holder, w.backgroundAgent(ctx, st, holder))
 		}
 		if c.failed != key {
 			c.failed, c.failures = key, c.failures+1
@@ -319,12 +319,26 @@ func started(st *state.State, p state.Party) bool {
 }
 
 // reviveGone resumes rl's gone holder headless outside the poll, as
-// succeedGone starts a successor. It returns what the GONE line adds.
-func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party) string {
+// succeedGone starts a successor; a background holder is continued by
+// claude --bg --resume. It returns what the GONE line adds.
+func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party, background bool) string {
 	if !w.stand.starting.CompareAndSwap(false, true) {
 		return successorStarting
 	}
 	w.stand.inflight.Add(1)
+	if background {
+		go func() {
+			defer w.stand.inflight.Done()
+			defer w.stand.starting.Store(false)
+			msg := rl.resumeMessage("your background session was stopped and runs again, continued by this message: this turn keeps " + rl.duty)
+			if err := w.stand.revive(ctx, rl, holder, msg); err != nil {
+				w.emitNow(rl.name+"-successor", "%sRESUME FAILED: %q runs no CLI and claude --bg --resume did not continue it: %v", rl.tag, holder.Name, err)
+				return
+			}
+			w.emitNow(rl.name+"-successor", "%sRESUME: %q ran no CLI: claude --bg --resume continued its background session, its turn keeps %s", rl.tag, holder.Name, rl.duty)
+		}()
+		return "; continuing its background session (it runs no CLI)"
+	}
 	go func() {
 		defer w.stand.inflight.Done()
 		defer w.stand.starting.Store(false)
@@ -352,6 +366,9 @@ func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party) s
 func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, msg string) error {
 	if holder.Session == "" {
 		return fmt.Errorf("%s has no session id to reach", holder.Name)
+	}
+	if st, err := a.store.Read(); err == nil && a.backgroundAgent(ctx, st, holder) {
+		return a.reviveBackground(ctx, holder, msg)
 	}
 	host := "local_" + holder.Session
 	if !a.hasRow(holder.Session) {

@@ -39,15 +39,27 @@ the agent.`,
 			if err != nil && len(args) == 0 {
 				return err
 			}
-			var ag state.Agent
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			find := func(st *state.State) (int, error) {
 				i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) })
 				if len(args) > 0 {
-					if i, err = findAgent(st, args[0]); err != nil {
-						return nil, err
-					}
+					return findAgent(st, args[0])
 				} else if i < 0 {
-					return nil, refused("this session is not registered: `beekeeper agents register` first")
+					return i, refused("this session is not registered: `beekeeper agents register` first")
+				}
+				return i, nil
+			}
+			// a background session has no desktop turn; the look at the
+			// claude daemon runs before the state's lock is taken
+			if st, err := a.store.Read(); err == nil {
+				if i, err := find(st); err == nil && a.backgroundAgent(cmd.Context(), st, st.Agents[i].Party) {
+					return refused("%s runs as a background session (agents.mode background): it has no desktop turn, Remote Control and claude attach show it", st.Agents[i].Name)
+				}
+			}
+			var ag state.Agent
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				i, err := find(st)
+				if err != nil {
+					return nil, err
 				}
 				st.Agents[i].DesktopTurn = a.now.UTC()
 				ag = st.Agents[i]

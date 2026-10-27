@@ -224,6 +224,8 @@ agents:                     # the hand-over of registered agents
       plugins: [beekeeper, desk-plugin]   # plugins kept by name or id; every other installed plugin, of any marketplace, is disabled; empty: all stay
       mcpServers: [claude-in-chrome, board]   # MCP servers kept (allowedMcpServers), claude.ai connectors included; empty: all stay
       deny: []              # further permission rules refused (permissions.deny); a bare tool or mcp__<server> name takes it off the tool list
+  mode: desktop             # desktop: started sessions are imported into Claude Desktop and woken through it; background: each is a claude --bg session with Remote Control, none of the caller's CLAUDE* variables, on the roster at once, woken by its messaging or claude --bg --resume
+  model: ""                 # the model of a session beekeeper starts when the start names none; empty: Claude Code's default
   autoResume: false         # the watch resumes a parked agent (agents park --on) with what settled its note or pull request; false: it says AGENT RESUMABLE, agents resume does it by hand
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none

@@ -39,6 +39,12 @@ refused: nothing resumes it.
 
 A session whose CLI runs gets the message by name, as SendMessage by name
 does: it queues and runs at the session's next tool call or as its next turn.
+A background session (agents start --mode background, or, while agents.mode
+is background, a session without a desktop one that claude agents --json
+--all lists as a background session; never one run in a terminal) whose
+CLI does not run is continued by "claude --bg --resume <id> <message>", with none of
+the caller's CLAUDE* variables, and keeps its Remote Control, mode, name
+and model; no desktop route, no claude:// link and no reopen unit.
 A session whose import is pending (agents shows it importing) is refused: a
 headless turn would run beside the CLI the import warms.
 A session with no running CLI (after a reboot, a crash, the desktop's idle
@@ -157,6 +163,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	}
 	if u := wakeRunning(ctx, w.id); u != "" {
 		return refused("%s: its wake turn %s is starting and not yet reachable by name: send again in a minute", ag.Name, u)
+	}
+	if a.backgroundAgent(ctx, st, ag.Party) {
+		return a.wakeBackground(ctx, by, w, msg)
 	}
 	if ag.Import.Pending(a.now) {
 		return a.importRefusal(by, ag)
