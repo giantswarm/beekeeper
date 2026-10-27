@@ -111,7 +111,55 @@ func TestMain(m *testing.M) {
 	// No test asks the machine's Claude Code for its plugins; one that
 	// wants a list sets it.
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
-	os.Exit(m.Run())
+	os.Exit(runIsolated(m))
+}
+
+// isolatedRoot is the scratch directory runIsolated points the
+// configuration and state at for the whole test binary.
+var isolatedRoot string
+
+// runIsolated runs the tests with no path to the machine's own
+// configuration or state: $XDG_CONFIG_HOME and $XDG_STATE_HOME are
+// scratch directories and $BEEKEEPER_CONFIG is unset, so a test that sets
+// none of them reads and writes there through the default paths. A test
+// that wants its own sets them with t.Setenv. The binary run as beekeeper
+// by a test inherits the test's environment, so this runs only on the
+// m.Run path.
+func runIsolated(m *testing.M) int {
+	root, err := os.MkdirTemp("", "beekeeper-cmd-test-")
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	isolatedRoot = root
+	if err := os.Unsetenv("BEEKEEPER_CONFIG"); err != nil {
+		panic(err)
+	}
+	for k, v := range map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(root, "config"),
+		"XDG_STATE_HOME":  filepath.Join(root, "state"),
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			panic(err)
+		}
+	}
+	return m.Run()
+}
+
+func TestATestWithoutItsOwnPathsUsesScratchOnes(t *testing.T) {
+	path, err := config.Path("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{"config": path, "state": cfg.StateDir, "desktop": cfg.Claude.DesktopDir} {
+		if rel, err := filepath.Rel(isolatedRoot, p); err != nil || strings.HasPrefix(rel, "..") {
+			t.Errorf("%s path %s is outside the scratch directory %s", name, p, isolatedRoot)
+		}
+	}
 }
 
 // testWakesEnv names the file a test binary run as beekeeper records its
