@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -28,7 +29,9 @@ const (
 func isolateUsageTestEnv(t *testing.T) (dir, cfgPath string) {
 	t.Helper()
 	orig := plat
-	plat.Machine = roomyMachine{Machine: plat.Machine}
+	stub := platform.Stub()
+	stub.Machine = roomyMachine{Machine: stub.Machine}
+	plat = stub
 	t.Cleanup(func() { plat = orig })
 
 	dir = t.TempDir()
