@@ -27,6 +27,7 @@ type poller struct {
 func (a *app) budgetCmd() *cobra.Command {
 	var gate bool
 	var floor int
+	var buckets []string
 	c := &cobra.Command{
 		Use:   "budget",
 		Short: "The GitHub REST, GraphQL and search budget every session draws from, and who is drawing",
@@ -52,11 +53,19 @@ watch's GitHub timer checks start after them.
 --gate exits 3 when GitHub refuses GraphQL calls, the budget is under the
 floor (github.floor, default 2500), merges queued for the reset go first or
 a "github" hold is set:
-` + "`beekeeper budget --gate && gh …`" + `.`,
+` + "`beekeeper budget --gate && gh …`" + `. --bucket names the search
+bucket a step spends (code_search, search; repeatable or comma-separated):
+--gate then also exits 3 while that bucket is spent, naming its reset, and
+fails (exit 1) when the search limits cannot be read, as it does for an
+unread core budget:
+` + "`beekeeper budget --gate --bucket code_search && gh search code …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if floor > 0 {
 				a.cfg.GitHub.Floor = floor
+			}
+			if err := checkBuckets(gate, buckets); err != nil {
+				return err
 			}
 			b, err := readBudget(a, cmd.Context())
 			if err != nil {
@@ -136,12 +145,65 @@ a "github" hold is set:
 			if gate && firstLine != "" {
 				return refused("%s", firstLine)
 			}
+			if gate {
+				return gateBuckets(a, b.Search, buckets)
+			}
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&gate, "gate", false, "exit 3 when GraphQL is refused, under the floor or held")
 	c.Flags().IntVar(&floor, "floor", 0, "the floor for this call (default github.floor)")
+	c.Flags().StringSliceVar(&buckets, "bucket", nil, "with --gate, also exit 3 while this search bucket is spent (repeatable or comma-separated: "+strings.Join(searchBuckets, ", ")+")")
 	return c
+}
+
+// searchBuckets are the names --bucket takes, those of /rate_limit.
+var searchBuckets = []string{"code_search", "search"}
+
+// searchBucket is the named bucket of s: nil when GitHub sent none.
+func searchBucket(s *github.Searches, name string) *github.Limit {
+	if name == "code_search" {
+		return s.CodeSearch
+	}
+	return s.Search
+}
+
+func checkBuckets(gate bool, buckets []string) error {
+	if len(buckets) > 0 && !gate {
+		return usageErr("--bucket needs --gate")
+	}
+	for _, n := range buckets {
+		if !slices.Contains(searchBuckets, n) {
+			return usageErr("unknown --bucket %q (want %s)", n, strings.Join(searchBuckets, ", "))
+		}
+	}
+	return nil
+}
+
+// gateBuckets refuses while a named bucket is spent. Limits that could not
+// be read fail the gate as an unread core budget does: the step does not run.
+func gateBuckets(a *app, s *github.Searches, buckets []string) error {
+	if len(buckets) == 0 {
+		return nil
+	}
+	if s == nil || s.Err != "" {
+		why := "not read"
+		if s != nil {
+			why = s.Err
+		}
+		return fmt.Errorf("search limits unknown, the gate cannot judge --bucket: %s", why)
+	}
+	for _, n := range buckets {
+		l := searchBucket(s, n)
+		if l == nil {
+			return fmt.Errorf("GitHub sent no %s limit, the gate cannot judge it", n)
+		}
+		if l.Spent(a.now) {
+			return refused("GitHub %s bucket is spent, 0 of %d left: wait for the reset at %s (in %s)",
+				n, l.Limit, clock(a.now, l.Reset), dur(l.Reset.Sub(a.now)))
+		}
+	}
+	return nil
 }
 
 // probeSearch reads the search limits; a failure is their Err.
