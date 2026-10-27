@@ -62,18 +62,20 @@ func decideAgyCmd(t *testing.T, h Hook, cwd, cmd string) agyDecision {
 
 func initGitRepo(t *testing.T, branch, remoteURL string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	run := func(args ...string) {
 		t.Helper()
-		c := exec.Command("git", args...) //nolint:gosec // test helper
+		c := exec.Command("git", append([]string{"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"}, args...)...) //nolint:gosec // test helper
 		c.Dir = dir
 		if out, err := c.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v (%s)", args, err, out)
 		}
 	}
-	run("init", "-b", branch)
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test")
+	run("init", "-q", "-b", branch)
+	run("commit", "-q", "--allow-empty", "-m", "init")
 	if remoteURL != "" {
 		run("remote", "add", "origin", remoteURL)
 	}
@@ -693,6 +695,7 @@ func TestPushDifferentialBash(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "push.log")
 	pathEnv := binDir + string(os.PathListSeparator) + os.Getenv("PATH")
 
+	pushedMainCount := 0
 	for _, startDir := range []string{mainRepo, featRepo} {
 		for _, line := range lines {
 			_ = os.Remove(logFile)
@@ -706,9 +709,13 @@ func TestPushDifferentialBash(t *testing.T) {
 			if !pushedMain {
 				continue
 			}
+			pushedMainCount++
 			if d := decideAgyCmd(t, h, startDir, line); d.Decision != decisionDeny {
 				t.Errorf("start=%s line=%q pushed main in bash, but DecideAgy returned %+v", startDir, line, d)
 			}
 		}
+	}
+	if pushedMainCount == 0 {
+		t.Fatal("differential test recorded 0 main pushes from bash")
 	}
 }

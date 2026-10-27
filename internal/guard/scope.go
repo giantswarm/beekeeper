@@ -26,12 +26,22 @@ func Under(dirs []string, paths ...string) bool {
 }
 
 func underOne(dirs []string, p string) bool {
+	realP, _ := filepath.EvalSymlinks(p)
 	for _, d := range dirs {
-		if p == d || strings.HasPrefix(p, strings.TrimSuffix(d, string(filepath.Separator))+string(filepath.Separator)) {
+		if hasDirPrefix(p, d) || (realP != "" && hasDirPrefix(realP, d)) {
 			return true
+		}
+		if realD, err := filepath.EvalSymlinks(d); err == nil && realD != "" {
+			if hasDirPrefix(p, realD) || (realP != "" && hasDirPrefix(realP, realD)) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func hasDirPrefix(p, d string) bool {
+	return p == d || strings.HasPrefix(p, strings.TrimSuffix(d, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // worktreeMainRepo returns the main repository root when dir lies inside a

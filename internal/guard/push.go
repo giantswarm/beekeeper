@@ -74,7 +74,7 @@ func (h Hook) pushRefusal(cmd, cwd string) string {
 	if hasUnbalancedQuotes(cmd) && (guardedKeyword.MatchString(cmd) || h.namesUnlock(cmd)) {
 		return "Refused: the command does not parse (unbalanced quotes): quote it so the guard can read it."
 	}
-	return h.scanPush(cmd, cwd, false, len( cwd ) == 0, 0)
+	return h.scanPush(cmd, cwd, false, len(cwd) == 0, 0)
 }
 
 func (h Hook) namesUnlock(cmd string) bool {
