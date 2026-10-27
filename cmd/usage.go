@@ -434,7 +434,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	}
 	now := w.now
 	if w.usageNeedsRefresh(k, now) {
-		w.inFlight(ctx, w.cfg.Watch.Interval.Duration, &w.usageBusy, func(ctx context.Context) {
+		w.inFlight(ctx, cmp.Or(w.cfg.Watch.Interval.Duration, k.Usage.EffectiveTimeout()), &w.usageBusy, func(ctx context.Context) {
 			w.refreshUsage(ctx, k, now)
 		})
 	}

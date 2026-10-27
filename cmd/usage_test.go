@@ -442,7 +442,9 @@ capacity:
 		a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: now, out: &out, as: usageCaller, readUsage: reader}
 		w := a.newWatcher(false, true)
 		w.now = now
+		w.doctoring.Store(true) // the doctor is not under test
 		w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+		t.Cleanup(func() { w.bg.Wait() })
 		return w, &out
 	}
 
