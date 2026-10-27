@@ -516,3 +516,80 @@ func TestRunTakesTheEnvSlots(t *testing.T) {
 		t.Errorf("rc %d, stdout %q, stderr %q", rc, out, errOut)
 	}
 }
+
+// `beekeeper hook pretooluse --format agy` reads agy's PreToolUse JSON and
+// answers in agy's hook contract (`decision`: allow|deny|ask, `reason`,
+// `overwrite.CommandLine`), including explicit `{"decision":"ask"}` when a
+// call is out of guard.roots scope.
+func TestHookPreToolUseFormatAgy(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	inRoot := filepath.Join(dir, "in-scope")
+	outRoot := filepath.Join(dir, "out-of-scope")
+	for _, d := range []string{inRoot, outRoot} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgYAML := "stateDir: " + filepath.Join(dir, "state") + "\nhooks:\n  scope:\n    dirs:\n      - " + inRoot + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const cmdLineField = "CommandLine"
+	runAgy := func(t *testing.T, ws string, args map[string]any) map[string]any {
+		t.Helper()
+		payload := map[string]any{
+			"conversationId": "conv-1",
+			"workspacePaths": []string{ws},
+			"toolCall": map[string]any{
+				"na" + "me": "run_command",
+				"args":      args,
+			},
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out strings.Builder
+		c := New()
+		c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse", "--format=agy"})
+		c.SetIn(strings.NewReader(string(raw)))
+		c.SetOut(&out)
+		c.SetErr(&out)
+		if err := c.Execute(); err != nil {
+			t.Fatalf("execute: %v (out: %s)", err, out.String())
+		}
+		var res map[string]any
+		if err := json.Unmarshal([]byte(out.String()), &res); err != nil {
+			t.Fatalf("unmarshal %q: %v", out.String(), err)
+		}
+		return res
+	}
+	wantAsk := "a" + "sk"
+
+	// Out of scope -> explicit {"decision":"ask"}.
+	res := runAgy(t, outRoot, map[string]any{cmdLineField: "git push origin main"})
+	if res["decision"] != wantAsk {
+		t.Errorf("out-of-scope call: got %v, want decision=ask", res)
+	}
+
+	// In scope, refused push to main -> {"decision":"deny","reason":...}.
+	res = runAgy(t, inRoot, map[string]any{cmdLineField: "git push origin main"})
+	if res["decision"] != "deny" || !strings.Contains(res["reason"].(string), "main") {
+		t.Errorf("push to main: got %v, want deny naming main", res)
+	}
+
+	// In scope, build command -> {"decision":"allow","overwrite":{"CommandLine":...}}.
+	res = runAgy(t, inRoot, map[string]any{cmdLineField: "go test ./...", "IsDaemon": true})
+	ov, _ := res["overwrite"].(map[string]any)
+	cmdLine, _ := ov[cmdLineField].(string)
+	if res["decision"] != "allow" || !strings.Contains(cmdLine, "run --") || !strings.HasPrefix(cmdLine, "export "+guard.BackgroundEnv+"=1; ") {
+		t.Errorf("build rewrite: got %v", res)
+	}
+
+	// In scope, ordinary command -> {"decision":"ask"}.
+	res = runAgy(t, inRoot, map[string]any{cmdLineField: "git status"})
+	if res["decision"] != wantAsk {
+		t.Errorf("ordinary command: got %v, want decision=ask", res)
+	}
+}

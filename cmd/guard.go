@@ -275,7 +275,8 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	c.AddCommand(&cobra.Command{
+	var formatFlag string
+	preCmd := &cobra.Command{
 		Use:   "pretooluse",
 		Short: "The PreToolUse hook: GitHub writes outside the allowed organizations, builds into a slot, the kind lab limit, the merge gate, Secret reads, outbound secrets, questions via the guide, desktop sends by name, a repository's instructions on the first write",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
@@ -405,27 +406,57 @@ scope or not, before any other check.
 Register it in ~/.claude/settings.json:
 
   "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "hooks": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook pretooluse"}]}]`,
+    "command": "~/.go/bin/beekeeper hook pretooluse"}]}]
+
+And in ~/.gemini/config/hooks.json for agy:
+
+  {"beekeeper": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
+    "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			defer func() { _ = recover() }() // a broken hook must not block the tool call
-			raw, err := io.ReadAll(os.Stdin)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			switch formatFlag {
+			case claudeComm, "agy":
+			default:
+				return usageErr("--format=%q: want claude or agy", formatFlag)
+			}
+			isAgy := formatFlag == "agy"
+			w := a.out
+			if cmd.OutOrStdout() != os.Stdout {
+				w = cmd.OutOrStdout()
+			}
+			defer func() {
+				if recover() != nil && isAgy {
+					_, _ = w.Write(guard.PassAgy())
+				}
+			}() // a broken hook must not block the tool call
+			raw, err := io.ReadAll(cmd.InOrStdin())
 			if err != nil {
+				if isAgy {
+					_, _ = w.Write(guard.PassAgy())
+				}
 				return nil
 			}
 			cfgErr := a.loadConfig()
 			sandboxed := a.sandboxed(cfgErr)
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
 				// every session on the machine, the desk's or not
+				if isAgy {
+					_, _ = w.Write(guard.DecideUnsandboxedAgy(raw))
+					return nil
+				}
 				if out := guard.DecideUnsandboxed(raw); out != nil {
-					_, _ = a.out.Write(out)
+					_, _ = w.Write(out)
 				}
 				return nil
 			}
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
+				if isAgy {
+					_, _ = w.Write((guard.Hook{Sandbox: sandboxed}).DecideSandboxAgy(raw))
+					return nil
+				}
 				if out := (guard.Hook{Sandbox: sandboxed}).DecideSandbox(raw); out != nil {
-					_, _ = a.out.Write(out)
+					_, _ = w.Write(out)
 				}
 				return nil
 			}
@@ -453,12 +484,18 @@ Register it in ~/.claude/settings.json:
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
 			}
+			if isAgy {
+				_, _ = w.Write(h.DecideAgy(raw))
+				return nil
+			}
 			if out := h.Decide(raw); out != nil {
-				_, _ = a.out.Write(out)
+				_, _ = w.Write(out)
 			}
 			return nil
 		},
-	})
+	}
+	preCmd.Flags().StringVar(&formatFlag, "format", claudeComm, "hook payload and output format: claude or agy")
+	c.AddCommand(preCmd)
 	c.AddCommand(&cobra.Command{
 		Use:   "posttooluse",
 		Short: "The PostToolUse hook: a tool result carrying a secret value is redacted before the model sees it",
@@ -689,8 +726,13 @@ func (a *app) inScope(raw []byte) bool {
 		Session string `json:"session_id"`
 	}
 	_ = json.Unmarshal(raw, &ev)
-	if guard.Under(a.cfg.Hooks.Scope.Dirs, ev.CWD, os.Getenv("CLAUDE_PROJECT_DIR")) {
+	paths := append([]string{ev.CWD, os.Getenv("CLAUDE_PROJECT_DIR")}, guard.AgyPaths(raw)...)
+	if guard.Under(a.cfg.Hooks.Scope.Dirs, paths...) {
 		return true
+	}
+	session := ev.Session
+	if session == "" {
+		session = guard.AgySession(raw)
 	}
 	store, err := state.Open(a.cfg.StateDir)
 	if err != nil {
@@ -700,7 +742,7 @@ func (a *app) inScope(raw []byte) bool {
 	if err != nil {
 		return true
 	}
-	return st.Knows(state.Party{Session: ev.Session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
+	return st.Knows(state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
 }
 
 // verbHookRefused is the event of a command the upstream guard refused.

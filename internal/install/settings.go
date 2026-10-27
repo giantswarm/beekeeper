@@ -32,6 +32,11 @@ type hookCommand struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
+const (
+	hookTypeCommand = "command"
+	hookWord        = "hook"
+)
+
 // Hooks are the entries install adds for the binary exe: the guard before
 // every tool call it rewrites or refuses, the permission requests of the
 // agents beekeeper starts, the value scan of every tool result, and the
@@ -41,7 +46,7 @@ func Hooks(exe string) []Hook {
 		var b bytes.Buffer
 		enc := json.NewEncoder(&b)
 		enc.SetEscapeHTML(false)
-		_ = enc.Encode(hookEntry{Matcher: matcher, Hooks: []hookCommand{{Type: "command", Command: shellQuote(exe) + " hook " + sub, Timeout: timeout}}})
+		_ = enc.Encode(hookEntry{Matcher: matcher, Hooks: []hookCommand{{Type: hookTypeCommand, Command: shellQuote(exe) + " " + hookWord + " " + sub, Timeout: timeout}}})
 		return Hook{Event: event, Entry: bytes.TrimSpace(b.Bytes())}
 	}
 	return []Hook{
@@ -70,7 +75,7 @@ func command(entry json.RawMessage) []string {
 	var subs []string
 	for _, h := range e.Hooks {
 		f := strings.Fields(h.Command)
-		if len(f) == 3 && filepath.Base(strings.Trim(f[0], `'"`)) == project.Name && f[1] == "hook" {
+		if len(f) == 3 && filepath.Base(strings.Trim(f[0], `'"`)) == project.Name && f[1] == hookWord {
 			subs = append(subs, f[2])
 		}
 	}
@@ -206,6 +211,151 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 		p.add("update", e.Settings, "", func() error { return writeFile(e.Settings, raw) })
 	}
 	return nil
+}
+
+// AgyHook is the named hook entry install writes under project.Name in
+// agy's hooks.json (~/.gemini/config/hooks.json).
+func AgyHook(exe string) json.RawMessage {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(map[string][]hookEntry{
+		"PreToolUse": {{
+			Matcher: "*",
+			Hooks: []hookCommand{{
+				Type:    hookTypeCommand,
+				Command: shellQuote(exe) + " " + hookWord + " pretooluse --format agy",
+				Timeout: 30,
+			}},
+		}},
+	})
+	return bytes.TrimSpace(b.Bytes())
+}
+
+// agyHookBinary returns the binary path and timeout of an agy hook entry
+// that runs "<exe> hook pretooluse --format agy", or ("", 0) when raw is
+// not such an entry.
+func agyHookBinary(raw json.RawMessage) (string, int) {
+	var events map[string][]hookEntry
+	if json.Unmarshal(raw, &events) != nil {
+		return "", 0
+	}
+	list := events["PreToolUse"]
+	if len(list) != 1 || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
+		return "", 0
+	}
+	f := strings.Fields(list[0].Hooks[0].Command)
+	if len(f) == 5 && f[1] == hookWord && f[2] == "pretooluse" && f[3] == "--format" && f[4] == "agy" {
+		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
+	}
+	if len(f) == 4 && f[1] == hookWord && f[2] == "pretooluse" && f[3] == "--format=agy" {
+		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
+	}
+	return "", 0
+}
+
+// planAgyHooks writes or updates the project.Name entry in agy's hooks.json
+// when e.AgyHooks is set, leaving any other named hooks in that file
+// untouched.
+func (e Env) planAgyHooks(p *plan, m *Manifest) error {
+	if e.AgyHooks == "" {
+		return nil
+	}
+	s, err := readSettings(e.AgyHooks)
+	if err != nil {
+		return err
+	}
+	want := AgyHook(e.Exe)
+	what := e.AgyHooks + ": " + project.Name + " PreToolUse hook"
+	cur, ok := s.top.get(project.Name)
+	changed := false
+	switch {
+	case ok && sameJSON(cur, want):
+		p.add("ok", what, "", nil)
+	case ok && (len(m.AgyHook) > 0 && sameJSON(cur, m.AgyHook) || func() bool { exe, _ := agyHookBinary(cur); return exe == e.Exe }()):
+		s.top.set(project.Name, want)
+		m.AgyHook = want
+		changed = true
+		p.add("update", what, "", nil)
+	case ok:
+		p.add("keep", what, "a beekeeper hook with another command", nil)
+	default:
+		s.top.set(project.Name, want)
+		m.AgyHook = want
+		changed = true
+		p.add("add", what, "", nil)
+	}
+	if !changed {
+		return nil
+	}
+	if !s.existed {
+		m.AgyHooksCreated = true
+		m.addDirs(filepath.Dir(e.AgyHooks))
+	}
+	raw := s.encode()
+	p.add(map[bool]string{true: "update", false: "write"}[s.existed], e.AgyHooks, "", func() error {
+		return writeFile(e.AgyHooks, raw)
+	})
+	return nil
+}
+
+// planAgyUnhooks removes the project.Name entry install added to agy's
+// hooks.json, leaving any other named hooks in place.
+func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error {
+	if len(m.AgyHook) == 0 || e.AgyHooks == "" {
+		return nil
+	}
+	s, err := readSettings(e.AgyHooks)
+	if err != nil || !s.existed {
+		return err
+	}
+	cur, ok := s.top.get(project.Name)
+	if !ok || !sameJSON(cur, m.AgyHook) {
+		return nil
+	}
+	s.top.del(project.Name)
+	p.add("remove", e.AgyHooks+": "+project.Name+" PreToolUse hook", "", nil)
+	if m.AgyHooksCreated && len(s.top) == 0 {
+		removed[e.AgyHooks] = true
+		p.add("remove", e.AgyHooks, "", func() error { return os.Remove(e.AgyHooks) })
+	} else {
+		raw := s.encode()
+		p.add("update", e.AgyHooks, "", func() error { return writeFile(e.AgyHooks, raw) })
+	}
+	return nil
+}
+
+// CheckAgyHooks checks that agy's hooks.json at path holds the PreToolUse
+// entry for project.Name (running exe when exe is non-empty); it returns a
+// one-line finding for `beekeeper doctor`, or "" when healthy or path is
+// empty.
+func CheckAgyHooks(path, exe, home string) string {
+	if path == "" {
+		return ""
+	}
+	short := (&plan{home: home}).tilde
+	s, err := readSettings(path)
+	if err != nil {
+		return fmt.Sprintf("agy hooks: %s: %v; run `beekeeper install`", short(path), err)
+	}
+	if !s.existed {
+		return fmt.Sprintf("agy hooks: %s is missing; run `beekeeper install`", short(path))
+	}
+	cur, ok := s.top.get(project.Name)
+	if !ok {
+		return fmt.Sprintf("agy hooks: %s lacks the %s PreToolUse hook; run `beekeeper install`", short(path), project.Name)
+	}
+	if exe != "" && sameJSON(cur, AgyHook(exe)) {
+		return ""
+	}
+	gotExe, timeout := agyHookBinary(cur)
+	if gotExe == "" || timeout <= 0 {
+		return fmt.Sprintf("agy hooks: %s: the %s PreToolUse hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
+	}
+	if exe != "" && gotExe != exe {
+		return fmt.Sprintf("agy hooks: %s runs %s instead of %s; run `beekeeper install`", short(path), short(gotExe), short(exe))
+	}
+	return ""
 }
 
 // settings is a Claude Code settings file, its keys in their order, written

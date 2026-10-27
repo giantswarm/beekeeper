@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -15,8 +16,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // The doctor does by rule the chores the note queue used to ask a person
@@ -585,7 +588,9 @@ line:
   TITLE while it lasts;
 - reports a stale plugin: an enabled beekeeper plugin whose skills differ
   from the ones this binary embeds, with the plugin's version, the
-  binary's and the commands that update it (beekeeper self-update does).
+  binary's and the commands that update it (beekeeper self-update does);
+- checks the agy PreToolUse hook in ~/.gemini/config/hooks.json when agy is
+  installed.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay
@@ -627,6 +632,15 @@ faults but remedying none.`,
 			if ps, err := listPlugins(cmd.Context()); err == nil {
 				for _, s := range stalePlugins(ps) {
 					lines = append(lines, s.String())
+				}
+			}
+			if home, err := os.UserHomeDir(); err == nil {
+				var exe string
+				if p, err := os.Executable(); err == nil && filepath.Base(p) == project.Name {
+					exe, _ = filepath.Abs(p)
+				}
+				if line := checkAgyHooks(home, exe, exe != "" && hasAgy()); line != "" {
+					lines = append(lines, line)
 				}
 			}
 			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
@@ -731,4 +745,9 @@ func (w *watcher) sayChores(rep doctorReport) {
 // unarchived for want of the person's agreement.
 func unagreedLine(n int) string {
 	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set agents.archiveAgreement to the person's agreement for a steward to archive them", n)
+}
+
+// checkAgyHooks checks ~/.gemini/config/hooks.json when agy is installed.
+func checkAgyHooks(home, exe string, agyInstalled bool) string {
+	return install.CheckAgyHooks(agyHooksPath(home, agyInstalled), exe, home)
 }

@@ -121,14 +121,22 @@ func (u Upstream) scan(cmd, cwd string, depth int) *upstreamWrite {
 		return nil
 	}
 	sc := scanShell(cmd)
-	for _, sg := range sc.segments() {
+	for _, st := range walkSegments(sc, cwd, u.Git != nil) {
+		sg := st.seg
 		words := shellWords(sc.plain[sg.start:sg.end])
-		if len(words) > 1 && words[0] == "cd" {
-			cwd = resolve(cwd, words[1])
-		}
-		if w := u.write(words, cwd); w != nil {
+		if w := u.write(words, st.dir); w != nil {
 			w.command = strings.TrimSpace(cmd[sg.start:sg.end])
 			return w
+		}
+		if envCmd := envSplitCommand(words); envCmd != "" {
+			if w := u.scan(envCmd, st.dir, depth+1); w != nil {
+				return w
+			}
+		}
+		if flockCmd := flockCommand(words); flockCmd != "" {
+			if w := u.scan(flockCmd, st.dir, depth+1); w != nil {
+				return w
+			}
 		}
 		// A command string or here-document a shell runs is a command line
 		// of its own.
@@ -137,14 +145,14 @@ func (u Upstream) scan(cmd, cwd string, depth int) *upstreamWrite {
 		}
 		for _, arg := range words[1:] {
 			if strings.ContainsAny(arg, " \t\n") {
-				if w := u.scan(arg, cwd, depth+1); w != nil {
+				if w := u.scan(arg, st.dir, depth+1); w != nil {
 					return w
 				}
 			}
 		}
 		for _, h := range sc.heredocs {
 			if h.op >= sg.start && h.op < sg.end {
-				if w := u.scan(cmd[h.start:h.end], cwd, depth+1); w != nil {
+				if w := u.scan(cmd[h.start:h.end], st.dir, depth+1); w != nil {
 					return w
 				}
 			}

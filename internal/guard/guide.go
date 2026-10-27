@@ -103,13 +103,8 @@ func work(ev event) string {
 // commandWork is the first command in cmd that does work, at a command
 // position or inside a shell's -c string; "" when none does.
 func commandWork(cmd string) string {
-	if m := guideWork.FindStringSubmatch(cmd); m != nil {
-		return m[1]
-	}
-	for _, cs := range shellStrings(cmd) {
-		if w := commandWork(cs.text); w != "" {
-			return w
-		}
+	if m := commandMatch(guideWork, cmd, nil); m != nil {
+		return cmd[m[2]:m[3]]
 	}
 	return ""
 }
@@ -154,6 +149,10 @@ func parseQuestion(raw any) Question {
 	q.Text = strings.TrimSpace(q.Text)
 	opts, _ := m["options"].([]any)
 	for _, o := range opts {
+		if s, ok := o.(string); ok {
+			q.Options = append(q.Options, s)
+			continue
+		}
 		om, _ := o.(map[string]any)
 		label, _ := om["label"].(string)
 		desc, _ := om["description"].(string)

@@ -612,3 +612,113 @@ func TestReadsTheEarlierManifest(t *testing.T) {
 		t.Errorf("manifest %+v", m)
 	}
 }
+
+const priorAgyHooks = `{
+  "other-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/other-guard",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+`
+
+// Install writes and updates the beekeeper entry in agy's hooks.json without
+// touching other named hooks in that file; CheckAgyHooks checks it; uninstall
+// removes only beekeeper's entry (or the file when install created it and no
+// other hook remains).
+func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	write(t, e.AgyHooks, priorAgyHooks)
+
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "lacks the beekeeper PreToolUse hook") {
+		t.Fatalf("before install: CheckAgyHooks = %q", got)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(e.AgyHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"other-guard"`,
+		`"/usr/local/bin/other-guard"`,
+		`"beekeeper"`,
+		`"/opt/bin/beekeeper hook pretooluse --format agy"`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("hooks.json lacks %s:\n%s", want, raw)
+		}
+	}
+	if !strings.HasPrefix(string(raw), "{\n  \"other-guard\":") {
+		t.Errorf("hooks.json lost key order:\n%s", raw)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {
+		t.Errorf("after install: CheckAgyHooks = %q, want empty", got)
+	}
+	const updatedExe = "/updated/bin/beekeeper"
+	if got := CheckAgyHooks(e.AgyHooks, updatedExe, home); !strings.Contains(got, "runs /opt/bin/beekeeper instead of "+updatedExe) {
+		t.Errorf("wrong binary: CheckAgyHooks = %q", got)
+	}
+
+	// Updating to a new binary updates beekeeper's entry in place and keeps other-guard.
+	e.Exe, e.Spec.Exe = updatedExe, updatedExe
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "update  ~/.gemini/config/hooks.json: beekeeper PreToolUse hook") {
+		t.Errorf("update output:\n%s", out)
+	}
+	raw, _ = os.ReadFile(e.AgyHooks)
+	if strings.Contains(string(raw), "/opt/bin") || !strings.Contains(string(raw), updatedExe+" hook pretooluse --format agy") || !strings.Contains(string(raw), `"other-guard"`) {
+		t.Errorf("hooks.json after update:\n%s", raw)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {
+		t.Errorf("after update: CheckAgyHooks = %q, want empty", got)
+	}
+
+	// Uninstall removes beekeeper's entry and leaves other-guard intact.
+	if err := Uninstall(context.Background(), e, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(e.AgyHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != priorAgyHooks {
+		t.Errorf("after uninstall:\n%s\nwant:\n%s", raw, priorAgyHooks)
+	}
+
+	// Installing when hooks.json does not exist creates it, and uninstall removes it.
+	if err := os.Remove(e.AgyHooks); err != nil {
+		t.Fatal(err)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "is missing") {
+		t.Errorf("missing file: CheckAgyHooks = %q", got)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {
+		t.Errorf("fresh install: CheckAgyHooks = %q", got)
+	}
+	if err := Uninstall(context.Background(), e, true); err != nil {
+		t.Fatal(err)
+	}
+	if exists(e.AgyHooks) {
+		t.Errorf("uninstall left hooks.json it created")
+	}
+}
