@@ -121,7 +121,8 @@ func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]
 	changed := false
 	kept := st.Timers[:0]
 	for _, t := range st.Timers {
-		if !t.Auto() || t.Due.After(now) {
+		if !t.Auto() || t.Due.After(now) || (st.Stop != nil && t.Wake != "") {
+			// A wake timer due while beekeeper is stopped fires after the resume.
 			kept = append(kept, t)
 			continue
 		}

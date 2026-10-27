@@ -1017,6 +1017,32 @@ type State struct {
 	// RoleLines are lines for a role's holder that found none to tell: the
 	// role's next start says them.
 	RoleLines []RoleLine `json:"roleLines,omitempty"`
+	// Stop is the stop of every start, wake, revive, import and merge
+	// (beekeeper stop) while it stands; beekeeper resume lifts it.
+	Stop *Stop `json:"stop,omitempty"`
+
+	rest rest
+}
+
+// Stop is a standing beekeeper stop: who stopped the machine's sessions,
+// when and why, and what the stop changed, which beekeeper resume puts
+// back.
+type Stop struct {
+	Reason string    `json:"reason"`
+	By     Party     `json:"by"`
+	At     time.Time `json:"at"`
+	// Holds are the targets of the holds the stop set (merges, github); a
+	// full hold that stood before the stop is not among them and stays.
+	Holds []string `json:"holds,omitempty"`
+	// Replaced are the holds on those targets the stop's replaced: one that
+	// let a merge through, or that would have ended by itself while the
+	// stop stands (a time, a probe). Resume puts each back as it was.
+	Replaced []Hold `json:"replaced,omitempty"`
+	// Units are the installed units the stop stopped (the standby service,
+	// stop.units), which resume starts again.
+	Units []string `json:"units,omitempty"`
+	// Sessions are the names of the sessions the stop ended.
+	Sessions []string `json:"sessions,omitempty"`
 
 	rest rest
 }

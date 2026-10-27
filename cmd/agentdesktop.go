@@ -51,6 +51,9 @@ the agent.`,
 			// a background session has no desktop turn; the look at the
 			// claude daemon runs before the state's lock is taken
 			if st, err := a.store.Read(); err == nil {
+				if err := a.refuseStopped(st, "a desktop turn"); err != nil {
+					return err
+				}
 				if i, err := find(st); err == nil && a.backgroundAgent(cmd.Context(), st, st.Agents[i].Party) {
 					return refused("%s runs as a background session (agents.mode background): it has no desktop turn, Remote Control and claude attach show it", st.Agents[i].Name)
 				}
