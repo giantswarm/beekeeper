@@ -36,6 +36,8 @@ type capacityView struct {
 	// without memory pressure, the busy build slot a start without builds
 	// does not wait for.
 	Notes []string `json:"notes,omitempty"`
+	// Stopped says the standing beekeeper stop, which no --force passes.
+	Stopped string `json:"stopped,omitempty"`
 }
 
 // agentCount sorts the roster: busy with a task, parked (kept on purpose, a
@@ -282,6 +284,15 @@ func newCapacity(c agentCount, k config.Capacity, h *headroom, builds bool) *cap
 	return v
 }
 
+// stopped makes the verdict "no start" while the stop s stands.
+func (v *capacityView) stopped(a *app, s *state.Stop) *capacityView {
+	if s != nil {
+		v.Stopped = a.stopText(s)
+		v.Blocks, v.Room = append([]string{v.Stopped}, v.Blocks...), 0
+	}
+	return v
+}
+
 // verdict is the one-line answer: room for N starts, or what blocks one,
 // with the notes in parentheses.
 func (v *capacityView) verdict() string {
@@ -385,7 +396,9 @@ with beekeeper run's waiters. Without --builds the verdict is for a start that d
 filer, a dispatcher, a reviewer, a promoter proving a release read-only),
 which has no use for the slot: a busy slot is a note in parentheses after
 the verdict, never a "no start". The verdict is "room for N starts" up to
-the ceiling, or what blocks one, each guard that refuses named. agents
+the ceiling, or what blocks one, each guard that refuses named; while
+beekeeper stop stands it is "no start: beekeeper is stopped …" with the
+stop's reason. agents
 start judges its start the same way, --builds marking one that builds.
 capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
@@ -400,7 +413,7 @@ nothing; it makes no GitHub call.`,
 				return err
 			}
 			c := countAgents(st, sessions, a.now)
-			v := newCapacity(c, a.cfg.Capacity, a.readHeadroom(cmd.Context(), a.watchSwap()), builds)
+			v := newCapacity(c, a.cfg.Capacity, a.readHeadroom(cmd.Context(), a.watchSwap()), builds).stopped(a, st.Stop)
 			if a.json {
 				return a.printJSON(struct {
 					*capacityView
@@ -437,6 +450,8 @@ const buildsFlag = "builds"
 // for the event log.
 func gateStart(v *capacityView, force bool) (string, error) {
 	switch {
+	case v.Stopped != "":
+		return "", refused("%s", v.verdict())
 	case v.Room > 0:
 		return "", nil
 	case force:
@@ -533,7 +548,7 @@ func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, er
 		return nil, err
 	}
 	c := countAgents(st, sessions, a.now)
-	return newCapacity(c, a.cfg.Capacity, a.readHeadroom(ctx, a.watchSwap()), builds), nil
+	return newCapacity(c, a.cfg.Capacity, a.readHeadroom(ctx, a.watchSwap()), builds).stopped(a, st.Stop), nil
 }
 
 // onlySlot reports whether the busy build slot alone stops the start.
@@ -558,7 +573,7 @@ func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*cla
 	k := w.cfg.Capacity
 	c := countAgents(st, sessions, w.now)
 	busy := len(c.Busy)
-	if busy >= k.Floor && busy < k.Ceiling {
+	if (busy >= k.Floor && busy < k.Ceiling) || st.Stop != nil {
 		w.clear("capacity-low")
 		w.clear("capacity-full")
 		return

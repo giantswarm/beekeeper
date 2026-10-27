@@ -421,6 +421,13 @@ type startedAgent struct {
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return startedAgent{}, err
+	}
+	if err := a.refuseStopped(st, "starting "+sp.name); err != nil {
+		return startedAgent{}, err
+	}
 	dir, err := a.agentDir(sp.dir)
 	if err != nil {
 		return startedAgent{}, err
@@ -1024,6 +1031,10 @@ func (a *app) detachReopen(arg string) error {
 		return err
 	}
 	id := strings.TrimPrefix(arg, "local_")
+	if s := a.readStop(); s != nil {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(s))
+		return err
+	}
 	unit := reopenUnit(id)
 	if err := a.launchReopen(unit, dir, arg, ownUnit()); err != nil {
 		name := id
@@ -1050,6 +1061,10 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 	id := strings.TrimPrefix(arg, "local_")
 	st, err := a.store.Read()
 	if err != nil {
+		return err
+	}
+	if st.Stop != nil {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(st.Stop))
 		return err
 	}
 	name, ok := reopens(st, arg)

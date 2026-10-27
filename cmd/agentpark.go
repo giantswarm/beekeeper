@@ -498,7 +498,7 @@ func markResumable(st *state.State, settled []settledPark, auto bool, now time.T
 // whose park is resumable; a resume that fails is a line, and the agent
 // stays parked for the next poll or agents resume.
 func (w *watcher) autoResume(ctx context.Context, st *state.State) {
-	if !w.cfg.Agents.AutoResume {
+	if !w.cfg.Agents.AutoResume || st.Stop != nil {
 		return
 	}
 	for _, ag := range st.Agents {
