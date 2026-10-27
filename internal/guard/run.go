@@ -126,6 +126,32 @@ func DefaultClass(argv []string) string {
 	return ClassBuild
 }
 
+// noopCommands build nothing whatever their arguments.
+var noopCommands = strings.Fields("true false echo printf")
+
+// BuildsNothing reports whether argv cannot build: one simple command, with
+// no operator, redirection or substitution, that is a no-op (true, false,
+// echo, printf) or only prints its help or version (helpOnly). Such a run
+// needs neither a build slot nor a cap.
+func BuildsNothing(argv []string) bool {
+	cmd := strings.TrimSpace(shellCommand(argv))
+	if cmd == "" || strings.ContainsAny(cmd, ";&|<>()`$\n") {
+		return false
+	}
+	words := invocation(cmd)
+	if len(words) == 0 {
+		return false
+	}
+	return slices.Contains(noopCommands, filepath.Base(words[0])) || helpOnly(cmd, 0)
+}
+
+// Exec replaces this process with argv, uncapped and slotless, for a
+// command that builds nothing (BuildsNothing); it returns only when argv
+// cannot run.
+func Exec(argv []string, stderr io.Writer) int {
+	return execve(argv, func(format string, a ...any) { _, _ = fmt.Fprintf(stderr, LogPrefix+format+"\n", a...) })
+}
+
 // MemcapSlice is the slice every capped run sits under; a run that takes no
 // slot sits in it directly, under its own cap.
 const MemcapSlice = "memcap.slice"
