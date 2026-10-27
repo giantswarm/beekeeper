@@ -76,9 +76,11 @@ merge at the next poll. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
 that wakes it). Fewer busy agents than capacity.floor, with the headroom
-for a start, is one CAPACITY LOW line, and capacity.ceiling reached one
-CAPACITY FULL line, each with the headroom (beekeeper capacity) and one
-ENDED line when the count recovers. A reopen that waits to show an agent in the desktop (the
+for a start, is one CAPACITY LOW line, and a positive capacity.ceiling
+reached one CAPACITY FULL line, each with the headroom (beekeeper capacity)
+and one ENDED line when the count recovers; capacity.ceiling of 0 suppresses
+both CAPACITY LOW and CAPACITY FULL (capacity.floor of 0 suppresses CAPACITY
+LOW). A reopen that waits to show an agent in the desktop (the
 window has the person's focus) is one IMPORT WAITS line per wait, with
 what it waits for and until when. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,

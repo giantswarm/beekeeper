@@ -1838,8 +1838,9 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   refuses a start whose verdict has no room (exit 3, the guards named, no session created) unless
   `--force`, which starts it and records the verdict overridden (`agents.start` in the log).
   `watch` says `CAPACITY LOW <busy> of <floor>` once while busy stays under the
-  floor with room for a start, and `CAPACITY FULL <busy> of <ceiling>` at the ceiling, each with
-  the headroom line and one `ENDED` line when the count recovers. The `handover --prompt` carries
+  floor with room for a start, and `CAPACITY FULL <busy> of <ceiling>` at a positive ceiling, each with
+  the headroom line and one `ENDED` line when the count recovers; a ceiling of 0 suppresses both
+  `CAPACITY LOW` and `CAPACITY FULL` (a floor of 0 suppresses `CAPACITY LOW`). The `handover --prompt` carries
   the count, `status` shows `busy <n>/<floor>-<ceiling>`.
 
 The command-line send is one headless `claude -p` turn whose only tool is SendMessage, addressed

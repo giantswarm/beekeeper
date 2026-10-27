@@ -456,12 +456,26 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 		return &app{cfgPath: cfgPath, cfg: c, store: store, now: keepNow, out: &out, as: agentOne, json: jsonOut}, &out
 	}
 
+	const (
+		floorKey        = "capacity.floor"
+		ceilingKey      = "capacity.ceiling"
+		verbAgentsStart = "agents.start"
+		lowTwoOfFive    = "CAPACITY LOW 2 of 5"
+	)
+	setCap := func(path, floor, ceiling string, extra ...config.Setting) {
+		t.Helper()
+		settings := append([]config.Setting{{Key: floorKey, Value: floor}, {Key: ceilingKey, Value: ceiling}}, extra...)
+		if _, err := config.Set(path, settings); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	aUnset, outUnset := openApp(false)
 	if err := aUnset.capacityCmd().Execute(); err != nil || !strings.Contains(outUnset.String(), "0 busy of floor 5, ceiling 10") || !strings.Contains(outUnset.String(), "room for 10 starts\n") {
 		t.Fatalf("unset capacity = %q, %v", outUnset.String(), err)
 	}
 	cfgCmd := aUnset.configCmd()
-	cfgCmd.SetArgs([]string{"set", "capacity.floor", "0", "capacity.ceiling", "0"})
+	cfgCmd.SetArgs([]string{"set", floorKey, "0", ceilingKey, "0"})
 	if err := cfgCmd.Execute(); err != nil {
 		t.Fatalf("config set 0 = %v", err)
 	}
@@ -480,33 +494,119 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	startCmd := aZero.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs([]string{"Worker 1", brief, "--dir", dir})
+	startCmd.SetArgs([]string{busyOne, brief, "--dir", dir})
 	if err := startCmd.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), noStartCeilingZero) {
 		t.Errorf("agents start at ceiling 0 = exit %d (%v), want ExitRefused naming ceiling 0", Code(err), err)
 	}
-	if over, err := aZero.startGate(context.Background(), "Worker 1", false, true); err != nil || over != noStartCeilingZero {
-		t.Errorf("startGate --force at ceiling 0 = %q, %v", over, err)
+
+	// agents start --force goes through agentStartCmd and logs the overridden
+	// ceiling-0 verdict in the store.
+	stubBackground(t, "backgrounded · "+bgShortID+" · "+busyOne+"\n", bgSession{ID: bgShortID, SessionID: bgID, Name: busyOne})
+	outZero.Reset()
+	forceCmd := aZero.agentStartCmd()
+	forceCmd.SilenceErrors = true
+	forceCmd.SilenceUsage = true
+	forceCmd.SetArgs([]string{busyOne, brief, "--dir", dir, modeFlag, config.ModeBackground, "--force"})
+	if err := forceCmd.Execute(); err != nil {
+		t.Fatalf("agents start --force at ceiling 0 = %v", err)
+	}
+	wantOverLine := "started over " + noStartCeilingZero + " (--force)"
+	if !strings.Contains(outZero.String(), wantOverLine+"\n") {
+		t.Errorf("agents start --force output = %q, want %q", outZero.String(), wantOverLine)
+	}
+	evs, err := aZero.store.Events(0, func(e state.Event) bool { return e.Verb == verbAgentsStart })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(evs, func(e state.Event) bool { return strings.Contains(e.Detail, busyOne+": "+wantOverLine) }) {
+		t.Errorf("agents.start events = %+v, want %q", evs, busyOne+": "+wantOverLine)
 	}
 
-	// Watch: ceiling 0 clears open capacity conditions and reads no headroom;
-	// floor 0 with a positive ceiling stays silent at 0 busy.
-	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	// A queued agents start --builds reloads Capacity from cfgPath when its
+	// slot turn arrives, catching a ceiling: 0 written while it waited; it
+	// also passes the reloaded Capacity to readHeadroom.
+	setCap(cfgPath, "5", "10")
+	aQueued, _ := openApp(false)
+	// Clear the forced worker so 0 agents are busy when the build start enters.
+	if err := aQueued.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	holdSlots(t, filepath.Join(dir, "memcap"))
+	vInitial, err := aQueued.startCapacity(context.Background(), true)
+	if err != nil || !vInitial.onlySlot() {
+		t.Fatalf("initial build start = %+v, %v; want onlySlot", vInitial, err)
+	}
+	_, err = queueStart(vInitial, true, false, "8m",
+		func() (bool, int, error) {
+			_, serr := config.Set(cfgPath, []config.Setting{
+				{Key: floorKey, Value: "0"},
+				{Key: ceilingKey, Value: "0"},
+				{Key: "capacity.availMinMiB", Value: "61440"},
+			})
+			return serr == nil, 0, serr
+		},
+		func() (*capacityView, error) { return aQueued.startCapacity(context.Background(), false) })
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), noStartCeilingZero) || !strings.Contains(err.Error(), "MemAvailable 45.0 GiB under 60 GiB") {
+		t.Errorf("queued start after config set ceiling 0 = exit %d (%v), want ceiling 0 and reloaded availMinMiB", Code(err), err)
+	}
+
+	// Watch: reloads Capacity from watchCfg on each poll without mutating
+	// w.cfg; ceiling 0 clears open capacity conditions and suppresses new ones,
+	// a watcher started at ceiling 0 resumes emitting once a positive ceiling
+	// is restored, and floor 0 with a positive ceiling stays silent at 0 busy.
+	watchDir := t.TempDir()
+	watchCfg := filepath.Join(watchDir, "config.yaml")
+	w, _, out := notifyingWatch(t, watchDir, false)
+	w.cfgPath = watchCfg
 	reads := 0
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { reads++; return roomy() }
 	w.capacity(context.Background(), supervised(2), nil)
-	if !strings.Contains(out.String(), "CAPACITY LOW 2 of 5") || reads != 1 {
+	if !strings.Contains(out.String(), lowTwoOfFive) || reads != 1 {
 		t.Fatalf("before ceiling 0 (reads %d):\n%s", reads, out)
 	}
 	out.Reset()
-	w.cfg.Capacity = zero
+	setCap(watchCfg, "0", "0")
 	w.capacity(context.Background(), supervised(0), nil)
-	if !strings.Contains(out.String(), "ENDED CAPACITY LOW 2 of 5") || strings.Contains(out.String(), "CAPACITY FULL") || reads != 1 {
-		t.Fatalf("at ceiling 0 (reads %d):\n%s", reads, out)
+	if !strings.Contains(out.String(), "ENDED "+lowTwoOfFive) || strings.Contains(out.String(), "CAPACITY FULL") || reads != 1 {
+		t.Fatalf("at ceiling 0 with 0 busy (reads %d):\n%s", reads, out)
+	}
+	if w.cfg.Capacity.Ceiling != config.DefaultCeiling {
+		t.Errorf("w.cfg.Capacity mutated to %+v", w.cfg.Capacity)
 	}
 	out.Reset()
-	w.cfg.Capacity = config.Capacity{Floor: 0, Ceiling: 10}
+	w.capacity(context.Background(), supervised(2), nil)
+	if out.Len() != 0 || reads != 1 {
+		t.Fatalf("at ceiling 0 with 2 busy (reads %d):\n%s", reads, out)
+	}
+
+	// A watcher started at ceiling 0 speaks once watchCfg restores a positive ceiling.
+	wFromZero, _, outFromZero := notifyingWatch(t, t.TempDir(), false)
+	wFromZero.cfg.Capacity = zero
+	wFromZero.cfgPath = watchCfg
+	fromZeroReads := 0
+	wFromZero.readHeadroom = func(context.Context, *swapReading) *headroom { fromZeroReads++; return roomy() }
+	wFromZero.capacity(context.Background(), supervised(2), nil)
+	if outFromZero.Len() != 0 || fromZeroReads != 0 {
+		t.Fatalf("started at ceiling 0 (reads %d):\n%s", fromZeroReads, outFromZero)
+	}
+	setCap(watchCfg, "5", "10")
+	wFromZero.capacity(context.Background(), supervised(2), nil)
+	if !strings.Contains(outFromZero.String(), lowTwoOfFive) || fromZeroReads != 1 {
+		t.Fatalf("after restoring positive ceiling (reads %d):\n%s", fromZeroReads, outFromZero)
+	}
+
+	out.Reset()
+	setCap(watchCfg, "0", "10")
 	w.capacity(context.Background(), supervised(0), nil)
 	if out.Len() != 0 || reads != 1 {
 		t.Fatalf("at floor 0, ceiling 10 with 0 busy (reads %d):\n%s", reads, out)
+	}
+
+	// A broken configuration file falls back to w.cfg.Capacity.
+	if err := os.WriteFile(watchCfg, []byte("capacity: ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := wFromZero.liveCapacity(); got != zero {
+		t.Errorf("liveCapacity on broken file = %+v, want fallback %+v", got, zero)
 	}
 }
