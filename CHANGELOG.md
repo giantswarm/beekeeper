@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The worker rules and the `beekeeper:merge` skill give a branch behind its base the same rule: it merges its base and pushes, never on a rebase line, where the gate rebases it at its turn. `beekeeper gate` refuses a `--rebase` merge whose pull request carries a merge commit (exit 77), before it takes a lane place and again at its turn, naming the replacement PR ([#1548](https://github.com/giantswarm/beekeeper/issues/1548)).
 - `beekeeper run` without `--class` runs a command that cannot build at once, uncapped and outside the build slot queue: a single `true`, `false`, `echo` or `printf`, or a command that only prints its help or version (`go version`, `make help`, `kubectl --help`). It waited for a build slot like a build ([#919](https://github.com/giantswarm/beekeeper/issues/919)).
 
 ### Changed

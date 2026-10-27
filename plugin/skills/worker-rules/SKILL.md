@@ -3,9 +3,9 @@ name: worker-rules
 description: The core rules of a worker on a beekeeper desk — the report, the supervisor, problems found, questions, secrets, git. Load at the start of every task a supervisor hands out; `agents start` sends them as the first message.
 ---
 
-# worker-rules — how a worker on a beekeeper desk works its task
+# worker-rules — a worker on a beekeeper desk
 
-A worker works one task to the finish. The desk's CLAUDE.md and rules win where stricter.
+A worker works one task to the finish. The desk's stricter CLAUDE.md and rules win.
 
 - **Goal.** Merged, released, rolled and proven live, in one report (PR links, versions, proof, what is open, live facts, "Problems found") by `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each finding, or `none`).
 - **The board holds the order**: priority, holds, plans, answers; next task: `board next`.
@@ -15,7 +15,7 @@ A worker works one task to the finish. The desk's CLAUDE.md and rules win where 
 - **Our own Apps** (`beekeeper app`): settings, installs and consents are the worker's `beekeeper browse` job, never the person's; a consent as the person to another's App needs their word.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys and metadata only. Every cluster call names its context or kubeconfig; never a write to `kube.production`.
 - **Alerts.** Post-roll and proof checks read `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts snapshot`, never Alertmanager or Mimir.
-- **Git.** No force push, not `--force-with-lease`: a branch behind its base merges it and pushes. Work in your worktree; no `git stash`: commit waiting work.
+- **Git.** No force push, not `--force-with-lease`: a behind branch merges its base and pushes, never on a rebase line. Work in your worktree; no `git stash`: commit waiting work.
 - **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects` or a main checkout; `cd "${dir:?}"`, `>|`.
 - **No polling**: no `--watch` or sleep loop; `devctl pr wait|merge` block, never under `timeout`; an agentlab proof only waits: never under `beekeeper run`.
 - **Nothing left running** (port-forward, monitor, background wait); kill by captured PID, a gated run by `beekeeper gate stop`. Nothing hard-deleted: move it aside.

@@ -181,7 +181,7 @@ func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 // Every gated merge line a shipped skill shows passes --update-branch: from
 // devctl 8.140.0 a head behind its base is exit 3 without it, strict
 // protection or not. The merge skill says what an exit 3 that still says
-// behind gets.
+// behind gets: the behind rule.
 func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	line := regexp.MustCompile("`devctl pr merge [^`]+`")
 	err := fs.WalkDir(Skills, SkillsDir, func(path string, d fs.DirEntry, err error) error {
@@ -206,8 +206,7 @@ func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	for _, want := range []string{
 		"`devctl pr merge <owner/repo> <n> --update-branch`",
 		"`--rebase --update-branch`",
-		`3 still "behind"`,
-		"merge the base into the branch, push, the same merge once more",
+		`3 still "behind": as below, then the same merge again`,
 	} {
 		if !strings.Contains(merge, want) {
 			t.Errorf("the merge skill does not say %q", want)
@@ -223,6 +222,21 @@ func TestRoleSkillsAreHiddenFromTheModel(t *testing.T) {
 		front, _, _ := strings.Cut(strings.TrimPrefix(string(SkillFile(name)), "---\n"), "\n---\n")
 		if !slices.Contains(strings.Split(front, "\n"), "disable-model-invocation: true") {
 			t.Errorf("%s/SKILL.md lacks disable-model-invocation: true:\n%s", name, front)
+		}
+	}
+}
+
+// behindRule is what a branch behind its base gets, per merge method: a
+// rebase line's history stays linear, the gate rebasing the branch.
+const behindRule = "a behind branch merges its base and pushes, never on a rebase line"
+
+// The worker rules and the merge skill give a branch behind its base the
+// same rule, word for word.
+func TestWorkerRulesAndMergeSkillShareTheBehindRule(t *testing.T) {
+	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	for name, text := range map[string]string{"the worker rules": WorkerRules(), "the merge skill": Skill("merge")} {
+		if !strings.Contains(words(text), behindRule) {
+			t.Errorf("%s do not say %q", name, behindRule)
 		}
 	}
 }

@@ -953,11 +953,12 @@ func conflictWhy(r github.Rebase) string {
 const replacementPR = "Open a replacement PR (a fresh branch from the base with the change applied again; never merge the base into a branch), then merge that one"
 
 // checkRebase refuses a rebase merge GitHub reports conflicting with its
-// base before it takes a lane place: devctl would refuse it only at its turn
-// (exit 3, "This branch can't be rebased"), and a base merged into the
-// branch hides the conflict from the pull request. GitHub not answering
-// refuses; a rebase GitHub has not computed after rebaseReads reads queues,
-// devctl judging it at its turn.
+// base, or whose head carries a merge commit, before it takes a lane place:
+// devctl would refuse the first only at its turn (exit 3, "This branch can't
+// be rebased"), and a base merged into the branch hides the conflict from
+// the pull request and breaks the line's linear history. GitHub not
+// answering refuses; a rebase GitHub has not computed after rebaseReads
+// reads queues, devctl judging it at its turn.
 func (g *gateRun) checkRebase() error {
 	r, err := g.readRebase()
 	switch {
@@ -969,7 +970,36 @@ func (g *gateRun) checkRebase() error {
 	case !r.Known:
 		gateLine("GitHub has not computed whether %s rebases (mergeable_state %s): it queues, devctl judges the rebase at its turn", g.key(), cmp.Or(r.State, unknownState))
 	}
+	merges, err := g.readMergeCommits()
+	switch {
+	case err != nil:
+		return g.refuse("whether %s carries a merge commit cannot be read (%v): run the same command again", g.key(), err)
+	case len(merges) > 0:
+		return g.refuse("%s carries %s: a rebase merge puts it on the line, so it takes no lane place. %s", g.key(), mergeCommitsWhy(merges), replacementPR)
+	}
 	return nil
+}
+
+// readMergeCommits reads the pull request's commits with more than one
+// parent.
+func (g *gateRun) readMergeCommits() ([]string, error) {
+	var merges []string
+	err := g.readRetrying("the commits of "+g.key(), func() (err error) {
+		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+		defer cancel()
+		merges, err = pullMergeCommits(ctx, g.repo, g.pr)
+		return err
+	})
+	return merges, err
+}
+
+// mergeCommitsWhy names a pull request's merge commits.
+func mergeCommitsWhy(merges []string) string {
+	short := make([]string, len(merges))
+	for i, m := range merges {
+		short[i] = shortSHA(m)
+	}
+	return "merge commit " + strings.Join(short, ", ")
 }
 
 // reviewHold reads the pull request's reviews and comments afresh
@@ -1016,8 +1046,14 @@ func (g *gateRun) checkReviews(refuse func(code int, format string, args ...any)
 // base in), the gate awaits the new head, and devctl, the only merger, runs
 // on it and waits for its checks. A merge that conflicts by now, or that
 // GitHub does not rebase, is refused with nothing merged; one GitHub does
-// not answer for runs as it stands, devctl judging it.
+// not answer for runs as it stands, devctl judging it. A head that carries
+// a merge commit by now is refused too.
 func (g *gateRun) catchUp() error {
+	if merges, err := g.readMergeCommits(); err != nil {
+		gateLine("whether %s carries a merge commit cannot be read (%v): devctl judges it as it stands", g.key(), err)
+	} else if len(merges) > 0 {
+		return g.refuseRunning("its turn came, and %s carries %s, which a rebase merge puts on the line; nothing merged. %s", g.key(), mergeCommitsWhy(merges), replacementPR)
+	}
 	r, err := g.readRebase()
 	switch {
 	case err != nil:
