@@ -80,7 +80,14 @@ for a start, is one CAPACITY LOW line, and a positive capacity.ceiling
 reached one CAPACITY FULL line, each with the headroom (beekeeper capacity)
 and one ENDED line when the count recovers; capacity.ceiling of 0 suppresses
 both CAPACITY LOW and CAPACITY FULL (capacity.floor of 0 suppresses CAPACITY
-LOW). A reopen that waits to show an agent in the desktop (the
+LOW). When capacity.usage.command is configured, the watch refreshes the
+subscription's 5-hour and 7-day usage windows every capacity.usage.every
+(default 5m, and once resetsAt passes), prints one USAGE line every
+capacity.usage.reportEvery (default 30m, negative turns it off, and once on
+watch --once), and once the 5-hour window reaches capacity.usage.highPercent
+(default 95%) emits USAGE HIGH once (and ENDED USAGE HIGH once reset), tells
+each running busy worker once per window episode to finish its step and
+park, and holds auto-resume until fiveHour.resetsAt. A reopen that waits to show an agent in the desktop (the
 window has the person's focus) is one IMPORT WAITS line per wait, with
 what it waits for and until when. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
@@ -405,10 +412,14 @@ type watcher struct {
 	// strained is the machine sample's verdict that the CPU is saturated:
 	// the installation reads slow down (READS SLOWED).
 	strained atomic.Bool
-	// settling and budgeting are set while a lane read or a budget probe
-	// runs: the next poll skips it instead of queueing a second one.
-	settling, budgeting atomic.Bool
-	lastSettle          time.Time
+	// settling, budgeting and usageBusy are set while a lane read, a budget
+	// probe or a subscription usage read runs: the next poll skips it instead
+	// of queueing a second one.
+	settling, budgeting, usageBusy atomic.Bool
+	lastSettle                     time.Time
+	lastUsage                      time.Time
+	usageErr                       string
+	usageReported                  time.Time
 	// sinkPending are the events of the sink's verbs within sink.Window,
 	// sinking is set while their dispatch runs, sinkLedger claims each one
 	// once across the machine's watches.
@@ -874,9 +885,10 @@ type condition struct {
 // same caller must not say again: the conditions open (it says only their
 // end) and the one-time events (runaways, stale leases).
 type watchMark struct {
-	Conditions map[string]condition `json:"conditions"`
-	Reported   map[string]bool      `json:"reported"`
-	FeedID     string               `json:"feedID,omitempty"`
+	Conditions    map[string]condition `json:"conditions"`
+	Reported      map[string]bool      `json:"reported"`
+	FeedID        string               `json:"feedID,omitempty"`
+	UsageReported time.Time            `json:"usageReported,omitzero"`
 }
 
 // newWatcher is a watch; one that keeps a mark resumes its caller's last
@@ -900,6 +912,7 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 			maps.Copy(w.active, m.Conditions)
 			maps.Copy(w.reported, m.Reported)
 			w.feedID = m.FeedID
+			w.usageReported = m.UsageReported
 		}
 	}
 	return w
@@ -913,7 +926,7 @@ func (w *watcher) saveMark() {
 		return
 	}
 	w.dirty = false
-	_ = w.store.WriteFile(w.markFile, watchMark{Conditions: w.active, Reported: w.reported, FeedID: w.feedID})
+	_ = w.store.WriteFile(w.markFile, watchMark{Conditions: w.active, Reported: w.reported, FeedID: w.feedID, UsageReported: w.usageReported})
 }
 
 // notify sends one event that needs a person (--notify): a lasting kind
@@ -1827,7 +1840,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.sayStop(st)
 	w.noteAnswers(st)
 	w.refusals()
-	if w.chores {
+	u := w.watchUsage(ctx, st, sessions)
+	if w.chores && (u == nil || !u.High) {
 		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
 	}
 	if st.Stop == nil {

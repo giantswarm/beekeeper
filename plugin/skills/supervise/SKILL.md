@@ -33,12 +33,13 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   for), `kube.production`, `alerts.installations`, `lanes`, `merge`, the `watch` thresholds and
   `memcap`. `beekeeper snapshot` is the tick: load, RAM, swap, the desktop scope, tmpfs and disk,
   build slots, kind clusters, the commands sessions sit on with their owner, every kernel OOM kill
-  since the last snapshot with whose limit it hit, leases, holds, the GitHub budget and the
+  since the last snapshot with whose limit it hit, leases, holds, the GitHub budget (and
+  subscription usage windows when `capacity.usage.command` is set) and the
   installations' alerts, ending with what changed since the last tick. `beekeeper watch` is the
   `Monitor` source: silent until something needs a look — thresholds, OOM kills, sessions that
   start, end or restart, stale leases, `RUNAWAY` sessions, `LANE STALLED`, notes and timers falling
   due, the end of a session with a record, `RELAY DUE`, a relay taken or expired, `HANDOVER DUE
-  "<agent>"`, `UPGRADE` and `UPGRADE ENDED`, `WATCH STALE` (re-arm that watch), and
+  "<agent>"`, `USAGE` and `USAGE HIGH` / `ENDED USAGE HIGH`, `UPGRADE` and `UPGRADE ENDED`, `WATCH STALE` (re-arm that watch), and
   `ALERT NEW|RESOLVED|FLAPPING`. It runs as `beekeeper watch --notify`, so what needs the person
   also reaches their desktop, armed with a
   30-minute timeout and re-armed on every expiry: the expiry is the half-hourly tick.
@@ -117,7 +118,7 @@ The rest of the role is in this skill's `references/` folder, each file read whe
 and all of them at the first tick:
 
 - `references/scheduling.md`: `capacity.floor` to `capacity.ceiling` busy agents (`5` and `10`
-  when unset; waiting ones hold no slot), the board,
+  when unset, or derived from `capacity.usage` windows; waiting ones hold no slot), the board,
   a worker for every ranked epic with open work, a fresh worker per task, the epics reported at a
   session's end. Read before filling free slots.
 - `references/merges-and-collisions.md`: merges, holds, lanes and hand-overs by name, sessions that

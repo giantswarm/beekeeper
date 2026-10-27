@@ -16,7 +16,14 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   `capacity.ceiling` is `0`, `capacity` says `no start: ceiling 0`, `agents start` refuses without
   `--force`, and the watch suppresses both `CAPACITY LOW` and `CAPACITY FULL` (`capacity.floor` of
   `0` suppresses `CAPACITY LOW`; unset `capacity.floor` and `capacity.ceiling` default to `5` and
-  `10`). Until the verdict allows a start the supervisor starts nothing, an unstaffed epic included
+  `10`). When `capacity.usage.command` is configured, beekeeper derives `floor` and `ceiling` from
+  the subscription's 5-hour and 7-day usage bands, prints `USAGE` on the watch every
+  `capacity.usage.reportEvery` (30m by default), and at `capacity.usage.highPercent` (95% by
+  default) on the 5-hour window emits `USAGE HIGH`, tells running busy workers once to finish their
+  step and park, and holds unforced `agents start`, `agents resume` and `autoResume` until
+  `fiveHour.resetsAt`; on `ENDED USAGE HIGH`, `autoResume` resumes settled `--on` parks and the
+  supervisor resumes workers parked on the 5-hour usage window reset within the restored capacity
+  verdict. Until the verdict allows a start the supervisor starts nothing, an unstaffed epic included
   (below). At every tick below `capacity.floor`, the supervisor fills the free slots in the same
   turn, within the memory guards (`MemAvailable` well above the watch's floor, machine swap not
   growing, a free build slot, the kind clusters under `maxKindClusters`), and never starts past

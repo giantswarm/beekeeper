@@ -24,9 +24,10 @@ import (
 // agents against the target, the headroom a new start needs and the verdict.
 type capacityView struct {
 	agentCount
-	Floor    int       `json:"floor"`
-	Ceiling  int       `json:"ceiling"`
-	Headroom *headroom `json:"headroom"`
+	Floor    int        `json:"floor"`
+	Ceiling  int        `json:"ceiling"`
+	Usage    *usageView `json:"usage,omitempty"`
+	Headroom *headroom  `json:"headroom"`
 	// Builds says the start judged builds: the build slot is then one of
 	// its guards.
 	Builds bool `json:"builds"`
@@ -292,6 +293,29 @@ func newCapacity(c agentCount, k config.Capacity, h *headroom, builds bool) *cap
 	return v
 }
 
+// withUsage attaches u to v and replaces or prepends the usage block when
+// subscription usage is unreadable or USAGE HIGH holds.
+func (v *capacityView) withUsage(u *usageView, now time.Time) *capacityView {
+	if u == nil {
+		return v
+	}
+	v.Usage = u
+	switch {
+	case u.Error != "":
+		v.Blocks = append([]string{"subscription usage unknown (" + u.Error + ")"}, v.Blocks...)
+		v.Room = 0
+	case u.High:
+		block := u.highBlock(now)
+		if len(v.Blocks) > 0 && v.Blocks[0] == ceilingZero {
+			v.Blocks[0] = block
+		} else {
+			v.Blocks = append([]string{block}, v.Blocks...)
+		}
+		v.Room = 0
+	}
+	return v
+}
+
 // stopped makes the verdict "no start" while the stop s stands.
 func (v *capacityView) stopped(a *app, s *state.Stop) *capacityView {
 	if s != nil {
@@ -386,7 +410,15 @@ func (a *app) capacityCmd() *cobra.Command {
 capacity.ceiling; unset, 5 and 10) and say whether a new start fits. A
 configured capacity.ceiling of 0 stops new starts ("no start: ceiling 0")
 and suppresses CAPACITY LOW and CAPACITY FULL in the watch; capacity.floor
-of 0 suppresses CAPACITY LOW. Busy is a roster agent
+of 0 suppresses CAPACITY LOW. When capacity.usage.command is configured,
+beekeeper reads the subscription's 5-hour and 7-day usage windows (cached
+for capacity.usage.every, default 5m, and re-read once resetsAt passes),
+derives floor and ceiling from capacity.usage.fiveHour and
+capacity.usage.sevenDay (taking the lower floor and ceiling when both have
+bands), prints the windows on the capacity line and under usage in --json,
+and refuses unforced starts with "no start: usage high: …" once the 5-hour
+window reaches capacity.usage.highPercent (default 95%) until
+fiveHour.resetsAt. Busy is a roster agent
 with a task that is neither parked, kept nor waiting: an agent kept on
 purpose (agents keep), one a timer wakes and one whose session waits on its
 person are parked; one whose session runs only waits (a sleep or a polling
@@ -436,8 +468,8 @@ nothing; it makes no GitHub call.`,
 				return err
 			}
 			c := countAgents(st, sessions, a.now)
-			k := a.liveCapacity()
-			v := newCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds).stopped(a, st.Stop)
+			k, u := a.resolveUsage(cmd.Context(), a.liveCapacity())
+			v := newCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds).withUsage(u, a.now).stopped(a, st.Stop)
 			if a.json {
 				return a.printJSON(struct {
 					*capacityView
@@ -445,7 +477,11 @@ nothing; it makes no GitHub call.`,
 				}{v, v.verdict()})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-			p("capacity: %s", c.line(k))
+			capLine := c.line(k)
+			if u != nil {
+				capLine += "; " + u.capacitySuffix(a.now)
+			}
+			p("capacity: %s", capLine)
 			if len(c.Parked) > 0 {
 				p("parked: %s", strings.Join(c.Parked, ", "))
 			}
@@ -572,8 +608,8 @@ func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, er
 		return nil, err
 	}
 	c := countAgents(st, sessions, a.now)
-	k := a.liveCapacity()
-	return newCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds).stopped(a, st.Stop), nil
+	k, u := a.resolveUsage(ctx, a.liveCapacity())
+	return newCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds).withUsage(u, a.now).stopped(a, st.Stop), nil
 }
 
 // onlySlot reports whether the busy build slot alone stops the start.
@@ -596,10 +632,10 @@ func (w *watcher) keepSwap(r *swapReading) {
 // count recovers, and a ceiling of 0 clears both and stays silent. The
 // machine is read only at those edges.
 func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*claude.Session) {
-	k := w.liveCapacity()
+	k, u := w.currentUsage(w.liveCapacity(), w.now)
 	c := countAgents(st, sessions, w.now)
 	busy := len(c.Busy)
-	if k.Ceiling == 0 || (busy >= k.Floor && busy < k.Ceiling) || st.Stop != nil {
+	if (u != nil && u.Error != "") || k.Ceiling == 0 || (busy >= k.Floor && busy < k.Ceiling) || st.Stop != nil {
 		w.clear("capacity-low")
 		w.clear("capacity-full")
 		return
@@ -614,7 +650,7 @@ func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*cla
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
 	// The watch weighs a start that does not build: a busy slot is a note.
-	v := newCapacity(c, k, h, false)
+	v := newCapacity(c, k, h, false).withUsage(u, w.now)
 	w.check("capacity-low", busy < k.Floor && v.Room > 0, "CAPACITY LOW %d of %d: %s; %s", busy, k.Floor, v.verdict(), v.Headroom.line())
 	w.check("capacity-full", busy >= k.Ceiling, "CAPACITY FULL %d of %d: %s", busy, k.Ceiling, v.Headroom.line())
 }

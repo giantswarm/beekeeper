@@ -155,53 +155,67 @@ func TestLabs(t *testing.T) {
 
 func TestLoadRejects(t *testing.T) {
 	for name, raw := range map[string]string{
-		"browser as resource":        "resources: [browser]",
-		"path as resource":           "resources: [../x]",
-		"lab not a resource":         "resources: [kind-1]\nlabs: {kind-2: kind-2}",
-		"lab without cluster":        "resources: [kind-1]\nlabs: {kind-1: \"\"}",
-		"lab cluster twice":          "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
-		"nameless install":           "alerts: {installations: [{context: x}]}",
-		"unknown floor":              "alerts: {installations: [{name: x, floor: low}]}",
-		"unknown pageSeverity":       "alerts: {pageSeverity: urgent}",
-		"short ownerGrace":           "alerts: {ownerGrace: 10s}",
-		"discover without a team":    "alerts: {discover: {every: 1h}}",
-		"bad discover exclude":       "alerts: {team: t, discover: {exclude: ['[']}}",
-		"pagerduty without services": "alerts: {pagerduty: {context: example}}",
-		"flapping at once":           "alerts: {flap: {changes: 1}}",
-		"bad duration":               "grantTTL: soon",
-		"sink without a repo":        "sink: {workflow: refresh.yaml}",
-		"sink repo not owner/repo":   "sink: {repo: site, workflow: refresh.yaml}",
-		"sink without a workflow":    "sink: {repo: o/site}",
-		"sink of an unknown verb":    "sink: {repo: o/site, workflow: refresh.yaml, verbs: [note.add]}",
-		"skill and file":             "supervisor: {skill: supervise, instructions: /x.md}",
-		"unknown worker profile":     "agents: {profile: lean}",
-		"profile name as a path":     "agents: {profiles: {../x: {tools: [Read]}}}",
-		"unknown role profile":       "guide: {profile: lean}\nagents: {profiles: {slim: {tools: [Bash]}}}",
-		"unknown notify kind":        "notify: {kinds: [due, alerts]}",
-		"machine notify kind":        "notify: {kinds: [due, oom-line]}",
-		"machine urgency":            "notify: {urgency: {oom-kill: critical}}",
-		"unknown urgency":            "notify: {urgency: {due: urgent}}",
-		"urgency of no kind":         "notify: {urgency: {sessions: low}}",
-		"bad quiet hours":            "notify: {quietHours: 22-7}",
-		"bad relayAt":                "supervisor: {relayAt: 400kb}",
-		"negative relayAt":           "supervisor: {relayAt: -1}",
-		"bad store glob":             "outbound: {storeDeny: [{vault: \"[\"}]}",
-		"bad outbound path":          "outbound: {paths: [\"[\"]}",
-		"age without match":          "secret: {ageIdentities: [{ref: op://V/i/f}]}",
-		"age bad recipient":          "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
-		"age without op ref":         "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
-		"age relative file":          "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
-		"age bad pathRegex":          "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
-		"nameless board step":        "board: {order: [{status: [backlog]}]}",
-		"search with fields":         "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
-		"omp key as value":           "omp: {providers: {spark: {apiKey: sk-planted}}}",
-		"omp key half ref":           "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
-		"omp key no ref":             "omp: {providers: {spark: {}}}",
-		"swap window under 5m":       "watch: {swapWindow: 2m}",
-		"negative swapPSIMax":        "capacity: {swapPSIMax: -1}",
-		"negative capacity floor":    "capacity: {floor: -1, ceiling: 0}",
-		"negative capacity ceiling":  "capacity: {ceiling: -1}",
-		"ceiling under floor":        "capacity: {floor: 5, ceiling: 0}",
+		"browser as resource":         "resources: [browser]",
+		"path as resource":            "resources: [../x]",
+		"lab not a resource":          "resources: [kind-1]\nlabs: {kind-2: kind-2}",
+		"lab without cluster":         "resources: [kind-1]\nlabs: {kind-1: \"\"}",
+		"lab cluster twice":           "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
+		"nameless install":            "alerts: {installations: [{context: x}]}",
+		"unknown floor":               "alerts: {installations: [{name: x, floor: low}]}",
+		"unknown pageSeverity":        "alerts: {pageSeverity: urgent}",
+		"short ownerGrace":            "alerts: {ownerGrace: 10s}",
+		"discover without a team":     "alerts: {discover: {every: 1h}}",
+		"bad discover exclude":        "alerts: {team: t, discover: {exclude: ['[']}}",
+		"pagerduty without services":  "alerts: {pagerduty: {context: example}}",
+		"flapping at once":            "alerts: {flap: {changes: 1}}",
+		"bad duration":                "grantTTL: soon",
+		"sink without a repo":         "sink: {workflow: refresh.yaml}",
+		"sink repo not owner/repo":    "sink: {repo: site, workflow: refresh.yaml}",
+		"sink without a workflow":     "sink: {repo: o/site}",
+		"sink of an unknown verb":     "sink: {repo: o/site, workflow: refresh.yaml, verbs: [note.add]}",
+		"skill and file":              "supervisor: {skill: supervise, instructions: /x.md}",
+		"unknown worker profile":      "agents: {profile: lean}",
+		"profile name as a path":      "agents: {profiles: {../x: {tools: [Read]}}}",
+		"unknown role profile":        "guide: {profile: lean}\nagents: {profiles: {slim: {tools: [Bash]}}}",
+		"unknown notify kind":         "notify: {kinds: [due, alerts]}",
+		"machine notify kind":         "notify: {kinds: [due, oom-line]}",
+		"machine urgency":             "notify: {urgency: {oom-kill: critical}}",
+		"unknown urgency":             "notify: {urgency: {due: urgent}}",
+		"urgency of no kind":          "notify: {urgency: {sessions: low}}",
+		"bad quiet hours":             "notify: {quietHours: 22-7}",
+		"bad relayAt":                 "supervisor: {relayAt: 400kb}",
+		"negative relayAt":            "supervisor: {relayAt: -1}",
+		"bad store glob":              "outbound: {storeDeny: [{vault: \"[\"}]}",
+		"bad outbound path":           "outbound: {paths: [\"[\"]}",
+		"age without match":           "secret: {ageIdentities: [{ref: op://V/i/f}]}",
+		"age bad recipient":           "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
+		"age without op ref":          "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
+		"age relative file":           "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
+		"age bad pathRegex":           "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
+		"nameless board step":         "board: {order: [{status: [backlog]}]}",
+		"search with fields":          "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
+		"omp key as value":            "omp: {providers: {spark: {apiKey: sk-planted}}}",
+		"omp key half ref":            "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
+		"omp key no ref":              "omp: {providers: {spark: {}}}",
+		"swap window under 5m":        "watch: {swapWindow: 2m}",
+		"negative swapPSIMax":         "capacity: {swapPSIMax: -1}",
+		"negative capacity floor":     "capacity: {floor: -1, ceiling: 0}",
+		"negative capacity ceiling":   "capacity: {ceiling: -1}",
+		"ceiling under floor":         "capacity: {floor: 5, ceiling: 0}",
+		"usage without command":       "capacity: {usage: {highPercent: 90}}",
+		"usage bands without command": "capacity: {usage: {fiveHour: [{upTo: 80, ceiling: 4}]}}",
+		"usage empty executable":      "capacity: {usage: {command: [\"  \"]}}",
+		"usage negative every":        "capacity: {usage: {command: [reader], every: -1m}}",
+		"usage negative timeout":      "capacity: {usage: {command: [reader], timeout: -1s}}",
+		"usage zero highPercent":      "capacity: {usage: {command: [reader], highPercent: 0}}",
+		"usage over-100 highPercent":  "capacity: {usage: {command: [reader], highPercent: 101}}",
+		"usage NaN highPercent":       "capacity: {usage: {command: [reader], highPercent: .nan}}",
+		"usage band zero upTo":        "capacity: {usage: {command: [reader], fiveHour: [{upTo: 0, ceiling: 4}]}}",
+		"usage band over-100 upTo":    "capacity: {usage: {command: [reader], fiveHour: [{upTo: 105, ceiling: 4}]}}",
+		"usage band unsorted":         "capacity: {usage: {command: [reader], fiveHour: [{upTo: 80, ceiling: 4}, {upTo: 80, ceiling: 2}]}}",
+		"usage band missing ceiling":  "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, floor: 2}]}}",
+		"usage band negative floor":   "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, floor: -1, ceiling: 2}]}}",
+		"usage band ceiling < floor":  "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, floor: 5, ceiling: 2}]}}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -503,6 +517,9 @@ func TestExampleConfig(t *testing.T) {
 	if pd := c.Alerts.PagerDuty; !pd.Enabled() || pd.Server != "pd" || !slices.Equal(pd.Services, []string{"PABC123"}) || pd.Every.Duration != time.Minute {
 		t.Errorf("alerts.pagerduty %+v", pd)
 	}
+	if u := c.Capacity.Usage; !u.Enabled() || len(u.FiveHour) != 3 || len(u.SevenDay) != 2 || u.HighPercent != 95 {
+		t.Errorf("capacity.usage %+v", u)
+	}
 }
 
 // Unset, the memory thresholds are fractions of what the machine has, and
@@ -735,5 +752,88 @@ func TestCapacityZeroAndUnset(t *testing.T) {
 	}
 	if loaded, err := Load(p); err != nil || loaded.Capacity.Floor != 0 || loaded.Capacity.Ceiling != 0 {
 		t.Errorf("Load after Set = %+v, %v; want floor 0, ceiling 0", loaded, err)
+	}
+}
+
+func TestCapacityUsageAndDerive(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `capacity:
+  usage:
+    command: ["~/bin/read-usage", "~/etc/usage.json", "--json"]
+    fiveHour:
+      - {upTo: 50, floor: 6, ceiling: 12}
+      - {upTo: 80, ceiling: 4}
+      - {upTo: 95, floor: 0, ceiling: 2}
+    sevenDay:
+      - {upTo: 70, floor: 5, ceiling: 10}
+      - {upTo: 90, floor: 2, ceiling: 3}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := c.Capacity.Usage
+	if !u.Enabled() || u.Command[0] != filepath.Join(home, "bin", "read-usage") ||
+		u.Command[1] != filepath.Join(home, "etc", "usage.json") || u.Command[2] != "--json" {
+		t.Fatalf("command = %q", u.Command)
+	}
+	if u.Every.Duration != DefaultUsageEvery || u.Timeout.Duration != DefaultUsageTimeout ||
+		u.ReportEvery.Duration != DefaultUsageReportEvery || u.HighPercent != DefaultUsageHighPercent || u.HighPercentSet() {
+		t.Errorf("defaults = every %s timeout %s reportEvery %s highPercent %g (set %v)",
+			u.Every, u.Timeout, u.ReportEvery, u.HighPercent, u.HighPercentSet())
+	}
+	// Band without floor clamps default floor (5) to its ceiling (4); explicit floor: 0 stays 0.
+	if u.FiveHour[1].Floor != 4 || u.FiveHour[2].Floor != 0 {
+		t.Errorf("band floors = %+v", u.FiveHour)
+	}
+
+	num := func(v float64) *float64 { return &v }
+	for _, tc := range []struct {
+		name               string
+		five, seven        *float64
+		wantFloor, wantMax int
+		wantHigh           bool
+	}{
+		{"first 5h band, 7d unreported", num(20), nil, 6, 12, false},
+		{"first 5h + first 7d takes min", num(20), num(40), 5, 10, false},
+		{"boundary 50 enters second 5h band", num(50), num(40), 4, 4, false},
+		{"second 7d band caps first 5h band", num(20), num(75), 2, 3, false},
+		{"third 5h band keeps floor 0", num(85), num(40), 0, 2, false},
+		{"past last 7d band yields 0/0 without high", num(20), num(90), 0, 0, false},
+		{"at highPercent triggers USAGE HIGH", num(95), num(40), 0, 0, true},
+		{"above 100 triggers USAGE HIGH", num(102.5), num(40), 0, 0, true},
+	} {
+		got, high := c.Capacity.Derive(tc.five, tc.seven)
+		if got.Floor != tc.wantFloor || got.Ceiling != tc.wantMax || high != tc.wantHigh {
+			t.Errorf("%s: got (%d, %d, high=%v), want (%d, %d, high=%v)",
+				tc.name, got.Floor, got.Ceiling, high, tc.wantFloor, tc.wantMax, tc.wantHigh)
+		}
+	}
+
+	// An explicit top-level ceiling (such as capacity.ceiling: 0) still caps the bands.
+	paused, err := Load(writeTemp(t, "capacity:\n  ceiling: 0\n  usage:\n    command: [reader]\n    fiveHour: [{upTo: 80, floor: 3, ceiling: 6}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, high := paused.Capacity.Derive(num(10), nil); got.Floor != 0 || got.Ceiling != 0 || high {
+		t.Errorf("explicit ceiling 0 with band: got (%d, %d, high=%v), want (0, 0, false)", got.Floor, got.Ceiling, high)
+	}
+
+	// Negative reportEvery turns periodic USAGE watch lines off without failing validation.
+	quiet, err := Load(writeTemp(t, "capacity: {usage: {command: [reader], reportEvery: -1m, highPercent: 98}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quiet.Capacity.Usage.ReportEvery.Duration >= 0 || !quiet.Capacity.Usage.HighPercentSet() || quiet.Capacity.Usage.HighPercent != 98 {
+		t.Errorf("quiet usage = %+v", quiet.Capacity.Usage)
+	}
+	if got, high := quiet.Capacity.Derive(num(96), nil); got.Floor != DefaultFloor || got.Ceiling != DefaultCeiling || high {
+		t.Errorf("no bands below custom highPercent 98: got (%d, %d, high=%v)", got.Floor, got.Ceiling, high)
+	}
+	if got, high := quiet.Capacity.Derive(num(98), nil); got.Floor != 0 || got.Ceiling != 0 || !high {
+		t.Errorf("at custom highPercent 98: got (%d, %d, high=%v)", got.Floor, got.Ceiling, high)
 	}
 }

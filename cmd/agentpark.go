@@ -242,14 +242,17 @@ func (a *app) leaseSettled(st *state.State, ag state.Agent, res string) (string,
 }
 
 func (a *app) agentResumeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   agentResumeName + " <agent>",
+	var force bool
+	c := &cobra.Command{
+		Use:   agentResumeName + " [--force] <agent>",
 		Short: "Resume a parked agent with what settled its wait, or by hand",
 		Long: `resume ends an agent's park (agents park) and wakes it, as agents wake
 does: by name to a running CLI, else headless. Its turn carries what
 settled the wait, a person's answer word for word, or that the caller
 resumed it by hand. An agent that is not parked is refused: agents wake
-messages it.`,
+messages it. While USAGE HIGH holds on the 5-hour window
+(capacity.usage.highPercent), resume refuses until fiveHour.resetsAt
+unless --force is given.`,
 		Example: `  beekeeper agents resume "BK 86"`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -257,15 +260,34 @@ messages it.`,
 			if err != nil {
 				return err
 			}
-			return a.resumeParked(cmd.Context(), by, args[0])
+			return a.resumeParkedOpts(cmd.Context(), by, args[0], force)
 		},
 	}
+	c.Flags().BoolVar(&force, "force", false, "resume even while USAGE HIGH holds")
+	return c
 }
 
 // resumeParked ends the park of agent q and wakes it with parkMessage. The
 // park ends before the wake, so two resumes never wake it twice, and comes
 // back when the wake fails.
 func (a *app) resumeParked(ctx context.Context, by state.Party, q string) error {
+	return a.resumeParkedOpts(ctx, by, q, false)
+}
+
+func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, force bool) error {
+	if st, err := a.store.Read(); err == nil {
+		i, ferr := findAgent(st, q)
+		if ferr != nil {
+			return ferr
+		}
+		if st.Agents[i].Park == nil {
+			return refused("%q is not parked: agents wake messages it", st.Agents[i].Name)
+		}
+	}
+	block := a.usageHighBlock(ctx)
+	if block != "" && !force {
+		return refused("no resume: %s (--force resumes anyway)", block)
+	}
 	var ag state.Agent
 	var p *state.Park
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -278,7 +300,11 @@ func (a *app) resumeParked(ctx context.Context, by state.Party, q string) error 
 		}
 		p, st.Agents[i].Park = st.Agents[i].Park, nil
 		ag = st.Agents[i]
-		return []state.Event{event(by, resumedEvent, "%s: %s", ag.Name, parkedText(p, a.now))}, nil
+		detail := fmt.Sprintf("%s: %s", ag.Name, parkedText(p, a.now))
+		if block != "" {
+			detail += fmt.Sprintf(" (over no resume: %s; --force)", block)
+		}
+		return []state.Event{event(by, resumedEvent, "%s", detail)}, nil
 	})
 	if err != nil {
 		return err

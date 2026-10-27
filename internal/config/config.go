@@ -866,6 +866,14 @@ const (
 	DefaultCeiling = 10
 )
 
+// Defaults of capacity.usage when capacity.usage.command is set.
+const (
+	DefaultUsageEvery       = 5 * time.Minute
+	DefaultUsageReportEvery = 30 * time.Minute
+	DefaultUsageTimeout     = 15 * time.Second
+	DefaultUsageHighPercent = 95.0
+)
+
 // Capacity is the supervisor's target of busy agents and the memory guards
 // that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
 type Capacity struct {
@@ -888,6 +896,227 @@ type Capacity struct {
 	// /proc/pressure/memory, in percent) up to which disk swap's growth is
 	// a warning rather than a refusal (0: any pressure refuses).
 	SwapPSIMax float64 `yaml:"swapPSIMax"`
+	// Usage derives Floor and Ceiling from the subscription's 5-hour and
+	// 7-day usage windows read by a configured command; unset, Floor and
+	// Ceiling stand as configured.
+	Usage Usage `yaml:"usage"`
+}
+
+// Usage configures the opt-in subscription usage reader of Capacity.
+type Usage struct {
+	// Command prints the current usage windows as JSON on stdout
+	// (fiveHour and/or sevenDay, each {usedPercent, resetsAt}); empty,
+	// beekeeper reads no subscription usage.
+	Command []string `yaml:"command"`
+	// Every is how often a cached reading stays fresh before beekeeper
+	// runs Command again (default 5m; a window past its resetsAt re-reads
+	// at once).
+	Every Duration `yaml:"every"`
+	// Timeout bounds one run of Command (default 15s).
+	Timeout Duration `yaml:"timeout"`
+	// ReportEvery is how often the watch prints a USAGE line (default 30m;
+	// negative: never, watch --once aside).
+	ReportEvery Duration `yaml:"reportEvery"`
+	// HighPercent is the 5-hour window's usedPercent from which USAGE HIGH
+	// holds until fiveHour.resetsAt: unforced starts, resumes and
+	// auto-resume wait, and each busy worker is told once to finish its
+	// step and park (default 95).
+	HighPercent    float64 `yaml:"highPercent"`
+	highPercentSet bool
+	// FiveHour and SevenDay map a window's usedPercent to a (floor, ceiling)
+	// pair: the first band with usedPercent < upTo applies, and at or past
+	// the last band's upTo the window yields (0, 0). When both windows have
+	// bands, the lower floor and the lower ceiling apply.
+	FiveHour []UsageBand `yaml:"fiveHour"`
+	SevenDay []UsageBand `yaml:"sevenDay"`
+}
+
+// UsageBand is one usage band of a subscription window: while the window's
+// usedPercent is below UpTo, its target is Floor and Ceiling.
+type UsageBand struct {
+	UpTo       float64 `yaml:"upTo"`
+	Floor      int     `yaml:"floor"`
+	Ceiling    int     `yaml:"ceiling"`
+	floorSet   bool
+	ceilingSet bool
+}
+
+// Enabled reports whether a subscription usage command is configured.
+func (u Usage) Enabled() bool { return len(u.Command) > 0 }
+
+// HighPercentSet reports whether capacity.usage.highPercent was explicitly set.
+func (u Usage) HighPercentSet() bool { return u.highPercentSet }
+
+// EffectiveEvery is Every, or DefaultUsageEvery when unset.
+func (u Usage) EffectiveEvery() time.Duration {
+	if u.Every.Duration > 0 {
+		return u.Every.Duration
+	}
+	return DefaultUsageEvery
+}
+
+// EffectiveTimeout is Timeout, or DefaultUsageTimeout when unset.
+func (u Usage) EffectiveTimeout() time.Duration {
+	if u.Timeout.Duration > 0 {
+		return u.Timeout.Duration
+	}
+	return DefaultUsageTimeout
+}
+
+// EffectiveHighPercent is HighPercent, or DefaultUsageHighPercent when unset.
+func (u Usage) EffectiveHighPercent() float64 {
+	if u.HighPercent > 0 {
+		return u.HighPercent
+	}
+	return DefaultUsageHighPercent
+}
+
+// UnmarshalYAML records whether highPercent was explicitly set.
+func (u *Usage) UnmarshalYAML(n *yaml.Node) error {
+	type plain Usage
+	if err := n.Decode((*plain)(u)); err != nil {
+		return err
+	}
+	var set struct {
+		HighPercent *float64 `yaml:"highPercent"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	u.highPercentSet = set.HighPercent != nil
+	return nil
+}
+
+// UnmarshalYAML records whether floor and ceiling were explicitly set on the band.
+func (b *UsageBand) UnmarshalYAML(n *yaml.Node) error {
+	type plain UsageBand
+	if err := n.Decode((*plain)(b)); err != nil {
+		return err
+	}
+	var set struct {
+		Floor   *int `yaml:"floor"`
+		Ceiling *int `yaml:"ceiling"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	b.floorSet, b.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	return nil
+}
+
+func (u *Usage) defaults(home string, baseFloor int) {
+	if !u.Enabled() {
+		return
+	}
+	for i := range u.Command {
+		u.Command[i] = homePath(home, u.Command[i])
+	}
+	setDur(&u.Every, DefaultUsageEvery)
+	setDur(&u.Timeout, DefaultUsageTimeout)
+	setDur(&u.ReportEvery, DefaultUsageReportEvery)
+	if !u.highPercentSet {
+		u.HighPercent = DefaultUsageHighPercent
+	}
+	for _, bs := range [][]UsageBand{u.FiveHour, u.SevenDay} {
+		for i := range bs {
+			if !bs[i].floorSet {
+				bs[i].Floor = max(0, min(baseFloor, bs[i].Ceiling))
+			}
+		}
+	}
+}
+
+func (u Usage) validate() error {
+	if !u.Enabled() {
+		if u.Every.Duration != 0 || u.Timeout.Duration != 0 || u.ReportEvery.Duration != 0 ||
+			u.highPercentSet || len(u.FiveHour) > 0 || len(u.SevenDay) > 0 {
+			return errors.New("capacity.usage: no command: set capacity.usage.command, or nothing of capacity.usage")
+		}
+		return nil
+	}
+	if strings.TrimSpace(u.Command[0]) == "" {
+		return errors.New("capacity.usage.command[0]: empty executable")
+	}
+	if u.Every.Duration <= 0 {
+		return fmt.Errorf("capacity.usage.every: %s is not positive", u.Every.Duration)
+	}
+	if u.Timeout.Duration <= 0 {
+		return fmt.Errorf("capacity.usage.timeout: %s is not positive", u.Timeout.Duration)
+	}
+	if !(u.HighPercent > 0 && u.HighPercent <= 100) {
+		return fmt.Errorf("capacity.usage.highPercent: %g is not in (0, 100]", u.HighPercent)
+	}
+	for _, w := range []struct {
+		name  string
+		bands []UsageBand
+	}{
+		{"capacity.usage.fiveHour", u.FiveHour},
+		{"capacity.usage.sevenDay", u.SevenDay},
+	} {
+		prev := 0.0
+		for i, b := range w.bands {
+			switch {
+			case !(b.UpTo > 0 && b.UpTo <= 100):
+				return fmt.Errorf("%s[%d]: upTo %g is not in (0, 100]", w.name, i, b.UpTo)
+			case b.UpTo <= prev:
+				return fmt.Errorf("%s[%d]: upTo %g is not above %g: list bands in ascending order", w.name, i, b.UpTo, prev)
+			case !b.ceilingSet:
+				return fmt.Errorf("%s[%d]: ceiling is required", w.name, i)
+			case b.Floor < 0 || b.Ceiling < b.Floor:
+				return fmt.Errorf("%s[%d]: floor %d and ceiling %d; the ceiling is at least the floor", w.name, i, b.Floor, b.Ceiling)
+			}
+			prev = b.UpTo
+		}
+	}
+	return nil
+}
+
+// Derive returns Capacity with Floor and Ceiling derived from the subscription
+// usage windows' effective usedPercent values (nil when a window was not
+// reported) and reports whether USAGE HIGH holds on the 5-hour window.
+func (k Capacity) Derive(fiveHour, sevenDay *float64) (derived Capacity, high bool) {
+	derived = k
+	if !k.Usage.Enabled() {
+		return derived, false
+	}
+	floor, ceiling, banded := k.Floor, k.Ceiling, false
+	apply := func(pct *float64, bands []UsageBand) {
+		if pct == nil || len(bands) == 0 {
+			return
+		}
+		bf, bc := matchBand(*pct, bands)
+		if !banded {
+			floor, ceiling, banded = bf, bc, true
+			return
+		}
+		floor, ceiling = min(floor, bf), min(ceiling, bc)
+	}
+	apply(fiveHour, k.Usage.FiveHour)
+	apply(sevenDay, k.Usage.SevenDay)
+	if banded {
+		if k.ceilingSet {
+			ceiling = min(ceiling, k.Ceiling)
+		}
+		if k.floorSet {
+			floor = min(floor, k.Floor)
+		}
+	}
+	floor = min(floor, ceiling)
+	if fiveHour != nil && *fiveHour >= k.Usage.EffectiveHighPercent() {
+		derived.Floor, derived.Ceiling = 0, 0
+		return derived, true
+	}
+	derived.Floor, derived.Ceiling = floor, ceiling
+	return derived, false
+}
+
+func matchBand(used float64, bands []UsageBand) (floor, ceiling int) {
+	for _, b := range bands {
+		if used < b.UpTo {
+			return b.Floor, b.Ceiling
+		}
+	}
+	return 0, 0
 }
 
 // UnmarshalYAML records whether floor and ceiling were set, so an explicit 0
@@ -2186,6 +2415,7 @@ func (c *Config) defaults() error {
 	if !c.Capacity.floorSet && c.Capacity.Floor == 0 {
 		c.Capacity.Floor = max(0, min(DefaultFloor, c.Capacity.Ceiling))
 	}
+	c.Capacity.Usage.defaults(home, c.Capacity.Floor)
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
 	setInt(&c.Capacity.SwapGrowthMaxMiB, 256)
 	al := &c.Alerts
@@ -2505,6 +2735,9 @@ func (c *Config) validate() error {
 	}
 	if c.Capacity.SwapPSIMax < 0 {
 		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
+	}
+	if err := c.Capacity.Usage.validate(); err != nil {
+		return err
 	}
 	if w := c.Watch.SwapWindow.Duration; w != 0 && w < MinSwapSpan {
 		return fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan)
