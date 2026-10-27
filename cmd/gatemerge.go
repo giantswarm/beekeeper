@@ -59,6 +59,9 @@ var (
 	pullRebase    = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
 		return github.ReadRebase(ctx, github.RunGH, repo, n)
 	}
+	pullMergeCommits = func(ctx context.Context, repo string, n int) ([]string, error) {
+		return github.MergeCommits(ctx, github.RunGH, repo, n)
+	}
 	// reviewGuard is the pull request's review read (github.ReviewGuard).
 	reviewGuard = func(ctx context.Context, repo string, n int) (string, error) {
 		why, _, err := github.ReviewGuard(ctx, github.RunGH, repo, n)

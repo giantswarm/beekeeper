@@ -15,9 +15,24 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// stubPullRebase answers pullRebase with r and err and counts the reads.
+// stubMergeCommits answers pullMergeCommits with merges and err.
+func stubMergeCommits(t *testing.T, merges []string, err error) {
+	t.Helper()
+	was := pullMergeCommits
+	t.Cleanup(func() { pullMergeCommits = was })
+	pullMergeCommits = func(_ context.Context, repo string, n int) ([]string, error) {
+		if repo != scratchRepo || n != 7 {
+			t.Errorf("read the commits of %s#%d", repo, n)
+		}
+		return merges, err
+	}
+}
+
+// stubPullRebase answers pullRebase with r and err and counts the reads, and
+// pullMergeCommits with none.
 func stubPullRebase(t *testing.T, r github.Rebase, err error) *int {
 	t.Helper()
+	stubMergeCommits(t, nil, nil)
 	asked := new(int)
 	was, retry := pullRebase, rebaseRetry
 	t.Cleanup(func() { pullRebase, rebaseRetry = was, retry })
@@ -66,6 +81,37 @@ func TestANonRebaseableMergeIsRefusedBeforeItQueues(t *testing.T) {
 			}
 			if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, "o/r#7 cannot be rebased onto its base") || !strings.Contains(d, "replacement PR") {
 				t.Errorf("refusal %q", d)
+			}
+		})
+	}
+}
+
+// A rebase merge whose head carries a merge commit, a base merged into the
+// branch, is refused before it takes a lane place: a rebase merge would put
+// it on the line. Its commits not read refuse too.
+func TestARebaseMergeCarryingAMergeCommitIsRefusedBeforeItQueues(t *testing.T) {
+	for name, c := range map[string]struct {
+		merges []string
+		err    error
+		why    string
+	}{
+		"a merge commit": {[]string{"cccccccccccc"}, nil, "o/r#7 carries merge commit ccccccccc"},
+		"unread":         {nil, errors.New("not found"), "whether o/r#7 carries a merge commit cannot be read (not found)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubGitHub(t, github.Open, "")
+			stubPullRebase(t, github.Rebase{Known: true, Rebaseable: true}, nil)
+			stubMergeCommits(t, c.merges, c.err)
+			a := busyLaneApp(t)
+			err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false)
+			if Code(err) != ExitGateRefused {
+				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+			}
+			if placeOf(t, a) >= 0 {
+				t.Errorf("the refused merge took a lane place")
+			}
+			if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, c.why) {
+				t.Errorf("refusal %q, want %q", d, c.why)
 			}
 		})
 	}
@@ -139,6 +185,7 @@ func rebaseTurn(t *testing.T, updateErr error, reads ...github.Rebase) (g *gateR
 	fakeDevctl(t, `echo "$*" > `+args+`; echo '`+mergedDoc+`'`)
 	stubGitHub(t, github.Merged, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
+	stubMergeCommits(t, nil, nil)
 	asked, updates = new(int), new(int)
 	was, update, retry := pullRebase, updateRebase, rebaseRetry
 	t.Cleanup(func() { pullRebase, updateRebase, rebaseRetry = was, update, retry })
@@ -218,6 +265,29 @@ func TestARebaseMergeThatCannotCatchUpAtItsTurnIsRefused(t *testing.T) {
 				t.Errorf("refusal %q", d)
 			}
 		})
+	}
+}
+
+// A rebase merge whose head carries a merge commit by its turn is refused
+// with nothing merged: devctl does not run and the place leaves the lane.
+func TestARebaseMergeCarryingAMergeCommitAtItsTurnIsRefused(t *testing.T) {
+	g, _, updates, args := rebaseTurn(t, nil, github.Rebase{Known: true, Rebaseable: true, State: github.BehindState})
+	stubMergeCommits(t, []string{"cccccccccccc"}, nil)
+	if err := startMerge(t, g); Code(err) != ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	}
+	if *updates != 0 {
+		t.Errorf("%d rebase updates, want none", *updates)
+	}
+	if _, err := os.Stat(args); err == nil {
+		t.Errorf("devctl ran")
+	}
+	if st := gateState(t, g); len(st.Merges) != 0 {
+		t.Errorf("the place stays in the lane: %+v", st.Merges)
+	}
+	if d := lastEvent(t, g, "merge.refused"); !strings.Contains(d, "its turn came, and o/r#7 carries merge commit ccccccccc") ||
+		!strings.Contains(d, "nothing merged") || !strings.Contains(d, "replacement PR") {
+		t.Errorf("refusal %q", d)
 	}
 }
 
