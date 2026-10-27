@@ -289,7 +289,7 @@ func TestRunOfACommandThatBuildsNothingSkipsTheQueue(t *testing.T) {
 	state, env := capped(t)
 	holdSlots(t, state)
 	self, _ := os.Executable()
-	for _, command := range []string{"true", "echo built nothing", "go version"} {
+	for _, command := range []string{"/usr/bin/true", "echo built nothing", "go version"} {
 		_, errOut, rc := zsh(t, env, self+" run --wait 5s -- "+command)
 		if rc != 0 || errOut != "" {
 			t.Errorf("%s with every slot held: rc %d, stderr %q", command, rc, errOut)

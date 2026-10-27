@@ -55,7 +55,7 @@ func TestBuildsNothing(t *testing.T) {
 		{[]string{"go", "version"}, true},
 		{[]string{testShell, "-c", "make help"}, true},
 		{[]string{"kubectl", "--help"}, true},
-		{[]string{"go", "build", "./..."}, false},
+		{[]string{"go", "test", "./..."}, false},
 		{[]string{testShell, "-c", "make"}, false},
 		{[]string{testShell, "-c", "true && go test ./..."}, false},
 		{[]string{testShell, "-c", "echo $(go build ./...)"}, false},

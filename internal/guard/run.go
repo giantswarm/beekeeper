@@ -127,7 +127,7 @@ func DefaultClass(argv []string) string {
 }
 
 // noopCommands build nothing whatever their arguments.
-var noopCommands = []string{"true", "false", "echo", "printf"}
+var noopCommands = strings.Fields("true false echo printf")
 
 // BuildsNothing reports whether argv cannot build: one simple command, with
 // no operator, redirection or substitution, that is a no-op (true, false,
