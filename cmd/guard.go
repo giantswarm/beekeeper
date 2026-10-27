@@ -91,7 +91,10 @@ run waits up to --wait only for MemAvailable to cover its cap, then runs in
 its own scope under memcap.slice with that cap: memory stays the bound, and
 a benchmark's model takes its budget with lease claim model-server --gib
 as before. A run that declares no class and runs agentlab without a build
-is a lab run.
+is a lab run. One that declares no class and cannot build, a single true,
+false, echo or printf, or a command that only prints its help or version
+(go version, make help, kubectl --help), runs at once, uncapped and
+outside the slot queue.
 
 When every slot is held, or MemAvailable is below the cap, run waits up to
 --wait in the build slot queue it shares with agents start --builds: a
@@ -189,6 +192,9 @@ machine's files stay untouched.`,
 				return usageErr("%v", err)
 			}
 			if !f.Changed("class") {
+				if guard.BuildsNothing(args) {
+					return &exitError{code: guard.Exec(args, os.Stderr)}
+				}
 				o.Class = guard.DefaultClass(args)
 			}
 			a.parseableKnownHosts()
