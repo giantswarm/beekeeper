@@ -344,7 +344,12 @@ func (a *app) promptAgents(p printer, agents []state.Agent, sessions []*claude.S
 // is a live value, read with beekeeper capacity.
 func (a *app) promptCapacity(p printer, st *state.State, sessions []*claude.Session) {
 	section(p, "Capacity", false, "")
-	p("%s; `beekeeper capacity` says whether a start fits.\n", countAgents(st, sessions, a.now).line(a.cfg.Capacity))
+	k, u := a.cachedUsageCapacity(a.liveCapacity())
+	line := countAgents(st, sessions, a.now).line(k)
+	if u != nil && u.Error == "" {
+		line += "; " + u.capacitySuffix(a.now)
+	}
+	p("%s; `beekeeper capacity` says whether a start fits.\n", line)
 }
 
 func (a *app) promptAlerts(p printer, al *alertsView) {

@@ -68,6 +68,9 @@ type snapshot struct {
 	KubeContext string `json:"kubeContext,omitempty"`
 	// Teleport is the Teleport login, nil when no keeper is configured.
 	Teleport *teleportView `json:"teleport,omitempty"`
+	// Usage is the subscription usage windows and derived capacity target,
+	// nil when capacity.usage.command is not configured.
+	Usage *usageView `json:"usage,omitempty"`
 	// Unavailable are the sections whose platform part this build does not
 	// have: each prints one "not available" line instead.
 	Unavailable []string `json:"unavailable,omitempty"`
@@ -121,7 +124,7 @@ sit on (with their owner), the kernel
 OOM kills since your last snapshot (every one counted, attributed to a
 memcap scope, a kind lab or the desktop scope; a memcap scope no run.start
 names has an unknown cap, a test run's scope is a test kill), leases, holds and the GitHub
-budget, the count of watch lines the quiet rules held back in the last
+budget (and subscription usage windows when capacity.usage.command is set), the count of watch lines the quiet rules held back in the last
 hour, the installations' alerts, grouped (beekeeper alerts snapshot), and
 their running upgrades (beekeeper watch).
 
@@ -298,6 +301,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	}
 	s.Holds = a.activeHolds(st)
 	s.Quiet = a.quietSince(a.now.Add(-time.Hour))
+	_, s.Usage = a.resolveUsage(ctx, a.liveCapacity())
 	if withBudget {
 		b, err := a.probeBudget(ctx)
 		if err != nil {
@@ -567,6 +571,9 @@ func (a *app) printSnapshot(s *snapshot) {
 	if len(s.Upgrades) > 0 {
 		p("upgrades: %s", strings.Join(upgradeWords(s.Upgrades, a.now), " · "))
 	}
+	if s.Usage != nil {
+		p("%s", s.Usage.snapshotLine(a.now))
+	}
 	switch {
 	case s.Budget != nil:
 		p("GitHub: %s", budgetLine(a, *s.Budget))
@@ -728,6 +735,10 @@ func diffSnapshots(prev, cur *snapshot) []string {
 		if d := prev.Budget.Remaining - cur.Budget.Remaining; d >= 250 {
 			out = append(out, fmt.Sprintf("GitHub budget %d → %d (%d spent)", prev.Budget.Remaining, cur.Budget.Remaining, d))
 		}
+	}
+	if cur.Usage != nil && (prev.Usage == nil || cur.Usage.Floor != prev.Usage.Floor ||
+		cur.Usage.Ceiling != prev.Usage.Ceiling || cur.Usage.High != prev.Usage.High || cur.Usage.Error != prev.Usage.Error) {
+		out = append(out, cur.Usage.snapshotLine(cur.At.Local()))
 	}
 	return out
 }

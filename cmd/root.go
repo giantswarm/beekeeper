@@ -135,6 +135,8 @@ type app struct {
 	// origin reads a requester's working directory and the keys' variables
 	// of its environment; nil is sandbox.Origin on /proc.
 	origin func(pid int, keys []string) (string, []string, error)
+	// readUsage runs capacity.usage.command; nil is runUsageCommand.
+	readUsage func(ctx context.Context, command []string, timeout time.Duration) (usageReading, error)
 }
 
 // requesterOrigin is a brokered request's working directory and the keys'

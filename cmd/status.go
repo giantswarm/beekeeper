@@ -99,7 +99,8 @@ func (a *app) status() (*statusView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now), Floor: a.cfg.Capacity.Floor, Ceiling: a.cfg.Capacity.Ceiling}
+	k, _ := a.cachedUsageCapacity(a.liveCapacity())
+	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now), Floor: k.Floor, Ceiling: k.Ceiling}
 	if st.Stop != nil {
 		v.Stopped = a.stopText(st.Stop)
 	}

@@ -237,6 +237,19 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
   swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
   swapPSIMax: 0             # the default; memory pressure (full avg60 of /proc/pressure/memory, %) up to which that growth is only a warning while MemAvailable is over availMinMiB
+  usage:                    # optional: derive floor and ceiling from subscription usage windows; unset command: off
+    command: [~/.local/bin/read-usage]   # prints JSON {"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}
+    every: 5m               # how long a cached reading in usage.json stays fresh (re-read at once once resetsAt passes)
+    timeout: 15s            # bounds one run of command
+    reportEvery: 30m        # watch prints one USAGE line this often (negative: never, watch --once aside)
+    highPercent: 95         # 5-hour usedPercent from which USAGE HIGH holds until fiveHour.resetsAt: starts, resumes and auto-resume wait, and busy workers are told once to finish their step and park
+    fiveHour:               # first band with usedPercent < upTo applies; at or past the last upTo yields floor 0, ceiling 0
+      - {upTo: 50, floor: 5, ceiling: 10}
+      - {upTo: 80, floor: 3, ceiling: 6}
+      - {upTo: 95, floor: 1, ceiling: 2}
+    sevenDay:               # when both windows have bands, the lower floor and the lower ceiling apply
+      - {upTo: 70, floor: 5, ceiling: 10}
+      - {upTo: 90, floor: 2, ceiling: 4}
 stop:                       # beekeeper stop, besides beekeeper's own units and the standby service
   units: [desk-guard.timer] # more user units the stop stops while they run and beekeeper resume starts again; default: none
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies
