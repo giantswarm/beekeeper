@@ -47,7 +47,7 @@ const UploadTargetScript = `(() => {
   const ok = all.filter(shown);
   if (ok.length === 1) { ok[0].setAttribute('aria-label', label); ok[0].parentElement.scrollIntoView({ block: 'center' });
     return label + ': marked ' + name(ok[0]) + ' (' + (all.length - 1) + ' other file inputs hidden or disabled); find "' + label + '" for its ref'; }
-  if (ok.length > 1) return label + ': none: ' + ok.length + ' visible file inputs (' + ok.map(name).join('; ') + '): run again with scope set to the intended form';
+  if (ok.length > 1) return label + ': none: ' + ok.length + ' visible file inputs (' + ok.map(name).join('; ') + '): run again with scope set to the intended form or comment box';
   return label + ': none: ' + all.length + ' file inputs, every one hidden or disabled' + (all.length ? ' (' + all.map(name).join('; ') + ')' : '');
 })()`
 

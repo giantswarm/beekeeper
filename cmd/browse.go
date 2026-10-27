@@ -359,18 +359,21 @@ Shared]" with a line naming the flag. A line below the report says "shared
 for upload: <path>".
 
 GitHub's issue and comment editor renders no file input until its paperclip
-opens a native file picker, which no turn drives. There the steps add a
-temporary, visible <input type=file multiple> to the comment form with
-javascript_tool, run the upload-target check scoped to that form, find its
-ref and file_upload to it, then dispatch a drop event (DragEvent 'drop' with a DataTransfer holding
-the input's files) on the comment textarea: GitHub inserts the attachment
-links as for a dropped file.
+opens a native file picker, which no turn drives. There the steps, with
+javascript_tool, take the nearest common ancestor of the comment textarea
+and its Comment button (the comment box), mark it with an attribute
+(data-beekeeper-upload) and add a temporary, visible <input type=file
+multiple> to it, run the upload-target check scoped to
+[data-beekeeper-upload], find its ref and file_upload to it, then dispatch
+a drop event (DragEvent 'drop' with a DataTransfer holding the input's
+files) on the comment textarea: GitHub inserts the attachment links as for
+a dropped file.
 
 A page keeps hidden file inputs (GitHub's review-reply boxes beside the
 comment box) that take a file_upload as readily as the intended one and
 attach the file nowhere the person sees. Before each file_upload the turn
 runs beekeeper's upload-target check with javascript_tool, scoped to the
-intended form: it marks the one visible, enabled file input there
+intended form or comment box: it marks the one visible, enabled file input there
 (accessible name "beekeeper upload target") and marks none when the scope
 holds only hidden or disabled inputs, or several visible ones. The turn
 then finds that name for the input's ref. The hook (beekeeper hook
