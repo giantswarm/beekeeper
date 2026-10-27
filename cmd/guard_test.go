@@ -268,18 +268,35 @@ func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 	state, env := capped(t)
 	holdSlots(t, state)
 	self, _ := os.Executable()
-	_, errOut, rc := zsh(t, env, self+" run --wait 1s -- true")
+	_, errOut, rc := zsh(t, env, self+" run --wait 1s -- go build ./...")
 	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: pid 1: go test holder-2\n") ||
 		!strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (--wait) waiting for") ||
-		!strings.Contains(errOut, guard.LogPrefix+"not run: true — the machine is busy") ||
+		!strings.Contains(errOut, guard.LogPrefix+"not run: go build ./... — the machine is busy") ||
 		!strings.Contains(errOut, "run_in_background (the wait is then 60m)") {
 		t.Errorf("foreground: rc %d, stderr %q", rc, errOut)
 	}
-	_, errOut, rc = zsh(t, append(env, "MEMCAP_WAIT=1s"), "export MEMCAP_BACKGROUND=1; "+self+" run -- true")
+	_, errOut, rc = zsh(t, append(env, "MEMCAP_WAIT=1s"), "export MEMCAP_BACKGROUND=1; "+self+" run -- go build ./...")
 	if rc != guard.ExitBusy || !strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (MEMCAP_WAIT) waiting for") ||
-		!strings.Contains(errOut, guard.LogPrefix+"not run: true — the machine is busy") ||
+		!strings.Contains(errOut, guard.LogPrefix+"not run: go build ./... — the machine is busy") ||
 		strings.Contains(errOut, "run_in_background") {
 		t.Errorf("background: rc %d, stderr %q", rc, errOut)
+	}
+}
+
+// A command that builds nothing runs at once with every slot held, without
+// a wait or a cap; declaring a class puts it back in the queue.
+func TestRunOfACommandThatBuildsNothingSkipsTheQueue(t *testing.T) {
+	state, env := capped(t)
+	holdSlots(t, state)
+	self, _ := os.Executable()
+	for _, command := range []string{"true", "echo built nothing", "go version"} {
+		_, errOut, rc := zsh(t, env, self+" run --wait 5s -- "+command)
+		if rc != 0 || errOut != "" {
+			t.Errorf("%s with every slot held: rc %d, stderr %q", command, rc, errOut)
+		}
+	}
+	if _, errOut, rc := zsh(t, env, self+" run --wait 1s --class build -- true"); rc != guard.ExitBusy {
+		t.Errorf("true declared a build with every slot held: rc %d, stderr %q", rc, errOut)
 	}
 }
 
@@ -310,12 +327,12 @@ func TestBackgroundCallsRunWaitTheBackgroundDefault(t *testing.T) {
 	self, _ := os.Executable()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "build.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run --class build -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
 		t.Fatal(err)
 	}
 	for shape, cmd := range map[string]string{
-		"direct": self + " run -- true",
-		"chain":  "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run -- true",
+		"direct": self + " run --class build -- true",
+		"chain":  "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run --class build -- true",
 		"script": script,
 	} {
 		_, errOut, rc := zsh(t, env, "timeout 3 "+testShell+" -c "+guard.ShellQuote(rewriteCall(t, cmd, true)))

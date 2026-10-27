@@ -43,6 +43,32 @@ func TestDefaultClass(t *testing.T) {
 	}
 }
 
+func TestBuildsNothing(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"true"}, true},
+		{[]string{"/usr/bin/false"}, true},
+		{[]string{"echo", "done"}, true},
+		{[]string{testShell, "-c", "printf '%s' x"}, true},
+		{[]string{"go", "version"}, true},
+		{[]string{testShell, "-c", "make help"}, true},
+		{[]string{"kubectl", "--help"}, true},
+		{[]string{"go", "build", "./..."}, false},
+		{[]string{testShell, "-c", "make"}, false},
+		{[]string{testShell, "-c", "true && go test ./..."}, false},
+		{[]string{testShell, "-c", "echo $(go build ./...)"}, false},
+		{[]string{testShell, "-c", "echo x > out"}, false},
+		{[]string{"./build.sh"}, false},
+		{[]string{testShell, "-c", "  "}, false},
+	} {
+		if got := BuildsNothing(c.argv); got != c.want {
+			t.Errorf("BuildsNothing(%q) = %v, want %v", c.argv, got, c.want)
+		}
+	}
+}
+
 // A benchmark or a lab proof takes no build slot: with every slot held it
 // runs at once, in memcap.slice under its own cap, and caps no slot's slice.
 func TestRunOfASlotlessClassTakesNoSlot(t *testing.T) {
