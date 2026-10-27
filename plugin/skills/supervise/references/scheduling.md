@@ -11,7 +11,8 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   slot: `beekeeper capacity` lists it under `waiting` and counts only the busy against the
   ceiling. The supervisor reads that verdict and never counts sessions by hand. Waiters that
   wake can push busy over the ceiling. No agent is stopped or parked for that: each one finishes
-  its work. `capacity` says `no start: <n> busy at the ceiling of <m>` and the watch says
+  its work. `capacity` says `no start: <n> busy at the ceiling of <m>` (or `no start: ceiling 0`
+  while `capacity.ceiling` is 0; unset defaults to floor 5, ceiling 10) and the watch says
   CAPACITY FULL until busy drops under the ceiling. Until then the supervisor starts nothing, an
   unstaffed epic included (below). At every tick below five, the supervisor fills the free slots in the same turn,
   within the memory guards (`MemAvailable` well above the watch's floor, machine swap not growing,

@@ -1798,7 +1798,8 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   the supervisor or the guide: `parked on a person: …`) apart from one whose headless turn ended
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
   resume at …`).
-- **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10).
+- **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10
+  when unset; a ceiling of 0 refuses every unforced start with `no start: ceiling 0`).
   Busy is a roster agent with a task that is neither parked, kept nor waiting: an agent kept on purpose
   (`agents keep`), one parked on a decision (`agents park`), one a timer wakes and one whose session
   waits on its person are parked; one whose session runs only waits (a `sleep` or a polling

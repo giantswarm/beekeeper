@@ -157,8 +157,12 @@ const (
 )
 
 // noFreeSlot is the build slot's guard: a block for a start that builds, a
-// note for one that does not.
-const noFreeSlot = "no free build slot"
+// note for one that does not. ceilingZero is the block when capacity.ceiling
+// is configured as 0.
+const (
+	noFreeSlot  = "no free build slot"
+	ceilingZero = "ceiling 0"
+)
 
 // blocks says what stops a new start: memory, swap, load and the labs stop
 // any; the build slot stops one that builds, which waits for it, while a
@@ -268,7 +272,10 @@ func (h *headroom) line() string {
 // pressure is a note, not a block.
 func newCapacity(c agentCount, k config.Capacity, h *headroom, builds bool) *capacityView {
 	v := &capacityView{agentCount: c, Floor: k.Floor, Ceiling: k.Ceiling, Headroom: h, Builds: builds}
-	if busy := len(c.Busy); busy >= k.Ceiling {
+	switch busy := len(c.Busy); {
+	case k.Ceiling == 0:
+		v.Blocks = append(v.Blocks, ceilingZero)
+	case busy >= k.Ceiling:
 		v.Blocks = append(v.Blocks, fmt.Sprintf("%d busy at the ceiling of %d", busy, k.Ceiling))
 	}
 	v.Blocks = append(v.Blocks, h.blocks(builds)...)
@@ -363,7 +370,9 @@ func (a *app) capacityCmd() *cobra.Command {
 		Use:   "capacity [--builds]",
 		Short: "Busy agents against the target, the headroom for a start and the verdict",
 		Long: `Count the roster's agents against the supervisor's target (capacity.floor,
-capacity.ceiling) and say whether a new start fits. Busy is a roster agent
+capacity.ceiling; unset, 5 and 10) and say whether a new start fits. A
+configured capacity.ceiling of 0 stops new starts ("no start: ceiling 0");
+capacity.floor of 0 suppresses CAPACITY LOW. Busy is a roster agent
 with a task that is neither parked, kept nor waiting: an agent kept on
 purpose (agents keep), one a timer wakes and one whose session waits on its
 person are parked; one whose session runs only waits (a sleep or a polling
@@ -573,7 +582,7 @@ func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*cla
 	k := w.cfg.Capacity
 	c := countAgents(st, sessions, w.now)
 	busy := len(c.Busy)
-	if (busy >= k.Floor && busy < k.Ceiling) || st.Stop != nil {
+	if k.Ceiling == 0 || (busy >= k.Floor && busy < k.Ceiling) || st.Stop != nil {
 		w.clear("capacity-low")
 		w.clear("capacity-full")
 		return

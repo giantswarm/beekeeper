@@ -859,13 +859,23 @@ func (a Agents) ProfileFor(name string) (Profile, bool) {
 	return Profile{}, false
 }
 
+// DefaultFloor and DefaultCeiling are capacity.floor and capacity.ceiling
+// when unset; an explicit 0 stays 0.
+const (
+	DefaultFloor   = 5
+	DefaultCeiling = 10
+)
+
 // Capacity is the supervisor's target of busy agents and the memory guards
 // that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
 type Capacity struct {
 	// Floor is the fewest busy agents the supervisor keeps (5); Ceiling
-	// the most it starts (10).
-	Floor   int `yaml:"floor"`
-	Ceiling int `yaml:"ceiling"`
+	// the most it starts (10). Zero is honoured: ceiling 0 refuses every
+	// unforced start.
+	Floor      int `yaml:"floor"`
+	Ceiling    int `yaml:"ceiling"`
+	floorSet   bool
+	ceilingSet bool
 	// AvailMinMiB is the MemAvailable a start needs (20 GiB), and the floor
 	// under which disk swap's growth refuses a start.
 	AvailMinMiB int `yaml:"availMinMiB"`
@@ -878,6 +888,24 @@ type Capacity struct {
 	// /proc/pressure/memory, in percent) up to which disk swap's growth is
 	// a warning rather than a refusal (0: any pressure refuses).
 	SwapPSIMax float64 `yaml:"swapPSIMax"`
+}
+
+// UnmarshalYAML records whether floor and ceiling were set, so an explicit 0
+// is kept rather than replaced with the default.
+func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
+	type plain Capacity
+	if err := n.Decode((*plain)(k)); err != nil {
+		return err
+	}
+	var set struct {
+		Floor   *int `yaml:"floor"`
+		Ceiling *int `yaml:"ceiling"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	k.floorSet, k.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	return nil
 }
 
 // AgentShell configures the prelude Claude Code runs before each Bash
@@ -2152,8 +2180,12 @@ func (c *Config) defaults() error {
 	setInt(&c.Memcap.Slots, 2)
 	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
 	setDur(&c.Memcap.HoldBound, 30*time.Minute)
-	setInt(&c.Capacity.Floor, 5)
-	setInt(&c.Capacity.Ceiling, 10)
+	if !c.Capacity.ceilingSet && c.Capacity.Ceiling == 0 {
+		c.Capacity.Ceiling = DefaultCeiling
+	}
+	if !c.Capacity.floorSet && c.Capacity.Floor == 0 {
+		c.Capacity.Floor = max(0, min(DefaultFloor, c.Capacity.Ceiling))
+	}
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
 	setInt(&c.Capacity.SwapGrowthMaxMiB, 256)
 	al := &c.Alerts
