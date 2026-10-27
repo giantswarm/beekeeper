@@ -2512,8 +2512,13 @@ reopen unit imports the session into the desktop once its turn ends, a killed tu
 standby service revives role sessions and starts successors; and the watch's doctor reopens
 workers without a desktop row. `beekeeper stop --reason "<the person's words>"` covers all of it:
 
-- it records the stop (who, when, the reason) and holds `merges` and `github`, unless a full
-  hold on them stands already (one that lets a merge through gives way to the stop's);
+- it records the stop (who, when, the reason) and holds `merges` and `github`, unless a hold
+  that holds them whole stands already; one that lets a merge through (`--except`, a
+  tool-release window) or would end by itself (`--until`, `--lift-when`) gives way to the
+  stop's, and the resume puts it back as it was;
+- it ends the devctl of every running gated merge and promotion before it merges (through its
+  recorded merge-child, as the gate's own preemption does): run the merge again after the
+  resume;
 - it stops every running `beekeeper-agent-*`, `beekeeper-wake-*`, `beekeeper-reopen-*` and
   `beekeeper-report-*` unit, the standby service (`beekeeper-notify.service`) and the units
   `stop.units` names (a timer of the desk's own that would start or change something);
@@ -2528,10 +2533,14 @@ wakes are refused with exit 3, naming the stop's reason; a role's successor, a r
 a desktop import and a scheduled status report do not start; a wake timer that falls due waits
 and fires after the resume. `beekeeper status` starts with `STOPPED: …`, `capacity` says `no
 start: beekeeper is stopped …`, and the watch says `STOPPED: …` once and `ENDED STOPPED` after
-the resume. Running `stop` again stops what came up since and keeps the first reason.
+the resume. Running `stop` again stops what came up since and keeps the first reason. A unit
+that does not stop, a session that does not end or a devctl that cannot be signalled is named on
+a `FAILED` line and makes `stop` exit 1, without the all-clear; the stop stands.
 
-`beekeeper resume` lifts it: the holds the stop set (a hold that stood before stays), the units
-it stopped started again, starts and wakes allowed. It starts no session: it names the sessions
+`beekeeper resume` lifts it: the units it stopped started again first, then the holds the stop
+set lifted (a hold that stood before stays, one it replaced is put back unless its time passed),
+starts and wakes allowed. A unit that does not start again keeps beekeeper stopped, with that
+unit still to start, and makes `resume` exit 1. It starts no session: it names the sessions
 the stop ended, which wait for a wake. The stop never changes `capacity.floor` or
 `capacity.ceiling`, so the capacity after the resume is what it was.
 

@@ -1032,8 +1032,12 @@ type Stop struct {
 	By     Party     `json:"by"`
 	At     time.Time `json:"at"`
 	// Holds are the targets of the holds the stop set (merges, github); a
-	// hold that stood before the stop is not among them and stays.
+	// full hold that stood before the stop is not among them and stays.
 	Holds []string `json:"holds,omitempty"`
+	// Replaced are the holds on those targets the stop's replaced: one that
+	// let a merge through, or that would have ended by itself while the
+	// stop stands (a time, a probe). Resume puts each back as it was.
+	Replaced []Hold `json:"replaced,omitempty"`
 	// Units are the installed units the stop stopped (the standby service,
 	// stop.units), which resume starts again.
 	Units []string `json:"units,omitempty"`

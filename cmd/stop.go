@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -66,7 +67,12 @@ func (a *app) stopCmd() *cobra.Command {
 stopped until beekeeper resume:
 
 - records the stop, with its reason and who stopped;
-- holds "merges" and "github" (beekeeper hold), unless held already;
+- holds "merges" and "github" (beekeeper hold), unless a hold that holds
+  them whole stands already: one that lets a merge through (--except, a
+  tool-release window) or ends by itself (--until, --lift-when) gives way
+  to the stop's, and resume puts it back as it was;
+- ends the devctl of every running gated merge and promotion before it
+  merges (its merge runs again after the resume);
 - stops every unit of beekeeper's starts, wakes, reopens and status
   reports (beekeeper-agent-*, beekeeper-wake-*, beekeeper-reopen-*,
   beekeeper-report-*), the standby service (beekeeper-notify.service)
@@ -88,7 +94,9 @@ waits and fires after the resume; the watch's doctor reopens nothing.
 beekeeper status, capacity and the watch say the stop with its reason.
 
 Run it again while stopped to stop what has come up since: the record
-keeps its first reason. It prints what it stopped.`,
+keeps its first reason. It prints what it stopped. A unit that does not
+stop, a session that does not end or a devctl that cannot be signalled is
+named on a FAILED line and makes it exit 1; the stop stands.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(reason) == "" {
@@ -105,10 +113,13 @@ func (a *app) resumeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "resume",
 		Short: "Lift beekeeper stop: its holds, and the units it stopped back",
-		Long: `Lift the standing beekeeper stop: the holds the stop set are lifted (a
-hold that stood before it stays), the installed units it stopped (the
-standby service, stop.units) start again, and starts, wakes, revives,
-reopens and imports run again. The capacity is what it was: the stop never
+		Long: `Lift the standing beekeeper stop: the installed units it stopped (the
+standby service, stop.units) start again, the holds the stop set are
+lifted, a hold that stood before it stays, one it replaced is put back as
+it was (unless its time passed meanwhile), and starts, wakes, revives,
+reopens and imports run again. A unit that does not start again is named
+on a FAILED line and makes it exit 1: beekeeper stays stopped, with that
+unit still to start, and resume runs again once it is fixed. The capacity is what it was: the stop never
 changes capacity.floor or capacity.ceiling. A wake timer that fell due
 during the stop fires at the watch's next poll.
 
@@ -120,8 +131,9 @@ It prints what it lifted and restarted.`,
 	}
 }
 
-// stop records the stop and its holds, then stops the units and ends the
-// sessions it stops, and records those.
+// stop records the stop and its holds, then ends the running merges' devctl,
+// stops the units and ends the sessions it stops, and records those. Any of
+// them that fails is an error once the rest is done; the stop stands.
 func (a *app) stop(ctx context.Context, reason string) error {
 	me, err := a.caller()
 	if err != nil {
@@ -129,20 +141,20 @@ func (a *app) stop(ctx context.Context, reason string) error {
 	}
 	var rec state.Stop
 	var again bool
-	var held []string
+	var held, replaced []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if again = st.Stop != nil; !again {
 			st.Stop = &state.Stop{Reason: reason, By: me, At: a.now.UTC()}
 		}
-		held = nil
+		held, replaced = nil, nil
 		for _, t := range stopHolds {
-			// A hold that stood before the stop, or that its first run set,
-			// stays; one that lets a merge through (--except, a tool-release
-			// window) gives way to the stop's.
-			if slices.ContainsFunc(st.Holds, func(h state.Hold) bool {
-				return h.Target == t && h.Active(a.now) && h.Except == "" && h.ExceptSession == "" && h.Tool == ""
-			}) {
-				continue
+			i := slices.IndexFunc(st.Holds, func(h state.Hold) bool { return h.Target == t && h.Active(a.now) })
+			if i >= 0 && fullHold(st.Holds[i]) {
+				continue // it holds as long as the stop's would, the first run's too
+			}
+			if i >= 0 {
+				st.Stop.Replaced = append(st.Stop.Replaced, st.Holds[i])
+				replaced = append(replaced, holdTarget(st.Holds[i]))
 			}
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == t || h.Expired(a.now) })
 			st.Holds = append(st.Holds, state.Hold{Target: t, Reason: stopHoldReason(st.Stop.Reason), By: me, At: a.now.UTC()})
@@ -166,6 +178,9 @@ func (a *app) stop(ctx context.Context, reason string) error {
 	} else {
 		p("stop: recorded, by %s: %s", me.Name, reason)
 	}
+	for _, h := range replaced {
+		p("stop: the hold on %s gives way to the stop's; resume puts it back", h)
+	}
 	for _, t := range held {
 		p("stop: held %s", t)
 	}
@@ -174,11 +189,13 @@ func (a *app) stop(ctx context.Context, reason string) error {
 		return err
 	}
 	spare := spared(st, me)
-	units, lines := a.stopUnits(ctx, spare)
-	for _, l := range lines {
-		p("stop: %s", l)
-	}
-	ended, lines := a.endWorkers(ctx, st, spare)
+	var failed []string
+	lines, f := a.endMerges(st, me)
+	failed = append(failed, f...)
+	units, ul, f := a.stopUnits(ctx, spare)
+	lines, failed = append(lines, ul...), append(failed, f...)
+	ended, el, f := a.endWorkers(ctx, st, spare)
+	lines, failed = append(lines, el...), append(failed, f...)
 	for _, l := range lines {
 		p("stop: %s", l)
 	}
@@ -196,13 +213,53 @@ func (a *app) stop(ctx context.Context, reason string) error {
 				st.Stop.Sessions = append(st.Stop.Sessions, n)
 			}
 		}
-		return []state.Event{event(me, "stop.stopped", "units %s; sessions %s", listOrNone(units), listOrNone(ended))}, nil
+		evs := []state.Event{event(me, "stop.stopped", "units %s; sessions %s", listOrNone(units), listOrNone(ended))}
+		if len(failed) > 0 {
+			evs = append(evs, event(me, "stop.failed", "%s", strings.Join(failed, "; ")))
+		}
+		return evs, nil
 	})
 	if err != nil {
 		return err
 	}
+	if len(failed) > 0 {
+		for _, l := range failed {
+			p("stop: FAILED %s", l)
+		}
+		return fmt.Errorf("the stop stands, but %d of its steps failed (above); act on them and run beekeeper stop again", len(failed))
+	}
 	p("stop: nothing starts, wakes, revives, imports or merges until beekeeper resume")
 	return nil
+}
+
+// fullHold reports whether h holds its target whole until someone lifts
+// it: no exception, no tool-release window, no end of its own (a time, a
+// probe) that would lift it while the stop stands.
+func fullHold(h state.Hold) bool {
+	return h.Except == "" && h.ExceptSession == "" && h.Tool == "" && h.Until.IsZero() && h.LiftWhen == ""
+}
+
+// endMerges ends the devctl of every running gated merge or promotion
+// before it merges: the stop's merges hold refuses new ones, but a devctl
+// already waiting for CI would merge on. Only a merge's recorded
+// merge-child is signalled, as the gate's own preemption does.
+func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string) {
+	var evs []state.Event
+	for _, m := range st.Merges {
+		if m.Phase != state.Running || m.Child == 0 || !proc.Alive(m.Child) || readPID(mergeBase(a.store.Dir(), m.Repo, m.PR)) != m.Child {
+			continue
+		}
+		if err := endChild(m.Child); err != nil {
+			failed = append(failed, fmt.Sprintf("ending the devctl of %s (pid %d): %v", m.Key(), m.Child, err))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("ended the devctl of %s (pid %d) before it merged; run its merge again after the resume", m.Key(), m.Child))
+		evs = append(evs, event(me, "merge.stopped", "%s in lane %s: its devctl (pid %d) ended by beekeeper stop", m.Key(), m.Lane, m.Child))
+	}
+	if len(evs) > 0 {
+		_ = a.store.Update(func(*state.State) ([]state.Event, error) { return evs, nil })
+	}
+	return lines, failed
 }
 
 // spared are the sessions a stop leaves running: the supervisor's, the
@@ -238,10 +295,11 @@ func sparedUnit(unit, own string, spare []state.Party) bool {
 // stopUnits stops the running units of beekeeper's starts, wakes and
 // reopens but the spared sessions', and the installed units that run of
 // the standby service and stop.units. It returns the installed units it
-// stopped, which resume starts again, and a line for each unit.
-func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, lines []string) {
+// stopped, which resume starts again, a line for each unit stopped and one
+// for each that did not stop.
+func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, lines, failed []string) {
 	if !plat.Launcher.Available() {
-		return nil, []string{"no unit stopped: this machine has no unit launcher (systemd --user); the standby watch honours the stop"}
+		return nil, []string{"no unit stopped: this machine has no unit launcher (systemd --user); the standby watch honours the stop"}, nil
 	}
 	own := ownUnit()
 	for _, u := range plat.Launcher.Running(ctx, true, turnPatterns...) {
@@ -249,7 +307,7 @@ func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, li
 			continue
 		}
 		if err := plat.Launcher.Stop(ctx, u); err != nil {
-			lines = append(lines, fmt.Sprintf("stopping %s: %v", u, err))
+			failed = append(failed, fmt.Sprintf("stopping %s: %v", u, err))
 			continue
 		}
 		lines = append(lines, "stopped "+u)
@@ -261,21 +319,22 @@ func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, li
 			continue
 		}
 		if err := plat.Launcher.Stop(ctx, u); err != nil {
-			lines = append(lines, fmt.Sprintf("stopping %s: %v", u, err))
+			failed = append(failed, fmt.Sprintf("stopping %s: %v", u, err))
 			continue
 		}
 		installed = append(installed, u)
 		lines = append(lines, "stopped "+u+"; resume starts it again")
 	}
-	return installed, lines
+	return installed, lines, failed
 }
 
 // endWorkers ends every live session beekeeper started but the spared
-// ones, in parallel, and returns the names it ended and a line for each.
-func (a *app) endWorkers(ctx context.Context, st *state.State, spare []state.Party) (ended, lines []string) {
+// ones, in parallel, and returns the names it ended, a line for each and
+// one for each it could not end.
+func (a *app) endWorkers(ctx context.Context, st *state.State, spare []state.Party) (ended, lines, failed []string) {
 	sessions, _, err := a.sessions()
 	if err != nil {
-		return nil, []string{fmt.Sprintf("no session ended: reading the sessions failed: %v", err)}
+		return nil, nil, []string{fmt.Sprintf("no session ended: reading the sessions failed: %v", err)}
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -289,7 +348,7 @@ func (a *app) endWorkers(ctx context.Context, st *state.State, spare []state.Par
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				lines = append(lines, fmt.Sprintf("ending %q (session %s): %v", s.Name, s.ID, err))
+				failed = append(failed, fmt.Sprintf("ending %q (session %s): %v", s.Name, s.ID, err))
 				return
 			}
 			ended = append(ended, s.Name)
@@ -299,7 +358,8 @@ func (a *app) endWorkers(ctx context.Context, st *state.State, spare []state.Par
 	wg.Wait()
 	slices.Sort(ended)
 	slices.Sort(lines)
-	return ended, lines
+	slices.Sort(failed)
+	return ended, lines, failed
 }
 
 // endedLine says the session s the stop ended with n processes.
@@ -319,18 +379,44 @@ func listOrNone(items []string) string {
 	return strings.Join(items, ", ")
 }
 
-// resume lifts the standing stop: its holds, then the units it stopped.
+// resume lifts the standing stop. It first starts the units the stop
+// stopped, while the stop still stands: one that does not start keeps the
+// stop, with that unit still to start, and is an error. Then it lifts the
+// holds the stop set, puts back those it replaced and clears the record.
 func (a *app) resume(ctx context.Context) error {
 	me, err := a.caller()
 	if err != nil {
 		return err
 	}
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
+	if st.Stop == nil {
+		p("resume: beekeeper is not stopped")
+		return nil
+	}
+	var startedUnits, failed []string
+	for _, u := range st.Stop.Units {
+		if err := plat.Launcher.Resume(ctx, u); err != nil {
+			failed = append(failed, fmt.Sprintf("starting %s again: %v", u, err))
+			continue
+		}
+		startedUnits = append(startedUnits, u)
+		p("resume: started %s again", u)
+	}
 	var rec *state.Stop
-	var lifted []string
+	var lifted, restored, lapsed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if rec = st.Stop; rec == nil {
 			return nil, nil
 		}
+		if len(failed) > 0 {
+			rec.Units = slices.DeleteFunc(rec.Units, func(u string) bool { return slices.Contains(startedUnits, u) })
+			return []state.Event{event(me, "resume.failed", "%s", strings.Join(failed, "; "))}, nil
+		}
+		lifted, restored, lapsed = nil, nil, nil
 		st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
 			if slices.Contains(rec.Holds, h.Target) && h.Reason == stopHoldReason(rec.Reason) {
 				lifted = append(lifted, h.Target)
@@ -338,27 +424,42 @@ func (a *app) resume(ctx context.Context) error {
 			}
 			return h.Expired(a.now)
 		})
+		for _, h := range rec.Replaced {
+			switch {
+			case h.Expired(a.now):
+				lapsed = append(lapsed, holdTarget(h))
+			case slices.ContainsFunc(st.Holds, func(x state.Hold) bool { return x.Target == h.Target }):
+				// set anew during the stop: that one stays
+			default:
+				st.Holds = append(st.Holds, h)
+				restored = append(restored, holdTarget(h))
+			}
+		}
 		st.Stop = nil
 		return []state.Event{event(me, "resume", "the stop by %s since %s: %s", rec.By.Name, rec.At.Format("15:04"), rec.Reason)}, nil
 	})
 	if err != nil {
 		return err
 	}
-	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 	if rec == nil {
 		p("resume: beekeeper is not stopped")
 		return nil
+	}
+	if len(failed) > 0 {
+		for _, l := range failed {
+			p("resume: FAILED %s", l)
+		}
+		return fmt.Errorf("beekeeper stays stopped: %d of the units the stop stopped did not start again (above); act on them and run beekeeper resume again", len(failed))
 	}
 	p("resume: lifted the stop by %s since %s: %s", rec.By.Name, clock(a.now, rec.At), rec.Reason)
 	for _, t := range lifted {
 		p("resume: lifted the hold on %s", t)
 	}
-	for _, u := range rec.Units {
-		if err := plat.Launcher.Resume(ctx, u); err != nil {
-			p("resume: starting %s again: %v", u, err)
-			continue
-		}
-		p("resume: started %s again", u)
+	for _, t := range restored {
+		p("resume: put back the hold on %s", t)
+	}
+	for _, t := range lapsed {
+		p("resume: the hold on %s ended during the stop, not put back", t)
 	}
 	p("resume: capacity as configured: floor %d, ceiling %d", a.cfg.Capacity.Floor, a.cfg.Capacity.Ceiling)
 	if len(rec.Sessions) > 0 {

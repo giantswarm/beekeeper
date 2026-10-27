@@ -3,8 +3,12 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +26,8 @@ import (
 const (
 	deskTimer  = "desk-guard.timer"
 	agentSeven = "Agent seven"
+	untilReset = "until the reset"
+	reportUnit = "beekeeper-report-9f9f9f9f.service"
 	stopWorker = "5a1b2c3d-0000-4000-8000-000000000001" //nolint:gosec // a session id
 	stopPerson = "6b2c3d4e-0000-4000-8000-000000000002"
 	stopGuide  = "7c3d4e5f-0000-4000-8000-000000000003"
@@ -36,7 +42,9 @@ type haltLauncher struct {
 	installed map[string]string
 	stopped   []string
 	resumed   []string
-	started   []platform.Unit
+	// fail are the units whose stop or start fails.
+	fail    map[string]bool
+	started []platform.Unit
 }
 
 func (l *haltLauncher) Available() bool { return true }
@@ -62,6 +70,9 @@ func (l *haltLauncher) State(_ context.Context, name string) string {
 func (l *haltLauncher) Stop(_ context.Context, name string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.fail[name] {
+		return errors.New("refused")
+	}
 	l.stopped = append(l.stopped, name)
 	l.active = slices.DeleteFunc(l.active, func(u string) bool { return u == name })
 	if _, ok := l.installed[name]; ok {
@@ -73,6 +84,9 @@ func (l *haltLauncher) Stop(_ context.Context, name string) error {
 func (l *haltLauncher) Resume(_ context.Context, name string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.fail[name] {
+		return errors.New("refused")
+	}
 	l.resumed = append(l.resumed, name)
 	l.installed[name] = unitActive
 	return nil
@@ -113,7 +127,7 @@ func stopDesk(t *testing.T) (*app, *haltLauncher, *[]string) {
 	a.cfg.Stop.Units = []string{deskTimer}
 	l := &haltLauncher{
 		active: []string{"beekeeper-agent-5a1b2c3d.service", "beekeeper-reopen-5a1b2c3d-11111111.service",
-			"beekeeper-wake-s1-22222222.service", "beekeeper-report-9f9f9f9f.service"},
+			"beekeeper-wake-s1-22222222.service", reportUnit},
 		installed: map[string]string{standbyUnit: unitActive, deskTimer: unitActive, "other.timer": unitActive},
 	}
 	plat.Launcher = l
@@ -169,7 +183,7 @@ func TestStopAndResume(t *testing.T) {
 		}
 	}
 	slices.Sort(l.stopped)
-	want := []string{"beekeeper-agent-5a1b2c3d.service", standbyUnit, "beekeeper-reopen-5a1b2c3d-11111111.service", "beekeeper-report-9f9f9f9f.service", deskTimer}
+	want := []string{"beekeeper-agent-5a1b2c3d.service", standbyUnit, "beekeeper-reopen-5a1b2c3d-11111111.service", reportUnit, deskTimer}
 	slices.Sort(want)
 	if !slices.Equal(l.stopped, want) {
 		t.Errorf("stopped %v, want %v", l.stopped, want)
@@ -233,31 +247,73 @@ func TestStopAndResume(t *testing.T) {
 	}
 }
 
-// A hold that stood before the stop stays after the resume; one that lets
-// a merge through gives way to the stop's, which the resume lifts.
-func TestResumeKeepsAHoldThatStoodBefore(t *testing.T) {
-	a, _, _ := stopDesk(t)
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Holds = append(st.Holds, state.Hold{Target: holdGitHub, Reason: "the budget is spent", At: a.now},
-			state.Hold{Target: holdMerges, Reason: "a window", Except: refOne, At: a.now})
-		return nil, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := a.stop(context.Background(), "stop"); err != nil {
-		t.Fatal(err)
-	}
-	st, _ := a.store.Read()
-	if !slices.Equal(st.Stop.Holds, []string{holdMerges}) {
-		t.Fatalf("the stop's holds %v, want merges only", st.Stop.Holds)
-	}
-	if err := a.resume(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	st, _ = a.store.Read()
-	if hs := a.activeHolds(st); len(hs) != 1 || hs[0].Target != holdGitHub || hs[0].Reason != "the budget is spent" {
-		t.Errorf("holds after resume: %+v", hs)
+// A full hold that stood before the stop stays after the resume. One that
+// lets a merge through, or that would end by itself during the stop, gives
+// way to the stop's and is put back exactly; one whose time passed during
+// the stop is not.
+func TestResumeKeepsAndRestoresTheHoldsThatStoodBefore(t *testing.T) {
+	window := state.Hold{Target: holdMerges, Reason: "a window", Except: refOne, ExceptSession: "a promoter", At: time.Now().UTC().Add(-time.Hour)}
+	for name, tc := range map[string]struct {
+		before   []state.Hold
+		stopHeld []string
+		after    []state.Hold
+	}{
+		"a full hold stays": {
+			before:   []state.Hold{{Target: holdGitHub, Reason: "the budget is spent", At: time.Now().UTC()}},
+			stopHeld: []string{holdMerges},
+			after:    []state.Hold{{Target: holdGitHub, Reason: "the budget is spent"}},
+		},
+		"an exception is put back": {
+			before:   []state.Hold{window},
+			stopHeld: stopHolds,
+			after:    []state.Hold{window},
+		},
+		"a timed hold is put back": {
+			before:   []state.Hold{{Target: holdGitHub, Reason: untilReset, Until: time.Now().UTC().Add(time.Hour)}},
+			stopHeld: stopHolds,
+			after:    []state.Hold{{Target: holdGitHub, Reason: untilReset}},
+		},
+		"a timed hold that ended meanwhile is not": {
+			before:   []state.Hold{{Target: holdGitHub, Reason: untilReset, Until: time.Now().UTC().Add(time.Second)}},
+			stopHeld: stopHolds,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, _, _ := stopDesk(t)
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Holds = tc.before; return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.stop(context.Background(), "stop"); err != nil {
+				t.Fatal(err)
+			}
+			st, _ := a.store.Read()
+			if !slices.Equal(st.Stop.Holds, tc.stopHeld) {
+				t.Fatalf("the stop's holds %v, want %v", st.Stop.Holds, tc.stopHeld)
+			}
+			for _, target := range stopHolds {
+				if h, ok := activeHold(st, a, target); !ok || (target == holdMerges && h.Except != "") {
+					t.Errorf("%s not held whole during the stop: %+v", target, h)
+				}
+			}
+			a.now = time.Now().Add(time.Minute)
+			if err := a.resume(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			st, _ = a.store.Read()
+			hs := a.activeHolds(st)
+			if len(hs) != len(tc.after) {
+				t.Fatalf("holds after resume: %+v, want %+v", hs, tc.after)
+			}
+			for i, want := range tc.after {
+				got := hs[i]
+				if got.Target != want.Target || got.Reason != want.Reason || (want.Except == "" && got.Except != "") {
+					t.Errorf("hold %d after resume: %+v, want %+v", i, got, want)
+				}
+				if want.Except != "" && (got.Except != want.Except || got.ExceptSession != want.ExceptSession || !got.At.Equal(want.At)) {
+					t.Errorf("the window came back changed: %+v, want %+v", got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -363,5 +419,118 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	w.sayStop(&state.State{})
 	if !strings.Contains(out.String(), "ENDED STOPPED") {
 		t.Errorf("no ENDED line after the resume:\n%s", out)
+	}
+}
+
+// A stop ends the devctl of a running gated merge before it merges, through
+// its recorded merge-child, and says so.
+func TestStopEndsARunningMergesDevctl(t *testing.T) {
+	a, _, _ := stopDesk(t)
+	child := os.Getpid() // alive; endChild is stubbed
+	base := mergeBase(a.store.Dir(), scratchRepo, 7)
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(child)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Phase: state.Running, Child: child},
+			state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ended []int
+	orig := endChild
+	endChild = func(pid int) error { ended = append(ended, pid); return nil }
+	t.Cleanup(func() { endChild = orig })
+	if err := a.stop(context.Background(), "stop"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ended, []int{child}) {
+		t.Errorf("ended %v, want the running merge's devctl %d", ended, child)
+	}
+	if s := a.out.(interface{ String() string }).String(); !strings.Contains(s, "ended the devctl of o/r#7") || !strings.Contains(s, "before it merged") {
+		t.Errorf("stop's output:\n%s", s)
+	}
+}
+
+// A unit that does not stop and a session that does not end make the stop
+// fail, named, without its all-clear; the stop stands. A unit that does not
+// start again keeps beekeeper stopped with that unit to start; the next
+// resume, once it starts, lifts the stop.
+func TestStopAndResumeFailures(t *testing.T) {
+	a, l, _ := stopDesk(t)
+	out := a.out.(interface{ String() string })
+	l.fail = map[string]bool{reportUnit: true}
+	endStopped = func(context.Context, *claude.Session) (int, error) {
+		return 0, errors.New("the CLI still runs after SIGKILL")
+	}
+	err := a.stop(context.Background(), "stop")
+	if err == nil || !strings.Contains(err.Error(), "2 of its steps failed") {
+		t.Fatalf("stop with failures: %v", err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "FAILED stopping beekeeper-report-9f9f9f9f.service") || !strings.Contains(s, "FAILED ending") || strings.Contains(s, "until beekeeper resume") {
+		t.Errorf("stop's output:\n%s", s)
+	}
+	st, _ := a.store.Read()
+	if st.Stop == nil || len(a.activeHolds(st)) != 2 {
+		t.Fatalf("the stop does not stand: %+v", st.Stop)
+	}
+
+	l.fail = map[string]bool{deskTimer: true}
+	err = a.resume(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "beekeeper stays stopped") || !strings.Contains(out.String(), "FAILED starting "+deskTimer) {
+		t.Fatalf("resume with a unit that does not start: %v\n%s", err, out)
+	}
+	st, _ = a.store.Read()
+	if st.Stop == nil || !slices.Equal(st.Stop.Units, []string{deskTimer}) || len(a.activeHolds(st)) != 2 {
+		t.Fatalf("after the failed resume: stop %+v, holds %+v", st.Stop, st.Holds)
+	}
+	l.fail = nil
+	if err := a.resume(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = a.store.Read()
+	if st.Stop != nil || len(a.activeHolds(st)) != 0 || !slices.Equal(l.resumed, []string{standbyUnit, deskTimer}) {
+		t.Errorf("after the resume: stop %+v, holds %+v, resumed %v", st.Stop, st.Holds, l.resumed)
+	}
+}
+
+// While stopped, agents desktop, a standby revive and a hand-over are
+// refused, the stop's reason named.
+func TestStopRefusesDesktopReviveAndHandover(t *testing.T) {
+	a, _, _ := stopDesk(t)
+	if err := a.stop(context.Background(), "the person said stop"); err != nil {
+		t.Fatal(err)
+	}
+	c := a.agentDesktopCmd()
+	c.SetArgs([]string{agentSeven})
+	c.SetOut(io.Discard)
+	c.SetErr(io.Discard)
+	if err := c.Execute(); !refusedStop(err) {
+		t.Errorf("agents desktop while stopped: %v", err)
+	}
+	if err := a.reviveFromWatch(context.Background(), supervisorRole, state.Party{Session: stopWorker, Name: agentSeven}, "resume"); !refusedStop(err) {
+		t.Errorf("revive while stopped: %v", err)
+	}
+	st, _ := a.store.Read()
+	i, err := findAgent(st, agentSeven)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hook := `{"hooks": {"PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "beekeeper hook permissionrequest"}]}]}}`
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(hook), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.handOver(context.Background(), handover{agent: st.Agents[i], dir: dir}); !refusedStop(err) || !strings.Contains(err.Error(), "the person said stop") {
+		t.Errorf("hand-over while stopped: %v", err)
 	}
 }

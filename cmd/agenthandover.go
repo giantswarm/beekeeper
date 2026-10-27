@@ -386,6 +386,14 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		return refused("%q is not handed over: no PermissionRequest hook runs `beekeeper hook permissionrequest` in %s, so its follow-up would stop at its first card; "+
 			"install the hook there (README: Agents started without a click) or pass --dir a folder whose settings have it", ag.Name, strings.Join(files, ", "))
 	}
+	// Before the note request, whose headless turn would wake the session.
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := a.refuseStopped(st, "handing over "+ag.Name); err != nil {
+		return err
+	}
 	noted := "no note"
 	note, ok, err := a.askNote(ctx, h)
 	if err != nil {
