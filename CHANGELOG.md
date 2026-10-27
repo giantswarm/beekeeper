@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `browse --help`'s GitHub upload recipe adds the temporary file input to the nearest common ancestor of the comment textarea and its Comment button, marked `data-beekeeper-upload`, and scopes the upload-target check to it, instead of to a comment form GitHub no longer renders ([#1526](https://github.com/giantswarm/beekeeper/issues/1526)).
 - `beekeeper run` without `--class` runs a command that cannot build at once, uncapped and outside the build slot queue: a single `true`, `false`, `echo` or `printf`, or a command that only prints its help or version (`go version`, `make help`, `kubectl --help`). It waited for a build slot like a build ([#919](https://github.com/giantswarm/beekeeper/issues/919)).
 
 ### Changed
