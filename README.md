@@ -2517,8 +2517,9 @@ workers without a desktop row. `beekeeper stop --reason "<the person's words>"` 
   tool-release window) or would end by itself (`--until`, `--lift-when`) gives way to the
   stop's, and the resume puts it back as it was;
 - it ends the devctl of every running gated merge and promotion before it merges (through its
-  recorded merge-child, as the gate's own preemption does): run the merge again after the
-  resume;
+  recorded merge-child, as a TaskStop of the gate does), and says, as GitHub reports it, whether
+  the pull request merged before the stop or nothing merged (run that merge again after the
+  resume); a waiting merge keeps its place behind the hold;
 - it stops every running `beekeeper-agent-*`, `beekeeper-wake-*`, `beekeeper-reopen-*` and
   `beekeeper-report-*` unit, the standby service (`beekeeper-notify.service`) and the units
   `stop.units` names (a timer of the desk's own that would start or change something);

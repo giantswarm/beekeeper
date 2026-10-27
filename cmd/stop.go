@@ -72,7 +72,8 @@ stopped until beekeeper resume:
   tool-release window) or ends by itself (--until, --lift-when) gives way
   to the stop's, and resume puts it back as it was;
 - ends the devctl of every running gated merge and promotion before it
-  merges (its merge runs again after the resume);
+  merges, saying whether GitHub reports it merged before the stop (a
+  release wait) or nothing merged; a waiting merge keeps its place;
 - stops every unit of beekeeper's starts, wakes, reopens and status
   reports (beekeeper-agent-*, beekeeper-wake-*, beekeeper-reopen-*,
   beekeeper-report-*), the standby service (beekeeper-notify.service)
@@ -241,25 +242,33 @@ func fullHold(h state.Hold) bool {
 
 // endMerges ends the devctl of every running gated merge or promotion
 // before it merges: the stop's merges hold refuses new ones, but a devctl
-// already waiting for CI would merge on. Only a merge's recorded
-// merge-child is signalled, as the gate's own preemption does.
+// already waiting for CI would merge on. It is a TaskStop's stopMerges on
+// the running merges only (a waiting merge keeps its place behind the
+// hold): only a merge's recorded merge-child is signalled, and each line
+// says, as GitHub reports it, whether the pull request merged before the
+// stop or nothing merged. A devctl that still runs after the stop's wait
+// fails.
 func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string) {
-	var evs []state.Event
+	running := func(m state.Merge) bool { return m.Phase == state.Running }
+	var children []state.Merge
 	for _, m := range st.Merges {
-		if m.Phase != state.Running || m.Child == 0 || !proc.Alive(m.Child) || readPID(mergeBase(a.store.Dir(), m.Repo, m.PR)) != m.Child {
-			continue
+		if running(m) && m.Child != 0 && proc.Alive(m.Child) {
+			children = append(children, m)
 		}
-		if err := endChild(m.Child); err != nil {
-			failed = append(failed, fmt.Sprintf("ending the devctl of %s (pid %d): %v", m.Key(), m.Child, err))
-			continue
+	}
+	if len(children) == 0 {
+		return nil, nil
+	}
+	said, err := stopMerges(a.store, me, running, true, func(state.Merge) string { return "beekeeper stop" })
+	if err != nil {
+		return nil, []string{fmt.Sprintf("ending the running merges: %v", err)}
+	}
+	for _, m := range children {
+		if proc.Alive(m.Child) {
+			failed = append(failed, fmt.Sprintf("the devctl of %s (merge-child pid %d) still runs", m.Key(), m.Child))
 		}
-		lines = append(lines, fmt.Sprintf("ended the devctl of %s (pid %d) before it merged; run its merge again after the resume", m.Key(), m.Child))
-		evs = append(evs, event(me, "merge.stopped", "%s in lane %s: its devctl (pid %d) ended by beekeeper stop", m.Key(), m.Lane, m.Child))
 	}
-	if len(evs) > 0 {
-		_ = a.store.Update(func(*state.State) ([]state.Event, error) { return evs, nil })
-	}
-	return lines, failed
+	return said, failed
 }
 
 // spared are the sessions a stop leaves running: the supervisor's, the

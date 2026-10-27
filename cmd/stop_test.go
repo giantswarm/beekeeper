@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -252,31 +254,20 @@ func TestStopAndResume(t *testing.T) {
 // way to the stop's and is put back exactly; one whose time passed during
 // the stop is not.
 func TestResumeKeepsAndRestoresTheHoldsThatStoodBefore(t *testing.T) {
-	window := state.Hold{Target: holdMerges, Reason: "a window", Except: refOne, ExceptSession: "a promoter", At: time.Now().UTC().Add(-time.Hour)}
+	now := time.Now().UTC().Truncate(time.Second)
+	full := state.Hold{Target: holdGitHub, Reason: "the budget is spent", At: now.Add(-2 * time.Hour)}
+	window := state.Hold{Target: holdMerges, Reason: "a window", Except: refOne, ExceptSession: "a promoter", At: now.Add(-time.Hour)}
+	timed := state.Hold{Target: holdGitHub, Reason: untilReset, At: now.Add(-time.Hour), Until: now.Add(time.Hour)}
+	lapsing := state.Hold{Target: holdGitHub, Reason: untilReset, At: now.Add(-time.Hour), Until: now.Add(time.Second)}
 	for name, tc := range map[string]struct {
 		before   []state.Hold
 		stopHeld []string
 		after    []state.Hold
 	}{
-		"a full hold stays": {
-			before:   []state.Hold{{Target: holdGitHub, Reason: "the budget is spent", At: time.Now().UTC()}},
-			stopHeld: []string{holdMerges},
-			after:    []state.Hold{{Target: holdGitHub, Reason: "the budget is spent"}},
-		},
-		"an exception is put back": {
-			before:   []state.Hold{window},
-			stopHeld: stopHolds,
-			after:    []state.Hold{window},
-		},
-		"a timed hold is put back": {
-			before:   []state.Hold{{Target: holdGitHub, Reason: untilReset, Until: time.Now().UTC().Add(time.Hour)}},
-			stopHeld: stopHolds,
-			after:    []state.Hold{{Target: holdGitHub, Reason: untilReset}},
-		},
-		"a timed hold that ended meanwhile is not": {
-			before:   []state.Hold{{Target: holdGitHub, Reason: untilReset, Until: time.Now().UTC().Add(time.Second)}},
-			stopHeld: stopHolds,
-		},
+		"a full hold stays":                        {before: []state.Hold{full}, stopHeld: []string{holdMerges}, after: []state.Hold{full}},
+		"an exception is put back":                 {before: []state.Hold{window}, stopHeld: stopHolds, after: []state.Hold{window}},
+		"a timed hold is put back":                 {before: []state.Hold{timed}, stopHeld: stopHolds, after: []state.Hold{timed}},
+		"a timed hold that ended meanwhile is not": {before: []state.Hold{lapsing}, stopHeld: stopHolds},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, _, _ := stopDesk(t)
@@ -306,11 +297,8 @@ func TestResumeKeepsAndRestoresTheHoldsThatStoodBefore(t *testing.T) {
 			}
 			for i, want := range tc.after {
 				got := hs[i]
-				if got.Target != want.Target || got.Reason != want.Reason || (want.Except == "" && got.Except != "") {
-					t.Errorf("hold %d after resume: %+v, want %+v", i, got, want)
-				}
-				if want.Except != "" && (got.Except != want.Except || got.ExceptSession != want.ExceptSession || !got.At.Equal(want.At)) {
-					t.Errorf("the window came back changed: %+v, want %+v", got, want)
+				if got.Target != want.Target || got.Reason != want.Reason || got.Except != want.Except || got.ExceptSession != want.ExceptSession || !got.At.Equal(want.At) || !got.Until.Equal(want.Until) {
+					t.Errorf("the hold came back changed: %+v, want %+v", got, want)
 				}
 			}
 		})
@@ -422,38 +410,59 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	}
 }
 
-// A stop ends the devctl of a running gated merge before it merges, through
-// its recorded merge-child, and says so.
+// A stop ends the devctl of a running gated merge through its recorded
+// merge-child, and says what GitHub reports: one whose release wait it
+// ended merged before the stop, one waiting for CI merged nothing. A
+// waiting merge keeps its place behind the hold.
 func TestStopEndsARunningMergesDevctl(t *testing.T) {
 	a, _, _ := stopDesk(t)
-	child := os.Getpid() // alive; endChild is stubbed
-	base := mergeBase(a.store.Dir(), scratchRepo, 7)
-	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(child)), 0o600); err != nil {
-		t.Fatal(err)
+	children := map[int]int{}
+	for _, pr := range []int{7, 9} {
+		c := exec.Command("sleep", "60")
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() { _ = c.Wait(); close(done) }()
+		t.Cleanup(func() { _ = c.Process.Kill(); <-done })
+		children[pr] = c.Process.Pid
+		base := mergeBase(a.store.Dir(), scratchRepo, pr)
+		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(c.Process.Pid)), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Phase: state.Running, Child: child},
+		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Phase: state.Running, Child: children[7]},
+			state.Merge{Repo: scratchRepo, PR: 9, Lane: scratchRepo, Phase: state.Running, Child: children[9]},
 			state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting})
 		return nil, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ended []int
-	orig := endChild
-	endChild = func(pid int) error { ended = append(ended, pid); return nil }
-	t.Cleanup(func() { endChild = orig })
+	merged := time.Now().Add(-time.Minute)
+	orig := pullState
+	pullState = func(_ context.Context, _ string, pr int) (github.Pull, error) {
+		if pr == 9 {
+			return github.Pull{State: github.Merged, MergedAt: merged}, nil
+		}
+		return github.Pull{State: github.Open}, nil
+	}
+	t.Cleanup(func() { pullState = orig })
 	if err := a.stop(context.Background(), "stop"); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(ended, []int{child}) {
-		t.Errorf("ended %v, want the running merge's devctl %d", ended, child)
-	}
-	if s := a.out.(interface{ String() string }).String(); !strings.Contains(s, "ended the devctl of o/r#7") || !strings.Contains(s, "before it merged") {
+	s := a.out.(interface{ String() string }).String()
+	if !strings.Contains(s, scratchRepo+"#7 cancelled") || !strings.Contains(s, "nothing merged") ||
+		!strings.Contains(s, scratchRepo+"#9 merged before the stop") || strings.Contains(s, "#9 cancelled") {
 		t.Errorf("stop's output:\n%s", s)
+	}
+	st, _ := a.store.Read()
+	if !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.PR == 8 && m.Phase == state.Waiting }) {
+		t.Errorf("the waiting merge lost its place: %+v", st.Merges)
 	}
 }
 
