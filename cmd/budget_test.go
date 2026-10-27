@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -183,5 +185,63 @@ func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 	w.budget(context.Background(), time.Now())
 	if !strings.Contains(out.String(), "ENDED GRAPHQL REFUSED") {
 		t.Errorf("the refusal's end was not said:\n%s", out)
+	}
+}
+
+// searchGitHub stands in for gh's login and for GitHub: REST and GraphQL
+// answer with headroom, /rate_limit with code search left codeLeft of 10.
+func searchGitHub(t *testing.T, codeLeft int, reset time.Time) {
+	t.Helper()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho tok\n"), 0o700); err != nil { //nolint:gosec // a fake gh
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-RateLimit-Limit", "5000")
+		h.Set("X-RateLimit-Remaining", "4800")
+		h.Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+		switch r.URL.Path {
+		case "/graphql":
+			_, _ = fmt.Fprintf(w, `{"data":{"rateLimit":{"limit":5000,"remaining":4960,"used":40,"resetAt":%q}}}`, reset.UTC().Format(time.RFC3339))
+		case "/rate_limit":
+			_, _ = fmt.Fprintf(w, `{"resources":{"search":{"limit":30,"remaining":30,"used":0,"reset":%[1]d},"code_search":{"limit":10,"remaining":%[2]d,"used":%[3]d,"reset":%[1]d}}}`,
+				reset.Unix(), codeLeft, 10-codeLeft)
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("BEEKEEPER_GITHUB_API", srv.URL)
+}
+
+// budget prints a row per search limit with its reset, and says a spent
+// code-search limit is spent until its reset.
+func TestBudgetShowsTheSearchLimits(t *testing.T) {
+	for name, tc := range map[string]struct {
+		codeLeft int
+		want     string
+	}{
+		"headroom": {7, "code search: 7 of 10 left, resets "},
+		"spent":    {0, "code search: SPENT, 0 of 10 left until "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, out := budgetApp(t)
+			reset := a.now.Add(40 * time.Second)
+			searchGitHub(t, tc.codeLeft, reset)
+			c := a.budgetCmd()
+			c.SetArgs(nil)
+			c.SetOut(out)
+			c.SetErr(out)
+			if err := c.Execute(); err != nil {
+				t.Fatalf("budget = %v", err)
+			}
+			for _, want := range []string{tc.want + clock(a.now, reset), "search: 30 of 30 left, resets " + clock(a.now, reset)} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("budget printed %q, want %q", out.String(), want)
+				}
+			}
+		})
 	}
 }
