@@ -277,6 +277,9 @@ func (w *watcher) upAgain(rl role, holder state.Party) {
 // Any other holder gets its successor at once. It returns what the GONE
 // line adds.
 func (w *watcher) standIn(ctx context.Context, rl role, st *state.State, holder state.Party, key string) string {
+	if st.Stop != nil {
+		return "; " + stoppedNothing
+	}
 	if w.stand.starting.Load() {
 		return successorStarting
 	}
@@ -367,7 +370,14 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 	if holder.Session == "" {
 		return fmt.Errorf("%s has no session id to reach", holder.Name)
 	}
-	if st, err := a.store.Read(); err == nil && a.backgroundAgent(ctx, st, holder) {
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := a.refuseStopped(st, "reviving "+holder.Name); err != nil {
+		return err
+	}
+	if a.backgroundAgent(ctx, st, holder) {
 		return a.reviveBackground(ctx, holder, msg)
 	}
 	host := "local_" + holder.Session
@@ -384,7 +394,7 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 		_, ok := claude.Live(sessions, holder)
 		return ok
 	}
-	_, err := a.sendThroughDesktop(ctx, host, msg, running)
+	_, err = a.sendThroughDesktop(ctx, host, msg, running)
 	return err
 }
 
@@ -504,7 +514,7 @@ func (w *watcher) succeedAsync(ctx context.Context, rl role, holder state.Party,
 // after successorBackoff.
 func (w *watcher) relayOverdue(ctx context.Context, rl role, st *state.State, sessions []*claude.Session) {
 	cfg, r := rl.cfg(w.cfg), rl.get(st)
-	if !pastRelayGrace(r, cfg, w.now) || w.now.Before(w.stand.overdueNext[rl.name]) {
+	if st.Stop != nil || !pastRelayGrace(r, cfg, w.now) || w.now.Before(w.stand.overdueNext[rl.name]) {
 		return
 	}
 	c := sessionContext(sessions, r.Holder.Party)
@@ -540,6 +550,9 @@ func pastRelayGrace(r state.Role, cfg config.Role, now time.Time) bool {
 // reopened within reopenGrace, while the supervisor may still come back.
 func (w *watcher) reopenAfterAppStart(ctx context.Context, st *state.State, gone time.Time, term string) bool {
 	sup := st.Supervisor
+	if st.Stop != nil {
+		return false
+	}
 	if w.stand.reopened == term {
 		return w.now.Sub(w.stand.reopenedAt) < reopenGrace
 	}
@@ -580,7 +593,7 @@ func reopenDue(start, gone, liveAt time.Time) bool {
 // role, and a headless resume's turn is the resume.
 func (w *watcher) resumeRestarted(ctx context.Context, rl role, st *state.State, sessions []*claude.Session) {
 	r := rl.get(st)
-	if r.Holder == nil {
+	if r.Holder == nil || st.Stop != nil {
 		return
 	}
 	if s, live := claude.Live(sessions, r.Holder.Party); !live || (r.CLI.Of(r.Holder) && r.CLI.PID == s.PID) {

@@ -106,6 +106,8 @@ type Config struct {
 	// Capacity is how many agents the supervisor keeps busy and the
 	// headroom a new start needs.
 	Capacity Capacity `yaml:"capacity"`
+	// Stop is what beekeeper stop stops besides beekeeper's own units.
+	Stop Stop `yaml:"stop"`
 	// Reporter is the one-off status reporter session the standby watch
 	// starts once per interval.
 	Reporter Reporter `yaml:"reporter"`
@@ -723,6 +725,13 @@ type Reporter struct {
 
 // Enabled reports whether a reporter is scheduled.
 func (r Reporter) Enabled() bool { return r.Every.Duration > 0 && r.Brief != "" }
+
+// Stop configures beekeeper stop.
+type Stop struct {
+	// Units are more user units (a timer of the desk's own) that beekeeper
+	// stop stops while they run and beekeeper resume starts again.
+	Units []string `yaml:"units"`
+}
 
 // Agents configures the hand-over of registered agents.
 type Agents struct {

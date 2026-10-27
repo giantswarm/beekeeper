@@ -1822,12 +1822,15 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.resumeRestarted(ctx, supervisorRole, st, sessions)
 		return // the supervisor's watch reports them
 	}
+	w.sayStop(st)
 	w.noteAnswers(st)
 	w.refusals()
 	if w.chores {
 		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
 	}
-	w.stoppedAgents(st, sessions)
+	if st.Stop == nil {
+		w.stoppedAgents(st, sessions) // STOPPED names the sessions the stop ended
+	}
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
 	w.rowlessAgents(st)

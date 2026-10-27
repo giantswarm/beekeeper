@@ -248,7 +248,7 @@ func splitPR(s string) (repo string, pr int, ok bool) {
 // a pull request one (except) that is not a repository or pull request, of
 // another repository than the held one, or outside the held lane.
 func (a *app) checkExcept(target, except, session string) error {
-	if (except != "" || session != "") && target == "github" {
+	if (except != "" || session != "") && target == holdGitHub {
 		return usageErr("a github hold stops every GitHub call and makes no exception")
 	}
 	if except == "" {
@@ -270,7 +270,7 @@ func (a *app) checkExcept(target, except, session string) error {
 // activeHold returns the hold that applies to target: its own, or the
 // "github" hold for any target.
 func activeHold(st *state.State, a *app, target string) (state.Hold, bool) {
-	for _, t := range []string{target, "github"} {
+	for _, t := range []string{target, holdGitHub} {
 		for _, h := range st.Holds {
 			if h.Target == t && h.Active(a.now) {
 				return h, true
@@ -399,6 +399,12 @@ func (a *app) holdList() error {
 
 // holdActive is the STATE of a hold that applies.
 const holdActive = "active"
+
+// The machine-wide hold targets: every merge, every GitHub call.
+const (
+	holdMerges = "merges"
+	holdGitHub = "github"
+)
 
 func (a *app) printHolds(holds []state.Hold) {
 	if len(holds) == 0 {

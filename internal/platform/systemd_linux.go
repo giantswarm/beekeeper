@@ -203,6 +203,10 @@ func (systemdLauncher) Stop(ctx context.Context, name string) error {
 	return systemctlUser(ctx, "stop", name)
 }
 
+func (systemdLauncher) Resume(ctx context.Context, name string) error {
+	return systemctlUser(ctx, "start", name)
+}
+
 // systemctlUser runs one systemctl --user verb on the units.
 func systemctlUser(ctx context.Context, verb string, units ...string) error {
 	out, err := exec.CommandContext(ctx, "systemctl", append([]string{userManager, verb}, units...)...).CombinedOutput() //nolint:gosec // the units beekeeper named
