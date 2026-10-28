@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -411,6 +412,29 @@ func (a *app) sendAgy(name, id, msg string) error {
 	err := agy.Send(agy.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, agy.ErrNotRunning) {
 		return refused("%s: its agy agent no longer runs (%s ended): start it again with agents start --harness agy", name, agyUnit(id))
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", name, err)
+	}
+	return nil
+}
+
+// wakeCodex writes msg to the inbox of the codex agent ag, started under id.
+func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
+	if err := a.sendCodex(ag.Name, id, msg); err != nil {
+		return err
+	}
+	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): written to its inbox, it runs the message as its next turn\n", ag.Name)
+	return err
+}
+
+// sendCodex writes msg to the inbox of the codex agent name, started under id;
+// one whose unit ended is refused.
+func (a *app) sendCodex(name, id, msg string) error {
+	err := codex.Send(codex.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, codex.ErrNotRunning) {
+		return refused("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)

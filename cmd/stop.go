@@ -25,7 +25,7 @@ var stopHolds = []string{holdMerges, holdGitHub}
 
 // turnPatterns match the units of beekeeper's starts, wakes, reopens and
 // status reports.
-var turnPatterns = []string{"beekeeper-agent-*", "beekeeper-agy-*", "beekeeper-omp-*", "beekeeper-wake-*", reopenUnitPrefix + "*", "beekeeper-report-*"}
+var turnPatterns = []string{"beekeeper-agent-*", "beekeeper-agy-*", "beekeeper-codex-*", "beekeeper-omp-*", "beekeeper-wake-*", reopenUnitPrefix + "*", "beekeeper-report-*"}
 
 // stopHoldReason is the reason of a hold the stop sets.
 func stopHoldReason(reason string) string { return "beekeeper stop: " + reason }
@@ -293,7 +293,7 @@ func sparedUnit(unit, own string, spare []state.Party) bool {
 	}
 	return slices.ContainsFunc(spare, func(p state.Party) bool {
 		if _, hid, ok := harnessForHost(p.HostSession); ok && hid != "" {
-			if strings.HasPrefix(unit, agyUnit(hid)) || strings.HasPrefix(unit, ompUnit(hid)) {
+			if strings.HasPrefix(unit, agyUnit(hid)) || strings.HasPrefix(unit, codexUnit(hid)) || strings.HasPrefix(unit, ompUnit(hid)) {
 				return true
 			}
 		}

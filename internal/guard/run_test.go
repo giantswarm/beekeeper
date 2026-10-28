@@ -493,3 +493,35 @@ func TestRunHoldsTheGoCacheAgainstATrim(t *testing.T) {
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// A run with GOCACHE disabled still protects the other build caches.
+type buildCacheCheckingCapper struct {
+	fakeCapper
+	dir  string
+	held bool
+}
+
+func (f *buildCacheCheckingCapper) Command(unit string, cap platform.Cap, argv []string) (*exec.Cmd, error) {
+	release, ok, err := gocache.TryTrim(f.dir)
+	f.held = err == nil && !ok
+	if ok {
+		release()
+	}
+	return f.fakeCapper.Command(unit, cap, argv)
+}
+
+func TestRunHoldsBuildCachesWithoutGoCache(t *testing.T) {
+	saved := plat.Capper
+	f := &buildCacheCheckingCapper{dir: filepath.Join(t.TempDir(), "build-cache")}
+	plat.Capper = f
+	t.Cleanup(func() { plat.Capper = saved })
+	o := Options{Max: "1M", Swap: "0", Wait: time.Second, SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard, BuildLock: f.dir}
+	if rc := Run(o, []string{"sh", "-c", "exit 0"}); rc != 0 || !f.held {
+		t.Fatalf("exit=%d cache lock held=%v", rc, f.held)
+	}
+	release, ok, err := gocache.TryTrim(f.dir)
+	if err != nil || !ok {
+		t.Fatalf("run left the cache held: %v", err)
+	}
+	release()
+}

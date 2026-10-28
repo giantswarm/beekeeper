@@ -8,14 +8,18 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -80,16 +84,14 @@ func desktopStarted(st *state.State, p state.Party) bool {
 	return !st.Starts[i].Background
 }
 
-// cleanEnv is environ without the caller's Claude Code session variables
-// (CLAUDE*, CCD*): a session started from inside another one would take
-// its identity, and beekeeper would book the new session's commands under
-// the caller. A configuration file the caller named goes on as
-// $BEEKEEPER_CONFIG, and a development build stays first on PATH, as a
-// transient unit's environment has them (startUnit).
+// cleanEnv is environ without the caller's session and harness variables
+// (CLAUDE*, CCD*, omp/agy/codex identity and shell/home overrides): a session
+// started from inside another one would take its identity, and beekeeper would
+// book the new session's commands under the caller. A configuration file the
+// caller named goes on as $BEEKEEPER_CONFIG, and a development build stays
+// first on PATH, as a transient unit's environment has them (startUnit).
 func cleanEnv(environ []string, config string) []string {
-	out := slices.DeleteFunc(slices.Clone(environ), func(kv string) bool {
-		return strings.HasPrefix(kv, "CLAUDE") || strings.HasPrefix(kv, "CCD")
-	})
+	out := slices.DeleteFunc(slices.Clone(environ), isHarnessEnv)
 	if config != "" {
 		out = append(slices.DeleteFunc(out, func(kv string) bool { return strings.HasPrefix(kv, "BEEKEEPER_CONFIG=") }), "BEEKEEPER_CONFIG="+config)
 	}
@@ -98,6 +100,22 @@ func cleanEnv(environ []string, config string) []string {
 			"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), devBuildEnv+"=1")
 	}
 	return out
+}
+
+func isHarnessEnv(kv string) bool {
+	k, v, _ := strings.Cut(kv, "=")
+	return strings.HasPrefix(k, "CLAUDE") ||
+		strings.HasPrefix(k, "CCD") ||
+		k == omp.EnvAgent ||
+		k == omp.EnvName ||
+		k == omp.EnvCredentials ||
+		k == agy.EnvAgent ||
+		k == agy.EnvName ||
+		k == codex.EnvAgent ||
+		k == codex.EnvName ||
+		k == "CODEX_HOME" ||
+		k == "ZDOTDIR" ||
+		(k == "SHELL" && strings.HasSuffix(filepath.ToSlash(v), "/omp/bin/bash"))
 }
 
 // bgStartArgv is a background start's command line: a background session

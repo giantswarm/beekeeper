@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -210,11 +211,11 @@ with central configured), 125 a newer release (self-update --check).`,
 	}
 	hook := a.hookCmd()
 	hook.AddCommand(a.preInvocationCmd())
-	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
+	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd(), a.agyRunCmd())
+	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd(), a.agyRunCmd(), a.codexRunCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})
@@ -272,7 +273,7 @@ func (a *app) callerSession() (state.Party, error) {
 		return state.Party{Name: a.as}, nil
 	}
 	p := envParty(os.Getenv)
-	if os.Getenv(omp.EnvAgent) != "" || os.Getenv(agy.EnvAgent) != "" {
+	if os.Getenv(omp.EnvAgent) != "" || os.Getenv(agy.EnvAgent) != "" || os.Getenv(codex.EnvAgent) != "" {
 		return p, nil
 	}
 	if p.Session == "" {
@@ -294,15 +295,18 @@ func (a *app) callerSession() (state.Party, error) {
 	return p, nil
 }
 
-// envParty is the session an environment names, read with get: an omp or agy
-// agent beekeeper started is its roster entry, whatever session variables its
-// tool shell carries; else the Claude Code session's ids and name.
+// envParty is the session an environment names, read with get: an omp, agy or
+// codex agent beekeeper started is its roster entry, whatever session
+// variables its tool shell carries; else the Claude Code session's ids and name.
 func envParty(get func(string) string) state.Party {
 	if id := get(omp.EnvAgent); id != "" {
 		return state.Party{HostSession: omp.HostPrefix + id, Name: get(omp.EnvName)}
 	}
 	if id := get(agy.EnvAgent); id != "" {
 		return state.Party{HostSession: agy.HostPrefix + id, Name: get(agy.EnvName)}
+	}
+	if id := get(codex.EnvAgent); id != "" {
+		return state.Party{HostSession: codex.HostPrefix + id, Name: get(codex.EnvName)}
 	}
 	return state.Party{
 		Session:     get("CLAUDE_CODE_SESSION_ID"),

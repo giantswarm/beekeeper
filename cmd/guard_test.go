@@ -49,6 +49,7 @@ func TestMain(m *testing.M) {
 	// Nor its worktrees: the trim finds none; a test that wants a run
 	// gives it a machine.
 	liveWorktrees = func(*app) (worktreeMachine, error) { return worktreeMachine{}, nil }
+	liveDisk = func(*app) (diskMachine, error) { return diskMachine{}, errors.New("no disk machine in a test") }
 	// Nor does a command sync the machine's Claude Code plugins, stamped
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }

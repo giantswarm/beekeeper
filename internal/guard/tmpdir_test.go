@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // tmpfsAndDisk are a tmpfs directory and one on disk, or a skip.
@@ -72,23 +71,21 @@ func TestRunTmpKeepsTheCallersDirectoryOffTmpfs(t *testing.T) {
 	}
 }
 
-func TestPruneTmpRemovesOnlyLeftovers(t *testing.T) {
-	base := t.TempDir()
-	old, fresh := filepath.Join(base, "old"), filepath.Join(base, "fresh")
-	for _, d := range []string{old, fresh} {
-		if err := os.MkdirAll(filepath.Join(d, "go-build1"), 0o700); err != nil {
-			t.Fatal(err)
-		}
+func TestRunTmpCleansReadOnlyOutputOnFailure(t *testing.T) {
+	shm, _ := tmpfsAndDisk(t)
+	saved := plat.Capper
+	plat.Capper = &fakeCapper{}
+	t.Cleanup(func() { plat.Capper = saved })
+	t.Setenv("GOTMPDIR", "")
+	t.Setenv("TMPDIR", shm)
+	base := filepath.Join(t.TempDir(), "tmp")
+	o := Options{Max: "1M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard, TmpDir: base}
+	script := `mkdir -p "$GOTMPDIR/go-build1/sub"; echo output > "$GOTMPDIR/go-build1/sub/file"; chmod 500 "$GOTMPDIR/go-build1/sub"; exit 3`
+	if rc := Run(o, []string{"sh", "-c", script}); rc != 3 {
+		t.Fatalf("exit=%d", rc)
 	}
-	then := time.Now().Add(-2 * staleTmp)
-	if err := os.Chtimes(old, then, then); err != nil {
-		t.Fatal(err)
-	}
-	pruneTmp(base, time.Now().Add(-staleTmp))
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Errorf("a leftover older than %s stayed: %v", staleTmp, err)
-	}
-	if _, err := os.Stat(fresh); err != nil {
-		t.Errorf("a running run's directory went: %v", err)
+	entries, err := os.ReadDir(base)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temporary output remained: %v %v", entries, err)
 	}
 }
