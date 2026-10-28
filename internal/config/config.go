@@ -75,6 +75,7 @@ type Config struct {
 
 	GitHub   GitHub   `yaml:"github"`
 	Watch    Watch    `yaml:"watch"`
+	Disk     Disk     `yaml:"disk"`
 	Overlaps Overlaps `yaml:"overlaps"`
 	Claude   Claude   `yaml:"claude"`
 	Omp      Omp      `yaml:"omp"`
@@ -649,6 +650,37 @@ type Kube struct {
 	// KUBECONFIG lists, else the machine kubeconfig ~/.kube/config.
 	Kubeconfig []string `yaml:"kubeconfig"`
 }
+
+// DiskPruneAuto and DiskPruneAsk select the automatic disk step or the
+// existing manual commands and doctor trims.
+const (
+	DiskPruneAuto = "auto"
+	DiskPruneAsk  = "ask"
+)
+
+// Disk configures automatic disk reclamation. Ask retains the existing
+// on-demand commands and doctor trims, without the automatic disk step.
+type Disk struct {
+	Prune string   `yaml:"prune"`
+	Every Duration `yaml:"every"`
+	// Checkouts locates main checkouts whose harness worktrees are inspected.
+	Checkouts []string `yaml:"checkouts"`
+	TrashDirs []string `yaml:"trashDirs"`
+	// BuildDirs adds regenerable directory names inside worktrees.
+	BuildDirs []string `yaml:"buildDirs"`
+	// BuildOutputs associates external build output with its owning worktree.
+	BuildOutputs []BuildOutput `yaml:"buildOutputs"`
+}
+
+// BuildOutput is explicitly disposable output of the task in Worktree.
+// It is reclaimed only once that worktree's task ended and no process uses it.
+type BuildOutput struct {
+	Path     string `yaml:"path"`
+	Worktree string `yaml:"worktree"`
+}
+
+// Auto reports whether the disk step runs without a person's answer.
+func (d Disk) Auto() bool { return d.Prune == "" || d.Prune == DiskPruneAuto }
 
 // Teleport configures the Teleport login's keeper: a periodic user unit
 // that renews the SSO login before it expires, under the browser lease.
@@ -2621,6 +2653,20 @@ func (c *Config) defaults() error {
 		state = filepath.Join(home, ".local", "state")
 	}
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
+	setStr(&c.Disk.Prune, DiskPruneAuto)
+	if c.Disk.TrashDirs == nil {
+		c.Disk.TrashDirs = []string{filepath.Join(c.StateDir, "trash"), filepath.Join(state, "trash")}
+	}
+	for i, p := range c.Disk.TrashDirs {
+		c.Disk.TrashDirs[i] = filepath.Clean(homePath(home, p))
+	}
+	setDur(&c.Disk.Every, time.Hour)
+	for i, p := range c.Disk.Checkouts {
+		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
+	}
+	for i, o := range c.Disk.BuildOutputs {
+		c.Disk.BuildOutputs[i] = BuildOutput{Path: filepath.Clean(homePath(home, o.Path)), Worktree: filepath.Clean(homePath(home, o.Worktree))}
+	}
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
 	if c.Identity.Host == "" {
@@ -2967,6 +3013,24 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	if c.Disk.Prune != "" && c.Disk.Prune != DiskPruneAuto && c.Disk.Prune != DiskPruneAsk {
+		return fmt.Errorf("disk.prune: want auto or ask")
+	}
+	for _, p := range c.Disk.TrashDirs {
+		if !filepath.IsAbs(p) || filepath.Clean(p) == string(filepath.Separator) {
+			return fmt.Errorf("disk.trashDirs: each entry must be an absolute trash directory, not a filesystem root")
+		}
+	}
+	for _, n := range c.Disk.BuildDirs {
+		if n == "" || n == "." || filepath.IsAbs(n) || strings.Contains(n, "..") || strings.Contains(n, ".git") {
+			return fmt.Errorf("disk.buildDirs: invalid directory %q", n)
+		}
+	}
+	for _, o := range c.Disk.BuildOutputs {
+		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
+			return fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths")
+		}
+	}
 	for name := range c.Agents.Profiles {
 		if !profileNamePattern.MatchString(name) {
 			return fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name)

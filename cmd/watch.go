@@ -475,9 +475,12 @@ type watcher struct {
 	freeing  atomic.Bool
 	freeNext time.Time
 	lastFree atomic.Pointer[freeMark]
-	// worktreesOn trims finished workers' worktrees (not for --once);
-	// worktreesTrimming is set while a run goes, worktreesNext is when
-	// the next is due.
+	// diskPruneOn enables the scheduled and pressure-triggered disk step.
+	// diskPruning orders access to diskPruneNext across background steps.
+	diskPruneOn   bool
+	diskPruning   atomic.Bool
+	diskPruneNext time.Time
+	// worktreesOn trims finished workers' worktrees for the legacy ask mode.
 	worktreesOn       bool
 	worktreesTrimming atomic.Bool
 	worktreesNext     time.Time
@@ -581,6 +584,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.timerActs.Wait()      // nor a timer's wake or command
 		return w.onceErr()
 	}
+	w.diskPruneOn = true
 	w.goCacheOn = true
 	w.dockerOn = true
 	w.freeOn = true
@@ -1148,6 +1152,7 @@ func (w *watcher) sample(ctx context.Context) {
 	w.docker(now)
 	w.autoFree(now)
 	w.worktrees(now)
+	w.diskPrune(now, false)
 	w.slotOrphans(now, table)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)

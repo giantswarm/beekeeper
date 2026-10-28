@@ -126,7 +126,7 @@ A capped run gives the command its own temporary directory under
 after the command: the go command's work directories (go-build*) and a
 test's files stay out of the tmpfs /tmp, whose files take RAM. A caller's
 GOTMPDIR or TMPDIR off tmpfs wins, so a nested run keeps its outer run's
-directory. A leftover of a run that never cleaned up goes after a day.
+directory. The disk step reclaims unused leftovers unchanged for an hour (disk.prune).
 
 Every capped run leaves a run.start and a run.end event in beekeeper log,
 naming the scope, the session and the command, so that a cap kill found
@@ -162,7 +162,7 @@ machine's files stay untouched.`,
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
 				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1",
-				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp")}
+				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache")}
 			var err error
 			if o.SlotDir, o.Slots, err = a.buildSlots(); err != nil {
 				return err

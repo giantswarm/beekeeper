@@ -301,3 +301,65 @@ timer from the running watches.
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |
 | `cmd` | The command line. The supervisor and the guide are one `role` type (`cmd/relay.go`): start, relay, relief, restart grace and relay due are written once and parameterised by the role's name, record and configuration; only the supervisor's start moves the grants. The guide's queue (`guideQueue`) holds the notes for `guide.person` (`noteFor`: a note's `For`, or an older note's `[for <person>]` text prefix, compared without case) and the waiting sessions, running ones from their desktop record and stopped ones from `claude.StoppedWaiting` (a record not parsed unless it holds `"blocked"`), without the guide's own session, an archived one or a test (`Session.Aside`, `Record.Aside`); its feed drops a note it said before that is still open but no longer in the queue without a line. |
+
+## Automatic disk reclamation
+
+`disk.prune: auto` is the default. A long-running watch runs the disk step
+hourly (`disk.every`) and within five minutes of `LOW DISK` or `DISK FILLING`.
+`watch --once` reports disk pressure without deleting anything. Watches share
+a lock and a last-run mark, so they do not prune the same data concurrently.
+Every disk step prints one `DISK PRUNE` line with bytes freed, retained data
+and the reasons for keeping it. `beekeeper disk prune` previews the step;
+`beekeeper disk prune --apply` runs it explicitly.
+
+The step clears the Go build cache and sccache once no builds use them. New
+`beekeeper run` commands share a build-cache lock, including Rust builds and
+runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
+runs and `cache clear go`. Unwrapped compiler processes and open files keep
+caches intact. The module cache is never cleared by this step.
+
+Finished worktrees under `doctor.worktreeRoots` and the state's `worktrees`
+place are removed with `git worktree remove` after the existing six-hour
+grace. A task is finished when its pull request merged or a successful
+remote query confirms its branch is gone. A network failure keeps it.
+Running sessions, process references, locks, uncommitted changes and
+unpushed commits prevent removal. Finished workers holding work lose only
+regenerable build output. Unlike the legacy worktree doctor, the automatic
+disk step keeps unfinished tasks' build output.
+
+The watch also finds `<checkout>/.claude/worktrees` under `disk.checkouts`,
+the hook scope's places and checkouts known from harness records and
+transcripts. An unused harness worktree can be removed after the grace
+when it has no uncommitted or unpublished work. Main checkouts are never
+removed. A dangling worktree is moved aside, never recursively deleted.
+
+Additional build directory names can be listed in `disk.buildDirs`.
+External build output needs an explicit owner, using absolute paths to the output and owning worktree:
+
+```yaml
+disk:
+  prune: auto
+  every: 1h
+  buildDirs: [generated-output]
+  buildOutputs:
+    - path: /scratch/build-output/target
+      worktree: /scratch/worktrees/app/feature
+```
+
+An external output directory is disposable only after its owner's task
+ends, and only while no process references it. If it must stay, its owner
+stays too so a later step can retry. Never configure source or shared
+persistent data as build output.
+
+A run removes its own temporary directory at exit, including read-only
+build files, and reports a cleanup failure. Disk pruning also reclaims run
+tmp entries unchanged for one hour, and trash entries unchanged for one
+hour. The defaults for `disk.trashDirs` are the state's `trash` directory
+and the XDG state root's `trash` directory; an explicit list replaces them.
+Recent descendants, open files, working directories, executable mappings
+and build/temp environment references keep entries alive. Symbolic links
+and directories containing checkout metadata are kept. Unreadable live
+process references stop the disk step instead of making data look unused.
+
+`disk.prune: ask` disables this disk step and retains the pre-existing
+on-demand commands and the doctor's cache-cap, tmpfs and worktree trims.

@@ -263,6 +263,8 @@ type Options struct {
 	// take RAM; "" leaves the caller's. The run removes it after the
 	// command.
 	TmpDir string
+	// BuildLock coordinates all build caches, even when GOCACHE is off.
+	BuildLock string
 	// Class is the run's class (ClassBuild, …); "" is ClassBuild. Only a
 	// build takes a slot.
 	Class string
@@ -417,6 +419,16 @@ func Run(o Options, argv []string) int {
 		}
 	}
 
+	if o.BuildLock != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), o.Wait)
+		defer cancel()
+		release, err := gocache.Use(ctx, o.BuildLock)
+		if err != nil {
+			logf("build caches busy: %v", err)
+			return ExitBusy
+		}
+		defer release()
+	}
 	env, cleanup := runTmp(o.TmpDir, logf)
 	defer cleanup()
 	if o.GoCache != "" {
