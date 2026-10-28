@@ -164,15 +164,15 @@ func TestRunsSession(t *testing.T) {
 		"agy":                               true,
 		"agy --model gemini-4-argon-medium": true,
 		"agy --input-format stream-json --output-format stream-json --model claude-opus-5-5-high": true,
-		"agy --conversation 1234": true,
-		"agy models":              false,
-		"agy mcp list":            false,
+		"agy --conversation 1234":   true,
+		"agy models":                false,
+		"agy mcp list":              false,
 		"agy remote-control status": false,
-		"agy -p /usage":           false,
-		"agy --print /usage":      false,
-		"agy --version":           false,
-		"agy --help":              false,
-		"claude":                  false,
+		"agy -p /usage":             false,
+		"agy --print /usage":        false,
+		"agy --version":             false,
+		"agy --help":                false,
+		"claude":                    false,
 	} {
 		f := strings.Fields(args)
 		p := &proc.Process{Comm: filepath.Base(f[0]), Args: f}

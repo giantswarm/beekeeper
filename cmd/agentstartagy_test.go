@@ -205,8 +205,9 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	}
 
 	var gotBrief string
-	origLauncher := plat.Launcher
-	t.Cleanup(func() { plat.Launcher = origLauncher })
+	origLauncher, origMachine := plat.Launcher, plat.Machine
+	t.Cleanup(func() { plat.Launcher, plat.Machine = origLauncher, origMachine })
+	plat.Machine = tableMachine{plat.Machine}
 	l := &agyTestLauncher{
 		onStart: func(u platform.Unit) {
 			go func() {
@@ -288,8 +289,9 @@ func TestStartAgyAgentMarksUndeliveredWhenUnitEndsBeforeBrief(t *testing.T) {
 		out:   &bytes.Buffer{},
 	}
 
-	origLauncher := plat.Launcher
-	t.Cleanup(func() { plat.Launcher = origLauncher })
+	origLauncher, origMachine := plat.Launcher, plat.Machine
+	t.Cleanup(func() { plat.Launcher, plat.Machine = origLauncher, origMachine })
+	plat.Machine = tableMachine{plat.Machine}
 	var l *agyTestLauncher
 	l = &agyTestLauncher{
 		onStart: func(u platform.Unit) {
