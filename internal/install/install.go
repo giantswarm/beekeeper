@@ -38,8 +38,8 @@ type Env struct {
 	// Config beekeeper's config file, StateDir its state directory (the
 	// manifest's).
 	Settings, AgyHooks, AgySkills, Config, StateDir string
-	Setup                                platform.Setup
-	Spec                                 platform.SetupSpec
+	Setup                                           platform.Setup
+	Spec                                            platform.SetupSpec
 	// Run runs one service manager command.
 	Run func(ctx context.Context, argv []string) error
 	Out io.Writer
