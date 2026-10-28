@@ -39,11 +39,31 @@ func FindHarness(places []string) []string {
 	return slices.Compact(out)
 }
 
-// RemoteGone asks the remote itself; stale tracking refs and a network
-// failure must not be interpreted as a deleted branch.
-func RemoteGone(ctx context.Context, git Git, t Tree) (bool, error) {
-	out, err := git(ctx, t.Dir, "ls-remote", "--heads", "origin", "refs/heads/"+t.HeadBranch())
-	return err == nil && len(strings.TrimSpace(string(out))) == 0, err
+// RemoteStatus verifies the branch and publication against current remote
+// heads. Local tracking refs and closed pull requests are not publication
+// evidence: they can outlive an unmerged branch deleted from the remote.
+func RemoteStatus(ctx context.Context, git Git, t Tree, hadPull bool) (gone, published bool, err error) {
+	out, err := git(ctx, t.Dir, "ls-remote", "--heads", "origin")
+	if err != nil {
+		return false, false, err
+	}
+	found := false
+	for line := range strings.Lines(string(out)) {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		found = found || fields[1] == "refs/heads/"+t.HeadBranch()
+		if fields[0] == t.Head {
+			published = true
+			continue
+		}
+		if _, err := git(ctx, t.Dir, "merge-base", "--is-ancestor", t.Head, fields[0]); err == nil {
+			published = true
+		}
+	}
+	trackedBranch := t.Pushed != "" && t.Pushed == t.HeadBranch()
+	return !found && (trackedBranch || hadPull), published, nil
 }
 
 // Automatic judges a worktree for the disk step. A harness worktree whose
@@ -60,18 +80,29 @@ func Automatic(t Tree, pull *github.HeadPull, gone, harness, live, pushed bool, 
 	if now.Sub(t.Touched) < Grace {
 		return Verdict{Keep, "touched within the grace", KeptTouched}
 	}
+	if pull != nil {
+		if pull.State == github.Open {
+			return Verdict{Keep, "pull request open", KeptOpen}
+		}
+		if now.Sub(pull.ClosedAt) < Grace {
+			return Verdict{Keep, "closed within the grace", KeptClosed}
+		}
+	}
+	if pull == nil && (t.Pushed == "" || t.Pushed != t.HeadBranch()) {
+		gone = false
+	}
 	merged := pull != nil && pull.State == github.Merged
 	if !merged && !gone && !harness {
 		return Verdict{Keep, "task not ended", KeptOpen}
-	}
-	if merged && now.Sub(pull.ClosedAt) < Grace {
-		return Verdict{Keep, "merged within the grace", KeptClosed}
 	}
 	why := "remote branch gone"
 	if merged {
 		why = "pull request merged"
 	} else if harness {
 		why = "unused harness worktree"
+	}
+	if !pushed {
+		t.Unpushed = max(1, t.Unpushed)
 	}
 	return finished(t, why, pushed)
 }

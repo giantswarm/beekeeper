@@ -663,6 +663,8 @@ const (
 type Disk struct {
 	Prune string   `yaml:"prune"`
 	Every Duration `yaml:"every"`
+	// SccacheMaxGiB caps scheduled sccache cleanup; negative disables the cap.
+	SccacheMaxGiB int `yaml:"sccacheMaxGiB"`
 	// Checkouts locates main checkouts whose harness worktrees are inspected.
 	Checkouts []string `yaml:"checkouts"`
 	TrashDirs []string `yaml:"trashDirs"`
@@ -2661,6 +2663,7 @@ func (c *Config) defaults() error {
 		c.Disk.TrashDirs[i] = filepath.Clean(homePath(home, p))
 	}
 	setDur(&c.Disk.Every, time.Hour)
+	setInt(&c.Disk.SccacheMaxGiB, 10)
 	for i, p := range c.Disk.Checkouts {
 		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
 	}

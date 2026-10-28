@@ -187,7 +187,7 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 // next look's time is read only with the flag held, after the look that
 // wrote it gave the flag back.
 func (w *watcher) goCache(now time.Time) {
-	if !w.goCacheOn || w.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
+	if w.cfg.Disk.Auto() || !w.goCacheOn || w.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
 		return
 	}
 	if now.Before(w.goCacheNext) {

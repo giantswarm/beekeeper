@@ -39,14 +39,14 @@ func diskFixture(t *testing.T) (*app, diskMachine) {
 func TestDiskPruneFreesCachesTmpAndTrash(t *testing.T) {
 	a, m := diskFixture(t)
 	read := func() (diskMachine, error) { return m, nil }
-	r := a.pruneDisk(true, read)
+	r := a.pruneDisk(true, true, read)
 	if len(r.Errors) > 0 || r.Freed == 0 {
 		t.Fatalf("dry=%s", r)
 	}
 	if !exists(filepath.Join(m.cache, "ab", "data")) {
 		t.Fatal("dry removed cache")
 	}
-	r = a.pruneDisk(false, read)
+	r = a.pruneDisk(false, true, read)
 	if len(r.Errors) > 0 || r.Freed == 0 {
 		t.Fatalf("apply=%s", r)
 	}
@@ -77,7 +77,7 @@ func TestDiskPruneKeepsCachesUnderRunsAndReferences(t *testing.T) {
 			case "reference":
 				m.refs = []string{filepath.Join(m.cache, "ab", "data"), filepath.Join(m.sccache, "0", "data")}
 			}
-			r := a.pruneDisk(false, func() (diskMachine, error) { return m, nil })
+			r := a.pruneDisk(false, false, func() (diskMachine, error) { return m, nil })
 			if len(r.Errors) > 0 {
 				t.Fatal(r)
 			}
@@ -95,7 +95,7 @@ func TestDiskPruneKeepsCachesUnderRunsAndReferences(t *testing.T) {
 
 func TestDiskPruneReadFailureKeepsEverything(t *testing.T) {
 	a, m := diskFixture(t)
-	r := a.pruneDisk(false, func() (diskMachine, error) { return diskMachine{}, errors.New("processes unreadable") })
+	r := a.pruneDisk(false, false, func() (diskMachine, error) { return diskMachine{}, errors.New("processes unreadable") })
 	if len(r.Errors) == 0 || !exists(filepath.Join(m.tmp[0], "dead")) {
 		t.Fatal("pruned after failed process read")
 	}
@@ -115,7 +115,7 @@ func TestDiskPruneExternalOutputOnlyForEndedOwner(t *testing.T) {
 	m.buildDirs = []string{"generated-output"}
 	writeT(t, filepath.Join(m.dirs[0], "generated-output", diskTestArtifact), "build")
 	m.outputs = []config.BuildOutput{{Path: external, Worktree: m.dirs[0]}}
-	r := a.pruneDisk(false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
+	r := a.pruneDisk(false, false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
 	if len(r.Errors) > 0 || exists(external) || exists(m.dirs[0]) {
 		t.Fatalf("prune=%s", r)
 	}
@@ -195,14 +195,16 @@ func TestDiskPruneDeletedRemoteAndActiveWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.dirs = []string{filepath.Join(root, "nopr"), filepath.Join(root, "work"), filepath.Join(root, "unpushed"), filepath.Join(root, "live")}
+	gitT(t, filepath.Join(root, "nopr"), "update-ref", "refs/remotes/origin/nopr", "HEAD")
+	gitT(t, filepath.Join(root, "nopr"), "branch", "--set-upstream-to=origin/nopr", "nopr")
 	git := m.git
 	m.git = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
-		if args[0] == "ls-remote" {
-			return nil, nil
+		if args[0] == diskRemoteQuery {
+			return git(ctx, dir, "ls-remote", "--heads", "local")
 		}
 		return git(ctx, dir, args...)
 	}
-	r := a.pruneDisk(false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
+	r := a.pruneDisk(false, false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
 	if len(r.Errors) > 0 {
 		t.Fatal(r)
 	}
@@ -227,11 +229,11 @@ func TestDiskPruneRetainsOwnerUntilExternalOutputCanGo(t *testing.T) {
 	writeT(t, filepath.Join(external, diskTestArtifact), "build")
 	m.outputs = []config.BuildOutput{{Path: external, Worktree: m.dirs[0]}}
 	held := []string{filepath.Join(external, diskTestArtifact)}
-	r := a.pruneDisk(false, func() (diskMachine, error) { return diskMachine{trees: m, refs: held}, nil })
+	r := a.pruneDisk(false, false, func() (diskMachine, error) { return diskMachine{trees: m, refs: held}, nil })
 	if len(r.Errors) > 0 || !exists(external) || !exists(m.dirs[0]) {
 		t.Fatalf("held output or owner lost: %s", r)
 	}
-	r = a.pruneDisk(false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
+	r = a.pruneDisk(false, false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
 	if len(r.Errors) > 0 || exists(external) || exists(m.dirs[0]) {
 		t.Fatalf("unused output or owner remained: %s", r)
 	}
@@ -245,7 +247,7 @@ func TestDiskPruneRechecksNewProcessReferences(t *testing.T) {
 	}
 	m.dirs = []string{filepath.Join(root, mergedPR)}
 	m.recheck = func() ([]string, error) { return []string{m.dirs[0]}, nil }
-	r := a.pruneDisk(false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
+	r := a.pruneDisk(false, false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
 	if len(r.Errors) > 0 || !exists(m.dirs[0]) {
 		t.Fatalf("new process's worktree removed: %s", r)
 	}
@@ -290,7 +292,7 @@ func TestDiskPruneTmpAndTrashUseDescendantAge(t *testing.T) {
 			}
 		}
 	}
-	r := a.pruneDisk(false, func() (diskMachine, error) { return m, nil })
+	r := a.pruneDisk(false, false, func() (diskMachine, error) { return m, nil })
 	if len(r.Errors) > 0 {
 		t.Fatal(r)
 	}

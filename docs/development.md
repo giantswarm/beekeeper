@@ -312,7 +312,12 @@ Every disk step prints one `DISK PRUNE` line with bytes freed, retained data
 and the reasons for keeping it. `beekeeper disk prune` previews the step;
 `beekeeper disk prune --apply` runs it explicitly.
 
-The step clears the Go build cache and sccache once no builds use them. New
+On healthy scheduled runs, the step trims only caches over their caps:
+`doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
+to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) clears sccache
+when exceeded. A negative cap disables its scheduled cleanup. Under
+`LOW DISK` or `DISK FILLING`, both unused caches are reclaimed immediately.
+No cache is reclaimed while builds use it. New
 `beekeeper run` commands share a build-cache lock, including Rust builds and
 runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
 runs and `cache clear go`. Unwrapped compiler processes and open files keep
@@ -321,8 +326,14 @@ caches intact. The module cache is never cleared by this step.
 Finished worktrees under `doctor.worktreeRoots` and the state's `worktrees`
 place are removed with `git worktree remove` after the existing six-hour
 grace. A task is finished when its pull request merged or a successful
-remote query confirms its branch is gone. A network failure keeps it.
-Running sessions, process references, locks, uncommitted changes and
+remote query confirms a previously published branch is gone. A branch
+that never tracked a remote branch and has no pull request stays. Open
+pull requests and those closed within the grace stay, including harness
+worktrees. For unmerged tasks, publication must be verified against
+current remote heads, not stale local tracking refs or a closed pull
+request's head. A network failure keeps the worktree.
+Running sessions, unarchived desktop sessions, active or parked roster
+agents, process references, locks, uncommitted changes and
 unpushed commits prevent removal. Finished workers holding work lose only
 regenerable build output. Unlike the legacy worktree doctor, the automatic
 disk step keeps unfinished tasks' build output.
@@ -349,17 +360,29 @@ disk:
 An external output directory is disposable only after its owner's task
 ends, and only while no process references it. If it must stay, its owner
 stays too so a later step can retry. Never configure source or shared
-persistent data as build output.
+persistent data as build output. Build output is renamed into the state's
+`trash` directory on the same filesystem. A move does not count as freed
+space; output on another filesystem is retained. Trash retention begins
+when output is moved, and pressure runs may reclaim it immediately once
+no process references it.
 
 A run removes its own temporary directory at exit, including read-only
 build files, and reports a cleanup failure. Disk pruning also reclaims run
 tmp entries unchanged for one hour, and trash entries unchanged for one
-hour. The defaults for `disk.trashDirs` are the state's `trash` directory
-and the XDG state root's `trash` directory; an explicit list replaces them.
+hour. Disk pressure bypasses trash retention, while tmp retains its
+one-hour inactivity window. The state's `trash` directory is always
+inspected. `disk.trashDirs` adds other trash places; its default also
+includes the XDG state root's `trash` directory.
 Recent descendants, open files, working directories, executable mappings
 and build/temp environment references keep entries alive. Symbolic links
-and directories containing checkout metadata are kept. Unreadable live
-process references stop the disk step instead of making data look unused.
+and directories containing checkout metadata are kept. Unreadable
+dumpable user-process references, unknown process ownership or an unreadable
+process root stop the disk step. Expected kernel permission denials on
+non-dumpable or credential-changing helpers do not stop pruning; their
+readable references still protect data.
 
+`beekeeper doctor` uses this automatic policy too, including its dry run.
 `disk.prune: ask` disables this disk step and retains the pre-existing
-on-demand commands and the doctor's cache-cap, tmpfs and worktree trims.
+on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
+freeing (`doctor.freeEvery`) and Docker reclamation remain independent
+in both modes.

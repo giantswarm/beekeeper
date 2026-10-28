@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/gocache"
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -27,6 +28,7 @@ const diskPruneLock = "disk-prune.lock"
 type diskMachine struct {
 	refs           []string
 	builds         bool
+	pressure       bool
 	cache, sccache string
 	tmp, trash     []string
 	trees          worktreeMachine
@@ -36,22 +38,13 @@ type diskMachine struct {
 var liveDisk = (*app).diskMachine
 
 func diskReferences() ([]string, bool, error) {
-	t, err := plat.Machine.Processes()
+	refs, commands, err := proc.UserReferences(os.Getuid())
 	if err != nil {
 		return nil, false, err
 	}
-	var refs []string
 	builds := false
-	for pid, p := range t.ByPID {
-		if proc.UID(pid) != os.Getuid() {
-			continue
-		}
-		paths, err := proc.References(pid)
-		if err != nil {
-			return nil, false, err
-		}
-		refs = append(refs, paths...)
-		if slices.Contains([]string{"go", "compile", "link", "cargo", "rustc", "cc", "gcc", "clang", "ninja", "make", "cmake"}, p.Comm) {
+	for _, comm := range commands {
+		if slices.Contains([]string{"go", "compile", "link", "cargo", "rustc", "cc", "gcc", "clang", "ninja", "make", "cmake"}, comm) {
 			builds = true
 		}
 	}
@@ -62,6 +55,9 @@ func diskReferences() ([]string, bool, error) {
 
 func (a *app) diskMachine() (diskMachine, error) {
 	m := diskMachine{refresh: diskReferences, cache: goCacheDir(), tmp: []string{filepath.Join(a.cfg.StateDir, "tmp")}, trash: a.cfg.Disk.TrashDirs}
+	if d, err := machine.ReadDisk(a.cfg.StateDir); err == nil {
+		m.pressure = d.FreeMiB < a.cfg.Watch.DiskMin(d.TotalMiB)
+	}
 	var err error
 	m.refs, m.builds, err = diskReferences()
 	if err != nil {
@@ -146,7 +142,7 @@ func sortedReasons(m map[string]int) []string {
 	return keys
 }
 
-func (a *app) pruneDisk(dry bool, read func() (diskMachine, error)) diskRun {
+func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) diskRun {
 	r := diskRun{dry: dry}
 	lock := flock.New(filepath.Join(a.store.Dir(), diskPruneLock))
 	ok, err := lock.TryLock()
@@ -164,7 +160,8 @@ func (a *app) pruneDisk(dry bool, read func() (diskMachine, error)) diskRun {
 		r.Errors = append(r.Errors, err)
 		return r
 	}
-	a.pruneDiskCaches(&r, m)
+	pressure = pressure || m.pressure
+	a.pruneDiskCaches(&r, m, pressure)
 	if m.refresh != nil {
 		refs, _, err := m.refresh()
 		if err != nil {
@@ -176,12 +173,27 @@ func (a *app) pruneDisk(dry bool, read func() (diskMachine, error)) diskRun {
 	for _, d := range m.tmp {
 		r.Add(diskprune.Children(d, a.now.Add(-time.Hour), m.refs, dry))
 	}
-	for _, d := range m.trash {
-		r.Add(diskprune.Children(d, a.now.Add(-time.Hour), m.refs, dry))
-	}
 	m.trees.automatic = true
 	m.trees.refs = m.refs
+	m.trees.trash = filepath.Join(a.store.Dir(), "trash")
 	r.trees = a.trimWorktrees(dry, func() (worktreeMachine, error) { return m.trees, nil })
+	if m.refresh != nil {
+		refs, _, err := m.refresh()
+		if err != nil {
+			r.Errors = append(r.Errors, err)
+			return r
+		}
+		m.refs = refs
+	}
+	cutoff := a.now.Add(-time.Hour)
+	if pressure {
+		cutoff = time.Time{}
+	}
+	trash := append(slices.Clone(m.trash), m.trees.trash)
+	slices.Sort(trash)
+	for _, d := range slices.Compact(trash) {
+		r.Add(diskprune.Children(d, cutoff, m.refs, dry))
+	}
 	if r.trees.err != nil {
 		r.Errors = append(r.Errors, r.trees.err)
 	}
@@ -194,7 +206,7 @@ func (a *app) pruneDisk(dry bool, read func() (diskMachine, error)) diskRun {
 	return r
 }
 
-func (a *app) pruneDiskCaches(r *diskRun, m diskMachine) {
+func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 	if m.builds {
 		r.Keep("caches: builds running")
 		return
@@ -239,11 +251,20 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine) {
 			u, err := gocache.Scan(m.cache)
 			if err != nil {
 				r.Errors = append(r.Errors, err)
+			} else if target, trim := diskCacheTarget(u.Bytes, a.cfg.Doctor.GoCacheMax(), pressure); !trim {
+				r.Keep("Go cache under cap")
 			} else if r.dry {
-				r.Freed += u.Bytes
-				r.Removed += len(u.Entries)
+				left := u.Bytes
+				for _, e := range u.Entries {
+					if left <= target {
+						break
+					}
+					r.Freed += e.Size
+					r.Removed++
+					left -= e.Size
+				}
 			} else {
-				n, removed, err := gocache.Trim(u, 0, func() bool { return false })
+				n, removed, err := gocache.Trim(u, target, func() bool { return false })
 				r.Freed += n
 				r.Removed += removed
 				if err != nil {
@@ -252,13 +273,31 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine) {
 			}
 		}
 	}
-	if m.sccache != "" {
-		if diskprune.InUse(m.sccache, m.refs) {
-			r.Keep("sccache in use")
-		} else {
-			r.Add(diskprune.Children(m.sccache, time.Time{}, m.refs, r.dry))
-		}
+	pruneSccache(r, m, int64(max(0, a.cfg.Disk.SccacheMaxGiB))<<30, pressure)
+}
+
+func pruneSccache(r *diskRun, m diskMachine, capBytes int64, pressure bool) {
+	if m.sccache == "" {
+		return
 	}
+	if diskprune.InUse(m.sccache, m.refs) {
+		r.Keep("sccache in use")
+	} else if _, trim := diskCacheTarget(worktrees.Size(m.sccache), capBytes, pressure); !trim {
+		r.Keep("sccache under cap")
+	} else {
+		r.Add(diskprune.Children(m.sccache, time.Time{}, m.refs, r.dry))
+	}
+}
+
+// diskCacheTarget preserves warm caches on healthy scheduled runs.
+func diskCacheTarget(size, capBytes int64, pressure bool) (int64, bool) {
+	if pressure {
+		return 0, true
+	}
+	if capBytes <= 0 || size <= capBytes {
+		return size, false
+	}
+	return capBytes * 3 / 4, true
 }
 
 // diskPrune runs on schedule and under pressure. All watches share the mark
@@ -300,7 +339,7 @@ func (w *watcher) diskPrune(now time.Time, pressure bool) {
 			w.diskPruneNext = mark.At.Add(every)
 			return
 		}
-		r := d.pruneDisk(false, func() (diskMachine, error) { return liveDisk(&d) })
+		r := d.pruneDisk(false, pressure, func() (diskMachine, error) { return liveDisk(&d) })
 		if r.locked {
 			w.diskPruneNext = now.Add(goCacheRetry)
 			return
@@ -316,7 +355,7 @@ func (a *app) diskCmd() *cobra.Command {
 	var apply bool
 	p := &cobra.Command{Use: "prune", Short: "Show reclaimable disk data; --apply reclaims it", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		a.now = time.Now()
-		r := a.pruneDisk(!apply, func() (diskMachine, error) { return liveDisk(a) })
+		r := a.pruneDisk(!apply, false, func() (diskMachine, error) { return liveDisk(a) })
 		_, err := fmt.Fprintln(a.out, r)
 		return errors.Join(err, errors.Join(r.Errors...))
 	}}

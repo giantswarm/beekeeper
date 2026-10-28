@@ -2157,13 +2157,16 @@ its last change, unchanged for an hour, nothing held inside). A run that freed s
 `FREE FAILED` until a run succeeds; the `TMPFS` line says when it ran last. `beekeeper doctor`
 frees the same (`--dry-run` says what it would); a negative `doctor.freeEvery` turns both off.
 Disk reclamation is automatic by default (`disk.prune: auto`): every `disk.every` (1h)
-and on `LOW DISK` or `DISK FILLING`, the watch clears unused Go and sccache caches,
-finished worktrees and their configured build output, run tmp entries unchanged for an hour,
-and trash entries unchanged for an hour. It also discovers harness worktrees under known
+the watch trims Go and sccache caches only when they exceed their caps. On
+`LOW DISK` or `DISK FILLING`, unused caches and unreferenced trash are reclaimed
+immediately. Both scheduled and pressure runs reclaim finished worktrees and
+move disposable build output into trash on the same filesystem. Scheduled runs
+keep trash for an hour; run tmp entries need an hour of inactivity in either mode. It also discovers harness worktrees under known
 checkouts. Live processes, running sessions, uncommitted changes and unpublished commits
 protect worktrees; a failed process or remote read keeps data. One `DISK PRUNE` line says
 what it freed and kept and why. `beekeeper disk prune` previews this step; `--apply` runs it.
-`disk.prune: ask` retains the existing commands and doctor trims described below. See
+`beekeeper doctor` uses the same automatic policy. Tmpfs and Docker reclamation remain
+independent in either mode. `disk.prune: ask` retains the existing commands and doctor trims described below. See
 [automatic disk reclamation](docs/development.md#automatic-disk-reclamation) for discovery,
 external output ownership and retention settings.
 

@@ -3,6 +3,7 @@ package diskprune
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -111,5 +112,67 @@ func TestChildrenDoesNotFollowPlaceSymlink(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(real, "output")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStageMovesOutputWithoutFreeingAndStartsTrashRetention(t *testing.T) {
+	base := t.TempDir()
+	dir, trash := filepath.Join(base, "target"), filepath.Join(base, "trash")
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "binary"), []byte("output"), 0400); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	dry := Stage(dir, trash, now, nil, true)
+	if dry.Staged != 1 || dry.Freed != 0 || dry.Moved == 0 {
+		t.Fatalf("dry stage=%+v", dry)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("preview moved output")
+	}
+	held := Stage(dir, trash, now, []string{filepath.Join(dir, "sub", "binary")}, false)
+	if held.Staged != 0 || len(held.Kept) == 0 {
+		t.Fatal("moved active output")
+	}
+	staged := Stage(dir, trash, now, nil, false)
+	if staged.Staged != 1 || staged.Freed != 0 || staged.Removed != 0 || len(staged.Errors) > 0 {
+		t.Fatalf("stage=%+v", staged)
+	}
+	entries, err := os.ReadDir(trash)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("trash entries=%v err=%v", entries, err)
+	}
+	moved := filepath.Join(trash, entries[0].Name(), "target", "sub", "binary")
+	if _, err := os.Stat(moved); err != nil {
+		t.Fatal("output was deleted instead of moved")
+	}
+	recent := Children(trash, now.Add(-time.Hour), nil, false)
+	if recent.Removed != 0 {
+		t.Fatal("newly staged output bypassed retention")
+	}
+	active := Children(trash, time.Time{}, []string{moved}, false)
+	if active.Removed != 0 {
+		t.Fatal("pressure removed referenced trash")
+	}
+	expired := Children(trash, now.Add(time.Hour), nil, false)
+	if expired.Removed != 1 || expired.Freed == 0 || len(expired.Errors) > 0 {
+		t.Fatalf("expired trash=%+v", expired)
+	}
+}
+
+func TestStageKeepsCrossFilesystemOutput(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "target")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	r := stage(dir, filepath.Join(base, "trash"), time.Now(), nil, false, func(string, string) error { return syscall.EXDEV })
+	if r.Staged != 0 || r.Freed != 0 || len(r.Kept) == 0 {
+		t.Fatalf("cross-filesystem stage=%+v", r)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("cross-filesystem fallback deleted source")
 	}
 }

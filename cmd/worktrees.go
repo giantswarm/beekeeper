@@ -62,6 +62,7 @@ type worktreeMachine struct {
 	automatic bool
 	buildDirs []string
 	outputs   []config.BuildOutput
+	trash     string
 	refs      []string
 	recheck   func() ([]string, error)
 }
@@ -84,26 +85,47 @@ func (a *app) worktreeMachine() (worktreeMachine, error) {
 		},
 		now: time.Now(),
 	}
-	if len(m.dirs) == 0 {
-		return m, nil
-	}
 	t, err := plat.Machine.Processes()
 	if err != nil {
 		return m, fmt.Errorf("no worktree removed: the process table: %w", err)
 	}
 	for pid := range t.ByPID {
-		if d := proc.Cwd(pid); d != "" {
+		if d := t.Cwd(pid); d != "" {
 			m.live = append(m.live, d)
 		}
 	}
 	for _, s := range discover(a.cfg, t, m.now) {
 		m.live = append(m.live, s.Cwd)
 	}
-	for _, r := range claude.ByCLI(a.cfg) {
+	records := claude.ByCLI(a.cfg)
+	for _, r := range records {
 		if !r.IsArchived {
-			m.live = append(m.live, r.Cwd)
+			m.live = append(m.live, r.Cwd, r.OriginCwd)
 		}
 	}
+	st, err := a.store.Read()
+	if err != nil {
+		return m, fmt.Errorf("no worktree removed: roster unavailable: %w", err)
+	}
+	for _, agent := range st.Agents {
+		if agent.Done || agent.Task == "" && agent.Park == nil {
+			continue
+		}
+		for _, start := range st.Starts {
+			if agent.Session != "" && start.Session == agent.Session || agent.HostSession != "" && start.HostSession == agent.HostSession {
+				m.live = append(m.live, start.Dir)
+			}
+		}
+		if r := records[agent.Session]; r != nil {
+			m.live = append(m.live, r.Cwd, r.OriginCwd)
+		}
+		if p := claude.Transcript(a.cfg, agent.Session, ""); p != "" {
+			if cwd, err := claude.TranscriptCwd(p); err == nil {
+				m.live = append(m.live, cwd)
+			}
+		}
+	}
+	m.live = slices.DeleteFunc(m.live, func(p string) bool { return p == "" })
 	return m, nil
 }
 
@@ -123,10 +145,12 @@ func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 
 // worktreeOutcome is what a run did, or would do, to one worktree.
 type worktreeOutcome struct {
-	dir   string
-	why   string
-	bytes int64
-	err   error
+	dir    string
+	why    string
+	bytes  int64
+	moved  int64
+	staged int
+	err    error
 }
 
 // worktreeRun is one look at the worktrees.
@@ -192,7 +216,14 @@ func (r worktreeRun) String() string {
 	var parts []string
 	tier := func(outs []worktreeOutcome, what string) {
 		if len(outs) > 0 {
-			parts = append(parts, fmt.Sprintf("%s %s %s", verb, fmt.Sprintf(what, len(outs)), sizeStr(sum(outs))))
+			amount, action := sum(outs), verb
+			for _, o := range outs {
+				amount += o.moved
+				if o.staged > 0 {
+					action = r.verb(true)
+				}
+			}
+			parts = append(parts, fmt.Sprintf("%s %s %s", action, fmt.Sprintf(what, len(outs)), sizeStr(amount)))
 		}
 	}
 	tier(r.removed, "%d finished,")
@@ -234,7 +265,10 @@ func (r worktreeRun) paths() []string {
 	var out []string
 	add := func(what string, outs []worktreeOutcome) {
 		for _, o := range outs {
-			l := fmt.Sprintf("  %s %s %s (%s)", what, sizeStr(o.bytes), o.dir, o.why)
+			if o.staged > 0 {
+				what = r.verb(true) + " build output"
+			}
+			l := fmt.Sprintf("  %s %s %s (%s)", what, sizeStr(o.bytes+o.moved), o.dir, o.why)
 			if o.err != nil {
 				l += ": " + o.err.Error()
 			}
@@ -299,7 +333,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 	var heads []github.Head
 	var errs []error
 	for _, d := range m.dirs {
-		if under(d, m.live) {
+		if diskprune.InUse(d, append(slices.Clone(m.live), m.refs...)) {
 			r.kept[worktrees.KeptLive]++
 			continue
 		}
@@ -338,20 +372,31 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		if p, ok := pulls[github.Head{Repo: t.Repo, Branch: t.HeadBranch()}]; ok {
 			pull = &p
 		}
+		if m.automatic && pull != nil && (pull.State == github.Open || m.now.Sub(pull.ClosedAt) < worktrees.Grace) {
+			v := worktrees.Automatic(t, pull, false, false, false, false, m.now)
+			r.kept[v.Kept]++
+			continue
+		}
 		knownPushed := pull != nil && pushed(ctx, m.git, t, pull.HeadOid)
 		v := worktrees.Decide(t, pull, false, knownPushed, m.now)
 		if m.automatic {
 			gone := false
-			if t.Branch != "" && t.Repo != "" && (pull == nil || pull.State != github.Merged) {
+			if pull == nil || pull.State != github.Merged {
 				var err error
-				gone, err = worktrees.RemoteGone(ctx, m.git, t)
+				gone, knownPushed, err = worktrees.RemoteStatus(ctx, m.git, t, pull != nil)
 				if err != nil {
 					r.kept["remote unavailable"]++
 					continue
 				}
+			} else {
+				knownPushed = t.Head == pull.HeadOid
+				if !knownPushed && pull.HeadOid != "" {
+					_, err := m.git(ctx, t.Dir, "merge-base", "--is-ancestor", t.Head, pull.HeadOid)
+					knownPushed = err == nil
+				}
 			}
 			harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
-			v = worktrees.Automatic(t, pull, gone, harness, diskprune.InUse(t.Dir, m.refs), knownPushed, m.now)
+			v = worktrees.Automatic(t, pull, gone, harness, diskprune.InUse(t.Dir, append(slices.Clone(m.live), m.refs...)), knownPushed, m.now)
 		}
 		if m.automatic && (v.Action == worktrees.Remove || v.Action == worktrees.Clean) {
 			if m.recheck != nil {
@@ -362,7 +407,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 					continue
 				}
 				m.refs = refs
-				if diskprune.InUse(t.Dir, refs) {
+				if diskprune.InUse(t.Dir, append(slices.Clone(m.live), refs...)) {
 					r.kept[worktrees.KeptLive]++
 					continue
 				}
@@ -372,7 +417,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				errs = append(errs, err)
 				continue
 			}
-			if fresh.Locked || fresh.Head != t.Head || (v.Action == worktrees.Remove && (len(fresh.Work) > 0 || fresh.Unpushed > 0 && !knownPushed)) {
+			if fresh.Locked || fresh.Head != t.Head || (v.Action == worktrees.Remove && (len(fresh.Work) > 0 || !knownPushed)) {
 				r.kept["worktree changed during inspection"]++
 				continue
 			}
@@ -382,14 +427,14 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				if filepath.Clean(b.Worktree) != t.Dir {
 					continue
 				}
-				o := diskprune.Output(b.Path, time.Time{}, m.refs, r.dryRun)
+				o := diskprune.Stage(b.Path, m.trash, m.now, append(slices.Clone(m.live), m.refs...), r.dryRun)
 				for why, n := range o.Kept {
 					r.kept["external output: "+why] += n
 				}
 				errs = append(errs, o.Errors...)
 				retainedOutput = retainedOutput || len(o.Kept) > 0 || len(o.Errors) > 0
-				if o.Removed > 0 {
-					r.external = append(r.external, worktreeOutcome{dir: b.Path, why: "finished task's external build output", bytes: o.Freed})
+				if o.Staged > 0 {
+					r.external = append(r.external, worktreeOutcome{dir: b.Path, why: "finished task's external build output", bytes: o.Freed, moved: o.Moved, staged: o.Staged})
 				}
 			}
 			if retainedOutput && v.Action == worktrees.Remove {
@@ -423,8 +468,10 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 					continue
 				}
 				if m.automatic {
-					result := diskprune.Output(p, time.Time{}, m.refs, r.dryRun)
+					result := diskprune.Stage(p, m.trash, m.now, append(slices.Clone(m.live), m.refs...), r.dryRun)
 					o.bytes += result.Freed
+					o.moved += result.Moved
+					o.staged += result.Staged
 					for why, n := range result.Kept {
 						r.kept["build output: "+why] += n
 					}
@@ -435,6 +482,9 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				if !r.dryRun {
 					o.err = errors.Join(o.err, worktrees.RemoveAll(p))
 				}
+			}
+			if m.automatic && o.staged == 0 && o.err == nil {
+				continue
 			}
 			if v.Kept != "" {
 				r.record(&r.idle, o)
@@ -455,16 +505,6 @@ func (r *worktreeRun) record(to *[]worktreeOutcome, o worktreeOutcome) {
 		return
 	}
 	*to = append(*to, o)
-}
-
-// under reports whether dir is, or holds, one of the folders.
-func under(dir string, folders []string) bool {
-	for _, f := range folders {
-		if f == dir || strings.HasPrefix(f, dir+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
 }
 
 // pushed reports whether t's commits that no remote-tracking branch has are

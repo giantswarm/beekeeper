@@ -15,7 +15,7 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Disk.Auto() || c.Disk.Every.Duration != time.Hour || len(c.Disk.TrashDirs) != 2 {
+	if !c.Disk.Auto() || c.Disk.Every.Duration != time.Hour || len(c.Disk.TrashDirs) != 2 || c.Disk.SccacheMaxGiB != 10 {
 		t.Fatalf("defaults=%+v", c.Disk)
 	}
 	for _, tc := range []struct {
@@ -23,6 +23,7 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		valid bool
 	}{
 		{"disk: {prune: ask}", true},
+		{"disk: {sccacheMaxGiB: -1}", true},
 		{"disk: {prune: never}", false},
 		{"disk: {trashDirs: [/]} ", false},
 		{"disk: {buildDirs: [../source]}", false},

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/worktrees"
@@ -135,6 +136,8 @@ func Remove(dir string) error {
 type Result struct {
 	Freed   int64
 	Removed int
+	Moved   int64
+	Staged  int
 	Kept    map[string]int
 	Errors  []error
 }
@@ -143,6 +146,8 @@ type Result struct {
 func (r *Result) Add(other Result) {
 	r.Freed += other.Freed
 	r.Removed += other.Removed
+	r.Moved += other.Moved
+	r.Staged += other.Staged
 	if r.Kept == nil {
 		r.Kept = map[string]int{}
 	}
@@ -187,6 +192,69 @@ func Output(dir string, cutoff time.Time, refs []string, dry bool) Result {
 		}
 	}
 	r.Freed, r.Removed = n, 1
+	return r
+}
+
+// Stage moves build output into trash on the same filesystem. Moving does
+// not free bytes. The new entry starts its retention window now, even when
+// all the output's files are old. Cross-filesystem output is retained.
+func Stage(dir, trash string, now time.Time, refs []string, dry bool) Result {
+	return stage(dir, trash, now, refs, dry, os.Rename)
+}
+
+func stage(dir, trash string, now time.Time, refs []string, dry bool, rename func(string, string) error) Result {
+	r := Result{}
+	if InUse(dir, refs) {
+		r.Keep("in use")
+		return r
+	}
+	n, why, err := Disposable(dir, time.Time{})
+	if errors.Is(err, os.ErrNotExist) {
+		return r
+	}
+	if err != nil {
+		r.Errors = append(r.Errors, err)
+		return r
+	}
+	if why != "" {
+		r.Keep(why)
+		return r
+	}
+	if trash == "" || InUse(dir, []string{trash}) || InUse(trash, []string{dir}) {
+		r.Keep("unsafe trash location")
+		return r
+	}
+	if fi, err := os.Lstat(trash); err == nil && !fi.IsDir() {
+		r.Keep("trash is not a directory")
+		return r
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		r.Errors = append(r.Errors, err)
+		return r
+	}
+	if !dry {
+		if err := os.MkdirAll(trash, 0700); err != nil {
+			r.Errors = append(r.Errors, err)
+			return r
+		}
+		entry, err := os.MkdirTemp(trash, "build-output-")
+		if err != nil {
+			r.Errors = append(r.Errors, err)
+			return r
+		}
+		if err := rename(dir, filepath.Join(entry, filepath.Base(dir))); err != nil {
+			_ = os.Remove(entry)
+			if errors.Is(err, syscall.EXDEV) {
+				r.Keep("output on another filesystem")
+			} else {
+				r.Errors = append(r.Errors, err)
+			}
+			return r
+		}
+		if err := os.Chtimes(entry, now, now); err != nil {
+			r.Errors = append(r.Errors, err)
+		}
+	}
+	r.Moved, r.Staged = n, 1
 	return r
 }
 
