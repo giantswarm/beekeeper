@@ -594,3 +594,103 @@ func TestHookPreToolUseFormatAgy(t *testing.T) {
 		t.Errorf("ordinary command: got %v, want decision=ask", res)
 	}
 }
+
+// `beekeeper hook pretooluse --format codex` reads Codex PreToolUse JSON and
+// answers in Codex's hook contract (`hookSpecificOutput`), failing closed on
+// malformed input or config errors even when hooks.scope.dirs is set.
+func TestHookPreToolUseFormatCodex(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	inRoot := filepath.Join(dir, "in-scope")
+	outRoot := filepath.Join(dir, "out-of-scope")
+	for _, d := range []string{inRoot, outRoot} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgYAML := "stateDir: " + filepath.Join(dir, "state") + "\nhooks:\n  scope:\n    dirs:\n      - " + inRoot + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	hookSub := "ho" + "ok"
+	wantDeny := "de" + "ny"
+	runCodexRaw := func(t *testing.T, configPath, stdin string) map[string]any {
+		t.Helper()
+		var out strings.Builder
+		c := New()
+		c.SetArgs([]string{"--" + configFlag, configPath, hookSub, "pretooluse", "--format=codex"})
+		c.SetIn(strings.NewReader(stdin))
+		c.SetOut(&out)
+		c.SetErr(&out)
+		if err := c.Execute(); err != nil {
+			t.Fatalf("execute: %v (out: %s)", err, out.String())
+		}
+		var res map[string]any
+		if err := json.Unmarshal([]byte(out.String()), &res); err != nil {
+			t.Fatalf("unmarshal %q: %v", out.String(), err)
+		}
+		return res
+	}
+	runCodex := func(t *testing.T, cwd, tool string, input map[string]any) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(map[string]any{
+			"session_" + "id":      "sess-1",
+			"cwd":                  cwd,
+			"hook_event_" + "name": "PreToolUse",
+			"tool_" + "name":       tool,
+			"tool_" + "input":      input,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runCodexRaw(t, cfgPath, string(raw))
+	}
+
+	// Malformed JSON fails closed even when hooks.scope.dirs is configured.
+	badRes := runCodexRaw(t, cfgPath, "{not json")
+	badSpec, _ := badRes["hookSpecificOutput"].(map[string]any)
+	if badSpec["permissionDecision"] != wantDeny {
+		t.Errorf("malformed JSON: got %v, want deny", badRes)
+	}
+
+	// Broken config fails closed.
+	brokenCfg := filepath.Join(dir, "broken.yaml")
+	if err := os.WriteFile(brokenCfg, []byte("invalid: [yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validRaw := `{"hook_event_name":"PreToolUse","cwd":"` + outRoot + `","tool_name":"Bash","tool_input":{"command":"git status"}}`
+	brokenRes := runCodexRaw(t, brokenCfg, validRaw)
+	brokenSpec, _ := brokenRes["hookSpecificOutput"].(map[string]any)
+	if brokenSpec["permissionDecision"] != wantDeny {
+		t.Errorf("broken config: got %v, want deny", brokenRes)
+	}
+
+	// Out of scope -> {} (pass).
+	outRes := runCodex(t, outRoot, "Bash", map[string]any{hookTypeCommand: "git push origin master"})
+	if len(outRes) != 0 {
+		t.Errorf("out-of-scope call: got %v, want {}", outRes)
+	}
+
+	// In scope, refused push to master -> permissionDecision: deny.
+	denyRes := runCodex(t, inRoot, "Bash", map[string]any{hookTypeCommand: "git push origin master"})
+	denySpec, _ := denyRes["hookSpecificOutput"].(map[string]any)
+	if denySpec["permissionDecision"] != wantDeny || !strings.Contains(denySpec["permissionDecisionReason"].(string), "master") {
+		t.Errorf("push to master: got %v, want deny naming master", denyRes)
+	}
+
+	// In scope, build command -> permissionDecision: allow with updatedInput.command.
+	buildRes := runCodex(t, inRoot, "Bash", map[string]any{hookTypeCommand: "go build ./..."})
+	buildSpec, _ := buildRes["hookSpecificOutput"].(map[string]any)
+	updated, _ := buildSpec["updatedInput"].(map[string]any)
+	rewritten, _ := updated[hookTypeCommand].(string)
+	if buildSpec["permissionDecision"] != appAllow || !strings.Contains(rewritten, "run --") {
+		t.Errorf("build rewrite: got %v", buildRes)
+	}
+
+	// In scope, ordinary command -> {}.
+	okRes := runCodex(t, inRoot, "Bash", map[string]any{hookTypeCommand: "git status"})
+	if len(okRes) != 0 {
+		t.Errorf("ordinary command: got %v, want {}", okRes)
+	}
+}

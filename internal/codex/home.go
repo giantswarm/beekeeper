@@ -153,7 +153,7 @@ func HooksJSON(exe string) ([]byte, error) {
 		Hooks: map[string][]hookMatcher{
 			"PreToolUse": {
 				{
-					Matcher: "*",
+					Matcher: ".*",
 					Hooks: []hookEntry{
 						{
 							Type:    keyCommand,
@@ -188,16 +188,32 @@ func EnsureHome(codexHome, authFile, userConfigFile, exe, prelude string) error 
 	}
 	if authFile != "" {
 		if _, err := os.Lstat(authFile); err == nil {
-			dstAuth := filepath.Join(codexHome, "auth.json")
-			if target, err := os.Readlink(dstAuth); err != nil || target != authFile {
-				_ = os.Remove(dstAuth)
-				if err := os.Symlink(authFile, dstAuth); err != nil {
-					return fmt.Errorf("linking codex auth.json: %w", err)
-				}
+			if err := ensureSymlink(authFile, filepath.Join(codexHome, "auth.json")); err != nil {
+				return fmt.Errorf("linking codex auth.json: %w", err)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("stat codex auth.json: %w", err)
 		}
+	}
+	userCodexDir := ""
+	if userConfigFile != "" {
+		userCodexDir = filepath.Dir(filepath.Clean(userConfigFile))
+	} else if authFile != "" {
+		userCodexDir = filepath.Dir(filepath.Clean(authFile))
+	}
+	if userCodexDir != "" {
+		userAgents := filepath.Join(userCodexDir, "AGENTS.md")
+		if _, err := os.Lstat(userAgents); err == nil {
+			if err := ensureSymlink(userAgents, filepath.Join(codexHome, "AGENTS.md")); err != nil {
+				return fmt.Errorf("linking codex AGENTS.md: %w", err)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat codex AGENTS.md: %w", err)
+		}
+	}
+	stateSkills := filepath.Join(filepath.Dir(filepath.Dir(filepath.Clean(codexHome))), "skills")
+	if err := ensureSymlink(stateSkills, filepath.Join(codexHome, "skills")); err != nil {
+		return fmt.Errorf("linking codex skills: %w", err)
 	}
 	var existing []byte
 	if userConfigFile != "" {
@@ -242,6 +258,14 @@ func EnsureHome(codexHome, authFile, userConfigFile, exe, prelude string) error 
 		"[[ -f \"$HOME/.zprofile\" ]] && source \"$HOME/.zprofile\"\n" +
 		body
 	return writeAtomic(filepath.Join(zshDir, ".zprofile"), []byte(zprofile))
+}
+
+func ensureSymlink(target, linkPath string) error {
+	if existing, err := os.Readlink(linkPath); err == nil && existing == target {
+		return nil
+	}
+	_ = os.RemoveAll(linkPath)
+	return os.Symlink(target, linkPath)
 }
 
 func writeAtomic(path string, data []byte) error {

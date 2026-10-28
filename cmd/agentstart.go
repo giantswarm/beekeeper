@@ -253,9 +253,9 @@ driving "codex exec --json" / "codex exec resume --json" in bypass mode on
 transient user unit beekeeper-codex-<id> with an isolated CODEX_HOME, its
 FIFO inbox in beekeeper's state folder and the worker rules + brief as its
 first message. It is registered on the roster as codex_<id> under <name>
-and shows in sessions and agents with harness codex; agents wake writes a
-message to its inbox, delivered mid-turn by the PreToolUse hook or as the
-next turn via codex exec resume.
+and shows in sessions and agents with harness codex; agents wake queues a
+message in its inbox, which codex-run delivers as the next turn via codex
+exec resume.
 
 --harness auto picks the first non-excluded (harness, model) pair in
 capacity.choices whose provider has room (5-hour window below threshold,

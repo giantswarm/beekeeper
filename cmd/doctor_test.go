@@ -403,3 +403,88 @@ func TestCheckAgySkills(t *testing.T) {
 		t.Errorf("stale skill file: got %q", got)
 	}
 }
+
+func TestCheckCodexHooks(t *testing.T) {
+	home := t.TempDir()
+	stateDir := filepath.Join(home, ".local", "state", "beekeeper")
+	exe := "/usr/local/bin/beekeeper"
+	if got := checkCodexHooks(home, stateDir, exe, false); got != "" {
+		t.Fatalf("codex not installed: got %q, want empty", got)
+	}
+	if got := checkCodexHooks(home, stateDir, exe, true); !strings.Contains(got, "~/.codex/hooks.json is missing; run `beekeeper install`") {
+		t.Fatalf("missing hooks.json: got %q", got)
+	}
+	var e install.Env
+	e.Exe = exe
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.CodexHooks = codexHooksPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = stateDir
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexHooks(home, stateDir, exe, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if got := checkCodexHooks(home, stateDir, "/other/beekeeper", true); !strings.Contains(got, "runs /usr/local/bin/beekeeper instead of /other/beekeeper") {
+		t.Errorf("other binary: got %q", got)
+	}
+	// Missing worker hooks.json under <stateDir>/codex/home/hooks.json is caught too.
+	if err := os.Remove(install.CodexWorkerHooks(stateDir)); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexHooks(home, stateDir, exe, true); !strings.Contains(got, ".local/state/beekeeper/codex/home/hooks.json is missing; run `beekeeper install`") {
+		t.Errorf("missing worker hooks.json: got %q", got)
+	}
+}
+
+func TestCheckCodexSkills(t *testing.T) {
+	home := t.TempDir()
+	stateDir := filepath.Join(home, ".local", "state", "beekeeper")
+	if got := checkCodexSkills(home, stateDir, false); got != "" {
+		t.Fatalf("codex not installed: got %q, want empty", got)
+	}
+	if got := checkCodexSkills(home, stateDir, true); !strings.Contains(got, "~/.codex/skills is missing; run `beekeeper install`") {
+		t.Fatalf("missing skills dir: got %q", got)
+	}
+	var e install.Env
+	e.Exe = "/usr/local/bin/beekeeper"
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.CodexSkills = codexSkillsPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = stateDir
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexSkills(home, stateDir, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if err := os.WriteFile(filepath.Join(install.AgySkillsDir(stateDir), "park", "SKILL.md"), []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexSkills(home, stateDir, true); !strings.Contains(got, "serves the skills park unlike beekeeper") {
+		t.Errorf("stale skill file: got %q", got)
+	}
+
+	// Custom configured Codex.ConfigFile / Codex.AuthFile derives the user Codex directory.
+	customCodexDir := filepath.Join(home, "custom-codex")
+	customCfg := config.Codex{ConfigFile: filepath.Join(customCodexDir, "config.toml")}
+	if got := codexHooksPath(home, true, customCfg); got != filepath.Join(customCodexDir, "hooks.json") {
+		t.Errorf("codexHooksPath(customCfg) = %q", got)
+	}
+	if got := codexSkillsPath(home, true, customCfg); got != filepath.Join(customCodexDir, "skills") {
+		t.Errorf("codexSkillsPath(customCfg) = %q", got)
+	}
+	if got := checkCodexHooks(home, stateDir, "/usr/local/bin/beekeeper", true, customCfg); !strings.Contains(got, "~/custom-codex/hooks.json is missing; run `beekeeper install`") {
+		t.Errorf("checkCodexHooks(customCfg): got %q", got)
+	}
+	if got := checkCodexSkills(home, stateDir, true, customCfg); !strings.Contains(got, "~/custom-codex/skills is missing; run `beekeeper install`") {
+		t.Errorf("checkCodexSkills(customCfg): got %q", got)
+	}
+}

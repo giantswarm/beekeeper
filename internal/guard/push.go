@@ -79,8 +79,28 @@ func (h Hook) pushRefusal(cmd, cwd string) string {
 
 func (h Hook) namesUnlock(cmd string) bool {
 	for _, u := range h.UnlockCommands {
-		if u != "" && strings.Contains(cmd, u) {
-			return true
+		if u == "" {
+			continue
+		}
+		idx := 0
+		for {
+			pos := strings.Index(cmd[idx:], u)
+			if pos < 0 {
+				break
+			}
+			abs := idx + pos
+			// Ignore negated glob patterns like -g '!unlock-helper' or -g '*/!unlock-helper'.
+			negated := false
+			for j := abs - 1; j >= 0 && strings.IndexByte(" \t\n'\"=", cmd[j]) < 0; j-- {
+				if cmd[j] == '!' {
+					negated = true
+					break
+				}
+			}
+			if !negated {
+				return true
+			}
+			idx = abs + len(u)
 		}
 	}
 	return false
@@ -120,8 +140,13 @@ func (h Hook) scanPush(cmd, cwd string, forceUnknown, noInitialCWD bool, depth i
 			continue
 		}
 		if guardNamed {
-			if _, unsure := unwrapWords(rawWords); unsure != "" {
-				return "Refused: the guard cannot read `" + unsure + "` in front of this command, which names a helper, a push or a merge: run the command plainly, without the wrapper."
+			if rest, unsure := unwrapWords(rawWords); unsure != "" {
+				restStr := strings.Join(rest, " ")
+				isSafeXargs := unsure == xargsCmd && len(rest) > 0 &&
+					!guardedKeyword.MatchString(restStr) && !h.namesUnlock(restStr) && !shells[path.Base(rest[0])]
+				if !isSafeXargs {
+					return "Refused: the guard cannot read `" + unsure + "` in front of this command, which names a helper, a push or a merge: run the command plainly, without the wrapper."
+				}
 			}
 		}
 		known := st.known && !lineMoved && !forceUnknown && !noInitialCWD

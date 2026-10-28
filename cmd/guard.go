@@ -418,7 +418,12 @@ Register it in ~/.claude/settings.json:
 And in ~/.gemini/config/hooks.json for agy:
 
   {"beekeeper": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}`,
+    "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}
+
+And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
+
+  {"hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command",
+    "command": "~/.go/bin/beekeeper hook pretooluse --format codex", "timeout": 30}]}]}}`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			switch formatFlag {
@@ -433,12 +438,22 @@ And in ~/.gemini/config/hooks.json for agy:
 				w = cmd.OutOrStdout()
 			}
 			defer func() {
-				if recover() != nil && isAgy {
-					_, _ = w.Write(guard.PassAgy())
+				if r := recover(); r != nil {
+					if isCodex {
+						_, _ = w.Write(guard.DenyCodex(fmt.Sprintf("Refused: internal panic in PreToolUse guard (%v); failing closed.", r)))
+						return
+					}
+					if isAgy {
+						_, _ = w.Write(guard.PassAgy())
+					}
 				}
-			}() // a broken hook must not block the tool call
+			}() // a broken hook must not block the tool call (codex fails closed)
 			raw, err := io.ReadAll(cmd.InOrStdin())
 			if err != nil {
+				if isCodex {
+					_, _ = w.Write(guard.DenyCodex("Refused: failed to read PreToolUse hook input (" + err.Error() + "); failing closed."))
+					return nil
+				}
 				if isAgy {
 					_, _ = w.Write(guard.PassAgy())
 				}
@@ -446,11 +461,22 @@ And in ~/.gemini/config/hooks.json for agy:
 			}
 			cfgErr := a.loadConfig()
 			if isCodex {
-				return nil
+				if reason := guard.ValidateCodexInput(raw); reason != "" {
+					_, _ = w.Write(guard.DenyCodex(reason))
+					return nil
+				}
+				if cfgErr != nil {
+					_, _ = w.Write(guard.DenyCodex("Refused: cannot load beekeeper configuration (" + cfgErr.Error() + "); failing closed."))
+					return nil
+				}
 			}
 			sandboxed := a.sandboxed(cfgErr)
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
 				// every session on the machine, the desk's or not
+				if isCodex {
+					_, _ = w.Write(guard.DecideUnsandboxedCodex(raw))
+					return nil
+				}
 				if isAgy {
 					_, _ = w.Write(guard.DecideUnsandboxedAgy(raw))
 					return nil
@@ -462,6 +488,10 @@ And in ~/.gemini/config/hooks.json for agy:
 			}
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
+				if isCodex {
+					_, _ = w.Write((guard.Hook{Sandbox: sandboxed}).DecideSandboxCodex(raw))
+					return nil
+				}
 				if isAgy {
 					_, _ = w.Write((guard.Hook{Sandbox: sandboxed}).DecideSandboxAgy(raw))
 					return nil
@@ -494,6 +524,10 @@ And in ~/.gemini/config/hooks.json for agy:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+			}
+			if isCodex {
+				_, _ = w.Write(h.DecideCodex(raw))
+				return nil
 			}
 			if isAgy {
 				_, _ = w.Write(h.DecideAgy(raw))
@@ -738,6 +772,7 @@ func (a *app) inScope(raw []byte) bool {
 	}
 	_ = json.Unmarshal(raw, &ev)
 	paths := append([]string{ev.CWD, os.Getenv("CLAUDE_PROJECT_DIR")}, guard.AgyPaths(raw)...)
+	paths = append(paths, guard.CodexPaths(raw)...)
 	if guard.Under(a.cfg.Hooks.Scope.Dirs, paths...) {
 		return true
 	}
@@ -745,12 +780,18 @@ func (a *app) inScope(raw []byte) bool {
 	if session == "" {
 		session = guard.AgySession(raw)
 	}
+	if session == "" {
+		session = guard.CodexSession(raw)
+	}
 	store, err := state.Open(a.cfg.StateDir)
 	if err != nil {
 		return true
 	}
 	st, err := store.Peek()
 	if err != nil {
+		return true
+	}
+	if id := os.Getenv(codex.EnvAgent); id != "" && st.Knows(state.Party{Session: codex.HostPrefix + id, HostSession: codex.HostPrefix + id}) {
 		return true
 	}
 	return st.Knows(state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
@@ -770,6 +811,11 @@ func (a *app) recordRefusal(session, command, repo string) {
 	who := state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID"), Name: noSession}
 	if t, err := plat.Machine.Processes(); err == nil {
 		if n := claude.RecordName(a.cfg, t, session); n != "" {
+			who.Name = n
+		}
+	}
+	if who.Name == noSession {
+		if n := os.Getenv(codex.EnvName); n != "" {
 			who.Name = n
 		}
 	}
