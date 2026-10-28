@@ -509,7 +509,7 @@ func TestAgyBashCommentsContinuationsAndWrappers(t *testing.T) {
 		`echo 'unlock-helper'`,
 		"true # git push origin main",
 		`git commit -m "$(echo "don't push")"`,
-		`gh pr create -R giantswarm/beekeeper --title "t" --body "$(jq -r '.x // "don'\''t"' file)"`,
+		`gh pr create -R giantswarm/beekeeper --title "$(jq -r '.x // "don'\''t"' file)" --body "b"`,
 		"echo \"`echo \"don't\"`\"",
 	} {
 		if d := decideAgyCmd(t, h, featRepo, cmd); d.Decision != decisionAsk {

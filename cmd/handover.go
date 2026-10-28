@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -337,12 +338,16 @@ latest 50 events; with one, every event in the window unless -n is given too.`,
 		Short: "Log a status line: what happened, for whoever reads the log (verb status)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			text := strings.Join(args, " ")
+			if m := post.Unlinked(text, ""); len(m) > 0 {
+				return refused("log line refused, it lacks: %s", strings.Join(m, "; "))
+			}
 			me, err := a.caller()
 			if err != nil {
 				return err
 			}
 			return a.store.Update(func(*state.State) ([]state.Event, error) {
-				return []state.Event{event(me, "status", "%s", strings.Join(args, " "))}, nil
+				return []state.Event{event(me, "status", "%s", text)}, nil
 			})
 		},
 	})

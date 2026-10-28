@@ -7,11 +7,14 @@ package brieflint
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"io/fs"
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/post"
 )
 
 // Finding is one line a rule refuses.
@@ -52,11 +55,13 @@ var rules = []rule{
 const (
 	clobberRule = "clobber"
 	clobberWhy  = "a bare > into a file fails on a rerun under noclobber: write >| or a fresh name per attempt"
+	fullURLRule = "full-url"
 )
 
 var (
-	// fence opens or closes a fenced code block; its info string names the language.
-	fence = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)")
+	// fence opens a fenced code block; its info string names the language.
+	fence      = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)\\s*(.*)$")
+	fenceClose = regexp.MustCompile("^\\s*(```+|~~~+)\\s*$")
 	// codeSpan is one inline code span.
 	codeSpan = regexp.MustCompile("`+[^`]+`+")
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
@@ -85,10 +90,17 @@ func clobbers(code string) bool {
 // The clobber rule reads only shell examples: inline code spans and fenced
 // blocks without a language or with a shell's.
 func Lint(name string, r io.Reader) ([]Finding, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	text := string(raw)
+	here := post.SingleRepo(text)
+	unlinked := post.UnlinkedLines(text, here)
 	var out []Finding
 	var inFence, shellFence bool
 	var fenceMark string
-	sc := bufio.NewScanner(r)
+	sc := bufio.NewScanner(bytes.NewReader(raw))
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
@@ -100,12 +112,17 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 				add(ru.name, ru.why)
 			}
 		}
+		if n-1 < len(unlinked) {
+			for _, why := range unlinked[n-1] {
+				add(fullURLRule, why)
+			}
+		}
 		var code string
 		switch m := fence.FindStringSubmatch(line); {
-		case m != nil && !inFence:
+		case m != nil && !inFence && (m[1][0] == '~' || !strings.ContainsRune(m[2]+m[3], '`')):
 			inFence, fenceMark, shellFence = true, m[1], shellFences[strings.ToLower(m[2])]
 			continue
-		case m != nil && strings.HasPrefix(m[1], fenceMark) && m[2] == "":
+		case inFence && fenceClose.MatchString(line) && strings.HasPrefix(strings.TrimSpace(line), fenceMark):
 			inFence = false
 			continue
 		case inFence && shellFence:

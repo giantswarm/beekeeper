@@ -265,3 +265,11 @@ func TestWorkerRulesAndTopicsUseHarnessNeutralRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerRulesStateFullURLRuleOnce(t *testing.T) {
+	rules := strings.Join(strings.Fields(WorkerRules()), " ")
+	const want = "Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`."
+	if n := strings.Count(rules, want); n != 1 {
+		t.Errorf("the worker rules state %q %d times, want 1", want, n)
+	}
+}

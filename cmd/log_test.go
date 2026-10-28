@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,5 +149,34 @@ func TestReportTimeTakesDays(t *testing.T) {
 	}
 	if _, err := reportTime(now, "-3d", time.UTC); Code(err) != ExitUsage {
 		t.Errorf("-3d = %v, want a usage error", err)
+	}
+}
+
+func TestLogAddRefusesUnlinkedRefs(t *testing.T) {
+	a, out := noteApp(t)
+	run := func(text string) error {
+		c := a.logCmd()
+		c.SetArgs([]string{strings.Fields("add x")[0], text})
+		c.SetOut(out)
+		c.SetErr(out)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		return c.Execute()
+	}
+	for name, c := range map[string]struct{ text, want string }{
+		"unlinked #N":             {"merged #7", "#7 without its full URL (https://github.com/<owner>/<repo>/issues/7)"},
+		"owner/repo#N":            {"merged x/y#7", "x/y#7 without its full URL (https://github.com/x/y/issues/7)"},
+		"bare #N with single URL": {"merged " + prURL + " for #9", "#9 without its full URL (https://github.com/o/r/issues/9)"},
+	} {
+		if err := run(c.text); Code(err) != ExitRefused || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want refusal with %q", name, err, c.want)
+		}
+	}
+	ok := "merged o/r#7 (" + prURL + "#issuecomment-1), note #3, timer #4, `#5`, `multi\n#6`, color: #123; background-color: #123456; and session beekeeper#12\n````md\n```\n#8\n```\n````"
+	if err := run(ok); err != nil {
+		t.Fatalf("log add(%q): %v", ok, err)
+	}
+	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "status" })
+	if err != nil || len(evs) != 1 || evs[0].Detail != ok {
+		t.Fatalf("events = %+v, %v", evs, err)
 	}
 }

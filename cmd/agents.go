@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -261,6 +262,9 @@ file; the log keeps them (agents.report, agents.problem).`,
 					return nil, refused("this session is not registered: `beekeeper agents register` first")
 				}
 				ag := &st.Agents[i]
+				if m := post.Unlinked(strings.Join(append([]string{report}, found...), "\n"), agentHere(st, ag)); len(m) > 0 {
+					return nil, refused("report refused, it lacks: %s", strings.Join(m, "; "))
+				}
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
@@ -435,6 +439,19 @@ func reportIdle(ag *state.Agent, now time.Time) {
 	if ag.Task != "" {
 		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
 	}
+}
+
+func agentHere(st *state.State, ag *state.Agent) string {
+	if r := post.SingleRepo(ag.Task + " " + ag.LastTask); r != "" {
+		return r
+	}
+	var issues []string
+	for _, r := range st.Records {
+		if r.Session.Is(ag.Party) {
+			issues = append(issues, r.Issue)
+		}
+	}
+	return post.SingleRepo(strings.Join(issues, " "))
 }
 
 // endNotes stamps the open notes worker filed with the end of its task

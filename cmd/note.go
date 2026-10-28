@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -150,6 +151,7 @@ filed nowhere else and exits 69.`,
 					linked = append(linked, name)
 				}
 			}
+			draft.Here = post.SingleRepo(strings.Join(linked, " "))
 			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Until: draft.Until, Refs: slices.Clip(linked),
 				Question: strings.TrimSpace(draft.Question), StatusQuo: draft.StatusQuo, Options: draft.Options, Recommend: draft.Recommend}
 			person := a.cfg.Guide.Person
