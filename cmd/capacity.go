@@ -1225,7 +1225,7 @@ nothing; it makes no GitHub call.`,
 			}
 			liveCap := a.liveCapacity()
 			var v *capacityView
-			if len(liveCap.Providers) > 0 {
+			if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop)
 			} else {
 				c := countAgents(st, sessions, a.now)
@@ -1470,7 +1470,7 @@ func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude
 		return nil, err
 	}
 	liveCap := a.liveCapacity()
-	if len(liveCap.Providers) > 0 {
+	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 		return a.resolveProvidersCapacity(ctx, st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop), nil
 	}
 	c := countAgents(st, sessions, a.now)

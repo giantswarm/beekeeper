@@ -328,6 +328,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if err != nil {
 				return err
 			}
+			var choiceLine string
 			if harness == harnessAuto {
 				ch, err := pickAutoChoice(v, force)
 				if err != nil {
@@ -336,15 +337,20 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				if err := validateStartHarness(ch.Harness, mode); err != nil {
 					return err
 				}
-				if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
-					return err
+				targetModel := cmp.Or(strings.TrimSpace(model), ch.Model)
+				if ch.Harness == omp.Harness && a.ompStartBrokered(targetModel) {
+					return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
 				}
 				harness = ch.Harness
-				if model == "" {
-					model = ch.Model
-				}
-				if harness == omp.Harness && a.ompStartBrokered(model) {
-					return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
+				model = targetModel
+				choiceLine = ch.line()
+			}
+			if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
+				return err
+			}
+			if choiceLine != "" {
+				if _, err := fmt.Fprintf(a.out, "choice: %s\n", choiceLine); err != nil {
+					return err
 				}
 			}
 			if over != "" {
@@ -395,7 +401,56 @@ func validateStartHarness(harness, mode string) error {
 	return nil
 }
 
+func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir string) error {
+	switch harness {
+	case harnessAgy:
+		resolvedDir, err := a.agentDir(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		bin, err := exec.LookPath(agy.Comm)
+		if err != nil {
+			return err
+		}
+		_, err = agyModel(model, func() ([]string, error) { return agyModels(ctx, bin) })
+		return err
+	case omp.Harness:
+		resolvedDir, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		bin, err := exec.LookPath(omp.Comm)
+		if err != nil {
+			return err
+		}
+		m, err := ompModel(model, a.cfg.Omp.Model, func() ([]string, error) { return ompModels(ctx, bin) })
+		if err != nil {
+			return err
+		}
+		_, err = a.ompCredentials(m)
+		return err
+	default:
+		resolvedDir, err := a.agentDir(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		return nil
+	}
+}
+
 func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
+	if v != nil && v.Stopped != "" {
+		return nil, refused("%s", v.verdict())
+	}
 	if v != nil && v.Choice != nil && v.Choice.Harness != "" && v.Choice.Model != "" {
 		return v.Choice, nil
 	}

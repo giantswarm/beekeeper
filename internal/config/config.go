@@ -3215,10 +3215,9 @@ func (c *Config) validate() error {
 		case ch.paceMarginSet && (ch.PaceMargin < -100 || ch.PaceMargin > 100):
 			return fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin)
 		}
-		if prov := ch.EffectiveProvider(); len(c.Capacity.Providers) > 0 {
-			if _, ok := c.Capacity.Providers[prov]; !ok {
-				return fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov)
-			}
+		prov := ch.EffectiveProvider()
+		if _, ok := c.Capacity.Providers[prov]; !ok {
+			return fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov)
 		}
 	}
 	if w := c.Watch.SwapWindow.Duration; w != 0 && w < MinSwapSpan {
