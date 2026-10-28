@@ -24,6 +24,13 @@ const sshTestOtherSelector = "host-b"
 func sshStartTestApp(t *testing.T) (*app, string) {
 	t.Helper()
 	a, _ := stubApp(t)
+	// Temporary roots may be aliases; managed storage requires a canonical
+	// operator-owned path on every coordinator platform.
+	root, err := filepath.EvalSymlinks(a.cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.StateDir = root
 	plat.Machine = roomyMachine{Machine: plat.Machine}
 	a.cfg.Identity.Host = "coordinator"
 	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{claudeComm: {Ceiling: 1}}, Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}}}
