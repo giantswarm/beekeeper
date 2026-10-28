@@ -146,6 +146,7 @@ type ExecutionHost struct {
 type Ref struct {
     Host HostID
     Execution ExecutionID
+    Generation uint64
 }
 
 type StartRequest struct {
@@ -161,7 +162,6 @@ type StartRequest struct {
 type Handle struct {
     Ref Ref
     Repository, Commit, Workspace, Unit, ConversationID string
-    Generation uint64
 }
 
 type Observation struct {
@@ -232,6 +232,14 @@ contacting the host. Persist them with the request digest and capacity
 reservation. Retrying the same request returns its existing handle. Reusing
 an ID with different content is a refusal. The durable record key includes
 coordinator identity and execution host, so another coordinator cannot adopt it.
+
+The digest covers the immutable request fields, including the execution
+generation, requested repository/ref, prompt, harness, model and policy. It
+excludes the registration/activation receipt, which authorizes the next
+handshake phase without changing the request. Pin the resolved commit at
+preparation; a retry never resolves a moving ref again. Every operation carries
+the expected generation in `Ref`; a stale ref cannot stop or message a later
+process generation.
 
 On the host, resolve the repository identity from its own mapping and verify
 the checkout's origin against the allowlist. Do not send or reuse local paths.
