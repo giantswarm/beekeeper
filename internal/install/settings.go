@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/pkg/project"
+	"github.com/giantswarm/beekeeper/plugin"
 )
 
 // Hook is one entry of a hook event's list in Claude Code's settings.
@@ -141,10 +142,17 @@ func (e Env) planHooks(p *plan, m *Manifest) error {
 		m.addDirs(filepath.Dir(e.Settings))
 	}
 	raw := s.encode()
-	p.add(map[bool]string{true: "update", false: "write"}[s.existed], e.Settings, "", func() error {
+	p.add(writeVerb(s.existed), e.Settings, "", func() error {
 		return writeFile(e.Settings, raw)
 	})
 	return nil
+}
+
+func writeVerb(existed bool) string {
+	if existed {
+		return "update"
+	}
+	return "write"
 }
 
 // find is where want stands in list: as it is, as the entry install added
@@ -293,7 +301,7 @@ func (e Env) planAgyHooks(p *plan, m *Manifest) error {
 		m.addDirs(filepath.Dir(e.AgyHooks))
 	}
 	raw := s.encode()
-	p.add(map[bool]string{true: "update", false: "write"}[s.existed], e.AgyHooks, "", func() error {
+	p.add(writeVerb(s.existed), e.AgyHooks, "", func() error {
 		return writeFile(e.AgyHooks, raw)
 	})
 	return nil
@@ -354,6 +362,299 @@ func CheckAgyHooks(path, exe, home string) string {
 	}
 	if exe != "" && gotExe != exe {
 		return fmt.Sprintf("agy hooks: %s runs %s instead of %s; run `beekeeper install`", short(path), short(gotExe), short(exe))
+	}
+	return ""
+}
+
+// agySkillsEntry is one path entry in agy's skills.json
+// (~/.gemini/config/skills.json).
+type agySkillsEntry struct {
+	Path        string   `json:"path"`
+	IncludeOnly []string `json:"include_only,omitempty"`
+	Exclude     []string `json:"exclude,omitempty"`
+}
+
+// AgySkillsDir is the directory under stateDir where install writes the
+// embedded skills that ~/.gemini/config/skills.json points at.
+func AgySkillsDir(stateDir string) string {
+	if stateDir == "" {
+		return ""
+	}
+	return filepath.Join(stateDir, plugin.SkillsDir)
+}
+
+// AgySkillsEntry is the JSON object install adds to the "entries" list of
+// agy's skills.json (~/.gemini/config/skills.json).
+func AgySkillsEntry(skillsDir string) json.RawMessage {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(agySkillsEntry{Path: skillsDir})
+	return bytes.TrimSpace(b.Bytes())
+}
+
+// agySkillsEntryPath returns the path and whether raw is a plain
+// {"path": "..."} object without include_only, exclude or extra keys.
+func agySkillsEntryPath(raw json.RawMessage) (string, bool) {
+	o, err := decodeObject(raw)
+	if err != nil {
+		return "", false
+	}
+	var e agySkillsEntry
+	if json.Unmarshal(raw, &e) != nil || e.Path == "" {
+		return "", false
+	}
+	return e.Path, len(o) == 1 && len(e.IncludeOnly) == 0 && len(e.Exclude) == 0
+}
+
+func expandHome(p, home string) string {
+	if home != "" && strings.HasPrefix(p, "~/") {
+		return filepath.Join(home, p[2:])
+	}
+	return p
+}
+
+// isBeekeeperSkillsEntry reports whether raw is a skills.json entry for
+// beekeeper's skills, at wantDir or at another beekeeper skills folder.
+func isBeekeeperSkillsEntry(raw json.RawMessage, wantDir, home string) bool {
+	p, _ := agySkillsEntryPath(raw)
+	if p == "" {
+		return false
+	}
+	clean := filepath.Clean(expandHome(p, home))
+	if wantDir != "" && clean == filepath.Clean(wantDir) {
+		return true
+	}
+	sep := string(filepath.Separator)
+	if strings.HasSuffix(clean, sep+filepath.Join(project.Name, plugin.SkillsDir)) ||
+		strings.HasSuffix(clean, sep+filepath.Join(project.Name, "plugin", plugin.SkillsDir)) {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(clean, "worker-rules", "SKILL.md"))
+	return err == nil
+}
+
+// staleAgySkills returns the names of the embedded skills whose files under
+// dir are missing or differ from what this binary embeds.
+func staleAgySkills(dir string) []string {
+	var stale []string
+	for _, name := range plugin.SkillNames() {
+		root := plugin.SkillsDir + "/" + name
+		ok := true
+		_ = fs.WalkDir(plugin.Skills, root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			want, rerr := plugin.Skills.ReadFile(p)
+			rel := strings.TrimPrefix(p, plugin.SkillsDir+"/")
+			got, gerr := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))) //nolint:gosec // beekeeper's own skills directory
+			if rerr != nil || gerr != nil || !bytes.Equal(got, want) {
+				ok = false
+			}
+			return nil
+		})
+		if !ok {
+			stale = append(stale, name)
+		}
+	}
+	return stale
+}
+
+// writeEmbeddedSkills writes every file in plugin.Skills under
+// plugin.SkillsDir into dir.
+func writeEmbeddedSkills(dir string) error {
+	return fs.WalkDir(plugin.Skills, plugin.SkillsDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		raw, err := plugin.Skills.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel := strings.TrimPrefix(p, plugin.SkillsDir+"/")
+		return writeFile(filepath.Join(dir, filepath.FromSlash(rel)), raw)
+	})
+}
+
+// planAgySkills writes the embedded skills into AgySkillsDir(e.StateDir) and
+// registers that directory in agy's skills.json (~/.gemini/config/skills.json)
+// when e.AgySkills is set, preserving every other entry and key in that file.
+func (e Env) planAgySkills(p *plan, m *Manifest) error {
+	if e.AgySkills == "" || e.StateDir == "" {
+		return nil
+	}
+	if symlink(e.AgySkills) {
+		p.add("keep", e.AgySkills, "a symlink to "+resolve(e.AgySkills)+": install never writes through a link; "+
+			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
+		return nil
+	}
+	s, err := readSettings(e.AgySkills)
+	if err != nil {
+		return err
+	}
+	var list []json.RawMessage
+	hasEntries := s.has("entries")
+	if raw, ok := s.top.get("entries"); ok {
+		if err := json.Unmarshal(raw, &list); err != nil {
+			return fmt.Errorf("%s entries: %w", e.AgySkills, err)
+		}
+	}
+	skillsDir := AgySkillsDir(e.StateDir)
+	want := AgySkillsEntry(skillsDir)
+	what := e.AgySkills + ": " + project.Name + " skills"
+	idx := slices.IndexFunc(list, func(r json.RawMessage) bool {
+		return sameJSON(r, want) || len(m.AgySkills) > 0 && sameJSON(r, m.AgySkills) || isBeekeeperSkillsEntry(r, skillsDir, e.Spec.Home)
+	})
+	skillsCurrent := len(staleAgySkills(skillsDir)) == 0
+	verb := "add"
+	switch {
+	case idx >= 0 && sameJSON(list[idx], want) && skillsCurrent:
+		m.AgySkills = want
+		m.AgySkillsDir = skillsDir
+		p.add("ok", what, "", nil)
+		return nil
+	case idx >= 0:
+		verb = writeVerb(true)
+		list[idx] = want
+	case !s.existed:
+		verb = writeVerb(false)
+		m.AgySkillsCreated = true
+		m.addDirs(filepath.Dir(e.AgySkills))
+		list = append(list, want)
+	default:
+		list = append(list, want)
+	}
+	if !hasEntries {
+		m.AgySkillsEntries = true
+	}
+	s.top.set("entries", encodeArray(list))
+	m.AgySkills = want
+	m.AgySkillsDir = skillsDir
+	raw := s.encode()
+	p.add(verb, what, "", func() error {
+		if err := writeEmbeddedSkills(skillsDir); err != nil {
+			return err
+		}
+		return writeFile(e.AgySkills, raw)
+	})
+	return nil
+}
+
+// planAgyUnskills removes the skills.json entry and embedded skills
+// directory that install wrote.
+func (e Env) planAgyUnskills(p *plan, m Manifest, removed map[string]bool, purge bool) error {
+	if len(m.AgySkills) == 0 && m.AgySkillsDir == "" {
+		return nil
+	}
+	rmDir := func() error {
+		if m.AgySkillsDir == "" || purge {
+			return nil
+		}
+		return os.RemoveAll(m.AgySkillsDir)
+	}
+	if e.AgySkills == "" || symlink(e.AgySkills) {
+		if m.AgySkillsDir != "" && !purge && exists(m.AgySkillsDir) {
+			p.add("remove", m.AgySkillsDir, "", rmDir)
+		}
+		return nil
+	}
+	s, err := readSettings(e.AgySkills)
+	if err != nil || !s.existed {
+		if m.AgySkillsDir != "" && !purge && exists(m.AgySkillsDir) {
+			p.add("remove", m.AgySkillsDir, "", rmDir)
+		}
+		return err
+	}
+	rawEntries, ok := s.top.get("entries")
+	if !ok {
+		if m.AgySkillsDir != "" && !purge && exists(m.AgySkillsDir) {
+			p.add("remove", m.AgySkillsDir, "", rmDir)
+		}
+		return nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(rawEntries, &list); err != nil {
+		return fmt.Errorf("%s entries: %w", e.AgySkills, err)
+	}
+	kept := slices.DeleteFunc(slices.Clone(list), func(r json.RawMessage) bool {
+		return len(m.AgySkills) > 0 && sameJSON(r, m.AgySkills)
+	})
+	if len(kept) == len(list) {
+		if m.AgySkillsDir != "" && !purge && exists(m.AgySkillsDir) {
+			p.add("remove", m.AgySkillsDir, "", rmDir)
+		}
+		return nil
+	}
+	if len(kept) == 0 && m.AgySkillsEntries {
+		s.top.del("entries")
+	} else {
+		s.top.set("entries", encodeArray(kept))
+	}
+	if m.AgySkillsCreated && len(s.top) == 0 {
+		removed[e.AgySkills] = true
+		p.add("remove", e.AgySkills, "", func() error {
+			if err := rmDir(); err != nil {
+				return err
+			}
+			return os.Remove(e.AgySkills)
+		})
+		return nil
+	}
+	raw := s.encode()
+	p.add("remove", e.AgySkills+": "+project.Name+" skills", "", func() error {
+		if err := rmDir(); err != nil {
+			return err
+		}
+		return writeFile(e.AgySkills, raw)
+	})
+	return nil
+}
+
+// CheckAgySkills checks that agy's skills.json at path registers
+// AgySkillsDir(stateDir) and that the skill files there match what this
+// binary embeds. It returns a one-line finding for `beekeeper doctor`, or ""
+// when healthy or path is empty.
+func CheckAgySkills(path, stateDir, home string) string {
+	if path == "" || stateDir == "" {
+		return ""
+	}
+	short := (&plan{home: home}).tilde
+	s, err := readSettings(path)
+	if err != nil {
+		return fmt.Sprintf("agy skills: %s: %v; run `beekeeper install`", short(path), err)
+	}
+	if !s.existed {
+		return fmt.Sprintf("agy skills: %s is missing; run `beekeeper install`", short(path))
+	}
+	rawEntries, ok := s.top.get("entries")
+	if !ok {
+		return fmt.Sprintf("agy skills: %s lacks the %s skills entry; run `beekeeper install`", short(path), project.Name)
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(rawEntries, &list); err != nil {
+		return fmt.Sprintf("agy skills: %s: entries: %v; run `beekeeper install`", short(path), err)
+	}
+	wantDir := AgySkillsDir(stateDir)
+	idx := slices.IndexFunc(list, func(r json.RawMessage) bool {
+		return isBeekeeperSkillsEntry(r, wantDir, home)
+	})
+	if idx < 0 {
+		return fmt.Sprintf("agy skills: %s lacks the %s skills entry; run `beekeeper install`", short(path), project.Name)
+	}
+	gotPath, plain := agySkillsEntryPath(list[idx])
+	if !plain {
+		return fmt.Sprintf("agy skills: %s: the %s skills entry differs from what install writes; run `beekeeper install`", short(path), project.Name)
+	}
+	gotDir := filepath.Clean(expandHome(gotPath, home))
+	if gotDir != filepath.Clean(wantDir) {
+		return fmt.Sprintf("agy skills: %s points to %s instead of %s; run `beekeeper install`", short(path), short(gotDir), short(wantDir))
+	}
+	if !exists(wantDir) {
+		return fmt.Sprintf("agy skills: %s is missing; run `beekeeper install`", short(wantDir))
+	}
+	if stale := staleAgySkills(wantDir); len(stale) > 0 {
+		return fmt.Sprintf("agy skills: %s serves the skills %s unlike %s %s; run `beekeeper install`",
+			short(wantDir), strings.Join(stale, ", "), project.Name, project.Version())
 	}
 	return ""
 }

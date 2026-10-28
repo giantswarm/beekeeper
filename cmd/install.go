@@ -27,7 +27,9 @@ binary it runs from (or --binary):
   - the PreToolUse and PermissionRequest hooks in Claude Code's user
     settings ($CLAUDE_CONFIG_DIR, else ~/.claude/settings.json), and when
     agy is installed the PreToolUse hook under "beekeeper" in
-    ~/.gemini/config/hooks.json, merged into what is there;
+    ~/.gemini/config/hooks.json and the embedded skills in
+    <stateDir>/skills registered under "entries" in
+    ~/.gemini/config/skills.json, merged into what is there;
   - the standby service (beekeeper watch --standby, with --notify when
     watch.notify is true; off by default): a systemd user unit on Linux, a
     launch agent on macOS, enabled and started;
@@ -149,7 +151,9 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 		claudeDir = filepath.Join(e.Spec.Home, ".claude")
 	}
 	e.Settings = filepath.Join(claudeDir, "settings.json")
-	e.AgyHooks = agyHooksPath(e.Spec.Home, hasAgy())
+	agyInstalled := hasAgy()
+	e.AgyHooks = agyHooksPath(e.Spec.Home, agyInstalled)
+	e.AgySkills = agySkillsPath(e.Spec.Home, agyInstalled)
 	e.StateDir = a.cfg.StateDir
 	e.Spec.Exe = e.Exe
 	if m, err := plat.Machine.Mem(); err == nil {
@@ -179,10 +183,20 @@ func hasAgy() bool {
 // agyHooksPath returns ~/.gemini/config/hooks.json when agy is installed or
 // the hooks file already exists, "" otherwise.
 func agyHooksPath(home string, agyInstalled bool) string {
+	return agyConfigPath(home, "hooks.json", agyInstalled)
+}
+
+// agySkillsPath returns ~/.gemini/config/skills.json when agy is installed or
+// the skills manifest already exists, "" otherwise.
+func agySkillsPath(home string, agyInstalled bool) string {
+	return agyConfigPath(home, "skills.json", agyInstalled)
+}
+
+func agyConfigPath(home, name string, agyInstalled bool) string {
 	if home == "" {
 		return ""
 	}
-	p := filepath.Join(home, ".gemini", "config", "hooks.json")
+	p := filepath.Join(home, ".gemini", "config", name)
 	if _, err := os.Lstat(p); err == nil || agyInstalled {
 		return p
 	}
