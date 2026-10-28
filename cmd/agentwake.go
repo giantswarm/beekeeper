@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -33,9 +34,10 @@ func (a *app) agentWakeCmd() *cobra.Command {
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
 
-An omp agent (agents start --harness omp) gets the message in its inbox,
-at its next tool round or as its next turn; one whose process ended is
-refused: nothing resumes it.
+An omp agent (agents start --harness omp) or an agy agent (agents start
+--harness agy) gets the message in its inbox, at its next tool round / model
+call or as its next turn; one whose process ended is refused: nothing resumes
+it.
 
 A session whose CLI runs gets the message by name, as SendMessage by name
 does: it queues and runs at the session's next tool call or as its next turn.
@@ -140,6 +142,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	}
 	if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
 		return a.wakeOmp(by, ag, id, msg)
+	}
+	if id, ok := strings.CutPrefix(ag.HostSession, agy.HostPrefix); ok {
+		return a.wakeAgy(by, ag, id, msg)
 	}
 	sessions, _, err := a.sessions()
 	if err != nil {
@@ -386,6 +391,29 @@ func (a *app) sendOmp(name, id, msg string) error {
 	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, omp.ErrNotRunning) {
 		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", name, err)
+	}
+	return nil
+}
+
+// wakeAgy writes msg to the inbox of the agy agent ag, started under id.
+func (a *app) wakeAgy(by state.Party, ag state.Agent, id, msg string) error {
+	if err := a.sendAgy(ag.Name, id, msg); err != nil {
+		return err
+	}
+	_ = a.store.Record(event(by, "agents.wake", "%s: written to its agy inbox", ag.Name))
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (agy): written to its inbox, it runs the message before its next model call or as its next turn\n", ag.Name)
+	return err
+}
+
+// sendAgy writes msg to the inbox of the agy agent name, started under id;
+// one whose process ended is refused.
+func (a *app) sendAgy(name, id, msg string) error {
+	err := agy.Send(agy.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, agy.ErrNotRunning) {
+		return refused("%s: its agy agent no longer runs (%s ended): start it again with agents start --harness agy", name, agyUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
