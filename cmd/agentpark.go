@@ -92,7 +92,7 @@ agents wake: its task is that message's first line.`,
   beekeeper agents park --on hold:merges "the devctl release window my merge was refused on"
   beekeeper agents park "the supervisor's go"`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -114,6 +114,9 @@ agents wake: its task is that message's first line.`,
 					}
 					on = refName(r)
 				}
+			}
+			if a.managedExecutionID() != "" {
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits})
 			}
 			line, err := a.park(me, on, waits)
 			if err != nil {
@@ -284,6 +287,9 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		}
 		if st.Agents[i].Park == nil {
 			return refused("%q is not parked: agents wake messages it", st.Agents[i].Name)
+		}
+		if st.Agents[i].Execution != nil {
+			return refused("remote resume is unavailable: https://github.com/giantswarm/beekeeper/issues/1714")
 		}
 		cp := st.Agents[i]
 		target = &cp

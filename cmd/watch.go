@@ -1832,6 +1832,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	w.clear("state-read")
+	st = w.syncExecutions(ctx, st)
 	w.records = st.Records
 	supervised := w.supervisorGone(ctx, st, sessions)
 	if w.standby {

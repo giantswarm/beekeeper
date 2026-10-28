@@ -96,6 +96,9 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 ) []chore {
 	var out []chore
 	for _, ag := range st.Agents {
+		if ag.Execution != nil {
+			continue
+		}
 		if ag.Task != "" || holdsRole(st, ag.Party) {
 			continue
 		}

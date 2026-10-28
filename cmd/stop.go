@@ -197,6 +197,14 @@ func (a *app) stop(ctx context.Context, reason string) error {
 	lines, failed = append(lines, ul...), append(failed, f...)
 	ended, el, f := a.endWorkers(ctx, st, spare)
 	lines, failed = append(lines, el...), append(failed, f...)
+	for _, s := range st.Starts {
+		if s.Execution == nil || s.Execution.Observation.StopAcknowledged {
+			continue
+		}
+		if err := a.stopExecution(ctx, s.Execution.Handle.Ref, reason); err != nil {
+			failed = append(failed, fmt.Sprintf("SSH execution on %s: termination unconfirmed: %v", s.Execution.Handle.Ref.Host, err))
+		}
+	}
 	for _, l := range lines {
 		p("stop: %s", l)
 	}

@@ -133,6 +133,9 @@ filed nowhere else and exits 69.`,
 			if err != nil {
 				return err
 			}
+			if a.managedExecutionID() != "" && (foldArg != "" || holds || draft.Kind == noteLogin) {
+				return refused("remote notes support ordinary decisions only; use the coordinating component for holds, logins and folds")
+			}
 			var into noteID
 			if foldArg != "" {
 				if into, err = a.noteNamed(foldArg); err != nil {
@@ -205,6 +208,9 @@ filed nowhere else and exits 69.`,
 				}
 			} else if draft.Recommend != 0 {
 				return usageErr("--recommend is a decision's: a %s recommends nothing", n.Kind)
+			}
+			if a.managedExecutionID() != "" {
+				return a.remoteControl(cmd.Context(), "note", executionNote{Draft: draft, Note: n})
 			}
 			if err := a.warnAnswered(cmd, n); err != nil {
 				return err

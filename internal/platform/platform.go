@@ -144,6 +144,9 @@ const RunNice = 10
 
 // Cap bounds a capped run.
 type Cap struct {
+	// StopWith binds a managed worker's scope to its verified owned service.
+	// Empty keeps the existing independent scope lifecycle.
+	StopWith string
 	// Max is the memory limit, Swap the swap limit ("12G", "0").
 	Max, Swap string
 	// Slice is the slice of the build slot the run holds or shares, under

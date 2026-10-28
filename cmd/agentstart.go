@@ -107,6 +107,7 @@ var desktopInput = func(ctx context.Context) (func() time.Time, error) { return 
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var nameFlag, model, dir, task, harness, mode, choiceLine string
+	var host, repository, gitRef string
 	var exclude []string
 	var desktop, builds, force, dryRun, review bool
 	c := &cobra.Command{
@@ -280,6 +281,27 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
+			if host != "" && host != "local" {
+				base, ok := harnessByName(harness)
+				if harness == harnessAuto {
+					base, ok = claudeHarness{}, true
+				}
+				if !ok {
+					return validateStartHarness(harness, mode)
+				}
+				h, err := executionHarness(base, executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, Exclude: exclude}, briefFile)
+				if err != nil {
+					return err
+				}
+				sp := agentStart{name: name, task: task, model: model}
+				if dryRun {
+					return h.DryRun(cmd.Context(), a, sp, nil)
+				}
+				return h.Start(cmd.Context(), a, sp)
+			}
+			if repository != "" || gitRef != "" {
+				return usageErr("--repo and --ref require an SSH --host")
+			}
 			if harness == harnessAuto {
 				choices := a.liveCapacity().Choices
 				if len(choices) == 0 {
@@ -412,6 +434,9 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 	}
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
+	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
+	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host")
+	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude, omp, agy, codex, or auto")
@@ -1727,7 +1752,7 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 			st.Records = append(st.Records, state.Record{Session: s.Party, Issue: serves, By: s.By, At: s.At})
 		}
 	}
-	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return s.At.Sub(x.At) > startsKept })
+	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return x.Execution == nil && s.At.Sub(x.At) > startsKept })
 	st.Starts = append(st.Starts, s)
 	return reg, nil
 }

@@ -14,9 +14,11 @@ every session does. What must be shared lives in a small state directory that su
 restarts: the supervisor, grants, holds, registered agents, notes, timers and session records. Every session and the
 supervisor use the same binary.
 
-The [SSH execution-host design](docs/ssh-execution-hosts.md) proposes remote
-harness execution with coordinated identity, capacity and approval checks;
-its commands and configuration are not implemented yet.
+The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
+starts managed headless Claude sessions in isolated host-local clones, with
+coordinator registration, shared capacity, acknowledged controls and owned
+stops. The [design](docs/ssh-execution-hosts.md) records the contract and the
+deferred remote wake, coordinator lease and merge authorization capabilities.
 
 ## Install
 

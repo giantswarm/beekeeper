@@ -165,6 +165,9 @@ machine's files stay untouched.`,
 				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1",
 				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache")}
 			var err error
+			if err := a.executionRunOptions(cmd.Context(), &o); err != nil {
+				return err
+			}
 			if o.SlotDir, o.Slots, err = a.buildSlots(); err != nil {
 				return err
 			}

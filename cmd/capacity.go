@@ -241,6 +241,14 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}}
 	sup, guide := st.SupervisorRole(), st.GuideRole()
 	for _, ag := range st.Agents {
+		if ag.Execution != nil {
+			if executionReserved(st, ag) {
+				c.Busy = append(c.Busy, ag.Name)
+			} else {
+				c.Idle = append(c.Idle, ag.Name)
+			}
+			continue
+		}
 		p := ag.Party
 		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
@@ -270,8 +278,9 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 }
 
 type providerAgents struct {
-	Busy       []string
-	BucketBusy map[string][]string
+	Unconfirmed []string
+	Busy        []string
+	BucketBusy  map[string][]string
 }
 
 func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time) map[string]providerAgents {
@@ -281,6 +290,36 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 	}
 	sup, guide := st.SupervisorRole(), st.GuideRole()
 	for _, ag := range st.Agents {
+		if ag.Execution != nil {
+			if !executionReserved(st, ag) {
+				continue
+			}
+			r, _ := executionRecord(st, *ag.Execution)
+			configured := false
+			if r != nil {
+				_, configured = out[r.Provider]
+			}
+			if r == nil || !configured {
+				// An unresolved reservation cannot become a fresh provider
+				// budget after a damaged record or configuration change.
+				for name, pa := range out {
+					pa.Busy = append(pa.Busy, ag.Name)
+					pa.Unconfirmed = append(pa.Unconfirmed, ag.Name)
+					out[name] = pa
+				}
+				continue
+			}
+			pa := out[r.Provider]
+			if pa.BucketBusy == nil {
+				pa.BucketBusy = map[string][]string{}
+			}
+			pa.Busy = append(pa.Busy, ag.Name)
+			if r.Bucket != "" {
+				pa.BucketBusy[r.Bucket] = append(pa.BucketBusy[r.Bucket], ag.Name)
+			}
+			out[r.Provider] = pa
+			continue
+		}
 		p := ag.Party
 		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
@@ -587,6 +626,12 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 		busy = []string{}
 	}
 	pv := &providerView{Name: name, Busy: busy}
+	if len(pa.Unconfirmed) > 0 {
+		pv.Error = "remote execution reservation is unresolved; inspect its registration and provider"
+		pv.Blocks = []string{pv.Error}
+		pv.Verdict = providerVerdict(0, pv.Blocks)
+		return pv
+	}
 	if pCfg.Enabled() {
 		pv.HighPercent = pCfg.EffectiveHighPercent()
 		if !res.ok || res.err != nil {
@@ -1164,10 +1209,11 @@ func (a *app) watchSwap() *swapReading {
 }
 
 func (a *app) capacityCmd() *cobra.Command {
+	var host string
 	var builds, review bool
 	var exclude []string
 	c := &cobra.Command{
-		Use:   "capacity [--builds] [--review] [--exclude <choice>]",
+		Use:   "capacity [--host <host>] [--builds] [--review] [--exclude <choice>]",
 		Short: "Busy agents against the target, the headroom for a start and the verdict",
 		Long: `Count the roster's agents against the supervisor's target (capacity.floor,
 capacity.ceiling; unset, 5 and 10) and say whether a new start fits. A
@@ -1240,7 +1286,22 @@ nothing; it makes no GitHub call.`,
 			}
 			liveCap := a.liveCapacity()
 			var v *capacityView
-			if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
+			if host != "" && host != "local" {
+				h, err := a.executionHost(host)
+				if err != nil {
+					return err
+				}
+				caps, err := a.probeExecution(cmd.Context(), h)
+				if err != nil {
+					return err
+				}
+				k := liveCap
+				var legacy *usageView
+				if len(k.Providers) == 0 {
+					k, legacy = a.resolveUsage(cmd.Context(), k)
+				}
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, exclude, review, harnessAuto, "")
+			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop)
 			} else {
 				c := countAgents(st, sessions, a.now)
@@ -1282,6 +1343,7 @@ nothing; it makes no GitHub call.`,
 		},
 	}
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
+	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
 	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, which skips the weekly pace check and worker weekly cap")
 	c.Flags().StringSliceVar(&exclude, excludeFlag, nil, "exclude a choice by model, harness/model, provider or harness (repeatable or comma-separated)")
 	return c

@@ -54,6 +54,9 @@ the agent.`,
 				if err := a.refuseStopped(st, "a desktop turn"); err != nil {
 					return err
 				}
+				if i, err := find(st); err == nil && st.Agents[i].Execution != nil {
+					return refused("managed SSH executions have no desktop turn")
+				}
 				if i, err := find(st); err == nil && a.backgroundAgent(cmd.Context(), st, st.Agents[i].Party) {
 					return refused("%s runs as a background session (agents.mode background): it has no desktop turn, Remote Control and claude attach show it", st.Agents[i].Name)
 				}

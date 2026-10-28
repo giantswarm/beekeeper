@@ -318,7 +318,7 @@ func (c *successorChain) outlook(now time.Time) string {
 
 // started reports whether p's session is one of beekeeper's starts.
 func started(st *state.State, p state.Party) bool {
-	return p.Session != "" && slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == p.Session })
+	return p.Session != "" && slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Execution == nil && s.Session == p.Session })
 }
 
 // reviveGone resumes rl's gone holder headless outside the poll, as

@@ -109,6 +109,10 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	ag := st.Agents[i]
+	if ag.Execution != nil {
+		h := sshHarness{Harness: claudeHarness{}, ref: ag.Execution}
+		return h.Wake(a, by, ag, ag.Session, msg)
+	}
 	if st.Supervisor != nil && st.Supervisor.Is(by) {
 		// The supervisor's `yours <resource>` is the grant, as in a
 		// SendMessage; the record follows the word.
