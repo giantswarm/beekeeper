@@ -281,7 +281,28 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			}
 		}
 		sessions, _, _ := target.sessions()
-		v := target.resolveProvidersCapacity(context.Background(), st, sessions, k, f.builds, f.excludes, f.review).stopped(&target, st.Stop)
+		c := countAgents(st, sessions, target.now)
+		pa := countProviderAgents(st, sessions, k, target.now)
+		readings := make(map[string]providerReadingResult, len(k.Providers))
+		for _, name := range k.ProviderNames() {
+			p := k.Providers[name]
+			if !p.Enabled() {
+				continue
+			}
+			r, err := target.resolveReading(context.Background(), usageProviderFile(name), p.Usage)
+			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+		}
+		h := &headroom{
+			AvailableMiB:     max(64<<10, k.AvailMinMiB+1024),
+			AvailMinMiB:      k.AvailMinMiB,
+			SwapGrowthMaxMiB: k.SwapGrowthMaxMiB,
+			PSIMax:           k.SwapPSIMax,
+			LoadMax:          64,
+			Slots:            1,
+			SlotsFree:        1,
+			MaxLabs:          1,
+		}
+		v := buildProvidersCapacity(c, pa, k, readings, h, false, f.excludes, f.review, target.now).stopped(&target, st.Stop)
 		ch, err := pickAutoChoice(v, f.force)
 		if err != nil || ch == nil {
 			return false
