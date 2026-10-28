@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	fixtureStatus      = "status"
 	fixtureEnvironment = "environ"
 	fixtureMappings    = "maps"
 )
@@ -66,12 +67,16 @@ func TestUserReferencesDistinguishesProtectedHelpersFromUnreadableProcesses(t *t
 		{"non-dumpable helper", "Dumpable: 0\n", fixtureEnvironment, false},
 		{"credential-changing helper", "setuid", fixtureMappings, false},
 		{"kernel-owned helper", "kernel-owned", fixtureEnvironment, false},
+		{"permitted capabilities", "CapPrm: 0000000000000001\n", fixtureEnvironment, false},
+		{"effective capabilities", "CapEff: 0000000000000001\n", "cwd", false},
+		{"mixed groups", "Gid: 1 2 1 1\n", fixtureMappings, false},
+		{"ordinary credentials", "Gid: 1 1 1 1\nCapPrm: 0000000000000000\nCapEff: 0000000000000000\n", fixtureEnvironment, true},
 		{"dumpable environment", "", fixtureEnvironment, true},
 		{"dumpable mappings", "", fixtureMappings, true},
 		{"dumpable descriptors", "", "fd", true},
 		{"dumpable cwd", "", "cwd", true},
 		{"dumpable descriptor target", "", "3", true},
-		{"unknown ownership", "", "status", true},
+		{"unknown ownership", "", fixtureStatus, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -87,7 +92,7 @@ func TestUserReferencesDistinguishesProtectedHelpersFromUnreadableProcesses(t *t
 			if tc.status == "setuid" {
 				status = fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid+1, uid, uid)
 			}
-			for name, data := range map[string]string{"status": status, "comm": "go", fixtureEnvironment: "", fixtureMappings: "", "fd/3": ""} {
+			for name, data := range map[string]string{fixtureStatus: status, "comm": "go", fixtureEnvironment: "", fixtureMappings: "", "fd/3": ""} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -142,5 +147,35 @@ func TestUserReferencesFailsClosedWithoutProcessRootOrOwnership(t *testing.T) {
 	files.readlink = func(string) (string, error) { return "", errors.New("link read failed") }
 	if _, err := referencesWith(root, 42, true, files); err == nil {
 		t.Fatal("helper hid an unexpected readlink failure")
+	}
+}
+
+// Every normal package test run exercises the host's process permissions;
+// synthetic status files alone cannot model proc inode ownership changes.
+func TestUserReferencesAgainstLiveProc(t *testing.T) {
+	if _, err := os.Stat("/proc/self/status"); errors.Is(err, os.ErrNotExist) {
+		t.Skip("Linux proc is unavailable")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.CreateTemp(t.TempDir(), "held-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	refs, commands, err := UserReferences(os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(refs, held.Name()) || len(commands) == 0 {
+		t.Fatal("live scan missed this process's open scratch file")
+	}
+}
+
+func TestReferenceOwnerRejectsMalformedProtectionMetadata(t *testing.T) {
+	for _, status := range []string{"Uid: 1 1 1\n", "Uid: 1 1 1 -1\n", "Uid: 1 1 1 1\nGid: 1 1\n", "Uid: 1 1 1 1\nCapPrm: invalid\n", "Uid: 1 1 1 1\nCapEff: invalid\n"} {
+		if _, _, err := referenceOwner([]byte(status)); err == nil {
+			t.Fatal("malformed credentials looked readable")
+		}
 	}
 }

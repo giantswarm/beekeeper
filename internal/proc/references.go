@@ -83,8 +83,8 @@ func referencesWith(root string, pid int, protected bool, files referenceIO) ([]
 
 // UserReferences scans every numeric process entry, including entries the
 // general process table cannot read. Unknown ownership fails closed. Kernel
-// EACCES on a non-dumpable or credential-changing helper is expected; other
-// errors on live user processes remain failures.
+// EACCES on helpers protected by dumpability, credentials or capabilities
+// is expected; other errors on live user processes remain failures.
 func UserReferences(uid int) ([]string, []string, error) {
 	return userReferencesAt(procRoot, uid, referenceFiles())
 }
@@ -115,16 +115,24 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		if owner != uid {
 			continue
 		}
-		info, err := files.stat(dir)
-		if errors.Is(err, os.ErrNotExist) {
+		// A cached directory inode may retain its original owner after a
+		// process becomes non-dumpable. Ptrace-gated children reflect the
+		// current protection, including when status omits Dumpable.
+		gone := false
+		for _, path := range []string{dir, filepath.Join(dir, "environ")} {
+			info, err := files.stat(path)
+			if errors.Is(err, os.ErrNotExist) {
+				gone = true
+				break
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			protected = protected || ownerUID(info) != uid
+		}
+		if gone {
 			continue
 		}
-		if err != nil {
-			return nil, nil, err
-		}
-		// Current kernels omit Dumpable from status, but reset proc directory
-		// ownership when a process makes itself non-dumpable.
-		protected = protected || ownerUID(info) != uid
 		paths, err := referencesWith(root, pid, protected, files)
 		if err != nil {
 			return nil, nil, err
@@ -146,29 +154,50 @@ func referenceOwner(status []byte) (int, bool, error) {
 	uid := -1
 	protected := false
 	for line := range strings.Lines(string(status)) {
-		if v, ok := strings.CutPrefix(line, "Uid:"); ok {
-			fields := strings.Fields(v)
-			if len(fields) != 4 {
-				return -1, false, errors.New("malformed process Uid")
+		key, value, _ := strings.Cut(line, ":")
+		switch key {
+		case "Uid", "Gid":
+			realID, mixed, err := referenceIDs(value)
+			if err != nil {
+				return -1, false, err
 			}
-			for i, f := range fields {
-				n, err := strconv.Atoi(f)
-				if err != nil {
-					return -1, false, err
-				}
-				if i == 0 {
-					uid = n
-				} else {
-					protected = protected || n != uid
-				}
+			if key == "Uid" {
+				uid = realID
 			}
-		}
-		if v, ok := strings.CutPrefix(line, "Dumpable:"); ok && strings.TrimSpace(v) == "0" {
-			protected = true
+			protected = protected || mixed
+		case "CapPrm", "CapEff":
+			capabilities, err := strconv.ParseUint(strings.TrimSpace(value), 16, 64)
+			if err != nil {
+				return -1, false, err
+			}
+			protected = protected || capabilities != 0
+		case "Dumpable":
+			protected = protected || strings.TrimSpace(value) == "0"
 		}
 	}
 	if uid < 0 {
 		return -1, false, errors.New("process Uid unavailable")
 	}
 	return uid, protected, nil
+}
+
+func referenceIDs(value string) (int, bool, error) {
+	fields := strings.Fields(value)
+	if len(fields) != 4 {
+		return -1, false, errors.New("malformed process credentials")
+	}
+	realID := -1
+	mixed := false
+	for i, field := range fields {
+		id, err := strconv.Atoi(field)
+		if err != nil || id < 0 {
+			return -1, false, errors.New("invalid process credentials")
+		}
+		if i == 0 {
+			realID = id
+		} else {
+			mixed = mixed || id != realID
+		}
+	}
+	return realID, mixed, nil
 }

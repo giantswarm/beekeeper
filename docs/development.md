@@ -378,8 +378,10 @@ and build/temp environment references keep entries alive. Symbolic links
 and directories containing checkout metadata are kept. Unreadable
 dumpable user-process references, unknown process ownership or an unreadable
 process root stop the disk step. Expected kernel permission denials on
-non-dumpable or credential-changing helpers do not stop pruning; their
-readable references still protect data.
+non-dumpable helpers or helpers with different credentials or capabilities
+do not stop pruning; their readable references still protect data. Ownership
+of ptrace-gated child entries detects changes in dumpability even when the
+process directory still has its original owner.
 
 `beekeeper doctor` uses this automatic policy too, including its dry run.
 `disk.prune: ask` disables this disk step and retains the pre-existing
