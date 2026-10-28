@@ -25,6 +25,15 @@ var (
 	ref      = regexp.MustCompile(`(^|[^\w&/.#-])((?:[\w.-]+/)?[\w.-]*#(\d+))\b`)
 	codeSpan = regexp.MustCompile("(?s)```.*?```|`[^`\n]*`")
 	utc      = regexp.MustCompile(`\b(?:UTC|GMT)\b`)
+	// shortRef is an issue or pull request named as #N or owner/repo#N;
+	// "note #N", "timer #N" and "--on <ref>" are not issue references.
+	shortRef = regexp.MustCompile(`(?i)(?:^|[^\w&/#])((?:note|timer|--on)\s+['"]?)?((?:([\w.-]+/[\w.-]+))?#(\d+))\b`)
+	// refURL is the full URL of a GitHub issue or pull request.
+	refURL = regexp.MustCompile(`(?i)https?://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
+	// anyURL is an http or https URL, whose #fragment is an anchor, never a bare #N.
+	anyURL = regexp.MustCompile(`(?i)https?://[^\s)>\]"']+`)
+	// codeBlock is a fenced code block (``` or ~~~) or an inline code span.
+	codeBlock = regexp.MustCompile("(?s)```.*?```|~~~.*?~~~|``[^`\n]+``|`[^`\n]*`")
 )
 
 // Check returns what is wrong with a report's links, one problem per
@@ -174,4 +183,74 @@ func Owners(repos ...string) map[string]string {
 		}
 	}
 	return out
+}
+
+// Unlinked lists the bare #N and owner/repo#N references in text (outside
+// fenced code blocks, inline code spans and URLs) that have no matching full
+// GitHub issue or pull request URL in text, each formatted as
+// "<ref> without its full URL (<url>)". When here is "owner/repo" (or text
+// links one repository), a bare #N names that repository in its URL.
+func Unlinked(text, here string) []string {
+	plain := codeBlock.ReplaceAllString(text, " ")
+	urls := refURL.FindAllStringSubmatch(plain, -1)
+	if here == "" {
+		here = singleRepo(urls)
+	}
+	withoutURLs := anyURL.ReplaceAllString(plain, " ")
+	var seen, out []string
+	for _, m := range shortRef.FindAllStringSubmatch(withoutURLs, -1) {
+		if m[1] != "" {
+			continue // note #N, timer #N, --on <ref>
+		}
+		ref, repo, num := m[2], m[3], m[4]
+		linked := slices.ContainsFunc(urls, func(u []string) bool {
+			return u[2] == num && (repo == "" || strings.EqualFold(u[1], repo))
+		})
+		if linked || slices.Contains(seen, ref) {
+			continue
+		}
+		seen = append(seen, ref)
+		if repo == "" {
+			repo = here
+		}
+		if repo == "" {
+			repo = "<owner>/<repo>"
+		}
+		out = append(out, fmt.Sprintf("%s without its full URL (https://github.com/%s/issues/%s)", ref, repo, num))
+	}
+	return out
+}
+
+// SingleRepo returns the single owner/repo that text names by a full GitHub
+// issue or pull request URL or an owner/repo#N reference, or "" when none or
+// more than one.
+func SingleRepo(text string) string {
+	plain := codeBlock.ReplaceAllString(text, " ")
+	if r := singleRepo(refURL.FindAllStringSubmatch(plain, -1)); r != "" {
+		return r
+	}
+	var repo string
+	for _, m := range shortRef.FindAllStringSubmatch(anyURL.ReplaceAllString(plain, " "), -1) {
+		if m[1] != "" || m[3] == "" {
+			continue
+		}
+		if repo == "" {
+			repo = m[3]
+		} else if !strings.EqualFold(repo, m[3]) {
+			return ""
+		}
+	}
+	return repo
+}
+
+func singleRepo(urls [][]string) string {
+	var repo string
+	for _, u := range urls {
+		if repo == "" {
+			repo = u[1]
+		} else if !strings.EqualFold(repo, u[1]) {
+			return ""
+		}
+	}
+	return repo
 }

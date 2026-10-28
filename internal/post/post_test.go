@@ -70,3 +70,27 @@ func TestZone(t *testing.T) {
 		t.Errorf("a UTC person: %q", p)
 	}
 }
+
+func TestUnlinked(t *testing.T) {
+	for _, c := range []struct {
+		name, text, here, want string
+	}{
+		{"bare #N without repo", "merged #7 today", "", "#7 without its full URL (https://github.com/<owner>/<repo>/issues/7)"},
+		{"bare #N with here", "merged #7 today", "o/r", "#7 without its full URL (https://github.com/o/r/issues/7)"},
+		{"bare #N with single URL repo", "merged https://github.com/o/r/pull/9 for #7", "", "#7 without its full URL (https://github.com/o/r/issues/7)"},
+		{"owner/repo#N", "x/y#7 is open", "o/r", "x/y#7 without its full URL (https://github.com/x/y/issues/7)"},
+		{"linked owner/repo#N", "approve o/r#7 (https://github.com/o/r/pull/7)", "", ""},
+		{"linked bare #N", "approve #7 (https://github.com/o/r/issues/7)", "", ""},
+		{"note and timer", "see note #3 and timer #4", "", ""},
+		{"park --on", "beekeeper agents park --on o/r#7 and --on '#9'", "", ""},
+		{"session name repo#N", "session beekeeper#1682: agy harness", "", ""},
+		{"code span and fenced block", "in `#7` and ``o/r#8`` and:\n```sh\ngh pr view #9 o/r#10\n```\nand:\n~~~\n#11\n~~~", "", ""},
+		{"URL anchor fragment", "see https://github.com/o/r/pull/7#issuecomment-12 and https://example.com/x#99", "", ""},
+		{"HTML entity", "char &#35; and &#123;", "", ""},
+	} {
+		got := strings.Join(Unlinked(c.text, c.here), "; ")
+		if got != c.want {
+			t.Errorf("%s: Unlinked(%q, %q) = %q, want %q", c.name, c.text, c.here, got, c.want)
+		}
+	}
+}

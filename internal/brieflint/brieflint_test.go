@@ -10,6 +10,7 @@ const (
 	ruleDate    = "date"
 	ruleUntil   = "until-ships"
 	ruleClobber = "clobber"
+	ruleFullURL = "full-url"
 )
 
 func TestLintRefusesStaleLines(t *testing.T) {
@@ -23,6 +24,8 @@ func TestLintRefusesStaleLines(t *testing.T) {
 		"As a workaround, restart the unit.":                                    "workaround",
 		"Pin the context for now.":                                              "workaround",
 		`The supervisor is "Supervisor run 59"; report to it.`:                  "role-run",
+		"Work #7 and report when done.":                                         ruleFullURL,
+		"Work o/r#7 and report when done.":                                      ruleFullURL,
 	} {
 		got, err := Lint("brief.md", strings.NewReader(line))
 		if err != nil {
@@ -44,6 +47,9 @@ func TestLintPassesCurrentState(t *testing.T) {
 		"An entry whose session no longer runs is replaced.",
 		"Report to the supervisor; the guide asks the person.",
 		"devctl v8.82.8 or newer merges through the bypass.",
+		"Work o/r#7 (https://github.com/o/r/issues/7) and https://github.com/o/r/pull/8#issuecomment-1.",
+		"Wait on note #3, timer #4, `beekeeper agents park --on o/r#7` and session beekeeper#12.",
+		"```sh\ngh pr view #7 o/r#8\n```",
 	} {
 		got, err := Lint("skill.md", strings.NewReader(line))
 		if err != nil {

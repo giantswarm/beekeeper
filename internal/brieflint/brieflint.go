@@ -7,11 +7,14 @@ package brieflint
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"io/fs"
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/post"
 )
 
 // Finding is one line a rule refuses.
@@ -52,6 +55,7 @@ var rules = []rule{
 const (
 	clobberRule = "clobber"
 	clobberWhy  = "a bare > into a file fails on a rerun under noclobber: write >| or a fresh name per attempt"
+	fullURLRule = "full-url"
 )
 
 var (
@@ -85,10 +89,15 @@ func clobbers(code string) bool {
 // The clobber rule reads only shell examples: inline code spans and fenced
 // blocks without a language or with a shell's.
 func Lint(name string, r io.Reader) ([]Finding, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	here := post.SingleRepo(string(raw))
 	var out []Finding
 	var inFence, shellFence bool
 	var fenceMark string
-	sc := bufio.NewScanner(r)
+	sc := bufio.NewScanner(bytes.NewReader(raw))
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
@@ -112,6 +121,9 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 			code = line
 		case !inFence:
 			code = strings.Join(codeSpan.FindAllString(line, -1), " ")
+			for _, why := range post.Unlinked(line, here) {
+				add(fullURLRule, why)
+			}
 		}
 		if clobbers(code) {
 			add(clobberRule, clobberWhy)

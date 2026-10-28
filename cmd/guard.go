@@ -360,7 +360,10 @@ one line naming the rule, a human decides what goes upstream: patches land
 on our fork and as a row on github.upstreamReview; it is logged as a
 hook.refused event with the session, the repository and the command, which
 the supervisor's watch says as a REFUSED line. Reads (gh pr view, gh issue
-view, gh api GET, gh search, git fetch) pass.
+view, gh api GET, gh search, git fetch) pass. A gh pr create, edit or
+comment, or gh issue create, edit or comment, whose --body or --body-file
+names a bare #n or owner/repo#n without its full GitHub URL is refused
+naming the full URL.
 
 A board-wide project read is refused: gh project item-list without
 --query, and a gh api graphql query over a projectV2's items without a

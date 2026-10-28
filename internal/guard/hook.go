@@ -382,6 +382,9 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.Outbound.bashRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if r := h.ghBodyRefusal(cmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
 	fixed, hidden, unread := h.hiddenMerges(cmd, bg)
