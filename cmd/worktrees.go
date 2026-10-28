@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
@@ -51,12 +53,18 @@ const (
 // the roots they lie under, the folders sessions and processes work in, git
 // and GitHub.
 type worktreeMachine struct {
-	dirs  []string
-	roots []string
-	live  []string
-	git   worktrees.Git
-	pulls func(context.Context, []github.Head) (map[github.Head]github.HeadPull, error)
-	now   time.Time
+	dirs      []string
+	roots     []string
+	live      []string
+	git       worktrees.Git
+	pulls     func(context.Context, []github.Head) (map[github.Head]github.HeadPull, error)
+	now       time.Time
+	automatic bool
+	buildDirs []string
+	outputs   []config.BuildOutput
+	trash     string
+	refs      []string
+	recheck   func() ([]string, error)
 }
 
 // liveWorktrees reads the machine the trim acts on. Tests replace it
@@ -77,26 +85,47 @@ func (a *app) worktreeMachine() (worktreeMachine, error) {
 		},
 		now: time.Now(),
 	}
-	if len(m.dirs) == 0 {
-		return m, nil
-	}
 	t, err := plat.Machine.Processes()
 	if err != nil {
 		return m, fmt.Errorf("no worktree removed: the process table: %w", err)
 	}
 	for pid := range t.ByPID {
-		if d := proc.Cwd(pid); d != "" {
+		if d := t.Cwd(pid); d != "" {
 			m.live = append(m.live, d)
 		}
 	}
 	for _, s := range discover(a.cfg, t, m.now) {
 		m.live = append(m.live, s.Cwd)
 	}
-	for _, r := range claude.ByCLI(a.cfg) {
+	records := claude.ByCLI(a.cfg)
+	for _, r := range records {
 		if !r.IsArchived {
-			m.live = append(m.live, r.Cwd)
+			m.live = append(m.live, r.Cwd, r.OriginCwd)
 		}
 	}
+	st, err := a.store.Read()
+	if err != nil {
+		return m, fmt.Errorf("no worktree removed: roster unavailable: %w", err)
+	}
+	for _, agent := range st.Agents {
+		if agent.Done || agent.Task == "" && agent.Park == nil {
+			continue
+		}
+		for _, start := range st.Starts {
+			if agent.Session != "" && start.Session == agent.Session || agent.HostSession != "" && start.HostSession == agent.HostSession {
+				m.live = append(m.live, start.Dir)
+			}
+		}
+		if r := records[agent.Session]; r != nil {
+			m.live = append(m.live, r.Cwd, r.OriginCwd)
+		}
+		if p := claude.Transcript(a.cfg, agent.Session, ""); p != "" {
+			if cwd, err := claude.TranscriptCwd(p); err == nil {
+				m.live = append(m.live, cwd)
+			}
+		}
+	}
+	m.live = slices.DeleteFunc(m.live, func(p string) bool { return p == "" })
 	return m, nil
 }
 
@@ -116,10 +145,12 @@ func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 
 // worktreeOutcome is what a run did, or would do, to one worktree.
 type worktreeOutcome struct {
-	dir   string
-	why   string
-	bytes int64
-	err   error
+	dir    string
+	why    string
+	bytes  int64
+	moved  int64
+	staged int
+	err    error
 }
 
 // worktreeRun is one look at the worktrees.
@@ -129,8 +160,9 @@ type worktreeRun struct {
 	// finished ones whose build output went and whose work stays, idle the
 	// unfinished ones untouched for the grace whose build output went,
 	// orphaned those whose gitfile names a missing repository, moved aside;
-	// failed those a removal or move failed for.
-	removed, cleaned, idle, orphaned, failed []worktreeOutcome
+	// external the explicitly owned build output; failed those a removal
+	// or move failed for.
+	removed, cleaned, idle, orphaned, external, failed []worktreeOutcome
 	// kept counts the worktrees left as they are, by kind
 	// (worktrees.Kept*).
 	kept   map[string]int
@@ -149,10 +181,10 @@ func sum(outcomes ...[]worktreeOutcome) int64 {
 	return n
 }
 
-func (r worktreeRun) freed() int64 { return sum(r.removed, r.cleaned, r.idle) }
+func (r worktreeRun) freed() int64 { return sum(r.removed, r.cleaned, r.idle, r.external) }
 
 func (r worktreeRun) acted() bool {
-	return len(r.removed)+len(r.cleaned)+len(r.idle)+len(r.orphaned) > 0
+	return len(r.removed)+len(r.cleaned)+len(r.idle)+len(r.orphaned)+len(r.external) > 0
 }
 
 // verb says what the run does to a path: "removed", in a dry run "would
@@ -184,11 +216,19 @@ func (r worktreeRun) String() string {
 	var parts []string
 	tier := func(outs []worktreeOutcome, what string) {
 		if len(outs) > 0 {
-			parts = append(parts, fmt.Sprintf("%s %s %s", verb, fmt.Sprintf(what, len(outs)), sizeStr(sum(outs))))
+			amount, action := sum(outs), verb
+			for _, o := range outs {
+				amount += o.moved
+				if o.staged > 0 {
+					action = r.verb(true)
+				}
+			}
+			parts = append(parts, fmt.Sprintf("%s %s %s", action, fmt.Sprintf(what, len(outs)), sizeStr(amount)))
 		}
 	}
 	tier(r.removed, "%d finished,")
 	tier(r.cleaned, "the build output of %d finished ones holding work,")
+	tier(r.external, "external build output (%d),")
 	tier(r.idle, "the build output of %d unfinished ones untouched for "+hoursStr(worktrees.Grace)+",")
 	if len(parts) > 0 {
 		parts = append(parts, fmt.Sprintf("%s %s in all", of, sizeStr(r.freed())))
@@ -202,7 +242,7 @@ func (r worktreeRun) String() string {
 	if n := r.kept[worktrees.KeptWork]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d finished ones kept whole for their work", n))
 	}
-	if r.dryRun && len(r.kept) > 0 {
+	if len(r.kept) > 0 {
 		kinds := slices.Sorted(maps.Keys(r.kept))
 		counts := make([]string, len(kinds))
 		for i, k := range kinds {
@@ -225,7 +265,10 @@ func (r worktreeRun) paths() []string {
 	var out []string
 	add := func(what string, outs []worktreeOutcome) {
 		for _, o := range outs {
-			l := fmt.Sprintf("  %s %s %s (%s)", what, sizeStr(o.bytes), o.dir, o.why)
+			if o.staged > 0 {
+				what = r.verb(true) + " build output"
+			}
+			l := fmt.Sprintf("  %s %s %s (%s)", what, sizeStr(o.bytes+o.moved), o.dir, o.why)
 			if o.err != nil {
 				l += ": " + o.err.Error()
 			}
@@ -234,6 +277,7 @@ func (r worktreeRun) paths() []string {
 	}
 	add(r.verb(false), r.removed)
 	add(r.verb(false)+" the build output of", r.cleaned)
+	add(r.verb(false)+" external build output", r.external)
 	add(r.verb(false)+" the build output of", r.idle)
 	add(r.verb(true), r.orphaned)
 	add("failed", r.failed)
@@ -289,8 +333,12 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 	var heads []github.Head
 	var errs []error
 	for _, d := range m.dirs {
-		if under(d, m.live) {
+		if diskprune.InUse(d, append(slices.Clone(m.live), m.refs...)) {
 			r.kept[worktrees.KeptLive]++
+			continue
+		}
+		if m.automatic && !worktrees.Linked(d) {
+			r.kept["not a linked worktree"]++
 			continue
 		}
 		if worktrees.Dangling(d) {
@@ -301,7 +349,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 			r.record(&r.orphaned, o)
 			continue
 		}
-		t, err := worktrees.Inspect(ctx, m.git, d)
+		t, err := worktrees.InspectBuildDirs(ctx, m.git, d, m.buildDirs)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", d, err))
 			continue
@@ -324,9 +372,89 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		if p, ok := pulls[github.Head{Repo: t.Repo, Branch: t.HeadBranch()}]; ok {
 			pull = &p
 		}
-		v := worktrees.Decide(t, pull, false, pull != nil && pushed(ctx, m.git, t, pull.HeadOid), m.now)
+		if m.automatic && pull != nil && (pull.State == github.Open || m.now.Sub(pull.ClosedAt) < worktrees.Grace) {
+			v := worktrees.Automatic(t, pull, false, false, false, false, m.now)
+			r.kept[v.Kept]++
+			continue
+		}
+		knownPushed := pull != nil && pushed(ctx, m.git, t, pull.HeadOid)
+		v := worktrees.Decide(t, pull, false, knownPushed, m.now)
+		if m.automatic {
+			gone := false
+			if pull == nil || pull.State != github.Merged {
+				var err error
+				gone, knownPushed, err = worktrees.RemoteStatus(ctx, m.git, t, pull != nil)
+				if err != nil {
+					r.kept["remote unavailable"]++
+					continue
+				}
+			} else {
+				knownPushed = t.Head == pull.HeadOid
+				if !knownPushed && pull.HeadOid != "" {
+					_, err := m.git(ctx, t.Dir, "merge-base", "--is-ancestor", t.Head, pull.HeadOid)
+					knownPushed = err == nil
+				}
+			}
+			harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
+			v = worktrees.Automatic(t, pull, gone, harness, diskprune.InUse(t.Dir, append(slices.Clone(m.live), m.refs...)), knownPushed, m.now)
+		}
+		if m.automatic && (v.Action == worktrees.Remove || v.Action == worktrees.Clean) {
+			if m.recheck != nil {
+				refs, err := m.recheck()
+				if err != nil {
+					errs = append(errs, err)
+					r.kept["process references unavailable"]++
+					continue
+				}
+				m.refs = refs
+				if diskprune.InUse(t.Dir, append(slices.Clone(m.live), refs...)) {
+					r.kept[worktrees.KeptLive]++
+					continue
+				}
+			}
+			fresh, err := worktrees.InspectBuildDirs(ctx, m.git, t.Dir, m.buildDirs)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if fresh.Locked || fresh.Head != t.Head || (v.Action == worktrees.Remove && (len(fresh.Work) > 0 || !knownPushed)) {
+				r.kept["worktree changed during inspection"]++
+				continue
+			}
+			t = fresh
+			retainedOutput := false
+			for _, b := range m.outputs {
+				if filepath.Clean(b.Worktree) != t.Dir {
+					continue
+				}
+				o := diskprune.Stage(b.Path, m.trash, m.now, append(slices.Clone(m.live), m.refs...), r.dryRun)
+				for why, n := range o.Kept {
+					r.kept["external output: "+why] += n
+				}
+				errs = append(errs, o.Errors...)
+				retainedOutput = retainedOutput || len(o.Kept) > 0 || len(o.Errors) > 0
+				if o.Staged > 0 {
+					r.external = append(r.external, worktreeOutcome{dir: b.Path, why: "finished task's external build output", bytes: o.Freed, moved: o.Moved, staged: o.Staged})
+				}
+			}
+			if retainedOutput && v.Action == worktrees.Remove {
+				r.kept["external output retained"]++
+				continue
+			}
+		}
 		switch v.Action {
 		case worktrees.Remove:
+			if m.automatic {
+				nested, err := worktrees.NestedCheckout(t.Dir)
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				if nested {
+					r.kept["contains another checkout"]++
+					continue
+				}
+			}
 			o := worktreeOutcome{dir: t.Dir, why: v.Why, bytes: worktrees.Size(t.Dir)}
 			if !r.dryRun {
 				o.err = removeWorktree(ctx, m.git, t.Dir)
@@ -339,10 +467,24 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				if !strings.HasPrefix(p, t.Dir+string(filepath.Separator)) {
 					continue
 				}
+				if m.automatic {
+					result := diskprune.Stage(p, m.trash, m.now, append(slices.Clone(m.live), m.refs...), r.dryRun)
+					o.bytes += result.Freed
+					o.moved += result.Moved
+					o.staged += result.Staged
+					for why, n := range result.Kept {
+						r.kept["build output: "+why] += n
+					}
+					o.err = errors.Join(o.err, errors.Join(result.Errors...))
+					continue
+				}
 				o.bytes += worktrees.Size(p)
 				if !r.dryRun {
 					o.err = errors.Join(o.err, worktrees.RemoveAll(p))
 				}
+			}
+			if m.automatic && o.staged == 0 && o.err == nil {
+				continue
 			}
 			if v.Kept != "" {
 				r.record(&r.idle, o)
@@ -363,16 +505,6 @@ func (r *worktreeRun) record(to *[]worktreeOutcome, o worktreeOutcome) {
 		return
 	}
 	*to = append(*to, o)
-}
-
-// under reports whether dir is, or holds, one of the folders.
-func under(dir string, folders []string) bool {
-	for _, f := range folders {
-		if f == dir || strings.HasPrefix(f, dir+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
 }
 
 // pushed reports whether t's commits that no remote-tracking branch has are
@@ -438,7 +570,7 @@ type worktreesMark struct {
 // failed one is WORKTREES FAILED until a run succeeds.
 func (w *watcher) worktrees(now time.Time) {
 	every := w.cfg.Doctor.WorktreesEvery.Duration
-	if !w.worktreesOn || every <= 0 || !w.worktreesTrimming.CompareAndSwap(false, true) {
+	if w.cfg.Disk.Auto() || !w.worktreesOn || every <= 0 || !w.worktreesTrimming.CompareAndSwap(false, true) {
 		return
 	}
 	if now.Before(w.worktreesNext) {
@@ -479,8 +611,10 @@ func (a *app) worktreesCmd() *cobra.Command {
 		Use:   "worktrees [--apply] [--root DIR]...",
 		Short: "Remove finished workers' git worktrees and idle worktrees' build output",
 		Long: `worktrees looks at the linked git worktrees under doctor.worktreeRoots
-(or each --root) and says, with --apply does, what the watch does every
-doctor.worktreesEvery, in three tiers:
+(or each --root) and says, with --apply does, the legacy doctor policy.
+With disk.prune: ask the watch runs it every doctor.worktreesEvery.
+The default disk step has stricter task and process checks; preview it
+with beekeeper disk prune. The legacy policy has three tiers:
 
   finished          the branch's newest pull request merged or closed ` + hoursStr(worktrees.Grace) + `
                     ago (a detached HEAD: untouched ` + hoursStr(worktrees.DetachedIdle) + `) and the

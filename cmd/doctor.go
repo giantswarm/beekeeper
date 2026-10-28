@@ -533,7 +533,12 @@ line:
   absent) and runs the remedy of a failing one that may run unattended,
   or the faults named with --fault; a fault still failing is one note for
   guide.person, closed once its probe passes;
-- trims the Go build cache that every session's builds share once it is over
+- in disk.prune: auto (the default), runs the automatic disk policy:
+  retains caches under their caps on a healthy disk, reclaims unused
+  caches and unreferenced trash under disk pressure, and handles finished
+  worktrees, moved-aside build output and stale run tmp directories with
+  live-session and publication checks;
+- with disk.prune: ask, trims the Go build cache once it is over
   doctor.goCacheMaxGiB (20), least recently used entries first, down to
   three quarters of the cap, while no go build runs or once it is past the
   cap by a quarter (the watch does it every doctor.goCacheEvery, 1h, and
@@ -559,7 +564,7 @@ line:
   says FREED when it freed something, and its TMPFS line says when it ran
   last; negative: off); each run that freed something is logged
   (free.apply);
-- removes the worktrees of finished workers: a linked git worktree under
+- with disk.prune: ask, removes finished workers' worktrees: a linked worktree under
   doctor.worktreeRoots (~/.local/state/klaus-lab/worktrees) whose branch's newest pull
   request merged or closed six hours ago, untouched as long, goes whole
   (a worktree on a detached HEAD: untouched three days)
@@ -649,9 +654,7 @@ faults but remedying none.`,
 					lines = append(lines, line)
 				}
 			}
-			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
-				lines = append(lines, r.String())
-			}
+
 			if r := a.pruneDocker(dryRun, a.dockerHolds); r.notable() {
 				lines = append(lines, r.String())
 			}
@@ -660,11 +663,7 @@ faults but remedying none.`,
 					lines = append(lines, r.String())
 				}
 			}
-			if a.cfg.Doctor.WorktreesEvery.Duration > 0 {
-				if r := a.trimWorktrees(dryRun, func() (worktreeMachine, error) { return liveWorktrees(a) }); r.notable() {
-					lines = append(append(lines, r.String()), r.paths()...)
-				}
-			}
+			lines = append(lines, a.doctorDisk(dryRun)...)
 			if len(lines) == 0 {
 				lines = []string{"doctor: nothing to fix"}
 			}
@@ -679,6 +678,25 @@ faults but remedying none.`,
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say what the doctor would do, fixing nothing")
 	c.Flags().StringArrayVar(&attended, "fault", nil, "run this fault's remedy although it may not run unattended (repeatable)")
 	return c
+}
+
+// doctorDisk selects the same automatic policy as the watch. Ask retains
+// the legacy worktree and Go-cache remedies.
+func (a *app) doctorDisk(dry bool) []string {
+	if a.cfg.Disk.Auto() {
+		r := a.pruneDisk(dry, false, func() (diskMachine, error) { return liveDisk(a) })
+		return []string{r.String()}
+	}
+	var lines []string
+	if r := a.trimGoCache(dry, goBuilds); r.notable() {
+		lines = append(lines, r.String())
+	}
+	if a.cfg.Doctor.WorktreesEvery.Duration > 0 {
+		if r := a.trimWorktrees(dry, func() (worktreeMachine, error) { return liveWorktrees(a) }); r.notable() {
+			lines = append(append(lines, r.String()), r.paths()...)
+		}
+	}
+	return lines
 }
 
 // retitleAgain is how long the watch's doctor leaves a desktop session it

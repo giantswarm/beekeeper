@@ -302,3 +302,90 @@ timer from the running watches.
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |
 | `cmd` | The command line. The supervisor and the guide are one `role` type (`cmd/relay.go`): start, relay, relief, restart grace and relay due are written once and parameterised by the role's name, record and configuration; only the supervisor's start moves the grants. The guide's queue (`guideQueue`) holds the notes for `guide.person` (`noteFor`: a note's `For`, or an older note's `[for <person>]` text prefix, compared without case) and the waiting sessions, running ones from their desktop record and stopped ones from `claude.StoppedWaiting` (a record not parsed unless it holds `"blocked"`), without the guide's own session, an archived one or a test (`Session.Aside`, `Record.Aside`); its feed drops a note it said before that is still open but no longer in the queue without a line. |
+
+## Automatic disk reclamation
+
+`disk.prune: auto` is the default. A long-running watch runs the disk step
+hourly (`disk.every`) and within five minutes of `LOW DISK` or `DISK FILLING`.
+`watch --once` reports disk pressure without deleting anything. Watches share
+a lock and a last-run mark, so they do not prune the same data concurrently.
+Every disk step prints one `DISK PRUNE` line with bytes freed, retained data
+and the reasons for keeping it. `beekeeper disk prune` previews the step;
+`beekeeper disk prune --apply` runs it explicitly.
+
+On healthy scheduled runs, the step trims only caches over their caps:
+`doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
+to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) clears sccache
+when exceeded. A negative cap disables its scheduled cleanup. Under
+`LOW DISK` or `DISK FILLING`, both unused caches are reclaimed immediately.
+No cache is reclaimed while builds use it. New
+`beekeeper run` commands share a build-cache lock, including Rust builds and
+runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
+runs and `cache clear go`. Unwrapped compiler processes and open files keep
+caches intact. The module cache is never cleared by this step.
+
+Finished worktrees under `doctor.worktreeRoots` and the state's `worktrees`
+place are removed with `git worktree remove` after the existing six-hour
+grace. A task is finished when its pull request merged or a successful
+remote query confirms a previously published branch is gone. A branch
+that never tracked a remote branch and has no pull request stays. Open
+pull requests and those closed within the grace stay, including harness
+worktrees. For unmerged tasks, publication must be verified against
+current remote heads, not stale local tracking refs or a closed pull
+request's head. A network failure keeps the worktree.
+Running sessions, unarchived desktop sessions, active or parked roster
+agents, process references, locks, uncommitted changes and
+unpushed commits prevent removal. Finished workers holding work lose only
+regenerable build output. Unlike the legacy worktree doctor, the automatic
+disk step keeps unfinished tasks' build output.
+
+The watch also finds `<checkout>/.claude/worktrees` under `disk.checkouts`,
+the hook scope's places and checkouts known from harness records and
+transcripts. An unused harness worktree can be removed after the grace
+when it has no uncommitted or unpublished work. Main checkouts are never
+removed. A dangling worktree is moved aside, never recursively deleted.
+
+Additional build directory names can be listed in `disk.buildDirs`.
+External build output needs an explicit owner, using absolute paths to the output and owning worktree:
+
+```yaml
+disk:
+  prune: auto
+  every: 1h
+  buildDirs: [generated-output]
+  buildOutputs:
+    - path: /scratch/build-output/target
+      worktree: /scratch/worktrees/app/feature
+```
+
+An external output directory is disposable only after its owner's task
+ends, and only while no process references it. If it must stay, its owner
+stays too so a later step can retry. Never configure source or shared
+persistent data as build output. Build output is renamed into the state's
+`trash` directory on the same filesystem. A move does not count as freed
+space; output on another filesystem is retained. Trash retention begins
+when output is moved, and pressure runs may reclaim it immediately once
+no process references it.
+
+A run removes its own temporary directory at exit, including read-only
+build files, and reports a cleanup failure. Disk pruning also reclaims run
+tmp entries unchanged for one hour, and trash entries unchanged for one
+hour. Disk pressure bypasses trash retention, while tmp retains its
+one-hour inactivity window. The state's `trash` directory is always
+inspected. `disk.trashDirs` adds other trash places; its default also
+includes the XDG state root's `trash` directory.
+Recent descendants, open files, working directories, executable mappings
+and build/temp environment references keep entries alive. Symbolic links
+and directories containing checkout metadata are kept. Unreadable
+dumpable user-process references, unknown process ownership or an unreadable
+process root stop the disk step. Expected kernel permission denials on
+non-dumpable helpers or helpers with different credentials or capabilities
+do not stop pruning; their readable references still protect data. Ownership
+of ptrace-gated child entries detects changes in dumpability even when the
+process directory still has its original owner.
+
+`beekeeper doctor` uses this automatic policy too, including its dry run.
+`disk.prune: ask` disables this disk step and retains the pre-existing
+on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
+freeing (`doctor.freeEvery`) and Docker reclamation remain independent
+in both modes.

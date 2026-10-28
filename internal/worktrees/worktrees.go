@@ -130,6 +130,11 @@ func Dangling(dir string) bool {
 // Inspect reads dir's state through git. git status runs without its
 // optional index refresh, so the look changes nothing Touched reads.
 func Inspect(ctx context.Context, git Git, dir string) (Tree, error) {
+	return InspectBuildDirs(ctx, git, dir, nil)
+}
+
+// InspectBuildDirs includes additional explicitly configured build directories.
+func InspectBuildDirs(ctx context.Context, git Git, dir string, extra []string) (Tree, error) {
 	t := Tree{Dir: dir}
 	gitdir, err := git(ctx, dir, "rev-parse", "--absolute-git-dir")
 	if err != nil {
@@ -163,7 +168,7 @@ func Inspect(ctx context.Context, git Git, dir string) (Tree, error) {
 	if err != nil {
 		return t, err
 	}
-	t.Work, t.Build = classify(status)
+	t.Work, t.Build = classifyBuildDirs(status, extra)
 	count, err := git(ctx, dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
 	if err != nil {
 		return t, err
@@ -179,7 +184,9 @@ func Inspect(ctx context.Context, git Git, dir string) (Tree, error) {
 // the build output (untracked or ignored Regenerable paths). An ignored path
 // that is not Regenerable is neither: it goes with a removed worktree, and
 // stays in a kept one.
-func classify(status []byte) (work, build []string) {
+func classify(status []byte) (work, build []string) { return classifyBuildDirs(status, nil) }
+
+func classifyBuildDirs(status []byte, extra []string) (work, build []string) {
 	entries := bytes.Split(status, []byte{0})
 	for i := 0; i < len(entries); i++ {
 		e := string(entries[i])
@@ -189,7 +196,7 @@ func classify(status []byte) (work, build []string) {
 		code, path := e[:2], e[3:]
 		switch code {
 		case "!!", "??":
-			if regenerable(path) {
+			if regenerableWith(path, extra) {
 				build = append(build, path)
 			} else if code == "??" {
 				work = append(work, path)
@@ -216,10 +223,12 @@ func (t Tree) HeadBranch() string {
 }
 
 // regenerable reports whether path lies in, or is, a Regenerable directory.
-func regenerable(path string) bool {
+func regenerable(path string) bool { return regenerableWith(path, nil) }
+
+func regenerableWith(path string, extra []string) bool {
 	parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
 	for i := range parts {
-		for _, r := range Regenerable {
+		for _, r := range append(slices.Clone(Regenerable), extra...) {
 			name := strings.Split(r, "/")
 			if i+1 >= len(name) && slices.Equal(parts[i+1-len(name):i+1], name) {
 				return true
