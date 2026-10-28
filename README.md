@@ -2937,6 +2937,17 @@ once when idle). Taking the agent off the roster (`agents remove`, `beekeeper do
 `beekeeper-codex-<id[:8]>` unit and removes its inbox, queue, lock, state, stream log and thread link
 files.
 
+`capacity.providers.codex` reads the subscription's 5-hour and weekly usage from the freshest
+`token_count` event (`event_msg` payload `rate_limits`) across all rollout transcripts in
+`<stateDir>/codex/home/sessions` and `codex.sessionsDir` (default command `[codex, usage]`). A newly
+started rollout transcript that has written only metadata is skipped when another session holds a
+fresh valid reading; an explicit invalid or stopped reading (`spend_control_reached`,
+`rate_limit_reached_type`, null or empty `rate_limits`) or a reading older than `staleAfter` fails
+closed (`ceiling 0, room 0`). On a Pro plan where only the weekly `primary` window (`window_minutes:
+10080`) is reported and `secondary` is `null`, the 7-day window and weekly pace govern the provider.
+`capacity.choices` offers `codex` entries (`{harness: codex, model: <model>}`) to `beekeeper capacity`
+and `agents start --harness auto`.
+
 **What a PreToolUse hook cannot cover in Codex 0.165.0:**
 - `write_stdin` sends characters to an already-running `exec_command` PTY without firing `PreToolUse`.
   Worker `config.toml` sets `[features] unified_exec_tty = false` so shell commands do not open an
