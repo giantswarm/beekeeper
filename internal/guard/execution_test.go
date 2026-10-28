@@ -8,13 +8,14 @@ import (
 )
 
 const (
-	executionToolInput = "tool_input"
-	executionToolName  = "tool_name"
-	executionFixture   = "fixture"
+	executionToolInput  = "tool_input"
+	executionToolName   = "tool_name"
+	executionFixture    = "fixture"
+	executionWorkingDir = "cwd"
 )
 
 func executionEvent(tool string, input map[string]any, cwd string) []byte {
-	b, _ := json.Marshal(map[string]any{executionToolName: tool, executionToolInput: input, sessionKey: executionFixture, "cwd": cwd})
+	b, _ := json.Marshal(map[string]any{executionToolName: tool, executionToolInput: input, sessionKey: executionFixture, executionWorkingDir: cwd})
 	return b
 }
 
