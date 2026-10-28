@@ -464,6 +464,12 @@ Use `Refs https://github.com/giantswarm/beekeeper/issues/1711` on PR 2 unless
 every acceptance line is met. Before requesting its review, file a follow-up
 for each deferred line below and link it from PR 2. The parent remains open.
 
+The implementation's [operator guide](ssh-execution-hosts-operations.md) gives
+the concrete configuration and commands. Deferred capabilities are tracked in
+https://github.com/giantswarm/beekeeper/issues/1714 (wake acceptance),
+https://github.com/giantswarm/beekeeper/issues/1715 (coordinator lease), and
+https://github.com/giantswarm/beekeeper/issues/1716 (merge authorization).
+
 | Acceptance line | First slice | Required follow-up if deferred |
 | --- | --- | --- |
 | Selector and five-operation transport; identity/version/rules validation; local behavior | Selector and lifecycle methods; `Message` returns a typed unsupported result until acknowledged harness delivery exists | Complete remote `wake` through the message contract |

@@ -10,10 +10,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
-	"github.com/spf13/cobra"
+)
+
+const (
+	executionStatus   = "status"
+	executionHandover = "handover"
+	executionLocal    = "local"
+	executionPending  = "pending"
+	executionDone     = "agents.done"
 )
 
 type executionAuthority struct {
@@ -44,7 +53,10 @@ func (a *app) remoteControl(ctx context.Context, op string, data any) error {
 	}
 	result, err := s.SendControl(ctx, j, op, data, a.executionRequestID, nil)
 	if err != nil {
-		return fmt.Errorf("coordinator delivery unconfirmed or refused; retry the same request, no host-local state was changed: %w", err)
+		if result.ID != "" && result.Error != "" {
+			return refused("coordinator acknowledged and refused request %q: %s; use a new request ID for corrected input", result.ID, result.Error)
+		}
+		return fmt.Errorf("coordinator delivery unconfirmed; retry the identical request, no host-local scheduling state was changed: %w", err)
 	}
 	_, err = fmt.Fprintln(a.out, result.Output)
 	return err
@@ -90,10 +102,10 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		switch req.Operation {
 		case "activate":
 			var request execution.StartRequest
-			if execution.Decode(req.Payload, &request) != nil || request.Digest() != r.RequestDigest || r.StopRequest != nil || r.Terminal() || st.Stop != nil || r.Phase != "activating" {
+			if execution.Decode(req.Payload, &request) != nil || request.Digest() != r.RequestDigest || r.StopRequest != nil || r.Terminal() || st.Stop != nil || r.Phase != execution.Activating {
 				return nil, errors.New("live coordinator activation refused")
 			}
-			value = true
+			value = execution.ActivationDecision{Allowed: true}
 		case "guard":
 			authority := executionAuthority{Stopped: st.Stop != nil || r.StopRequest != nil || r.Terminal()}
 			for _, hold := range st.Holds {
@@ -102,7 +114,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				}
 			}
 			value = authority
-		case "status":
+		case executionStatus:
 			// Only public roster fields cross this boundary; journals contain a
 			// component credential and are never a status response.
 			type row struct {
@@ -113,10 +125,11 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				Execution *execution.Ref `json:"execution,omitempty"`
 			}
 			rows := []row{}
+			supervisor := st.SupervisorRole().Holder
 			for _, ag := range st.Agents {
 				role := ""
-				if st.Supervisor != nil && st.Supervisor.Holder != nil && st.Supervisor.Holder.Is(ag.Party) {
-					role = "supervisor"
+				if supervisor != nil && supervisor.Is(ag.Party) {
+					role = supervisorRole.name
 				}
 				rows = append(rows, row{ag.Name, ag.Task, ag.Host, role, ag.Execution})
 			}
@@ -126,29 +139,18 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			if execution.Decode(req.Payload, &control) != nil || control.Ref != req.Ref || !execution.ValidIdentity(control.ID) || control.Sequence == 0 {
 				return nil, errors.New("invalid worker control")
 			}
-			digest := control.ContentDigest()
-			if old, ok := r.ControlResults[control.ID]; ok {
-				if old.Digest != digest || old.Sequence != control.Sequence {
-					return nil, errors.New("control idempotency conflict")
+			ledger := execution.ControlLedger{Sequence: r.ControlSequence, Results: r.ControlResults}
+			result, applyErr := ledger.Apply(req.Ref, control, func() (string, error) {
+				text, evs, err := a.applyExecutionControl(st, st.Starts[i].Party, control)
+				if err == nil {
+					events = evs
 				}
-				value = old
-				break
+				return text, err
+			})
+			if applyErr != nil {
+				return nil, applyErr
 			}
-			if control.Sequence != r.ControlSequence+1 {
-				return nil, errors.New("control sequence gap or replay")
-			}
-			result := execution.ControlResult{ID: control.ID, Sequence: control.Sequence, Digest: digest}
-			result.Output, events, err = a.applyExecutionControl(st, st.Starts[i].Party, control)
-			if err != nil {
-				result.Error = err.Error()
-				events = nil
-				err = nil
-			}
-			if r.ControlResults == nil {
-				r.ControlResults = map[string]execution.ControlResult{}
-			}
-			r.ControlResults[control.ID] = result
-			r.ControlSequence = control.Sequence
+			r.ControlResults, r.ControlSequence = ledger.Results, ledger.Sequence
 			value = result
 		default:
 			return nil, errors.New("unsupported coordinator operation")
@@ -185,6 +187,7 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 		d.Options = n.Options
 		d.Recommend = n.Recommend
 		d.Kind = n.Kind
+		d.Here = post.SingleRepo(strings.Join(n.Refs, " "))
 		missing := append(d.unanswered(), d.unrenderable(n.For)...)
 		if guides(a.cfg.Guide.Person, &n) {
 			missing = append(missing, d.missing()...)
@@ -204,7 +207,9 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 		if len(a.cfg.Plans.Repositories) > 0 && len(pullURL.FindAllString(d.subject(), -1)) > 0 {
 			return "", nil, refused("plan-linked decisions require the coordinating component directly")
 		}
-		n.By, n.At = me, a.now.UTC()
+		// Only note input fields cross the boundary. Lifecycle, gateway and
+		// sender metadata always belong to the coordinating instance.
+		n = state.Note{For: n.For, Due: n.Due, Default: d.Default, By: me, At: a.now.UTC(), Kind: noteDecision, Refs: n.Refs, Question: d.Question, StatusQuo: d.StatusQuo, Options: d.Options, Recommend: d.Recommend}
 		n.ID = st.NextNote + 1
 		n.Text = d.text()
 		st.NextNote++
@@ -232,6 +237,11 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 			}
 		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits)}
+		for i := range st.Records {
+			if st.Records[i].Session.Is(me) {
+				st.Records[i].Waits = oneLine(v.Waits)
+			}
+		}
 		return "park recorded on coordinator; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
 	case "report":
 		var v executionReport
@@ -254,7 +264,7 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 		ag.Done = v.Finished
 		verb := "agents.idle"
 		if v.Finished {
-			verb = "agents.done"
+			verb = executionDone
 			clearRecords(st, me)
 		}
 		events := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
@@ -266,7 +276,7 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 			events = append(events, event(me, "agents.problem", "%s: %s", ag.Name, p))
 		}
 		return "report acknowledged by coordinator", events, nil
-	case "handover", "event":
+	case executionHandover, "event":
 		var v executionEvent
 		if err := execution.Decode(c.Data, &v); err != nil {
 			return "", nil, err
@@ -277,8 +287,8 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 		if m := post.Unlinked(v.Text, agentHere(st, ag)); len(m) > 0 {
 			return "", nil, refused("full issue and pull request URLs are required")
 		}
-		verb := "log.added"
-		if c.Operation == "handover" {
+		verb := executionStatus
+		if c.Operation == executionHandover {
 			verb = "agents.note"
 		}
 		return "recorded by coordinator", []state.Event{event(me, verb, "%s", v.Text)}, nil

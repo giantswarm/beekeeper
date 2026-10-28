@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -83,7 +82,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 	s.GuardProbe = func() error {
 		h := a.executionHook()
 		for _, command := range []string{"git push origin main", "gh pr merge 1 --repo giantswarm/beekeeper", "gh issue create --repo forbidden/repository --title fixture --body fixture"} {
-			raw, _ := json.Marshal(map[string]any{"session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{"command": command}})
+			raw, _ := json.Marshal(map[string]any{"session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
 			var out struct {
 				Hook struct {
 					Decision string `json:"permissionDecision"`
@@ -201,7 +200,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	switch path {
 	case "run", "agents idle", "agents park", "agents note", "note add", "log add":
 		return nil
-	case "agents", "agents list", "supervisor status":
+	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 			s, j, err := a.executionCaller()
 			if err != nil {
@@ -209,7 +208,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 			}
 			var rows json.RawMessage
 			co := s.Config.Coordinators[j.Request.Coordinator]
-			if err := execution.CoordinatorCall(cmd.Context(), co.Callback, string(j.Handle.Ref.Host), "status", j.Handle.Ref, nil, j.Request.ControlKey, &rows, nil); err != nil {
+			if err := execution.CoordinatorCall(cmd.Context(), co.Callback, string(j.Handle.Ref.Host), executionStatus, j.Handle.Ref, nil, j.Request.ControlKey, &rows, nil); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintln(a.out, string(rows))
@@ -349,7 +348,7 @@ func (a *app) executionHostsCmd() *cobra.Command {
 
 func (a *app) executionHost(selector string) (execution.Host, error) {
 	h, ok := a.cfg.Agents.Hosts[selector]
-	if !ok || selector == "local" {
+	if !ok || selector == executionLocal {
 		return h, usageErr("unknown SSH execution host %q", selector)
 	}
 	return h, h.Validate()
@@ -373,20 +372,13 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if err != nil {
 		return c, err
 	}
-	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Version != project.Version() || c.Harnesses["claude"] == "" {
+	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Version != project.Version() || c.Harnesses[claudeComm] == "" {
 		return c, refused("execution host identity, protocol, binary, harness or policy does not match")
 	}
 	if c.Resources.ObservedAt.IsZero() || time.Since(c.Resources.ObservedAt) > time.Minute || c.Resources.ObservedAt.After(time.Now().Add(5*time.Second)) {
 		return c, refused("execution host resource observation is stale")
 	}
 	return c, nil
-}
-
-// stdoutBuffer is used only for coordinating read-only command responses.
-func stdoutBuffer(f func(io.Writer) error) (string, error) {
-	var b bytes.Buffer
-	err := f(&b)
-	return b.String(), err
 }
 
 func executionRecord(st *state.State, ref execution.Ref) (*state.ExecutionRecord, int) {

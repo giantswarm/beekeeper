@@ -3,11 +3,14 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"slices"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
-	"github.com/google/uuid"
-	"github.com/spf13/cobra"
 )
 
 func (a *app) executionByName(name string) (execution.Ref, error) {
@@ -87,6 +90,21 @@ func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason strin
 	if ack.ID != r.StopRequest.ID || ack.Stage != "applied" {
 		return refused("termination is unconfirmed")
 	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		r, i := executionRecord(st, ref)
+		if r == nil {
+			return nil, refused("execution registration disappeared")
+		}
+		r.Observation.Handle = r.Handle
+		r.Observation.StopRequested = true
+		r.Observation.StopAcknowledged = true
+		r.Observation.ProcessState = execution.Exited
+		r.Observation.Reachability = execution.Reachable
+		r.Observation.ReachabilityAt = time.Now().UTC()
+		return []state.Event{event(st.Starts[i].By, "execution.stop-acknowledged", "%s: owned process termination confirmed", st.Starts[i].Name)}, nil
+	}); err != nil {
+		return err
+	}
 	_, err = a.inspectExecution(ctx, ref)
 	return err
 }
@@ -137,7 +155,7 @@ func (a *app) executionLogsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		page, err := a.executionClient(h).Logs(cmd.Context(), ref, execution.LogRequest{Cursor: cursor, Limit: limit})
+		page, err := a.executionClient(h).Logs(cmd.Context(), ref, execution.LogRequest{After: cursor, Limit: limit})
 		if err != nil {
 			return err
 		}
@@ -168,8 +186,17 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 			continue
 		}
 		ref := r.Handle.Ref
-		var result execution.ControlResult
-		if err := (execution.SSHTransport{Host: h}).Call(ctx, "sync-control", ref, nil, &result); err != nil {
+		if st.Stop != nil && !r.Terminal() && r.StopRequest == nil {
+			if err := a.stopExecution(ctx, ref, st.Stop.Reason); err != nil {
+				failures = append(failures, err.Error())
+				continue
+			}
+		}
+		syncer, ok := a.executionClient(h).(execution.ControlSyncer)
+		if !ok {
+			return refused("execution transport cannot reconcile its control outbox")
+		}
+		if _, err := syncer.SyncControl(ctx, ref); err != nil {
 			a.executionFailure(ref, err)
 			failures = append(failures, err.Error())
 			continue
@@ -187,4 +214,45 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		return fmt.Errorf("%d execution reconciliation(s) unconfirmed: %s", len(failures), failures[0])
 	}
 	return nil
+}
+
+// syncExecutions uses one bounded window per minute. Rotating the first
+// host prevents an unreachable endpoint monopolizing reconciliation.
+func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.State {
+	selectors := []string{}
+	for _, s := range st.Starts {
+		if r := s.Execution; r != nil && !slices.Contains(selectors, r.Selector) {
+			selectors = append(selectors, r.Selector)
+		}
+	}
+	if len(selectors) == 0 {
+		return st
+	}
+	w.mu.Lock()
+	if w.last == nil {
+		w.last = map[string]time.Time{}
+	}
+	if last := w.last["execution-sync"]; !last.IsZero() && w.now.Sub(last) < time.Minute {
+		w.mu.Unlock()
+		return st
+	}
+	w.last["execution-sync"] = w.now
+	w.mu.Unlock()
+	slices.Sort(selectors)
+	start := int((w.now.Unix() / 60) % int64(len(selectors)))
+	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for i := range selectors {
+		selector := selectors[(start+i)%len(selectors)]
+		if err := w.syncExecutionHost(bounded, selector); err != nil {
+			w.emit("execution-sync-"+selector, "EXECUTION UNCONFIRMED: %s: %v", selector, err)
+		} else {
+			w.clear("execution-sync-" + selector)
+		}
+	}
+	updated, err := w.store.Read()
+	if err != nil {
+		return st
+	}
+	return updated
 }

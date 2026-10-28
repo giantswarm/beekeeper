@@ -38,6 +38,11 @@ func TestExecutionGuardFailsClosedAndRefusesRemoteAuthority(t *testing.T) {
 	for _, cmd := range []string{
 		"gh pr merge 7 --repo giantswarm/beekeeper",
 		"env gh pr merge 7 --repo giantswarm/beekeeper",
+		"beekeeper run -- gh pr merge 7 --repo giantswarm/beekeeper",
+		"beekeeper --request-id fixture run --class build -- env gh pr merge 7 --repo giantswarm/beekeeper",
+		"beekeeper run -- systemctl --user stop personal.service",
+		"beekeeper --config /srv/workspace/other.yaml agents idle",
+		"beekeeper agents execution-run fixture",
 		"env -- gh pr merge 7 --repo giantswarm/beekeeper",
 		"timeout 5s command gh pr merge 7 --repo giantswarm/beekeeper",
 		"BEEKEEPER_EXECUTION_ID=other beekeeper agents idle",

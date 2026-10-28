@@ -226,6 +226,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // Options configure one capped run.
 type Options struct {
+	// StopWith is a verified managed execution service, never a CLI flag.
+	StopWith string
 	// Max is the scope's MemoryMax, a systemd size ("12G").
 	Max string
 	// Swap is the scope's MemorySwapMax; "0": a build does not swap.
@@ -280,7 +282,7 @@ func (o Options) cap(n int) platform.Cap {
 	if n > 0 {
 		slice = o.SlotSlice(n)
 	}
-	return platform.Cap{Max: o.Max, Swap: o.Swap, Slice: slice, CPUQuota: o.CPUQuota, CPUWeight: o.CPUWeight}
+	return platform.Cap{Max: o.Max, Swap: o.Swap, Slice: slice, CPUQuota: o.CPUQuota, CPUWeight: o.CPUWeight, StopWith: o.StopWith}
 }
 
 func (o Options) record(verb, detail string) {

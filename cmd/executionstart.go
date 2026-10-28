@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -18,7 +18,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
-	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 type executionStartOptions struct {
@@ -28,6 +27,10 @@ type executionStartOptions struct {
 }
 
 func (a *app) startSSHAgent(cmd *cobra.Command, name, briefPath string, o executionStartOptions) error {
+	return a.startSSHExecution(cmd.Context(), name, briefPath, o)
+}
+
+func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
 	host, err := a.executionHost(o.Host)
 	if err != nil {
 		return err
@@ -35,7 +38,7 @@ func (a *app) startSSHAgent(cmd *cobra.Command, name, briefPath string, o execut
 	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != "headless" {
 		return usageErr("remote starts require --repo and --ref, use headless mode and do not accept --dir or --desktop")
 	}
-	if o.Harness != "claude" && o.Harness != harnessAuto {
+	if o.Harness != claudeComm && o.Harness != harnessAuto {
 		return refused("execution host supports harness claude only")
 	}
 	if _, ok := host.Repositories[o.Repository]; !ok {
@@ -55,15 +58,15 @@ func (a *app) startSSHAgent(cmd *cobra.Command, name, briefPath string, o execut
 	if err != nil {
 		return err
 	}
-	caps, err := a.probeExecution(cmd.Context(), host)
+	caps, err := a.probeExecution(ctx, host)
 	if err != nil {
 		return err
 	}
 	k := a.liveCapacity()
-	readings := a.executionReadings(cmd.Context(), k)
+	readings := a.executionReadings(ctx, k)
 	var legacy *usageView
 	if len(k.Providers) == 0 {
-		k, legacy = a.resolveUsage(cmd.Context(), k)
+		k, legacy = a.resolveUsage(ctx, k)
 	}
 	sessions, _, err := a.sessions()
 	if err != nil {
@@ -82,7 +85,7 @@ func (a *app) startSSHAgent(cmd *cobra.Command, name, briefPath string, o execut
 		}
 		o.Harness, o.Model = choice.Harness, choice.Model
 	}
-	if o.Harness != "claude" || o.Model == "" {
+	if o.Harness != claudeComm || o.Model == "" {
 		return usageErr("remote claude requires an explicit --model or a configured auto choice")
 	}
 	verdict = verdict.forTarget(k, o.Harness, o.Model)
@@ -130,7 +133,7 @@ func (a *app) startSSHAgent(cmd *cobra.Command, name, briefPath string, o execut
 		if executionHostBusy(current, host.Identity) >= host.MaxBusy {
 			return nil, refused("execution host maxBusy reached")
 		}
-		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: "pending", Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
+		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Execution: rec}
 		if _, err := recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
@@ -142,7 +145,7 @@ func (a *app) startSSHAgent(cmd *cobra.Command, name, briefPath string, o execut
 	if err != nil {
 		return err
 	}
-	return a.activateExecution(cmd.Context(), r.Ref)
+	return a.activateExecution(ctx, r.Ref)
 }
 
 func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[string]providerReadingResult {
@@ -231,7 +234,7 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		return refused("execution is terminal; its workspace and unfinished task are preserved")
 	}
 	r := rec.Request
-	if rec.Phase == "pending" {
+	if rec.Phase == executionPending {
 		handle, err := client.Start(ctx, r)
 		if err != nil {
 			a.executionFailure(ref, err)
@@ -271,7 +274,7 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		return refused("execution has a remote stop request")
 	}
 	if observation.ProcessState == execution.Prepared {
-		key, err := execution.SigningKey(path.Join(a.cfg.StateDir, "execution-coordinator"))
+		key, err := execution.SigningKey(filepath.Join(a.cfg.StateDir, "execution-coordinator"))
 		if err != nil {
 			return err
 		}
@@ -283,7 +286,7 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 			if err := a.refuseStopped(current, "activating an SSH execution"); err != nil {
 				return nil, err
 			}
-			x.Phase = "activating"
+			x.Phase = execution.Activating
 			return nil, nil
 		}); err != nil {
 			return err
@@ -331,13 +334,7 @@ func (a *app) executionFailure(ref execution.Ref, failure error) {
 		if r == nil {
 			return nil, nil
 		}
-		var down *execution.UnreachableError
-		if errors.As(failure, &down) {
-			r.Observation.Reachability = execution.Unreachable
-		} else {
-			r.Observation.Reachability = execution.Reachable
-		}
-		r.Observation.LastError = failure.Error()
+		r.Observation = r.Observation.FailedContact(failure, time.Now().UTC())
 		return []state.Event{event(st.Starts[i].By, "execution.unconfirmed", "%s: %s", st.Starts[i].Name, failure.Error())}, nil
 	})
 }
@@ -351,6 +348,30 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		if r == nil {
 			return nil, refused("execution is not registered")
 		}
+		if o.Handle.Unit != execution.UnitName(ref) || o.Handle.ConversationID != r.Request.ConversationID || o.Handle.Repository != r.Request.Repository {
+			return nil, refused("remote observation ownership mismatch")
+		}
+		host, err := a.executionHost(r.Selector)
+		if err != nil {
+			return nil, err
+		}
+		if o.Handle.Workspace != "" && o.Handle.Workspace != path.Join(host.WorkspaceRoot, string(ref.Execution), "workspace") {
+			return nil, refused("remote observation workspace mismatch")
+		}
+		if r.Handle.Commit != "" && o.Handle.Commit != r.Handle.Commit {
+			return nil, refused("remote observation changed its pinned commit")
+		}
+		switch o.ProcessState {
+		case execution.Preparing, execution.Prepared, execution.Running, execution.Exited, execution.Failed, execution.Unknown:
+		default:
+			return nil, refused("invalid remote process observation")
+		}
+		if r.Observation.StopAcknowledged {
+			o.StopAcknowledged = true
+			o.StopRequested = true
+			o.ProcessState = execution.Exited
+		}
+		o.Reachability, o.ReachabilityAt = execution.Reachable, time.Now().UTC()
 		r.Observation = o
 		if o.Ready {
 			r.Phase = execution.Running
@@ -361,6 +382,3 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		return nil, nil
 	})
 }
-
-// executionBinaryVersion pins both ends while this protocol has one adapter.
-func executionBinaryVersion() string { return project.Version() }

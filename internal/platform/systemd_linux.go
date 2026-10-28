@@ -325,9 +325,16 @@ func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, erro
 // the slot's slice, the memory cap, and the command at RunNice, which
 // systemd-run applies itself in --scope mode.
 func scopeArgs(name string, c Cap, argv []string) []string {
-	return append([]string{userManager, "--scope", quietRun, "--expand-environment=no", "--unit=" + name,
+	args := []string{userManager, "--scope", quietRun, "--expand-environment=no", "--unit=" + name,
 		"--slice=" + c.slice(), "--nice=" + strconv.Itoa(RunNice), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
-		"-p", "OOMPolicy=continue", "--"}, argv...)
+		"-p", "OOMPolicy=continue"}
+	if c.StopWith != "" {
+		// Requisite requires an already active owner without starting it.
+		// PartOf propagates an owned stop; After orders child teardown first.
+		// https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html
+		args = append(args, "-p", "Requisite="+c.StopWith, "-p", "PartOf="+c.StopWith, "-p", "After="+c.StopWith)
+	}
+	return append(append(args, "--"), argv...)
 }
 
 // Adopt starts the transient scope name around the running process pid

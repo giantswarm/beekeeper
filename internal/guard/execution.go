@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	executionConfigFlag  = "--config"
+	executionRunCommand  = "run"
 	executionUnset       = "--unset"
 	executionSignal      = "--signal"
 	executionSudo        = "sudo"
@@ -200,6 +202,47 @@ func executionShell(command, workspace string, protected []string, depth int) er
 		}
 		name := filepath.Base(words[0])
 		switch name {
+		case selfCmd:
+			for _, word := range words[1:] {
+				if word == "--" {
+					break
+				}
+				if word == executionConfigFlag || strings.HasPrefix(word, "--config=") {
+					refusal = errors.New("managed execution configuration cannot be overridden")
+					return false
+				}
+			}
+			args := executionVerb(words[1:])
+			if len(args) > 1 && args[0] == "agents" {
+				switch args[1] {
+				case "start", "wake", "desktop", "resume", "handover", "hosts", "host-rpc", "coordinator-rpc", "execution-run", "execution-guard":
+					refusal = errors.New("harness and host lifecycle belongs to the coordinating component")
+					return false
+				}
+			}
+			if len(args) > 0 && args[0] == executionRunCommand {
+				target := executionRunTarget(args[1:])
+				if len(target) > 0 {
+					unwrapped, err := executionUnwrap(target)
+					if err != nil {
+						refusal = err
+						break
+					}
+					if len(unwrapped) > 0 {
+						var executable bytes.Buffer
+						_ = syntax.NewPrinter().Print(&executable, call.Args[len(call.Args)-len(unwrapped)])
+						if strings.ContainsAny(executable.String(), "$`") {
+							refusal = errors.New("dynamic executable is not supported by the remote guard")
+							break
+						}
+					}
+					quoted := make([]string, len(target))
+					for i, word := range target {
+						quoted[i] = ShellQuote(word)
+					}
+					refusal = executionShell(strings.Join(quoted, " "), workspace, protected, depth+1)
+				}
+			}
 		case unsetCmd:
 			for _, arg := range words[1:] {
 				if executionIdentityVariable(arg) {
@@ -306,7 +349,7 @@ func executionLexicalWithin(root, p string) bool {
 func executionVerb(args []string) []string {
 	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
 		switch args[0] {
-		case "--repo", "-R", "--hostname", "--config":
+		case "--repo", "-R", "--hostname", executionConfigFlag, "--request-id":
 			if len(args) < 2 {
 				return nil
 			}
@@ -316,6 +359,27 @@ func executionVerb(args []string) []string {
 		}
 	}
 	return args
+}
+
+func executionRunTarget(args []string) []string {
+	for len(args) > 0 {
+		if args[0] == "--" {
+			return args[1:]
+		}
+		if !strings.HasPrefix(args[0], "-") {
+			return args
+		}
+		switch args[0] {
+		case "--max", "--swap", "--wait", "--class":
+			if len(args) < 2 {
+				return nil
+			}
+			args = args[2:]
+		default:
+			args = args[1:]
+		}
+	}
+	return nil
 }
 
 func executionUnwrap(words []string) ([]string, error) {

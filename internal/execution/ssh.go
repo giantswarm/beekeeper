@@ -214,6 +214,12 @@ func (t SSHTransport) Check(ctx context.Context) (Capabilities, error) {
 	}
 	return x, err
 }
+
+func (t SSHTransport) SyncControl(ctx context.Context, r Ref) (ControlResult, error) {
+	var result ControlResult
+	err := t.Call(ctx, "sync-control", r, nil, &result)
+	return result, err
+}
 func (t SSHTransport) Start(ctx context.Context, r StartRequest) (Handle, error) {
 	var x Handle
 	if err := r.Validate(); err != nil {

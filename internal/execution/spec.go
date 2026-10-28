@@ -219,6 +219,12 @@ type Transport interface {
 	Logger
 }
 
+// ControlSyncer is the optional host outbox reconciliation operation. It
+// does not implement worker wake acceptance, which remains unsupported.
+type ControlSyncer interface {
+	SyncControl(context.Context, Ref) (ControlResult, error)
+}
+
 type Resources struct {
 	Blocks        []string  `json:"blocks,omitempty"`
 	BuildBlocks   []string  `json:"buildBlocks,omitempty"`
