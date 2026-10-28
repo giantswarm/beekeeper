@@ -589,9 +589,10 @@ line:
 - reports a stale plugin: an enabled beekeeper plugin whose skills differ
   from the ones this binary embeds, with the plugin's version, the
   binary's and the commands that update it (beekeeper self-update does);
-- checks the agy PreToolUse hook in ~/.gemini/config/hooks.json and the
-  agy skills entry in ~/.gemini/config/skills.json (and the skill files it
-  points at) when agy is installed.
+- checks the agy PreInvocation and PreToolUse hooks in
+  ~/.gemini/config/hooks.json and the agy skills entry in
+  ~/.gemini/config/skills.json (and the skill files it points at) when agy
+  is installed.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay

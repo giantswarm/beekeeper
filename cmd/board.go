@@ -21,7 +21,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -466,11 +465,7 @@ func (a *app) sessionWorks(sessions []*claude.Session) []claude.Work {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			if s.Harness == omp.Harness {
-				out[i], _ = omp.ReadTranscript(s.Transcript, a.now)
-			} else {
-				out[i], _ = a.readTranscript(s.Transcript)
-			}
+			out[i], _ = harnessForSession(s).ReadTranscript(a, s.Transcript, a.now)
 		})
 	}
 	wg.Wait()

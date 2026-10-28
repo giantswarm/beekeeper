@@ -232,6 +232,18 @@ and agents with harness omp; agents wake writes a message to its inbox,
 which omp delivers at its next tool round or as its next turn. No desktop
 is involved and no import happens.
 
+--harness agy starts an Antigravity CLI (agy) agent instead: "beekeeper
+agy-run" driving "agy --input-format stream-json --output-format
+stream-json --dangerously-skip-permissions" on --model (required; no
+harness default, validated against agy models), in a transient user unit
+beekeeper-agy-<id>, with its persistent FIFO inbox in beekeeper's state
+folder and the worker rules and brief as its first message, confirming
+the brief arrived in its own conversation. It is registered on the roster
+as agy_<id> under <name> and shows in sessions and agents with harness
+agy; agents wake queues a message in its inbox, which the PreInvocation
+hook injects before its next model call inside a running turn or agy-run
+sends as its next turn. No desktop is involved and no import happens.
+
 --harness auto picks the first non-excluded (harness, model) pair in
 capacity.choices whose provider has room (5-hour window below threshold,
 weekly use within the choice's sevenDayMax worker cap and paceMargin).
@@ -256,6 +268,9 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if harness != harnessAuto {
 				if err := validateStartHarness(harness, mode); err != nil {
 					return err
+				}
+				if harness == harnessAgy && strings.TrimSpace(model) == "" && !dryRun {
+					return usageErr("an agy agent needs its model: --model (agy models lists them)")
 				}
 			}
 			// an omp agent whose provider's key is in the vault starts where
@@ -291,6 +306,9 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					if err != nil {
 						return err
 					}
+					if ch.Harness == harnessAgy {
+						return refused("no start: harness %q is not yet supported by agents start", ch.Harness)
+					}
 					if err := validateStartHarness(ch.Harness, mode); err != nil {
 						return err
 					}
@@ -303,10 +321,8 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					}
 				}
 				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
-				if harness == omp.Harness {
-					return a.dryRunOmpStart(sp, gaps)
-				}
-				return a.dryRunStart(cmd.Context(), sp, gaps)
+				h, _ := harnessByName(harness)
+				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
@@ -318,6 +334,9 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				ch, err := pickAutoChoice(v, force)
 				if err != nil {
 					return err
+				}
+				if ch.Harness == harnessAgy {
+					return refused("no start: harness %q is not yet supported by agents start", ch.Harness)
 				}
 				if err := validateStartHarness(ch.Harness, mode); err != nil {
 					return err
@@ -353,42 +372,14 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				}
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
-			if harness == omp.Harness {
-				return a.startOmpAgent(cmd.Context(), sp)
-			}
-			sa, err := a.startAgent(cmd.Context(), sp)
-			if err != nil {
-				return err
-			}
-			if sa.background {
-				_, err = fmt.Fprintf(a.out, "started %s: background session %s with Remote Control, in %s, busy with %q\n%s\nits turns run on %s\n",
-					name, sa.id, sa.dir, sa.task, sa.turn, cmp.Or(sa.want, "Claude Code's default model"))
-				return err
-			}
-			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, in %s, busy with %q\n%s\n",
-				name, sa.id, sa.id, sa.dir, sa.task, sa.turn)
-			if err == nil && sa.kept != "" {
-				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
-			}
-			if err == nil && sa.restored != "" {
-				_, err = fmt.Fprintln(a.out, sa.restored)
-			}
-			if err == nil {
-				_, err = fmt.Fprintln(a.out, titleLine(name, sa.title))
-			}
-			if err == nil {
-				_, err = fmt.Fprintln(a.out, modelLine(sa.model, sa.want, "local_"+sa.id))
-			}
-			if err == nil {
-				_, err = fmt.Fprintln(a.out, browserLine(sa.chrome))
-			}
-			return err
+			h, _ := harnessByName(harness)
+			return h.Start(cmd.Context(), a, sp)
 		},
 	}
-	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; auto: the chosen model)")
+	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; auto: the chosen model)")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
-	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude, omp, or auto")
+	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude, omp, agy, or auto")
 	c.Flags().StringArrayVar(&exclude, "exclude", nil, "exclude a choice from --harness auto (model, harness/model, provider, or harness; repeatable)")
 	c.Flags().BoolVar(&review, "review", false, "a desk review start: skip the 7-day pace check and worker weekly cap when capacity.reviewSkipPace is true")
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
@@ -400,15 +391,11 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 }
 
 func validateStartHarness(harness, mode string) error {
-	switch harness {
-	case "", claudeComm, omp.Harness:
-	case harnessAgy:
-		return refused("no start: harness %q is not yet supported by agents start", harness)
-	default:
-		return usageErr("--harness %q: claude, omp, or auto", harness)
+	if _, ok := harnessByName(harness); !ok {
+		return usageErr("--harness %q: claude, omp, agy, or auto", harness)
 	}
-	if strings.TrimSpace(mode) == config.ModeBackground && harness == omp.Harness {
-		return usageErr("--mode background and --harness omp: an omp agent is no Claude Code background session")
+	if strings.TrimSpace(mode) == config.ModeBackground && (harness == omp.Harness || harness == harnessAgy) {
+		return usageErr("--mode background and --harness %s: an %s agent is no Claude Code background session", harness, harness)
 	}
 	return nil
 }

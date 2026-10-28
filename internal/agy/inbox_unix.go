@@ -263,10 +263,20 @@ func writeQueue(path string, q queue) error {
 	return os.Rename(tmp, qp) //nolint:gosec // beside the agent's inbox under the state folder
 }
 
-// RemoveInbox removes the inbox FIFO at path, its queue and its lock file;
-// removed is false when none of them existed.
+// RemoveInbox removes the inbox FIFO at path, its queue, its lock file and its
+// conversation link; removed is false when none of them existed.
 func RemoveInbox(path string) (removed bool, err error) {
-	for _, p := range []string{path, queuePath(path), lockPath(path)} {
+	paths := []string{path, queuePath(path), lockPath(path)}
+	if base, ok := strings.CutSuffix(path, ".in"); ok {
+		convFile := base + ".conv"
+		if b, rerr := os.ReadFile(convFile); rerr == nil { //nolint:gosec // beside the agent's inbox under the state folder
+			if c := cleanID(string(b)); c != "" {
+				paths = append(paths, ConvLinkPath(filepath.Dir(filepath.Dir(path)), c))
+			}
+		}
+		paths = append(paths, convFile, base+".log")
+	}
+	for _, p := range paths {
 		if rerr := os.Remove(p); rerr == nil {
 			removed = true
 		} else if !errors.Is(rerr, os.ErrNotExist) && err == nil {

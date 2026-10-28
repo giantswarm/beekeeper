@@ -666,6 +666,7 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 		`"other-guard"`,
 		`"/usr/local/bin/other-guard"`,
 		`"beekeeper"`,
+		`"/opt/bin/beekeeper hook preinvocation"`,
 		`"/opt/bin/beekeeper hook pretooluse --format agy"`,
 	} {
 		if !strings.Contains(string(raw), want) {
@@ -706,7 +707,7 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 		t.Errorf("update output:\n%s", out)
 	}
 	raw, _ = os.ReadFile(e.AgyHooks)
-	if strings.Contains(string(raw), "/opt/bin") || !strings.Contains(string(raw), updatedExe+" hook pretooluse --format agy") || !strings.Contains(string(raw), `"other-guard"`) {
+	if strings.Contains(string(raw), "/opt/bin") || !strings.Contains(string(raw), updatedExe+" hook preinvocation") || !strings.Contains(string(raw), updatedExe+" hook pretooluse --format agy") || !strings.Contains(string(raw), `"other-guard"`) {
 		t.Errorf("hooks.json after update:\n%s", raw)
 	}
 	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -271,7 +272,7 @@ func (a *app) callerSession() (state.Party, error) {
 		return state.Party{Name: a.as}, nil
 	}
 	p := envParty(os.Getenv)
-	if os.Getenv(omp.EnvAgent) != "" {
+	if os.Getenv(omp.EnvAgent) != "" || os.Getenv(agy.EnvAgent) != "" {
 		return p, nil
 	}
 	if p.Session == "" {
@@ -293,12 +294,15 @@ func (a *app) callerSession() (state.Party, error) {
 	return p, nil
 }
 
-// envParty is the session an environment names, read with get: an omp agent
-// beekeeper started is its roster entry, whatever session variables its tool
-// shell carries; else the Claude Code session's ids and name.
+// envParty is the session an environment names, read with get: an omp or agy
+// agent beekeeper started is its roster entry, whatever session variables its
+// tool shell carries; else the Claude Code session's ids and name.
 func envParty(get func(string) string) state.Party {
 	if id := get(omp.EnvAgent); id != "" {
 		return state.Party{HostSession: omp.HostPrefix + id, Name: get(omp.EnvName)}
+	}
+	if id := get(agy.EnvAgent); id != "" {
+		return state.Party{HostSession: agy.HostPrefix + id, Name: get(agy.EnvName)}
 	}
 	return state.Party{
 		Session:     get("CLAUDE_CODE_SESSION_ID"),
@@ -316,10 +320,13 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 	return discover(a.cfg, t, a.now), t, nil
 }
 
-// discover returns the running sessions of every harness: Claude Code's,
-// then omp's.
+// discover returns the running sessions of every harness.
 func discover(cfg *config.Config, t *proc.Table, now time.Time) []*claude.Session {
-	return append(claude.Discover(cfg, t, now), omp.Discover(cfg.Omp.SessionsDir, t, now)...)
+	var out []*claude.Session
+	for _, h := range harnesses {
+		out = append(out, h.Discover(cfg, t, now)...)
+	}
+	return out
 }
 
 func (a *app) printJSON(v any) error {

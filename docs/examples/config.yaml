@@ -385,6 +385,13 @@ omp:
     spark:
       apiKey: op://Shared/spark/credential   # the key's reference, never the key: it goes into the agent's environment alone
 
+agy:
+  brainDir: ~/.gemini/antigravity-cli/brain                 # the default; agy's per-conversation brain directories and transcripts
+  projectsDir: ~/.gemini/config/projects                    # the default; agy's project records mapping working directories to conversations
+  conversationsDir: ~/.gemini/antigravity-cli/conversations # the default; agy's .pb conversation files
+  remoteControl: false                                      # true: restart remoteDaemon once a new conversation's .pb file is written
+  remoteDaemon: ""                                          # the user unit running agy remote-control, when remoteControl is true
+
 desktop:
   typingQuiet: 30s          # the default; a claude:// link waits for this much idle keyboard and pointer input, and a browse turn sends Chrome's new windows off-screen only after it; negative: no wait, no watch
 
