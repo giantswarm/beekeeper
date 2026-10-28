@@ -14,6 +14,10 @@ every session does. What must be shared lives in a small state directory that su
 restarts: the supervisor, grants, holds, registered agents, notes, timers and session records. Every session and the
 supervisor use the same binary.
 
+The [SSH execution-host design](docs/ssh-execution-hosts.md) proposes remote
+harness execution with coordinated identity, capacity and approval checks;
+its commands and configuration are not implemented yet.
+
 ## Install
 
 Download the binary for your OS and architecture from the latest release into any directory on
