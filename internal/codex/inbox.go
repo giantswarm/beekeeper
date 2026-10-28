@@ -66,12 +66,12 @@ type QueuedMessage struct {
 // Injected holds messages returned by the PreToolUse hook until the runner
 // confirms the tool call started or the turn completed.
 type persistentQueue struct {
-	Messages  []QueuedMessage `json:"messages,omitempty"`
-	Inflight  string          `json:"inflight,omitempty"`
-	InflightID string         `json:"inflightId,omitempty"`
-	Injected  []QueuedMessage `json:"injected,omitempty"`
-	Delivered []string        `json:"delivered,omitempty"`
-	ThreadID  string          `json:"threadId,omitempty"`
+	Messages   []QueuedMessage `json:"messages,omitempty"`
+	Inflight   string          `json:"inflight,omitempty"`
+	InflightID string          `json:"inflightId,omitempty"`
+	Injected   []QueuedMessage `json:"injected,omitempty"`
+	Delivered  []string        `json:"delivered,omitempty"`
+	ThreadID   string          `json:"threadId,omitempty"`
 }
 
 func normalizeQueue(q *persistentQueue) {

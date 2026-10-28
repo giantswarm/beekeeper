@@ -68,9 +68,12 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 	if err != nil {
 		return err
 	}
+	readerDone := make(chan struct{})
 	defer func() {
 		WriteState(inbox, StateIdle)
+		_, _ = fifo.Write([]byte{'\n'})
 		_ = fifo.Close()
+		<-readerDone
 	}()
 
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
@@ -88,9 +91,16 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 
 	wake := make(chan struct{}, 1)
 	go func() {
+		defer close(readerDone)
 		buf := make([]byte, 256)
 		for {
+			if ctx.Err() != nil {
+				return
+			}
 			n, rerr := fifo.Read(buf)
+			if ctx.Err() != nil {
+				return
+			}
 			if n > 0 {
 				select {
 				case wake <- struct{}{}:

@@ -114,9 +114,14 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	oldLauncher := plat.Launcher
+	oldMachine := plat.Machine
 	hl := &haltLauncher{installed: map[string]string{}}
 	plat.Launcher = hl
-	defer func() { plat.Launcher = oldLauncher }()
+	plat.Machine = tableMachine{plat.Machine}
+	defer func() {
+		plat.Launcher = oldLauncher
+		plat.Machine = oldMachine
+	}()
 
 	oldSend := sendCodexWhenReady
 	var deliveredInbox, deliveredMsg string
