@@ -62,14 +62,12 @@ type QueuedMessage struct {
 // persistentQueue is the on-disk JSON state of an inbox's unread messages.
 // Inflight holds the message currently handed to codex's stdin until the
 // runner observes turn.started or turn.completed on stdout; if codex crashes
-// before accepting it, the runner restores Inflight to the front of Messages.
-// Injected holds messages returned by the PreToolUse hook until the runner
-// confirms the tool call started or the turn completed.
+// before accepting it, the runner retries Inflight on the next turn without
+// losing or duplicating it.
 type persistentQueue struct {
 	Messages   []QueuedMessage `json:"messages,omitempty"`
 	Inflight   string          `json:"inflight,omitempty"`
 	InflightID string          `json:"inflightId,omitempty"`
-	Injected   []QueuedMessage `json:"injected,omitempty"`
 	Delivered  []string        `json:"delivered,omitempty"`
 	ThreadID   string          `json:"threadId,omitempty"`
 }
@@ -78,11 +76,6 @@ func normalizeQueue(q *persistentQueue) {
 	for i := range q.Messages {
 		if q.Messages[i].ID == "" {
 			q.Messages[i].ID = uuid.NewString()
-		}
-	}
-	for i := range q.Injected {
-		if q.Injected[i].ID == "" {
-			q.Injected[i].ID = uuid.NewString()
 		}
 	}
 }
@@ -100,22 +93,6 @@ func markDelivered(q *persistentQueue, ids ...string) {
 	const maxDelivered = 128
 	if len(q.Delivered) > maxDelivered {
 		q.Delivered = q.Delivered[len(q.Delivered)-maxDelivered:]
-	}
-}
-
-func restoreUnconfirmedInjected(q *persistentQueue) {
-	if len(q.Injected) == 0 {
-		return
-	}
-	var pending []QueuedMessage
-	for _, m := range q.Injected {
-		if !isDelivered(q, m.ID) {
-			pending = append(pending, m)
-		}
-	}
-	q.Injected = nil
-	if len(pending) > 0 {
-		q.Messages = append(pending, q.Messages...)
 	}
 }
 
@@ -137,7 +114,7 @@ func readQueue(inbox string) (persistentQueue, error) {
 
 func writeQueue(inbox string, q persistentQueue) error {
 	qpath := QueuePath(inbox)
-	if len(q.Messages) == 0 && q.Inflight == "" && len(q.Injected) == 0 && len(q.Delivered) == 0 && q.ThreadID == "" {
+	if len(q.Messages) == 0 && q.Inflight == "" && len(q.Delivered) == 0 && q.ThreadID == "" {
 		if err := os.Remove(qpath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -225,66 +202,4 @@ func ResolveInbox(stateDir, threadID string) string {
 		}
 	}
 	return ""
-}
-
-// preToolUseHookInput is the minimal subset of Codex's PreToolUse stdin JSON
-// needed to resolve the session's inbox.
-type preToolUseHookInput struct {
-	SessionID string `json:"session_id"`
-}
-
-// preToolUseHookResponse is Codex's PreToolUse stdout JSON when injecting
-// mid-turn wake messages via additionalContext.
-type preToolUseHookResponse struct {
-	HookSpecificOutput preToolUseSpecificOutput `json:"hookSpecificOutput"`
-}
-
-type preToolUseSpecificOutput struct {
-	HookEventName     string `json:"hookEventName"`
-	AdditionalContext string `json:"additionalContext,omitempty"`
-}
-
-// DrainHookText drains pending wake messages from the session's inbox for a
-// PreToolUse hook invocation and returns the joined additionalContext string
-// (empty when no messages are queued).
-func DrainHookText(stateDir string, stdin []byte) string {
-	var in preToolUseHookInput
-	_ = json.Unmarshal(stdin, &in)
-	inbox := ResolveInbox(stateDir, in.SessionID)
-	if inbox == "" {
-		return ""
-	}
-	msgs, err := DrainHook(inbox)
-	if err != nil || len(msgs) == 0 {
-		return ""
-	}
-	texts := make([]string, 0, len(msgs))
-	for _, m := range msgs {
-		if strings.TrimSpace(m.Text) != "" {
-			texts = append(texts, m.Text)
-		}
-	}
-	return strings.Join(texts, "\n\n")
-}
-
-// PreToolUse reads a Codex PreToolUse hook event on stdin, drains any queued
-// wake messages from the session's inbox, and returns the PreToolUse JSON
-// response carrying additionalContext (or nil when no wake message is queued).
-func PreToolUse(stateDir string, stdin []byte) []byte {
-	ctxText := DrainHookText(stateDir, stdin)
-	if ctxText == "" {
-		return nil
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(preToolUseHookResponse{
-		HookSpecificOutput: preToolUseSpecificOutput{
-			HookEventName:     "PreToolUse",
-			AdditionalContext: ctxText,
-		},
-	}); err != nil {
-		return nil
-	}
-	return buf.Bytes()
 }

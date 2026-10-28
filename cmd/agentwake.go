@@ -425,7 +425,7 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 		return err
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
-	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): written to its inbox, it runs the message at its next tool call or as its next turn\n", ag.Name)
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): written to its inbox, it runs the message as its next turn\n", ag.Name)
 	return err
 }
 

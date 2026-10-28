@@ -481,8 +481,8 @@ func assign(files []file, procs []*proc.Process, cwd func(pid int) string) map[i
 }
 
 type head struct {
-	id, cwd string
-	created time.Time
+	id, cwd, model string
+	created        time.Time
 }
 
 type rolloutLine struct {
@@ -581,11 +581,12 @@ func readHead(path string) (head, error) {
 			var tc turnContextPayload
 			if json.Unmarshal(l.Payload, &tc) == nil {
 				h.cwd = cmp.Or(h.cwd, tc.Cwd)
+				h.model = cmp.Or(h.model, tc.Model)
 			}
 		case evThreadStarted:
 			h.id = cmp.Or(h.id, l.ThreadID)
 		}
-		if h.id != "" && h.cwd != "" {
+		if h.id != "" && h.cwd != "" && h.model != "" {
 			return h, nil
 		}
 	}
@@ -809,7 +810,7 @@ func tail(path string, n int, tools bool) ([]claude.Turn, error) {
 
 // ReadTranscript reads a Codex rollout file into the Work and Activity records
 // that board, metrics, sessions and capacity use.
-func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
+func ReadTranscript(path string, now time.Time, sessionModel ...string) (claude.Work, claude.Activity) {
 	buf, whole := claude.ReadWindow(path)
 	a := claude.Activity{Whole: whole}
 	if len(buf) == 0 {
@@ -818,6 +819,26 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 	hourStart := now.Add(-time.Hour)
 	acts := claude.NewActs()
 	var cwd string
+	for _, m := range sessionModel {
+		if m != "" {
+			a.Model = m
+			break
+		}
+	}
+	if !whole || a.Model == "" {
+		if meta, err := readHead(path); err == nil {
+			if cwd == "" && meta.cwd != "" {
+				cwd = meta.cwd
+			}
+			if a.Model == "" && meta.model != "" {
+				a.Model = meta.model
+			}
+		}
+	}
+	var fileModTime time.Time
+	if fi, err := os.Stat(path); err == nil {
+		fileModTime = fi.ModTime().UTC()
+	}
 	var prevTotal tokenUsage
 	seededTotal := whole
 
@@ -827,11 +848,15 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 		if json.Unmarshal(sc.Bytes(), &l) != nil {
 			continue
 		}
-		if a.Since.IsZero() && !l.Timestamp.IsZero() {
-			a.Since = l.Timestamp
+		ts := l.Timestamp
+		if ts.IsZero() && (l.Type == evTurnStarted || l.Type == evItemCompleted || l.Type == evTurnCompleted) {
+			ts = fileModTime
+		}
+		if a.Since.IsZero() && !ts.IsZero() {
+			a.Since = ts
 		}
 		counts := []*claude.Counts{&a.Total}
-		if !l.Timestamp.IsZero() && !l.Timestamp.Before(hourStart) {
+		if !ts.IsZero() && !ts.Before(hourStart) {
 			counts = append(counts, &a.LastHour)
 		}
 		switch l.Type {
@@ -936,6 +961,13 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 				c.Tokens.CacheRead += tok.CacheRead
 				c.Tokens.CacheWrite5m += tok.CacheWrite5m
 			}
+			if tok.Sum() > 0 {
+				reqModel := a.Model
+				if reqModel == "" {
+					reqModel = Harness
+				}
+				a.AddRequest(ts, reqModel, tok, hourStart)
+			}
 			u := em.Info.LastTokenUsage
 			if ctx := u.InputTokens + u.OutputTokens; ctx > 0 {
 				a.Context = ctx
@@ -971,6 +1003,13 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 					c.Tokens.Output += tok.Output
 					c.Tokens.CacheRead += tok.CacheRead
 					c.Tokens.CacheWrite5m += tok.CacheWrite5m
+				}
+				if tok.Sum() > 0 {
+					reqModel := a.Model
+					if reqModel == "" {
+						reqModel = Harness
+					}
+					a.AddRequest(ts, reqModel, tok, hourStart)
 				}
 				if ctx := l.Usage.InputTokens + l.Usage.OutputTokens; ctx > 0 {
 					a.Context = ctx

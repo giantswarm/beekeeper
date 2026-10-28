@@ -443,11 +443,6 @@ And in ~/.gemini/config/hooks.json for agy:
 			}
 			cfgErr := a.loadConfig()
 			if isCodex {
-				if cfgErr == nil && a.cfg != nil {
-					if out := codex.PreToolUse(a.cfg.StateDir, raw); out != nil {
-						_, _ = w.Write(out)
-					}
-				}
 				return nil
 			}
 			sandboxed := a.sandboxed(cfgErr)

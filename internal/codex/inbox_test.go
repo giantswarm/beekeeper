@@ -115,63 +115,209 @@ fi
 	}
 }
 
-func TestPreToolUseMidTurnWakeAndDedup(t *testing.T) {
+func TestConsecutiveToolOnlyStepsQueuedWakeDeliveredNextTurnOnce(t *testing.T) {
 	stateDir := t.TempDir()
-	agentID := "agent-midturn"
+	agentID := "agent-tool-only"
 	inbox := InboxPath(stateDir, agentID)
-	if err := MakeInbox(inbox); err != nil {
-		t.Fatal(err)
-	}
-	fifo, err := openInboxRDWR(inbox)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = fifo.Close() }()
+	logPath := LogPath(stateDir, agentID)
+	callsFile := filepath.Join(stateDir, "calls.log")
+	step1File := filepath.Join(stateDir, "step1.ready")
+	releaseFile := filepath.Join(stateDir, "step1.release")
 
-	if err := RecordThread(stateDir, inbox, "thread-mid-1"); err != nil {
+	// Turn 1 emits two consecutive tool-only steps (command_execution item_1 and
+	// item_2, with no agent_message or reasoning item). While Turn 1 is paused
+	// between tool 1 and tool 2, a wake message is queued. Turn 1 finishes its
+	// second tool-only step and completes; Run then delivers the wake message
+	// once as Turn 2 via `codex exec resume`.
+	fakeCodex := filepath.Join(stateDir, "fake-codex-tools.sh")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+prompt="$(cat)"
+printf 'ARGS:%s|PROMPT:%s\n' "$*" "$prompt" >> "` + callsFile + `"
+if [[ "$*" == *" resume "* ]]; then
+  echo '{"type":"turn.started"}'
+  echo '{"type":"item.started","item":{"id":"item_3","type":"command_execution"}}'
+  echo '{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"git status"}}'
+  echo '{"type":"turn.completed","usage":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":15}}'
+else
+  echo '{"type":"thread.started","thread_id":"thread-tools-1"}'
+  echo '{"type":"turn.started"}'
+  echo '{"type":"item.started","item":{"id":"item_1","type":"command_execution"}}'
+  echo '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls"}}'
+  touch "` + step1File + `"
+  while [[ ! -f "` + releaseFile + `" ]]; do sleep 0.01; done
+  echo '{"type":"item.started","item":{"id":"item_2","type":"command_execution"}}'
+  echo '{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"pwd"}}'
+  echo '{"type":"turn.completed","usage":{"input_tokens":80,"cached_input_tokens":20,"output_tokens":25}}'
+fi
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o700); err != nil { //nolint:gosec // test script
 		t.Fatal(err)
-	}
-	if err := Send(inbox, "wake message 1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := Send(inbox, "wake message 2"); err != nil {
-		t.Fatal(err)
-	}
-
-	hookStdin := []byte(`{"session_id":"thread-mid-1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`)
-	out := PreToolUse(stateDir, hookStdin)
-	if len(out) == 0 {
-		t.Fatalf("expected PreToolUse output for queued wake messages")
-	}
-	var resp preToolUseHookResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatalf("unmarshal PreToolUse output: %v", err)
-	}
-	if resp.HookSpecificOutput.HookEventName != "PreToolUse" {
-		t.Errorf("HookEventName = %q, want PreToolUse", resp.HookSpecificOutput.HookEventName)
-	}
-	if resp.HookSpecificOutput.AdditionalContext != "wake message 1\n\nwake message 2" {
-		t.Errorf("AdditionalContext = %q", resp.HookSpecificOutput.AdditionalContext)
-	}
-
-	// If the first hook timed out before tool execution started, a retry before
-	// ConfirmInjected re-delivers the same messages in FIFO order.
-	retryOut := PreToolUse(stateDir, hookStdin)
-	if !bytes.Equal(retryOut, out) {
-		t.Errorf("retry PreToolUse before confirm = %s, want %s", string(retryOut), string(out))
 	}
 
-	// Once the runner sees the tool call start/complete and calls ConfirmInjected,
-	// subsequent PreToolUse calls and subsequent turns do not re-deliver them.
-	if err := ConfirmInjected(inbox); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	var stderr bytes.Buffer
+	go func() {
+		done <- Run(ctx, inbox, logPath, fakeCodex, testModel, &stderr)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		err := Send(inbox, "turn 1 prompt")
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrNotRunning) || time.Now().After(deadline) {
+			t.Fatalf("Send turn 1: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Wait for tool 1 in Turn 1 to complete.
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(step1File); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Queue a wake message while Turn 1 is mid-turn between two tool-only steps.
+	if err := Send(inbox, "wake queued during tool-only turn"); err != nil {
+		t.Fatalf("Send mid-turn wake: %v", err)
+	}
+	if err := os.WriteFile(releaseFile, []byte("go\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if afterConfirm := PreToolUse(stateDir, hookStdin); len(afterConfirm) != 0 {
-		t.Errorf("expected empty PreToolUse after ConfirmInjected, got %s", string(afterConfirm))
+
+	// Wait for Turn 2 (resume) to complete.
+	var calls string
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		b, _ := os.ReadFile(callsFile) //nolint:gosec // test file
+		calls = string(b)
+		if strings.Count(calls, "ARGS:") >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(calls), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("calls = %q, want 2 lines (no duplicate delivery)", calls)
+	}
+	if !strings.HasSuffix(lines[1], "|PROMPT:wake queued during tool-only turn") {
+		t.Errorf("turn 2 = %q, want wake queued during tool-only turn", lines[1])
 	}
 	msgs, err := Drain(inbox)
 	if err != nil || len(msgs) != 0 {
-		t.Errorf("Drain after ConfirmInjected = (%v, %v), want empty", msgs, err)
+		t.Errorf("Drain after Turn 2 = (%v, %v), want empty", msgs, err)
+	}
+}
+
+func TestRunLogOpenErrorDoesNotHang(t *testing.T) {
+	stateDir := t.TempDir()
+	inbox := InboxPath(stateDir, "agent-bad-log")
+	// Pass an existing directory as logPath so os.OpenFile fails immediately.
+	badLogPath := t.TempDir()
+
+	done := make(chan error, 1)
+	go func() {
+		var stderr bytes.Buffer
+		done <- Run(context.Background(), inbox, badLogPath, "codex", testModel, &stderr)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run with directory logPath = nil, want error")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Run hung when opening logPath failed")
+	}
+}
+
+func TestStopRunnerStopsActiveChildTree(t *testing.T) {
+	stateDir := t.TempDir()
+	agentID := "agent-stop-tree"
+	inbox := InboxPath(stateDir, agentID)
+	logPath := LogPath(stateDir, agentID)
+	childPIDFile := filepath.Join(stateDir, "child.pid")
+
+	// Fake codex spawns a child sleep and blocks waiting for it during an active turn.
+	fakeCodex := filepath.Join(stateDir, "fake-codex-active.sh")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+echo '{"type":"thread.started","thread_id":"thread-stop-tree"}'
+echo '{"type":"turn.started"}'
+sleep 60 &
+child=$!
+echo "$child" > "` + childPIDFile + `"
+wait "$child"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o700); err != nil { //nolint:gosec // test executable script
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	var stderr bytes.Buffer
+	go func() {
+		done <- Run(ctx, inbox, logPath, fakeCodex, testModel, &stderr)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		err := Send(inbox, "start blocking turn")
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrNotRunning) || time.Now().After(deadline) {
+			t.Fatalf("Send: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var childPID int
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(childPIDFile) //nolint:gosec // test file
+		if err == nil && len(bytes.TrimSpace(b)) > 0 {
+			if err := json.Unmarshal(bytes.TrimSpace(b), &childPID); err == nil && childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID <= 0 {
+		t.Fatal("child PID was not written")
+	}
+	defer func() {
+		_ = syscall.Kill(childPID, syscall.SIGKILL)
+	}()
+
+	// Cancel the runner while the turn and its child sleep are active.
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run error on cancel: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not exit within 3s after cancel")
+	}
+
+	// Verify the child sleep process is no longer alive.
+	if err := syscall.Kill(childPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("child process %d remained alive after runner stopped (kill(0) = %v)", childPID, err)
 	}
 }
 
@@ -218,12 +364,12 @@ echo '{"type":"turn.completed"}'
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Wait for the background sleep PID to be written.
+	// Wait for the background sleep PID to be written and for the turn to finish.
 	var bgPIDBytes []byte
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		b, err := os.ReadFile(pidFile) //nolint:gosec // test file
-		if err == nil && len(bytes.TrimSpace(b)) > 0 {
+		if err == nil && len(bytes.TrimSpace(b)) > 0 && ReadState(inbox) == StateIdle {
 			bgPIDBytes = bytes.TrimSpace(b)
 			break
 		}
@@ -240,7 +386,7 @@ echo '{"type":"turn.completed"}'
 		}
 	}()
 
-	// Stop the runner while the background child is still alive.
+	// Stop the idle runner while the background child is still alive.
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run: %v", err)
@@ -301,9 +447,9 @@ func TestRemoveInboxRemovesAllCompanionFilesWhenFIFOMissing(t *testing.T) {
 	}
 }
 
-func TestRunTurnRestoresUnconfirmedInjectedUnlessSubsequentModelStep(t *testing.T) {
+func TestUnconfirmedTurnRetryAndConfirm(t *testing.T) {
 	stateDir := t.TempDir()
-	const id = "agent-inject-restore"
+	const id = "agent-inflight-retry"
 	inbox := InboxPath(stateDir, id)
 	logPath := LogPath(stateDir, id)
 	if err := MakeInbox(inbox); err != nil {
@@ -315,80 +461,42 @@ func TestRunTurnRestoresUnconfirmedInjectedUnlessSubsequentModelStep(t *testing.
 	}
 	defer func() { _ = fifo.Close() }()
 
+	if err := Send(inbox, "retryable turn msg"); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := Drain(inbox)
+	if err != nil || len(msgs) != 1 || msgs[0] != "retryable turn msg" {
+		t.Fatalf("Drain 1 = (%v, %v), want [retryable turn msg]", msgs, err)
+	}
+
+	// Simulate codex failing before emitting turn.started: runTurn returns an
+	// error without calling Confirm(inbox).
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // test file
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = logFile.Close() }()
 
-	// Case 1: PreToolUse drains a mid-turn wake message during a tool call, but
-	// the turn ends right after the tool call without a subsequent model step.
-	// The message must be restored to q.Messages at turn end.
-	fakeNoModelStep := filepath.Join(stateDir, "fake-no-model-step.sh")
-	script1 := `#!/usr/bin/env bash
-set -euo pipefail
-cat >/dev/null
-echo '{"type":"thread.started","thread_id":"thread-restore-1"}'
-echo '{"type":"turn.started"}'
-echo '{"type":"item.started","item":{"id":"item_1","type":"command_execution"}}'
-echo '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls"}}'
-echo '{"type":"turn.completed"}'
-`
-	if err := os.WriteFile(fakeNoModelStep, []byte(script1), 0o700); err != nil { //nolint:gosec // test script
+	fakeFail := filepath.Join(stateDir, "fake-fail.sh")
+	if err := os.WriteFile(fakeFail, []byte("#!/usr/bin/env bash\nexit 1\n"), 0o700); err != nil { //nolint:gosec // test script
 		t.Fatal(err)
 	}
-	if err := RecordThread(stateDir, inbox, "thread-restore-1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := Send(inbox, "mid-turn unconfirmed msg"); err != nil {
-		t.Fatal(err)
-	}
-	hookStdin := []byte(`{"session_id":"thread-restore-1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`)
-	if out := PreToolUse(stateDir, hookStdin); len(out) == 0 {
-		t.Fatal("expected PreToolUse to drain message into Injected")
-	}
-
-	threadID := "thread-restore-1"
+	var threadID string
 	var stderr bytes.Buffer
-	if err := runTurn(context.Background(), stateDir, inbox, logFile, fakeNoModelStep, testModel, &threadID, "initial prompt", &stderr); err != nil {
-		t.Fatalf("runTurn 1: %v", err)
+	if err := runTurn(context.Background(), stateDir, inbox, logFile, fakeFail, testModel, &threadID, msgs[0], &stderr); err == nil {
+		t.Fatal("expected runTurn to fail")
 	}
 
-	// Because no subsequent model step (agent_message / reasoning) occurred,
-	// the injected message must have been restored to q.Messages and returned by Drain.
-	msgs, err := Drain(inbox)
-	if err != nil || len(msgs) != 1 || msgs[0] != "mid-turn unconfirmed msg" {
-		t.Fatalf("Drain after turn without model step = (%v, %v), want [mid-turn unconfirmed msg]", msgs, err)
+	// Next Drain returns the unconfirmed Inflight message again without losing it.
+	msgs, err = Drain(inbox)
+	if err != nil || len(msgs) != 1 || msgs[0] != "retryable turn msg" {
+		t.Fatalf("Drain after failed turn = (%v, %v), want [retryable turn msg]", msgs, err)
 	}
 	if err := Confirm(inbox); err != nil {
 		t.Fatal(err)
 	}
-
-	// Case 2: PreToolUse drains a mid-turn wake message and a subsequent model
-	// step (agent_message) runs before turn.completed -> message is confirmed.
-	fakeWithModelStep := filepath.Join(stateDir, "fake-with-model-step.sh")
-	script2 := `#!/usr/bin/env bash
-set -euo pipefail
-cat >/dev/null
-echo '{"type":"turn.started"}'
-echo '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls"}}'
-echo '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"handled wake message"}}'
-echo '{"type":"turn.completed"}'
-`
-	if err := os.WriteFile(fakeWithModelStep, []byte(script2), 0o700); err != nil { //nolint:gosec // test script
-		t.Fatal(err)
-	}
-	if err := Send(inbox, "mid-turn confirmed msg"); err != nil {
-		t.Fatal(err)
-	}
-	if out := PreToolUse(stateDir, hookStdin); len(out) == 0 {
-		t.Fatal("expected PreToolUse to drain second message into Injected")
-	}
-	if err := runTurn(context.Background(), stateDir, inbox, logFile, fakeWithModelStep, testModel, &threadID, "second prompt", &stderr); err != nil {
-		t.Fatalf("runTurn 2: %v", err)
-	}
 	msgs, err = Drain(inbox)
 	if err != nil || len(msgs) != 0 {
-		t.Fatalf("Drain after turn with subsequent model step = (%v, %v), want empty", msgs, err)
+		t.Fatalf("Drain after Confirm = (%v, %v), want empty", msgs, err)
 	}
 }

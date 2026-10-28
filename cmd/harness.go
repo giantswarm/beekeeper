@@ -320,7 +320,7 @@ func (codexHarness) Follow(path string, n int) ([]claude.Turn, error) {
 }
 
 func (codexHarness) ReadTranscript(a *app, s *claude.Session, now time.Time) (claude.Work, claude.Activity) {
-	work, act := codex.ReadTranscript(s.Transcript, now)
+	work, act := codex.ReadTranscript(s.Transcript, now, s.Model)
 	act.Price(a.cfg.Metrics)
 	return work, act
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
@@ -348,5 +349,51 @@ func TestReadTranscriptPartialWindow(t *testing.T) {
 	want := claude.Tokens{Input: 900, Output: 500, CacheRead: 1600}
 	if act.Total.Tokens != want {
 		t.Errorf("act.Total.Tokens = %+v, want %+v", act.Total.Tokens, want)
+	}
+}
+
+func TestCodexReadTranscriptPricesRequests(t *testing.T) {
+	dir := t.TempDir()
+	rolloutPath := filepath.Join(dir, "rollout-price.jsonl")
+	if err := os.WriteFile(rolloutPath, []byte(sampleRollout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now, _ := time.Parse(time.RFC3339, "2026-10-28T10:15:00Z")
+
+	// 1. Configured model in Metrics.Models is priced in Total and LastHour.
+	pricedMetrics := config.Metrics{
+		Models: map[string]config.Model{
+			testModel: {Input: 2, Output: 10, CacheRead: 0.2, ContextWindow: 400_000},
+		},
+	}
+	_, act := ReadTranscript(rolloutPath, now)
+	act.Price(pricedMetrics)
+	if act.Total.CostUSD == nil || *act.Total.CostUSD <= 0 || len(act.Total.CostUnknown) > 0 {
+		t.Fatalf("priced rollout Total = (CostUSD=%v, CostUnknown=%v), want >0 and no unknown", act.Total.CostUSD, act.Total.CostUnknown)
+	}
+	if act.LastHour.CostUSD == nil || *act.LastHour.CostUSD <= 0 {
+		t.Fatalf("priced rollout LastHour CostUSD = %v, want >0", act.LastHour.CostUSD)
+	}
+
+	// 2. Unpriced model is marked in CostUnknown (CostUSD == nil).
+	_, actUnknown := ReadTranscript(rolloutPath, now)
+	actUnknown.Price(config.Metrics{})
+	if actUnknown.Total.CostUSD != nil || len(actUnknown.Total.CostUnknown) == 0 {
+		t.Fatalf("unpriced rollout Total = (CostUSD=%v, CostUnknown=%v), want nil CostUSD and unknown model", actUnknown.Total.CostUSD, actUnknown.Total.CostUnknown)
+	}
+
+	// 3. Stream log (`turn.completed` with `usage`) is also priced via sessionModel.
+	streamPath := filepath.Join(dir, "stream.jsonl")
+	streamData := `{"type":"thread.started","thread_id":"thread-stream-1"}
+{"type":"turn.started"}
+{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":200}}
+`
+	if err := os.WriteFile(streamPath, []byte(streamData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, actStream := ReadTranscript(streamPath, time.Now().UTC(), testModel)
+	actStream.Price(pricedMetrics)
+	if actStream.Total.CostUSD == nil || *actStream.Total.CostUSD <= 0 || len(actStream.Total.CostUnknown) > 0 {
+		t.Fatalf("priced stream Total = (CostUSD=%v, CostUnknown=%v), want >0 and no unknown", actStream.Total.CostUSD, actStream.Total.CostUnknown)
 	}
 }

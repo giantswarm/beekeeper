@@ -111,8 +111,7 @@ func Send(inbox, text string) error {
 // Drain atomically pops the next message from inbox's persistent queue and
 // marks it Inflight until Confirm is called. If a previous Inflight message
 // was never confirmed (for example, codex exited before accepting it), Drain
-// returns that Inflight message first so it is not lost. Any unconfirmed
-// Injected messages from a prior turn are restored to the front of the queue.
+// returns that Inflight message first so it is not lost.
 func Drain(inbox string) ([]string, error) {
 	var msg string
 	var hasMsg bool
@@ -121,7 +120,6 @@ func Drain(inbox string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		restoreUnconfirmedInjected(&q)
 		if q.Inflight != "" {
 			if isDelivered(&q, q.InflightID) {
 				q.Inflight = ""
@@ -153,35 +151,6 @@ func Drain(inbox string) ([]string, error) {
 	return []string{msg}, nil
 }
 
-// DrainHook returns all pending mid-turn messages for the PreToolUse hook,
-// keeping them inflight in q.Injected until ConfirmInjected records that the
-// tool call started or the turn completed.
-func DrainHook(inbox string) ([]QueuedMessage, error) {
-	var out []QueuedMessage
-	err := withLock(inbox, func() error {
-		q, err := readQueue(inbox)
-		if err != nil {
-			return err
-		}
-		var active []QueuedMessage
-		for _, m := range q.Injected {
-			if !isDelivered(&q, m.ID) {
-				active = append(active, m)
-			}
-		}
-		for _, m := range q.Messages {
-			if !isDelivered(&q, m.ID) {
-				active = append(active, m)
-			}
-		}
-		q.Messages = nil
-		q.Injected = active
-		out = active
-		return writeQueue(inbox, q)
-	})
-	return out, err
-}
-
 // Confirm clears the Inflight message from inbox's persistent queue once codex
 // has accepted the turn on stdin.
 func Confirm(inbox string) error {
@@ -196,41 +165,6 @@ func Confirm(inbox string) error {
 		markDelivered(&q, q.InflightID)
 		q.Inflight = ""
 		q.InflightID = ""
-		return writeQueue(inbox, q)
-	})
-}
-
-// ConfirmInjected marks all currently Injected mid-turn messages as delivered
-// once the runner observes a subsequent model step on the codex stream.
-func ConfirmInjected(inbox string) error {
-	return withLock(inbox, func() error {
-		q, err := readQueue(inbox)
-		if err != nil {
-			return err
-		}
-		if len(q.Injected) == 0 {
-			return nil
-		}
-		for _, m := range q.Injected {
-			markDelivered(&q, m.ID)
-		}
-		q.Injected = nil
-		return writeQueue(inbox, q)
-	})
-}
-
-// RestoreInjected restores any unconfirmed Injected mid-turn messages back to
-// the front of q.Messages when a turn ends without a subsequent model step.
-func RestoreInjected(inbox string) error {
-	return withLock(inbox, func() error {
-		q, err := readQueue(inbox)
-		if err != nil {
-			return err
-		}
-		if len(q.Injected) == 0 {
-			return nil
-		}
-		restoreUnconfirmedInjected(&q)
 		return writeQueue(inbox, q)
 	})
 }

@@ -6,16 +6,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -47,15 +53,15 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	if err := codex.RecordThread(dir, inbox, "thread-wake-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.wakeCodex(by, ag, id, "mid-turn wake message"); err != nil {
+	if err := a.wakeCodex(by, ag, id, "next-turn wake message"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "written to its inbox") {
+	if !strings.Contains(out.String(), "written to its inbox, it runs the message as its next turn") {
 		t.Fatalf("output %q", out.String())
 	}
 
-	// Verify `beekeeper hook pretooluse --format codex` drains the queued wake
-	// message and prints additionalContext.
+	// Verify `beekeeper hook pretooluse --format codex` does not steal or
+	// duplicate the queued wake message mid-turn, leaving it queued for Drain.
 	cfgFile := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgFile, []byte("stateDir: "+dir+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -68,17 +74,10 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	if err := hookCmd.Execute(); err != nil {
 		t.Fatalf("hook pretooluse: %v", err)
 	}
-	var parsed struct {
-		HookSpecificOutput struct {
-			HookEventName     string `json:"hookEventName"`
-			AdditionalContext string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal(hookOut.Bytes(), &parsed); err != nil {
-		t.Fatalf("unmarshal hook output %q: %v", hookOut.String(), err)
-	}
-	if parsed.HookSpecificOutput.HookEventName != "PreToolUse" || parsed.HookSpecificOutput.AdditionalContext != "mid-turn wake message" {
-		t.Errorf("unexpected hook output: %+v", parsed)
+
+	msgs, err := codex.Drain(inbox)
+	if err != nil || len(msgs) != 1 || msgs[0] != "next-turn wake message" {
+		t.Fatalf("Drain(inbox) = (%v, %v), want [next-turn wake message]", msgs, err)
 	}
 }
 
@@ -175,6 +174,9 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	u := hl.started[0]
 	if u.Name != "beekeeper-codex-abcdef12" {
 		t.Errorf("unit name = %q, want beekeeper-codex-abcdef12", u.Name)
+	}
+	if u.KeepChildren {
+		t.Errorf("unit KeepChildren = true, want false so stopping the unit terminates child turns")
 	}
 	wantCodexHome := codex.HomeDir(stateDir)
 	for _, wantEnv := range []string{
@@ -402,5 +404,279 @@ func TestStartCodexValidationCleanupAndStop(t *testing.T) {
 		if !slices.Contains(callerEnv, want) {
 			t.Errorf("callerEnv %v missing %q", callerEnv, want)
 		}
+	}
+}
+
+func TestStopRunnerSubprocessStopsChildOnSIGTERM(t *testing.T) {
+	if os.Getenv("BEEKEEPER_TEST_CODEX_RUNNER") == "1" {
+		if i := slices.Index(os.Args, "--"); i >= 0 {
+			cmd := New()
+			cmd.SetArgs(os.Args[i+1:])
+			if err := cmd.Execute(); err != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+	}
+
+	stateDir := t.TempDir()
+	const id = "runner-sigterm-test"
+	inbox := codex.InboxPath(stateDir, id)
+	logPath := codex.LogPath(stateDir, id)
+	childPIDFile := filepath.Join(stateDir, "child.pid")
+
+	fakeCodex := filepath.Join(stateDir, "fake-codex.sh")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+echo '{"type":"thread.started","thread_id":"thread-sigterm"}'
+echo '{"type":"turn.started"}'
+sleep 60 &
+child=$!
+echo "$child" > "` + childPIDFile + `"
+wait "$child"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o700); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := exec.Command(self, "-test.run=^TestStopRunnerSubprocessStopsChildOnSIGTERM$", "--", codexRunCmdName, inbox, logPath, fakeCodex, "gpt-5.7") //nolint:gosec // test binary
+	runner.Env = append(os.Environ(), "BEEKEEPER_TEST_CODEX_RUNNER=1")
+	if err := runner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if runner.Process != nil {
+			_ = runner.Process.Kill()
+		}
+	}()
+
+	// Wait until runner opens the inbox and start an active turn.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		err := codex.Send(inbox, "start turn")
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, codex.ErrNotRunning) || time.Now().After(deadline) {
+			t.Fatalf("Send: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var childPID int
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(childPIDFile) //nolint:gosec // test file
+		if err == nil && len(bytes.TrimSpace(b)) > 0 {
+			if err := json.Unmarshal(bytes.TrimSpace(b), &childPID); err == nil && childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID <= 0 {
+		t.Fatal("child PID was not written")
+	}
+	defer func() {
+		_ = syscall.Kill(childPID, syscall.SIGKILL)
+	}()
+
+	// Send SIGTERM to the codex-run process, simulating unit stop / endCodex.
+	if err := runner.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM runner: %v", err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- runner.Wait() }()
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runner did not exit within 3s after SIGTERM")
+	}
+
+	if err := syscall.Kill(childPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("child process %d remained alive after SIGTERM to runner (kill(0) = %v)", childPID, err)
+	}
+}
+
+func TestFailedStartAndEndCodexStopActiveChildTurn(t *testing.T) {
+	if os.Getenv("BEEKEEPER_TEST_CODEX_RUNNER_UNIT") == "1" {
+		if i := slices.Index(os.Args, "--"); i >= 0 {
+			cmd := New()
+			cmd.SetArgs(os.Args[i+1:])
+			if err := cmd.Execute(); err != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+	}
+
+	const (
+		testCodexModel = "gpt-5.7"
+		startID        = "88888888-0000-4000-8000-000000000000"
+	)
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	leaseDir := filepath.Join(root, "leases")
+	childPIDFile := filepath.Join(root, "child.pid")
+	fakeBinDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBinDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeCodex := filepath.Join(fakeBinDir, codex.Comm)
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+echo '{"type":"thread.started","thread_id":"thread-active-child"}'
+echo '{"type":"turn.started"}'
+sleep 60 &
+child=$!
+echo "$child" > "` + childPIDFile + `"
+wait "$child"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o700); err != nil { //nolint:gosec // test executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := codex.InboxPath(stateDir, startID)
+	logPath := codex.LogPath(stateDir, startID)
+	runner := exec.Command(self, "-test.run=^TestFailedStartAndEndCodexStopActiveChildTurn$", "--", codexRunCmdName, inbox, logPath, fakeCodex, testCodexModel) //nolint:gosec // test binary
+	runner.Env = append(os.Environ(), "BEEKEEPER_TEST_CODEX_RUNNER_UNIT=1")
+	if err := runner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if runner.Process != nil {
+			_ = runner.Process.Kill()
+		}
+	}()
+
+	// Wait until the runner opens the inbox and start a turn with an active child.
+	if err := sendCodexWhenReady(context.Background(), inbox, "start turn", 3*time.Second); err != nil {
+		t.Fatalf("sendCodexWhenReady: %v", err)
+	}
+	var childPID int
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		b, rerr := os.ReadFile(childPIDFile) //nolint:gosec // test file
+		if rerr == nil && len(bytes.TrimSpace(b)) > 0 {
+			if json.Unmarshal(bytes.TrimSpace(b), &childPID) == nil && childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID <= 0 {
+		t.Fatal("child PID was not written")
+	}
+	defer func() { _ = syscall.Kill(childPID, syscall.SIGKILL) }()
+
+	// Wire haltLauncher so Stop sends SIGTERM to the running unit's runner and waits for it.
+	oldLauncher := plat.Launcher
+	unitName := codexUnit(startID)
+	hl := &haltLauncher{
+		installed: map[string]string{unitName: holdActive},
+	}
+	plat.Launcher = stopExecLauncher{
+		Launcher: hl,
+		stopFn: func(_ context.Context, name string) error {
+			if name == unitName && runner.Process != nil {
+				_ = runner.Process.Signal(syscall.SIGTERM)
+				_ = runner.Wait()
+			}
+			return hl.Stop(context.Background(), name)
+		},
+	}
+	defer func() { plat.Launcher = oldLauncher }()
+
+	store, err := state.Open(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{
+		cfg:   &config.Config{StateDir: stateDir, LeaseDir: leaseDir},
+		store: store,
+		out:   &bytes.Buffer{},
+	}
+	summary := a.endCodex(context.Background(), startID)
+	if !strings.Contains(summary, "stopped its codex unit") || !strings.Contains(summary, "removed its codex inbox") {
+		t.Fatalf("endCodex = %q", summary)
+	}
+	if err := syscall.Kill(childPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("child process %d remained alive after endCodex (kill(0) = %v)", childPID, err)
+	}
+	if _, statErr := os.Stat(inbox); !os.IsNotExist(statErr) {
+		t.Errorf("expected inbox removed after endCodex, got %v", statErr)
+	}
+}
+
+type stopExecLauncher struct {
+	platform.Launcher
+	stopFn func(context.Context, string) error
+}
+
+func (s stopExecLauncher) Stop(ctx context.Context, name string) error {
+	return s.stopFn(ctx, name)
+}
+
+func TestBackgroundDropsCodexIdentity(t *testing.T) {
+	parentEnv := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"HOME=/home/tester",
+		codex.EnvAgent + "=parent-codex-id",
+		codex.EnvName + "=parent-codex-worker",
+		"CODEX_HOME=/tmp/state/codex/home",
+		"ZDOTDIR=/tmp/state/codex/home/zsh",
+		agy.EnvAgent + "=parent-agy-id",
+		omp.EnvAgent + "=parent-omp-id",
+		omp.EnvCredentials + "=OPENAI_API_KEY",
+		"SHELL=/tmp/state/omp/bin/bash",
+		"CLAUDE_CODE_SESSION_ID=parent-claude",
+	}
+
+	cleaned := cleanEnv(parentEnv, "/tmp/config.yaml")
+	childEnv := append(slices.Clone(cleaned),
+		"CLAUDE_CODE_SESSION_ID=child-claude-id",
+		"CLAUDE_CODE_SESSION_NAME=child-claude-worker",
+	)
+	lookup := func(env []string) func(string) string {
+		m := make(map[string]string, len(env))
+		for _, kv := range env {
+			k, v, ok := strings.Cut(kv, "=")
+			if ok {
+				m[k] = v
+			}
+		}
+		return func(k string) string { return m[k] }
+	}
+
+	got := envParty(lookup(childEnv))
+	want := state.Party{Session: "child-claude-id", Name: "child-claude-worker"}
+	if got != want {
+		t.Fatalf("envParty(cleanEnv) = %+v, want %+v (cleaned env: %v)", got, want, cleaned)
+	}
+	for _, forbidden := range []string{codex.EnvAgent, codex.EnvName, "CODEX_HOME", "ZDOTDIR", agy.EnvAgent, omp.EnvAgent, omp.EnvCredentials, "SHELL"} {
+		if v := lookup(cleaned)(forbidden); v != "" {
+			t.Errorf("cleanEnv kept %s=%q", forbidden, v)
+		}
+	}
+
+	browsed := browseEnv(parentEnv)
+	gotBrowse := envParty(lookup(append(slices.Clone(browsed),
+		"CLAUDE_CODE_SESSION_ID=browse-turn-id",
+		"CLAUDE_CODE_SESSION_NAME=beekeeper browse",
+	)))
+	wantBrowse := state.Party{Session: "browse-turn-id", Name: "beekeeper browse"}
+	if gotBrowse != wantBrowse {
+		t.Fatalf("envParty(browseEnv) = %+v, want %+v", gotBrowse, wantBrowse)
 	}
 }

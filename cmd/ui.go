@@ -16,7 +16,6 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
-	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -196,17 +195,6 @@ func (a *app) messageSession(ctx context.Context, sessions []*claude.Session, s 
 		_ = a.store.Log(event(by, "ui.message", "%s: written to its %s inbox", s.Name, h.Name()))
 		return fmt.Sprintf("in its %s inbox: it runs at the next tool round or as the next turn", h.Name()), nil
 	}
-	if s.Harness == codex.Harness {
-		id, ok := strings.CutPrefix(s.HostID, codex.HostPrefix)
-		if !ok {
-			return "", refused("%s: a codex session beekeeper did not start takes no message: codex has no inbox outside beekeeper's starts", s.Name)
-		}
-		if err := a.sendCodex(s.Name, id, msg); err != nil {
-			return "", err
-		}
-		_ = a.store.Log(event(by, "ui.message", "%s: written to its codex inbox", s.Name))
-		return "in its codex inbox: it runs at the next tool call or as the next turn", nil
-	}
 	name, err := uniqueName(sessions, s)
 	if err != nil {
 		return "", err
@@ -246,9 +234,6 @@ func (c *collector) takeOver(sessions []*claude.Session, q string, now time.Time
 	}
 	if s.Harness != "" {
 		return refused("%s: an %s session asks for no approvals (beekeeper's %s agents run in yolo mode): nothing to take over", s.Name, s.Harness, s.Harness)
-	}
-	if s.Harness == codex.Harness {
-		return refused("%s: a codex session asks for no approvals (beekeeper's codex agents run in bypass mode): nothing to take over", s.Name)
 	}
 	if s.ID == "" {
 		return refused("%s: no session id is known, so its approvals cannot be told apart", s.Name)

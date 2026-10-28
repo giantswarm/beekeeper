@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -163,11 +164,10 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 
 	unit := codexUnit(id)
 	runnerArgv := []string{self, codexRunCmdName, inbox, logPath, bin, model}
-	if err := launch(
+	if err := launchCodex(
 		unit,
 		dir,
 		a.explicitConfig(),
-		nil,
 		runnerArgv,
 		codex.EnvAgent+"="+id,
 		codex.EnvName+"="+sp.name,
@@ -196,6 +196,20 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		}
 	}
 	return err
+}
+
+// launchCodex starts a codex-run transient user service with KeepChildren: false
+// (KillMode=control-group) so stopping the unit terminates and waits for the
+// runner and any active codex child turn process tree.
+func launchCodex(unit, dir, config string, argv []string, env ...string) error {
+	return startUnit(platform.Unit{
+		Name:          unit,
+		Dir:           dir,
+		Argv:          argv,
+		KeepChildren:  false,
+		TermIsSuccess: true,
+		StopTimeout:   turnStopWait,
+	}, config, env...)
 }
 
 func (a *app) codexModel(flag string) (string, error) {

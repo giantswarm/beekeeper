@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -56,26 +58,17 @@ func stateDirFromInbox(inbox string) string {
 
 // Run drives a Codex CLI session one turn at a time from its persistent FIFO
 // inbox. The first message runs `codex exec --json ... -`, captures the
-// emitted thread_id, and subsequent messages run `codex exec resume --json ... <thread_id> -`.
-// While a turn is running, PreToolUse hooks can drain newly queued messages
-// mid-turn; any message remaining in the queue when a turn ends is delivered
-// immediately as the next turn.
+// emitted thread_id, and subsequent messages run
+// `codex exec resume --json ... <thread_id> -`. Messages arriving while a turn
+// is running stay in the persistent queue and run as the next turn as soon as
+// the active turn finishes.
 func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Writer) error {
+	ctx, stopSig := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSig()
+
 	if err := MakeInbox(inbox); err != nil {
 		return err
 	}
-	fifo, err := openInboxRDWR(inbox)
-	if err != nil {
-		return err
-	}
-	readerDone := make(chan struct{})
-	defer func() {
-		WriteState(inbox, StateIdle)
-		_, _ = fifo.Write([]byte{'\n'})
-		_ = fifo.Close()
-		<-readerDone
-	}()
-
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
@@ -85,10 +78,15 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 	}
 	defer func() { _ = logFile.Close() }()
 
+	fifo, err := openInboxRDWR(inbox)
+	if err != nil {
+		return err
+	}
 	stateDir := stateDirFromInbox(inbox)
 	threadID := ReadThread(stateDir, inbox)
 	WriteState(inbox, StateIdle)
 
+	readerDone := make(chan struct{})
 	wake := make(chan struct{}, 1)
 	go func() {
 		defer close(readerDone)
@@ -111,6 +109,12 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 				return
 			}
 		}
+	}()
+	defer func() {
+		WriteState(inbox, StateIdle)
+		_, _ = fifo.Write([]byte{'\n'})
+		_ = fifo.Close()
+		<-readerDone
 	}()
 
 	for {
@@ -148,26 +152,6 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 type streamEvent struct {
 	Type     string `json:"type"`
 	ThreadID string `json:"thread_id"`
-	Item     *struct {
-		ID   string `json:"id"`
-		Type string `json:"type"`
-	} `json:"item"`
-	Payload *struct {
-		Type string `json:"type"`
-		Role string `json:"role"`
-	} `json:"payload"`
-}
-
-func isSubsequentModelStep(ev streamEvent) bool {
-	switch ev.Type {
-	case "item.started", evItemCompleted:
-		return ev.Item != nil && (ev.Item.Type == itemAgentMessage || ev.Item.Type == "reasoning")
-	case evResponseItem:
-		return ev.Payload != nil && ((ev.Payload.Type == itemMessage && ev.Payload.Role == roleAssistant) || ev.Payload.Type == "reasoning")
-	case evEventMsg:
-		return ev.Payload != nil && (ev.Payload.Type == itemAgentMessage || ev.Payload.Type == "agent_reasoning")
-	}
-	return false
 }
 
 func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin, model string, threadID *string, prompt string, stderr io.Writer) error {
@@ -178,6 +162,7 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 		argv = ResumeArgv(bin, model, *threadID)
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv is built from the configured codex binary and model
+	configureTurnCmd(cmd)
 	if !strings.HasSuffix(prompt, "\n") {
 		prompt += "\n"
 	}
@@ -191,7 +176,9 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 		return err
 	}
 	defer func() {
-		_ = RestoreInjected(inbox)
+		if ctx.Err() != nil {
+			stopTurnProcessGroup(cmd)
+		}
 	}()
 
 	accepted := false
@@ -212,9 +199,6 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 		case evTurnStarted, "item.started", evItemCompleted, evTurnCompleted:
 			accepted = true
 			_ = Confirm(inbox)
-		}
-		if isSubsequentModelStep(ev) {
-			_ = ConfirmInjected(inbox)
 		}
 	}
 	waitErr := cmd.Wait()
