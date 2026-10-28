@@ -67,6 +67,9 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 	if err != nil || root != filepath.Clean(s.Config.WorkspaceRoot) {
 		return errors.New("workspace root is missing or resolves through a symlink")
 	}
+	if within(root, source) || within(source, root) {
+		return errors.New("resolved source checkout and workspace root must be disjoint")
+	}
 	parent := filepath.Join(root, string(j.Request.Ref.Execution))
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err

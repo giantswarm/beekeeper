@@ -91,6 +91,29 @@ func within(root, target string) bool {
 	return err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) && !filepath.IsAbs(r)
 }
 
+// ownedDirectory rejects symlinked parents before creating any managed
+// directory. Provisioning must not write through an operator path alias.
+func ownedDirectory(p string) error {
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p || p == string(filepath.Separator) {
+		return errors.New("managed directory must be an absolute clean non-root path")
+	}
+	ancestor := p
+	for {
+		real, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			if real != ancestor {
+				return errors.New("managed directory resolves through a symlink")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(ancestor) == ancestor {
+			return errors.New("managed directory parent is unavailable")
+		}
+		ancestor = filepath.Dir(ancestor)
+	}
+	return os.MkdirAll(p, 0o700)
+}
+
 // cleanEnvironment retains user-manager plumbing and local authentication
 // location only. It never inherits a caller's harness identity/provider keys.
 func cleanEnvironment(configDir string) []string {

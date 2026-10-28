@@ -24,6 +24,7 @@ func TestHostValidationRefusesIncompleteAndUnsafeEndpoints(t *testing.T) {
 		{"ssh shell", func(h *Host) { h.SSH = "host-a.example;fixture" }},
 		{"relative executable", func(h *Host) { h.Executable = "beekeeper" }},
 		{"unclean workspace", func(h *Host) { h.WorkspaceRoot = "/srv/../workspaces" }},
+		{"filesystem root workspace", func(h *Host) { h.WorkspaceRoot = "/" }},
 		{"unsupported harness", func(h *Host) { h.Harnesses = []string{"other"} }},
 		{"missing digest", func(h *Host) { h.PolicyDigest = "" }},
 		{"unbounded timeout", func(h *Host) { h.OperationTimeout = "1h" }},

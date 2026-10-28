@@ -50,7 +50,7 @@ func (h Host) Validate() error {
 	if err := h.Endpoint.Validate(); err != nil {
 		return err
 	}
-	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) != 1 || h.Harnesses[0] != HarnessClaude {
+	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) != 1 || h.Harnesses[0] != HarnessClaude {
 		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses [claude]")
 	}
 	for repo, p := range h.Repositories {

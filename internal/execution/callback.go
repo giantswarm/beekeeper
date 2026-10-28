@@ -137,7 +137,7 @@ type outbox struct {
 // number. Different work cannot overtake an unacknowledged mutation.
 func (s *Server) SendControl(ctx context.Context, j Journal, op string, data any, id string, run CommandRunner) (ControlResult, error) {
 	var result ControlResult
-	if op != ControlNote && op != ControlPark && op != ControlReport && op != "handover" && op != "event" {
+	if !controlOperation(op) {
 		return result, errors.New("unsupported remote worker control operation")
 	}
 	if id != "" && !ValidIdentity(id) {

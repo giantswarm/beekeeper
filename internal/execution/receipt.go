@@ -23,7 +23,7 @@ type Receipt struct {
 // SigningKey creates a coordinator key once. Only its public half is ever
 // returned to an operator; provision that half on the host independently.
 func SigningKey(root string) (ed25519.PrivateKey, error) {
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	if err := ownedDirectory(root); err != nil {
 		return nil, err
 	}
 	l := flock.New(filepath.Join(root, "key.lock"))

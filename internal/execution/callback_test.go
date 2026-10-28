@@ -21,9 +21,8 @@ type fakeCoordinator struct {
 	calls int
 }
 type fakeCoordinatorState struct {
-	Sequence uint64                   `json:"sequence"`
-	Applied  []string                 `json:"applied"`
-	Receipts map[string]ControlResult `json:"receipts"`
+	Ledger  ControlLedger `json:"ledger"`
+	Applied []string      `json:"applied"`
 }
 
 func (f *fakeCoordinator) run(_ context.Context, argv []string, raw []byte) ([]byte, error) {
@@ -43,25 +42,15 @@ func (f *fakeCoordinator) run(_ context.Context, argv []string, raw []byte) ([]b
 	if err := readJSON(f.path, &st); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	result, ok := st.Receipts[request.ID]
-	if ok {
-		if result.Digest != request.ContentDigest() || result.Sequence != request.Sequence {
-			return nil, errors.New("conflicting receipt")
-		}
-	} else {
-		if request.Sequence != st.Sequence+1 {
-			return nil, errors.New("out of order callback")
-		}
-		st.Sequence = request.Sequence
+	result, err := st.Ledger.Apply(wire.Ref, request, func() (string, error) {
 		st.Applied = append(st.Applied, request.Operation)
-		result = ControlResult{ID: request.ID, Sequence: request.Sequence, Digest: request.ContentDigest(), Output: "original receipt"}
-		if st.Receipts == nil {
-			st.Receipts = map[string]ControlResult{}
-		}
-		st.Receipts[request.ID] = result
-		if err := atomicFile(f.path, mustJSON(st)); err != nil {
-			return nil, err
-		}
+		return "original receipt", nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := atomicFile(f.path, mustJSON(st)); err != nil {
+		return nil, err
 	}
 	if f.drop {
 		f.drop = false

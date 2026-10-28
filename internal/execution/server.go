@@ -65,7 +65,7 @@ func (s *Server) journalPath(r Ref) (string, error) {
 	if r.Host != s.Config.Identity {
 		return "", errors.New("execution host identity mismatch")
 	}
-	if err := os.MkdirAll(s.Root, 0o700); err != nil {
+	if err := ownedDirectory(s.Root); err != nil {
 		return "", err
 	}
 	root, err := filepath.EvalSymlinks(s.Root)

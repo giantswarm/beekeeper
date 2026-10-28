@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -125,10 +124,10 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", errors.New("execution policy and source checkouts must be disjoint")
 		}
 	}
-	if err := os.MkdirAll(s.Root, 0o700); err != nil {
+	if err := ownedDirectory(s.Root); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(s.Config.WorkspaceRoot, 0o700); err != nil {
+	if err := ownedDirectory(s.Config.WorkspaceRoot); err != nil {
 		return "", err
 	}
 	for name, b := range map[string][]byte{"policy.json": mustJSON(p), "settings.json": s.settings(), "CLAUDE.md": s.Rules} {
