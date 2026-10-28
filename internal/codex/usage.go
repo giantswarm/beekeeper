@@ -6,23 +6,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	evTokenCount    = "token_count"
-	maxFiveHourMin  = 360
-	minSevenDayMin  = 1440
-	epochMilliFloor = 100_000_000_000
-	slotPrimary     = "primary"
-	slotSecondary   = "secondary"
-	jsonNullLiteral = "null"
+	evTokenCount        = "token_count"
+	fiveHourWindowMin   = 300
+	sevenDayWindowMin   = 10080
+	maxRolloutTailBytes = 4 * 1024 * 1024
+	rolloutModSlack     = time.Minute
+	epochMilliFloor     = 100_000_000_000
+	slotPrimary         = "primary"
+	slotSecondary       = "secondary"
+	jsonNullLiteral     = "null"
 )
 
 // UsageWindow is one subscription rate-limit window reported by Codex CLI in
@@ -54,7 +58,27 @@ type UsageReading struct {
 // HasRollouts reports whether at least one rollout `.jsonl` file exists under
 // the isolated worker CODEX_HOME sessions directory or sessionsDir.
 func HasRollouts(stateDir, sessionsDir string, extraDirs ...string) bool {
-	return len(rolloutFiles(sessionDirs(stateDir, sessionsDir, extraDirs...))) > 0
+	found := false
+	for _, dir := range sessionDirs(stateDir, sessionsDir, extraDirs...) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(d.Name(), ".jsonl") {
+				found = true
+				return fs.SkipAll
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadUsage scans Codex rollout transcripts across the isolated worker
@@ -66,10 +90,10 @@ func HasRollouts(stateDir, sessionsDir string, extraDirs ...string) bool {
 // A rollout transcript that has not yet written any `token_count` event (such
 // as a newly started session that has written only `session_meta` or
 // `turn_context`) produces no candidate and never shadows a valid reading from
-// another session. An explicit invalid or stopped `token_count` event (for
-// example `spend_control_reached: true`, `rate_limit_reached_type` set, null
-// or empty `rate_limits`, or out-of-range `used_percent`) is recorded at its
-// event timestamp and fails closed when it is the freshest event.
+// another session. An explicit invalid, stopped or truncated/corrupt rollout
+// event is recorded at its timestamp (or the later of the previous line's
+// timestamp and the file's mtime) and fails closed when it is the freshest
+// event.
 func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading, error) {
 	files := rolloutFiles(sessionDirs(stateDir, sessionsDir, extraDirs...))
 	if len(files) == 0 {
@@ -77,6 +101,9 @@ func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading,
 	}
 	var best *usageCandidate
 	for _, rf := range files {
+		if best != nil && !best.at.IsZero() && rf.mod.Before(best.at.Add(-rolloutModSlack)) {
+			break
+		}
 		if c := scanRolloutUsage(rf); c != nil {
 			if best == nil || candidateNewer(*c, *best) {
 				best = c
@@ -150,6 +177,12 @@ func rolloutFiles(dirs []string) []rolloutRef {
 			return nil
 		})
 	}
+	slices.SortFunc(out, func(a, b rolloutRef) int {
+		if c := b.mod.Compare(a.mod); c != 0 {
+			return c
+		}
+		return strings.Compare(b.path, a.path)
+	})
 	return out
 }
 
@@ -160,17 +193,52 @@ func scanRolloutUsage(rf rolloutRef) *usageCandidate {
 	}
 	defer func() { _ = f.Close() }()
 
+	soughtTail := false
+	if fi, statErr := f.Stat(); statErr == nil && fi.Size() > maxRolloutTailBytes {
+		if _, seekErr := f.Seek(fi.Size()-maxRolloutTailBytes-1, io.SeekStart); seekErr == nil {
+			soughtTail = true
+		}
+	}
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), maxLine)
+
+	if soughtTail {
+		// Discard the partial leading line starting at the seek offset.
+		_ = sc.Scan()
+	}
 
 	var lastLineAt time.Time
 	var best *usageCandidate
 	seq := 0
 
+	recordErr := func(raw []byte, seqNum int, cerr error) {
+		c := usageCandidate{
+			at:   corruptLineAt(raw, lastLineAt, rf.mod),
+			mod:  rf.mod,
+			path: rf.path,
+			seq:  seqNum,
+			err:  cerr,
+		}
+		if best == nil || candidateNewer(c, *best) {
+			best = &c
+		}
+	}
+
 	for sc.Scan() {
 		seq++
 		raw := bytes.TrimSpace(sc.Bytes())
 		if len(raw) == 0 {
+			continue
+		}
+		if raw[0] != '{' || !json.Valid(raw) {
+			recordErr(raw, seq, errors.New("invalid codex token_count or rollout JSON line"))
+			continue
+		}
+		if ts := extractRawTimestamp(raw); !ts.IsZero() {
+			lastLineAt = ts
+		}
+		if !bytes.Contains(raw, []byte(evTokenCount)) && !bytes.Contains(raw, []byte("rate_limits")) {
 			continue
 		}
 		var line struct {
@@ -180,22 +248,7 @@ func scanRolloutUsage(rf rolloutRef) *usageCandidate {
 			RateLimits json.RawMessage `json:"rate_limits"`
 		}
 		if uerr := json.Unmarshal(raw, &line); uerr != nil {
-			if bytes.Contains(raw, []byte(evTokenCount)) || bytes.Contains(raw, []byte("rate_limits")) {
-				at := lastLineAt
-				if at.IsZero() {
-					at = rf.mod
-				}
-				c := usageCandidate{
-					at:   at,
-					mod:  rf.mod,
-					path: rf.path,
-					seq:  seq,
-					err:  fmt.Errorf("invalid codex token_count JSON: %w", uerr),
-				}
-				if best == nil || candidateNewer(c, *best) {
-					best = &c
-				}
-			}
+			recordErr(raw, seq, fmt.Errorf("invalid codex token_count JSON: %w", uerr))
 			continue
 		}
 		if !line.Timestamp.IsZero() {
@@ -230,7 +283,49 @@ func scanRolloutUsage(rf rolloutRef) *usageCandidate {
 			best = &c
 		}
 	}
+
+	if scanErr := sc.Err(); scanErr != nil {
+		recordErr(nil, seq+1, fmt.Errorf("codex rollout scan error: %w", scanErr))
+	} else if soughtTail && seq == 0 {
+		recordErr(nil, 1, errors.New("truncated codex rollout tail"))
+	}
 	return best
+}
+
+func corruptLineAt(raw []byte, lastLineAt, mod time.Time) time.Time {
+	if ts := extractRawTimestamp(raw); !ts.IsZero() {
+		return ts.UTC()
+	}
+	if lastLineAt.After(mod) {
+		return lastLineAt
+	}
+	return mod
+}
+
+func extractRawTimestamp(raw []byte) time.Time {
+	const key = `"timestamp"`
+	idx := bytes.Index(raw, []byte(key))
+	if idx < 0 {
+		return time.Time{}
+	}
+	rest := bytes.TrimSpace(raw[idx+len(key):])
+	if len(rest) == 0 || rest[0] != ':' {
+		return time.Time{}
+	}
+	rest = bytes.TrimSpace(rest[1:])
+	if len(rest) < 2 || rest[0] != '"' {
+		return time.Time{}
+	}
+	rest = rest[1:]
+	end := bytes.IndexByte(rest, '"')
+	if end <= 0 {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, string(rest[:end]))
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 func extractTokenCountRateLimits(lineType string, rawPayload, topRateLimits json.RawMessage) (bool, json.RawMessage, time.Time, error) {
@@ -320,6 +415,10 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 			}
 		}
 	}
+	if at.IsZero() {
+		return UsageReading{}, errors.New("codex token_count event is missing timestamp")
+	}
+	at = at.UTC()
 
 	var rl struct {
 		Primary              json.RawMessage `json:"primary"`
@@ -363,7 +462,7 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 	}
 
 	out := UsageReading{
-		At:       at.UTC(),
+		At:       at,
 		PlanType: strings.TrimSpace(rl.PlanType),
 	}
 	if rl.Credits != nil {
@@ -405,8 +504,8 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 		}
 	}
 
-	if out.FiveHour == nil && out.SevenDay == nil {
-		return UsageReading{}, errors.New("codex rate_limits has neither 5-hour nor 7-day window")
+	if out.SevenDay == nil {
+		return UsageReading{}, errors.New("codex rate_limits omits 7-day window")
 	}
 	return out, nil
 }
@@ -440,17 +539,16 @@ func parseRateLimitWindow(slot string, raw json.RawMessage, ref time.Time) (*Usa
 		return nil, fmt.Errorf("codex %s.used_percent %g is invalid", slot, used)
 	}
 
-	winMin := 0
-	if w.WindowMinutes != nil {
-		winMin = *w.WindowMinutes
-		if winMin <= 0 {
-			return nil, fmt.Errorf("codex %s.window_minutes %d is invalid", slot, winMin)
-		}
-	} else if w.WindowMinutesAlt != nil {
-		winMin = *w.WindowMinutesAlt
-		if winMin <= 0 {
-			return nil, fmt.Errorf("codex %s.window_minutes %d is invalid", slot, winMin)
-		}
+	winPtr := w.WindowMinutes
+	if winPtr == nil {
+		winPtr = w.WindowMinutesAlt
+	}
+	if winPtr == nil {
+		return nil, fmt.Errorf("codex %s.window_minutes is missing", slot)
+	}
+	winMin := *winPtr
+	if winMin != fiveHourWindowMin && winMin != sevenDayWindowMin {
+		return nil, fmt.Errorf("codex %s.window_minutes %d is unsupported (want %d or %d)", slot, winMin, fiveHourWindowMin, sevenDayWindowMin)
 	}
 
 	rawReset := w.ResetsAt
@@ -461,6 +559,19 @@ func parseRateLimitWindow(slot string, raw json.RawMessage, ref time.Time) (*Usa
 	if err != nil {
 		return nil, err
 	}
+	if resetAt.IsZero() {
+		return nil, fmt.Errorf("codex %s.resets_at is missing", slot)
+	}
+	if !ref.IsZero() {
+		refUTC := ref.UTC()
+		if !resetAt.After(refUTC) {
+			return nil, fmt.Errorf("codex %s.resets_at %s is not after event timestamp %s", slot, resetAt.Format(time.RFC3339), refUTC.Format(time.RFC3339))
+		}
+		maxWindow := time.Duration(winMin) * time.Minute
+		if resetAt.Sub(refUTC) > maxWindow {
+			return nil, fmt.Errorf("codex %s.resets_at %s exceeds %dm window from %s", slot, resetAt.Format(time.RFC3339), winMin, refUTC.Format(time.RFC3339))
+		}
+	}
 
 	return &UsageWindow{
 		UsedPercent:   math.Round(used*10) / 10,
@@ -470,18 +581,13 @@ func parseRateLimitWindow(slot string, raw json.RawMessage, ref time.Time) (*Usa
 }
 
 func classifyRateLimitWindow(slot string, w *UsageWindow) (fiveHour, sevenDay bool, err error) {
-	switch {
-	case w.WindowMinutes == 0:
-		if slot == slotPrimary {
-			return true, false, nil
-		}
-		return false, true, nil
-	case w.WindowMinutes > 0 && w.WindowMinutes <= maxFiveHourMin:
+	switch w.WindowMinutes {
+	case fiveHourWindowMin:
 		return true, false, nil
-	case w.WindowMinutes >= minSevenDayMin:
+	case sevenDayWindowMin:
 		return false, true, nil
 	default:
-		return false, false, fmt.Errorf("codex %s.window_minutes %d is unsupported", slot, w.WindowMinutes)
+		return false, false, fmt.Errorf("codex %s.window_minutes %d is unsupported (want %d or %d)", slot, w.WindowMinutes, fiveHourWindowMin, sevenDayWindowMin)
 	}
 }
 
@@ -512,7 +618,7 @@ func parseResetTime(slot string, raw json.RawMessage, resetsInSeconds *int64, re
 		return unixEpochToTime(slot, num)
 	}
 	if resetsInSeconds != nil {
-		if *resetsInSeconds < 0 {
+		if *resetsInSeconds <= 0 {
 			return time.Time{}, fmt.Errorf("codex %s.resets_in_seconds %d is invalid", slot, *resetsInSeconds)
 		}
 		if !ref.IsZero() {

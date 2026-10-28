@@ -2389,4 +2389,19 @@ capacity:
 	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (usage reading is stale") {
 		t.Fatalf("expected stale codex reading to fail closed, got:\n%s", capOut.String())
 	}
+
+	// 6. Future SourceAt timestamp (> now + 1m) is rejected by validateReadingAt and fails closed.
+	tFuture := t0.Add(10 * time.Minute)
+	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-e-future.jsonl", tFuture,
+		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
+			tFuture.Format(time.RFC3339), reset7d.Unix()),
+	)
+	capOut.Reset()
+	aFuture := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &capOut, as: usageCaller}
+	if err := aFuture.capacityCmd().Execute(); err != nil {
+		t.Fatalf("capacity on future codex reading: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
+		t.Fatalf("expected future codex reading to fail closed, got:\n%s", capOut.String())
+	}
 }

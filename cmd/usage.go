@@ -335,11 +335,21 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(age), dur(maxAge))
 		}
 	}
-	if !r.SourceAt.IsZero() && !now.IsZero() && now.Sub(r.SourceAt) > maxAge {
-		return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.SourceAt)), dur(maxAge))
+	if !r.SourceAt.IsZero() && !now.IsZero() {
+		if r.SourceAt.After(now.Add(time.Minute)) {
+			return fmt.Errorf("usage reading timestamp %s is in the future", r.SourceAt.Format(time.RFC3339))
+		}
+		if now.Sub(r.SourceAt) > maxAge {
+			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.SourceAt)), dur(maxAge))
+		}
 	}
-	if !r.At.IsZero() && !now.IsZero() && now.Sub(r.At) > maxAge {
-		return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
+	if !r.At.IsZero() && !now.IsZero() {
+		if r.At.After(now.Add(time.Minute)) {
+			return fmt.Errorf("usage reading timestamp %s is in the future", r.At.Format(time.RFC3339))
+		}
+		if now.Sub(r.At) > maxAge {
+			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
+		}
 	}
 	if len(r.Buckets) > 0 {
 		for _, bName := range bucketNames(r) {

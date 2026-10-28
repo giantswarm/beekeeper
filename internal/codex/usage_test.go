@@ -206,3 +206,155 @@ func TestReadUsageFailsClosedWhenNoTokenCountExists(t *testing.T) {
 		t.Fatal("expected error when rollout files contain no token_count event")
 	}
 }
+
+func TestReadUsageReviewR1Regressions(t *testing.T) {
+	t.Run("truncated or corrupt rollout line beats older valid session even when session_meta is older", func(t *testing.T) {
+		tMetaOld := time.Date(2026, 10, 28, 14, 0, 0, 0, time.UTC)
+		tValid := time.Date(2026, 10, 28, 14, 30, 0, 0, time.UTC)
+		tCorrupt := time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC)
+
+		cases := []struct {
+			name string
+			line string
+		}{
+			{
+				name: "truncated before token_count with timestamp prefix",
+				line: `{"timestamp":"2026-10-28T15:00:00Z","type":"event_m`,
+			},
+			{
+				name: "truncated inside token_count with timestamp prefix",
+				line: `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{BROKEN`,
+			},
+			{
+				name: "truncated inside timestamp falls back to max(lastLineAt, mod)",
+				line: `{"timestamp":"2026-10-28T15:0`,
+			},
+			{
+				name: "scanner ErrTooLong on oversized line",
+				line: `{"timestamp":"2026-10-28T15:00:00Z","type":"response_item","payload":"` + strings.Repeat("x", maxLine+1024),
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				stateDir := t.TempDir()
+				sessDir := filepath.Join(t.TempDir(), "sessions")
+
+				// Session 1 has a valid token_count at 14:30.
+				writeRollout(t, sessDir, "2026/10/28/rollout-valid.jsonl", tValid,
+					`{"timestamp":"2026-10-28T14:30:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":20,"window_minutes":300,"resets_at":1793215200},"secondary":{"used_percent":30,"window_minutes":10080,"resets_at":1793726400}}}}`,
+				)
+
+				// Session 2 started earlier (session_meta at 14:00 < 14:30), then wrote a truncated/corrupt tail at 15:00.
+				_ = tMetaOld
+				writeRollout(t, HomeSessionsDir(stateDir), "2026/10/28/rollout-corrupt.jsonl", tCorrupt,
+					`{"timestamp":"2026-10-28T14:00:00Z","type":"session_meta","payload":{"id":"t-corrupt","cwd":"/work"}}`,
+					tc.line,
+				)
+
+				if _, err := ReadUsage(stateDir, sessDir); err == nil {
+					t.Fatalf("expected ReadUsage to fail closed on %s, got nil", tc.name)
+				}
+			})
+		}
+	})
+
+	t.Run("window_minutes, resets_at, and 7-day window validation", func(t *testing.T) {
+		tEvent := time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC)
+		cases := []struct {
+			name    string
+			line    string
+			wantSub string
+		}{
+			{
+				name:    "missing window_minutes",
+				line:    `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"resets_at":1793215200},"secondary":{"used_percent":20,"window_minutes":10080,"resets_at":1793726400}}}}`,
+				wantSub: "primary.window_minutes is missing",
+			},
+			{
+				name:    "non-weekly window_minutes 43200 (free plan monthly)",
+				line:    `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":43200,"resets_at":1793726400},"secondary":null}}}`,
+				wantSub: "window_minutes 43200 is unsupported",
+			},
+			{
+				name:    "missing resets_at on 7-day window",
+				line:    `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":10080},"secondary":null}}}`,
+				wantSub: "primary.resets_at is missing",
+			},
+			{
+				name:    "expired resets_at at or before event timestamp",
+				line:    `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":99,"window_minutes":10080,"resets_at":"2026-10-28T14:59:00Z"},"secondary":null}}}`,
+				wantSub: "is not after event timestamp",
+			},
+			{
+				name:    "resets_at exceeds window_minutes from event timestamp",
+				line:    `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":300,"resets_at":"2026-10-29T00:00:00Z"},"secondary":{"used_percent":20,"window_minutes":10080,"resets_at":1793726400}}}}`,
+				wantSub: "exceeds 300m window",
+			},
+			{
+				name:    "5h window only without 7d window",
+				line:    `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":300,"resets_at":1793215200},"secondary":null}}}`,
+				wantSub: "omits 7-day window",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				stateDir := t.TempDir()
+				sessDir := filepath.Join(t.TempDir(), "sessions")
+				writeRollout(t, sessDir, "2026/10/28/rollout.jsonl", tEvent, tc.line)
+				_, err := ReadUsage(stateDir, sessDir)
+				if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+					t.Fatalf("err = %v, want substring %q", err, tc.wantSub)
+				}
+			})
+		}
+	})
+
+	t.Run("bounded rollout scanning: stops before historical files and seeks last 4 MiB tail", func(t *testing.T) {
+		stateDir := t.TempDir()
+		sessDir := filepath.Join(t.TempDir(), "sessions")
+		tOld := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+		tFresh := time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC)
+
+		// Old historical rollout file (mod = Oct 20) contains corrupt JSON that would fail if scanned,
+		// proving ReadUsage sorts by mod descending and stops once rf.mod < best.at - rolloutModSlack.
+		writeRollout(t, sessDir, "2026/10/20/rollout-ancient.jsonl", tOld, `{CORRUPT_HISTORICAL`)
+
+		// Fresh rollout file > 4 MiB (4.5 MiB of response_item lines followed by a valid token_count event).
+		largePath := filepath.Join(HomeSessionsDir(stateDir), "2026/10/28/rollout-large.jsonl")
+		if err := os.MkdirAll(filepath.Dir(largePath), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.OpenFile(largePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // test rollout file
+		if err != nil {
+			t.Fatal(err)
+		}
+		padLine := `{"timestamp":"2026-10-28T14:50:00Z","type":"response_item","payload":{"type":"message","text":"` + strings.Repeat("a", 4000) + `"}}` + "\n"
+		for written := 0; written < maxRolloutTailBytes+512*1024; written += len(padLine) {
+			if _, werr := f.WriteString(padLine); werr != nil {
+				_ = f.Close()
+				t.Fatal(werr)
+			}
+		}
+		tailEvent := `{"timestamp":"2026-10-28T15:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":22.5,"window_minutes":300,"resets_at":1793215200},"secondary":{"used_percent":48.0,"window_minutes":10080,"resets_at":1793726400},"plan_type":"plus"}}}` + "\n"
+		if _, werr := f.WriteString(tailEvent); werr != nil {
+			_ = f.Close()
+			t.Fatal(werr)
+		}
+		if cerr := f.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		if err := os.Chtimes(largePath, tFresh, tFresh); err != nil {
+			t.Fatal(err)
+		}
+
+		r, err := ReadUsage(stateDir, sessDir)
+		if err != nil {
+			t.Fatalf("ReadUsage on >4 MiB rollout with historical files: %v", err)
+		}
+		if r.FiveHour == nil || r.FiveHour.UsedPercent != 22.5 || r.SevenDay == nil || r.SevenDay.UsedPercent != 48.0 {
+			t.Fatalf("unexpected reading from >4 MiB tail: %+v / %+v", r.FiveHour, r.SevenDay)
+		}
+	})
+}
