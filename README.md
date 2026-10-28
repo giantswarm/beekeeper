@@ -2833,12 +2833,12 @@ through omp's relay service.
 shows in `sessions`, `snapshot`, `board`, `ui` and `free` with harness `agy`, its state (`busy`
 while a turn runs, `idle` while it waits between turns), its title, model, checkout and memory, the
 tool commands its shells run, and its last hour from its transcript (`<agy.brainDir>/<conversation-id>/.system_generated/logs/transcript.jsonl`,
-default `~/.gemini/antigravity-cli/brain`). `tail <session>` and `sessions follow` follow it, and
+default `~/.gemini/antigravity-cli/brain`). `tail <session>` and `ui` follow it, and
 `spend` counts the token usage of every `agy` transcript under `agy.brainDir`.
 
 `agents start <name> <brief> --harness agy --model <m> [--dir <dir>]` requires `--model` (an exact
 selector `agy models` lists, such as `claude-opus-4-6-thinking` or `gemini-3-1-pro-medium`; there is
-no harness default) and starts `beekeeper agy-run --id <id> -- agy --input-format stream-json
+no harness default) and starts `beekeeper agy-run <inbox> <log> agy --input-format stream-json
 --output-format stream-json --dangerously-skip-permissions --model <m>` in a transient user unit
 `beekeeper-agy-<id[:8]>` in the working directory. The unit carries `BEEKEEPER_AGY_AGENT=<id>` and
 `BEEKEEPER_AGENT_NAME=<name>`, and the agent is registered on the roster at once as `agy_<id>`, busy
@@ -2849,8 +2849,9 @@ stream log (`<stateDir>/agy/<id>.log`) to record both the `init` frame naming it
 and the `user_input` `step_update` confirming the brief arrived in that conversation; if the unit
 ends or fails before confirming the brief, `agents start` stops the unit, marks the roster entry
 `undelivered`, and exits non-zero. When `agy.remoteControl` is true and `agy.remoteDaemon` names a
-running user unit, `agents start` restarts that unit after the `.pb` conversation file appears under
-`agy.conversationsDir` so `agy remote-control` picks up the new conversation.
+running user unit, `agents start` restarts that unit after the `<conversation-id>.db` conversation file
+appears under `agy.conversationsDir` (unless another running `agy` session is busy mid-turn) so
+`agy remote-control` picks up the new conversation.
 
 `agents wake <name> <message>` writes to the agent's inbox. While a turn is running, `beekeeper hook
 preinvocation` (configured under `PreInvocation` in `~/.gemini/config/hooks.json` by `beekeeper
@@ -2859,10 +2860,9 @@ install` and checked by `beekeeper doctor`) drains the inbox before the next mod
 than waiting for the turn to end; drained messages stay inflight until the transcript records them
 (or the next `user_input`/`result` arrives), and an interrupted hook or crashed process re-delivers
 unread messages once without duplicates. While the session is idle between turns, `beekeeper agy-run`
-delivers the message as a `stream-json` user frame on `agy`'s stdin, or restarts `agy --resume
-<conversation-id>` when the child process exited. Taking the agent off the roster (`agents remove`,
-`beekeeper doctor`) stops its `beekeeper-agy-<id[:8]>` unit and removes its inbox, queue, inflight,
-stream log and conversation link files.
+delivers the message as a `stream-json` user frame on `agy`'s stdin. Taking the agent off the roster
+(`agents remove`, `beekeeper doctor`) stops its `beekeeper-agy-<id[:8]>` unit and removes its inbox,
+queue, lock, stream log and conversation link files.
 
 ## Session metrics
 

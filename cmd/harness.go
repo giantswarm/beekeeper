@@ -42,8 +42,8 @@ type Harness interface {
 	Tail(path string, n int) ([]claude.Turn, error)
 	// Follow reads the last n turns of a transcript, including tool calls.
 	Follow(path string, n int) ([]claude.Turn, error)
-	// ReadTranscript reads the work and activity of a transcript window.
-	ReadTranscript(a *app, path string, now time.Time) (claude.Work, claude.Activity)
+	// ReadTranscript reads the work and activity of a session's transcript window.
+	ReadTranscript(a *app, s *claude.Session, now time.Time) (claude.Work, claude.Activity)
 	// SpendTranscripts reads whole-transcript API requests in [from, to) for spend.
 	SpendTranscripts(cfg *config.Config, from, to time.Time) ([]claude.SpendTranscript, error)
 }
@@ -160,8 +160,8 @@ func (claudeHarness) Follow(path string, n int) ([]claude.Turn, error) {
 	return claude.Follow(path, n)
 }
 
-func (claudeHarness) ReadTranscript(a *app, path string, _ time.Time) (claude.Work, claude.Activity) {
-	work, act := a.readTranscript(path)
+func (claudeHarness) ReadTranscript(a *app, s *claude.Session, _ time.Time) (claude.Work, claude.Activity) {
+	work, act := a.readTranscript(s.Transcript)
 	act.Price(a.cfg.Metrics)
 	return work, act
 }
@@ -212,9 +212,9 @@ func (ompHarness) Follow(path string, n int) ([]claude.Turn, error) {
 	return omp.Follow(path, n)
 }
 
-func (ompHarness) ReadTranscript(_ *app, path string, now time.Time) (claude.Work, claude.Activity) {
+func (ompHarness) ReadTranscript(_ *app, s *claude.Session, now time.Time) (claude.Work, claude.Activity) {
 	// omp prices its replies itself.
-	return omp.ReadTranscript(path, now)
+	return omp.ReadTranscript(s.Transcript, now)
 }
 
 func (ompHarness) SpendTranscripts(cfg *config.Config, from, to time.Time) ([]claude.SpendTranscript, error) {
@@ -263,8 +263,8 @@ func (agyHarness) Follow(path string, n int) ([]claude.Turn, error) {
 	return agy.Follow(path, n)
 }
 
-func (agyHarness) ReadTranscript(a *app, path string, now time.Time) (claude.Work, claude.Activity) {
-	work, act := agy.ReadTranscript(path, now)
+func (agyHarness) ReadTranscript(a *app, s *claude.Session, now time.Time) (claude.Work, claude.Activity) {
+	work, act := agy.ReadTranscript(s.Transcript, now, s.Cwd)
 	act.Price(a.cfg.Metrics)
 	return work, act
 }

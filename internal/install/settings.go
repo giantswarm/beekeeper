@@ -382,9 +382,12 @@ func CheckAgyHooks(path, exe, home string) string {
 		return ""
 	}
 	gotExe, timeout := agyHookBinary(cur)
-	preExe, preTimeout := agyPreInvocationBinary(cur)
-	if gotExe == "" || timeout <= 0 || preExe == "" || preTimeout <= 0 || preExe != gotExe {
+	if gotExe == "" || timeout <= 0 {
 		return fmt.Sprintf("agy hooks: %s: the %s PreToolUse hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
+	}
+	preExe, preTimeout := agyPreInvocationBinary(cur)
+	if preExe == "" || preTimeout <= 0 || preExe != gotExe {
+		return fmt.Sprintf("agy hooks: %s: the %s PreInvocation hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
 	}
 	if exe != "" && gotExe != exe {
 		return fmt.Sprintf("agy hooks: %s runs %s instead of %s; run `beekeeper install`", short(path), short(gotExe), short(exe))

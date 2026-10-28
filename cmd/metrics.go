@@ -104,7 +104,7 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 		wg.Go(func() {
 			defer func() { <-sem }()
 			m := &metrics{}
-			work[i], m.Activity = harnessForSession(s).ReadTranscript(a, s.Transcript, a.now)
+			work[i], m.Activity = harnessForSession(s).ReadTranscript(a, s, a.now)
 			if !s.LastActive.IsZero() {
 				m.Idle = a.now.Sub(s.LastActive).Round(time.Second)
 			}

@@ -18,7 +18,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -327,11 +329,14 @@ func TestStartAgyAgentMarksUndeliveredWhenUnitEndsBeforeBrief(t *testing.T) {
 		dir:   dir,
 	}
 	err = a.startAgyAgent(context.Background(), sp)
-	if err == nil || !strings.Contains(err.Error(), "auth expired") {
-		t.Fatalf("startAgyAgent err = %v, want auth expired", err)
+	if err == nil || !strings.Contains(err.Error(), "auth expired") || !strings.Contains(err.Error(), "start it again with agents start --harness agy") {
+		t.Fatalf("startAgyAgent err = %v, want auth expired and restart hint", err)
 	}
 	if len(l.stopped) != 1 {
 		t.Errorf("stopped = %v, want unit stopped", l.stopped)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "agy", "*")); len(matches) != 0 {
+		t.Errorf("leftover agy files after failed start: %v", matches)
 	}
 	st, err := store.Read()
 	if err != nil {
@@ -421,5 +426,210 @@ func TestAgyHarnessDispatchInViewsAndHandover(t *testing.T) {
 	}
 	if _, err := a.readHandover(testAgyWorker); err == nil || !strings.Contains(err.Error(), "is an agy agent") {
 		t.Errorf("readHandover = %v, want refusal for agy agents", err)
+	}
+}
+
+type agyProcMachine struct {
+	platform.Machine
+	procs map[int]*proc.Process
+}
+
+func (m agyProcMachine) Processes() (*proc.Table, error) {
+	return &proc.Table{ByPID: m.procs}, nil
+}
+
+func TestNotifyAgyRemoteDaemonAndStopUnits(t *testing.T) {
+	const (
+		convID    = "conv-remote-1122"
+		otherConv = "88888888-9999-4aaa-bbbb-cccccccccccc"
+		daemon    = "antigravity-cli-daemon"
+		model     = "claude-opus-4-6-thinking"
+	)
+	writeFakeAgy(t, "Available models:\n  "+model+"\n")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sup-1")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", "supervisor")
+
+	dir := t.TempDir()
+	brainDir := filepath.Join(dir, "brain")
+	convDir := filepath.Join(dir, "conversations")
+	if err := os.MkdirAll(convDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(convDir, convID+".db"), []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var restarted []string
+	origRestart := restartAgyRemoteDaemon
+	t.Cleanup(func() { restartAgyRemoteDaemon = origRestart })
+	restartAgyRemoteDaemon = func(_ context.Context, u string) error {
+		restarted = append(restarted, u)
+		return nil
+	}
+
+	origLauncher, origMachine := plat.Launcher, plat.Machine
+	t.Cleanup(func() { plat.Launcher, plat.Machine = origLauncher, origMachine })
+	plat.Machine = tableMachine{plat.Machine}
+	l := &agyTestLauncher{
+		onStart: func(u platform.Unit) {
+			go func() {
+				var startID string
+				for _, e := range u.Env {
+					if v, ok := strings.CutPrefix(e, agy.EnvAgent+"="); ok {
+						startID = v
+					}
+				}
+				inbox := agy.InboxPath(dir, startID)
+				logPath := agy.StreamPath(dir, startID)
+				f, oerr := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test FIFO
+				if oerr != nil {
+					return
+				}
+				defer func() { _ = f.Close() }()
+				_, _ = bufio.NewReader(f).ReadString('\n')
+				_, _ = agy.Drain(inbox)
+				stream := `{"event":"init","conversation_id":"` + convID + `"}` + "\n" +
+					`{"event":"step_update","step_update":{"conversation_id":"` + convID + `","step_type":"user_input"}}` + "\n"
+				_ = os.WriteFile(logPath, []byte(stream), 0o600)
+			}()
+		},
+	}
+	plat.Launcher = l
+
+	// 1. RemoteControl == false does not restart RemoteDaemon even when RemoteDaemon != "".
+	var out bytes.Buffer
+	a := &app{
+		cfg: &config.Config{
+			StateDir: dir,
+			Agy: config.Agy{
+				BrainDir:         brainDir,
+				ConversationsDir: convDir,
+				RemoteControl:    false,
+				RemoteDaemon:     daemon,
+			},
+		},
+		store: store,
+		now:   time.Now(),
+		out:   &out,
+	}
+	if err := a.startAgyAgent(context.Background(), agentStart{
+		name:  "worker-no-rc",
+		brief: "brief 1",
+		task:  testAgyTask,
+		model: model,
+		dir:   dir,
+	}); err != nil {
+		t.Fatalf("startAgyAgent (RemoteControl=false): %v", err)
+	}
+	if len(restarted) != 0 {
+		t.Fatalf("restarted = %v, want empty when RemoteControl is false", restarted)
+	}
+
+	// 2. RemoteControl == true restarts RemoteDaemon when no other agy session is busy and reports it.
+	a.cfg.Agy.RemoteControl = true
+	out.Reset()
+	if err := a.startAgyAgent(context.Background(), agentStart{
+		name:  "worker-rc",
+		brief: "brief 2",
+		task:  testAgyTask,
+		model: model,
+		dir:   dir,
+	}); err != nil {
+		t.Fatalf("startAgyAgent (RemoteControl=true): %v", err)
+	}
+	if !slices.Equal(restarted, []string{daemon}) {
+		t.Fatalf("restarted = %v, want [%s]", restarted, daemon)
+	}
+	if !strings.Contains(out.String(), "restarted remote daemon "+daemon+" for conversation "+convID) {
+		t.Fatalf("output missing restart report:\n%s", out.String())
+	}
+
+	// 3. Another running agy session in StateBusy prevents restarting RemoteDaemon and reports why.
+	restarted = nil
+	now := time.Now().UTC()
+	otherTranscript := agy.TranscriptPath(brainDir, otherConv)
+	if err := os.MkdirAll(filepath.Dir(otherTranscript), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	busyStep := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"` + now.Format(time.RFC3339) + `","content":"busy turn"}` + "\n"
+	if err := os.WriteFile(otherTranscript, []byte(busyStep), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plat.Machine = agyProcMachine{
+		Machine: origMachine,
+		procs: map[int]*proc.Process{
+			4242: {PID: 4242, Comm: agy.Comm, Args: []string{agy.Comm, "--conversation", otherConv}, Start: now.Add(-time.Minute)},
+		},
+	}
+	a.now = now
+	gotLine := a.notifyAgyRemoteDaemon(context.Background(), "new-start-id", convID)
+	if len(restarted) != 0 {
+		t.Fatalf("restarted = %v, want skip while another agy session is busy", restarted)
+	}
+	if !strings.Contains(gotLine, "not restarted: agy session") || !strings.Contains(gotLine, "is busy mid-turn") {
+		t.Fatalf("notifyAgyRemoteDaemon = %q, want busy skip message", gotLine)
+	}
+
+	// 4. turnPatterns includes beekeeper-agy-* and beekeeper-omp-*, and sparedUnit matches spared agy/omp sessions.
+	if !slices.Contains(turnPatterns, "beekeeper-agy-*") || !slices.Contains(turnPatterns, "beekeeper-omp-*") {
+		t.Errorf("turnPatterns = %v, want beekeeper-agy-* and beekeeper-omp-*", turnPatterns)
+	}
+	spare := []state.Party{
+		{HostSession: agy.HostPrefix + "11223344-5566-7788-99aa-bbccddeeff00", Name: "spared-agy"},
+		{HostSession: omp.HostPrefix + "99887766-5544-3322-1100-ffeeddccbbaa", Name: "spared-omp"},
+	}
+	if !sparedUnit("beekeeper-agy-11223344.service", "", spare) {
+		t.Error("sparedUnit did not spare spared agy unit")
+	}
+	if !sparedUnit("beekeeper-omp-99887766.service", "", spare) {
+		t.Error("sparedUnit did not spare spared omp unit")
+	}
+	if sparedUnit("beekeeper-agy-deadbeef.service", "", spare) {
+		t.Error("sparedUnit spared non-spared agy unit")
+	}
+
+	// 5. A start refused by recordStart (live session already registered under the name) creates no orphan FIFO in <stateDir>/agy.
+	refusedDir := t.TempDir()
+	refusedStore, err := state.Open(refusedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refusedStore.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Session: otherConv, Name: "w"}, Task: testAgyTask}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	aRefused := &app{
+		cfg: &config.Config{
+			StateDir: refusedDir,
+			Agy:      config.Agy{BrainDir: brainDir},
+		},
+		store: refusedStore,
+		now:   now,
+		out:   &bytes.Buffer{},
+	}
+	if err := aRefused.startAgyAgent(context.Background(), agentStart{name: "w", brief: "b", model: model, dir: refusedDir}); err == nil {
+		t.Fatal("expected startAgyAgent on live duplicate agent name to fail")
+	}
+	if matches, _ := filepath.Glob(filepath.Join(refusedDir, "agy", "*")); len(matches) != 0 {
+		t.Errorf("orphan agy files after refused recordStart: %v", matches)
+	}
+
+	// 6. board next --claim allows an agy caller (HostSession set, Session empty) past the --as check.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", "")
+	t.Setenv(agy.EnvAgent, "11223344-5566-7788-99aa-bbccddeeff00")
+	t.Setenv(agy.EnvName, testAgyWorker)
+	bnCmd := a.boardNextCmd()
+	bnCmd.SilenceErrors = true
+	bnCmd.SilenceUsage = true
+	bnCmd.SetArgs([]string{"--claim"})
+	if berr := bnCmd.Execute(); berr != nil && strings.Contains(berr.Error(), "run it inside a Claude Code session") {
+		t.Errorf("board next --claim rejected agy session caller: %v", berr)
 	}
 }

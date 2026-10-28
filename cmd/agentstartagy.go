@@ -69,12 +69,9 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 		return err
 	}
 	id := uuid.NewString()
-	sp.brief = fillScratchpad(sp.brief, dir, id)
+	sp.brief = "Working directory: " + dir + "\n\n" + fillScratchpad(sp.brief, dir, id)
 	inbox := agy.InboxPath(a.cfg.StateDir, id)
 	stream := agy.StreamPath(a.cfg.StateDir, id)
-	if err := agy.MakeInbox(inbox); err != nil {
-		return err
-	}
 	s := state.Start{Party: state.Party{HostSession: agy.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: agy.Harness, Model: model}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -88,28 +85,40 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	if err != nil {
 		return err
 	}
+	if err := agy.MakeInbox(inbox); err != nil {
+		return err
+	}
 	unit := agyUnit(id)
 	projID := agy.ProjectForDir(a.cfg.Agy.ProjectsDir, dir)
 	argv := agyRunArgv(self, inbox, stream, agyArgv(bin, model, a.cfg.Agy.RemoteControl, projID))
 	if err := launch(unit, dir, a.explicitConfig(), nil, argv,
 		agy.EnvAgent+"="+id, agy.EnvName+"="+sp.name); err != nil {
+		_, _ = agy.RemoveInbox(inbox)
 		return fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := sendAgyWhenOpen(ctx, inbox, sp.brief, inboxWait); err != nil {
 		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = agy.RemoveInbox(inbox)
 		return a.undelivered(by, s.Party, fmt.Errorf("the brief did not reach its inbox: %w (journalctl --user -u %s)", err, unit))
 	}
 	convID, err := awaitAgyBrief(ctx, stream, func() bool { return unitEnded(ctx, unit) }, agyBriefWait)
 	if err != nil {
 		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = agy.RemoveInbox(inbox)
 		return a.undelivered(by, s.Party, fmt.Errorf("%w (journalctl --user -u %s)", err, unit))
 	}
-	if a.cfg.Agy.RemoteDaemon != "" {
-		a.notifyAgyRemoteDaemon(ctx, convID)
+	var remoteLine string
+	if a.cfg.Agy.RemoteControl && a.cfg.Agy.RemoteDaemon != "" {
+		remoteLine = a.notifyAgyRemoteDaemon(ctx, id, convID)
 	}
-	_, err = fmt.Fprintf(a.out, "started %s: agy agent agy_%s (conversation %s), dangerously-skip-permissions, on %s, in %s, busy with %q\n"+
+	if _, err = fmt.Fprintf(a.out, "started %s: agy agent agy_%s (conversation %s), dangerously-skip-permissions, on %s, in %s, busy with %q\n"+
 		"its brief is in its conversation; agents wake %q <message> reaches it before its next model call or as its next turn (journalctl --user -u %s)\n",
-		sp.name, id, convID, model, dir, reg.task, sp.name, unit)
+		sp.name, id, convID, model, dir, reg.task, sp.name, unit); err != nil {
+		return err
+	}
+	if remoteLine != "" {
+		_, err = fmt.Fprintln(a.out, remoteLine)
+	}
 	return err
 }
 
@@ -306,23 +315,58 @@ func readAgyBriefStream(streamPath string) (convID string, accepted bool, err er
 	return convID, accepted, nil
 }
 
-// notifyAgyRemoteDaemon waits briefly for <ConversationsDir>/<convID>.db and
-// restarts the configured remote daemon unit so Antigravity's remote view
-// picks up the new conversation.
-func (a *app) notifyAgyRemoteDaemon(ctx context.Context, convID string) {
+// restartAgyRemoteDaemon runs `systemctl --user try-restart <unit>`; a seam
+// for tests.
+var restartAgyRemoteDaemon = func(ctx context.Context, unit string) error {
+	return exec.CommandContext(ctx, "systemctl", "--user", "try-restart", unit).Run() //nolint:gosec // configured unit name
+}
+
+// notifyAgyRemoteDaemon waits briefly for <ConversationsDir>/<convID>.db,
+// checks that no other running agy session is in a busy turn, and restarts
+// the configured remote daemon unit so Antigravity's remote view picks up the
+// new conversation, returning a status line describing what it did.
+func (a *app) notifyAgyRemoteDaemon(ctx context.Context, startID, convID string) string {
+	daemon := a.cfg.Agy.RemoteDaemon
 	if convID != "" && a.cfg.Agy.ConversationsDir != "" {
 		db := filepath.Join(a.cfg.Agy.ConversationsDir, convID+".db")
 		deadline := time.Now().Add(agyRemoteDBWait)
-		for time.Now().Before(deadline) {
+		found := false
+		for {
 			if _, err := os.Stat(db); err == nil {
+				found = true
+				break
+			}
+			if !time.Now().Before(deadline) {
 				break
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
+		if !found {
+			return fmt.Sprintf("remote daemon %s not restarted: %s.db did not appear in %s", daemon, convID, a.cfg.Agy.ConversationsDir)
+		}
+	}
+	if sessions, _, err := a.sessions(); err == nil {
+		var busy []string
+		for _, s := range sessions {
+			if s.Harness != agy.Harness || s.State != agy.StateBusy {
+				continue
+			}
+			if (convID != "" && s.ID == convID) || (startID != "" && s.HostID == agy.HostPrefix+startID) {
+				continue
+			}
+			label := cmp.Or(s.Name, s.ID, s.HostID)
+			busy = append(busy, label)
+		}
+		if len(busy) > 0 {
+			return fmt.Sprintf("remote daemon %s not restarted: agy session %s is busy mid-turn", daemon, strings.Join(busy, ", "))
+		}
 	}
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(cctx, "systemctl", "--user", "try-restart", a.cfg.Agy.RemoteDaemon).Run() //nolint:gosec // configured unit name
+	if err := restartAgyRemoteDaemon(cctx, daemon); err != nil {
+		return fmt.Sprintf("remote daemon %s restart failed: %v", daemon, err)
+	}
+	return fmt.Sprintf("restarted remote daemon %s for conversation %s", daemon, convID)
 }
 
 // endAgy stops the unit of the agy agent started under id, which left the

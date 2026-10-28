@@ -697,6 +697,14 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 		t.Errorf("wrong binary: CheckAgyHooks = %q", got)
 	}
 
+	// Missing PreInvocation in beekeeper's hooks.json entry is named by CheckAgyHooks.
+	missingPre := filepath.Join(home, "missing-pre.json")
+	write(t, missingPre, `{"beekeeper":{"PreToolUse":[{"hooks":[{"type":"command","command":"/opt/bin/beekeeper hook pretooluse --format agy","timeout":30}]}]}}`)
+	if got := CheckAgyHooks(missingPre, e.Exe, home); !strings.Contains(got, "PreInvocation hook differs") {
+		t.Errorf("missing PreInvocation: CheckAgyHooks = %q", got)
+	}
+	_ = os.Remove(missingPre)
+
 	// Updating to a new binary updates beekeeper's entry in place and keeps other-guard.
 	e.Exe, e.Spec.Exe = updatedExe, updatedExe
 	out.Reset()

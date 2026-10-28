@@ -180,7 +180,7 @@ the whole walk.`,
 				if me, err = a.caller(); err != nil {
 					return err
 				}
-				if me.Session == "" {
+				if me.Session == "" && me.HostSession == "" {
 					return usageErr("--claim records a session's serve: run it inside a Claude Code session, not --as")
 				}
 			} else if replace {
@@ -465,7 +465,7 @@ func (a *app) sessionWorks(sessions []*claude.Session) []claude.Work {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			out[i], _ = harnessForSession(s).ReadTranscript(a, s.Transcript, a.now)
+			out[i], _ = harnessForSession(s).ReadTranscript(a, s, a.now)
 		})
 	}
 	wg.Wait()

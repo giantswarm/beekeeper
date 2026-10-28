@@ -425,8 +425,12 @@ func readHead(path, convID string) (head, error) {
 		if h.created.IsZero() && !e.CreatedAt.IsZero() {
 			h.created = e.CreatedAt
 		}
-		if h.cwd == "" && e.Cwd != "" {
-			h.cwd = e.Cwd
+		if h.cwd == "" {
+			if e.Cwd != "" {
+				h.cwd = e.Cwd
+			} else if c := extractPromptCwd(e.Content); c != "" {
+				h.cwd = c
+			}
 		}
 		if h.model == "" {
 			if e.Model != "" {
@@ -436,12 +440,8 @@ func readHead(path, convID string) (head, error) {
 			}
 		}
 		if h.title == "" && e.Type == stepUserInput {
-			if txt := extractUserText(e.Content); txt != "" {
-				first, _, _ := strings.Cut(txt, "\n")
-				h.title = strings.TrimSpace(first)
-				if len(h.title) > 80 {
-					h.title = h.title[:80]
-				}
+			if title := extractBriefTitle(extractUserText(e.Content)); title != "" {
+				h.title = title
 			}
 		}
 	}
@@ -496,7 +496,7 @@ func fillFromFile(s *claude.Session, path string, running bool) {
 
 func stepBusy(e *step) bool {
 	switch e.Type {
-	case stepUserInput, "GENERIC", "TOOL_RESPONSE":
+	case stepUserInput, "GENERIC", "TOOL_RESPONSE", "CHECKPOINT", "SYSTEM_MESSAGE":
 		return true
 	case stepPlannerResponse:
 		if e.Status != "" && e.Status != "DONE" {
@@ -528,15 +528,77 @@ func eachStep(buf []byte, fn func(*step)) {
 func extractUserText(content string) string {
 	if _, rest, ok := strings.Cut(content, "<USER_REQUEST>"); ok {
 		if body, _, ok := strings.Cut(rest, "</USER_REQUEST>"); ok {
-			return strings.TrimSpace(body)
+			content = body
+		}
+	} else {
+		for _, tag := range []string{"<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>"} {
+			if before, _, ok := strings.Cut(content, tag); ok {
+				content = before
+			}
 		}
 	}
-	for _, tag := range []string{"<ADDITIONAL_METADATA>", "<USER_SETTINGS_CHANGE>"} {
-		if before, _, ok := strings.Cut(content, tag); ok {
-			content = before
+	content = strings.TrimSpace(content)
+	if first, rest, ok := strings.Cut(content, "\n"); ok && hasPromptCwdPrefix(strings.TrimSpace(first)) {
+		content = strings.TrimSpace(rest)
+	}
+	return content
+}
+
+func hasPromptCwdPrefix(line string) bool {
+	for _, pfx := range []string{"Command Working Directory:", "Working directory:", "Workspace:"} {
+		if strings.HasPrefix(line, pfx) {
+			return true
 		}
 	}
-	return strings.TrimSpace(content)
+	return false
+}
+
+// extractPromptCwd extracts the session's working directory from an agy prompt
+// header (`Command Working Directory:`, `Working directory:`, `Workspace:`, or
+// `Active Workspaces:`) when the transcript step has no `cwd` JSON field.
+func extractPromptCwd(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		for _, pfx := range []string{"Command Working Directory:", "Working directory:", "Workspace:"} {
+			if rest, ok := strings.CutPrefix(line, pfx); ok {
+				if dir := strings.TrimSpace(rest); dir != "" {
+					return dir
+				}
+			}
+		}
+		if line == "Active Workspaces:" && i+1 < len(lines) {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(lines[i+1]), "- "); ok {
+				if dir := strings.TrimSpace(rest); dir != "" {
+					return dir
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// extractBriefTitle returns the first non-empty line of the task brief after
+// `--- beekeeper brief ---` when present, or the first non-header line of txt.
+func extractBriefTitle(txt string) string {
+	if _, after, ok := strings.Cut(txt, "--- beekeeper brief ---"); ok {
+		if before, _, ok := strings.Cut(after, "--- end beekeeper brief ---"); ok {
+			txt = before
+		} else {
+			txt = after
+		}
+	}
+	for _, line := range strings.Split(txt, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || hasPromptCwdPrefix(line) {
+			continue
+		}
+		if len(line) > 80 {
+			line = line[:80]
+		}
+		return line
+	}
+	return ""
 }
 
 var modelSettingRe = regexp.MustCompile("Model Selection` from [^\n]+ to ([^\n]+?)\\.(?:\n|$)")
@@ -667,18 +729,36 @@ func hasToolError(e *step) bool {
 // ReadTranscript reads an agy transcript's window for the issues and
 // repositories it acts on and its activity: turns, tool calls and errors,
 // GitHub CLI calls, token counts, context and model requests for pricing.
-func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
+func ReadTranscript(path string, now time.Time, sessionCwd ...string) (claude.Work, claude.Activity) {
 	buf, whole := claude.ReadWindow(path)
 	a := claude.Activity{Whole: whole}
 	hourStart := now.Add(-time.Hour)
 	acts := claude.NewActs()
 	var cwd, model string
+	for _, c := range sessionCwd {
+		if c != "" {
+			cwd = c
+			break
+		}
+	}
+	if h, err := readHead(path, ""); err == nil {
+		if cwd == "" && h.cwd != "" {
+			cwd = h.cwd
+		}
+		if h.model != "" {
+			model = h.model
+		}
+	}
 	var prevAt time.Time
 	var pendingIDs []string
 
 	eachStep(buf, func(e *step) {
 		if e.Cwd != "" {
 			cwd = e.Cwd
+		} else if cwd == "" {
+			if c := extractPromptCwd(e.Content); c != "" {
+				cwd = c
+			}
 		}
 		if e.Model != "" {
 			model = e.Model
@@ -750,7 +830,9 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 				a.Model = model
 			}
 		case "GENERIC", "TOOL_RESPONSE":
-			for _, id := range pendingIDs {
+			if len(pendingIDs) > 0 {
+				id := pendingIDs[0]
+				pendingIDs = pendingIDs[1:]
 				acts.Result(id, e.Content)
 			}
 			if hasToolError(e) {

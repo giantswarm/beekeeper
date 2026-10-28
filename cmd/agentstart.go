@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -306,9 +307,6 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					if err != nil {
 						return err
 					}
-					if ch.Harness == harnessAgy {
-						return refused("no start: harness %q is not yet supported by agents start", ch.Harness)
-					}
 					if err := validateStartHarness(ch.Harness, mode); err != nil {
 						return err
 					}
@@ -334,9 +332,6 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				ch, err := pickAutoChoice(v, force)
 				if err != nil {
 					return err
-				}
-				if ch.Harness == harnessAgy {
-					return refused("no start: harness %q is not yet supported by agents start", ch.Harness)
 				}
 				if err := validateStartHarness(ch.Harness, mode); err != nil {
 					return err
@@ -644,6 +639,10 @@ func (a *app) undelivered(by, p state.Party, why error) error {
 		}
 		return []state.Event{event(by, "agents.start", "%s: task not delivered: %v", p.Name, why)}, nil
 	})
+	if strings.HasPrefix(p.HostSession, agy.HostPrefix) {
+		return fmt.Errorf("%s: task not delivered: %w (start it again with agents start --harness agy, or beekeeper agents remove %q takes it off the roster)",
+			p.Name, why, p.Name)
+	}
 	return fmt.Errorf("%s: task not delivered: %w (beekeeper agents wake %q <message> delivers it, beekeeper agents remove %q takes it off the roster)",
 		p.Name, why, p.Name, p.Name)
 }

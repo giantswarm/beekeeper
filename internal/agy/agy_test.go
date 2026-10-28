@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -258,5 +259,49 @@ func TestProjectForDirAndParseModels(t *testing.T) {
 	models := ParseModelsOutput(raw)
 	if len(models) != 2 || models[0] != "gemini-4-argon-medium" || models[1] != "claude-opus-5-5-high" {
 		t.Errorf("ParseModelsOutput = %v", models)
+	}
+}
+
+func TestReadHeadWorkerPromptStepBusyAndMultiToolCalls(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	brainDir := t.TempDir()
+	repoDir := filepath.Join(t.TempDir(), "beekeeper")
+	writeFile(t, filepath.Join(repoDir, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/giantswarm/beekeeper.git\n")
+
+	const workerConv = "55555555-6666-7777-8888-999999999999"
+	workerTranscript := TranscriptPath(brainDir, workerConv)
+	t0 := now.Add(-5 * time.Minute).Format(time.RFC3339)
+	t1 := now.Add(-4 * time.Minute).Format(time.RFC3339)
+	t2 := now.Add(-3 * time.Minute).Format(time.RFC3339)
+	t3 := now.Add(-2 * time.Minute).Format(time.RFC3339)
+	content := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"` + t0 + `","content":"<USER_REQUEST>\nWorking directory: ` + repoDir + `\n\nBeekeeper v0.1.0 gives every worker it starts these rules; they hold for the whole task.\n\n# worker-rules\n\nYour task:\n--- beekeeper brief ---\nShip the agy harness\n\nDetails here.\n--- end beekeeper brief ---\n</USER_REQUEST>"}` + "\n" +
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"` + t1 + `","tool_calls":[{"name":"run_command","args":{"CommandLine":"\"gh issue create --title test\""}},{"name":"read_file","args":{"Path":"\"README.md\""}},{"name":"run_command","args":{"CommandLine":"\"gh issue view 123\""}}]}` + "\n" +
+		`{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"` + t2 + `","content":"https://github.com/giantswarm/beekeeper/issues/42\n"}` + "\n" +
+		`{"step_index":3,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"` + t3 + `","content":"See https://github.com/other/repo/issues/777 for background.\n"}` + "\n"
+	writeFile(t, workerTranscript, content)
+
+	ended := Ended(brainDir, nil, now.Add(-time.Hour))
+	if len(ended) != 1 {
+		t.Fatalf("Ended = %d, want 1", len(ended))
+	}
+	if ended[0].Cwd != repoDir {
+		t.Errorf("ended Cwd = %q, want %q", ended[0].Cwd, repoDir)
+	}
+	if ended[0].Name != "Ship the agy harness" {
+		t.Errorf("ended Name = %q, want %q", ended[0].Name, "Ship the agy harness")
+	}
+
+	w, _ := ReadTranscript(workerTranscript, now, repoDir)
+	if !slices.Contains(w.Refs, "giantswarm/beekeeper#42") || !slices.Contains(w.Refs, "giantswarm/beekeeper#123") {
+		t.Errorf("Refs = %v, want giantswarm/beekeeper#42 and giantswarm/beekeeper#123", w.Refs)
+	}
+	if slices.Contains(w.Refs, "other/repo#777") {
+		t.Errorf("Refs = %v, second tool output URL misattributed to gh issue create", w.Refs)
+	}
+
+	for _, stepType := range []string{"CHECKPOINT", "SYSTEM_MESSAGE"} {
+		if !stepBusy(&step{Type: stepType, Status: "DONE"}) {
+			t.Errorf("stepBusy(%q) = false, want true", stepType)
+		}
 	}
 }
