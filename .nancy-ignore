@@ -1,1 +1,2 @@
 CVE-2026-108859 until=2026-11-12 # mcp-go through v1.2.1, no fixed release; /mcp bodies bounded in serve: https://github.com/giantswarm/beekeeper/issues/999
+CVE-2026-84445 until=2026-11-28 # google.golang.org/grpc@v1.84.0 already contains the v1.83.2 authority check in internal/xds/server/routing.go; xds.NewGRPCServer is not used
