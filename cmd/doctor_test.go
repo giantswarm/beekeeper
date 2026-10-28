@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -306,5 +309,38 @@ func TestStaleBinaries(t *testing.T) {
 	if len(rest) == 2 && staleLine(rest[1]) != "stale binary: pid 5 (beekeeper agents reopen) runs a beekeeper an install replaced; "+
 		"its saves of the state are refused until it ends or is restarted" {
 		t.Errorf("a reopen: %q", staleLine(rest[1]))
+	}
+}
+
+// The doctor checks ~/.gemini/config/hooks.json when agy is installed,
+// reporting when the file or beekeeper's PreToolUse entry is missing or
+// points to another binary, and passing when the entry is in place alongside
+// other named hooks.
+func TestCheckAgyHooks(t *testing.T) {
+	home := t.TempDir()
+	exe := "/opt/bin/beekeeper"
+	if got := checkAgyHooks(home, exe, false); got != "" {
+		t.Fatalf("agy not installed: got %q, want empty", got)
+	}
+	if got := checkAgyHooks(home, exe, true); !strings.Contains(got, "~/.gemini/config/hooks.json is missing; run `beekeeper install`") {
+		t.Fatalf("missing hooks.json: got %q", got)
+	}
+	var e install.Env
+	e.Exe = exe
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.AgyHooks = agyHooksPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = home + "/.local/state/beekeeper"
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgyHooks(home, exe, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if got := checkAgyHooks(home, "/other/beekeeper", true); !strings.Contains(got, "runs /opt/bin/beekeeper instead of /other/beekeeper") {
+		t.Errorf("other binary: got %q", got)
 	}
 }

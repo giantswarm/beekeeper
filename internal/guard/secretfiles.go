@@ -171,6 +171,9 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 	recursive := name == "rg" || name == "ag" || isGrep && slices.ContainsFunc(args, grepRecursive.MatchString)
 	file := ""
 	for i, w := range words {
+		if i <= k && !strings.HasPrefix(w, "<") && !strings.Contains(w, "/") && !strings.Contains(w, "=") {
+			continue // a bare command or wrapper word, resolved on PATH
+		}
 		if i > 0 && (words[i-1] == ">" || words[i-1] == ">>" || words[i-1] == ">|") || strings.HasPrefix(w, ">") {
 			continue // a write target, no read
 		}

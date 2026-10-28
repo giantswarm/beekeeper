@@ -31,11 +31,13 @@ type Env struct {
 	// Exe is the absolute path of the binary the hooks and the standby
 	// service run.
 	Exe string
-	// Settings is Claude Code's user settings file, Config beekeeper's
-	// config file, StateDir its state directory (the manifest's).
-	Settings, Config, StateDir string
-	Setup                      platform.Setup
-	Spec                       platform.SetupSpec
+	// Settings is Claude Code's user settings file, AgyHooks agy's
+	// user hooks file (~/.gemini/config/hooks.json; empty when agy is
+	// not installed), Config beekeeper's config file, StateDir its
+	// state directory (the manifest's).
+	Settings, AgyHooks, Config, StateDir string
+	Setup                                platform.Setup
+	Spec                                 platform.SetupSpec
 	// Run runs one service manager command.
 	Run func(ctx context.Context, argv []string) error
 	Out io.Writer
@@ -54,6 +56,9 @@ func Install(ctx context.Context, e Env) error {
 	before := m.encode()
 	p := &plan{home: e.Spec.Home}
 	if err := e.planHooks(p, &m); err != nil {
+		return err
+	}
+	if err := e.planAgyHooks(p, &m); err != nil {
 		return err
 	}
 	e.planConfig(p, &m)
@@ -116,6 +121,9 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	}
 	unitsGone := len(removed) > 0
 	if err := e.planUnhooks(p, m, removed); err != nil {
+		return err
+	}
+	if err := e.planAgyUnhooks(p, m, removed); err != nil {
 		return err
 	}
 	remove := func(path, why string, rm func(string) error) {
@@ -350,6 +358,10 @@ type Manifest struct {
 	// "hooks.PreToolUse"); SettingsCreated says it created the file.
 	SettingsKeys    []string `json:"settingsKeys,omitempty"`
 	SettingsCreated bool     `json:"settingsCreated,omitempty"`
+	// AgyHook is the entry install added under project.Name in AgyHooks;
+	// AgyHooksCreated says it created the file.
+	AgyHook         json.RawMessage `json:"agyHook,omitempty"`
+	AgyHooksCreated bool            `json:"agyHooksCreated,omitempty"`
 }
 
 func readManifest(path string) (Manifest, error) {
