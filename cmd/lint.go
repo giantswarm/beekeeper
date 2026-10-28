@@ -22,7 +22,7 @@ func (a *app) lintCmd() *cobra.Command {
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "briefs <file or folder>...",
-		Short: "Refuse dated lines, waits on a release, fixed workarounds and clobbering redirects in skills and briefs",
+		Short: "Refuse dated lines, waits on a release, fixed workarounds, bare issue refs and clobbering redirects in skills and briefs",
 		Long: `briefs reads each file named, and every Markdown file below each folder
 named (hidden folders left out), and prints one line per line a rule
 refuses, path:line: rule: why, followed by the line:
@@ -37,6 +37,8 @@ refuses, path:line: rule: why, followed by the line:
                being right once the fix ships
   role-run     "Supervisor run 59": a relay makes it stale; "the supervisor"
                reaches whoever holds the role
+  full-url     a bare #n or owner/repo#n outside a code span or fenced block
+               without its full GitHub issue or pull request URL
   clobber      a bare > into a file in a shell example (an inline code span,
                a fenced block without a language or with a shell's): a
                rerun under noclobber fails before the command runs and

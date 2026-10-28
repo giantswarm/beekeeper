@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -32,16 +33,13 @@ const probeTimeout = 10 * time.Second
 // noteDraft is what `note add` was given for a person: the question and the
 // parts the person needs to answer it without asking back.
 type noteDraft struct {
-	Question, StatusQuo, Why, Default, Due, Checked, Kind, Until string
-	Options                                                      []string
+	Question, StatusQuo, Why, Default, Due, Checked, Kind, Until, Here string
+	Options                                                            []string
 	// Recommend is the recommended option, 1-based; 0 recommends none.
 	Recommend int
 }
 
 var (
-	// shortRef is an issue or PR named as #N or owner/repo#N; "note #N"
-	// and "timer #N" name beekeeper's own items.
-	shortRef = regexp.MustCompile(`(?i)(?:^|[^\w/#])((?:note|timer)\s+)?((?:([\w.-]+/[\w.-]+))?#(\d+))\b`)
 	// refURL is the full URL of an issue or PR.
 	refURL = regexp.MustCompile(`(?i)https?://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
 	// pullURL is the full URL of a pull request.
@@ -135,9 +133,7 @@ func (d noteDraft) lacks() []string {
 		}
 	}
 	all := d.text() + " " + d.Default
-	for _, r := range unlinked(all) {
-		out = append(out, r+" without its full URL")
-	}
+	out = append(out, post.Unlinked(all, d.Here)...)
 	if d.Checked == "" {
 		claims := stateClaim.FindAllString(d.Question+" "+d.StatusQuo+" "+d.Why, -1)
 		if len(claims) > 0 {
@@ -245,25 +241,6 @@ func planStages(ctx context.Context, plans config.Plans, s string) (planStage, e
 		}
 	}
 	return p, nil
-}
-
-// unlinked lists the issue and PR references in s that have no full URL
-// in s: owner/repo#N needs that repository's URL, #N any URL ending in N.
-func unlinked(s string) []string {
-	urls := refURL.FindAllStringSubmatch(s, -1)
-	var out []string
-	for _, m := range shortRef.FindAllStringSubmatch(s, -1) {
-		if m[1] != "" {
-			continue // note #N, timer #N
-		}
-		linked := slices.ContainsFunc(urls, func(u []string) bool {
-			return u[2] == m[4] && (m[3] == "" || strings.EqualFold(u[1], m[3]))
-		})
-		if !linked && !slices.Contains(out, m[2]) {
-			out = append(out, m[2])
-		}
-	}
-	return out
 }
 
 // refs are the issues and PRs s links, as owner/repo#N in lower case.

@@ -14,6 +14,10 @@ every session does. What must be shared lives in a small state directory that su
 restarts: the supervisor, grants, holds, registered agents, notes, timers and session records. Every session and the
 supervisor use the same binary.
 
+The [SSH execution-host design](docs/ssh-execution-hosts.md) proposes remote
+harness execution with coordinated identity, capacity and approval checks;
+its commands and configuration are not implemented yet.
+
 ## Install
 
 Download the binary for your OS and architecture from the latest release into any directory on
@@ -128,7 +132,8 @@ the desk's installations, resources, lanes and person are the configuration's ke
 the desk's own conventions — which board, which repositories, local traps — stay in the project
 the sessions run in, which the skills defer to. `beekeeper lint briefs <file or folder>...`
 refuses what makes a skill or a brief go stale: a dated line, an "until X ships" clause, a note on
-the release that fixed something, a workaround, a role's run number, and a shell example's bare `>`
+the release that fixed something, a workaround, a role's run number, a bare `#n` or `owner/repo#n`
+without its full GitHub URL, and a shell example's bare `>`
 into a file, which a rerun under noclobber refuses (`>|` passes). The shipped skills pass it in
 CI, and a project holding its own skills can run it as a CI step (exit 3 on a finding).
 

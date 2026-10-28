@@ -140,7 +140,7 @@ func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 	// The worker ends its task with the issues closed: they settle its
 	// notes, its next task notwithstanding.
 	for _, args := range [][]string{
-		{verbIdle, flagDone, flagReport, "merged o/r#2", flagProblem, noProblems},
+		{verbIdle, flagDone, flagReport, "merged https://github.com/o/r/pull/2", flagProblem, noProblems},
 		{"assign", agentOne, "another task"},
 	} {
 		c := w.agentsCmd()

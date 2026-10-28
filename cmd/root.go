@@ -207,11 +207,13 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
+	hook := a.hookCmd()
+	hook.AddCommand(a.preInvocationCmd())
+	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd())
+	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd(), a.agyRunCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})
