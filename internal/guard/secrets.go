@@ -309,7 +309,10 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 				continue
 			}
 			var src string
-			for _, w := range words[c:] {
+			for idx, w := range words[c:] {
+				if idx == 0 && !strings.HasPrefix(w, "<") && !strings.Contains(w, "/") {
+					continue
+				}
 				w = strings.TrimPrefix(w, "if=")
 				w = strings.TrimLeft(w, "<")
 				if u := isUnlock(w); u != "" {
@@ -432,7 +435,7 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 		}
 		// Every argument is scanned as a command line of its own: a -c
 		// string, ssh's remote command, watch's; one word (zsh -ic f) too.
-		script := name != "ssh" && name != watchCmd && name != evalCmd
+		script := name != "ssh" && name != watchCmd && name != evalCmd && !slices.ContainsFunc(words[k+1:], isCFlag)
 		for _, arg := range words[k+1:] {
 			if strings.HasPrefix(arg, "-") {
 				continue
@@ -1608,7 +1611,7 @@ func scanShell(s string) shellScan {
 				b[i], b[i+1] = '_', '_'
 				i++
 			case c == '\\' && i+1 < len(b):
-				b[i+1] = '_'
+				b[i], b[i+1] = '_', '_'
 				i++
 			case c == '"':
 				stack = stack[:len(stack)-1]

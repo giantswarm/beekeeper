@@ -396,8 +396,14 @@ func (st *deleteState) environ(name string) string {
 // $1, ${…}, $(…), `…`), i+1 when a lone $.
 func expansionEnd(word string, i int) int {
 	if word[i] == '`' {
-		if j := strings.IndexByte(word[i+1:], '`'); j >= 0 {
-			return i + j + 2
+		for j := i + 1; j < len(word); j++ {
+			if word[j] == '\\' && j+1 < len(word) && (word[j+1] == '`' || word[j+1] == '\\' || word[j+1] == '$') {
+				j++
+				continue
+			}
+			if word[j] == '`' {
+				return j + 1
+			}
 		}
 		return len(word)
 	}

@@ -586,6 +586,127 @@ func TestAgyGuardedToolVsData(t *testing.T) {
 	}
 }
 
+// Comment 3 (https://github.com/giantswarm/beekeeper/issues/1683#issuecomment-6454284090):
+// 1. A bare command word without a slash is resolved through PATH (or as a
+// builtin), never against a same-named directory or file in the working
+// directory; words with a `/` (`./agy/<tool>`, `agy/<tool>`) are still checked
+// as paths.
+// 2. Inside double quotes, `\` + backtick (`\“) is a literal backtick, not a
+// command substitution; only unescaped backticks and `$(...)` substitute.
+func TestAgyBareCommandWordAndEscapedBackticks(t *testing.T) {
+	mainRepo := initGitRepo(t, "main", "https://github.com/giantswarm/beekeeper.git")
+	dir := initGitRepo(t, "feat-branch", "https://github.com/giantswarm/beekeeper.git")
+
+	// Create `./agy/` in the repository root holding a guarded tool, a script
+	// that invokes it, and a secret file.
+	agyDir := filepath.Join(dir, "agy")
+	if err := os.MkdirAll(agyDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{ //nolint:gosec // test fixture
+		helper:             "#!/bin/sh\necho secret\n",
+		"run-helper.sh":    "#!/bin/sh\n" + helper + "\n",
+		"prod.secret.yaml": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: prod\n",
+	} {
+		if err := os.WriteFile(filepath.Join(agyDir, name), []byte(body), 0o755); err != nil { //nolint:gosec // test fixture
+			t.Fatal(err)
+		}
+	}
+
+	// Also create a separate directory containing a regular script file named
+	// `agy` that invokes the guarded helper, to verify a bare command word
+	// `agy` without a `/` is never resolved against cwd.
+	fileDir := initGitRepo(t, "feat-branch", "https://github.com/giantswarm/beekeeper.git")
+	if err := os.WriteFile(filepath.Join(fileDir, "agy"), []byte("#!/bin/sh\n"+helper+"\n"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+
+	h := Hook{
+		Self:           testBeekeeperExe,
+		Shell:          zshCmd,
+		UnlockCommands: []string{helper},
+		SecretFiles:    []string{filepath.Join(agyDir, "*.secret.yaml")},
+		Upstream:       Upstream{Orgs: []string{allowedOrg}},
+	}
+
+	// Bare command word `agy` with a same-named directory (`./agy/`) or file in
+	// cwd is allowed.
+	for _, tc := range []struct {
+		cwd string
+		cmd string
+	}{
+		{dir, "agy models"},
+		{dir, "agy --version"},
+		{dir, "sh -c 'agy models'"},
+		{dir, "bash -c \"agy models\""},
+		{dir, "agy models > /tmp/agy-models.out"},
+		{fileDir, "agy models"},
+		{fileDir, "sh -c 'agy models'"},
+	} {
+		if d := decideAgyCmd(t, h, tc.cwd, tc.cmd); d.Decision != decisionAsk {
+			t.Errorf("bare command word %q in %s: got %+v, want ask", tc.cmd, tc.cwd, d)
+		}
+	}
+
+	// Words with a `/` (`./agy/<tool>`, `agy/<tool>`, `./agy`) are still
+	// checked as paths and denied.
+	for _, tc := range []struct {
+		cwd string
+		cmd string
+	}{
+		{dir, "./agy/" + helper},
+		{dir, "agy/" + helper},
+		{dir, "./agy/run-helper.sh"},
+		{dir, "agy/run-helper.sh"},
+		{dir, "bash agy/run-helper.sh"},
+		{dir, "sh ./agy/run-helper.sh"},
+		{fileDir, "./agy models"},
+	} {
+		if d := decideAgyCmd(t, h, tc.cwd, tc.cmd); d.Decision != decisionDeny {
+			t.Errorf("path command %q in %s: got %+v, want deny", tc.cmd, tc.cwd, d)
+		}
+	}
+
+	// Escaped backticks inside double quotes are literal backticks, not command
+	// substitutions.
+	for _, tc := range []struct {
+		cwd string
+		cmd string
+	}{
+		{dir, "beekeeper agents idle --done --report \"checked \\`agy models\\`\""},
+		{dir, "beekeeper agents idle --done --report \"refused \\`" + helper + "\\` and \\`./agy/" + helper + "\\`\""},
+		{dir, "echo \"ran \\`" + helper + "\\`\""},
+		{dir, "echo \"ran \\`agy/" + helper + "\\` and \\`./agy/" + helper + "\\`\""},
+		{dir, "echo \"never run \\`git push origin main\\`\""},
+		{dir, "echo \"never run \\`kubectl get secret app -o yaml\\`\""},
+		{dir, "echo \"never run \\`gh issue create -R other-org/project --title t --body b\\`\""},
+		{mainRepo, "cd " + dir + " && git commit -m \"note \\`git push origin main\\`\" && git push"},
+	} {
+		if d := decideAgyCmd(t, h, tc.cwd, tc.cmd); d.Decision != decisionAsk {
+			t.Errorf("escaped backticks %q: got %+v, want ask", tc.cmd, d)
+		}
+	}
+
+	// The same text with unescaped backticks or $(...) inside double quotes
+	// runs a command substitution and is denied.
+	for _, cmd := range []string{
+		`beekeeper agents idle --done --report "refused ` + "`" + helper + "`" + `"`,
+		`echo "ran ` + "`" + helper + "`" + `"`,
+		`echo "ran $(` + helper + `)"`,
+		`echo "ran ` + "`agy/" + helper + "`" + `"`,
+		`echo "ran ` + "`./agy/" + helper + "`" + `"`,
+		`echo "ran ` + "`agy/run-helper.sh`" + `"`,
+		`echo "never run ` + "`git push origin main`" + `"`,
+		`echo "never run $(git push origin main)"`,
+		`echo "never run ` + "`kubectl get secret app -o yaml`" + `"`,
+		`echo "never run ` + "`gh issue create -R other-org/project --title t --body b`" + `"`,
+	} {
+		if d := decideAgyCmd(t, h, dir, cmd); d.Decision != decisionDeny {
+			t.Errorf("unescaped substitution %q: got %+v, want deny", cmd, d)
+		}
+	}
+}
+
 // Comment 1 differential test: generate 200+ command lines mixing cd/pushd/popd/cd -,
 // true/false, git push, and shell operators (; && || | & \n ( ) { } $( ) eval !
 // comments and backslash-newlines), run each in real bash against two temporary

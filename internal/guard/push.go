@@ -648,7 +648,8 @@ func isPlain(sc shellScan) bool {
 			return false
 		}
 		raw := sc.plain[sg.start:sg.end]
-		if strings.Contains(raw, "$(") || strings.Contains(raw, "`") {
+		masked := sc.masked[sg.start:sg.end]
+		if strings.Contains(masked, "$(") || strings.Contains(masked, "`") || strings.Contains(raw, unknownMarker) {
 			return false
 		}
 		words := stripRedirects(shellWords(raw))
@@ -923,15 +924,16 @@ func opaquePlain(s string) (outer string, inners []string, hadSubst bool) {
 		}
 		if c == '`' {
 			end := i + 1
+			var innerBuf strings.Builder
 			for end < len(s) && s[end] != '`' {
-				if s[end] == '\\' && end+1 < len(s) && (s[end+1] == '`' || s[end+1] == '\\' || s[end+1] == '$') {
+				if s[end] == '\\' && end+1 < len(s) && (s[end+1] == '`' || s[end+1] == '\\' || s[end+1] == '$' || (inDouble && s[end+1] == '"')) {
 					end++
 				}
+				innerBuf.WriteByte(s[end])
 				end++
 			}
 			full := s[i:min(end+1, len(s))]
-			inner := s[i+1 : end]
-			inners = append(inners, inner)
+			inners = append(inners, innerBuf.String())
 			hadSubst = true
 			if headSubst.MatchString(full) {
 				b.WriteString(gitHeadRef)
