@@ -82,10 +82,30 @@ func TestWakeAgyDeliversMidTurnViaPreInvocationHook(t *testing.T) {
 		t.Fatalf("InjectSteps = %+v, want %+v", res.InjectSteps, want)
 	}
 
-	// Subsequent PreInvocation call on the next model invocation injects nothing.
+	// If agy ignored the hook's output (e.g. a hook timeout), the next
+	// PreInvocation call re-injects the unconfirmed messages rather than
+	// losing them.
+	out.Reset()
+	cmdRetry := a.preInvocationCmd()
+	cmdRetry.SetIn(strings.NewReader(`{"conversationId":"` + convID + `","invocationNum":3}`))
+	if err := cmdRetry.Execute(); err != nil {
+		t.Fatalf("retry preInvocationCmd: %v", err)
+	}
+	var retryRes agy.PreInvocationResult
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &retryRes); err != nil || !slices.Equal(retryRes.InjectSteps, want) {
+		t.Fatalf("unconfirmed retry = %+v (%v), want %+v", retryRes.InjectSteps, err, want)
+	}
+
+	// Once the stream confirms the two injected user_input steps, a
+	// subsequent PreInvocation call injects nothing.
+	for range want {
+		if err := agy.Confirm(inbox); err != nil {
+			t.Fatalf("Confirm: %v", err)
+		}
+	}
 	out.Reset()
 	cmd2 := a.preInvocationCmd()
-	cmd2.SetIn(strings.NewReader(`{"conversationId":"` + convID + `","invocationNum":3}`))
+	cmd2.SetIn(strings.NewReader(`{"conversationId":"` + convID + `","invocationNum":4}`))
 	if err := cmd2.Execute(); err != nil {
 		t.Fatalf("second preInvocationCmd: %v", err)
 	}

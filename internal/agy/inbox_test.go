@@ -54,8 +54,18 @@ func TestSendRefusesStoppedInboxAndDrainsInOrder(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("Drain = %q, want %q", got, want)
 	}
+	// Until confirmed, a second Drain (e.g. after a killed hook) re-returns
+	// the inflight messages in order without losing or duplicating them.
+	if retry, err := Drain(inbox); err != nil || !slices.Equal(retry, want) {
+		t.Fatalf("unconfirmed Drain retry = %q, %v, want %q", retry, err, want)
+	}
+	for range want {
+		if err := Confirm(inbox); err != nil {
+			t.Fatalf("Confirm: %v", err)
+		}
+	}
 	if again, err := Drain(inbox); err != nil || len(again) != 0 {
-		t.Fatalf("second Drain = %q, %v, want empty", again, err)
+		t.Fatalf("Drain after Confirm = %q, %v, want empty", again, err)
 	}
 
 	removed, err := RemoveInbox(inbox)
@@ -71,6 +81,7 @@ func TestPreInvocationInjectsOnceInOrder(t *testing.T) {
 		convID  = "conv-uuid-0001"
 	)
 	inbox := InboxPath(stateDir, startID)
+	transcriptPath := filepath.Join(stateDir, "transcript.jsonl")
 	if err := MakeInbox(inbox); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +99,14 @@ func TestPreInvocationInjectsOnceInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	payload := []byte(`{"conversationId":"` + convID + `","invocationNum":2}`)
+	payload, err := json.Marshal(PreInvocationArgs{
+		ConversationID: convID,
+		TranscriptPath: transcriptPath,
+		InvocationNum:  2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	out := PreInvocation(stateDir, payload)
 	if out == nil {
 		t.Fatal("PreInvocation returned nil, want injectSteps")
@@ -102,8 +120,16 @@ func TestPreInvocationInjectsOnceInOrder(t *testing.T) {
 		t.Fatalf("InjectSteps = %+v, want %+v", res.InjectSteps, want)
 	}
 
+	// Simulate agy recording the two injected user steps in the transcript.
+	if err := os.WriteFile(transcriptPath, []byte(
+		`{"type":"USER_INPUT","content":"msg one"}`+"\n"+
+			`{"type":"USER_INPUT","content":"msg two"}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	if second := PreInvocation(stateDir, payload); second != nil {
-		t.Fatalf("second PreInvocation = %q, want nil (already drained)", second)
+		t.Fatalf("second PreInvocation after transcript confirmation = %q, want nil", second)
 	}
 }
 
@@ -156,11 +182,32 @@ func TestHelperMockAgy(t *testing.T) {
 		keyConvID     = "conversation_id"
 		keyStepUpdate = "step_update"
 	)
+	turnNum := 0
 	runHook := func(inv int) {
-		raw, _ := json.Marshal(PreInvocationArgs{ConversationID: convID, InvocationNum: inv})
+		if mode == "kill-hook-inv2" && inv == 2 {
+			// Simulate the hook process being killed right after Drain
+			// commits to <inbox>.queue before printing injectSteps.
+			inbox := ResolveInbox(stateDir, convID)
+			_, _ = drainHook(inbox, transcriptPath)
+			return
+		}
+		raw, _ := json.Marshal(PreInvocationArgs{
+			ConversationID: convID,
+			TranscriptPath: transcriptPath,
+			InvocationNum:  inv,
+		})
 		out := PreInvocation(stateDir, raw)
 		if len(out) == 0 {
 			return
+		}
+		if (mode == "timeout-hook-inv2" && inv == 2) || (mode == "timeout-hook-inv3" && turnNum == 1 && inv >= 2) {
+			// Simulate agy timing out on the hook and ignoring its stdout.
+			return
+		}
+		if mode == "crash-before-store-inv2" && inv == 2 {
+			// Simulate agy crashing after PreInvocation returns before
+			// storing the injected step in the transcript or stream.
+			os.Exit(1)
 		}
 		var res PreInvocationResult
 		if json.Unmarshal(out, &res) != nil {
@@ -168,6 +215,11 @@ func TestHelperMockAgy(t *testing.T) {
 		}
 		for _, s := range res.InjectSteps {
 			appendTranscript("USER_INPUT", "", s.UserMessage)
+			if mode == "crash-after-store-inv2" && inv == 2 {
+				// Simulate agy writing the injected step to transcript.jsonl
+				// and crashing before emitting step_update on stdout.
+				os.Exit(1)
+			}
 			emit(map[string]any{
 				keyEvent: keyStepUpdate,
 				keyStepUpdate: map[string]any{
@@ -181,7 +233,6 @@ func TestHelperMockAgy(t *testing.T) {
 	emit(map[string]any{keyEvent: "init", keyConvID: convID})
 
 	sc := bufio.NewScanner(os.Stdin)
-	turnNum := 0
 	for sc.Scan() {
 		var in streamMessage
 		if json.Unmarshal(sc.Bytes(), &in) != nil || in.Event != "user" {
@@ -232,7 +283,8 @@ func TestHelperMockAgy(t *testing.T) {
 			},
 		})
 
-		if mode == "one-turn" || (mode == "two-turns" && turnNum >= 2) {
+		if mode == "one-turn" || mode == "kill-hook-inv2" || mode == "timeout-hook-inv2" ||
+			((mode == "two-turns" || mode == "timeout-hook-inv3") && turnNum >= 2) {
 			return
 		}
 	}
@@ -262,8 +314,6 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 	if err := MakeInbox(inbox); err != nil {
 		t.Fatal(err)
 	}
-	// Hold a reader open long enough to seed the initial brief into the queue,
-	// then close it so Run opens its own descriptor.
 	seedReader, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test inbox
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +343,6 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 		errCh <- runSession(ctx, "two-turns")
 	}()
 
-	// Wait for Turn 1 to finish its first tool call.
 	for range 200 {
 		if _, err := os.Stat(signalFile); err == nil {
 			break
@@ -304,21 +353,16 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 		t.Fatalf("turn 1 did not reach tool_call_1: %v", err)
 	}
 
-	// Send two wake messages mid-turn after the first tool call.
 	if err := Send(inbox, "mid-turn first"); err != nil {
 		t.Fatalf("Send mid-turn first: %v", err)
 	}
 	if err := Send(inbox, "mid-turn second"); err != nil {
 		t.Fatalf("Send mid-turn second: %v", err)
 	}
-	// Let Turn 1 proceed to its second model call (which runs PreInvocation).
 	if err := os.WriteFile(resumeSignal, []byte("go\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	// Wait until Turn 1 completes in the transcript, then send an idle wake
-	// message for Turn 2, plus two extra messages after Turn 2 starts that
-	// will remain unread when the session exits after Turn 2.
 	for range 200 {
 		raw, _ := os.ReadFile(transcriptPath) //nolint:gosec // test file
 		if strings.Contains(string(raw), "turn complete: initial brief") {
@@ -334,39 +378,18 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 		t.Fatalf("first Run failed: %v", err)
 	}
 
-	readTranscript := func() []transcriptEntry {
-		t.Helper()
-		raw, err := os.ReadFile(transcriptPath) //nolint:gosec // test file
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out []transcriptEntry
-		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-			var e transcriptEntry
-			if err := json.Unmarshal([]byte(line), &e); err != nil {
-				t.Fatalf("bad transcript line %q: %v", line, err)
-			}
-			out = append(out, e)
-		}
-		return out
-	}
-
-	entries := readTranscript()
+	entries := readTestTranscript(t, transcriptPath)
 	var summary []string
 	for _, e := range entries {
 		summary = append(summary, fmt.Sprintf("%s:%s:%s", e.Type, e.Tool, e.Content))
 	}
 	wantSummary := []string{
-		// Turn 1: starts with "initial brief", makes tool_call_1, receives
-		// "mid-turn first" and "mid-turn second" before tool_call_2 and
-		// before Turn 1 ends, and never receives them a second time.
 		"USER_INPUT::initial brief",
 		"PLANNER_RESPONSE:tool_call_1:",
 		"USER_INPUT::mid-turn first",
 		"USER_INPUT::mid-turn second",
 		"PLANNER_RESPONSE:tool_call_2:",
 		"PLANNER_RESPONSE::turn complete: initial brief",
-		// Turn 2: delivered via stdin while idle, with no duplicate injection.
 		"USER_INPUT::idle second turn",
 		"PLANNER_RESPONSE:tool_call_1:",
 		"PLANNER_RESPONSE:tool_call_2:",
@@ -376,10 +399,6 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 		t.Fatalf("transcript after two turns =\n  %v\nwant\n  %v", summary, wantSummary)
 	}
 
-	// Now test survival across a crash/restart: queue two messages, start a
-	// runner whose agy crashes before accepting the first message (so message 1
-	// is in Inflight and message 2 is in Messages), then restart the runner and
-	// verify both messages are delivered in order, once.
 	hold, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test inbox
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +423,7 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 	}
 
 	var userInputs []string
-	for _, e := range readTranscript() {
+	for _, e := range readTestTranscript(t, transcriptPath) {
 		if e.Type == "USER_INPUT" {
 			userInputs = append(userInputs, e.Content)
 		}
@@ -420,4 +439,142 @@ func TestDeliveryMidTurnIdleAndAcrossRestart(t *testing.T) {
 	if !slices.Equal(userInputs, wantInputs) {
 		t.Fatalf("user inputs across restart = %q, want %q", userInputs, wantInputs)
 	}
+}
+
+// TestMidTurnFaultsDeliverExactlyOnce verifies that no mid-turn message is
+// lost or delivered twice when:
+//  1. the PreInvocation hook is killed after Drain commits to <inbox>.queue;
+//  2. agy times out waiting for the PreInvocation hook and ignores its output
+//     (both mid-turn before a subsequent model call and on the final model
+//     call before turn end);
+//  3. agy crashes after PreInvocation before storing the injected step (and
+//     after storing the step in transcript.jsonl before emitting step_update).
+func TestMidTurnFaultsDeliverExactlyOnce(t *testing.T) {
+	runCase := func(t *testing.T, firstMode, secondMode string, wantInputs []string) {
+		t.Helper()
+		stateDir := t.TempDir()
+		const (
+			startID = "1234abcd-0000-4000-8000-000000000004"
+			convID  = "conv-uuid-0004"
+		)
+		inbox := InboxPath(stateDir, startID)
+		logPath := StreamPath(stateDir, startID)
+		transcriptPath := filepath.Join(stateDir, "transcript.jsonl")
+		signalFile := filepath.Join(stateDir, "after-tool-1")
+		resumeSignal := filepath.Join(stateDir, "resume-turn-1")
+
+		if err := MakeInbox(inbox); err != nil {
+			t.Fatal(err)
+		}
+		seed, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test inbox
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Send(inbox, "turn brief"); err != nil {
+			t.Fatal(err)
+		}
+		_ = seed.Close()
+
+		runSession := func(ctx context.Context, mode string) error {
+			t.Setenv("GO_WANT_HELPER_MOCK_AGY", "1")
+			t.Setenv("MOCK_AGY_STATE_DIR", stateDir)
+			t.Setenv("MOCK_AGY_TRANSCRIPT", transcriptPath)
+			t.Setenv("MOCK_AGY_CONV_ID", convID)
+			t.Setenv("MOCK_AGY_MODE", mode)
+			t.Setenv("MOCK_AGY_SIGNAL_FILE", signalFile)
+			t.Setenv("MOCK_AGY_RESUME_SIGNAL", resumeSignal)
+			argv := []string{os.Args[0], "-test.run=^TestHelperMockAgy$"}
+			return Run(ctx, inbox, logPath, argv, io.Discard)
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- runSession(ctx, firstMode)
+		}()
+
+		for range 200 {
+			if _, err := os.Stat(signalFile); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if _, err := os.Stat(signalFile); err != nil {
+			t.Fatalf("turn 1 did not reach tool_call_1: %v", err)
+		}
+		if err := Send(inbox, "fault-message-1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := Send(inbox, "fault-message-2"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(resumeSignal, []byte("go\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		firstErr := <-errCh
+		if secondMode == "" {
+			if firstErr != nil {
+				t.Fatalf("Run(%s) failed: %v", firstMode, firstErr)
+			}
+		} else {
+			if firstErr == nil {
+				t.Fatalf("Run(%s) succeeded, want crash exit", firstMode)
+			}
+			_ = os.Remove(signalFile)
+			if err := os.WriteFile(resumeSignal, []byte("go\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := runSession(ctx, secondMode); err != nil {
+				t.Fatalf("restarted Run(%s) failed: %v", secondMode, err)
+			}
+		}
+
+		var got []string
+		for _, e := range readTestTranscript(t, transcriptPath) {
+			if e.Type == "USER_INPUT" {
+				got = append(got, e.Content)
+			}
+		}
+		if !slices.Equal(got, wantInputs) {
+			t.Fatalf("USER_INPUT steps = %q, want %q", got, wantInputs)
+		}
+	}
+
+	wantAll := []string{"turn brief", "fault-message-1", "fault-message-2"}
+
+	t.Run("hook killed after Drain re-injects at next model call", func(t *testing.T) {
+		runCase(t, "kill-hook-inv2", "", wantAll)
+	})
+	t.Run("agy ignores timed-out hook output and re-injects at next model call", func(t *testing.T) {
+		runCase(t, "timeout-hook-inv2", "", wantAll)
+	})
+	t.Run("agy ignores timed-out hook output on final model call and delivers on next turn", func(t *testing.T) {
+		runCase(t, "timeout-hook-inv3", "", wantAll)
+	})
+	t.Run("agy crashes before storing injected step and delivers on restart", func(t *testing.T) {
+		runCase(t, "crash-before-store-inv2", "one-turn", wantAll)
+	})
+	t.Run("agy crashes after storing first injected step and deduplicates on restart", func(t *testing.T) {
+		runCase(t, "crash-after-store-inv2", "one-turn", wantAll)
+	})
+}
+
+func readTestTranscript(t *testing.T, path string) []transcriptEntry {
+	t.Helper()
+	raw, err := os.ReadFile(path) //nolint:gosec // test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []transcriptEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e transcriptEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("bad transcript line %q: %v", line, err)
+		}
+		out = append(out, e)
+	}
+	return out
 }

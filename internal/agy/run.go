@@ -50,8 +50,12 @@ func linkConversation(inbox, convID string) {
 // Run pops the next queued message from inbox into Inflight and writes it as
 // a stream-json user event to agy's stdin. While a turn is running, Run does
 // not write to agy's stdin: queued messages stay in the persistent queue for
-// the PreInvocation hook to drain before the next model call inside the
-// running turn, or for Run to send on stdin once the turn ends.
+// the PreInvocation hook to drain into Injected before the next model call
+// inside the running turn, and each user_input step_update event confirms
+// the corresponding Inflight or Injected message. Any Injected messages that
+// were not confirmed before the turn ends (e.g. a hook killed or timed out
+// on the final model call) are restored to Messages on result and sent on
+// stdin as the next turn.
 func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Writer) error {
 	if len(argv) == 0 {
 		return errors.New("agy-run: missing command")
@@ -165,10 +169,10 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 				feedIfIdle()
 			case "step_update":
 				if ev.StepUpdate != nil && ev.StepUpdate.StepType == "user_input" {
-					_ = clearInflight(inbox)
+					_ = Confirm(inbox)
 				}
 			case "result":
-				_ = clearInflight(inbox)
+				_ = finishTurn(inbox)
 				busy = false
 				feedIfIdle()
 			}

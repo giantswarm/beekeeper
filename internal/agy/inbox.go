@@ -3,10 +3,12 @@
 package agy
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -48,14 +50,153 @@ func ConvLinkPath(stateDir, convID string) string {
 	return filepath.Join(stateDir, "agy", convID+".inbox")
 }
 
+// QueuedMessage is one message in an agy session's persistent inbox, carrying
+// a unique ID so at-least-once delivery across retries and restarts can
+// deduplicate messages and deliver each one in FIFO order once.
+type QueuedMessage struct {
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	InputSeq int    `json:"inputSeq,omitempty"`
+}
+
 // queue is the persistent on-disk message queue beside an inbox (<inbox>.queue).
 type queue struct {
+	// NextSeq is the monotonic counter used when assigning message IDs.
+	NextSeq int `json:"nextSeq,omitempty"`
+	// StreamInputs is the number of user_input step_update events the
+	// current agy-run process has seen on stdout.
+	StreamInputs int `json:"streamInputs,omitempty"`
+	// Transcript is the conversation's transcript.jsonl path, and
+	// TranscriptInputs is the number of USER_INPUT steps in that
+	// transcript before the current Inflight/Injected messages were sent.
+	Transcript       string `json:"transcript,omitempty"`
+	TranscriptInputs int    `json:"transcriptInputs,omitempty"`
 	// Inflight is the message written to agy's stdin when idle that agy
-	// has not yet recorded in its conversation or started a model
-	// invocation for. If the session restarts before accepting it, the
-	// runner restores Inflight to the front of Messages.
-	Inflight string   `json:"inflight,omitempty"`
-	Messages []string `json:"messages,omitempty"`
+	// has not yet recorded in its conversation. If the session restarts
+	// before accepting it, the runner restores Inflight to the front of
+	// Messages.
+	Inflight *QueuedMessage `json:"inflight,omitempty"`
+	// Injected holds the messages drained by PreInvocation for a mid-turn
+	// model call that have not yet been confirmed in the stream or
+	// transcript. Until confirmed, a subsequent PreInvocation re-injects
+	// them and a turn end or session restart restores them to the front of
+	// Messages.
+	Injected []QueuedMessage `json:"injected,omitempty"`
+	// Messages are the pending messages waiting to be delivered, in FIFO
+	// order.
+	Messages []QueuedMessage `json:"messages,omitempty"`
+	// Delivered holds the IDs of messages already confirmed delivered in
+	// this session, so a retried or restored message is never delivered
+	// twice.
+	Delivered []string `json:"delivered,omitempty"`
+}
+
+const maxDeliveredIDs = 64
+
+func (q *queue) markDelivered(id string) {
+	if id == "" || slices.Contains(q.Delivered, id) {
+		return
+	}
+	q.Delivered = append(q.Delivered, id)
+	if len(q.Delivered) > maxDeliveredIDs {
+		q.Delivered = q.Delivered[len(q.Delivered)-maxDeliveredIDs:]
+	}
+}
+
+func dedupMessages(delivered []string, lists ...[]QueuedMessage) []QueuedMessage {
+	seen := make(map[string]bool, len(delivered))
+	for _, id := range delivered {
+		if id != "" {
+			seen[id] = true
+		}
+	}
+	var out []QueuedMessage
+	for _, list := range lists {
+		for _, m := range list {
+			if m.ID != "" {
+				if seen[m.ID] {
+					continue
+				}
+				seen[m.ID] = true
+			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+type transcriptLine struct {
+	Type    string `json:"type"`
+	Content string `json:"content"`
+}
+
+func transcriptUserInputs(path string) ([]string, bool) {
+	if path == "" {
+		return nil, false
+	}
+	f, err := os.Open(filepath.Clean(path)) //nolint:gosec // transcript path from agy hook or session state
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = f.Close() }()
+	var out []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
+		var line transcriptLine
+		if json.Unmarshal(sc.Bytes(), &line) == nil && line.Type == "USER_INPUT" {
+			out = append(out, line.Content)
+		}
+	}
+	if sc.Err() != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// reconcile confirms any Inflight or Injected messages that have appeared in
+// the stream (StreamInputs) or in the transcript (USER_INPUT steps at or after
+// TranscriptInputs), moving their IDs to Delivered. It returns the highest
+// InputSeq confirmed so far.
+func (q *queue) reconcile(transcriptPath string) int {
+	if transcriptPath != "" {
+		q.Transcript = transcriptPath
+	}
+	highSeq := q.StreamInputs
+	if q.Inflight != nil && q.Inflight.InputSeq > 0 && q.Inflight.InputSeq <= q.StreamInputs {
+		q.markDelivered(q.Inflight.ID)
+		q.Inflight = nil
+		q.TranscriptInputs++
+	}
+	for len(q.Injected) > 0 && q.Injected[0].InputSeq > 0 && q.Injected[0].InputSeq <= q.StreamInputs {
+		q.markDelivered(q.Injected[0].ID)
+		q.Injected = q.Injected[1:]
+		q.TranscriptInputs++
+	}
+	inputs, ok := transcriptUserInputs(q.Transcript)
+	if !ok {
+		return highSeq
+	}
+	if q.Inflight != nil && q.TranscriptInputs < len(inputs) && strings.Contains(inputs[q.TranscriptInputs], q.Inflight.Text) {
+		if q.Inflight.InputSeq > highSeq {
+			highSeq = q.Inflight.InputSeq
+		}
+		q.markDelivered(q.Inflight.ID)
+		q.Inflight = nil
+		q.TranscriptInputs++
+	}
+	for len(q.Injected) > 0 && q.TranscriptInputs < len(inputs) {
+		if !strings.Contains(inputs[q.TranscriptInputs], q.Injected[0].Text) {
+			break
+		}
+		if q.Injected[0].InputSeq > highSeq {
+			highSeq = q.Injected[0].InputSeq
+		}
+		q.markDelivered(q.Injected[0].ID)
+		q.Injected = q.Injected[1:]
+		q.TranscriptInputs++
+	}
+	return highSeq
 }
 
 func lockPath(inbox string) string  { return inbox + ".lock" }
@@ -88,6 +229,7 @@ func streamLine(msg string) ([]byte, error) {
 // agy's PreInvocation stdin payload.
 type PreInvocationArgs struct {
 	ConversationID string `json:"conversationId"`
+	TranscriptPath string `json:"transcriptPath"`
 	InvocationNum  int    `json:"invocationNum"`
 }
 
@@ -109,6 +251,22 @@ func cleanID(id string) string {
 		return ""
 	}
 	return id
+}
+
+func defaultTranscriptPath(convID string) string {
+	c := cleanID(convID)
+	if c == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	p := filepath.Join(home, ".gemini", "antigravity-cli", "brain", c, ".system_generated", "logs", "transcript.jsonl")
+	if _, err := os.Stat(p); err == nil { //nolint:gosec // cleaned conversation id under user home
+		return p
+	}
+	return ""
 }
 
 // ResolveInbox finds the inbox path for a session by its agy conversationId
@@ -139,10 +297,12 @@ func ResolveInbox(stateDir, convID string) string {
 	return ""
 }
 
-// PreInvocation drains the queued messages of the session named in raw (a
-// PreInvocation hook stdin payload) and formats them as an injectSteps JSON
-// response. It returns nil when there are no messages to inject or raw is
-// malformed.
+// PreInvocation marks the queued messages of the session named in raw (a
+// PreInvocation hook stdin payload) inflight in its persistent queue and
+// formats them as an injectSteps JSON response. Messages remain inflight on
+// disk until confirmed by the stream or transcript so a killed or timed-out
+// hook or an agy crash before storing the step re-injects or restores them
+// without message loss or duplicate delivery.
 func PreInvocation(stateDir string, raw []byte) []byte {
 	var in PreInvocationArgs
 	if json.Unmarshal(raw, &in) != nil {
@@ -152,7 +312,11 @@ func PreInvocation(stateDir string, raw []byte) []byte {
 	if inbox == "" {
 		return nil
 	}
-	msgs, err := Drain(inbox)
+	tp := in.TranscriptPath
+	if tp == "" {
+		tp = defaultTranscriptPath(in.ConversationID)
+	}
+	msgs, err := drainHook(inbox, tp)
 	if err != nil || len(msgs) == 0 {
 		return nil
 	}

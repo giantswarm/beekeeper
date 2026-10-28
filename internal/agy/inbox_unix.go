@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/google/uuid"
 )
 
 // MakeInbox creates the inbox FIFO at path, keeping one that exists. Any
@@ -28,9 +30,9 @@ func MakeInbox(path string) error {
 	return syscall.Mkfifo(path, 0o600)
 }
 
-// Send queues msg in the persistent inbox at path and wakes the runner on the
-// FIFO. When no process holds the FIFO open for reading, Send returns
-// ErrNotRunning without queuing msg.
+// Send queues msg in the persistent inbox at path with a unique message ID and
+// wakes the runner on the FIFO. When no process holds the FIFO open for
+// reading, Send returns ErrNotRunning without queuing msg.
 func Send(path, msg string) error {
 	msg = strings.TrimSpace(msg)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
@@ -49,7 +51,11 @@ func Send(path, msg string) error {
 		if err != nil {
 			return err
 		}
-		q.Messages = append(q.Messages, msg)
+		q.NextSeq++
+		q.Messages = append(q.Messages, QueuedMessage{
+			ID:   fmt.Sprintf("%d-%s", q.NextSeq, uuid.NewString()[:8]),
+			Text: msg,
+		})
 		if err := writeQueue(path, q); err != nil {
 			return err
 		}
@@ -62,10 +68,16 @@ func Send(path, msg string) error {
 	})
 }
 
-// Drain removes and returns all queued messages from the persistent inbox at
-// path in FIFO order, and clears any Inflight marker (a PreInvocation hook
-// runs only once agy has started a turn).
+// Drain marks all pending messages in the persistent inbox at path inflight
+// in Injected (keeping any unconfirmed Injected messages ahead of newly queued
+// Messages, deduplicated by message ID) and returns their texts in FIFO order.
+// Drained messages remain in Injected on disk until confirmed by Confirm (on
+// a stream user_input event) or by appearing in the conversation's transcript.
 func Drain(path string) ([]string, error) {
+	return drainHook(path, "")
+}
+
+func drainHook(path, transcriptPath string) ([]string, error) {
 	if _, err := os.Stat(queuePath(path)); errors.Is(err, os.ErrNotExist) { //nolint:gosec // beside the agent's inbox under the state folder
 		if _, serr := os.Stat(path); errors.Is(serr, os.ErrNotExist) { //nolint:gosec // the agent's inbox under the state folder
 			return nil, nil
@@ -77,15 +89,43 @@ func Drain(path string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if q.Inflight == "" && len(q.Messages) == 0 {
-			return nil
+		highSeq := q.reconcile(transcriptPath)
+		if q.Inflight != nil && q.Inflight.InputSeq > highSeq {
+			highSeq = q.Inflight.InputSeq
 		}
-		msgs = q.Messages
-		q.Inflight = ""
+		pending := dedupMessages(q.Delivered, q.Injected, q.Messages)
 		q.Messages = nil
+		for i := range pending {
+			pending[i].InputSeq = highSeq + i + 1
+		}
+		q.Injected = pending
+		if inputs, ok := transcriptUserInputs(q.Transcript); ok {
+			q.TranscriptInputs = len(inputs)
+		}
+		if len(pending) > 0 {
+			msgs = make([]string, len(pending))
+			for i, m := range pending {
+				msgs[i] = m.Text
+			}
+		}
 		return writeQueue(path, q)
 	})
 	return msgs, err
+}
+
+// Confirm records that agy accepted one user_input step on the stream for the
+// inbox at path, confirming the corresponding Inflight or head Injected
+// message and recording its ID in Delivered.
+func Confirm(path string) error {
+	return withLock(path, func() error {
+		q, err := readQueue(path)
+		if err != nil {
+			return err
+		}
+		q.StreamInputs++
+		q.reconcile("")
+		return writeQueue(path, q)
+	})
 }
 
 // popInflight moves the head message of the persistent queue at path into
@@ -96,40 +136,80 @@ func popInflight(path string) (msg string, ok bool, err error) {
 		if err != nil {
 			return err
 		}
+		highSeq := q.reconcile("")
+		q.Messages = dedupMessages(q.Delivered, q.Messages)
 		if len(q.Messages) == 0 {
-			return nil
+			return writeQueue(path, q)
 		}
-		msg, ok = q.Messages[0], true
-		q.Inflight = msg
+		head := q.Messages[0]
+		head.InputSeq = highSeq + 1
+		q.Inflight = &head
 		q.Messages = q.Messages[1:]
+		if inputs, tok := transcriptUserInputs(q.Transcript); tok {
+			q.TranscriptInputs = len(inputs)
+		}
+		msg, ok = head.Text, true
 		return writeQueue(path, q)
 	})
 	return msg, ok, err
 }
 
-// clearInflight clears the Inflight message once agy recorded it in the
-// conversation or finished the turn.
-func clearInflight(path string) error {
+// finishTurn reconciles the queue at the end of an agy turn (result event):
+// the turn's initial stdin message (Inflight) is confirmed, any Injected
+// messages confirmed in the transcript are marked delivered, and any
+// remaining unconfirmed Injected messages (e.g. from a timed-out or killed
+// PreInvocation hook on the final model call) are restored to the front of
+// Messages so the runner delivers them on stdin as the next turn.
+func finishTurn(path string) error {
 	return withLock(path, func() error {
 		q, err := readQueue(path)
-		if err != nil || q.Inflight == "" {
+		if err != nil {
 			return err
 		}
-		q.Inflight = ""
+		if q.Inflight != nil {
+			if q.Inflight.InputSeq > q.StreamInputs {
+				q.StreamInputs = q.Inflight.InputSeq
+			}
+			q.markDelivered(q.Inflight.ID)
+			q.Inflight = nil
+		}
+		q.reconcile("")
+		if len(q.Injected) > 0 {
+			for i := range q.Injected {
+				q.Injected[i].InputSeq = 0
+			}
+			q.Messages = dedupMessages(q.Delivered, q.Injected, q.Messages)
+			q.Injected = nil
+		}
 		return writeQueue(path, q)
 	})
 }
 
-// restoreInflight returns an unaccepted Inflight message to the front of
-// Messages when a runner starts on an inbox after a crash or restart.
+// restoreInflight reconciles the transcript and returns any unaccepted
+// Inflight or Injected messages to the front of Messages (deduplicated against
+// Delivered) when a runner starts on an inbox after a crash or restart.
 func restoreInflight(path string) error {
 	return withLock(path, func() error {
 		q, err := readQueue(path)
-		if err != nil || q.Inflight == "" {
+		if err != nil {
 			return err
 		}
-		q.Messages = append([]string{q.Inflight}, q.Messages...)
-		q.Inflight = ""
+		q.reconcile("")
+		q.StreamInputs = 0
+		var inflight []QueuedMessage
+		if q.Inflight != nil {
+			q.Inflight.InputSeq = 0
+			inflight = append(inflight, *q.Inflight)
+			q.Inflight = nil
+		}
+		for i := range q.Injected {
+			q.Injected[i].InputSeq = 0
+		}
+		q.Messages = dedupMessages(q.Delivered, inflight, q.Injected, q.Messages)
+		q.Injected = nil
+		if inputs, ok := transcriptUserInputs(q.Transcript); ok {
+			q.TranscriptInputs = len(inputs)
+		}
 		return writeQueue(path, q)
 	})
 }
@@ -166,7 +246,7 @@ func readQueue(path string) (queue, error) {
 
 func writeQueue(path string, q queue) error {
 	qp := queuePath(path)
-	if q.Inflight == "" && len(q.Messages) == 0 {
+	if q.Inflight == nil && len(q.Injected) == 0 && len(q.Messages) == 0 && len(q.Delivered) == 0 {
 		if err := os.Remove(qp); err != nil && !errors.Is(err, os.ErrNotExist) { //nolint:gosec // beside the agent's inbox under the state folder
 			return err
 		}
