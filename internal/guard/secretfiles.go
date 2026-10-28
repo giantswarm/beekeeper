@@ -24,6 +24,7 @@ var SecretFiles = []string{
 	"~/.omp/agent/config.yml",
 	"~/.omp/agent/agent.db",
 	"~/.claude/.credentials.json",
+	"~/.codex/auth.json",
 	"~/.config/gh/hosts.yml",
 	"~/.docker/config.json",
 	"~/.netrc",
@@ -71,7 +72,11 @@ type secretFiles struct {
 func newSecretFiles(extra []string) secretFiles {
 	home, _ := os.UserHomeDir()
 	f := secretFiles{home: home}
-	for _, g := range slices.Concat(SecretFiles, extra) {
+	list := slices.Concat(SecretFiles, extra, []string{"~/.local/state/beekeeper/codex/home/auth.json"})
+	if ch := strings.TrimSpace(os.Getenv("CODEX_HOME")); ch != "" {
+		list = append(list, filepath.Join(ch, "auth.json"))
+	}
+	for _, g := range list {
 		if g = expandHome(g); !filepath.IsAbs(g) {
 			continue
 		}
@@ -99,7 +104,11 @@ func (f secretFiles) match(p string) string {
 	}
 	for _, c := range cands {
 		real, err := filepath.EvalSymlinks(c)
-		for _, x := range []string{c, real} {
+		var dirReal string
+		if dir, derr := filepath.EvalSymlinks(filepath.Dir(c)); derr == nil && dir != filepath.Dir(c) {
+			dirReal = filepath.Join(dir, filepath.Base(c))
+		}
+		for _, x := range []string{c, real, dirReal} {
 			if x == "" || err != nil && x == real {
 				continue
 			}
@@ -164,19 +173,25 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 		return nil
 	}
 	name, args := path.Base(words[k]), words[k+1:]
-	if metaCmds[name] {
-		return nil
-	}
+	isMeta := metaCmds[name]
 	isGrep := grepCmds[name]
-	recursive := name == "rg" || name == "ag" || isGrep && slices.ContainsFunc(args, grepRecursive.MatchString)
+	recursive := !isMeta && (name == "rg" || name == "ag" || isGrep && slices.ContainsFunc(args, grepRecursive.MatchString))
 	file := ""
 	for i, w := range words {
+		isInputRedir := strings.HasPrefix(w, "<") && !strings.HasPrefix(w, "<<") && !strings.HasPrefix(w, "<&") ||
+			strings.HasPrefix(w, "0<") && !strings.HasPrefix(w, "0<&") ||
+			i > 0 && (words[i-1] == "<" || words[i-1] == "0<" || words[i-1] == "<>")
+		isSelfConfig := name == selfCmd && (strings.HasPrefix(w, "--config=") || i > 0 && words[i-1] == flagConfig)
+		if isMeta && !isInputRedir && !isSelfConfig {
+			continue
+		}
 		if i <= k && !strings.HasPrefix(w, "<") && !strings.Contains(w, "/") && !strings.Contains(w, "=") {
 			continue // a bare command or wrapper word, resolved on PATH
 		}
-		if i > 0 && (words[i-1] == ">" || words[i-1] == ">>" || words[i-1] == ">|") || strings.HasPrefix(w, ">") {
+		if i > 0 && (words[i-1] == ">" || words[i-1] == ">>" || words[i-1] == ">|" || words[i-1] == "2>" || words[i-1] == "2>>" || words[i-1] == "2>|" || words[i-1] == "&>" || words[i-1] == "&>>") || strings.HasPrefix(w, ">") || strings.HasPrefix(w, "2>") || strings.HasPrefix(w, "&>") {
 			continue // a write target, no read
 		}
+		w = strings.TrimPrefix(strings.TrimPrefix(w, "0<"), "<>")
 		if _, v, ok := strings.Cut(w, "="); ok {
 			w = v // --config=<file>, F=<file>
 		}

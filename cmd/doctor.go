@@ -653,6 +653,13 @@ faults but remedying none.`,
 				if line := checkAgySkills(home, a.cfg.StateDir, agyInstalled); line != "" {
 					lines = append(lines, line)
 				}
+				codexInstalled := exe != "" && hasCodex()
+				if line := checkCodexHooks(home, a.cfg.StateDir, exe, codexInstalled); line != "" {
+					lines = append(lines, line)
+				}
+				if line := checkCodexSkills(home, a.cfg.StateDir, codexInstalled); line != "" {
+					lines = append(lines, line)
+				}
 			}
 
 			if r := a.pruneDocker(dryRun, a.dockerHolds); r.notable() {
@@ -780,4 +787,32 @@ func checkAgyHooks(home, exe string, agyInstalled bool) string {
 // it points at when agy is installed.
 func checkAgySkills(home, stateDir string, agyInstalled bool) string {
 	return install.CheckAgySkills(agySkillsPath(home, agyInstalled), stateDir, home)
+}
+
+// checkCodexHooks checks ~/.codex/hooks.json and <stateDir>/codex/home/hooks.json
+// when codex is installed.
+func checkCodexHooks(home, stateDir, exe string, codexInstalled bool) string {
+	if line := install.CheckCodexHooks(codexHooksPath(home, codexInstalled), exe, home); line != "" {
+		return line
+	}
+	if workerHooks := install.CodexWorkerHooks(stateDir); workerHooks != "" {
+		if _, err := os.Lstat(workerHooks); err == nil || codexInstalled {
+			return install.CheckCodexHooks(workerHooks, exe, home)
+		}
+	}
+	return ""
+}
+
+// checkCodexSkills checks ~/.codex/skills and <stateDir>/codex/home/skills
+// when codex is installed.
+func checkCodexSkills(home, stateDir string, codexInstalled bool) string {
+	if line := install.CheckCodexSkills(codexSkillsPath(home, codexInstalled), stateDir, home); line != "" {
+		return line
+	}
+	if workerSkills := install.CodexWorkerSkills(stateDir); workerSkills != "" {
+		if _, err := os.Lstat(workerSkills); err == nil || codexInstalled {
+			return install.CheckCodexSkills(workerSkills, stateDir, home)
+		}
+	}
+	return ""
 }

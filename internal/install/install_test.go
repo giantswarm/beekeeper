@@ -892,3 +892,128 @@ func TestAgySkillsPreservesOtherEntriesAndDetectsStale(t *testing.T) {
 		t.Errorf("uninstall left skills.json it created")
 	}
 }
+
+const priorCodexHooks = `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/other-codex-hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+`
+
+func TestCodexHooksAndSkills(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	skillsPath := filepath.Join(home, ".codex", "skills")
+	skillsDir := AgySkillsDir(e.StateDir)
+
+	// When e.CodexHooks and e.CodexSkills are empty (codex not installed), nothing is written.
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if exists(hooksPath) || exists(skillsPath) || exists(skillsDir) {
+		t.Fatalf("Install wrote codex hooks/skills when e.CodexHooks/e.CodexSkills were empty")
+	}
+
+	e.CodexHooks = hooksPath
+	e.CodexSkills = skillsPath
+	write(t, e.CodexHooks, priorCodexHooks)
+	userAgentsMD := filepath.Join(home, ".codex", "AGENTS.md")
+	write(t, userAgentsMD, "# Standing rules\n")
+	customSkill := filepath.Join(skillsPath, "custom-user-skill")
+	if err := os.MkdirAll(customSkill, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); !strings.Contains(got, "lacks the beekeeper PreToolUse hook") {
+		t.Fatalf("before install: CheckCodexHooks = %q", got)
+	}
+	if got := CheckCodexSkills(e.CodexSkills, e.StateDir, home); !strings.Contains(got, "lacks the") {
+		t.Fatalf("before install: CheckCodexSkills = %q", got)
+	}
+
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(e.CodexHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"/usr/local/bin/other-codex-hook"`,
+		`"/opt/bin/beekeeper hook pretooluse --format codex"`,
+		`"matcher": ".*"`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("codex hooks.json lacks %s:\n%s", want, raw)
+		}
+	}
+	if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); got != "" {
+		t.Errorf("after install: CheckCodexHooks = %q, want empty", got)
+	}
+	if got := CheckCodexHooks(CodexWorkerHooks(e.StateDir), e.Exe, home); got != "" {
+		t.Errorf("after install: CheckCodexHooks(worker) = %q, want empty", got)
+	}
+	if got := CheckCodexSkills(e.CodexSkills, e.StateDir, home); got != "" {
+		t.Errorf("after install: CheckCodexSkills = %q, want empty", got)
+	}
+	if got := CheckCodexSkills(CodexWorkerSkills(e.StateDir), e.StateDir, home); got != "" {
+		t.Errorf("after install: CheckCodexSkills(worker) = %q, want empty", got)
+	}
+	if gotTarget, err := os.Readlink(filepath.Join(e.StateDir, "codex", "home", "AGENTS.md")); err != nil || gotTarget != userAgentsMD {
+		t.Errorf("worker AGENTS.md link = %q (%v), want %q", gotTarget, err, userAgentsMD)
+	}
+
+	// Second run is idempotent.
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "ok      ~/.codex/hooks.json: beekeeper PreToolUse hook") ||
+		!strings.Contains(out.String(), "ok      ~/.codex/skills: beekeeper skills") {
+		t.Errorf("idempotent second run output:\n%s", out)
+	}
+
+	// Updating binary path updates hooks.json in place.
+	const updatedExe = "/updated/bin/beekeeper"
+	if got := CheckCodexHooks(e.CodexHooks, updatedExe, home); !strings.Contains(got, "runs /opt/bin/beekeeper instead of "+updatedExe) {
+		t.Errorf("wrong binary: CheckCodexHooks = %q", got)
+	}
+	e.Exe, e.Spec.Exe = updatedExe, updatedExe
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); got != "" {
+		t.Errorf("after update: CheckCodexHooks = %q, want empty", got)
+	}
+
+	// Uninstall removes beekeeper's hook and skill links while preserving other-codex-hook and custom-user-skill.
+	if err := Uninstall(context.Background(), e, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(e.CodexHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != priorCodexHooks {
+		t.Errorf("after uninstall:\n%s\nwant:\n%s", raw, priorCodexHooks)
+	}
+	if !exists(customSkill) {
+		t.Errorf("uninstall removed user's custom skill directory")
+	}
+	if exists(skillsDir) {
+		t.Errorf("uninstall left skillsDir %s", skillsDir)
+	}
+}

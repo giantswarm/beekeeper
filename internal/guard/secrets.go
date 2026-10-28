@@ -318,21 +318,34 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 			if c >= len(words) {
 				continue
 			}
-			var src string
+			var src, srcStageCmd string
+			var srcStageArgs []string
 			for j := first; j <= segIdx && src == ""; j++ {
 				stageWords := words
 				if j < segIdx {
 					stageWords = shellWords(sc.plain[segs[j].start:segs[j].end])
 				}
 				scIdx := commandAt(stageWords)
-				for idx, w := range stageWords[scIdx:] {
+				if scIdx >= len(stageWords) {
+					continue
+				}
+				stageArgs := stageWords[scIdx:]
+				for idx, w := range stageArgs {
 					if idx == 0 && !strings.HasPrefix(w, "<") && !strings.Contains(w, "/") {
+						continue
+					}
+					if idx > 0 && (stageArgs[idx-1] == "-g" || stageArgs[idx-1] == "--glob" || stageArgs[idx-1] == "--exclude" || stageArgs[idx-1] == "--ignore-file") {
 						continue
 					}
 					w = strings.TrimPrefix(w, "if=")
 					w = strings.TrimLeft(w, "<")
+					if strings.HasPrefix(w, "!") || strings.HasPrefix(w, "--glob=") || strings.HasPrefix(w, "--exclude=") {
+						continue
+					}
 					if u := isUnlock(w); u != "" {
 						src = u
+						srcStageCmd = path.Base(stageArgs[0])
+						srcStageArgs = stageArgs[1:]
 						break
 					}
 				}
@@ -342,6 +355,7 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 			}
 			staged := false
 			name := path.Base(words[c])
+			readSearchStage := isReadOnlyUnlockSearch(srcStageCmd, srcStageArgs)
 			switch name {
 			case "cp", "mv", "ln", "install":
 				staged = true
@@ -358,19 +372,27 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 						copied[path.Base(dst)] = src
 					}
 				}
+			case "s" + "ed", gsedCmd, perlCmd:
+				if hasInPlaceFlag(words[c+1:]) {
+					staged = true
+				}
 			case teeCmd:
-				for _, dst := range nonFlags(words[c+1:]) {
-					if !strings.Contains(dst, "<") {
-						staged = true
-						copied[dst] = src
-						copied[path.Base(dst)] = src
+				if !readSearchStage {
+					for _, dst := range nonFlags(words[c+1:]) {
+						if !strings.Contains(dst, "<") {
+							staged = true
+							copied[dst] = src
+							copied[path.Base(dst)] = src
+						}
 					}
 				}
 			}
-			if m := redirect.FindStringSubmatch(sc.plain[sg.start:sg.end]); m != nil && !terminal.MatchString(m[1]) && m[1] != "/dev/null" {
-				staged = true
-				copied[m[1]] = src
-				copied[path.Base(m[1])] = src
+			if !readSearchStage {
+				if m := redirect.FindStringSubmatch(sc.plain[sg.start:sg.end]); m != nil && !terminal.MatchString(m[1]) && m[1] != "/dev/null" {
+					staged = true
+					copied[m[1]] = src
+					copied[path.Base(m[1])] = src
+				}
 			}
 			if staged && copyLeak == nil {
 				copyLeak = &leak{
@@ -412,7 +434,10 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 		name, args := path.Base(words[c]), words[c+1:]
 		switch {
 		case name == evalCmd:
-			return g.scan(strings.Join(args, " "), depth+1)
+			if l := g.scan(strings.Join(args, " "), depth+1); l != nil {
+				return l
+			}
+			return g.inputLeak(cmd, sc, segs, segIdx, words[run:], copied, depth)
 		case (name == sourceCmd || name == ".") && len(args) > 0:
 			return g.unlockOrScript(args[0], copied, depth)
 		case name == gitCmd:
@@ -420,6 +445,13 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 				if l := g.scan(aliasCmd, depth+1); l != nil {
 					return l
 				}
+			}
+			if l := g.gitConfigLeak(args, copied, depth); l != nil {
+				return l
+			}
+		case name == "sed" || name == "gsed":
+			if l := g.sedExecLeak(args, copied, depth); l != nil {
+				return l
 			}
 		case name == "awk" || name == "gawk" || name == "mawk" || name == "nawk":
 			for i := 0; i < len(args); i++ {
@@ -539,18 +571,46 @@ func (g secretGuard) inputLeak(cmd string, sc shellScan, segs []segment, segIdx 
 	}
 	if first < segIdx {
 		for j := first; j < segIdx; j++ {
-			stageWords := shellWords(sc.plain[segs[j].start:segs[j].end])
-			scIdx := commandAt(stageWords)
-			if scIdx < len(stageWords) && (path.Base(stageWords[scIdx]) == "echo" || path.Base(stageWords[scIdx]) == "printf") {
-				if l := g.scan(strings.Join(stageWords[scIdx+1:], " "), depth+1); l != nil {
-					return l
-				}
+			if l := g.stageInputLeak(sc, segs[j], copied, depth); l != nil {
+				return l
 			}
-			for _, sw := range stageWords[min(scIdx+1, len(stageWords)):] {
-				if !strings.HasPrefix(sw, "-") {
-					if l := g.unlockOrScript(sw, copied, depth); l != nil {
-						return l
-					}
+		}
+	}
+	for j := segIdx + 1; j < len(segs); j++ {
+		prevAfter := segs[j-1].after
+		if prevAfter != "$(" && prevAfter != "`" && segs[j].before != "$(" && segs[j].before != "`" {
+			break
+		}
+		if l := g.stageInputLeak(sc, segs[j], copied, depth); l != nil {
+			return l
+		}
+	}
+	return nil
+}
+
+func (g secretGuard) stageInputLeak(sc shellScan, sg segment, copied map[string]string, depth int) *leak {
+	stageWords := shellWords(sc.plain[sg.start:sg.end])
+	scIdx := commandAt(stageWords)
+	if scIdx >= len(stageWords) {
+		return nil
+	}
+	stageName := path.Base(stageWords[scIdx])
+	if stageName == "echo" || stageName == "printf" {
+		if l := g.scan(strings.Join(stageWords[scIdx+1:], " "), depth+1); l != nil {
+			return l
+		}
+	}
+	for _, sw := range stageWords[scIdx+1:] {
+		if strings.HasPrefix(sw, "-") {
+			continue
+		}
+		if l := g.unlockOrScript(sw, copied, depth); l != nil {
+			return l
+		}
+		if stageName == gitCmd {
+			if _, rest, ok := strings.Cut(sw, ":"); ok && rest != "" {
+				if l := g.unlockOrScript(rest, copied, depth); l != nil {
+					return l
 				}
 			}
 		}
@@ -632,6 +692,9 @@ func (g secretGuard) sourceLeak(words []string, before string, aliases map[strin
 		return l
 	}
 	if l := g.toolLeak(words, copied); l != nil {
+		return l
+	}
+	if l := g.installedUnlockLeak(words, dirs); l != nil {
 		return l
 	}
 	for k, w := range words {
@@ -1038,8 +1101,8 @@ func unwrapWords(words []string) (rest []string, unsure string) {
 			if i < len(words) && (words[i] == "-c" || words[i] == "--command" || strings.HasPrefix(words[i], "--command=")) {
 				return words[i:], cmp.Or(unsure, "flock")
 			}
-		case name == "xargs":
-			markUnsure("xargs")
+		case name == xargsCmd:
+			markUnsure(xargsCmd)
 			i++
 			for i < len(words) && strings.HasPrefix(words[i], "-") {
 				o := words[i]
@@ -1154,6 +1217,215 @@ func gitAliasCommands(args []string) []string {
 		}
 	}
 	return out
+}
+
+// isReadOnlyUnlockSearch reports whether a pipeline stage that mentions an
+// unlock helper path is a read-only search, diff, status or metadata command
+// whose redirected output does not copy the helper itself.
+func isReadOnlyUnlockSearch(cmdName string, args []string) bool {
+	if grepCmds[cmdName] || metaCmds[cmdName] || cmdName == "gh" {
+		return true
+	}
+	if cmdName == gitCmd {
+		sub := nonFlags(args)
+		if len(sub) == 0 {
+			return false
+		}
+		switch sub[0] {
+		case "di" + "ff", "log", "st" + "atus", "blame", "grep", "add", "commit", "branch", "rev-parse":
+			return true
+		}
+	}
+	return false
+}
+
+func hasInPlaceFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "-i" || a == "--in-place" || strings.HasPrefix(a, "--in-place=") {
+			return true
+		}
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.ContainsRune(a[1:], 'i') {
+			return true
+		}
+	}
+	return false
+}
+
+// gitConfigLeak checks git -c <key>=<val> options that execute commands
+// (core.pager, core.editor, core.sshcommand, core.fsmonitor, diff.external,
+// credential.helper) and refuses piping git output of an unlock helper or
+// script into a shell/interpreter via core.pager.
+func (g secretGuard) gitConfigLeak(args []string, copied map[string]string, depth int) *leak {
+	execKeys := map[string]bool{
+		"core.pager":        true,
+		"core.editor":       true,
+		"core.sshcommand":   true,
+		"core.fsmonitor":    true,
+		"diff.external":     true,
+		"credential.helper": true,
+	}
+	for i := 0; i < len(args); i++ {
+		var kv string
+		switch {
+		case args[i] == "-c" && i+1 < len(args):
+			kv = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "-c") && len(args[i]) > 2 && !strings.HasPrefix(args[i], "--"):
+			kv = args[i][2:]
+		default:
+			continue
+		}
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || !execKeys[strings.ToLower(k)] {
+			continue
+		}
+		v = strings.TrimPrefix(v, "!")
+		if l := g.scan(v, depth+1); l != nil {
+			return l
+		}
+		vWords := shellWords(v)
+		scIdx := commandAt(vWords)
+		if scIdx < len(vWords) {
+			vName := path.Base(vWords[scIdx])
+			if shells[vName] || interpreters[vName].code != nil || len(interpreters[vName].file) > 0 || slices.Contains(g.unlock, vName) {
+				for _, a := range args {
+					if strings.HasPrefix(a, "-") {
+						continue
+					}
+					if l := g.unlockOrScript(a, copied, depth); l != nil {
+						return l
+					}
+					if _, rest, ok := strings.Cut(a, ":"); ok && rest != "" {
+						if l := g.unlockOrScript(rest, copied, depth); l != nil {
+							return l
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+var sedExecCommand = regexp.MustCompile(`(?:^|[;\s{}0-9,$!])e(?:\s+(.*)|$)`)
+
+// sedExecLeak checks sed -f script files and the GNU sed `e` command.
+func (g secretGuard) sedExecLeak(args []string, copied map[string]string, depth int) *leak {
+	var scripts, pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			pos = append(pos, args[i+1:]...)
+			break
+		}
+		switch {
+		case (a == "-f" || a == "--file") && i+1 < len(args):
+			if l := g.unlockOrScript(args[i+1], copied, depth); l != nil {
+				return l
+			}
+			i++
+		case strings.HasPrefix(a, "--file="):
+			if l := g.unlockOrScript(strings.TrimPrefix(a, "--file="), copied, depth); l != nil {
+				return l
+			}
+		case strings.HasPrefix(a, "-f") && len(a) > 2 && !strings.HasPrefix(a, "--"):
+			if l := g.unlockOrScript(a[2:], copied, depth); l != nil {
+				return l
+			}
+		case (a == "-e" || a == "--expression") && i+1 < len(args):
+			scripts = append(scripts, args[i+1])
+			i++
+		case strings.HasPrefix(a, "--expression="):
+			scripts = append(scripts, strings.TrimPrefix(a, "--expression="))
+		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--"):
+			if idx := strings.IndexByte(a[1:], 'e'); idx >= 0 {
+				rest := a[1+idx+1:]
+				if rest != "" {
+					scripts = append(scripts, rest)
+				} else if i+1 < len(args) {
+					scripts = append(scripts, args[i+1])
+					i++
+				}
+			}
+		case !strings.HasPrefix(a, "-"):
+			pos = append(pos, a)
+		}
+	}
+	if len(scripts) == 0 && len(pos) > 0 {
+		scripts = append(scripts, pos[0])
+		pos = pos[1:]
+	}
+	hasExec := false
+	for _, s := range scripts {
+		if m := sedExecCommand.FindStringSubmatch(s); m != nil {
+			hasExec = true
+			if subCmd := strings.TrimSpace(m[1]); subCmd != "" {
+				if l := g.scan(subCmd, depth+1); l != nil {
+					return l
+				}
+			}
+		}
+	}
+	if hasExec {
+		for _, p := range pos {
+			if l := g.unlockOrScript(p, copied, depth); l != nil {
+				return l
+			}
+		}
+	}
+	return nil
+}
+
+// installedUnlockLeak refuses any command that touches an installed unlock
+// helper under ~/.local/bin or ~/bin (even a read such as `cat ~/.local/bin/<helper>`),
+// while repository files with the same basename inside a checkout/worktree
+// remain readable and inspectable.
+func (g secretGuard) installedUnlockLeak(words []string, dirs []string) *leak {
+	if len(g.unlock) == 0 {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	localBin := filepath.Join(home, ".local", "bin")
+	homeBin := filepath.Join(home, "bin")
+	k := commandAt(words)
+	for _, w := range words[k:] {
+		if _, v, ok := strings.Cut(w, "="); ok {
+			w = v
+		}
+		w = strings.TrimLeft(w, "<>|&")
+		if strings.HasPrefix(w, "!") || (!strings.Contains(w, "/") && !strings.Contains(w, "~") && !strings.Contains(w, "$HOME")) {
+			continue
+		}
+		b := path.Base(w)
+		if !slices.Contains(g.unlock, b) {
+			continue
+		}
+		for _, d := range dirs {
+			p := wordPath(w, d)
+			if p == "" {
+				continue
+			}
+			for _, cand := range []string{p} {
+				dir := filepath.Dir(cand)
+				if dir == localBin || dir == homeBin {
+					return &leak{what: b + ", a vault unlock", never: true, unlock: true}
+				}
+				if real, err := filepath.EvalSymlinks(cand); err == nil {
+					rdir := filepath.Dir(real)
+					if rdir == localBin || rdir == homeBin {
+						return &leak{what: b + ", a vault unlock", never: true, unlock: true}
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // toolLeak returns the leak of a credential tool that runs only in beekeeper
@@ -1707,7 +1979,7 @@ func scanShell(s string) shellScan {
 				i++
 			}
 			i--
-		case c == '<' && strings.HasPrefix(s[i:], "<<") && !strings.HasPrefix(s[i:], "<<<"):
+		case c == '<' && (i == 0 || s[i-1] != '<') && strings.HasPrefix(s[i:], "<<") && !strings.HasPrefix(s[i:], "<<<"):
 			if m := heredocOp.FindStringSubmatch(s[i:]); m != nil {
 				pending = append(pending, struct {
 					op    int

@@ -154,6 +154,9 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	agyInstalled := hasAgy()
 	e.AgyHooks = agyHooksPath(e.Spec.Home, agyInstalled)
 	e.AgySkills = agySkillsPath(e.Spec.Home, agyInstalled)
+	codexInstalled := hasCodex()
+	e.CodexHooks = codexHooksPath(e.Spec.Home, codexInstalled)
+	e.CodexSkills = codexSkillsPath(e.Spec.Home, codexInstalled)
 	e.StateDir = a.cfg.StateDir
 	e.Spec.Exe = e.Exe
 	if m, err := plat.Machine.Mem(); err == nil {
@@ -198,6 +201,35 @@ func agyConfigPath(home, name string, agyInstalled bool) string {
 	}
 	p := filepath.Join(home, ".gemini", "config", name)
 	if _, err := os.Lstat(p); err == nil || agyInstalled {
+		return p
+	}
+	return ""
+}
+
+// hasCodex reports whether the codex CLI is installed on PATH.
+func hasCodex() bool {
+	_, err := exec.LookPath("codex")
+	return err == nil
+}
+
+// codexHooksPath returns ~/.codex/hooks.json when codex is installed or the
+// hooks file already exists, "" otherwise.
+func codexHooksPath(home string, codexInstalled bool) string {
+	return codexConfigPath(home, "hooks.json", codexInstalled)
+}
+
+// codexSkillsPath returns ~/.codex/skills when codex is installed or the
+// skills directory already exists, "" otherwise.
+func codexSkillsPath(home string, codexInstalled bool) string {
+	return codexConfigPath(home, "skills", codexInstalled)
+}
+
+func codexConfigPath(home, name string, codexInstalled bool) string {
+	if home == "" {
+		return ""
+	}
+	p := filepath.Join(home, ".codex", name)
+	if _, err := os.Lstat(p); err == nil || codexInstalled {
 		return p
 	}
 	return ""

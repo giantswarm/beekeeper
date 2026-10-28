@@ -115,8 +115,13 @@ func TestEnsureHome(t *testing.T) {
 	if err := os.WriteFile(userConfig, []byte("[projects.\"/tmp/work\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	userAgents := filepath.Join(userCodex, "AGENTS.md")
+	if err := os.WriteFile(userAgents, []byte("# Global rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	codexHome := HomeDir(filepath.Join(root, "state"))
+	stateDir := filepath.Join(root, "state")
+	codexHome := HomeDir(stateDir)
 	if err := EnsureHome(codexHome, authFile, userConfig, "/usr/local/bin/beekeeper", "unalias grep\n"); err != nil {
 		t.Fatalf("EnsureHome: %v", err)
 	}
@@ -125,11 +130,21 @@ func TestEnsureHome(t *testing.T) {
 	if err != nil || linkTarget != authFile {
 		t.Errorf("auth.json symlink = %q (err %v), want %q", linkTarget, err, authFile)
 	}
+	agentsTarget, err := os.Readlink(filepath.Join(codexHome, "AGENTS.md"))
+	if err != nil || agentsTarget != userAgents {
+		t.Errorf("AGENTS.md symlink = %q (err %v), want %q", agentsTarget, err, userAgents)
+	}
+	skillsTarget, err := os.Readlink(filepath.Join(codexHome, "skills"))
+	wantSkills := filepath.Join(stateDir, "skills")
+	if err != nil || skillsTarget != wantSkills {
+		t.Errorf("skills symlink = %q (err %v), want %q", skillsTarget, err, wantSkills)
+	}
 	hooksRaw, err := os.ReadFile(filepath.Join(codexHome, "hooks.json")) //nolint:gosec // test file
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(hooksRaw), "/usr/local/bin/beekeeper hook pretooluse --format codex") {
+	if !strings.Contains(string(hooksRaw), "/usr/local/bin/beekeeper hook pretooluse --format codex") ||
+		!strings.Contains(string(hooksRaw), `"matcher": ".*"`) {
 		t.Errorf("unexpected hooks.json: %s", string(hooksRaw))
 	}
 	zshenvRaw, err := os.ReadFile(filepath.Join(ZshDir(codexHome), ".zshenv")) //nolint:gosec // test file
