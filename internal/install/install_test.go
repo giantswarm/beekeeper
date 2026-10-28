@@ -639,7 +639,17 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeSetup{}
 	e, out := env(t, home, f, f.run)
-	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	hooksPath := filepath.Join(home, ".gemini", "config", "hooks.json")
+
+	// When e.AgyHooks is empty (agy not installed), Install writes nothing at ~/.gemini/config/hooks.json.
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if exists(hooksPath) {
+		t.Fatalf("Install wrote %s when e.AgyHooks was empty", hooksPath)
+	}
+
+	e.AgyHooks = hooksPath
 	write(t, e.AgyHooks, priorAgyHooks)
 
 	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "lacks the beekeeper PreToolUse hook") {
@@ -667,6 +677,19 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 	}
 	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {
 		t.Errorf("after install: CheckAgyHooks = %q, want empty", got)
+	}
+
+	// A second Install run is idempotent (`ok`) and leaves hooks.json byte-for-byte unchanged.
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "ok      ~/.gemini/config/hooks.json: beekeeper PreToolUse hook") {
+		t.Errorf("idempotent second run output:\n%s", out)
+	}
+	raw2, err := os.ReadFile(e.AgyHooks)
+	if err != nil || string(raw2) != string(raw) {
+		t.Errorf("second run changed hooks.json:\n%s\nwant:\n%s", raw2, raw)
 	}
 	const updatedExe = "/updated/bin/beekeeper"
 	if got := CheckAgyHooks(e.AgyHooks, updatedExe, home); !strings.Contains(got, "runs /opt/bin/beekeeper instead of "+updatedExe) {

@@ -211,7 +211,10 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		dirs = append(dirs, within(g.cwd, m[1]))
 	}
 	vars := scanVars(sc, segs)
-	copied := g.copiedUnlocks(sc, segs, vars, depth)
+	copied, copyLeak := g.copiedUnlocks(sc, segs, vars, depth)
+	if copyLeak != nil {
+		return copyLeak
+	}
 	for i, sg := range segs {
 		words := shellWords(sc.plain[sg.start:sg.end])
 		for _, exp := range expandWordsList(words, vars) {
@@ -283,12 +286,15 @@ func expandWordsList(words []string, vars map[string][]string) [][]string {
 }
 
 // copiedUnlocks maps a destination path created on the command line from an
-// unlock helper (by cp, mv, ln, install, dd, tee or >) to that helper's name.
-func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string][]string, depth int) map[string]string {
+// unlock helper (by cp, mv, ln, install, dd, tee or >) to that helper's name,
+// and returns a leak when a segment copies, moves, links or redirects an unlock
+// helper so no alias can be staged across tool calls.
+func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string][]string, depth int) (map[string]string, *leak) {
 	if len(g.unlock) == 0 {
-		return nil
+		return nil, nil
 	}
 	copied := map[string]string{}
+	var copyLeak *leak
 	isUnlock := func(p string) string {
 		b := path.Base(p)
 		if slices.Contains(g.unlock, b) {
@@ -302,30 +308,43 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 		}
 		return ""
 	}
-	for _, sg := range segs {
+	for segIdx, sg := range segs {
+		first := segIdx
+		for first > 0 && segs[first-1].after == "|" {
+			first--
+		}
 		for _, words := range expandWordsList(shellWords(sc.plain[sg.start:sg.end]), vars) {
 			c := commandAt(words)
 			if c >= len(words) {
 				continue
 			}
 			var src string
-			for idx, w := range words[c:] {
-				if idx == 0 && !strings.HasPrefix(w, "<") && !strings.Contains(w, "/") {
-					continue
+			for j := first; j <= segIdx && src == ""; j++ {
+				stageWords := words
+				if j < segIdx {
+					stageWords = shellWords(sc.plain[segs[j].start:segs[j].end])
 				}
-				w = strings.TrimPrefix(w, "if=")
-				w = strings.TrimLeft(w, "<")
-				if u := isUnlock(w); u != "" {
-					src = u
-					break
+				scIdx := commandAt(stageWords)
+				for idx, w := range stageWords[scIdx:] {
+					if idx == 0 && !strings.HasPrefix(w, "<") && !strings.Contains(w, "/") {
+						continue
+					}
+					w = strings.TrimPrefix(w, "if=")
+					w = strings.TrimLeft(w, "<")
+					if u := isUnlock(w); u != "" {
+						src = u
+						break
+					}
 				}
 			}
 			if src == "" {
 				continue
 			}
+			staged := false
 			name := path.Base(words[c])
 			switch name {
 			case "cp", "mv", "ln", "install":
+				staged = true
 				if non := nonFlags(words[c+1:]); len(non) >= 2 {
 					dst := non[len(non)-1]
 					copied[dst] = src
@@ -334,6 +353,7 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 			case "dd":
 				for _, w := range words[c+1:] {
 					if dst, ok := strings.CutPrefix(w, "of="); ok {
+						staged = true
 						copied[dst] = src
 						copied[path.Base(dst)] = src
 					}
@@ -341,18 +361,28 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 			case teeCmd:
 				for _, dst := range nonFlags(words[c+1:]) {
 					if !strings.Contains(dst, "<") {
+						staged = true
 						copied[dst] = src
 						copied[path.Base(dst)] = src
 					}
 				}
 			}
-			if m := redirect.FindStringSubmatch(sc.plain[sg.start:sg.end]); m != nil {
+			if m := redirect.FindStringSubmatch(sc.plain[sg.start:sg.end]); m != nil && !terminal.MatchString(m[1]) && m[1] != "/dev/null" {
+				staged = true
 				copied[m[1]] = src
 				copied[path.Base(m[1])] = src
 			}
+			if staged && copyLeak == nil {
+				copyLeak = &leak{
+					what:   src + ", a vault unlock",
+					at:     sc.plain[segs[first].start:sg.end],
+					never:  true,
+					unlock: true,
+				}
+			}
 		}
 	}
-	return copied
+	return copied, copyLeak
 }
 
 // nested returns the leak of what the simple command runs besides itself:
@@ -438,6 +468,9 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 		script := name != "ssh" && name != watchCmd && name != evalCmd && !slices.ContainsFunc(words[k+1:], isCFlag)
 		for _, arg := range words[k+1:] {
 			if strings.HasPrefix(arg, "-") {
+				if isCFlag(arg) {
+					script = false
+				}
 				continue
 			}
 			if bareRedirect.MatchString(arg) || redirection.MatchString(arg) {
@@ -634,10 +667,10 @@ func (g secretGuard) sourceLeak(words []string, before string, aliases map[strin
 // in full; when a command line wraps a guarded tool in one, it fails closed.
 var unmodeledWrappers = map[string]bool{
 	"strace": true, "ltrace": true, "gdb": true, "lldb": true, "perf": true, "valgrind": true,
-	"bwrap": true, "firejail": true, "nsenter": true, "unshare": true, "chroot": true, " fakeroot": true, "fakeroot": true,
+	"bwrap": true, "firejail": true, "nsenter": true, "unshare": true, "chroot": true, "fakeroot": true,
 	"proot": true, "su": true, "runuser": true, "doas": true, "pkexec": true,
 	"systemd-run": true, "systemd-inhibit": true, "at": true, "batch": true,
-	"parallel": true, " busybox": true, "busybox": true, "toybox": true,
+	"parallel": true, "busybox": true, "toybox": true,
 	"expect": true, "socat": true, "script": true, "screen": true, "tmux": true,
 }
 

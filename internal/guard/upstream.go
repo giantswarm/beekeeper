@@ -34,15 +34,21 @@ type Upstream struct {
 // to, and the command line segment it is.
 type upstreamWrite struct{ what, repo, command string }
 
+const (
+	ghRepoVerb   = "repo"
+	unsetCmd     = "unset"
+	originRemote = "origin"
+)
+
 // ghWrites are the gh subcommands and verbs that write to a repository.
 var ghWrites = map[string]map[string]bool{
 	"pr": {verbCreate: true, verbComment: true, "review": true, verbClose: true, verbEdit: true, "ready": true, "merge": true,
 		"reopen": true, "lock": true, verbUnlock: true, "update-branch": true},
 	"issue": {verbCreate: true, verbComment: true, verbClose: true, verbEdit: true, "reopen": true, "lock": true, verbUnlock: true,
 		verbDelete: true, "transfer": true, "pin": true, "unpin": true, "develop": true},
-	"release": {verbCreate: true, verbEdit: true, verbDelete: true, "upload": true, "delete-asset": true},
-	"label":   {verbCreate: true, verbEdit: true, verbDelete: true, "clone": true},
-	"repo":    {verbEdit: true, verbDelete: true, "archive": true, "unarchive": true, "rename": true},
+	"release":  {verbCreate: true, verbEdit: true, verbDelete: true, "upload": true, "delete-asset": true},
+	"label":    {verbCreate: true, verbEdit: true, verbDelete: true, "clone": true},
+	ghRepoVerb: {verbEdit: true, verbDelete: true, "archive": true, "unarchive": true, "rename": true},
 }
 
 // ghValued are the flags of gh's pr, issue, release, label and repo verbs
@@ -113,47 +119,70 @@ func (u Upstream) bashWrite(cmd, cwd string) *upstreamWrite {
 	if !u.on() {
 		return nil
 	}
-	return u.scan(cmd, cwd, 0)
+	return u.scan(cmd, cwd, false, 0)
 }
 
-func (u Upstream) scan(cmd, cwd string, depth int) *upstreamWrite {
+func (u Upstream) scan(cmd, cwd string, forceUnknown bool, depth int) *upstreamWrite {
 	if depth > 4 {
 		return nil
 	}
-	sc := scanShell(cmd)
-	for _, st := range walkSegments(sc, cwd, u.Git != nil) {
-		sg := st.seg
-		words := shellWords(sc.plain[sg.start:sg.end])
-		if w := u.write(words, st.dir); w != nil {
-			w.command = strings.TrimSpace(cmd[sg.start:sg.end])
+	rawSc := scanShell(cmd)
+	outerPlain, inners, hadSubst := opaquePlain(rawSc.plain)
+	sc := scanShell(outerPlain)
+	sc.heredocs = rawSc.heredocs
+	segs := sc.segments()
+	vars := scanVars(sc, segs)
+	states := walkSegments(sc, cwd, u.Git != nil)
+	anyCD := hasAnyCD(rawSc, 0) || hasAnyCD(sc, 0)
+	for _, in := range inners {
+		if hasAnyCD(scanShell(in), 0) {
+			anyCD = true
+		}
+	}
+	lineMoved := (!isPlain(sc) || hadSubst) && anyCD
+
+	for _, in := range inners {
+		if w := u.scan(in, cwd, lineMoved || forceUnknown, depth+1); w != nil {
 			return w
 		}
-		if envCmd := envSplitCommand(words); envCmd != "" {
-			if w := u.scan(envCmd, st.dir, depth+1); w != nil {
+	}
+
+	for _, st := range states {
+		sg := st.seg
+		rawWords := shellWords(sc.plain[sg.start:sg.end])
+		known := st.known && !lineMoved && !forceUnknown
+		for _, words := range expandWordsList(rawWords, vars) {
+			if w := u.write(words, st.dir, known, st.vars); w != nil {
+				w.command = strings.TrimSpace(cmd[sg.start:sg.end])
 				return w
 			}
-		}
-		if flockCmd := flockCommand(words); flockCmd != "" {
-			if w := u.scan(flockCmd, st.dir, depth+1); w != nil {
-				return w
-			}
-		}
-		// A command string or here-document a shell runs is a command line
-		// of its own.
-		if k := commandAt(words); k == len(words) || !shells[path.Base(words[k])] {
-			continue
-		}
-		for _, arg := range words[1:] {
-			if strings.ContainsAny(arg, " \t\n") {
-				if w := u.scan(arg, st.dir, depth+1); w != nil {
+			if envCmd := envSplitCommand(words); envCmd != "" {
+				if w := u.scan(envCmd, st.dir, !known, depth+1); w != nil {
 					return w
 				}
 			}
-		}
-		for _, h := range sc.heredocs {
-			if h.op >= sg.start && h.op < sg.end {
-				if w := u.scan(cmd[h.start:h.end], st.dir, depth+1); w != nil {
+			if flockCmd := flockCommand(words); flockCmd != "" {
+				if w := u.scan(flockCmd, st.dir, !known, depth+1); w != nil {
 					return w
+				}
+			}
+			// A command string or here-document a shell runs is a command line
+			// of its own.
+			if k := commandAt(words); k == len(words) || !shells[path.Base(words[k])] {
+				continue
+			}
+			for _, arg := range words[1:] {
+				if strings.ContainsAny(arg, " \t\n") {
+					if w := u.scan(arg, st.dir, !known, depth+1); w != nil {
+						return w
+					}
+				}
+			}
+			for _, h := range sc.heredocs {
+				if h.op >= sg.start && h.op < sg.end {
+					if w := u.scan(cmd[h.start:h.end], st.dir, !known, depth+1); w != nil {
+						return w
+					}
 				}
 			}
 		}
@@ -162,7 +191,7 @@ func (u Upstream) scan(cmd, cwd string, depth int) *upstreamWrite {
 }
 
 // write is the refused write of one simple command, nil for none.
-func (u Upstream) write(words []string, cwd string) *upstreamWrite {
+func (u Upstream) write(words []string, cwd string, known bool, vars map[string]string) *upstreamWrite {
 	k := commandAt(words)
 	if k == len(words) {
 		return nil
@@ -177,9 +206,9 @@ func (u Upstream) write(words []string, cwd string) *upstreamWrite {
 	var what, repo string
 	switch path.Base(words[k]) {
 	case "gh":
-		what, repo = u.ghWrite(args, cwd, env)
+		what, repo = u.ghWrite(args, cwd, env, known)
 	case gitCmd:
-		what, repo = u.pushWrite(args, cwd)
+		what, repo = u.pushWrite(words[k:], cwd, known, vars)
 	case "curl":
 		what, repo = u.curlWrite(args)
 	}
@@ -195,12 +224,12 @@ func (u Upstream) write(words []string, cwd string) *upstreamWrite {
 // ghWrite is what a gh call writes and the repository it writes to; "" for
 // a read. A GraphQL mutation that names no owner, or one outside the
 // organizations, reads as one to an unknown repository.
-func (u Upstream) ghWrite(args []string, cwd, env string) (what, repo string) {
+func (u Upstream) ghWrite(args []string, cwd, env string, known bool) (what, repo string) {
 	if len(args) == 0 {
 		return "", ""
 	}
 	if args[0] == ghAPISub {
-		return u.ghAPIWrite(args, cwd, env)
+		return u.ghAPIWrite(args, cwd, env, known)
 	}
 	// The subcommand and verb are the first two positional words: gh's
 	// --repo is a persistent flag, so it may stand between them.
@@ -243,7 +272,7 @@ func (u Upstream) ghWrite(args []string, cwd, env string) (what, repo string) {
 	if named != "" {
 		return what, named
 	}
-	return what, u.baseRepo(cwd, env)
+	return what, u.baseRepo(cwd, env, known)
 }
 
 // repoFlag is the value of a --repo or -R flag written in one word
@@ -289,7 +318,7 @@ func ghAPIMethod(args []string) string {
 // ghAPIWrite is a gh api call's write: a write method, given or implied by
 // a field or an input, on a repository's or an organization's path, or a
 // GraphQL mutation that posts.
-func (u Upstream) ghAPIWrite(args []string, cwd, env string) (what, repo string) {
+func (u Upstream) ghAPIWrite(args []string, cwd, env string, known bool) (what, repo string) {
 	words := append([]string{"gh"}, args...)
 	ep := ghAPIEndpoint(words)
 	if ep == "" {
@@ -310,7 +339,7 @@ func (u Upstream) ghAPIWrite(args []string, cwd, env string) (what, repo string)
 	case m[3] != "":
 		return what, m[3] + "/*"
 	case m[1] == "{owner}" || m[2] == "{repo}":
-		return what, u.baseRepo(cwd, env)
+		return what, u.baseRepo(cwd, env, known)
 	}
 	return what, m[1] + "/" + m[2]
 }
@@ -377,30 +406,39 @@ func (u Upstream) curlWrite(args []string) (what, repo string) {
 // pushWrite is a git push's write: the GitHub repository of the remote it
 // pushes to, a name resolved in the worktree it runs in (git -C), a URL as
 // given, the branch's push remote when none is named.
-func (u Upstream) pushWrite(args []string, cwd string) (what, repo string) {
-	dir := cwd
-	i := 0
-	for ; i < len(args) && strings.HasPrefix(args[i], "-"); i++ {
-		if gitValue[args[i]] && i+1 < len(args) {
-			if args[i] == "-C" {
-				dir = resolve(dir, args[i+1])
-			}
-			i++
-		}
-	}
-	if i == len(args) || args[i] != "push" {
+func (u Upstream) pushWrite(gitWords []string, cwd string, known bool, vars map[string]string) (what, repo string) {
+	args, dir, dirKnown, _ := parseGitGlobal(gitWords, cwd, known, vars, u.Git != nil)
+	if len(args) == 0 || args[0] != "push" {
 		return "", ""
 	}
 	remote := ""
-	for _, a := range args[i+1:] {
+	for k := 1; k < len(args); k++ {
+		a := args[k]
 		if v, ok := strings.CutPrefix(a, flagRepo+"="); ok {
 			remote = v
 			break
+		}
+		if gitPushValued[a] && k+1 < len(args) {
+			if a == flagRepo {
+				remote = args[k+1]
+				break
+			}
+			k++
+			continue
 		}
 		if !strings.HasPrefix(a, "-") {
 			remote = a
 			break
 		}
+	}
+	if r := urlRepo(remote); r != "" {
+		return "git push " + remote, r
+	}
+	if !dirKnown {
+		if remote == "" {
+			remote = originRemote
+		}
+		return "git push " + remote, "a repository the guard cannot resolve after an unfollowed cd (pass git -C <dir> or a repository URL)"
 	}
 	if remote == "" {
 		remote = u.pushRemote(dir)
@@ -434,7 +472,7 @@ func (u Upstream) pushRemote(dir string) string {
 // baseRepo is the repository a gh call without --repo acts on, as gh
 // resolves it: GH_REPO, the remote gh repo set-default chose, else the
 // first GitHub remote of upstream, github and origin, else any.
-func (u Upstream) baseRepo(cwd, env string) string {
+func (u Upstream) baseRepo(cwd, env string, known bool) string {
 	getenv := u.Getenv
 	if getenv == nil {
 		getenv = os.Getenv
@@ -444,6 +482,9 @@ func (u Upstream) baseRepo(cwd, env string) string {
 	}
 	if r := repoSlug(env); r != "" {
 		return r
+	}
+	if !known {
+		return "a repository the guard cannot resolve after an unfollowed cd (pass -R <owner/repo> or a URL)"
 	}
 	type remote struct{ name, repo, resolved string }
 	var remotes []remote

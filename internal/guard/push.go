@@ -230,9 +230,17 @@ func (h Hook) checkGitPush(gitWords []string, cwd string, known, hasCDOnLine boo
 		return ""
 	}
 	var opts, pos []string
+	remote := ""
 	for k := 1; k < len(args); k++ {
 		a := args[k]
+		if v, ok := strings.CutPrefix(a, flagRepo+"="); ok {
+			remote = v
+			continue
+		}
 		if gitPushValued[a] && k+1 < len(args) {
+			if a == flagRepo {
+				remote = args[k+1]
+			}
 			k++
 			continue
 		}
@@ -241,6 +249,9 @@ func (h Hook) checkGitPush(gitWords []string, cwd string, known, hasCDOnLine boo
 		} else {
 			pos = append(pos, a)
 		}
+	}
+	if remote == "" && len(pos) > 0 {
+		remote = pos[0]
 	}
 	for _, o := range opts {
 		if o == "--force" || o == "--mirror" ||
@@ -299,6 +310,9 @@ func (h Hook) checkGitPush(gitWords []string, cwd string, known, hasCDOnLine boo
 		if branch == "" && (h.inWorkTree(gitDir) || hasCDOnLine || explicitC) {
 			return unknownBranchReason
 		}
+	}
+	if !dirKnown && h.Upstream.on() && urlRepo(remote) == "" {
+		return "Refused: the guard cannot tell which repository this push runs in (a cd it cannot follow): pass `git -C <dir> push` or push to the repository URL."
 	}
 	return ""
 }
@@ -412,16 +426,25 @@ func (h Hook) checkGHCommand(words []string, cmdIdx int, cwd string, known bool)
 	if len(pos) >= 2 && pos[0] == "alias" && (pos[1] == verbSet || pos[1] == "import") {
 		return "Refused: no `gh alias`: an alias hides the command from the guard; run it in full."
 	}
-	if len(pos) >= 2 && pos[0] == "pr" && pos[1] == "merge" {
+	if len(pos) >= 2 && ghWrites[pos[0]][pos[1]] {
 		for _, a := range pos[2:] {
 			if r := urlRepo(a); r != "" {
 				namedRepo = r
 			} else if m := issueRef.FindStringSubmatch(a); m != nil {
 				namedRepo = m[1] + "/" + m[2]
+			} else if pos[0] == ghRepoVerb {
+				if r := repoSlug(a); r != "" {
+					namedRepo = r
+				}
 			}
 		}
 		if namedRepo == "" && !known {
-			return "Refused: the guard cannot tell which repository this merge runs in (a cd it cannot follow): name the PR by its URL or with -R <owner/repo>."
+			if pos[0] == "pr" && pos[1] == "merge" {
+				return "Refused: the guard cannot tell which repository this merge runs in (a cd it cannot follow): name the PR by its URL or with -R <owner/repo>."
+			}
+			if h.Upstream.on() {
+				return "Refused: the guard cannot tell which repository `gh " + pos[0] + " " + pos[1] + "` runs in (a cd it cannot follow): pass -R <owner/repo> or a URL."
+			}
 		}
 	}
 	return ""
@@ -464,15 +487,9 @@ func walkSegments(sc shellScan, cwd string, hasFakeGit bool) []segmentState {
 	lost, inList, cond, branchOff := false, false, false, false
 
 	out := make([]segmentState, 0, len(segs))
-	pendingOp := ""
-	havePendingOp := false
 
 	for _, sg := range segs {
 		op := sg.before
-		if havePendingOp {
-			op = pendingOp
-			havePendingOp = false
-		}
 		switch sg.before {
 		case "(", "$(", "<(", "`":
 			top := frames[len(frames)-1]
@@ -513,24 +530,44 @@ func walkSegments(sc shellScan, cwd string, hasFakeGit bool) []segmentState {
 			continue
 		}
 
-		// Record literal variable assignments at the start of the segment.
+		isolated := sg.before == "|" || sg.after == "|" || sg.after == "&"
+		// Bind a variable only when the segment contains assignments alone and
+		// runs unconditionally; otherwise invalidate any assigned variable name.
 		assignWords := words
 		for len(assignWords) > 0 && (assignWords[0] == "export" || assignWords[0] == "declare" || assignWords[0] == "local" || assignWords[0] == "readonly" || assignWords[0] == "typeset") {
 			assignWords = assignWords[1:]
 		}
-		for _, a := range assignWords {
-			m := envWord.FindStringSubmatch(a)
-			if m == nil {
-				break
+		if len(assignWords) > 0 && assignWords[0] == unsetCmd {
+			for _, a := range assignWords[1:] {
+				if !strings.HasPrefix(a, "-") {
+					delete(variables, a)
+				}
 			}
-			if val, ok := expandDirWord(m[2], variables); ok {
-				variables[m[1]] = val
-			} else {
-				delete(variables, m[1])
+		} else {
+			onlyAssigns := len(assignWords) > 0
+			for _, a := range assignWords {
+				if !envWord.MatchString(a) {
+					onlyAssigns = false
+					break
+				}
+			}
+			unconditional := (op == "" || op == ";" || op == "\n") && !cond && !lost && !branchOff && !isolated && len(frames) == 1
+			for _, a := range assignWords {
+				m := envWord.FindStringSubmatch(a)
+				if m == nil {
+					break
+				}
+				if onlyAssigns && unconditional {
+					if val, ok := expandDirWord(m[2], variables); ok {
+						variables[m[1]] = val
+					} else {
+						delete(variables, m[1])
+					}
+				} else {
+					delete(variables, m[1])
+				}
 			}
 		}
-
-		isolated := sg.before == "|" || sg.after == "|" || sg.after == "&"
 		unwrapped, _ := unwrapWords(words)
 		if len(unwrapped) > 0 && (unwrapped[0] == "cd" || unwrapped[0] == pushdCmd || unwrapped[0] == popdCmd) && !isolated {
 			cond = cond || op == "&&" || op == "||"
@@ -784,11 +821,57 @@ func stripRedirects(words []string) []string {
 func hasUnbalancedQuotes(s string) bool {
 	sc := scanShell(s)
 	p := sc.plain
+	// frames: 't' top, 's' $( ), '"' double quotes, '`' backticks.
+	stack := []byte{'t'}
 	for i := 0; i < len(p); i++ {
+		top := stack[len(stack)-1]
 		c := p[i]
+		if top == '"' {
+			switch {
+			case c == '\\':
+				i++
+				if i >= len(p) {
+					return true
+				}
+			case c == '"':
+				stack = stack[:len(stack)-1]
+			case c == '$' && i+1 < len(p) && p[i+1] == '(':
+				stack = append(stack, 's')
+				i++
+			case c == '`':
+				stack = append(stack, '`')
+			}
+			continue
+		}
+		if top == '`' {
+			switch {
+			case c == '\\':
+				i++
+				if i >= len(p) {
+					return true
+				}
+			case c == '`':
+				stack = stack[:len(stack)-1]
+			case c == '\'':
+				j := strings.IndexByte(p[i+1:], '\'')
+				if j < 0 {
+					return true
+				}
+				i += j + 1
+			case c == '"':
+				stack = append(stack, '"')
+			case c == '$' && i+1 < len(p) && p[i+1] == '(':
+				stack = append(stack, 's')
+				i++
+			}
+			continue
+		}
 		switch {
 		case c == '\\':
 			i++
+			if i >= len(p) {
+				return true
+			}
 		case c == '$' && i+1 < len(p) && p[i+1] == '$':
 			i++
 		case c == '$' && i+1 < len(p) && p[i+1] == '\'':
@@ -809,19 +892,19 @@ func hasUnbalancedQuotes(s string) bool {
 			}
 			i += j + 1
 		case c == '"':
+			stack = append(stack, '"')
+		case c == '$' && i+1 < len(p) && p[i+1] == '(':
+			stack = append(stack, 's')
 			i++
-			for i < len(p) && p[i] != '"' {
-				if p[i] == '\\' {
-					i++
-				}
-				i++
-			}
-			if i >= len(p) {
-				return true
-			}
+		case c == '(' && top == 's':
+			stack = append(stack, 's')
+		case c == ')' && top == 's':
+			stack = stack[:len(stack)-1]
+		case c == '`':
+			stack = append(stack, '`')
 		}
 	}
-	return false
+	return len(stack) != 1
 }
 
 // opaquePlain replaces $(...), $((...)), <(...), >(...) and `...` in s (which
@@ -881,10 +964,9 @@ func opaquePlain(s string) (outer string, inners []string, hadSubst bool) {
 				continue
 			case c == '=' && i+1 < len(s) && s[i+1] == '(':
 				end := findClosingParen(s, i+1)
-				_, subInners, subHad := opaquePlain(s[i+2 : end])
+				_, subInners, _ := opaquePlain(s[i+2 : end])
 				inners = append(inners, subInners...)
 				hadSubst = true
-				_ = subHad
 				b.WriteString("=__beekeeper_array__")
 				i = min(end+1, len(s))
 				continue
@@ -950,30 +1032,75 @@ func opaquePlain(s string) (outer string, inners []string, hadSubst bool) {
 }
 
 func findClosingParen(s string, openIdx int) int {
-	depth := 0
-	for i := openIdx; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
+	stack := []byte{'s'}
+	for i := openIdx + 1; i < len(s); i++ {
+		top := stack[len(stack)-1]
+		c := s[i]
+		if top == '"' {
+			switch {
+			case c == '\\':
+				i++
+			case c == '"':
+				stack = stack[:len(stack)-1]
+			case c == '$' && i+1 < len(s) && s[i+1] == '(':
+				stack = append(stack, 's')
+				i++
+			case c == '`':
+				stack = append(stack, '`')
+			}
+			continue
+		}
+		if top == '`' {
+			switch {
+			case c == '\\':
+				i++
+			case c == '`':
+				stack = stack[:len(stack)-1]
+			case c == '\'':
+				j := strings.IndexByte(s[i+1:], '\'')
+				if j < 0 {
+					return len(s)
+				}
+				i += j + 1
+			case c == '"':
+				stack = append(stack, '"')
+			case c == '$' && i+1 < len(s) && s[i+1] == '(':
+				stack = append(stack, 's')
+				i++
+			}
+			continue
+		}
+		switch {
+		case c == '\\':
 			i++
-		case '\'':
+		case c == '$' && i+1 < len(s) && s[i+1] == '$':
+			i++
+		case c == '$' && i+1 < len(s) && s[i+1] == '\'':
+			for i += 2; i < len(s) && s[i] != '\''; i++ {
+				if s[i] == '\\' {
+					i++
+				}
+			}
+		case c == '\'':
 			j := strings.IndexByte(s[i+1:], '\'')
 			if j < 0 {
 				return len(s)
 			}
 			i += j + 1
-		case '"':
-			for i++; i < len(s) && s[i] != '"'; i++ {
-				if s[i] == '\\' {
-					i++
-				}
-			}
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
+		case c == '"':
+			stack = append(stack, '"')
+		case c == '$' && i+1 < len(s) && s[i+1] == '(':
+			stack = append(stack, 's')
+			i++
+		case c == '(':
+			stack = append(stack, 's')
+		case c == ')':
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
 				return i
 			}
+		case c == '`':
+			stack = append(stack, '`')
 		}
 	}
 	return len(s)

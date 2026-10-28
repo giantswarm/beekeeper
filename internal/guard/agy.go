@@ -7,7 +7,11 @@ import (
 	"strings"
 )
 
-const decisionAsk = "ask"
+const (
+	decisionAsk       = "ask"
+	manageTaskTool    = "manage_task"
+	commandStatusTool = "command_status"
+)
 
 // agyPayload is the PreToolUse JSON agy passes on stdin.
 type agyPayload struct {
@@ -60,7 +64,7 @@ func AgyPaths(input []byte) []string {
 	var out []string
 	out = append(out, p.WorkspacePaths...)
 	if p.ToolCall != nil && p.ToolCall.Args != nil {
-		for _, k := range []string{"Cwd", "DirectoryPath", "SearchPath", "SearchDirectory", "Path", "TargetFile", "AbsolutePath"} {
+		for _, k := range []string{"Cwd", "DirectoryPath", "SearchPath", "SearchDirectory", "Path", "TargetFile", "AbsolutePath", "NotebookPath"} {
 			if v, ok := p.ToolCall.Args[k].(string); ok && v != "" {
 				out = append(out, v)
 			}
@@ -80,8 +84,7 @@ func AgySession(input []byte) string {
 
 // DecideUnsandboxedAgy is DecideUnsandboxed in agy's PreToolUse format.
 func DecideUnsandboxedAgy(input []byte) []byte {
-	ev, origCmd, errReason := parseAgyEvent(input)
-	_ = origCmd
+	ev, _, errReason := parseAgyEvent(input)
 	if errReason != "" {
 		return DenyAgy(errReason)
 	}
@@ -116,7 +119,8 @@ func (h Hook) DecideAgy(input []byte) []byte {
 	if ev.ToolName == "" {
 		return PassAgy()
 	}
-	raw := h.decide(ev)
+	h.freshLabs(ev)
+	raw := h.labProxy(ev, h.decide(ev))
 	if len(raw) == 0 {
 		return PassAgy()
 	}
@@ -130,7 +134,7 @@ func (h Hook) DecideAgy(input []byte) []byte {
 	if out.PermissionDecision == decisionDeny {
 		return DenyAgy(out.Reason)
 	}
-	if ev.ToolName == bashTool && out.UpdatedInput != nil {
+	if ev.ToolName == bashTool && origCmd != "" && out.UpdatedInput != nil {
 		if newCmd, ok := out.UpdatedInput[commandKey].(string); ok && newCmd != "" && newCmd != origCmd {
 			return answerAgy(agyOutput{
 				Decision:  decisionAllow,
@@ -138,7 +142,32 @@ func (h Hook) DecideAgy(input []byte) []byte {
 			})
 		}
 	}
+	if ev.ToolName == SendMessageTool && out.UpdatedInput != nil {
+		if newTo, ok := out.UpdatedInput["to"].(string); ok && newTo != "" {
+			return answerAgy(agyOutput{
+				Decision:  decisionAllow,
+				Overwrite: map[string]any{"Recipient": newTo},
+			})
+		}
+	}
 	return PassAgy()
+}
+
+// agyNonFileTools are known non-file agy tools whose string arguments are
+// scanned by Outbound.toolRefusal.
+var agyNonFileTools = map[string]bool{
+	"search_web":         true,
+	"schedule":           true,
+	"invoke_subagent":    true,
+	"define_subagent":    true,
+	"manage_subagents":   true,
+	"list_resources":     true,
+	"read_resource":      true,
+	"read_url_content":   true,
+	"view_content_chunk": true,
+	"browser_subagent":   true,
+	manageTaskTool:       true,
+	commandStatusTool:    true,
 }
 
 func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
@@ -156,13 +185,10 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	session := p.ConversationID
-	if session != "" && !strings.HasPrefix(session, "agy-") {
-		session = "agy-" + session
-	}
 	ev = event{
-		CWD:     cwd,
-		Session: session,
+		CWD:            cwd,
+		Session:        p.ConversationID,
+		TranscriptPath: p.TranscriptPath,
 	}
 
 	switch name := p.ToolCall.Name; {
@@ -179,19 +205,95 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		}
 		return ev, cmd, ""
 
+	case name == manageTaskTool:
+		switch firstString(args, "Action", "action") {
+		case "send_input":
+			in, ok := args["Input"].(string)
+			if !ok || in == "" {
+				return event{}, "", "Refused: manage_task send_input without an Input string."
+			}
+			ev.ToolName = bashTool
+			ev.ToolInput = map[string]any{
+				commandKey: in,
+			}
+			return ev, "", ""
+		case "kill":
+			taskID := firstString(args, "TaskId", "task_id")
+			if taskID == "" {
+				return event{}, "", "Refused: manage_task kill without a TaskId string."
+			}
+			ev.ToolName = TaskStopTool
+			ev.ToolInput = map[string]any{
+				"task_id": taskID,
+			}
+			return ev, "", ""
+		case "status":
+			taskID := firstString(args, "TaskId", "task_id")
+			if taskID == "" {
+				return event{}, "", "Refused: manage_task status without a TaskId string."
+			}
+			ev.ToolName = manageTaskTool
+			ev.ToolInput = args
+			return ev, "", ""
+		case "list":
+			ev.ToolName = manageTaskTool
+			ev.ToolInput = args
+			return ev, "", ""
+		default:
+			return event{}, "", "Refused: manage_task without a valid Action."
+		}
+
+	case name == "send_command_input":
+		in, ok := args["Input"].(string)
+		if !ok || in == "" {
+			return event{}, "", "Refused: send_command_input without an Input string."
+		}
+		ev.ToolName = bashTool
+		ev.ToolInput = map[string]any{
+			commandKey: in,
+		}
+		return ev, "", ""
+
+	case name == "terminate_command":
+		taskID := firstString(args, "CommandId", "TaskId", "task_id")
+		if taskID == "" {
+			return event{}, "", "Refused: terminate_command without a CommandId string."
+		}
+		ev.ToolName = TaskStopTool
+		ev.ToolInput = map[string]any{
+			"task_id": taskID,
+		}
+		return ev, "", ""
+
+	case name == commandStatusTool:
+		if firstString(args, "CommandId", "TaskId", "task_id") == "" {
+			return event{}, "", "Refused: command_status without a CommandId string."
+		}
+		ev.ToolName = commandStatusTool
+		ev.ToolInput = args
+		return ev, "", ""
+
 	case name == "write_file" || name == "write_to_file":
+		fp := firstString(args, "Path", "TargetFile", filePathKey)
+		if fp == "" {
+			return event{}, "", "Refused: " + name + " without a Path string."
+		}
 		ev.ToolName = writeTool
 		ev.ToolInput = map[string]any{
-			filePathKey: firstString(args, "Path", "TargetFile", filePathKey),
+			filePathKey: fp,
 			"content":   firstString(args, "Content", "CodeContent", "content"),
 		}
 		return ev, "", ""
 
-	case name == "edit_file" || name == "replace_file_content" || name == "multi_replace_file_content":
+	case name == "edit_file" || name == "replace_file_content" || name == "multi_replace_file_content" || name == "multi_edit_file":
 		const newStringKey = "new_string"
+		fp := firstString(args, "Path", "TargetFile", filePathKey)
+		if fp == "" {
+			return event{}, "", "Refused: " + name + " without a Path string."
+		}
 		ev.ToolName = editTool
 		ti := map[string]any{
-			filePathKey:  firstString(args, "Path", "TargetFile", filePathKey),
+			filePathKey:  fp,
 			newStringKey: firstString(args, "Replacement", "ReplacementContent", newStringKey),
 		}
 		if chunks, ok := args["ReplacementChunks"].([]any); ok {
@@ -208,30 +310,54 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		ev.ToolInput = ti
 		return ev, "", ""
 
+	case name == "notebook_edit":
+		fp := firstString(args, "NotebookPath", "Path", "TargetFile", notebookPathKey, filePathKey)
+		if fp == "" {
+			return event{}, "", "Refused: notebook_edit without a NotebookPath string."
+		}
+		ev.ToolName = notebookTool
+		ev.ToolInput = map[string]any{
+			notebookPathKey: fp,
+			"new_source":    firstString(args, "NewSource", "Content", "Replacement", "new_source"),
+		}
+		return ev, "", ""
+
 	case name == "read_file" || name == "view_file" || name == "view_file_outline" || name == "view_code_item":
+		fp := firstString(args, "Path", "AbsolutePath", "File", filePathKey)
+		if fp == "" {
+			return event{}, "", "Refused: " + name + " without a Path string."
+		}
 		ev.ToolName = readTool
 		ev.ToolInput = map[string]any{
-			filePathKey: firstString(args, "Path", "AbsolutePath", "File", filePathKey),
+			filePathKey: fp,
 		}
 		return ev, "", ""
 
 	case name == "grep_search":
+		sp := firstString(args, "SearchPath", "Path", "DirectoryPath", pathKey)
+		if sp == "" {
+			return event{}, "", "Refused: grep_search without a SearchPath string."
+		}
 		ev.ToolName = grepTool
 		mode := contentKey
 		if mpl, ok := args["MatchPerLine"].(bool); ok && !mpl {
 			mode = "files_with_matches"
 		}
 		ev.ToolInput = map[string]any{
-			pathKey:       firstString(args, "SearchPath", "Path", "DirectoryPath", pathKey),
+			pathKey:       sp,
 			patternKey:    firstString(args, "Query", "Pattern", patternKey),
 			outputModeKey: mode,
 		}
 		return ev, "", ""
 
-	case name == "find_by_name" || name == "list_dir":
+	case name == "find_by_name" || name == "list_dir" || name == "list_directory":
+		sp := firstString(args, "SearchDirectory", "DirectoryPath", "Path", pathKey)
+		if sp == "" {
+			return event{}, "", "Refused: " + name + " without a DirectoryPath string."
+		}
 		ev.ToolName = globTool
 		ev.ToolInput = map[string]any{
-			pathKey:    firstString(args, "SearchDirectory", "DirectoryPath", "Path", pathKey),
+			pathKey:    sp,
 			patternKey: firstString(args, "Pattern", patternKey),
 		}
 		return ev, "", ""
@@ -242,9 +368,13 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return ev, "", ""
 
 	case name == "send_message":
+		to := firstString(args, "Recipient", "to")
+		if to == "" {
+			return event{}, "", "Refused: send_message without a Recipient string."
+		}
 		ev.ToolName = SendMessageTool
 		ev.ToolInput = map[string]any{
-			"to":      firstString(args, "Recipient", "to"),
+			"to":      to,
 			"message": firstString(args, "Message", "message"),
 		}
 		return ev, "", ""
@@ -252,6 +382,9 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 	case name == "call_mcp_tool":
 		server := firstString(args, "ServerName", "server")
 		tool := firstString(args, "ToolName", "tool")
+		if server == "" || tool == "" {
+			return event{}, "", "Refused: call_mcp_tool without ServerName and ToolName strings."
+		}
 		mcpInput := args
 		if sub, ok := args["Arguments"].(map[string]any); ok {
 			mcpInput = sub
@@ -262,21 +395,28 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 
 	case strings.HasPrefix(name, "mcp_"):
 		if strings.HasPrefix(name, mcpPrefix) {
+			if len(name) <= len(mcpPrefix) {
+				return event{}, "", "Refused: malformed mcp tool name."
+			}
 			ev.ToolName = name
 		} else {
 			rest := strings.TrimPrefix(name, "mcp_")
 			server, tool, ok := strings.Cut(rest, "_")
-			if ok {
-				ev.ToolName = mcpPrefix + server + "__" + tool
-			} else {
-				ev.ToolName = mcpPrefix + rest
+			if !ok || server == "" || tool == "" {
+				return event{}, "", "Refused: malformed mcp tool name."
 			}
+			ev.ToolName = mcpPrefix + server + "__" + tool
 		}
+		ev.ToolInput = args
+		return ev, "", ""
+
+	case agyNonFileTools[name]:
+		ev.ToolName = name
 		ev.ToolInput = args
 		return ev, "", ""
 	}
 
-	return event{}, "", ""
+	return event{}, "", "Refused: unknown agy tool `" + p.ToolCall.Name + "`."
 }
 
 func firstString(m map[string]any, keys ...string) string {

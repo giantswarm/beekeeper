@@ -156,7 +156,7 @@ func outboundReason(what string, hits []string) string {
 func (o Outbound) toolRefusal(tool string, input map[string]any) string {
 	var text, what string
 	switch {
-	case strings.HasPrefix(tool, mcpPrefix):
+	case strings.HasPrefix(tool, mcpPrefix) || agyNonFileTools[tool]:
 		text, what = strings.Join(stringValues(input), "\n"), "the "+tool+" call"
 	case tool == writeTool || tool == editTool || tool == multiEditTool || tool == notebookTool:
 		file, _ := input[filePathKey].(string)
