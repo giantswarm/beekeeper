@@ -337,8 +337,11 @@ latest 50 events; with one, every event in the window unless -n is given too.`,
 		Use:   "add <text>",
 		Short: "Log a status line: what happened, for whoever reads the log (verb status)",
 		Args:  cobra.MinimumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args, " ")
+			if a.managedExecutionID() != "" {
+				return a.remoteControl(cmd.Context(), "event", executionEvent{Text: text})
+			}
 			if m := post.Unlinked(text, ""); len(m) > 0 {
 				return refused("log line refused, it lacks: %s", strings.Join(m, "; "))
 			}

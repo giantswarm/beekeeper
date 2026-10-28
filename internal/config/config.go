@@ -30,6 +30,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/notify"
 )
 
@@ -771,6 +772,11 @@ type Stop struct {
 
 // Agents configures the hand-over of registered agents.
 type Agents struct {
+	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
+	// the existing local launch path. Execution configures this machine only
+	// when it is itself an execution host; authentication is provisioned there.
+	Hosts     map[string]ExecutionHost `yaml:"hosts,omitempty"`
+	Execution *execution.HostConfig    `yaml:"execution,omitempty"`
 	// RelayAt is an agent's session context, in tokens, at which the watch
 	// says its hand-over due (default: supervisor.relayAt).
 	RelayAt Tokens `yaml:"relayAt"`
@@ -830,6 +836,8 @@ type Agents struct {
 	// none (--model, a successor's holder's); empty: Claude Code's default.
 	Model string `yaml:"model"`
 }
+
+type ExecutionHost = execution.Host
 
 // The values of agents.mode.
 const (
@@ -3091,6 +3099,21 @@ func (c *Config) validate() error {
 	for _, o := range c.Disk.BuildOutputs {
 		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
 			return fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths")
+		}
+	}
+	identities := map[execution.HostID]bool{}
+	for selector, host := range c.Agents.Hosts {
+		if selector == "local" || !execution.ValidIdentity(selector) || identities[host.Identity] {
+			return errors.New("agents.hosts requires unique identities and selectors; local is reserved")
+		}
+		if err := host.Validate(); err != nil {
+			return fmt.Errorf("agents.hosts.%s: %w", selector, err)
+		}
+		identities[host.Identity] = true
+	}
+	if c.Agents.Execution != nil {
+		if err := c.Agents.Execution.Validate(); err != nil {
+			return fmt.Errorf("agents.execution: %w", err)
 		}
 	}
 	for name := range c.Agents.Profiles {

@@ -191,6 +191,14 @@ func (a *app) stop(ctx context.Context, reason string) error {
 	}
 	spare := spared(st, me)
 	var failed []string
+	for _, s := range st.Starts {
+		if s.Execution == nil || s.Execution.Observation.StopAcknowledged {
+			continue
+		}
+		if err := a.stopExecution(ctx, s.Execution.Handle.Ref, reason); err != nil {
+			failed = append(failed, fmt.Sprintf("SSH execution on %s: termination unconfirmed: %v", s.Execution.Handle.Ref.Host, err))
+		}
+	}
 	lines, f := a.endMerges(st, me)
 	failed = append(failed, f...)
 	units, ul, f := a.stopUnits(ctx, spare)

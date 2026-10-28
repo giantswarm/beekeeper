@@ -109,6 +109,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	ag := st.Agents[i]
+	if ag.Execution != nil {
+		return refused("remote wake is unavailable: https://github.com/giantswarm/beekeeper/issues/1714")
+	}
 	if st.Supervisor != nil && st.Supervisor.Is(by) {
 		// The supervisor's `yours <resource>` is the grant, as in a
 		// SendMessage; the record follows the word.

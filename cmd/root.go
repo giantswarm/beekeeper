@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -98,7 +99,11 @@ func Main() int {
 }
 
 type app struct {
-	cfgPath string
+	executionTransport func(execution.Host) execution.Transport
+	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
+	executionRuntime   func() (*execution.Server, error)
+	executionRequestID string
+	cfgPath            string
 	// loadedCfg is the configuration file loadConfig read; liveCapacity
 	// reloads Capacity from cfgPath or loadedCfg without mutating cfg.
 	loadedCfg string
@@ -177,6 +182,9 @@ with central configured), 125 a newer release (self-update --check).`,
 			if err := a.load(); err != nil {
 				return err
 			}
+			if err := a.checkExecutionCommand(cmd); err != nil {
+				return err
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), firstRunTimeout)
 			defer cancel()
 			if syncsUnder(a.explicitConfig()) {
@@ -190,6 +198,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	pf.StringVar(&a.cfgPath, configFlag, "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
 	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session")
 	pf.BoolVar(&a.json, "json", false, "print JSON")
+	pf.StringVar(&a.executionRequestID, "request-id", "", "idempotency key for a managed remote note, park or report retry")
 
 	root.AddGroup(
 		&cobra.Group{ID: "watching", Title: "Watching:"},
@@ -259,6 +268,13 @@ func (a *app) load() error {
 // caller is who runs this command: the Claude Code session it runs in, or
 // the --as name, with the configured person, team and host.
 func (a *app) caller() (state.Party, error) {
+	if a.managedExecutionID() != "" {
+		_, j, err := a.executionCaller()
+		if err != nil {
+			return state.Party{}, err
+		}
+		return state.Party{Session: j.Handle.ConversationID, Name: j.Request.Name, Host: string(j.Handle.Ref.Host), Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team}, nil
+	}
 	p, err := a.callerSession()
 	p.Person, p.Team, p.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
 	return p, err

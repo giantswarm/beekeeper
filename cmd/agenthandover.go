@@ -50,7 +50,7 @@ follow-up session's prompt. It waits 3s at most for the state lock: a lock
 held longer fails the note unsaved, naming the lock's holder and the desktop
 import of the calling session when one is pending; note again.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -61,6 +61,9 @@ import of the calling session when one is pending; note again.`,
 				return usageErr("the note is empty")
 			case len(text) > maxNote:
 				return usageErr("the note has %d bytes, more than %d", len(text), maxNote)
+			}
+			if a.managedExecutionID() != "" {
+				return a.remoteControl(cmd.Context(), "handover", executionEvent{Text: text})
 			}
 			if err := a.store.RecordWithin(noteLockWait, event(me, verbNote, "%s", text)); err != nil {
 				return a.noteBusy(me, err)
@@ -191,6 +194,9 @@ func (a *app) readHandover(q string) (handover, error) {
 		return handover{}, err
 	}
 	h := handover{agent: st.Agents[i]}
+	if h.agent.Execution != nil {
+		return handover{}, refused("remote handover is unavailable: https://github.com/giantswarm/beekeeper/issues/1714")
+	}
 	p := h.agent.Party
 	if hr, _, ok := harnessForHost(p.HostSession); ok {
 		return handover{}, refused("%q is an %s agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name, hr.Name())

@@ -249,6 +249,9 @@ file; the log keeps them (agents.report, agents.problem).`,
 				report = string(b)
 			}
 			report = strings.TrimSpace(report)
+			if a.managedExecutionID() != "" {
+				return a.remoteControl(cmd.Context(), "report", executionReport{Finished: finished, Text: report, Problems: problems})
+			}
 			if finished && report == "" {
 				return refused("the final report is missing: --report \"<PR links, releases, the live proof, what is still open>\" (or --report - from stdin); beekeeper delivers it to the supervisor")
 			}
@@ -332,6 +335,12 @@ archive it. A session its person started is never archived.`,
 					return nil, err
 				}
 				gone = st.Agents[i].Party
+				if st.Agents[i].Execution != nil {
+					if executionReserved(st, st.Agents[i]) {
+						return nil, refused("SSH execution must have confirmed termination before removal")
+					}
+					keepDesktop = true
+				}
 				removeAgent(st, i)
 				return []state.Event{event(me, "agents.remove", "%s", gone.Name)}, nil
 			})
@@ -359,6 +368,7 @@ archive it. A session its person started is never archived.`,
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
 	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, remove, list)
+	c.AddCommand(a.executionHostCmds()...)
 	return c
 }
 
@@ -388,6 +398,9 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		own := x.Is(me)
 		if !own && !strings.EqualFold(x.Name, me.Name) {
 			continue
+		}
+		if x.Execution != nil {
+			return registration{}, refused("name belongs to a managed SSH execution; inspect or stop it before replacement")
 		}
 		if x.LastTask != "" && (own || lastTask == "") {
 			lastTask = x.LastTask
@@ -540,6 +553,19 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	desktop := t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
+		if ag.Execution != nil {
+			v.Reachable = "SSH reachability unknown; process unknown"
+			if r, _ := executionRecord(st, *ag.Execution); r != nil {
+				reach := r.Observation.Reachability
+				if r.Observation.ObservedAt.IsZero() || a.now.Sub(r.Observation.ObservedAt) > time.Minute {
+					reach = "unknown (stale)"
+				}
+				v.Reachable = "SSH " + reach + "; process " + r.Observation.ProcessState
+			}
+			v.Browser = "-"
+			out = append(out, v)
+			continue
+		}
 		if w := ag.Import; w.Pending(a.now) {
 			v.Reachable = "importing, until " + clock(a.now, w.Until)
 		}
@@ -573,6 +599,9 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 func stoppedAgents(agents []state.Agent, sessions []*claude.Session) []state.Agent {
 	var out []state.Agent
 	for _, ag := range agents {
+		if ag.Execution != nil {
+			continue
+		}
 		if _, live := claude.Live(sessions, ag.Party); ag.Task != "" && !live {
 			out = append(out, ag)
 		}
