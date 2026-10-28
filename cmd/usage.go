@@ -133,13 +133,13 @@ func parseUsageJSON(raw []byte) (usageReading, error) {
 		SevenDay *rawWindow `json:"sevenDay"`
 	}
 	var doc struct {
-		At         string                `json:"at"`
-		AgeMinutes *float64              `json:"ageMinutes"`
-		Stale      bool                  `json:"stale"`
-		Pace       *float64              `json:"pace"`
-		FiveHour   *rawWindow            `json:"fiveHour"`
-		SevenDay   *rawWindow            `json:"sevenDay"`
-		Buckets    map[string]rawBucket  `json:"buckets"`
+		At         string               `json:"at"`
+		AgeMinutes *float64             `json:"ageMinutes"`
+		Stale      bool                 `json:"stale"`
+		Pace       *float64             `json:"pace"`
+		FiveHour   *rawWindow           `json:"fiveHour"`
+		SevenDay   *rawWindow           `json:"sevenDay"`
+		Buckets    map[string]rawBucket `json:"buckets"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return usageReading{}, fmt.Errorf("invalid JSON: %w", err)
