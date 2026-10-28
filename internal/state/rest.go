@@ -174,10 +174,19 @@ func (v *AlertOwner) UnmarshalJSON(b []byte) error {
 func (v AlertOwner) MarshalJSON() ([]byte, error) { return encodeKeeping(plainAlertOwner(v), v.rest) }
 func (v *Start) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainStart)(v), &v.rest) }
 func (v Start) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainStart(v), v.rest) }
-func (v *App) UnmarshalJSON(b []byte) error       { return decodeKeeping(b, (*plainApp)(v), &v.rest) }
-func (v App) MarshalJSON() ([]byte, error)        { return encodeKeeping(plainApp(v), v.rest) }
-func (v *AppRun) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainAppRun)(v), &v.rest) }
-func (v AppRun) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainAppRun(v), v.rest) }
+
+type plainExecutionRecord ExecutionRecord
+
+func (v *ExecutionRecord) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainExecutionRecord)(v), &v.rest)
+}
+func (v ExecutionRecord) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainExecutionRecord(v), v.rest)
+}
+func (v *App) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainApp)(v), &v.rest) }
+func (v App) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainApp(v), v.rest) }
+func (v *AppRun) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainAppRun)(v), &v.rest) }
+func (v AppRun) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainAppRun(v), v.rest) }
 func (v *AppCreated) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainAppCreated)(v), &v.rest)
 }

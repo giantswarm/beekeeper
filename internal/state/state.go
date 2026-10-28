@@ -24,6 +24,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -362,11 +363,14 @@ type Park struct {
 // Agent is an empty session registered as spare capacity.
 type Agent struct {
 	Party
-	Registered time.Time `json:"registered"`
-	Task       string    `json:"task,omitempty"`
-	AssignedAt time.Time `json:"assignedAt,omitzero"`
-	IdleSince  time.Time `json:"idleSince,omitzero"`
-	LastTask   string    `json:"lastTask,omitempty"`
+	// Execution references a coordinating roster entry's remote process.
+	// Its reachability and lifecycle are stored on the matching Start.
+	Execution  *execution.Ref `json:"execution,omitempty"`
+	Registered time.Time      `json:"registered"`
+	Task       string         `json:"task,omitempty"`
+	AssignedAt time.Time      `json:"assignedAt,omitzero"`
+	IdleSince  time.Time      `json:"idleSince,omitzero"`
+	LastTask   string         `json:"lastTask,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
@@ -761,10 +765,11 @@ type AppCreated struct {
 // the start that created it.
 type Start struct {
 	Party
-	Mode string    `json:"mode"`
-	Dir  string    `json:"dir"`
-	By   Party     `json:"by"`
-	At   time.Time `json:"at"`
+	Execution *ExecutionRecord `json:"execution,omitempty"`
+	Mode      string           `json:"mode"`
+	Dir       string           `json:"dir"`
+	By        Party            `json:"by"`
+	At        time.Time        `json:"at"`
 	// Harness is the agent harness started: "" for Claude Code, "omp".
 	Harness string `json:"harness,omitempty"`
 	// Model is the model the session was started on (--model, as its first
@@ -776,6 +781,32 @@ type Start struct {
 	Background bool `json:"background,omitempty"`
 
 	rest rest
+}
+
+// ExecutionRecord is the coordinator's durable admission/activation journal.
+// Request includes the private component callback credential and must never
+// be returned by an operator status or logs command.
+type ExecutionRecord struct {
+	Handle          execution.Handle                   `json:"handle"`
+	Request         execution.StartRequest             `json:"request"`
+	RequestDigest   string                             `json:"requestDigest"`
+	Selector        string                             `json:"selector"`
+	Phase           string                             `json:"phase"`
+	Provider        string                             `json:"provider"`
+	Bucket          string                             `json:"bucket,omitempty"`
+	ReservedAt      time.Time                          `json:"reservedAt"`
+	Observation     execution.Observation              `json:"observation"`
+	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
+	ControlSequence uint64                             `json:"controlSequence,omitempty"`
+	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
+	rest            rest
+}
+
+func (r *ExecutionRecord) Terminal() bool {
+	if r.StopRequest != nil && !r.Observation.StopAcknowledged {
+		return false
+	}
+	return r.Observation.StopAcknowledged || r.Observation.ProcessState == execution.Exited || r.Observation.ProcessState == execution.Failed
 }
 
 // Archive is the desktop session of an agent that left the roster while
