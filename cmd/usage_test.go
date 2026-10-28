@@ -2006,3 +2006,145 @@ capacity:
 		t.Fatalf("resume ParkedClaude under claude USAGE HIGH: code=%d, err=%v", Code(err), err)
 	}
 }
+
+func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	origMachine := plat.Machine
+	plat.Machine = tableMachine{plat.Machine}
+	t.Cleanup(func() { plat.Machine = origMachine })
+
+	rawCfg := `capacity:
+  floor: 1
+  ceiling: 4
+  providers:
+    claude:
+      floor: 1
+      ceiling: 2
+    agy:
+      floor: 1
+      ceiling: 2
+  choices:
+    - {harness: claude, model: claude-opus-4-7}
+    - {harness: agy, model: gemini-3-1-pro-medium}
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Fix https://github.com/giantswarm/beekeeper/issues/1684\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+
+	// 1. scratchArgv serializes --exclude without square brackets so a brokered child
+	//    agentStartCmd excludes claude and dispatches agy.
+	parentCmd := a.agentStartCmd()
+	if err := parentCmd.ParseFlags([]string{testHarnessFlag, harnessAuto, "--exclude", claudeComm, "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := a.scratchArgv(parentCmd, []string{"SandboxedAuto1", brief})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(argv, "--exclude=claude") || slices.Contains(argv, "--exclude=[claude]") {
+		t.Fatalf("scratchArgv serialized --exclude with brackets: %q", argv)
+	}
+	childArgs, _, err := scratchConfig(argv[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a.out = &out
+	childCmd := a.agentStartCmd()
+	childCmd.SilenceErrors = true
+	childCmd.SilenceUsage = true
+	childCmd.SetArgs(childArgs)
+	if err := childCmd.Execute(); err != nil {
+		t.Fatalf("brokered child agentStartCmd failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "choice: agy / gemini-3-1-pro-medium") {
+		t.Fatalf("brokered child did not exclude claude:\n%s", out.String())
+	}
+
+	// 2. Even if bracketed --exclude=[claude] is passed directly, normalizeExcludes strips brackets.
+	out.Reset()
+	bracketCmd := a.agentStartCmd()
+	bracketCmd.SilenceErrors = true
+	bracketCmd.SilenceUsage = true
+	bracketCmd.SetArgs([]string{testHarnessFlag, harnessAuto, "--exclude=[claude]", "--dry-run", "SandboxedAuto2", brief})
+	if err := bracketCmd.Execute(); err != nil {
+		t.Fatalf("bracketed --exclude failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "choice: agy / gemini-3-1-pro-medium") {
+		t.Fatalf("bracketed --exclude=[claude] did not exclude claude:\n%s", out.String())
+	}
+}
+
+func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	origMachine := plat.Machine
+	plat.Machine = tableMachine{plat.Machine}
+	t.Cleanup(func() { plat.Machine = origMachine })
+
+	rawCfg := `capacity:
+  floor: 1
+  ceiling: 4
+  providers:
+    shared-agy:
+      floor: 1
+      ceiling: 1
+  choices:
+    - {harness: agy, model: gemini-3-1-pro-medium, provider: shared-agy}
+    - {harness: agy, model: claude-opus-4-6-thinking, provider: shared-agy}
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	sup := tasked("Supervisor run 1")
+	busyGemini := tasked("BusyGemini")
+	busyGemini.Harness, busyGemini.Model = harnessAgy, testModelGemini
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Agents = []state.Agent{sup, busyGemini}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Fix https://github.com/giantswarm/beekeeper/issues/1684\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// BusyGemini runs on gemini-3-1-pro-medium, mapped via choices[0] to provider shared-agy (ceiling 1).
+	// Requesting --harness auto --model claude-opus-4-6-thinking must still attribute BusyGemini to
+	// shared-agy before filtering candidate choices to claude-opus-4-6-thinking, and refuse the start.
+	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+	cmd := a.agentStartCmd()
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, "BlockedWorker", brief})
+	err = cmd.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "1 busy at the ceiling of 1") {
+		t.Fatalf("expected refusal when shared provider ceiling 1 is held by another choice's model: code=%d, err=%v", Code(err), err)
+	}
+}

@@ -138,7 +138,7 @@ func TestOmpCredentials(t *testing.T) {
 	} {
 		cfg := &config.Config{Omp: config.Omp{ModelsFile: write(t, tc.models)}}
 		if tc.ref != "" {
-			cfg.Omp.Providers = map[string]config.OmpProvider{"spark": {APIKey: tc.ref}}
+			cfg.Omp.Providers = map[string]config.OmpProvider{sparkProvider: {APIKey: tc.ref}}
 		}
 		a := &app{cfg: cfg}
 		creds, err := a.ompCredentials(tc.model)
@@ -166,8 +166,10 @@ func TestOmpCredentials(t *testing.T) {
 
 // The tests' vault provider: a model of it and its key's reference.
 const (
-	sparkModel = "spark/m"
-	sparkRef   = "op://Shared/spark/credential" //nolint:gosec // a reference, no value
+	sparkProvider   = "spark"
+	sparkModel      = "spark/m"
+	sparkRef        = "op://Shared/spark/credential" //nolint:gosec // a reference, no value
+	autoHarnessFlag = "--harness=auto"
 )
 
 // A brokered omp start on a provider of omp.providers reads the vault,
@@ -175,9 +177,10 @@ const (
 // eligible non-vault choice ahead of a vault-backed omp fallback does not.
 func TestOmpStartNeedsVault(t *testing.T) {
 	const ompHarness = "--harness=omp"
-	const autoHarness = "--harness=auto"
+	const autoHarness = autoHarnessFlag
+	const claudeStartedOut = "claude started"
 	a := vaultApp(t, 20*time.Millisecond)
-	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{"spark": {APIKey: sparkRef}}}
+	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
 	a.cfg.Capacity = config.Capacity{
 		Floor:   1,
 		Ceiling: 2,
@@ -186,7 +189,7 @@ func TestOmpStartNeedsVault(t *testing.T) {
 			omp.Harness: {Floor: 1, Ceiling: 1},
 		},
 		Choices: []config.Choice{
-			{Harness: claudeComm, Model: "claude-opus-4-7"},
+			{Harness: claudeComm, Model: testModelOpus47},
 			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
 		},
 	}
@@ -226,11 +229,11 @@ func TestOmpStartNeedsVault(t *testing.T) {
 			if env != nil {
 				t.Errorf("expected nil vault env for claude choice, got %q", env)
 			}
-			return sandbox.Reply{Out: "claude started"}, nil
+			return sandbox.Reply{Out: claudeStartedOut}, nil
 		}
 	})
 	r, err := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpAgents, Args: []string{agentStartName, autoHarness, "--", "w", briefMD}})
-	if err != nil || r.Code != 0 || !called || r.Out != "claude started" {
+	if err != nil || r.Code != 0 || !called || r.Out != claudeStartedOut {
 		t.Fatalf("brokeredVault with eligible claude choice and locked vault: r=%+v, err=%v, called=%v", r, err, called)
 	}
 	called = false
@@ -294,5 +297,130 @@ func TestOmpAgentIsTheCaller(t *testing.T) {
 	ag := state.Agent{Party: state.Party{HostSession: omp.HostPrefix + id, Name: "omp worker"}}
 	if !ag.Is(me) || me.Session != "" {
 		t.Fatalf("caller = %+v, want the omp agent's roster entry", me)
+	}
+}
+
+func TestAutoStartNeedsVaultScratchConfigIsolation(t *testing.T) {
+	a := vaultApp(t, 20*time.Millisecond)
+	a.cfg.StateDir = a.store.Dir()
+	marker := filepath.Join(t.TempDir(), "pwned")
+	missingState := filepath.Join(t.TempDir(), "missing-state")
+	scratchCfg := filepath.Join(t.TempDir(), "scratch.yaml")
+	rawScratch := `stateDir: ` + missingState + `
+omp:
+  model: ` + sparkModel + `
+  providers:
+    spark:
+      apiKey: ` + sparkRef + `
+capacity:
+  floor: 1
+  ceiling: 2
+  providers:
+    spark:
+      floor: 1
+      ceiling: 1
+      command: ["sh", "-c", "touch ` + marker + ` && echo '{\"fiveHour\":{\"usedPercent\":10,\"resetsAt\":\"2099-01-01T00:00:00Z\"}}'"]
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 1}
+  choices:
+    - {harness: omp, model: ` + sparkModel + `, provider: spark}
+`
+	if err := os.WriteFile(scratchCfg, []byte(rawScratch), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const autoHarness = autoHarnessFlag
+	// Host config has no capacity.choices or omp.providers: autoStartNeedsVault
+	// must never copy Capacity/Omp from scratchCfg, never run scratch usage
+	// commands on the host, and never create missingState.
+	if a.ompStartNeedsVault([]string{agentStartName, autoHarness, "--config=" + scratchCfg, "--", "w", briefMD}) {
+		t.Fatal("ompStartNeedsVault copied Capacity/Omp from scratch config")
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scratch usage command ran on host: marker stat err = %v", err)
+	}
+	if _, err := os.Stat(missingState); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing scratch stateDir was created on host: stat err = %v", err)
+	}
+
+	// Denied paths under the state's scanDir (or outside sandbox allow lists) are rejected.
+	deniedCfg := filepath.Join(a.scanDir(), "denied.yaml")
+	if err := os.MkdirAll(a.scanDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deniedCfg, []byte(rawScratch), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
+	a.cfg.Capacity = config.Capacity{
+		Floor:   1,
+		Ceiling: 2,
+		Providers: map[string]config.Provider{
+			claudeComm:  {Floor: 1, Ceiling: 1},
+			omp.Harness: {Floor: 1, Ceiling: 1},
+		},
+		Choices: []config.Choice{
+			{Harness: claudeComm, Model: testModelOpus47},
+			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
+		},
+	}
+	if a.ompStartNeedsVault([]string{agentStartName, autoHarness, "--config=" + deniedCfg, "--", "w", briefMD}) {
+		t.Fatal("ompStartNeedsVault accepted a scratch config inside denied scanDir")
+	}
+}
+
+func TestAutoStartNeedsVaultZeroNowPace(t *testing.T) {
+	const autoHarness = autoHarnessFlag
+	a := vaultApp(t, 20*time.Millisecond)
+	// Leave a.now at zero (time.Time{}), as sandboxCmd's PersistentPreRunE
+	// (loadConfig) leaves it on the host broker.
+	a.now = time.Time{}
+	now := time.Now().UTC()
+	reset5h := now.Add(2 * time.Hour)
+	reset7d := now.Add(84 * time.Hour) // 50% of 7d elapsed -> pace is 50% at time.Now(), 0% at 0001-01-01.
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{
+			FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: reset5h},
+			SevenDay: &usageWindow{UsedPercent: 25, ResetsAt: reset7d},
+		}, nil
+	}
+	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
+	a.cfg.Capacity = config.Capacity{
+		Floor:   1,
+		Ceiling: 2,
+		Providers: map[string]config.Provider{
+			claudeComm: {
+				Floor:   1,
+				Ceiling: 1,
+				Usage: config.Usage{
+					Command:  []string{"read-claude"},
+					FiveHour: []config.UsageBand{{UpTo: 90, Floor: 1, Ceiling: 1}},
+					SevenDay: []config.UsageBand{{UpTo: 90, Floor: 1, Ceiling: 1}},
+				},
+			},
+			omp.Harness: {Floor: 1, Ceiling: 1},
+		},
+		Choices: []config.Choice{
+			{Harness: claudeComm, Model: testModelOpus47},
+			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
+		},
+	}
+	if a.ompStartNeedsVault([]string{agentStartName, autoHarness, "--", "w", briefMD}) {
+		t.Fatal("ompStartNeedsVault rejected eligible 7d pace choice when a.now was zero")
+	}
+	k := secret.NewKeeper(time.Hour, nil)
+	v := &vaultBroker{k: k, wait: 20 * time.Millisecond, signin: func(context.Context) (string, string, error) {
+		return "", "", errors.New("vault locked")
+	}}
+	called := false
+	h := a.brokeredVault(v, func(env []string) sandbox.Handler {
+		return func(context.Context, int, sandbox.Request) (sandbox.Reply, error) {
+			called = true
+			return sandbox.Reply{Out: "ok"}, nil
+		}
+	})
+	r, err := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpAgents, Args: []string{agentStartName, autoHarness, "--", "w", briefMD}})
+	if err != nil || r.Code != 0 || !called {
+		t.Fatalf("brokeredVault with zero a.now and locked vault: r=%+v, err=%v, called=%v", r, err, called)
 	}
 }

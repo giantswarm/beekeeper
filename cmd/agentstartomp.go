@@ -247,17 +247,32 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 
 func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 	target := *a
-	if f.scratchCfg != "" && filepath.IsAbs(f.scratchCfg) {
-		if c, err := config.Load(f.scratchCfg); err == nil {
-			cfgCopy := *a.cfg
-			cfgCopy.StateDir, cfgCopy.LeaseDir = c.StateDir, c.LeaseDir
-			if len(cfgCopy.Capacity.Choices) == 0 && len(c.Capacity.Choices) > 0 {
-				cfgCopy.Capacity = c.Capacity
-			}
-			if len(cfgCopy.Omp.Providers) == 0 && len(c.Omp.Providers) > 0 {
-				cfgCopy.Omp = c.Omp
-			}
-			target.cfg = &cfgCopy
+	if target.now.IsZero() {
+		target.now = time.Now()
+	}
+	if f.scratchCfg != "" {
+		if !filepath.IsAbs(f.scratchCfg) {
+			return false
+		}
+		p := target.sandboxPolicy()
+		cwd, err := os.Getwd()
+		if err != nil || target.sandboxPaths([]string{f.scratchCfg}, nil) != nil || !p.Readable(f.scratchCfg, cwd) {
+			return false
+		}
+		c, err := config.Load(f.scratchCfg)
+		if err != nil {
+			return false
+		}
+		if target.sandboxPaths(nil, []string{c.StateDir, c.LeaseDir}) != nil ||
+			(c.StateDir != "" && !p.Writable(c.StateDir, cwd)) ||
+			(c.LeaseDir != "" && !p.Writable(c.LeaseDir, cwd)) {
+			return false
+		}
+		cfgCopy := *a.cfg
+		cfgCopy.StateDir, cfgCopy.LeaseDir = c.StateDir, c.LeaseDir
+		target.cfg = &cfgCopy
+		target.store = nil
+		if fi, err := os.Stat(c.StateDir); err == nil && fi.IsDir() {
 			if stStore, err := state.Open(c.StateDir); err == nil {
 				target.store = stStore
 			}
@@ -267,16 +282,15 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 	if len(k.Choices) == 0 {
 		return false
 	}
-	if m := strings.TrimSpace(f.model); m != "" {
-		if !choicesHaveModel(k.Choices, m) {
-			return false
-		}
-		k = filterChoiceModel(k, m)
+	wantModel := strings.TrimSpace(f.model)
+	if wantModel != "" && !choicesHaveModel(k.Choices, wantModel) {
+		return false
 	}
+	choicesCap := filterChoiceModel(k, wantModel)
 	if len(k.Providers) > 0 {
 		st := &state.State{}
 		if target.store != nil {
-			if s, err := target.store.Read(); err == nil {
+			if s, err := target.store.Peek(); err == nil {
 				st = s
 			}
 		}
@@ -302,7 +316,7 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			SlotsFree:        1,
 			MaxLabs:          1,
 		}
-		v := buildProvidersCapacity(c, pa, k, readings, h, false, f.excludes, f.review, target.now).stopped(&target, st.Stop)
+		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, f.review, target.now).stopped(&target, st.Stop)
 		ch, err := pickAutoChoice(v, f.force)
 		if err != nil || ch == nil {
 			return false
@@ -310,7 +324,7 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 		return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
 	}
 	normEx := normalizeExcludes(f.excludes)
-	for _, ch := range k.Choices {
+	for _, ch := range choicesCap.Choices {
 		if !choiceExcluded(ch, normEx, nil) {
 			return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
 		}

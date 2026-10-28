@@ -123,6 +123,12 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 			err = refused("--as: a brokered call runs as this session")
 		case configFlag:
 		default:
+			if sv, ok := f.Value.(pflag.SliceValue); ok {
+				for _, v := range sv.GetSlice() {
+					argv = append(argv, "--"+f.Name+"="+v)
+				}
+				return
+			}
 			argv = append(argv, "--"+f.Name+"="+f.Value.String())
 		}
 	})
@@ -166,6 +172,12 @@ func brokerFlags(cmd *cobra.Command) ([]string, error) {
 	cmd.Flags().Visit(func(f *pflag.Flag) {
 		if f.Name == "as" || f.Name == configFlag {
 			err = refused("--%s: a brokered call runs as this session, under the host's config", f.Name)
+		}
+		if sv, ok := f.Value.(pflag.SliceValue); ok {
+			for _, v := range sv.GetSlice() {
+				argv = append(argv, "--"+f.Name+"="+v)
+			}
+			return
 		}
 		argv = append(argv, "--"+f.Name+"="+f.Value.String())
 	})

@@ -841,8 +841,9 @@ func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, 
 func normalizeExcludes(exclude []string) []string {
 	var out []string
 	for _, raw := range exclude {
+		raw = strings.Trim(strings.TrimSpace(raw), "[]")
 		for _, part := range strings.Split(raw, ",") {
-			if s := strings.TrimSpace(part); s != "" {
+			if s := strings.Trim(strings.TrimSpace(part), "[]"); s != "" {
 				out = append(out, s)
 			}
 		}
@@ -1011,8 +1012,16 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 }
 
 func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, review bool) *capacityView {
-	c := countAgents(st, sessions, a.now)
-	pa := countProviderAgents(st, sessions, k, a.now)
+	return a.resolveProvidersCapacityForModel(ctx, st, sessions, k, builds, exclude, review, "")
+}
+
+func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, review bool, wantModel string) *capacityView {
+	now := a.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	c := countAgents(st, sessions, now)
+	pa := countProviderAgents(st, sessions, k, now)
 	readings := make(map[string]providerReadingResult, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
@@ -1023,7 +1032,7 @@ func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, ses
 		readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
 	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
-	return buildProvidersCapacity(c, pa, k, readings, h, builds, exclude, review, a.now)
+	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, review, now)
 }
 
 // withUsage attaches u to v and replaces or prepends the usage block when
@@ -1482,9 +1491,9 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	if err != nil && !platform.Missing(err) {
 		return nil, err
 	}
-	liveCap := filterChoiceModel(a.liveCapacity(), wantModel)
+	liveCap := a.liveCapacity()
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-		return a.resolveProvidersCapacity(ctx, st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop), nil
+		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, review, wantModel).stopped(a, st.Stop), nil
 	}
 	c := countAgents(st, sessions, a.now)
 	k, u := a.resolveUsage(ctx, liveCap)
