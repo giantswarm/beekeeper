@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -342,5 +344,44 @@ func TestCheckAgyHooks(t *testing.T) {
 	}
 	if got := checkAgyHooks(home, "/other/beekeeper", true); !strings.Contains(got, "runs /opt/bin/beekeeper instead of /other/beekeeper") {
 		t.Errorf("other binary: got %q", got)
+	}
+}
+
+// The doctor checks ~/.gemini/config/skills.json and the skills directory it
+// points at when agy is installed, reporting when the file, beekeeper's entry
+// or a skill file is missing or stale, and passing when the entry and skills
+// are in place alongside other entries.
+func TestCheckAgySkills(t *testing.T) {
+	home := t.TempDir()
+	stateDir := filepath.Join(home, ".local", "state", "beekeeper")
+	if got := checkAgySkills(home, stateDir, false); got != "" {
+		t.Fatalf("agy not installed: got %q, want empty", got)
+	}
+	if got := checkAgySkills(home, stateDir, true); !strings.Contains(got, "~/.gemini/config/skills.json is missing; run `beekeeper install`") {
+		t.Fatalf("missing skills.json: got %q", got)
+	}
+	var e install.Env
+	e.Exe = "/opt/bin/beekeeper"
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.AgySkills = agySkillsPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = stateDir
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgySkills(home, stateDir, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if got := checkAgySkills(home, filepath.Join(home, ".local", "state", "other"), true); !strings.Contains(got, "points to ~/.local/state/beekeeper/skills instead of ~/.local/state/other/skills") {
+		t.Errorf("stale path: got %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(install.AgySkillsDir(stateDir), "park", "SKILL.md"), []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgySkills(home, stateDir, true); !strings.Contains(got, "serves the skills park unlike beekeeper") {
+		t.Errorf("stale skill file: got %q", got)
 	}
 }

@@ -21,9 +21,10 @@ session, and beekeeper takes this one off the roster and archives it once its tu
 
 ## Context
 
-- **The supervisor** is the session `beekeeper supervisor status` names (exit 3: none runs); messages
-  go to it by `SendMessage` to `the supervisor`, which beekeeper's hook delivers to the current
-  holder.
+- **The supervisor** is the session `beekeeper supervisor status` names (exit 3: none runs): a
+  worker reports through `agents idle --done --report`, parks through `agents park`, asks questions
+  through `note add --for "<supervisor>"`, and receives wakes through its inbox (`agents wake`; in
+  Claude Code, `SendMessage` to `the supervisor` also reaches the current holder).
 - **The registration** is `beekeeper agents register [--name <name>]`, which puts the session on the
   roster under its title and prints the message's first line, which stands alone: `register:
   <session name> idle, ready for a task`. `beekeeper agents idle` marks a finished task and prints
@@ -60,8 +61,8 @@ session, and beekeeper takes this one off the roster and archives it once its tu
   supervisor's tasks, grants and holds are followed without asking again, and so are the answers
   the guide relays word for word (a message from the guide, the answer in `beekeeper log --verb
   answer.recorded`). What the work shows on GitHub is its own result: the merge, the reply to a reviewer,
-  the issue update, never the answer itself. A question for the person goes to the supervisor in one line; it files it as a
-  note and the guide asks. No `AskUserQuestion` and no waiting on a permission prompt, a browser
+  the issue update, never the answer itself. A question for the person goes to the supervisor via `note add`; it files it as a
+  note and the guide asks. No question tool (`AskUserQuestion`, `ask_question`) and no waiting on a permission prompt, a browser
   approval or a change to settings or configuration: each is a note for the person with its
   default, the session carries on, and a change the person approves is the guide's to make.
 

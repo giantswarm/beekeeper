@@ -745,3 +745,141 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 		t.Errorf("uninstall left hooks.json it created")
 	}
 }
+
+const priorAgySkills = `{
+  "inherits": [
+    {
+      "path": "/shared/skills.json"
+    }
+  ],
+  "entries": [
+    {
+      "path": "~/custom-skills",
+      "exclude": [
+        "experimental-.*"
+      ]
+    }
+  ]
+}
+`
+
+// Install writes the embedded skills and registers their directory in agy's
+// skills.json idempotently without touching other entries or inherits;
+// CheckAgySkills detects missing or stale entries and skill files; nothing is
+// written when agy is not installed; uninstall removes only beekeeper's entry
+// and skill files (or the file when install created it).
+func TestAgySkillsPreservesOtherEntriesAndDetectsStale(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	skillsPath := filepath.Join(home, ".gemini", "config", "skills.json")
+	skillsDir := AgySkillsDir(e.StateDir)
+
+	// When e.AgySkills is empty (agy not installed), Install writes neither skills.json nor skillsDir.
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if exists(skillsPath) || exists(skillsDir) {
+		t.Fatalf("Install wrote agy skills (%v, %v) when e.AgySkills was empty", exists(skillsPath), exists(skillsDir))
+	}
+
+	e.AgySkills = skillsPath
+	write(t, e.AgySkills, priorAgySkills)
+
+	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); !strings.Contains(got, "lacks the beekeeper skills entry") {
+		t.Fatalf("before install: CheckAgySkills = %q", got)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(e.AgySkills)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"/shared/skills.json"`,
+		`"~/custom-skills"`,
+		`"experimental-.*"`,
+		`"` + skillsDir + `"`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("skills.json lacks %s:\n%s", want, raw)
+		}
+	}
+	if !strings.HasPrefix(string(raw), "{\n  \"inherits\":") {
+		t.Errorf("skills.json lost key order:\n%s", raw)
+	}
+	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); got != "" {
+		t.Errorf("after install: CheckAgySkills = %q, want empty", got)
+	}
+
+	// A second Install run is idempotent (`ok`) and leaves skills.json byte-for-byte unchanged.
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "ok      ~/.gemini/config/skills.json: beekeeper skills") {
+		t.Errorf("idempotent second run output:\n%s", out)
+	}
+	raw2, err := os.ReadFile(e.AgySkills)
+	if err != nil || string(raw2) != string(raw) {
+		t.Errorf("second run changed skills.json:\n%s\nwant:\n%s", raw2, raw)
+	}
+
+	// Doctor finds a stale entry pointing to another state directory.
+	otherState := filepath.Join(home, ".local", "state", "other-beekeeper")
+	if got := CheckAgySkills(e.AgySkills, otherState, home); !strings.Contains(got, "points to ~/.local/state/beekeeper/skills instead of ~/.local/state/other-beekeeper/skills") {
+		t.Errorf("stale path: CheckAgySkills = %q", got)
+	}
+
+	// Doctor finds a stale skill file in the registered skills directory, and Install updates it in place.
+	write(t, filepath.Join(skillsDir, "worker-rules", "SKILL.md"), "---\nname: worker-rules\n---\n# stale\n")
+	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); !strings.Contains(got, "serves the skills worker-rules unlike beekeeper") {
+		t.Errorf("stale skill content: CheckAgySkills = %q", got)
+	}
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "update  ~/.gemini/config/skills.json: beekeeper skills") {
+		t.Errorf("update stale skill output:\n%s", out)
+	}
+	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); got != "" {
+		t.Errorf("after skill refresh: CheckAgySkills = %q, want empty", got)
+	}
+
+	// Uninstall removes beekeeper's entry and skill files, leaving prior entries and inherits intact.
+	if err := Uninstall(context.Background(), e, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(e.AgySkills)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != priorAgySkills {
+		t.Errorf("after uninstall:\n%s\nwant:\n%s", raw, priorAgySkills)
+	}
+	if exists(skillsDir) {
+		t.Errorf("uninstall left skillsDir %s", skillsDir)
+	}
+
+	// Installing when skills.json does not exist creates it, and uninstall removes it.
+	if err := os.Remove(e.AgySkills); err != nil {
+		t.Fatal(err)
+	}
+	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); !strings.Contains(got, "is missing") {
+		t.Errorf("missing file: CheckAgySkills = %q", got)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); got != "" {
+		t.Errorf("fresh install: CheckAgySkills = %q", got)
+	}
+	if err := Uninstall(context.Background(), e, true); err != nil {
+		t.Fatal(err)
+	}
+	if exists(e.AgySkills) {
+		t.Errorf("uninstall left skills.json it created")
+	}
+}

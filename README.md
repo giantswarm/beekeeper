@@ -49,7 +49,7 @@ beekeeper install
 ```
 
 `install` merges the PreToolUse, PermissionRequest, PostToolUse and SessionStart hooks into Claude Code's user settings
-(`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) with the binary's absolute path, and when `agy` is installed (`agy` on `PATH` or `~/.gemini/config/hooks.json` present) writes the `"beekeeper"` `PreToolUse` entry (`<this binary> hook pretooluse --format agy`) into `~/.gemini/config/hooks.json` without touching other named hooks in that file (`beekeeper doctor` checks that entry too), writes and
+(`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) with the binary's absolute path, and when `agy` is installed (`agy` on `PATH` or `~/.gemini/config/hooks.json` or `~/.gemini/config/skills.json` present) writes the `"beekeeper"` `PreToolUse` entry (`<this binary> hook pretooluse --format agy`) into `~/.gemini/config/hooks.json` without touching other named hooks in that file and extracts the embedded skills into `<stateDir>/skills` and registers `{"path": "<stateDir>/skills"}` under `"entries"` in `~/.gemini/config/skills.json` without touching other entries or `inherits` in that file (`beekeeper doctor` checks both too), writes and
 starts the [standby service](#desktop-notifications) (a systemd user unit, a launch agent on
 macOS), with `teleport.proxy` set the [Teleport login's keeper](#the-teleport-login), and on systemd the [agent sandbox](#the-agent-sandbox)'s broker (`beekeeper-sandbox.service`) and the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
 run`'s capped commands, with their CPU budget (`memcap.cpuQuota`, `memcap.cpuWeight`), and a drop-in for the Claude Desktop scope that runs (run install again
@@ -155,6 +155,16 @@ they stay out of every worker's skill listing and the Skill tool refuses them: a
 prompt that starts with its bare slash command, as the person types it. A successor's first prompt and
 `handover --prompt` (`guide handover --prompt`) start with it (`/beekeeper:supervise you take over …`),
 and a desk's own copy of a role skill carries the flag too.
+
+For `agy` (Antigravity CLI), `beekeeper install` writes the embedded skills to `<stateDir>/skills`
+(`~/.local/state/beekeeper/skills`) and registers `{"path": "<stateDir>/skills"}` under `"entries"`
+in `~/.gemini/config/skills.json` without touching other entries or `inherits` (`beekeeper doctor`
+checks both the `skills.json` entry and the skill files on disk, and `beekeeper uninstall` removes
+them). Because `agy` walks `AGENTS.md` and `GEMINI.md` only from the working directory up to the
+repository root (the folder containing `.git`) plus the global `~/.gemini/config/GEMINI.md` — and does
+not load an `AGENTS.md` in a parent folder above the repositories — a desk whose shared rules sit
+above the repositories puts them in `~/.gemini/config/GEMINI.md`, or includes the desk's rules file
+from `~/.gemini/config/GEMINI.md` with `@[AGENTS.md](/path/to/projects/AGENTS.md)`.
 
 ## What it does
 

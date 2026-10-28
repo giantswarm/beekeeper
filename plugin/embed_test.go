@@ -240,3 +240,28 @@ func TestWorkerRulesAndMergeSkillShareTheBehindRule(t *testing.T) {
 		}
 	}
 }
+
+// The worker rules and worker topic skills name the harness-neutral CLI
+// routes (agents idle --done --report, agents park, note add, the inbox) and
+// say nothing of Claude Code's SendMessage or AskUserQuestion tools.
+func TestWorkerRulesAndTopicsUseHarnessNeutralRoutes(t *testing.T) {
+	rules := strings.Join(strings.Fields(WorkerRules()), " ")
+	for _, want := range []string{
+		"agents idle --done --report",
+		"agents park",
+		"note add",
+		"inbox",
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("the worker rules do not name %q", want)
+		}
+	}
+	for _, name := range append([]string{"worker-rules"}, Topics...) {
+		text := Skill(name)
+		for _, tool := range []string{"SendMessage", "AskUserQuestion"} {
+			if strings.Contains(text, tool) {
+				t.Errorf("%s skill names %s", name, tool)
+			}
+		}
+	}
+}

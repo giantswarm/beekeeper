@@ -589,8 +589,9 @@ line:
 - reports a stale plugin: an enabled beekeeper plugin whose skills differ
   from the ones this binary embeds, with the plugin's version, the
   binary's and the commands that update it (beekeeper self-update does);
-- checks the agy PreToolUse hook in ~/.gemini/config/hooks.json when agy is
-  installed.
+- checks the agy PreToolUse hook in ~/.gemini/config/hooks.json and the
+  agy skills entry in ~/.gemini/config/skills.json (and the skill files it
+  points at) when agy is installed.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay
@@ -639,7 +640,11 @@ faults but remedying none.`,
 				if p, err := os.Executable(); err == nil && filepath.Base(p) == project.Name {
 					exe, _ = filepath.Abs(p)
 				}
-				if line := checkAgyHooks(home, exe, exe != "" && hasAgy()); line != "" {
+				agyInstalled := exe != "" && hasAgy()
+				if line := checkAgyHooks(home, exe, agyInstalled); line != "" {
+					lines = append(lines, line)
+				}
+				if line := checkAgySkills(home, a.cfg.StateDir, agyInstalled); line != "" {
 					lines = append(lines, line)
 				}
 			}
@@ -750,4 +755,10 @@ func unagreedLine(n int) string {
 // checkAgyHooks checks ~/.gemini/config/hooks.json when agy is installed.
 func checkAgyHooks(home, exe string, agyInstalled bool) string {
 	return install.CheckAgyHooks(agyHooksPath(home, agyInstalled), exe, home)
+}
+
+// checkAgySkills checks ~/.gemini/config/skills.json and the skills directory
+// it points at when agy is installed.
+func checkAgySkills(home, stateDir string, agyInstalled bool) string {
+	return install.CheckAgySkills(agySkillsPath(home, agyInstalled), stateDir, home)
 }
