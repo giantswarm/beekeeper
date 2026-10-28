@@ -247,9 +247,20 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
 				return usageErr("--harness auto: no capacity.choices configured")
 			}
+			if _, err := a.startMode(mode); err != nil {
+				return err
+			}
+			if strings.TrimSpace(mode) == config.ModeBackground && desktop {
+				return usageErr("--mode background and --desktop: a background session has no desktop turn")
+			}
+			if harness != harnessAuto {
+				if err := validateStartHarness(harness, mode); err != nil {
+					return err
+				}
+			}
 			// an omp agent whose provider's key is in the vault starts where
 			// the vault session is: the host's broker
-			if harness == omp.Harness && a.ompStartBrokered(model) {
+			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
 				return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
 			}
 			// a sandboxed session's start reads its brief and gives the
@@ -264,19 +275,8 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
-			if _, err := a.startMode(mode); err != nil {
-				return err
-			}
-			if strings.TrimSpace(mode) == config.ModeBackground {
-				switch {
-				case desktop:
-					return usageErr("--mode background and --desktop: a background session has no desktop turn")
-				case harness == omp.Harness:
-					return usageErr("--mode background and --harness omp: an omp agent is no Claude Code background session")
-				}
-			}
 			gaps := pluginGaps(cmd.Context())
-			if dryRun && harness != omp.Harness {
+			if dryRun {
 				if builds {
 					if err := a.dryRunSlot(); err != nil {
 						return err
@@ -291,6 +291,9 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					if err != nil {
 						return err
 					}
+					if err := validateStartHarness(ch.Harness, mode); err != nil {
+						return err
+					}
 					if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
 						return err
 					}
@@ -299,11 +302,15 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 						model = ch.Model
 					}
 				}
-				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}, gaps)
+				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
+				if harness == omp.Harness {
+					return a.dryRunOmpStart(sp, gaps)
+				}
+				return a.dryRunStart(cmd.Context(), sp, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
-			over, v, err := a.startGateWithOptions(cmd.Context(), name, builds, force, exclude, review)
+			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, review)
 			if err != nil {
 				return err
 			}
@@ -312,12 +319,18 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				if err != nil {
 					return err
 				}
+				if err := validateStartHarness(ch.Harness, mode); err != nil {
+					return err
+				}
 				if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
 					return err
 				}
 				harness = ch.Harness
 				if model == "" {
 					model = ch.Model
+				}
+				if harness == omp.Harness && a.ompStartBrokered(model) {
+					return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
 				}
 			}
 			if over != "" {
@@ -340,12 +353,8 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				}
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
-			switch harness {
-			case omp.Harness:
+			if harness == omp.Harness {
 				return a.startOmpAgent(cmd.Context(), sp)
-			case "", claudeComm:
-			default:
-				return usageErr("--harness %q: claude, omp, or auto", harness)
 			}
 			sa, err := a.startAgent(cmd.Context(), sp)
 			if err != nil {
@@ -388,6 +397,20 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	return c
+}
+
+func validateStartHarness(harness, mode string) error {
+	switch harness {
+	case "", claudeComm, omp.Harness:
+	case harnessAgy:
+		return refused("no start: harness %q is not yet supported by agents start", harness)
+	default:
+		return usageErr("--harness %q: claude, omp, or auto", harness)
+	}
+	if strings.TrimSpace(mode) == config.ModeBackground && harness == omp.Harness {
+		return usageErr("--mode background and --harness omp: an omp agent is no Claude Code background session")
+	}
+	return nil
 }
 
 func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
@@ -1739,6 +1762,26 @@ func (a *app) dryRunStart(ctx context.Context, sp agentStart, gaps []string) err
 		}
 	}
 	_, err := fmt.Fprintf(a.out, "first prompt: %d bytes\n%s\n", len(sp.brief), sp.brief)
+	return err
+}
+
+func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
+	dir, err := a.agentDir(sp.dir)
+	if err != nil {
+		return err
+	}
+	model := cmp.Or(sp.model, a.cfg.Omp.Model, "<model>")
+	argv := ompArgv(omp.Comm, model)
+	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as an omp agent on %s, yolo, no desktop import\nstart: %s\n",
+		sp.name, dir, model, strings.Join(argv, " ")); err != nil {
+		return err
+	}
+	if note := gapsNote(gaps); note != "" {
+		if _, err := fmt.Fprintln(a.out, note); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(a.out, "first prompt: %d bytes\n%s\n", len(sp.brief), sp.brief)
 	return err
 }
 

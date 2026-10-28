@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -330,7 +331,7 @@ func agentHarnessModel(st *state.State, sessions []*claude.Session, ag state.Age
 	if harness == "" {
 		switch {
 		case strings.HasPrefix(ag.HostSession, "omp_") || strings.HasPrefix(ag.Session, "omp_"):
-			harness = "omp"
+			harness = omp.Harness
 		case strings.HasPrefix(ag.HostSession, "agy_") || strings.HasPrefix(ag.Session, "agy_"):
 			harness = harnessAgy
 		default:
@@ -577,35 +578,6 @@ type providerReadingResult struct {
 	ok      bool
 }
 
-func deriveProviderReading(p config.Provider, r usageReading, now time.Time) (floor, ceiling int, high bool) {
-	if !p.Enabled() {
-		return p.Floor, p.Ceiling, false
-	}
-	if len(r.Buckets) > 0 {
-		maxCeiling := 0
-		allHigh := true
-		for _, bName := range bucketNames(r) {
-			b := r.Buckets[bName]
-			fh := effectiveWindow(b.FiveHour, now)
-			sd := effectiveSevenDayWindow(b.SevenDay, now)
-			dp, bh := p.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
-			maxCeiling = max(maxCeiling, dp.Ceiling)
-			if !bh {
-				allHigh = false
-			}
-		}
-		if maxCeiling == 0 {
-			return 0, 0, allHigh
-		}
-		c := min(p.Ceiling, maxCeiling)
-		return min(p.Floor, c), c, false
-	}
-	fh := effectiveWindow(r.FiveHour, now)
-	sd := effectiveSevenDayWindow(r.SevenDay, now)
-	dp, high := p.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
-	return dp.Floor, dp.Ceiling, high
-}
-
 func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time) *providerView {
 	busy := pa.Busy
 	if busy == nil {
@@ -634,12 +606,16 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 			maxBucketCeiling := 0
 			anyBucketOpen := false
 			allHigh := true
+			var firstHighFH *usageWindow
 			var bucketBlocks []string
 			for _, bName := range pv.bucketOrder {
 				b := r.Buckets[bName]
 				fh := effectiveWindow(b.FiveHour, now)
 				sd := effectiveSevenDayWindow(b.SevenDay, now)
 				dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
+				if high && firstHighFH == nil {
+					firstHighFH = fh
+				}
 				bBusy := pa.BucketBusy[bName]
 				if bBusy == nil {
 					bBusy = []string{}
@@ -684,6 +660,9 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 			if maxBucketCeiling == 0 {
 				pv.Floor, pv.Ceiling, pv.Room = 0, 0, 0
 				pv.High = allHigh
+				if allHigh {
+					pv.FiveHour = firstHighFH
+				}
 				pv.Blocks = bucketBlocks
 				pv.Verdict = providerVerdict(0, pv.Blocks)
 				return pv
@@ -883,7 +862,7 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	pm := p + "/" + m
 
 	isKnownProviderOrHarness := func(tok string) bool {
-		if tok == h || tok == p || tok == claudeComm || tok == harnessAgy || tok == "omp" {
+		if tok == h || tok == p || tok == claudeComm || tok == harnessAgy || tok == omp.Harness {
 			return true
 		}
 		return slices.ContainsFunc(providerNames, func(n string) bool { return strings.EqualFold(n, tok) })
@@ -1318,28 +1297,101 @@ func gateStart(v *capacityView, force bool) (string, error) {
 }
 
 // startGateWithOptions reads the capacity verdict for a start that builds or not,
-// as beekeeper capacity reads it, and judges it (queueStart).
-func (a *app) startGateWithOptions(ctx context.Context, name string, builds, force bool, exclude []string, review bool) (string, *capacityView, error) {
+// as beekeeper capacity reads it, narrowed to the target harness/model when
+// explicit, and judges it (queueStart).
+func (a *app) startGateWithOptions(ctx context.Context, name, harness, model string, builds, force bool, exclude []string, review bool) (string, *capacityView, error) {
+	effModel := a.effectiveStartModel(harness, model)
 	v, err := a.startCapacityWithOptions(ctx, builds, exclude, review)
 	if err != nil {
 		return "", nil, err
 	}
+	v = v.forTarget(a.liveCapacity(), harness, effModel)
 	o, wait, err := a.startSlot()
 	if err != nil {
 		return "", nil, err
 	}
-	var latest *capacityView
-	latest = v
+	latest := v
 	over, err := queueStart(v, builds, force, wait,
 		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
 		func() (*capacityView, error) {
 			next, err := a.startCapacityWithOptions(ctx, false, exclude, review)
 			if err == nil {
+				next = next.forTarget(a.liveCapacity(), harness, effModel)
 				latest = next
 			}
 			return next, err
 		})
 	return over, latest, err
+}
+
+func (a *app) effectiveStartModel(harness, model string) string {
+	if m := strings.TrimSpace(model); m != "" {
+		return m
+	}
+	switch strings.TrimSpace(harness) {
+	case omp.Harness:
+		return strings.TrimSpace(a.cfg.Omp.Model)
+	case "", claudeComm:
+		return strings.TrimSpace(a.cfg.Agents.Model)
+	}
+	return ""
+}
+
+// forTarget narrows v's Room and Blocks to the resolved provider and bucket
+// when an explicit harness (not auto) is given.
+func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capacityView {
+	if v == nil || v.Stopped != "" || harness == harnessAuto || len(v.Providers) == 0 {
+		return v
+	}
+	prov, bucket := resolveAgentProviderBucket(k, harness, model)
+	pv := v.Providers[prov]
+	if pv == nil {
+		return v
+	}
+	if bucket != "" && len(pv.Buckets) > 0 {
+		if bv := pv.findBucket(bucket); bv != nil {
+			if bv.Room == 0 {
+				v.Room = 0
+				switch {
+				case len(bv.Blocks) > 0:
+					v.Blocks = []string{fmt.Sprintf("provider %s (%s): %s", prov, bv.Name, strings.Join(bv.Blocks, "; "))}
+				case len(pv.Blocks) == 1 && pv.Blocks[0] == noFreeSlot:
+					v.Blocks = []string{noFreeSlot}
+				case len(pv.Blocks) > 0:
+					v.Blocks = []string{fmt.Sprintf("provider %s: %s", prov, strings.Join(pv.Blocks, "; "))}
+				default:
+					v.Blocks = []string{fmt.Sprintf("provider %s (%s): %s", prov, bv.Name, ceilingZero)}
+				}
+				return v
+			}
+			if v.Room == 0 {
+				v.Room = bv.Room
+				v.Blocks = nil
+			} else {
+				v.Room = min(v.Room, bv.Room)
+			}
+			return v
+		}
+	}
+	if pv.Room == 0 {
+		v.Room = 0
+		switch {
+		case len(pv.Blocks) == 1 && pv.Blocks[0] == noFreeSlot:
+			v.Blocks = []string{noFreeSlot}
+		case len(pv.Blocks) > 0:
+			v.Blocks = []string{fmt.Sprintf("provider %s: %s", prov, strings.Join(pv.Blocks, "; "))}
+		default:
+			v.Blocks = []string{fmt.Sprintf("provider %s: %s", prov, ceilingZero)}
+		}
+		return v
+	}
+	if v.Room == 0 {
+		v.Room = pv.Room
+		v.Blocks = nil
+	} else {
+		v.Room = min(v.Room, pv.Room)
+	}
+	return v
 }
 
 // startSlot is the build slot a start that builds queues for, in the slots

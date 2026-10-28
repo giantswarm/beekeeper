@@ -46,6 +46,13 @@ func usageHighProviderFile(name string) string {
 	return "usage-high-" + unsafeKey.ReplaceAllString(name, "_") + ".json"
 }
 
+func usageHighBucketFile(name, bucket string) string {
+	if bucket == "" {
+		return usageHighProviderFile(name)
+	}
+	return "usage-high-" + unsafeKey.ReplaceAllString(name, "_") + "-" + unsafeKey.ReplaceAllString(bucket, "_") + ".json"
+}
+
 // usageWindow is one subscription usage window (5-hour or 7-day).
 type usageWindow struct {
 	UsedPercent float64   `json:"usedPercent"`
@@ -466,8 +473,8 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 // cachedUsageCapacity derives Capacity from a fresh usage.json (or cached
 // provider usage files) if one exists, without running any subprocess.
 func (a *app) cachedUsageCapacity(k config.Capacity) (config.Capacity, *usageView) {
-	if len(k.Providers) > 0 && a.store != nil {
-		return a.cachedProvidersCapacity(k)
+	if len(k.Providers) > 0 {
+		return a.cachedProvidersCapacityAt(k, a.now, nil)
 	}
 	if !k.Usage.Enabled() || a.store == nil {
 		return k, nil
@@ -480,33 +487,50 @@ func (a *app) cachedUsageCapacity(k config.Capacity) (config.Capacity, *usageVie
 	return k, nil
 }
 
-func (a *app) cachedProvidersCapacity(k config.Capacity) (config.Capacity, *usageView) {
+func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, providerErrs map[string]string) (config.Capacity, *usageView) {
 	derived := k
 	sumFloor, sumCeiling := 0, 0
-	anyRead := false
+	var errs []string
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if !p.Enabled() {
 			sumFloor += p.Floor
 			sumCeiling += p.Ceiling
-			anyRead = true
+			continue
+		}
+		if uerr := providerErrs[name]; uerr != "" {
+			errs = append(errs, name+": "+uerr)
+			continue
+		}
+		if a.store == nil {
+			errs = append(errs, name+": usage not read")
 			continue
 		}
 		var r usageReading
-		if found, err := a.store.ReadFile(usageProviderFile(name), &r); err == nil && found &&
-			usageFresh(r, p.Usage, a.now) && validateReadingAt(r, p.Usage, a.now) == nil {
-			f, c, _ := deriveProviderReading(p, r, a.now)
-			sumFloor += f
-			sumCeiling += c
-			anyRead = true
+		found, err := a.store.ReadFile(usageProviderFile(name), &r)
+		if err != nil || !found {
+			errs = append(errs, name+": usage not read")
+			continue
 		}
-	}
-	if !anyRead {
-		return k, nil
+		if verr := validateReadingAt(r, p.Usage, now); verr != nil {
+			errs = append(errs, name+": "+verr.Error())
+			continue
+		}
+		if !usageFresh(r, p.Usage, now) {
+			errs = append(errs, name+": usage reading is stale")
+			continue
+		}
+		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+		sumFloor += pv.Floor
+		sumCeiling += pv.Ceiling
 	}
 	derived.Ceiling = min(k.Ceiling, sumCeiling)
 	derived.Floor = min(k.Floor, min(sumFloor, derived.Ceiling))
-	return derived, nil
+	var u *usageView
+	if len(errs) > 0 {
+		u = &usageView{Floor: derived.Floor, Ceiling: derived.Ceiling, Error: strings.Join(errs, "; ")}
+	}
+	return derived, u
 }
 
 // resolveUsage returns the derived Capacity and usageView for k, reusing a
@@ -557,12 +581,13 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	return r, nil
 }
 
-// usageHighBlock returns the USAGE HIGH block reason if USAGE HIGH holds now,
-// "" otherwise.
-func (a *app) usageHighBlock(ctx context.Context) string {
+// usageHighBlockForAgent returns the USAGE HIGH block reason for ag if USAGE
+// HIGH holds now on ag's provider/bucket (or globally when capacity.providers
+// is not configured), "" otherwise.
+func (a *app) usageHighBlockForAgent(ctx context.Context, st *state.State, sessions []*claude.Session, ag *state.Agent) string {
 	k := a.liveCapacity()
 	if len(k.Providers) > 0 {
-		return a.providersUsageHighBlock(ctx, k)
+		return a.providersUsageHighBlockForAgent(ctx, k, st, sessions, ag)
 	}
 	if !k.Usage.Enabled() {
 		return ""
@@ -585,41 +610,87 @@ func (a *app) usageHighBlock(ctx context.Context) string {
 	return ""
 }
 
-func (a *app) providersUsageHighBlock(ctx context.Context, k config.Capacity) string {
+func (a *app) providersUsageHighBlockForAgent(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session, ag *state.Agent) string {
+	if ag != nil {
+		if st == nil && a.store != nil {
+			st, _ = a.store.Read()
+		}
+		if st == nil {
+			st = &state.State{}
+		}
+		if sessions == nil {
+			sessions, _, _ = a.sessions()
+		}
+		harness, model := agentHarnessModel(st, sessions, *ag)
+		prov, bucket := resolveAgentProviderBucket(k, harness, model)
+		return a.singleProviderUsageHighBlock(ctx, prov, bucket, k.Providers[prov])
+	}
 	var highReasons []string
+	enabledCount := 0
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if !p.Enabled() {
 			return ""
 		}
-		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
-		if err != nil {
-			if a.store != nil {
-				var l usageHighLedger
-				if found, rerr := a.store.ReadFile(usageHighProviderFile(name), &l); rerr == nil && found &&
-					l.Episode != "" && !l.ResetsAt.IsZero() && a.now.Before(l.ResetsAt) {
-					highReasons = append(highReasons, fmt.Sprintf("%s: usage high until %s (in %s); usage unreadable (%s)",
-						name, clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(err.Error(), 80)))
-					continue
-				}
-			}
+		enabledCount++
+		reason := a.singleProviderUsageHighBlock(ctx, name, "", p)
+		if reason == "" {
 			return ""
 		}
-		_, _, high := deriveProviderReading(p, r, a.now)
-		if !high {
-			return ""
-		}
-		fh := effectiveWindow(r.FiveHour, a.now)
-		highReasons = append(highReasons, name+": "+highBlockText(fh, p.EffectiveHighPercent(), a.now))
+		highReasons = append(highReasons, reason)
 	}
-	if len(highReasons) == 0 {
+	if enabledCount == 0 || len(highReasons) == 0 {
 		return ""
 	}
 	if len(highReasons) == 1 {
-		_, rest, _ := strings.Cut(highReasons[0], ": ")
-		return rest
+		_, rest, ok := strings.Cut(highReasons[0], ": ")
+		if ok {
+			return rest
+		}
+		return highReasons[0]
 	}
 	return strings.Join(highReasons, "; ")
+}
+
+func (a *app) singleProviderUsageHighBlock(ctx context.Context, prov, bucket string, p config.Provider) string {
+	if !p.Enabled() {
+		return ""
+	}
+	r, err := a.resolveReading(ctx, usageProviderFile(prov), p.Usage)
+	if err != nil {
+		if a.store != nil {
+			files := []string{usageHighProviderFile(prov)}
+			if bucket != "" {
+				files = []string{usageHighBucketFile(prov, bucket), usageHighProviderFile(prov)}
+			}
+			for _, lf := range files {
+				var l usageHighLedger
+				if found, rerr := a.store.ReadFile(lf, &l); rerr == nil && found &&
+					l.Episode != "" && !l.ResetsAt.IsZero() && a.now.Before(l.ResetsAt) {
+					label := prov
+					if bucket != "" {
+						label = prov + " (" + bucket + ")"
+					}
+					return fmt.Sprintf("provider %s: usage high until %s (in %s); usage unreadable (%s)",
+						label, clock(a.now.Local(), l.ResetsAt), dur(l.ResetsAt.Sub(a.now)), truncate(err.Error(), 80))
+				}
+			}
+		}
+		return ""
+	}
+	pv := buildSingleProviderView(prov, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, a.now)
+	if len(pv.Buckets) > 0 && bucket != "" {
+		if bv := pv.findBucket(bucket); bv != nil {
+			if bv.High {
+				return fmt.Sprintf("provider %s (%s): %s", prov, bv.Name, highBlockText(bv.FiveHour, pv.HighPercent, a.now))
+			}
+			return ""
+		}
+	}
+	if !pv.High {
+		return ""
+	}
+	return fmt.Sprintf("provider %s: %s", prov, highBlockText(pv.FiveHour, pv.HighPercent, a.now))
 }
 
 func windowFigure(label string, w *usageWindow, now time.Time) string {
@@ -795,8 +866,10 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 
 func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacity, *usageView) {
 	if len(k.Providers) > 0 {
-		derived, _ := w.cachedProvidersCapacity(k)
-		return derived, nil
+		w.mu.Lock()
+		errs := maps.Clone(w.providerUsageErr)
+		w.mu.Unlock()
+		return w.cachedProvidersCapacityAt(k, now, errs)
 	}
 	if !k.Usage.Enabled() {
 		return k, nil
@@ -881,20 +954,25 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 }
 
 func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session) *usageView {
+	readings := map[string]providerReadingResult{}
 	if !w.chores {
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
 			if !p.Enabled() {
 				continue
 			}
-			if _, err := w.resolveReading(ctx, usageProviderFile(name), p.Usage); err != nil {
+			r, err := w.resolveReading(ctx, usageProviderFile(name), p.Usage)
+			if err != nil {
 				w.mu.Lock()
 				if w.providerUsageErr == nil {
 					w.providerUsageErr = map[string]string{}
 				}
 				w.providerUsageErr[name] = err.Error()
 				w.mu.Unlock()
+				readings[name] = providerReadingResult{err: err}
+				continue
 			}
+			readings[name] = providerReadingResult{reading: r, ok: true}
 		}
 	} else {
 		now := w.now
@@ -902,6 +980,29 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.inFlight(ctx, cmp.Or(w.cfg.Watch.Interval.Duration, config.DefaultUsageTimeout), &w.usageBusy, func(ctx context.Context) {
 				w.refreshUsage(ctx, k, now)
 			})
+		}
+		for _, name := range k.ProviderNames() {
+			p := k.Providers[name]
+			if !p.Enabled() {
+				continue
+			}
+			w.mu.Lock()
+			uerr := w.providerUsageErr[name]
+			w.mu.Unlock()
+			if uerr != "" {
+				readings[name] = providerReadingResult{err: errors.New(uerr)}
+				continue
+			}
+			if w.store != nil {
+				var r usageReading
+				if found, err := w.store.ReadFile(usageProviderFile(name), &r); err == nil && found {
+					if verr := validateReadingAt(r, p.Usage, w.now); verr != nil {
+						readings[name] = providerReadingResult{err: verr}
+					} else {
+						readings[name] = providerReadingResult{reading: r, ok: true}
+					}
+				}
+			}
 		}
 	}
 
@@ -916,33 +1017,15 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	} else {
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
-	readings := map[string]providerReadingResult{}
-	for _, name := range k.ProviderNames() {
-		p := k.Providers[name]
-		if !p.Enabled() {
-			continue
-		}
-		w.mu.Lock()
-		uerr := w.providerUsageErr[name]
-		w.mu.Unlock()
-		if uerr != "" {
-			readings[name] = providerReadingResult{err: errors.New(uerr)}
-			continue
-		}
-		var r usageReading
-		if found, err := w.store.ReadFile(usageProviderFile(name), &r); err == nil && found {
-			if verr := validateReadingAt(r, p.Usage, w.now); verr != nil {
-				readings[name] = providerReadingResult{err: verr}
-			} else {
-				readings[name] = providerReadingResult{reading: r, ok: true}
-			}
-		}
-	}
 	v := buildProvidersCapacity(c, pa, k, readings, h, false, nil, false, w.now).stopped(w.app, st.Stop)
 
 	var parts []string
 	allHigh := len(k.Providers) > 0
 	for _, name := range k.ProviderNames() {
+		p := k.Providers[name]
+		if !p.Enabled() {
+			allHigh = false
+		}
 		pv := v.Providers[name]
 		if pv == nil {
 			continue
@@ -953,6 +1036,29 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.clear("usage-error-" + name)
 		}
 		parts = append(parts, name+": "+pv.watchSummary(w.now))
+		if len(pv.Buckets) > 0 {
+			for _, bName := range pv.bucketOrder {
+				bv := pv.Buckets[bName]
+				if bv == nil {
+					continue
+				}
+				target := name + "/" + bName
+				highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
+					target, highFigureText(bv.FiveHour, pv.HighPercent, w.now), target)
+				w.check("usage-high-"+name+"-"+bName, bv.High, "%s", highLine)
+				ledgerFile := usageHighBucketFile(name, bName)
+				if !bv.High {
+					allHigh = false
+					w.clearUsageHighEpisode(ledgerFile)
+				} else if st.Stop == nil {
+					u := &usageView{FiveHour: bv.FiveHour, High: true, HighPercent: pv.HighPercent}
+					w.tellBusyWorkersUsageHigh(ctx, st, sessions, u, ledgerFile, func(ag state.Agent) bool {
+						return slices.Contains(bv.Busy, ag.Name)
+					})
+				}
+			}
+			continue
+		}
 		highLine := fmt.Sprintf("USAGE HIGH (%s): %s; new starts and resumes on %s wait until reset, telling busy workers to finish their step and park",
 			name, highFigureText(pv.FiveHour, pv.HighPercent, w.now), name)
 		w.check("usage-high-"+name, pv.High, "%s", highLine)

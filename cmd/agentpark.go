@@ -275,7 +275,9 @@ func (a *app) resumeParked(ctx context.Context, by state.Party, q string) error 
 }
 
 func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, force bool) error {
-	if st, err := a.store.Read(); err == nil {
+	var target *state.Agent
+	st, err := a.store.Read()
+	if err == nil {
 		i, ferr := findAgent(st, q)
 		if ferr != nil {
 			return ferr
@@ -283,14 +285,16 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		if st.Agents[i].Park == nil {
 			return refused("%q is not parked: agents wake messages it", st.Agents[i].Name)
 		}
+		cp := st.Agents[i]
+		target = &cp
 	}
-	block := a.usageHighBlock(ctx)
+	block := a.usageHighBlockForAgent(ctx, st, nil, target)
 	if block != "" && !force {
 		return refused("no resume: %s (--force resumes anyway)", block)
 	}
 	var ag state.Agent
 	var p *state.Park
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i, err := findAgent(st, q)
 		if err != nil {
 			return nil, err
@@ -529,6 +533,10 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 	}
 	for _, ag := range st.Agents {
 		if ag.Park == nil || ag.Park.Resumable.IsZero() {
+			continue
+		}
+		cp := ag
+		if w.usageHighBlockForAgent(ctx, st, nil, &cp) != "" {
 			continue
 		}
 		quiet := *w.app // the wake's own report is not a watch line
