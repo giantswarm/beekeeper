@@ -8,6 +8,10 @@ import (
 )
 
 func TestGHBodyFullURLCheckClaudeAndAgy(t *testing.T) {
+	const (
+		wantRef11       = "#11 without its full URL (https://github.com/o/r/issues/11)"
+		wantUninspected = "cannot inspect the body"
+	)
 	dir := t.TempDir()
 	badFile := filepath.Join(dir, "bad.md")
 	if err := os.WriteFile(badFile, []byte("Closes #11 and x/y#12\n"), 0o600); err != nil {
@@ -45,7 +49,7 @@ func TestGHBodyFullURLCheckClaudeAndAgy(t *testing.T) {
 		{
 			"gh pr create --body-file",
 			`gh pr create --repo o/r --title "feat: x" --body-file ` + badFile,
-			"#11 without its full URL (https://github.com/o/r/issues/11)",
+			wantRef11,
 		},
 		{
 			"gh issue comment -F=",
@@ -60,7 +64,92 @@ func TestGHBodyFullURLCheckClaudeAndAgy(t *testing.T) {
 		{
 			"gh issue create $(cat file)",
 			`gh issue create --repo o/r --title t --body "$(cat ` + badFile + `)"`,
-			"#11 without its full URL (https://github.com/o/r/issues/11)",
+			wantRef11,
+		},
+		{
+			"printf piped to --body-file -",
+			`printf '%s' 'Closes #7' | gh pr create -R o/r --title t --body-file -`,
+			"#7 without its full URL (https://github.com/o/r/issues/7)",
+		},
+		{
+			"echo piped to -F -",
+			`echo 'Fixes #14' | gh issue comment 1 -R o/r -F -`,
+			"#14 without its full URL (https://github.com/o/r/issues/14)",
+		},
+		{
+			"cat file piped to --body-file -",
+			`cat ` + badFile + ` | gh pr create -R o/r --title t --body-file -`,
+			wantRef11,
+		},
+		{
+			"input redirection with -F -",
+			`gh pr create -R o/r --title t -F - < ` + badFile,
+			wantRef11,
+		},
+		{
+			"here-string with -F -",
+			`gh pr create -R o/r --title t -F - <<< 'Closes #15'`,
+			"#15 without its full URL (https://github.com/o/r/issues/15)",
+		},
+		{
+			"file written earlier in same command",
+			`printf '%s' 'Closes #16' >| staged.md && gh pr create -R o/r --title t --body-file staged.md`,
+			"#16 without its full URL (https://github.com/o/r/issues/16)",
+		},
+		{
+			"file written earlier by heredoc in same command",
+			"cat <<'EOF' >| staged-hd.md\nCloses #17\nEOF\ngh issue create -R o/r --title t -F staged-hd.md",
+			"#17 without its full URL (https://github.com/o/r/issues/17)",
+		},
+		{
+			"resolved body variable with unlinked ref",
+			`BODY='Closes #18'; gh pr create -R o/r --title t --body "$BODY"`,
+			"#18 without its full URL (https://github.com/o/r/issues/18)",
+		},
+		{
+			"unreadable --body-file",
+			`gh pr create -R o/r --title t --body-file missing.md`,
+			wantUninspected,
+		},
+		{
+			"unreadable input redirection with -F -",
+			`gh pr create -R o/r --title t -F - < missing.md`,
+			wantUninspected,
+		},
+		{
+			"unreadable $(cat missing.md)",
+			`gh pr create -R o/r --title t --body "$(cat missing.md)"`,
+			wantUninspected,
+		},
+		{
+			"uninspectable writer to file in same command",
+			`unknown_gen >| gen.md && gh pr create -R o/r --title t --body-file gen.md`,
+			wantUninspected,
+		},
+		{
+			"uninspectable pipeline to --body-file -",
+			`unknown_gen | gh pr create -R o/r --title t --body-file -`,
+			wantUninspected,
+		},
+		{
+			"bare --body-file - without stdin",
+			`gh pr create -R o/r --title t --body-file -`,
+			wantUninspected,
+		},
+		{
+			"unresolved body variable",
+			`gh pr create -R o/r --title t --body "$UNRESOLVED_BODY"`,
+			wantUninspected,
+		},
+		{
+			"unresolved variable in here-string",
+			`gh pr create -R o/r --title t -F - <<< "$UNRESOLVED_BODY"`,
+			wantUninspected,
+		},
+		{
+			"unresolved variable in unquoted heredoc",
+			"gh pr create -R o/r --title t -F - <<EOF\n$UNRESOLVED_BODY\nEOF",
+			wantUninspected,
 		},
 	} {
 		if d := decide(t, h, dir, c.cmd, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, c.want) {
@@ -76,7 +165,14 @@ func TestGHBodyFullURLCheckClaudeAndAgy(t *testing.T) {
 		`gh pr edit o/r#12 --body "See https://github.com/o/r/pull/7#issuecomment-42 and note #3 and timer #4"`,
 		`gh issue create --repo o/r --title "bug" --body "Park with ` + "`beekeeper agents park --on o/r#7`" + ` or in session beekeeper#12"`,
 		"gh issue comment 7 --repo o/r --body \"```sh\ngh pr view #8 o/r#9\n```\"",
+		"gh issue comment 7 --repo o/r --body \"````markdown\n```sh\ngh pr view #8\n```\no/r#9\n````\"",
+		"gh issue comment 7 --repo o/r --body \"in `multiline\n#8 span` and color: #123; background-color: #123456;\"",
 		`gh pr create --repo o/r --title "feat: x" --body-file ` + goodFile,
+		`printf '%s' 'Closes https://github.com/o/r/issues/7' | gh pr create -R o/r --title t --body-file -`,
+		`gh pr create -R o/r --title t -F - < ` + goodFile,
+		`gh pr create -R o/r --title t -F - <<< 'Closes https://github.com/o/r/issues/7'`,
+		`printf '%s' 'Closes https://github.com/o/r/issues/7' >| staged-ok.md && gh pr create -R o/r --title t -F staged-ok.md`,
+		`BODY='Closes https://github.com/o/r/issues/7'; gh pr create -R o/r --title t --body "$BODY"`,
 	} {
 		if d := decide(t, h, dir, cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("claude allowed command denied (%s): %s", cmd, d.Reason)

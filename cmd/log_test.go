@@ -171,7 +171,7 @@ func TestLogAddRefusesUnlinkedRefs(t *testing.T) {
 			t.Errorf("%s: got %v, want refusal with %q", name, err, c.want)
 		}
 	}
-	ok := "merged o/r#7 (" + prURL + "#issuecomment-1), note #3, timer #4, `#5` and session beekeeper#12"
+	ok := "merged o/r#7 (" + prURL + "#issuecomment-1), note #3, timer #4, `#5`, `multi\n#6`, color: #123; background-color: #123456; and session beekeeper#12\n````md\n```\n#8\n```\n````"
 	if err := run(ok); err != nil {
 		t.Fatalf("log add(%q): %v", ok, err)
 	}

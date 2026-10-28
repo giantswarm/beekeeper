@@ -72,19 +72,27 @@ func TestZone(t *testing.T) {
 }
 
 func TestUnlinked(t *testing.T) {
+	const testRepo = "o/r"
 	for _, c := range []struct {
 		name, text, here, want string
 	}{
 		{"bare #N without repo", "merged #7 today", "", "#7 without its full URL (https://github.com/<owner>/<repo>/issues/7)"},
-		{"bare #N with here", "merged #7 today", "o/r", "#7 without its full URL (https://github.com/o/r/issues/7)"},
+		{"bare #N with here", "merged #7 today", testRepo, "#7 without its full URL (https://github.com/o/r/issues/7)"},
 		{"bare #N with single URL repo", "merged https://github.com/o/r/pull/9 for #7", "", "#7 without its full URL (https://github.com/o/r/issues/7)"},
-		{"owner/repo#N", "x/y#7 is open", "o/r", "x/y#7 without its full URL (https://github.com/x/y/issues/7)"},
+		{"owner/repo#N", "x/y#7 is open", testRepo, "x/y#7 without its full URL (https://github.com/x/y/issues/7)"},
 		{"linked owner/repo#N", "approve o/r#7 (https://github.com/o/r/pull/7)", "", ""},
 		{"linked bare #N", "approve #7 (https://github.com/o/r/issues/7)", "", ""},
 		{"note and timer", "see note #3 and timer #4", "", ""},
 		{"park --on", "beekeeper agents park --on o/r#7 and --on '#9'", "", ""},
 		{"session name repo#N", "session beekeeper#1682: agy harness", "", ""},
 		{"code span and fenced block", "in `#7` and ``o/r#8`` and:\n```sh\ngh pr view #9 o/r#10\n```\nand:\n~~~\n#11\n~~~", "", ""},
+		{"four-backtick fence with triple-backtick example", "````markdown\n```sh\ngh issue view #12\n```\nSee o/r#13 in the example.\n````", "", ""},
+		{"multiline inline code span", "in `gh issue view\n#14` and ``first line\no/r#15 second line`` here", "", ""},
+		{"triple-backtick string inside fenced shell block", "```sh\npattern=\"```\"\n# comment #16 and o/r#17\n```", "", ""},
+		{"unclosed fence extending to EOF", "prose before\n```sh\ngh issue view #18\n# o/r#19 at EOF", "", ""},
+		{"numeric CSS three- and six-digit colours", "color: #123; background-color: #123456; border: 1px solid #000; background: linear-gradient(#123, #456789); --accent: #987654;", "", ""},
+		{"CSS colour followed by unlinked issue", "color: #123; see #456", testRepo, "#456 without its full URL (https://github.com/o/r/issues/456)"},
+		{"real three- and six-digit issue numbers", "Fixes: #123 and closes #123456", testRepo, "#123 without its full URL (https://github.com/o/r/issues/123); #123456 without its full URL (https://github.com/o/r/issues/123456)"},
 		{"URL anchor fragment", "see https://github.com/o/r/pull/7#issuecomment-12 and https://example.com/x#99", "", ""},
 		{"HTML entity", "char &#35; and &#123;", "", ""},
 	} {

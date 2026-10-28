@@ -244,7 +244,10 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 	if st, _ := a.store.Read(); st.Agents[0].Task != task || st.Agents[0].Done {
 		t.Fatalf("a refused report changed the agent: %+v", st.Agents[0])
 	}
-	found := []string{"giantswarm/github: the reconciler creates no repository; worked around with gh", "follow-up: docs (note #3, timer #4, `#5`, " + prURL + "#issuecomment-1)"}
+	found := []string{
+		"giantswarm/github: the reconciler creates no repository; worked around with gh",
+		"follow-up: docs (note #3, timer #4, `#5`, `multi\n#6`, color: #123; background-color: #123456;, " + prURL + "#issuecomment-1)\n````md\n```\n#8\n```\n````",
+	}
 	reportText := merged + ", released v1.2.3"
 	if err := run(verbIdle, flagDone, flagReport, reportText, flagProblem, found[0], flagProblem, found[1]); err != nil {
 		t.Fatal(err)

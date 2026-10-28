@@ -48,8 +48,14 @@ func TestLintPassesCurrentState(t *testing.T) {
 		"Report to the supervisor; the guide asks the person.",
 		"devctl v8.82.8 or newer merges through the bypass.",
 		"Work o/r#7 (https://github.com/o/r/issues/7) and https://github.com/o/r/pull/8#issuecomment-1.",
+		"Work [o/r#7][issue].\n\n[issue]: https://github.com/o/r/issues/7",
 		"Wait on note #3, timer #4, `beekeeper agents park --on o/r#7` and session beekeeper#12.",
 		"```sh\ngh pr view #7 o/r#8\n```",
+		"````markdown\n```sh\ngh issue view #7\n```\nSee o/r#8 inside the outer fence.\n````",
+		"Run `gh issue view\n#7` or ``first\no/r#8 second`` in code.",
+		"```sh\npattern=\"```\"\n# #7 and o/r#8 stay inside the fence\n```",
+		"```sh\ngh issue view #7 at EOF",
+		"Theme uses color: #123; and background-color: #123456;.",
 	} {
 		got, err := Lint("skill.md", strings.NewReader(line))
 		if err != nil {
@@ -58,6 +64,17 @@ func TestLintPassesCurrentState(t *testing.T) {
 		if len(got) != 0 {
 			t.Errorf("Lint(%q) = %+v, want none", line, got)
 		}
+	}
+}
+
+func TestLintReferenceLinkAndLineNumbers(t *testing.T) {
+	doc := "Work [o/r#7][issue].\nAlso fix #8 before closing.\n\n[issue]: https://github.com/o/r/issues/7\n"
+	got, err := Lint("brief.md", strings.NewReader(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Rule != ruleFullURL || got[0].Line != 2 || !strings.Contains(got[0].Why, "https://github.com/o/r/issues/8") {
+		t.Errorf("Lint(reference link doc) = %+v, want one full-url finding on line 2", got)
 	}
 }
 

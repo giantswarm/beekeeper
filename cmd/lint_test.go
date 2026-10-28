@@ -15,9 +15,10 @@ func TestLintBriefsCommandChecksFullURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	good := filepath.Join(dir, "good.md")
-	goodText := "Work https://github.com/o/r/issues/7 (o/r#7) and https://github.com/o/r/pull/8#issuecomment-1.\n" +
-		"Wait on note #3, timer #4, `beekeeper agents park --on o/r#7` and session beekeeper#12.\n" +
-		"```sh\ngh pr view #9 o/r#10\n```\n"
+	goodText := "Work [o/r#7][issue] and https://github.com/o/r/pull/8#issuecomment-1.\n" +
+		"Wait on note #3, timer #4, `beekeeper agents park --on o/r#7`, `multi\n#6`, color: #123; background-color: #123456; and session beekeeper#12.\n" +
+		"````markdown\n```sh\ngh pr view #9 o/r#10\n```\n````\n\n" +
+		"[issue]: https://github.com/o/r/issues/7\n"
 	if err := os.WriteFile(good, []byte(goodText), 0o600); err != nil {
 		t.Fatal(err)
 	}

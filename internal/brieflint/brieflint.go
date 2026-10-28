@@ -59,8 +59,9 @@ const (
 )
 
 var (
-	// fence opens or closes a fenced code block; its info string names the language.
-	fence = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)")
+	// fence opens a fenced code block; its info string names the language.
+	fence      = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)\\s*(.*)$")
+	fenceClose = regexp.MustCompile("^\\s*(```+|~~~+)\\s*$")
 	// codeSpan is one inline code span.
 	codeSpan = regexp.MustCompile("`+[^`]+`+")
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
@@ -93,7 +94,9 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	here := post.SingleRepo(string(raw))
+	text := string(raw)
+	here := post.SingleRepo(text)
+	unlinked := post.UnlinkedLines(text, here)
 	var out []Finding
 	var inFence, shellFence bool
 	var fenceMark string
@@ -109,21 +112,23 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 				add(ru.name, ru.why)
 			}
 		}
+		if n-1 < len(unlinked) {
+			for _, why := range unlinked[n-1] {
+				add(fullURLRule, why)
+			}
+		}
 		var code string
 		switch m := fence.FindStringSubmatch(line); {
-		case m != nil && !inFence:
+		case m != nil && !inFence && (m[1][0] == '~' || !strings.ContainsRune(m[2]+m[3], '`')):
 			inFence, fenceMark, shellFence = true, m[1], shellFences[strings.ToLower(m[2])]
 			continue
-		case m != nil && strings.HasPrefix(m[1], fenceMark) && m[2] == "":
+		case inFence && fenceClose.MatchString(line) && strings.HasPrefix(strings.TrimSpace(line), fenceMark):
 			inFence = false
 			continue
 		case inFence && shellFence:
 			code = line
 		case !inFence:
 			code = strings.Join(codeSpan.FindAllString(line, -1), " ")
-			for _, why := range post.Unlinked(line, here) {
-				add(fullURLRule, why)
-			}
 		}
 		if clobbers(code) {
 			add(clobberRule, clobberWhy)
