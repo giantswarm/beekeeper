@@ -135,8 +135,17 @@ func TestEnsureHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(zshenvRaw), "unalias grep") {
-		t.Errorf("unexpected .zshenv: %s", string(zshenvRaw))
+	zshenv := string(zshenvRaw)
+	if !strings.Contains(zshenv, "ZDOTDIR=\"$HOME\"\n[[ -f \"$HOME/.zshenv\" ]] && source \"$HOME/.zshenv\"\nunalias grep") {
+		t.Errorf("unexpected .zshenv ordering: %s", zshenv)
+	}
+	zprofileRaw, err := os.ReadFile(filepath.Join(ZshDir(codexHome), ".zprofile")) //nolint:gosec // test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	zprofile := string(zprofileRaw)
+	if !strings.Contains(zprofile, "ZDOTDIR=\"$HOME\"\n[[ -f \"$HOME/.zprofile\" ]] && source \"$HOME/.zprofile\"\nunalias grep") {
+		t.Errorf("unexpected .zprofile ordering: %s", zprofile)
 	}
 }
 
@@ -302,5 +311,42 @@ func TestDiscoverAndEnded(t *testing.T) {
 	ended := Ended(stateDir, "", nil, now.Add(-24*time.Hour))
 	if len(ended) != 1 || ended[0].HostID != HostPrefix+agentID || ended[0].State != StateEnded {
 		t.Fatalf("Ended = %+v, want 1 ended session with HostID %s", ended, HostPrefix+agentID)
+	}
+}
+
+func TestReadTranscriptPartialWindow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-partial.jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding := `{"timestamp":"2026-10-28T09:00:00Z","type":"turn_context","payload":{"cwd":"/work/repo","model":"gpt-5.7","pad":"` + strings.Repeat("x", 4096) + `"}}` + "\n"
+	for written := 0; written <= 512<<10+64*1024; written += len(padding) {
+		if _, err := f.WriteString(padding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tailEvents := `{"timestamp":"2026-10-28T10:00:10Z","type":"turn_context","payload":{"cwd":"/work/repo","model":"gpt-5.7"}}
+{"timestamp":"2026-10-28T10:00:15Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":50000,"cached_input_tokens":40000,"output_tokens":5000,"total_tokens":55000},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"output_tokens":200,"total_tokens":1200}}}}
+{"timestamp":"2026-10-28T10:00:20Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":51500,"cached_input_tokens":41000,"output_tokens":5300,"total_tokens":56800},"last_token_usage":{"input_tokens":1500,"cached_input_tokens":1000,"output_tokens":300,"total_tokens":1800}}}}
+`
+	if _, err := f.WriteString(tailEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now, _ := time.Parse(time.RFC3339, "2026-10-28T10:05:00Z")
+	_, act := ReadTranscript(path, now)
+	if act.Whole {
+		t.Fatalf("expected partial window (!act.Whole)")
+	}
+	// First event in partial window uses last_token_usage (400 uncached + 600 cached, 200 out);
+	// second event uses delta from seeded prevTotal (500 uncached + 1000 cached, 300 out).
+	want := claude.Tokens{Input: 900, Output: 500, CacheRead: 1600}
+	if act.Total.Tokens != want {
+		t.Errorf("act.Total.Tokens = %+v, want %+v", act.Total.Tokens, want)
 	}
 }

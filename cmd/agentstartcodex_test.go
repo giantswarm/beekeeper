@@ -127,7 +127,8 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	var deliveredInbox, deliveredMsg string
 	sendCodexWhenReady = func(_ context.Context, inbox, msg string, _ time.Duration) error {
 		deliveredInbox, deliveredMsg = inbox, msg
-		return nil
+		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1234\"}\n{\"type\":\"turn.started\"}\n"), 0o600)
 	}
 	defer func() { sendCodexWhenReady = oldSend }()
 
@@ -282,5 +283,124 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	ownCodex := &claude.Session{Name: "codex in repo", Harness: codex.Harness}
 	if _, err := aWorker.messageSession(context.Background(), []*claude.Session{ownCodex}, ownCodex, "hi"); err == nil || !strings.Contains(err.Error(), "beekeeper did not start") {
 		t.Errorf("messageSession on standalone codex = %v, want refusal", err)
+	}
+}
+
+func TestStartCodexValidationCleanupAndStop(t *testing.T) {
+	const (
+		testCodexModel = "gpt-5.7"
+		startID        = "99999999-0000-4000-8000-000000000000"
+	)
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	leaseDir := filepath.Join(root, "leases")
+	fakeBinDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBinDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBinDir, codex.Comm), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // test executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldLauncher := plat.Launcher
+	oldMachine := plat.Machine
+	hl := &haltLauncher{installed: map[string]string{}}
+	plat.Launcher = hl
+	plat.Machine = tableMachine{plat.Machine}
+	defer func() {
+		plat.Launcher = oldLauncher
+		plat.Machine = oldMachine
+	}()
+
+	store, err := state.Open(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		StateDir: stateDir,
+		LeaseDir: leaseDir,
+		Codex: config.Codex{
+			SessionsDir: filepath.Join(root, "sessions"),
+			AuthFile:    filepath.Join(root, "auth.json"),
+			ConfigFile:  filepath.Join(root, "config.toml"),
+			Model:       testCodexModel,
+		},
+	}
+	a := &app{
+		cfg:   cfg,
+		store: store,
+		now:   time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC),
+		out:   &bytes.Buffer{},
+		as:    supervisorName,
+	}
+
+	// 1. Refuse when beekeeper is stopped.
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Stop = &state.Stop{Reason: "hold all", By: state.Party{Name: holderPerson}, At: a.now}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.startCodexAgent(context.Background(), agentStart{name: "stopped-codex", dir: root, model: testCodexModel}); err == nil || !strings.Contains(err.Error(), "beekeeper is stopped") {
+		t.Fatalf("startCodexAgent while stopped = %v, want stopped refusal", err)
+	}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Stop = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Refuse when --dir is not a directory.
+	notDir := filepath.Join(root, "not-a-dir")
+	if err := a.startCodexAgent(context.Background(), agentStart{name: "bad-dir", dir: notDir, model: testCodexModel}); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("startCodexAgent with bad dir = %v, want not a directory error", err)
+	}
+
+	// 3. Clean up unit and inbox/log files when first turn fails to start.
+	oldSend := sendCodexWhenReady
+	sendCodexWhenReady = func(_ context.Context, inbox, _ string, _ time.Duration) error {
+		logPath := strings.TrimSuffix(inbox, ".in") + ".jsonl"
+		return os.WriteFile(logPath, []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-fail\"}\n{\"type\":\"error\",\"message\":\"api failure\"}\n"), 0o600)
+	}
+	defer func() { sendCodexWhenReady = oldSend }()
+
+	err = a.startCodexAgent(context.Background(), agentStart{
+		id:    startID,
+		name:  "failing-codex",
+		brief: "Task brief",
+		task:  "Task brief",
+		dir:   root,
+		model: testCodexModel,
+	})
+	if err == nil || !strings.Contains(err.Error(), "api failure") {
+		t.Fatalf("startCodexAgent on turn error = %v, want api failure", err)
+	}
+	if !slices.Contains(hl.stopped, codexUnit(startID)) {
+		t.Errorf("hl.stopped = %v, want %s stopped on failure", hl.stopped, codexUnit(startID))
+	}
+	if _, statErr := os.Stat(codex.InboxPath(stateDir, startID)); !os.IsNotExist(statErr) {
+		t.Errorf("expected inbox to be removed on failure, statErr = %v", statErr)
+	}
+	if _, statErr := os.Stat(codex.LogPath(stateDir, startID)); !os.IsNotExist(statErr) {
+		t.Errorf("expected logPath to be removed on failure, statErr = %v", statErr)
+	}
+
+	// 4. Verify turnPatterns, sparedUnit, and callerEnv include codex.
+	if !slices.Contains(turnPatterns, "beekeeper-codex-*") {
+		t.Errorf("turnPatterns %v missing beekeeper-codex-*", turnPatterns)
+	}
+	sparedParty := []state.Party{{HostSession: codex.HostPrefix + startID}}
+	if !sparedUnit(codexUnit(startID), "", sparedParty) {
+		t.Errorf("sparedUnit should spare %s", codexUnit(startID))
+	}
+	if sparedUnit(codexUnit("other1234"), "", sparedParty) {
+		t.Errorf("sparedUnit should not spare non-spared codex unit")
+	}
+	for _, want := range []string{codex.EnvAgent, codex.EnvName} {
+		if !slices.Contains(callerEnv, want) {
+			t.Errorf("callerEnv %v missing %q", callerEnv, want)
+		}
 	}
 }

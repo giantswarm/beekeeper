@@ -221,19 +221,26 @@ func EnsureHome(codexHome, authFile, userConfigFile, exe, prelude string) error 
 	if err := writeAtomic(filepath.Join(codexHome, "hooks.json"), hooksBytes); err != nil {
 		return err
 	}
-	zshenv := "[[ -f \"$HOME/.zshenv\" ]] && source \"$HOME/.zshenv\"\n" +
-		"setopt nonomatch 2>/dev/null || true\n" +
+	body := "setopt nonomatch 2>/dev/null || true\n" +
 		"unalias grep find ls cp mv rm 2>/dev/null || true\n"
 	if strings.TrimSpace(prelude) != "" {
-		zshenv = "[[ -f \"$HOME/.zshenv\" ]] && source \"$HOME/.zshenv\"\n" + prelude
-		if !strings.HasSuffix(zshenv, "\n") {
-			zshenv += "\n"
+		body = prelude
+		if !strings.HasSuffix(body, "\n") {
+			body += "\n"
 		}
 	}
+	zshenv := "_bk_zdotdir=\"$ZDOTDIR\"\n" +
+		"ZDOTDIR=\"$HOME\"\n" +
+		"[[ -f \"$HOME/.zshenv\" ]] && source \"$HOME/.zshenv\"\n" +
+		body +
+		"[[ -o login ]] && ZDOTDIR=\"$_bk_zdotdir\"\n" +
+		"unset _bk_zdotdir\n"
 	if err := writeAtomic(filepath.Join(zshDir, ".zshenv"), []byte(zshenv)); err != nil {
 		return err
 	}
-	zprofile := "[[ -f \"$HOME/.zprofile\" ]] && source \"$HOME/.zprofile\"\n"
+	zprofile := "ZDOTDIR=\"$HOME\"\n" +
+		"[[ -f \"$HOME/.zprofile\" ]] && source \"$HOME/.zprofile\"\n" +
+		body
 	return writeAtomic(filepath.Join(zshDir, ".zprofile"), []byte(zprofile))
 }
 

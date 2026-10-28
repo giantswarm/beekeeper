@@ -252,3 +252,143 @@ echo '{"type":"turn.completed"}'
 		t.Fatalf("Send after runner exit with live child = %v, want ErrNotRunning", err)
 	}
 }
+
+func TestRemoveInboxRemovesAllCompanionFilesWhenFIFOMissing(t *testing.T) {
+	stateDir := t.TempDir()
+	const id = "agent-cleanup"
+	const threadID = "thread-cleanup-1"
+	inbox := InboxPath(stateDir, id)
+	if err := MakeInbox(inbox); err != nil {
+		t.Fatal(err)
+	}
+	fifo, err := openInboxRDWR(inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Send(inbox, "queued msg"); err != nil {
+		t.Fatal(err)
+	}
+	_ = fifo.Close()
+	WriteState(inbox, StateIdle)
+	if err := RecordThread(stateDir, inbox, threadID); err != nil {
+		t.Fatal(err)
+	}
+	logPath := LogPath(stateDir, id)
+	if err := os.WriteFile(logPath, []byte(`{"type":"thread.started"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the .in FIFO first to simulate a partial cleanup where .in is gone.
+	if err := os.Remove(inbox); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := RemoveInbox(inbox)
+	if err != nil || !removed {
+		t.Fatalf("RemoveInbox = (%v, %v), want (true, nil)", removed, err)
+	}
+	for _, p := range []string{
+		inbox,
+		QueuePath(inbox),
+		LockPath(inbox),
+		StatePath(inbox),
+		logPath,
+		ThreadPath(stateDir, id),
+		ThreadLinkPath(stateDir, threadID),
+	} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("expected %s to be removed, stat err = %v", p, err)
+		}
+	}
+}
+
+func TestRunTurnRestoresUnconfirmedInjectedUnlessSubsequentModelStep(t *testing.T) {
+	stateDir := t.TempDir()
+	const id = "agent-inject-restore"
+	inbox := InboxPath(stateDir, id)
+	logPath := LogPath(stateDir, id)
+	if err := MakeInbox(inbox); err != nil {
+		t.Fatal(err)
+	}
+	fifo, err := openInboxRDWR(inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fifo.Close() }()
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = logFile.Close() }()
+
+	// Case 1: PreToolUse drains a mid-turn wake message during a tool call, but
+	// the turn ends right after the tool call without a subsequent model step.
+	// The message must be restored to q.Messages at turn end.
+	fakeNoModelStep := filepath.Join(stateDir, "fake-no-model-step.sh")
+	script1 := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+echo '{"type":"thread.started","thread_id":"thread-restore-1"}'
+echo '{"type":"turn.started"}'
+echo '{"type":"item.started","item":{"id":"item_1","type":"command_execution"}}'
+echo '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls"}}'
+echo '{"type":"turn.completed"}'
+`
+	if err := os.WriteFile(fakeNoModelStep, []byte(script1), 0o700); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	if err := RecordThread(stateDir, inbox, "thread-restore-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Send(inbox, "mid-turn unconfirmed msg"); err != nil {
+		t.Fatal(err)
+	}
+	hookStdin := []byte(`{"session_id":"thread-restore-1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`)
+	if out := PreToolUse(stateDir, hookStdin); len(out) == 0 {
+		t.Fatal("expected PreToolUse to drain message into Injected")
+	}
+
+	threadID := "thread-restore-1"
+	var stderr bytes.Buffer
+	if err := runTurn(context.Background(), stateDir, inbox, logFile, fakeNoModelStep, testModel, &threadID, "initial prompt", &stderr); err != nil {
+		t.Fatalf("runTurn 1: %v", err)
+	}
+
+	// Because no subsequent model step (agent_message / reasoning) occurred,
+	// the injected message must have been restored to q.Messages and returned by Drain.
+	msgs, err := Drain(inbox)
+	if err != nil || len(msgs) != 1 || msgs[0] != "mid-turn unconfirmed msg" {
+		t.Fatalf("Drain after turn without model step = (%v, %v), want [mid-turn unconfirmed msg]", msgs, err)
+	}
+	if err := Confirm(inbox); err != nil {
+		t.Fatal(err)
+	}
+
+	// Case 2: PreToolUse drains a mid-turn wake message and a subsequent model
+	// step (agent_message) runs before turn.completed -> message is confirmed.
+	fakeWithModelStep := filepath.Join(stateDir, "fake-with-model-step.sh")
+	script2 := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+echo '{"type":"turn.started"}'
+echo '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls"}}'
+echo '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"handled wake message"}}'
+echo '{"type":"turn.completed"}'
+`
+	if err := os.WriteFile(fakeWithModelStep, []byte(script2), 0o700); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	if err := Send(inbox, "mid-turn confirmed msg"); err != nil {
+		t.Fatal(err)
+	}
+	if out := PreToolUse(stateDir, hookStdin); len(out) == 0 {
+		t.Fatal("expected PreToolUse to drain second message into Injected")
+	}
+	if err := runTurn(context.Background(), stateDir, inbox, logFile, fakeWithModelStep, testModel, &threadID, "second prompt", &stderr); err != nil {
+		t.Fatalf("runTurn 2: %v", err)
+	}
+	msgs, err = Drain(inbox)
+	if err != nil || len(msgs) != 0 {
+		t.Fatalf("Drain after turn with subsequent model step = (%v, %v), want empty", msgs, err)
+	}
+}

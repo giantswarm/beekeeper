@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -26,6 +28,10 @@ import (
 // drive `codex exec` / `codex exec resume` one turn at a time from its
 // persistent FIFO inbox.
 const codexRunCmdName = "codex-run"
+
+// codexBriefWait bounds the wait for a started codex session's stream log to
+// show its thread_id and first turn.started event; tests shorten it.
+var codexBriefWait = 60 * time.Second
 
 // codexUnit is the transient user unit a codex agent runs in.
 func codexUnit(id string) string { return "beekeeper-codex-" + id[:min(8, len(id))] }
@@ -56,12 +62,22 @@ func (a *app) codexRunCmd() *cobra.Command {
 // the state directory, and sp.brief (worker rules + brief) queued as its first
 // turn.
 func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := a.refuseStopped(st, "starting "+sp.name); err != nil {
+		return err
+	}
 	if !plat.Launcher.Available() {
 		return refused("this machine has no unit launcher (systemd --user): a codex agent runs in a transient user unit")
 	}
 	dir, err := a.agentDir(sp.dir)
 	if err != nil {
 		return err
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return usageErr("--dir %s: not a directory", dir)
 	}
 	model, err := a.codexModel(sp.model)
 	if err != nil {
@@ -108,9 +124,6 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	sp.brief = fillScratchpad(sp.brief, dir, id)
 	inbox := codex.InboxPath(a.cfg.StateDir, id)
 	logPath := codex.LogPath(a.cfg.StateDir, id)
-	if err := codex.MakeInbox(inbox); err != nil {
-		return err
-	}
 
 	s := state.Start{
 		Party:   state.Party{HostSession: codex.HostPrefix + id, Name: sp.name},
@@ -142,7 +155,9 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		return evs, nil
 	})
 	if err != nil {
-		_, _ = codex.RemoveInbox(inbox)
+		return err
+	}
+	if err := codex.MakeInbox(inbox); err != nil {
 		return err
 	}
 
@@ -160,10 +175,17 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		"ZDOTDIR="+codex.ZshDir(codexHome),
 	); err != nil {
 		_, _ = codex.RemoveInbox(inbox)
-		return a.undelivered(by, s.Party, err)
+		return fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := sendCodexWhenReady(ctx, inbox, sp.brief, inboxWait); err != nil {
-		return a.undelivered(by, s.Party, err)
+		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = codex.RemoveInbox(inbox)
+		return a.undelivered(by, s.Party, fmt.Errorf("the brief did not reach its inbox: %w (journalctl --user -u %s)", err, unit))
+	}
+	if _, err := awaitCodexBrief(ctx, logPath, func() bool { return unitEnded(ctx, unit) }, codexBriefWait); err != nil {
+		_ = plat.Launcher.Stop(ctx, unit)
+		_, _ = codex.RemoveInbox(inbox)
+		return a.undelivered(by, s.Party, fmt.Errorf("%w (journalctl --user -u %s)", err, unit))
 	}
 	_, err = fmt.Fprintf(a.out, "started %s: codex agent codex_%s, bypass, on %s, in %s, busy with %q\n"+
 		"turn: %s (%s)\n",
@@ -220,4 +242,102 @@ var sendCodexWhenReady = func(ctx context.Context, inbox, msg string, wait time.
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// awaitCodexBrief waits up to wait for the stream log at logPath to show the
+// started session's thread.started and turn.started events, confirming the
+// first turn began in its own thread.
+func awaitCodexBrief(ctx context.Context, logPath string, ended func() bool, wait time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		threadID, started, err := readCodexBriefStream(logPath)
+		if err != nil {
+			return threadID, err
+		}
+		if threadID != "" && started {
+			return threadID, nil
+		}
+		if ended != nil && ended() {
+			threadID, started, err = readCodexBriefStream(logPath)
+			if err != nil {
+				return threadID, err
+			}
+			if threadID != "" && started {
+				return threadID, nil
+			}
+			return threadID, errors.New("codex ended before its first turn started")
+		}
+		select {
+		case <-ctx.Done():
+			return threadID, fmt.Errorf("the brief did not start a codex turn within %s", wait)
+		case <-tick.C:
+		}
+	}
+}
+
+func readCodexBriefStream(logPath string) (threadID string, started bool, err error) {
+	f, oerr := os.Open(logPath) //nolint:gosec // beekeeper's own stream log
+	if oerr != nil {
+		return "", false, nil
+	}
+	defer func() { _ = f.Close() }()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		var ev struct {
+			Type     string `json:"type"`
+			ThreadID string `json:"thread_id"`
+			Message  string `json:"message"`
+			Error    *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(sc.Bytes(), &ev) != nil {
+			continue
+		}
+		switch {
+		case ev.Type == "thread.started":
+			if ev.ThreadID != "" {
+				threadID = ev.ThreadID
+			}
+		case ev.Type == "turn.started" || ev.Type == "item.started" || ev.Type == "item.completed" || ev.Type == "turn.completed":
+			started = true
+		case ev.Type == "turn.failed" || strings.EqualFold(ev.Type, "ERROR"):
+			msg := strings.TrimSpace(ev.Message)
+			if ev.Error != nil && strings.TrimSpace(ev.Error.Message) != "" {
+				msg = strings.TrimSpace(ev.Error.Message)
+			}
+			if msg == "" {
+				msg = "codex reported an error before starting the turn"
+			}
+			return threadID, false, errors.New(msg)
+		}
+	}
+	return threadID, started, nil
+}
+
+// endCodex stops the unit of the codex agent started under id, which left the
+// roster, and removes its inbox, log and thread files, and says what it did.
+func (a *app) endCodex(ctx context.Context, id string) string {
+	var done []string
+	if unit := codexUnit(id); plat.Launcher.State(ctx, unit) == holdActive {
+		if err := plat.Launcher.Stop(ctx, unit); err != nil {
+			return fmt.Sprintf("its codex unit %s runs on: %v", unit, err)
+		}
+		done = append(done, "stopped its codex unit "+unit)
+	}
+	removed, err := codex.RemoveInbox(codex.InboxPath(a.cfg.StateDir, id))
+	switch {
+	case err != nil:
+		done = append(done, fmt.Sprintf("its codex inbox stays: %v", err))
+	case removed:
+		done = append(done, "removed its codex inbox")
+	}
+	if len(done) == 0 {
+		return "a codex agent has no desktop session"
+	}
+	return strings.Join(done, ", ")
 }

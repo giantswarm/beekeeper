@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/machine"
@@ -1248,47 +1250,96 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		t.Fatalf("bucket gate: code=%d, err=%v", Code(err), err)
 	}
 
-	// 2a. --harness auto picking agy refuses clearly before printing choice or writing any state event (even with --force).
+	// 2a. --dry-run --harness auto picking agy prints the agy choice and agy's dry-run command line.
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = nil
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	evsBefore, err := store.Events(0, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	claude5h = 96.0 // claude blocked, so auto picks agy/gemini-3-1-pro-medium
-	aAutoAgy, outAutoAgy := newApp()
-	cmdAutoAgy := aAutoAgy.agentStartCmd()
-	cmdAutoAgy.SilenceErrors = true
-	cmdAutoAgy.SilenceUsage = true
-	cmdAutoAgy.SetArgs([]string{"AutoAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, usageForceFlag})
-	err = cmdAutoAgy.Execute()
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `no start: harness "agy" is not yet supported by agents start`) {
-		t.Fatalf("--harness auto picking agy: code=%d, err=%v", Code(err), err)
-	}
-	if outAutoAgy.Len() != 0 {
-		t.Fatalf("--harness auto picking agy printed output before refusing:\n%s", outAutoAgy.String())
-	}
-	evsAfter, err := store.Events(0, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(evsAfter) != len(evsBefore) {
-		t.Fatalf("--harness auto picking agy wrote state events: before=%d, after=%d", len(evsBefore), len(evsAfter))
-	}
-
-	// 2b. --dry-run --harness auto picking agy also refuses clearly.
 	aDryAgy, outDryAgy := newApp()
 	cmdDryAgy := aDryAgy.agentStartCmd()
 	cmdDryAgy.SilenceErrors = true
 	cmdDryAgy.SilenceUsage = true
 	cmdDryAgy.SetArgs([]string{"DryAgy", brief, usageDirFlag, dir, "--dry-run", testHarnessFlag, harnessAuto})
-	err = cmdDryAgy.Execute()
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `no start: harness "agy" is not yet supported by agents start`) || outDryAgy.Len() != 0 {
-		t.Fatalf("--dry-run --harness auto picking agy: code=%d, err=%v, out=%q", Code(err), err, outDryAgy.String())
+	if err := cmdDryAgy.Execute(); err != nil {
+		t.Fatalf("--dry-run --harness auto picking agy: %v", err)
+	}
+	if !strings.Contains(outDryAgy.String(), "choice: agy / gemini-3-1-pro-medium (provider agy, bucket Gemini Models)") ||
+		!strings.Contains(outDryAgy.String(), "as an agy agent on gemini-3-1-pro-medium") ||
+		!strings.Contains(outDryAgy.String(), "start: agy --input-format stream-json --output-format stream-json --model gemini-3-1-pro-medium") {
+		t.Fatalf("--dry-run --harness auto agy output:\n%s", outDryAgy.String())
+	}
+
+	// 2b. --mode background --harness auto picking agy refuses with usage error, and --harness auto picking agy validates the model against agy models.
+	aBgAgy, _ := newApp()
+	cmdBgAgy := aBgAgy.agentStartCmd()
+	cmdBgAgy.SilenceErrors = true
+	cmdBgAgy.SilenceUsage = true
+	cmdBgAgy.SetArgs([]string{"BgAgy", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto})
+	err = cmdBgAgy.Execute()
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--mode background and --harness agy") {
+		t.Fatalf("--mode background --harness auto picking agy: code=%d, err=%v", Code(err), err)
+	}
+
+	binDir := t.TempDir()
+	fakeAgy := filepath.Join(binDir, harnessAgy)
+	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\necho 'Available models:'\necho '  claude-opus-4-6-thinking'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	aAutoAgyBadModel, _ := newApp()
+	cmdAutoAgyBadModel := aAutoAgyBadModel.agentStartCmd()
+	cmdAutoAgyBadModel.SilenceErrors = true
+	cmdAutoAgyBadModel.SilenceUsage = true
+	cmdAutoAgyBadModel.SetArgs([]string{"AutoAgyBadModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	err = cmdAutoAgyBadModel.Execute()
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), `agy lists no model "gemini-3-1-pro-medium"`) {
+		t.Fatalf("--harness auto picking agy unlisted model: code=%d, err=%v", Code(err), err)
+	}
+
+	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\necho 'Available models:'\necho '  gemini-3-1-pro-medium'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	origLauncher := plat.Launcher
+	t.Cleanup(func() { plat.Launcher = origLauncher })
+	plat.Launcher = &agyTestLauncher{
+		onStart: func(u platform.Unit) {
+			go func() {
+				var startID string
+				for _, e := range u.Env {
+					if v, ok := strings.CutPrefix(e, agy.EnvAgent+"="); ok {
+						startID = v
+					}
+				}
+				inbox := agy.InboxPath(cfg.StateDir, startID)
+				logPath := agy.StreamPath(cfg.StateDir, startID)
+				f, oerr := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test FIFO
+				if oerr != nil {
+					return
+				}
+				defer func() { _ = f.Close() }()
+				_, _ = bufio.NewReader(f).ReadString('\n')
+				_, _ = agy.Drain(inbox)
+				stream := `{"event":"init","conversation_id":"conv-auto-agy"}` + "\n" +
+					`{"event":"step_update","step_update":{"conversation_id":"conv-auto-agy","step_type":"user_input"}}` + "\n"
+				_ = os.WriteFile(logPath, []byte(stream), 0o600)
+			}()
+		},
+	}
+	aAutoAgy, outAutoAgy := newApp()
+	cmdAutoAgy := aAutoAgy.agentStartCmd()
+	cmdAutoAgy.SilenceErrors = true
+	cmdAutoAgy.SilenceUsage = true
+	cmdAutoAgy.SetArgs([]string{"AutoAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	if err := cmdAutoAgy.Execute(); err != nil {
+		t.Fatalf("--harness auto picking agy: %v", err)
+	}
+	if !strings.Contains(outAutoAgy.String(), "choice: agy / gemini-3-1-pro-medium (provider agy, bucket Gemini Models)") ||
+		!strings.Contains(outAutoAgy.String(), "started AutoAgy: agy agent agy_") ||
+		!strings.Contains(outAutoAgy.String(), "on gemini-3-1-pro-medium") {
+		t.Fatalf("--harness auto agy start output:\n%s", outAutoAgy.String())
 	}
 
 	// 2c. --dry-run --harness auto picking omp prints omp's dry-run command line, and --mode background --harness auto picking omp refuses.

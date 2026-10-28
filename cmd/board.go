@@ -19,10 +19,8 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
-	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -182,7 +180,7 @@ the whole walk.`,
 				if me, err = a.caller(); err != nil {
 					return err
 				}
-				if me.Session == "" {
+				if me.Session == "" && me.HostSession == "" {
 					return usageErr("--claim records a session's serve: run it inside a Claude Code session, not --as")
 				}
 			} else if replace {
@@ -467,14 +465,7 @@ func (a *app) sessionWorks(sessions []*claude.Session) []claude.Work {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			switch s.Harness {
-			case omp.Harness:
-				out[i], _ = omp.ReadTranscript(s.Transcript, a.now)
-			case codex.Harness:
-				out[i], _ = codex.ReadTranscript(s.Transcript, a.now)
-			default:
-				out[i], _ = a.readTranscript(s.Transcript)
-			}
+			out[i], _ = harnessForSession(s).ReadTranscript(a, s, a.now)
 		})
 	}
 	wg.Wait()

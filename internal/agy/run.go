@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // streamEvent is the subset of an agy stream-json stdout event that the
@@ -26,8 +27,9 @@ type streamEvent struct {
 	} `json:"result"`
 }
 
-// linkConversation records the mapping from convID to inbox so that
-// beekeeper hook preinvocation resolves convID to the session's inbox.
+// linkConversation records the mapping between convID and inbox so that
+// beekeeper hook preinvocation resolves convID to the session's inbox and
+// session discovery resolves the agent start id to convID.
 func linkConversation(inbox, convID string) {
 	c := cleanID(convID)
 	if c == "" {
@@ -39,6 +41,13 @@ func linkConversation(inbox, convID string) {
 	tmp := link + ".tmp"
 	if os.WriteFile(tmp, []byte(inbox+"\n"), 0o600) == nil {
 		_ = os.Rename(tmp, link)
+	}
+	if id := cleanID(strings.TrimSuffix(filepath.Base(inbox), ".in")); id != "" {
+		convFile := AgentConvPath(stateDir, id)
+		ctmp := convFile + ".tmp"
+		if os.WriteFile(ctmp, []byte(c+"\n"), 0o600) == nil {
+			_ = os.Rename(ctmp, convFile)
+		}
 	}
 }
 
@@ -103,7 +112,7 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 			if len(line) > 0 {
 				var ev streamEvent
 				if json.Unmarshal(line, &ev) == nil && ev.Event != "" {
-					if ev.Event == "init" && ev.ConversationID != "" {
+					if ev.Event == eventInit && ev.ConversationID != "" {
 						linkConversation(inbox, ev.ConversationID)
 					}
 					_, _ = logFile.Write(line)
@@ -164,7 +173,7 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 				return err
 			}
 			switch ev.Event {
-			case "init":
+			case eventInit:
 				ready, busy = true, false
 				feedIfIdle()
 			case "step_update":

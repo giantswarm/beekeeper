@@ -19,7 +19,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -185,16 +184,17 @@ func (a *app) messageSession(ctx context.Context, sessions []*claude.Session, s 
 	person := a.uiPerson()
 	msg := fmt.Sprintf("From %s through beekeeper ui: %s", person, strings.TrimSpace(text))
 	by := state.Party{Name: person}
-	if s.Harness == omp.Harness {
-		id, ok := strings.CutPrefix(s.HostID, omp.HostPrefix)
+	if s.Harness != "" {
+		h := harnessForSession(s)
+		id, ok := strings.CutPrefix(s.HostID, h.HostPrefix())
 		if !ok {
-			return "", refused("%s: an omp session beekeeper did not start takes no message: omp has no way into an interactive session", s.Name)
+			return "", refused("%s: an %s session beekeeper did not start takes no message: %s has no way into an interactive session", s.Name, h.Name(), h.Name())
 		}
-		if err := a.sendOmp(s.Name, id, msg); err != nil {
+		if err := h.Send(a, s.Name, id, msg); err != nil {
 			return "", err
 		}
-		_ = a.store.Log(event(by, "ui.message", "%s: written to its omp inbox", s.Name))
-		return "in its omp inbox: it runs at the next tool round or as the next turn", nil
+		_ = a.store.Log(event(by, "ui.message", "%s: written to its %s inbox", s.Name, h.Name()))
+		return fmt.Sprintf("in its %s inbox: it runs at the next tool round or as the next turn", h.Name()), nil
 	}
 	if s.Harness == codex.Harness {
 		id, ok := strings.CutPrefix(s.HostID, codex.HostPrefix)
@@ -227,7 +227,7 @@ func (c *collector) takeoverDir() string { return takeover.Dir(c.a.cfg.StateDir)
 
 // TakeOver brings the approvals of the Claude Code session id to this
 // screen: the PermissionRequest hook holds them for its answer while the
-// screen runs. An omp session has none: omp agents run in yolo mode.
+// screen runs. An omp or agy session has none: they run in yolo mode.
 func (c *collector) TakeOver(_ context.Context, id string) error {
 	raw, err := c.running()
 	if err != nil {
@@ -244,8 +244,8 @@ func (c *collector) takeOver(sessions []*claude.Session, q string, now time.Time
 	if err != nil {
 		return err
 	}
-	if s.Harness == omp.Harness {
-		return refused("%s: an omp session asks for no approvals (beekeeper's omp agents run in yolo mode): nothing to take over", s.Name)
+	if s.Harness != "" {
+		return refused("%s: an %s session asks for no approvals (beekeeper's %s agents run in yolo mode): nothing to take over", s.Name, s.Harness, s.Harness)
 	}
 	if s.Harness == codex.Harness {
 		return refused("%s: a codex session asks for no approvals (beekeeper's codex agents run in bypass mode): nothing to take over", s.Name)

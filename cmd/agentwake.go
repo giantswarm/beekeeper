@@ -141,14 +141,8 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 			}
 		}()
 	}
-	if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
-		return a.wakeOmp(by, ag, id, msg)
-	}
-	if id, ok := strings.CutPrefix(ag.HostSession, agy.HostPrefix); ok {
-		return a.wakeAgy(by, ag, id, msg)
-	}
-	if id, ok := strings.CutPrefix(ag.HostSession, codex.HostPrefix); ok {
-		return a.wakeCodex(by, ag, id, msg)
+	if h, id, ok := harnessForHost(ag.HostSession); ok {
+		return h.Wake(a, by, ag, id, msg)
 	}
 	sessions, _, err := a.sessions()
 	if err != nil {

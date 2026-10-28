@@ -10,11 +10,9 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
-	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/merge"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -106,17 +104,7 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 		wg.Go(func() {
 			defer func() { <-sem }()
 			m := &metrics{}
-			switch s.Harness {
-			case omp.Harness:
-				// omp prices its replies itself.
-				work[i], m.Activity = omp.ReadTranscript(s.Transcript, a.now)
-			case codex.Harness:
-				work[i], m.Activity = codex.ReadTranscript(s.Transcript, a.now)
-				m.Price(a.cfg.Metrics)
-			default:
-				work[i], m.Activity = a.readTranscript(s.Transcript)
-				m.Price(a.cfg.Metrics)
-			}
+			work[i], m.Activity = harnessForSession(s).ReadTranscript(a, s, a.now)
 			if !s.LastActive.IsZero() {
 				m.Idle = a.now.Sub(s.LastActive).Round(time.Second)
 			}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -30,28 +31,32 @@ func MakeInbox(inbox string) error {
 	return syscall.Mkfifo(inbox, 0o600)
 }
 
-// RemoveInbox removes the inbox FIFO and its companion files (.queue, .lock, .state).
-func RemoveInbox(inbox string) (bool, error) {
-	fi, err := os.Lstat(inbox)
-	if errors.Is(err, os.ErrNotExist) {
-		_ = os.Remove(QueuePath(inbox))
-		_ = os.Remove(LockPath(inbox))
-		_ = os.Remove(StatePath(inbox))
-		return false, nil
+// RemoveInbox removes the inbox FIFO at inbox, its queue, lock and state files,
+// its stream log (<id>.jsonl), its thread file (<id>.thread) and its thread
+// link (threads/<threadID>); removed is false when none of them existed.
+func RemoveInbox(inbox string) (removed bool, err error) {
+	paths := []string{inbox, QueuePath(inbox), LockPath(inbox), StatePath(inbox)}
+	stateDir := stateDirFromInbox(inbox)
+	if q, qerr := readQueue(inbox); qerr == nil && strings.TrimSpace(q.ThreadID) != "" && stateDir != "" {
+		paths = append(paths, ThreadLinkPath(stateDir, strings.TrimSpace(q.ThreadID)))
 	}
-	if err != nil {
-		return false, err
+	if base, ok := strings.CutSuffix(inbox, ".in"); ok {
+		threadFile := base + ".thread"
+		if b, rerr := os.ReadFile(threadFile); rerr == nil { //nolint:gosec // beside the agent's inbox under the state folder
+			if tid := strings.TrimSpace(string(b)); tid != "" && stateDir != "" {
+				paths = append(paths, ThreadLinkPath(stateDir, tid))
+			}
+		}
+		paths = append(paths, threadFile, base+".jsonl")
 	}
-	if fi.Mode()&os.ModeNamedPipe == 0 {
-		return false, nil
+	for _, p := range paths {
+		if rerr := os.Remove(p); rerr == nil {
+			removed = true
+		} else if !errors.Is(rerr, os.ErrNotExist) && err == nil {
+			err = rerr
+		}
 	}
-	if err := os.Remove(inbox); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
-	_ = os.Remove(QueuePath(inbox))
-	_ = os.Remove(LockPath(inbox))
-	_ = os.Remove(StatePath(inbox))
-	return true, nil
+	return removed, err
 }
 
 // withLock runs fn while holding an exclusive flock on LockPath(inbox).
@@ -196,7 +201,7 @@ func Confirm(inbox string) error {
 }
 
 // ConfirmInjected marks all currently Injected mid-turn messages as delivered
-// once the runner observes the tool call start or complete on the codex stream.
+// once the runner observes a subsequent model step on the codex stream.
 func ConfirmInjected(inbox string) error {
 	return withLock(inbox, func() error {
 		q, err := readQueue(inbox)
@@ -210,6 +215,22 @@ func ConfirmInjected(inbox string) error {
 			markDelivered(&q, m.ID)
 		}
 		q.Injected = nil
+		return writeQueue(inbox, q)
+	})
+}
+
+// RestoreInjected restores any unconfirmed Injected mid-turn messages back to
+// the front of q.Messages when a turn ends without a subsequent model step.
+func RestoreInjected(inbox string) error {
+	return withLock(inbox, func() error {
+		q, err := readQueue(inbox)
+		if err != nil {
+			return err
+		}
+		if len(q.Injected) == 0 {
+			return nil
+		}
+		restoreUnconfirmedInjected(&q)
 		return writeQueue(inbox, q)
 	})
 }

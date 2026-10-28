@@ -33,6 +33,7 @@ const (
 	evItemCompleted = "item.completed"
 
 	itemMessage        = "message"
+	itemAgentMessage   = "agent_message"
 	itemFunctionCall   = "function_call"
 	itemCustomToolCall = "custom_tool_call"
 	itemLocalShellCall = "local_shell_call"
@@ -780,7 +781,7 @@ func tail(path string, n int, tools bool) ([]claude.Turn, error) {
 				continue
 			}
 			switch si.Type {
-			case "agent_message":
+			case itemAgentMessage:
 				if strings.TrimSpace(si.Text) != "" {
 					turns = append(turns, claude.Turn{
 						At:   l.Timestamp,
@@ -818,6 +819,7 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 	acts := claude.NewActs()
 	var cwd string
 	var prevTotal tokenUsage
+	seededTotal := whole
 
 	sc := newScanner(bytes.NewReader(buf))
 	for sc.Scan() {
@@ -909,7 +911,21 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 			if json.Unmarshal(l.Payload, &em) != nil || em.Type != "token_count" || em.Info == nil {
 				continue
 			}
-			tok, nextTotal, ok := stepTokens(em.Info.TotalTokenUsage, em.Info.LastTokenUsage, prevTotal)
+			var (
+				tok       claude.Tokens
+				nextTotal tokenUsage
+				ok        bool
+			)
+			if !seededTotal {
+				seededTotal = true
+				prevTotal = em.Info.TotalTokenUsage
+				u := em.Info.LastTokenUsage
+				if u.TotalTokens > 0 || u.InputTokens > 0 || u.OutputTokens > 0 {
+					tok, nextTotal, ok = usageToClaudeTokens(u), prevTotal, true
+				}
+			} else {
+				tok, nextTotal, ok = stepTokens(em.Info.TotalTokenUsage, em.Info.LastTokenUsage, prevTotal)
+			}
 			if !ok {
 				continue
 			}

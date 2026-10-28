@@ -222,12 +222,21 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 }
 
 // AgyHook is the named hook entry install writes under project.Name in
-// agy's hooks.json (~/.gemini/config/hooks.json).
+// agy's hooks.json (~/.gemini/config/hooks.json): PreInvocation for mid-turn
+// message injection and PreToolUse for the tool guards.
 func AgyHook(exe string) json.RawMessage {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(map[string][]hookEntry{
+		"PreInvocation": {{
+			Matcher: "*",
+			Hooks: []hookCommand{{
+				Type:    hookTypeCommand,
+				Command: shellQuote(exe) + " " + hookWord + " preinvocation",
+				Timeout: 30,
+			}},
+		}},
 		"PreToolUse": {{
 			Matcher: "*",
 			Hooks: []hookCommand{{
@@ -257,6 +266,22 @@ func agyHookBinary(raw json.RawMessage) (string, int) {
 		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
 	}
 	if len(f) == 4 && f[1] == hookWord && f[2] == "pretooluse" && f[3] == "--format=agy" {
+		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
+	}
+	return "", 0
+}
+
+func agyPreInvocationBinary(raw json.RawMessage) (string, int) {
+	var events map[string][]hookEntry
+	if json.Unmarshal(raw, &events) != nil {
+		return "", 0
+	}
+	list := events["PreInvocation"]
+	if len(list) != 1 || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
+		return "", 0
+	}
+	f := strings.Fields(list[0].Hooks[0].Command)
+	if len(f) == 3 && f[1] == hookWord && f[2] == "preinvocation" {
 		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
 	}
 	return "", 0
@@ -359,6 +384,10 @@ func CheckAgyHooks(path, exe, home string) string {
 	gotExe, timeout := agyHookBinary(cur)
 	if gotExe == "" || timeout <= 0 {
 		return fmt.Sprintf("agy hooks: %s: the %s PreToolUse hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
+	}
+	preExe, preTimeout := agyPreInvocationBinary(cur)
+	if preExe == "" || preTimeout <= 0 || preExe != gotExe {
+		return fmt.Sprintf("agy hooks: %s: the %s PreInvocation hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
 	}
 	if exe != "" && gotExe != exe {
 		return fmt.Sprintf("agy hooks: %s runs %s instead of %s; run `beekeeper install`", short(path), short(gotExe), short(exe))

@@ -8,18 +8,17 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
-	"github.com/giantswarm/beekeeper/internal/codex"
-	"github.com/giantswarm/beekeeper/internal/omp"
 )
 
 func (a *app) spendCmd() *cobra.Command {
 	var since, until, tz string
 	c := &cobra.Command{
 		Use:   "spend",
-		Short: "What the Claude Code and omp sessions' API requests of a window cost, from the whole transcripts",
+		Short: "What the Claude Code, omp and agy sessions' API requests of a window cost, from the whole transcripts",
 		Long: `spend prices every API request from --since up to --until in the
-transcripts under claude.projectsDir and the session files under
-omp.sessionsDir: the sessions' and their subagents' .jsonl files, read
+transcripts under claude.projectsDir, the session files under
+omp.sessionsDir, and the transcripts under agy.brainDir: the sessions' and
+their subagents' .jsonl files, read
 whole, of running, paused and archived sessions alike. A request counts
 once by its id, however many transcripts carry it. Prices come from
 metrics.models; an omp model is named provider/model and takes the price
@@ -54,12 +53,14 @@ only; spend is the figure for a day or any other window.`,
 			if !from.Before(to) {
 				return usageErr("--since %s is not before --until %s", from.In(zone).Format(time.RFC3339), to.In(zone).Format(time.RFC3339))
 			}
-			ts, err := claude.ReadSpendTranscripts(a.cfg.Claude.ProjectsDir, from, to)
-			if err != nil {
-				return err
+			var ts []claude.SpendTranscript
+			for _, h := range harnesses {
+				hs, err := h.SpendTranscripts(a.cfg, from, to)
+				if err != nil {
+					return err
+				}
+				ts = append(ts, hs...)
 			}
-			ts = append(ts, omp.SpendTranscripts(a.cfg.Omp.SessionsDir, from, to)...)
-			ts = append(ts, codex.SpendTranscripts(a.cfg.StateDir, a.cfg.Codex.SessionsDir, from, to)...)
 			s := claude.PriceSpend(ts, from, to, a.cfg.Metrics)
 			if a.json {
 				return a.printJSON(s)

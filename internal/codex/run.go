@@ -148,6 +148,26 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 type streamEvent struct {
 	Type     string `json:"type"`
 	ThreadID string `json:"thread_id"`
+	Item     *struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	} `json:"item"`
+	Payload *struct {
+		Type string `json:"type"`
+		Role string `json:"role"`
+	} `json:"payload"`
+}
+
+func isSubsequentModelStep(ev streamEvent) bool {
+	switch ev.Type {
+	case "item.started", evItemCompleted:
+		return ev.Item != nil && (ev.Item.Type == itemAgentMessage || ev.Item.Type == "reasoning")
+	case evResponseItem:
+		return ev.Payload != nil && ((ev.Payload.Type == itemMessage && ev.Payload.Role == roleAssistant) || ev.Payload.Type == "reasoning")
+	case evEventMsg:
+		return ev.Payload != nil && (ev.Payload.Type == itemAgentMessage || ev.Payload.Type == "agent_reasoning")
+	}
+	return false
 }
 
 func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin, model string, threadID *string, prompt string, stderr io.Writer) error {
@@ -170,6 +190,9 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	defer func() {
+		_ = RestoreInjected(inbox)
+	}()
 
 	accepted := false
 	sc := bufio.NewScanner(stdout)
@@ -186,19 +209,17 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 			_ = RecordThread(stateDir, inbox, ev.ThreadID)
 		}
 		switch ev.Type {
-		case evTurnStarted:
+		case evTurnStarted, "item.started", evItemCompleted, evTurnCompleted:
 			accepted = true
 			_ = Confirm(inbox)
-		case "item.started", evItemCompleted, evTurnCompleted:
-			accepted = true
-			_ = Confirm(inbox)
+		}
+		if isSubsequentModelStep(ev) {
 			_ = ConfirmInjected(inbox)
 		}
 	}
 	waitErr := cmd.Wait()
 	if waitErr == nil && (accepted || *threadID != "") {
 		_ = Confirm(inbox)
-		_ = ConfirmInjected(inbox)
 	}
 	return waitErr
 }
