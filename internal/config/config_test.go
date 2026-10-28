@@ -837,3 +837,101 @@ func TestCapacityUsageAndDerive(t *testing.T) {
 		t.Errorf("at custom highPercent 98: got (%d, %d, high=%v)", got.Floor, got.Ceiling, high)
 	}
 }
+
+func TestCapacityProvidersAndChoices(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `capacity:
+  floor: 5
+  ceiling: 10
+  providers:
+    claude:
+      floor: 5
+      ceiling: 10
+      command: ["~/bin/claude-usage"]
+      staleAfter: 15m
+      fiveHourMax: 90
+      sevenDayMax: 99
+      paceMargin: 2
+      fiveHour:
+        - {upTo: 70, floor: 5, ceiling: 10}
+        - {upTo: 85, floor: 2, ceiling: 4}
+        - {upTo: 95, floor: 0, ceiling: 1}
+      sevenDay:
+        - {upTo: 85, floor: 5, ceiling: 10}
+        - {upTo: 95, floor: 1, ceiling: 3}
+      paceCaps:
+        - {overBy: 5, floor: 1, ceiling: 3}
+        - {overBy: 10, floor: 0, ceiling: 1}
+    agy:
+      ceiling: 2
+      fiveHourMax: 90
+      sevenDayMax: 99
+  choices:
+    - {harness: claude, model: claude-opus-4-7}
+    - {harness: agy, model: claude-opus-4-6-thinking}
+    - {harness: agy, model: gemini-3-1-pro-high, skipPace: true, sevenDayMax: 80}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		provClaude = "claude"
+		provAgy    = "agy"
+	)
+	if got := c.Capacity.ProviderNames(); !slices.Equal(got, []string{provClaude, provAgy}) {
+		t.Fatalf("ProviderNames = %v, want [claude agy]", got)
+	}
+	cl := c.Capacity.Providers[provClaude]
+	if cl.Command[0] != filepath.Join(home, "bin", "claude-usage") || cl.EffectiveStaleAfter() != 15*time.Minute {
+		t.Errorf("claude provider = %+v", cl)
+	}
+	agy := c.Capacity.Providers[provAgy]
+	if agy.Floor != 0 || agy.Ceiling != 2 || !slices.Equal(agy.Command, DefaultAgyUsageCommand) {
+		t.Errorf("agy provider = %+v", agy)
+	}
+	if got := c.Capacity.Choices[0]; got.EffectiveProvider() != provClaude || got.EffectivePaceMargin(cl) != 2 {
+		t.Errorf("choice[0] = %+v", got)
+	}
+	if got := c.Capacity.Choices[1]; got.EffectiveProvider() != provAgy || got.EffectiveBucket(agy) != DefaultAgyClaudeBucket {
+		t.Errorf("choice[1] = %+v (bucket %q)", got, got.EffectiveBucket(agy))
+	}
+	if got := c.Capacity.Choices[2]; got.EffectiveProvider() != provAgy || got.EffectiveBucket(agy) != DefaultAgyGeminiBucket || !got.SkipPace {
+		t.Errorf("choice[2] = %+v (bucket %q)", got, got.EffectiveBucket(agy))
+	}
+	if max7d, ok := c.Capacity.Choices[2].EffectiveWorkerSevenDayMax(); !ok || max7d != 80 {
+		t.Errorf("choice[2] worker sevenDayMax = %g, %v", max7d, ok)
+	}
+
+	num := func(v float64) *float64 { return &v }
+	// PaceCaps lower claude's floor/ceiling when 7d is ahead of pace by >= 5% or >= 10%.
+	if dp, high := cl.DeriveWithPace(num(20), num(56), num(50)); dp.Floor != 1 || dp.Ceiling != 3 || high {
+		t.Errorf("paceCap +6%%: got (%d, %d, high=%v), want (1, 3, false)", dp.Floor, dp.Ceiling, high)
+	}
+	if dp, high := cl.DeriveWithPace(num(20), num(61), num(50)); dp.Floor != 0 || dp.Ceiling != 1 || high {
+		t.Errorf("paceCap +11%%: got (%d, %d, high=%v), want (0, 1, false)", dp.Floor, dp.Ceiling, high)
+	}
+	// fiveHourMax (90) yields (0, 0) without high (< 95); at 95 high is true.
+	if dp, high := cl.DeriveWithPace(num(91), num(40), num(50)); dp.Floor != 0 || dp.Ceiling != 0 || high {
+		t.Errorf("at fiveHourMax 91%%: got (%d, %d, high=%v), want (0, 0, false)", dp.Floor, dp.Ceiling, high)
+	}
+	if dp, high := cl.DeriveWithPace(num(95), num(40), num(50)); dp.Floor != 0 || dp.Ceiling != 0 || !high {
+		t.Errorf("at highPercent 95%%: got (%d, %d, high=%v), want (0, 0, true)", dp.Floor, dp.Ceiling, high)
+	}
+
+	for name, bad := range map[string]string{
+		"unknown provider in choice": "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: agy, model: m}\n",
+		"missing model in choice":    "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: claude}\n",
+		"provider without command":   "capacity:\n  providers:\n    claude: {fiveHourMax: 90}\n",
+		"descending paceCaps":        "capacity:\n  providers:\n    claude:\n      command: [r]\n      paceCaps:\n        - {overBy: 10, ceiling: 2}\n        - {overBy: 5, ceiling: 1}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeTemp(t, bad)); err == nil {
+				t.Errorf("%s: loaded invalid config", name)
+			}
+		})
+	}
+}

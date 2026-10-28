@@ -866,12 +866,24 @@ const (
 	DefaultCeiling = 10
 )
 
-// Defaults of capacity.usage when capacity.usage.command is set.
+// Defaults of capacity.usage and capacity.providers.<name> when a usage
+// command is set.
 const (
 	DefaultUsageEvery       = 5 * time.Minute
 	DefaultUsageReportEvery = 30 * time.Minute
 	DefaultUsageTimeout     = 15 * time.Second
+	DefaultUsageStaleAfter  = 15 * time.Minute
 	DefaultUsageHighPercent = 95.0
+)
+
+// DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
+var DefaultAgyUsageCommand = []string{"agy", "-p", "/usage"}
+
+// DefaultAgyGeminiBucket and DefaultAgyClaudeBucket are the usage bucket names
+// `agy -p /usage` prints for Gemini and Claude/GPT models.
+const (
+	DefaultAgyGeminiBucket = "Gemini Models"
+	DefaultAgyClaudeBucket = "Claude and GPT models"
 )
 
 // Capacity is the supervisor's target of busy agents and the memory guards
@@ -900,12 +912,142 @@ type Capacity struct {
 	// 7-day usage windows read by a configured command; unset, Floor and
 	// Ceiling stand as configured.
 	Usage Usage `yaml:"usage"`
+	// Providers configures per-provider (e.g. claude, agy) usage readers,
+	// window thresholds and floor/ceiling targets. Busy agents count
+	// against the provider they run on, while the machine guards and
+	// Capacity.Ceiling cap the total.
+	Providers     map[string]Provider `yaml:"providers"`
+	providerOrder []string
+	// Choices is the ordered list of (harness, model) pairs that
+	// `agents start --harness auto` and `beekeeper capacity` evaluate:
+	// a start takes the first non-excluded choice whose provider has room,
+	// its 5-hour window below its threshold and its 7-day use within the
+	// weekly cap and pace margin.
+	Choices []Choice `yaml:"choices"`
+	// ReviewSkipPace lets a review (`capacity --review`,
+	// `agents start --review`) skip a choice's weekly pace check and
+	// per-choice weekly worker cap while still respecting the provider's
+	// ceiling and 5-hour / 7-day stops (default true).
+	ReviewSkipPace    bool `yaml:"reviewSkipPace"`
+	reviewSkipPaceSet bool
 }
 
-// Usage configures the opt-in subscription usage reader of Capacity.
+// Provider configures one subscription provider (such as claude or agy): its
+// own floor and ceiling of busy agents and its usage reader and thresholds.
+type Provider struct {
+	Floor      int `yaml:"floor"`
+	Ceiling    int `yaml:"ceiling"`
+	floorSet   bool
+	ceilingSet bool
+	Usage      `yaml:",inline"`
+}
+
+// Choice is one (harness, model) candidate in Capacity.Choices for
+// `agents start --harness auto` and `beekeeper capacity`.
+type Choice struct {
+	// Harness is the agent harness to start ("claude", "agy", "omp").
+	Harness string `yaml:"harness" json:"harness"`
+	// Model is the model selector passed to the harness.
+	Model string `yaml:"model" json:"model"`
+	// Provider names the entry in Capacity.Providers whose room and windows
+	// govern this choice (default: Harness, or "claude" when Harness is "").
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	// Bucket selects the named usage bucket within Provider when the
+	// provider reports multiple buckets (such as `agy -p /usage`'s
+	// "Gemini Models" and "Claude and GPT models"). Empty: inferred from
+	// Provider.Buckets or the model name.
+	Bucket string `yaml:"bucket,omitempty" json:"bucket,omitempty"`
+	// FiveHourMax overrides Provider.FiveHourMax for this choice when set:
+	// the choice requires fiveHour.usedPercent < FiveHourMax.
+	FiveHourMax    float64 `yaml:"fiveHourMax,omitempty" json:"fiveHourMax,omitempty"`
+	fiveHourMaxSet bool
+	// SevenDayMax is the weekly usedPercent cap for workers on this choice:
+	// a normal start requires sevenDay.usedPercent < SevenDayMax, while
+	// --review (when Capacity.ReviewSkipPace is true) may use the budget
+	// above it up to Provider.SevenDayMax.
+	SevenDayMax    float64 `yaml:"sevenDayMax,omitempty" json:"sevenDayMax,omitempty"`
+	sevenDayMaxSet bool
+	// PaceMargin is how many percentage points sevenDay.usedPercent may
+	// exceed the 7-day window's elapsed share (pace) and still allow this
+	// choice (default: Provider.PaceMargin, else 0).
+	PaceMargin    float64 `yaml:"paceMargin,omitempty" json:"paceMargin,omitempty"`
+	paceMarginSet bool
+	// SkipPace skips the weekly pace check for this choice on every start,
+	// workers and reviews alike.
+	SkipPace bool `yaml:"skipPace,omitempty" json:"skipPace,omitempty"`
+}
+
+// EffectiveProvider returns the provider name in Capacity.Providers that
+// governs this choice.
+func (c Choice) EffectiveProvider() string {
+	return cmp.Or(strings.TrimSpace(c.Provider), strings.TrimSpace(c.Harness), "claude")
+}
+
+// EffectiveBucket returns the usage bucket name for this choice on p.
+func (c Choice) EffectiveBucket(p Provider) string {
+	if b := strings.TrimSpace(c.Bucket); b != "" {
+		return b
+	}
+	return p.BucketFor(c.Model)
+}
+
+// EffectiveFiveHourMax returns the 5-hour usedPercent stop threshold for this
+// choice on p, and whether one is configured.
+func (c Choice) EffectiveFiveHourMax(p Provider) (float64, bool) {
+	if c.fiveHourMaxSet || c.FiveHourMax > 0 {
+		return c.FiveHourMax, true
+	}
+	if p.fiveHourMaxSet || p.FiveHourMax > 0 {
+		return p.FiveHourMax, true
+	}
+	return 0, false
+}
+
+// EffectiveWorkerSevenDayMax returns the choice's worker-specific 7-day
+// usedPercent cap, and whether one is configured.
+func (c Choice) EffectiveWorkerSevenDayMax() (float64, bool) {
+	if c.sevenDayMaxSet || c.SevenDayMax > 0 {
+		return c.SevenDayMax, true
+	}
+	return 0, false
+}
+
+// EffectivePaceMargin returns the percentage-point margin by which 7-day usage
+// may exceed the even weekly pace for this choice on p.
+func (c Choice) EffectivePaceMargin(p Provider) float64 {
+	if c.paceMarginSet || c.PaceMargin != 0 {
+		return c.PaceMargin
+	}
+	if p.paceMarginSet || p.PaceMargin != 0 {
+		return p.PaceMargin
+	}
+	return 0
+}
+
+// UnmarshalYAML records whether fiveHourMax, sevenDayMax and paceMargin were set.
+func (c *Choice) UnmarshalYAML(n *yaml.Node) error {
+	type plain Choice
+	if err := n.Decode((*plain)(c)); err != nil {
+		return err
+	}
+	var set struct {
+		FiveHourMax *float64 `yaml:"fiveHourMax"`
+		SevenDayMax *float64 `yaml:"sevenDayMax"`
+		PaceMargin  *float64 `yaml:"paceMargin"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	c.fiveHourMaxSet = set.FiveHourMax != nil
+	c.sevenDayMaxSet = set.SevenDayMax != nil
+	c.paceMarginSet = set.PaceMargin != nil
+	return nil
+}
+
+// Usage configures the opt-in subscription usage reader of Capacity or a Provider.
 type Usage struct {
-	// Command prints the current usage windows as JSON on stdout
-	// (fiveHour and/or sevenDay, each {usedPercent, resetsAt}); empty,
+	// Command prints the current usage windows on stdout (JSON fiveHour
+	// and/or sevenDay, or `agy -p /usage` tab-separated lines); empty,
 	// beekeeper reads no subscription usage.
 	Command []string `yaml:"command"`
 	// Every is how often a cached reading stays fresh before beekeeper
@@ -914,21 +1056,41 @@ type Usage struct {
 	Every Duration `yaml:"every"`
 	// Timeout bounds one run of Command (default 15s).
 	Timeout Duration `yaml:"timeout"`
+	// StaleAfter is how old a usage reading may grow before it counts as
+	// stale, yielding ceiling 0 and room 0 for that provider (default 15m).
+	StaleAfter Duration `yaml:"staleAfter"`
 	// ReportEvery is how often the watch prints a USAGE line (default 30m;
 	// negative: never, watch --once aside).
-	ReportEvery Duration `yaml:"reportEvery"`
+	ReportEvery    Duration `yaml:"reportEvery"`
+	reportEverySet bool
 	// HighPercent is the 5-hour window's usedPercent from which USAGE HIGH
 	// holds until fiveHour.resetsAt: unforced starts, resumes and
 	// auto-resume wait, and each busy worker is told once to finish its
 	// step and park (default 95).
 	HighPercent    float64 `yaml:"highPercent"`
 	highPercentSet bool
+	// FiveHourMax and SevenDayMax are hard usedPercent stops for a window:
+	// at or past the threshold the window yields (floor 0, ceiling 0).
+	FiveHourMax    float64 `yaml:"fiveHourMax"`
+	fiveHourMaxSet bool
+	SevenDayMax    float64 `yaml:"sevenDayMax"`
+	sevenDayMaxSet bool
+	// PaceMargin is the default percentage-point margin by which 7-day
+	// usedPercent may exceed the even weekly pace (default 0).
+	PaceMargin    float64 `yaml:"paceMargin"`
+	paceMarginSet bool
 	// FiveHour and SevenDay map a window's usedPercent to a (floor, ceiling)
 	// pair: the first band with usedPercent < upTo applies, and at or past
 	// the last band's upTo the window yields (0, 0). When both windows have
 	// bands, the lower floor and the lower ceiling apply.
 	FiveHour []UsageBand `yaml:"fiveHour"`
 	SevenDay []UsageBand `yaml:"sevenDay"`
+	// PaceCaps lower Floor and Ceiling when the 7-day window's usedPercent
+	// exceeds the even weekly pace by at least OverBy percentage points.
+	PaceCaps []PaceCap `yaml:"paceCaps"`
+	// Buckets maps a model name or prefix to a bucket name in multi-bucket
+	// usage output (such as `agy -p /usage`).
+	Buckets map[string]string `yaml:"buckets"`
 }
 
 // UsageBand is one usage band of a subscription window: while the window's
@@ -941,11 +1103,24 @@ type UsageBand struct {
 	ceilingSet bool
 }
 
+// PaceCap caps Floor and Ceiling when the 7-day window's usedPercent exceeds
+// the even weekly pace by at least OverBy percentage points.
+type PaceCap struct {
+	OverBy     float64 `yaml:"overBy"`
+	Floor      int     `yaml:"floor"`
+	Ceiling    int     `yaml:"ceiling"`
+	floorSet   bool
+	ceilingSet bool
+}
+
 // Enabled reports whether a subscription usage command is configured.
 func (u Usage) Enabled() bool { return len(u.Command) > 0 }
 
-// HighPercentSet reports whether capacity.usage.highPercent was explicitly set.
+// HighPercentSet reports whether highPercent was explicitly set.
 func (u Usage) HighPercentSet() bool { return u.highPercentSet }
+
+// ReportEverySet reports whether reportEvery was explicitly set.
+func (u Usage) ReportEverySet() bool { return u.reportEverySet }
 
 // EffectiveEvery is Every, or DefaultUsageEvery when unset.
 func (u Usage) EffectiveEvery() time.Duration {
@@ -963,6 +1138,14 @@ func (u Usage) EffectiveTimeout() time.Duration {
 	return DefaultUsageTimeout
 }
 
+// EffectiveStaleAfter is StaleAfter, or max(DefaultUsageStaleAfter, 3*EffectiveEvery()) when unset.
+func (u Usage) EffectiveStaleAfter() time.Duration {
+	if u.StaleAfter.Duration > 0 {
+		return u.StaleAfter.Duration
+	}
+	return max(DefaultUsageStaleAfter, 3*u.EffectiveEvery())
+}
+
 // EffectiveHighPercent is HighPercent, or DefaultUsageHighPercent when unset.
 func (u Usage) EffectiveHighPercent() float64 {
 	if u.HighPercent > 0 {
@@ -971,19 +1154,58 @@ func (u Usage) EffectiveHighPercent() float64 {
 	return DefaultUsageHighPercent
 }
 
-// UnmarshalYAML records whether highPercent was explicitly set.
+// BucketFor returns the usage bucket name for model: an exact or prefix match
+// in u.Buckets if configured, else "Gemini Models" for gemini* models and
+// "Claude and GPT models" otherwise.
+func (u Usage) BucketFor(model string) string {
+	m := strings.TrimSpace(model)
+	if len(u.Buckets) > 0 {
+		if b, ok := u.Buckets[m]; ok {
+			return b
+		}
+		lower := strings.ToLower(m)
+		for _, k := range slices.Sorted(maps.Keys(u.Buckets)) {
+			prefix := strings.TrimSuffix(strings.ToLower(k), "*")
+			if prefix != "" && strings.HasPrefix(lower, prefix) {
+				return u.Buckets[k]
+			}
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(m), "gemini") {
+		return DefaultAgyGeminiBucket
+	}
+	return DefaultAgyClaudeBucket
+}
+
+func (u Usage) hasFields() bool {
+	return u.Every.Duration != 0 || u.Timeout.Duration != 0 || u.StaleAfter.Duration != 0 ||
+		u.ReportEvery.Duration != 0 || u.highPercentSet || u.fiveHourMaxSet ||
+		u.sevenDayMaxSet || u.paceMarginSet || len(u.FiveHour) > 0 ||
+		len(u.SevenDay) > 0 || len(u.PaceCaps) > 0 || len(u.Buckets) > 0
+}
+
+// UnmarshalYAML records whether highPercent, fiveHourMax, sevenDayMax,
+// paceMargin and reportEvery were explicitly set.
 func (u *Usage) UnmarshalYAML(n *yaml.Node) error {
 	type plain Usage
 	if err := n.Decode((*plain)(u)); err != nil {
 		return err
 	}
 	var set struct {
-		HighPercent *float64 `yaml:"highPercent"`
+		ReportEvery *Duration `yaml:"reportEvery"`
+		HighPercent *float64  `yaml:"highPercent"`
+		FiveHourMax *float64  `yaml:"fiveHourMax"`
+		SevenDayMax *float64  `yaml:"sevenDayMax"`
+		PaceMargin  *float64  `yaml:"paceMargin"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
+	u.reportEverySet = set.ReportEvery != nil
 	u.highPercentSet = set.HighPercent != nil
+	u.fiveHourMaxSet = set.FiveHourMax != nil
+	u.sevenDayMaxSet = set.SevenDayMax != nil
+	u.paceMarginSet = set.PaceMargin != nil
 	return nil
 }
 
@@ -1004,6 +1226,49 @@ func (b *UsageBand) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// UnmarshalYAML records whether floor and ceiling were explicitly set on the pace cap.
+func (p *PaceCap) UnmarshalYAML(n *yaml.Node) error {
+	type plain PaceCap
+	if err := n.Decode((*plain)(p)); err != nil {
+		return err
+	}
+	var set struct {
+		Floor   *int `yaml:"floor"`
+		Ceiling *int `yaml:"ceiling"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	p.floorSet, p.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	return nil
+}
+
+// UnmarshalYAML decodes floor, ceiling and either inline or nested usage fields
+// on a provider.
+func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
+	var fc struct {
+		Floor   *int   `yaml:"floor"`
+		Ceiling *int   `yaml:"ceiling"`
+		Usage   *Usage `yaml:"usage"`
+	}
+	if err := n.Decode(&fc); err != nil {
+		return err
+	}
+	if err := p.Usage.UnmarshalYAML(n); err != nil {
+		return err
+	}
+	if fc.Usage != nil {
+		p.Usage = *fc.Usage
+	}
+	if fc.Floor != nil {
+		p.Floor, p.floorSet = *fc.Floor, true
+	}
+	if fc.Ceiling != nil {
+		p.Ceiling, p.ceilingSet = *fc.Ceiling, true
+	}
+	return nil
+}
+
 func (u *Usage) defaults(home string, baseFloor int) {
 	if !u.Enabled() {
 		return
@@ -1013,6 +1278,7 @@ func (u *Usage) defaults(home string, baseFloor int) {
 	}
 	setDur(&u.Every, DefaultUsageEvery)
 	setDur(&u.Timeout, DefaultUsageTimeout)
+	setDur(&u.StaleAfter, max(DefaultUsageStaleAfter, 3*u.Every.Duration))
 	setDur(&u.ReportEvery, DefaultUsageReportEvery)
 	if !u.highPercentSet {
 		u.HighPercent = DefaultUsageHighPercent
@@ -1024,34 +1290,54 @@ func (u *Usage) defaults(home string, baseFloor int) {
 			}
 		}
 	}
+	for i := range u.PaceCaps {
+		if !u.PaceCaps[i].floorSet {
+			u.PaceCaps[i].Floor = max(0, min(baseFloor, u.PaceCaps[i].Ceiling))
+		}
+	}
 }
 
 func (u Usage) validate() error {
+	return u.validateNamed("capacity.usage")
+}
+
+func (u Usage) validateNamed(prefix string) error {
 	if !u.Enabled() {
-		if u.Every.Duration != 0 || u.Timeout.Duration != 0 || u.ReportEvery.Duration != 0 ||
-			u.highPercentSet || len(u.FiveHour) > 0 || len(u.SevenDay) > 0 {
-			return errors.New("capacity.usage: no command: set capacity.usage.command, or nothing of capacity.usage")
+		if u.hasFields() {
+			return fmt.Errorf("%s: no command: set %s.command, or nothing of %s", prefix, prefix, prefix)
 		}
 		return nil
 	}
 	if strings.TrimSpace(u.Command[0]) == "" {
-		return errors.New("capacity.usage.command[0]: empty executable")
+		return fmt.Errorf("%s.command[0]: empty executable", prefix)
 	}
 	if u.Every.Duration <= 0 {
-		return fmt.Errorf("capacity.usage.every: %s is not positive", u.Every.Duration)
+		return fmt.Errorf("%s.every: %s is not positive", prefix, u.Every.Duration)
 	}
 	if u.Timeout.Duration <= 0 {
-		return fmt.Errorf("capacity.usage.timeout: %s is not positive", u.Timeout.Duration)
+		return fmt.Errorf("%s.timeout: %s is not positive", prefix, u.Timeout.Duration)
+	}
+	if u.StaleAfter.Duration < 0 {
+		return fmt.Errorf("%s.staleAfter: %s is negative", prefix, u.StaleAfter.Duration)
 	}
 	if !(u.HighPercent > 0 && u.HighPercent <= 100) {
-		return fmt.Errorf("capacity.usage.highPercent: %g is not in (0, 100]", u.HighPercent)
+		return fmt.Errorf("%s.highPercent: %g is not in (0, 100]", prefix, u.HighPercent)
+	}
+	if u.fiveHourMaxSet && !(u.FiveHourMax > 0 && u.FiveHourMax <= 100) {
+		return fmt.Errorf("%s.fiveHourMax: %g is not in (0, 100]", prefix, u.FiveHourMax)
+	}
+	if u.sevenDayMaxSet && !(u.SevenDayMax > 0 && u.SevenDayMax <= 100) {
+		return fmt.Errorf("%s.sevenDayMax: %g is not in (0, 100]", prefix, u.SevenDayMax)
+	}
+	if u.paceMarginSet && (u.PaceMargin < -100 || u.PaceMargin > 100) {
+		return fmt.Errorf("%s.paceMargin: %g is not in [-100, 100]", prefix, u.PaceMargin)
 	}
 	for _, w := range []struct {
 		name  string
 		bands []UsageBand
 	}{
-		{"capacity.usage.fiveHour", u.FiveHour},
-		{"capacity.usage.sevenDay", u.SevenDay},
+		{prefix + ".fiveHour", u.FiveHour},
+		{prefix + ".sevenDay", u.SevenDay},
 	} {
 		prev := 0.0
 		for i, b := range w.bands {
@@ -1068,6 +1354,21 @@ func (u Usage) validate() error {
 			prev = b.UpTo
 		}
 	}
+	prevOver := 0.0
+	for i, pc := range u.PaceCaps {
+		name := prefix + ".paceCaps"
+		switch {
+		case !(pc.OverBy > 0 && pc.OverBy <= 100):
+			return fmt.Errorf("%s[%d]: overBy %g is not in (0, 100]", name, i, pc.OverBy)
+		case pc.OverBy <= prevOver:
+			return fmt.Errorf("%s[%d]: overBy %g is not above %g: list paceCaps in ascending order", name, i, pc.OverBy, prevOver)
+		case !pc.ceilingSet:
+			return fmt.Errorf("%s[%d]: ceiling is required", name, i)
+		case pc.Floor < 0 || pc.Ceiling < pc.Floor:
+			return fmt.Errorf("%s[%d]: floor %d and ceiling %d; the ceiling is at least the floor", name, i, pc.Floor, pc.Ceiling)
+		}
+		prevOver = pc.OverBy
+	}
 	return nil
 }
 
@@ -1075,11 +1376,43 @@ func (u Usage) validate() error {
 // usage windows' effective usedPercent values (nil when a window was not
 // reported) and reports whether USAGE HIGH holds on the 5-hour window.
 func (k Capacity) Derive(fiveHour, sevenDay *float64) (derived Capacity, high bool) {
+	return k.DeriveWithPace(fiveHour, sevenDay, nil)
+}
+
+// DeriveWithPace returns Capacity with Floor and Ceiling derived from the
+// 5-hour and 7-day windows and the 7-day even pace.
+func (k Capacity) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Capacity, high bool) {
 	derived = k
 	if !k.Usage.Enabled() {
 		return derived, false
 	}
-	floor, ceiling, banded := k.Floor, k.Ceiling, false
+	p := Provider{
+		Floor:      k.Floor,
+		Ceiling:    k.Ceiling,
+		floorSet:   k.floorSet,
+		ceilingSet: k.ceilingSet,
+		Usage:      k.Usage,
+	}
+	dp, high := p.DeriveWithPace(fiveHour, sevenDay, pace)
+	derived.Floor, derived.Ceiling = dp.Floor, dp.Ceiling
+	return derived, high
+}
+
+// Derive returns Provider with Floor and Ceiling derived from the subscription
+// usage windows' effective usedPercent values and reports whether USAGE HIGH
+// holds on the 5-hour window.
+func (p Provider) Derive(fiveHour, sevenDay *float64) (derived Provider, high bool) {
+	return p.DeriveWithPace(fiveHour, sevenDay, nil)
+}
+
+// DeriveWithPace returns Provider with Floor and Ceiling derived from the
+// 5-hour and 7-day windows and the 7-day even pace.
+func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Provider, high bool) {
+	derived = p
+	if !p.Enabled() {
+		return derived, false
+	}
+	floor, ceiling, banded := p.Floor, p.Ceiling, false
 	apply := func(pct *float64, bands []UsageBand) {
 		if pct == nil || len(bands) == 0 {
 			return
@@ -1091,18 +1424,32 @@ func (k Capacity) Derive(fiveHour, sevenDay *float64) (derived Capacity, high bo
 		}
 		floor, ceiling = min(floor, bf), min(ceiling, bc)
 	}
-	apply(fiveHour, k.Usage.FiveHour)
-	apply(sevenDay, k.Usage.SevenDay)
+	apply(fiveHour, p.FiveHour)
+	apply(sevenDay, p.SevenDay)
 	if banded {
-		if k.ceilingSet {
-			ceiling = min(ceiling, k.Ceiling)
+		if p.ceilingSet {
+			ceiling = min(ceiling, p.Ceiling)
 		}
-		if k.floorSet {
-			floor = min(floor, k.Floor)
+		if p.floorSet {
+			floor = min(floor, p.Floor)
 		}
 	}
+	if sevenDay != nil && pace != nil && len(p.PaceCaps) > 0 {
+		over := *sevenDay - *pace
+		for _, pc := range p.PaceCaps {
+			if over >= pc.OverBy-1e-9 {
+				floor, ceiling = min(floor, pc.Floor), min(ceiling, pc.Ceiling)
+			}
+		}
+	}
+	if (p.fiveHourMaxSet || p.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.FiveHourMax {
+		floor, ceiling = 0, 0
+	}
+	if (p.sevenDayMaxSet || p.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.SevenDayMax {
+		floor, ceiling = 0, 0
+	}
 	floor = min(floor, ceiling)
-	if fiveHour != nil && *fiveHour >= k.Usage.EffectiveHighPercent() {
+	if fiveHour != nil && *fiveHour >= p.EffectiveHighPercent() {
 		derived.Floor, derived.Ceiling = 0, 0
 		return derived, true
 	}
@@ -1119,21 +1466,67 @@ func matchBand(used float64, bands []UsageBand) (floor, ceiling int) {
 	return 0, 0
 }
 
-// UnmarshalYAML records whether floor and ceiling were set, so an explicit 0
-// is kept rather than replaced with the default.
+// EffectiveReviewSkipPace reports whether --review skips a choice's weekly
+// pace check and worker weekly cap (default true).
+func (k Capacity) EffectiveReviewSkipPace() bool {
+	if k.reviewSkipPaceSet {
+		return k.ReviewSkipPace
+	}
+	return true
+}
+
+// ProviderNames returns the configured providers in their YAML declaration
+// order (or "claude" first, then sorted keys when constructed in Go).
+func (k Capacity) ProviderNames() []string {
+	if len(k.Providers) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(k.Providers))
+	var out []string
+	for _, name := range k.providerOrder {
+		if _, ok := k.Providers[name]; ok && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	if _, ok := k.Providers["claude"]; ok && !seen["claude"] {
+		seen["claude"] = true
+		out = append(out, "claude")
+	}
+	for _, name := range slices.Sorted(maps.Keys(k.Providers)) {
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// UnmarshalYAML records whether floor, ceiling and reviewSkipPace were set, and
+// preserves the YAML key order of providers.
 func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 	type plain Capacity
 	if err := n.Decode((*plain)(k)); err != nil {
 		return err
 	}
 	var set struct {
-		Floor   *int `yaml:"floor"`
-		Ceiling *int `yaml:"ceiling"`
+		Floor          *int  `yaml:"floor"`
+		Ceiling        *int  `yaml:"ceiling"`
+		ReviewSkipPace *bool `yaml:"reviewSkipPace"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
 	k.floorSet, k.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	k.reviewSkipPaceSet = set.ReviewSkipPace != nil
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == "providers" && n.Content[i+1].Kind == yaml.MappingNode {
+			pn := n.Content[i+1]
+			for j := 0; j+1 < len(pn.Content); j += 2 {
+				k.providerOrder = append(k.providerOrder, pn.Content[j].Value)
+			}
+		}
+	}
 	return nil
 }
 
@@ -2415,7 +2808,28 @@ func (c *Config) defaults() error {
 	if !c.Capacity.floorSet && c.Capacity.Floor == 0 {
 		c.Capacity.Floor = max(0, min(DefaultFloor, c.Capacity.Ceiling))
 	}
+	if !c.Capacity.reviewSkipPaceSet {
+		c.Capacity.ReviewSkipPace = true
+	}
 	c.Capacity.Usage.defaults(home, c.Capacity.Floor)
+	for _, name := range slices.Sorted(maps.Keys(c.Capacity.Providers)) {
+		p := c.Capacity.Providers[name]
+		if !p.ceilingSet && p.Ceiling == 0 {
+			p.Ceiling = c.Capacity.Ceiling
+		}
+		if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
+			p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
+		}
+		if name == "agy" && len(p.Command) == 0 && p.hasFields() {
+			p.Command = slices.Clone(DefaultAgyUsageCommand)
+		}
+		baseFloor := c.Capacity.Floor
+		if p.floorSet {
+			baseFloor = p.Floor
+		}
+		p.defaults(home, baseFloor)
+		c.Capacity.Providers[name] = p
+	}
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
 	setInt(&c.Capacity.SwapGrowthMaxMiB, 256)
 	al := &c.Alerts
@@ -2738,6 +3152,37 @@ func (c *Config) validate() error {
 	}
 	if err := c.Capacity.Usage.validate(); err != nil {
 		return err
+	}
+	for _, name := range c.Capacity.ProviderNames() {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("capacity.providers: empty provider name")
+		}
+		p := c.Capacity.Providers[name]
+		if p.Floor < 0 || p.Ceiling < p.Floor {
+			return fmt.Errorf("capacity.providers.%s: floor %d and ceiling %d; the ceiling is at least the floor", name, p.Floor, p.Ceiling)
+		}
+		if err := p.validateNamed("capacity.providers." + name); err != nil {
+			return err
+		}
+	}
+	for i, ch := range c.Capacity.Choices {
+		switch {
+		case strings.TrimSpace(ch.Harness) == "":
+			return fmt.Errorf("capacity.choices[%d]: harness is required", i)
+		case strings.TrimSpace(ch.Model) == "":
+			return fmt.Errorf("capacity.choices[%d]: model is required", i)
+		case ch.fiveHourMaxSet && !(ch.FiveHourMax > 0 && ch.FiveHourMax <= 100):
+			return fmt.Errorf("capacity.choices[%d]: fiveHourMax %g is not in (0, 100]", i, ch.FiveHourMax)
+		case ch.sevenDayMaxSet && !(ch.SevenDayMax > 0 && ch.SevenDayMax <= 100):
+			return fmt.Errorf("capacity.choices[%d]: sevenDayMax %g is not in (0, 100]", i, ch.SevenDayMax)
+		case ch.paceMarginSet && (ch.PaceMargin < -100 || ch.PaceMargin > 100):
+			return fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin)
+		}
+		if prov := ch.EffectiveProvider(); len(c.Capacity.Providers) > 0 {
+			if _, ok := c.Capacity.Providers[prov]; !ok {
+				return fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov)
+			}
+		}
 	}
 	if w := c.Watch.SwapWindow.Duration; w != 0 && w < MinSwapSpan {
 		return fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan)

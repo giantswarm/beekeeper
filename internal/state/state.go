@@ -401,6 +401,10 @@ type Agent struct {
 	// its registration and each session start; GHAt when. Empty: not read.
 	GH   string    `json:"gh,omitempty"`
 	GHAt time.Time `json:"ghAt,omitzero"`
+	// Harness is the agent harness the session runs on ("" or "claude",
+	// "omp", "agy"); Model is the model it runs on.
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
 
 	rest rest
 }

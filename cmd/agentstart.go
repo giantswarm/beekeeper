@@ -105,7 +105,8 @@ var desktopInput = func(ctx context.Context) (func() time.Time, error) { return 
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task, harness, mode string
-	var desktop, builds, force, dryRun bool
+	var exclude []string
+	var desktop, builds, force, dryRun, review bool
 	c := &cobra.Command{
 		Use:   agentStartName + " <name> <brief file>",
 		Short: "Start an agent session in bypass: imported into the desktop, or a background session with Remote Control",
@@ -229,16 +230,37 @@ in beekeeper's state folder and the brief as its first message. It is
 registered on the roster as omp_<id> under <name> and shows in sessions
 and agents with harness omp; agents wake writes a message to its inbox,
 which omp delivers at its next tool round or as its next turn. No desktop
-is involved and no import happens.`,
+is involved and no import happens.
+
+--harness auto picks the first non-excluded (harness, model) pair in
+capacity.choices whose provider has room (5-hour window below threshold,
+weekly use within the choice's sevenDayMax worker cap and paceMargin).
+--exclude skips matching choices (by model, harness/model, provider, or
+harness; repeatable), and --review skips the weekly pace check and
+per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
+			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
+				return usageErr("--harness auto: no capacity.choices configured")
+			}
+			if _, err := a.startMode(mode); err != nil {
+				return err
+			}
+			if strings.TrimSpace(mode) == config.ModeBackground && desktop {
+				return usageErr("--mode background and --desktop: a background session has no desktop turn")
+			}
+			if harness != harnessAuto {
+				if err := validateStartHarness(harness, mode); err != nil {
+					return err
+				}
+			}
 			// an omp agent whose provider's key is in the vault starts where
 			// the vault session is: the host's broker
-			if harness == omp.Harness && a.ompStartBrokered(model) {
+			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
 				return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
 			}
 			// a sandboxed session's start reads its brief and gives the
@@ -253,31 +275,63 @@ is involved and no import happens.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
-			if _, err := a.startMode(mode); err != nil {
-				return err
-			}
-			if strings.TrimSpace(mode) == config.ModeBackground {
-				switch {
-				case desktop:
-					return usageErr("--mode background and --desktop: a background session has no desktop turn")
-				case harness == omp.Harness:
-					return usageErr("--mode background and --harness omp: an omp agent is no Claude Code background session")
-				}
-			}
 			gaps := pluginGaps(cmd.Context())
-			if dryRun && harness != omp.Harness {
+			if dryRun {
 				if builds {
 					if err := a.dryRunSlot(); err != nil {
 						return err
 					}
 				}
-				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}, gaps)
+				if harness == harnessAuto {
+					v, err := a.startCapacityWithOptions(cmd.Context(), builds, exclude, review)
+					if err != nil {
+						return err
+					}
+					ch, err := pickAutoChoice(v, force)
+					if err != nil {
+						return err
+					}
+					if err := validateStartHarness(ch.Harness, mode); err != nil {
+						return err
+					}
+					if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
+						return err
+					}
+					harness = ch.Harness
+					if model == "" {
+						model = ch.Model
+					}
+				}
+				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
+				if harness == omp.Harness {
+					return a.dryRunOmpStart(sp, gaps)
+				}
+				return a.dryRunStart(cmd.Context(), sp, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
-			over, err := a.startGate(cmd.Context(), name, builds, force)
+			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, review)
 			if err != nil {
 				return err
+			}
+			if harness == harnessAuto {
+				ch, err := pickAutoChoice(v, force)
+				if err != nil {
+					return err
+				}
+				if err := validateStartHarness(ch.Harness, mode); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
+					return err
+				}
+				harness = ch.Harness
+				if model == "" {
+					model = ch.Model
+				}
+				if harness == omp.Harness && a.ompStartBrokered(model) {
+					return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
+				}
 			}
 			if over != "" {
 				by, err := a.caller()
@@ -299,12 +353,8 @@ is involved and no import happens.`,
 				}
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
-			switch harness {
-			case omp.Harness:
+			if harness == omp.Harness {
 				return a.startOmpAgent(cmd.Context(), sp)
-			case "", "claude":
-			default:
-				return usageErr("--harness %q: claude or omp", harness)
 			}
 			sa, err := a.startAgent(cmd.Context(), sp)
 			if err != nil {
@@ -335,16 +385,56 @@ is involved and no import happens.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model)")
+	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; auto: the chosen model)")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
-	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
+	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude, omp, or auto")
+	c.Flags().StringArrayVar(&exclude, "exclude", nil, "exclude a choice from --harness auto (model, harness/model, provider, or harness; repeatable)")
+	c.Flags().BoolVar(&review, "review", false, "a desk review start: skip the 7-day pace check and worker weekly cap when capacity.reviewSkipPace is true")
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
 	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	return c
+}
+
+func validateStartHarness(harness, mode string) error {
+	switch harness {
+	case "", claudeComm, omp.Harness:
+	case harnessAgy:
+		return refused("no start: harness %q is not yet supported by agents start", harness)
+	default:
+		return usageErr("--harness %q: claude, omp, or auto", harness)
+	}
+	if strings.TrimSpace(mode) == config.ModeBackground && harness == omp.Harness {
+		return usageErr("--mode background and --harness omp: an omp agent is no Claude Code background session")
+	}
+	return nil
+}
+
+func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
+	if v != nil && v.Choice != nil && v.Choice.Harness != "" && v.Choice.Model != "" {
+		return v.Choice, nil
+	}
+	if force && v != nil && v.Choice != nil {
+		for _, cand := range v.Choice.Candidates {
+			if cand.Reason != "excluded" {
+				return &choiceView{
+					Harness:  cand.Harness,
+					Model:    cand.Model,
+					Provider: cand.Provider,
+					Bucket:   cand.Bucket,
+					Review:   v.Choice.Review,
+				}, nil
+			}
+		}
+		return nil, refused("no start: all capacity.choices excluded")
+	}
+	if v != nil && len(v.Blocks) > 0 {
+		return nil, refused("no start: %s", strings.Join(v.Blocks, "; "))
+	}
+	return nil, refused("no start: no choice in capacity.choices has room")
 }
 
 // agentStart is a session `agents start` or `agents handover` starts.
@@ -890,6 +980,11 @@ func (a *app) resolveStartModel(id string) {
 		for i := range st.Starts {
 			if s := &st.Starts[i]; s.Session == id && s.Model != "" {
 				s.Model = model
+			}
+		}
+		for i := range st.Agents {
+			if ag := &st.Agents[i]; ag.Session == id && ag.Model != "" {
+				ag.Model = model
 			}
 		}
 		return nil, nil
@@ -1507,9 +1602,10 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 	if err != nil {
 		return registration{}, err
 	}
+	ag := &st.Agents[len(st.Agents)-1]
+	ag.Harness, ag.Model = s.Harness, s.Model
 	if reg.task == "" && task != "" {
 		reg.task, reg.assignedAt = task, s.At
-		ag := &st.Agents[len(st.Agents)-1]
 		ag.Task, ag.AssignedAt = task, s.At
 		if serves != "" {
 			st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(s.Party) })
@@ -1666,6 +1762,26 @@ func (a *app) dryRunStart(ctx context.Context, sp agentStart, gaps []string) err
 		}
 	}
 	_, err := fmt.Fprintf(a.out, "first prompt: %d bytes\n%s\n", len(sp.brief), sp.brief)
+	return err
+}
+
+func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
+	dir, err := a.agentDir(sp.dir)
+	if err != nil {
+		return err
+	}
+	model := cmp.Or(sp.model, a.cfg.Omp.Model, "<model>")
+	argv := ompArgv(omp.Comm, model)
+	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as an omp agent on %s, yolo, no desktop import\nstart: %s\n",
+		sp.name, dir, model, strings.Join(argv, " ")); err != nil {
+		return err
+	}
+	if note := gapsNote(gaps); note != "" {
+		if _, err := fmt.Fprintln(a.out, note); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(a.out, "first prompt: %d bytes\n%s\n", len(sp.brief), sp.brief)
 	return err
 }
 

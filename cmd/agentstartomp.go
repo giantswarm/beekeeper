@@ -83,7 +83,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if err := omp.MakeInbox(inbox); err != nil {
 		return err
 	}
-	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness}
+	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness, Model: model}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error

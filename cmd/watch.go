@@ -80,14 +80,16 @@ for a start, is one CAPACITY LOW line, and a positive capacity.ceiling
 reached one CAPACITY FULL line, each with the headroom (beekeeper capacity)
 and one ENDED line when the count recovers; capacity.ceiling of 0 suppresses
 both CAPACITY LOW and CAPACITY FULL (capacity.floor of 0 suppresses CAPACITY
-LOW). When capacity.usage.command is configured, the watch refreshes the
-subscription's 5-hour and 7-day usage windows every capacity.usage.every
-(default 5m, and once resetsAt passes), prints one USAGE line every
-capacity.usage.reportEvery (default 30m, negative turns it off, and once on
-watch --once), and once the 5-hour window reaches capacity.usage.highPercent
-(default 95%) emits USAGE HIGH once (and ENDED USAGE HIGH once reset), tells
-each running busy worker once per window episode to finish its step and
-park, and holds auto-resume until fiveHour.resetsAt. A reopen that waits to show an agent in the desktop (the
+LOW). When capacity.usage.command or capacity.providers is configured, the watch refreshes each
+subscription's 5-hour and 7-day usage windows every usage.every
+(default 5m, and once resetsAt passes), prints one USAGE line (with each
+provider's windows and verdict and the capacity.choices selection when
+capacity.providers is configured, else every capacity.usage.reportEvery,
+default 30m, negative turns it off, and once on watch --once), and once a
+5-hour window reaches usage.highPercent (default 95%) emits USAGE HIGH once
+(and ENDED USAGE HIGH once reset), tells each running busy worker on that
+provider once per window episode to finish its step and park, and holds
+auto-resume until fiveHour.resetsAt. A reopen that waits to show an agent in the desktop (the
 window has the person's focus) is one IMPORT WAITS line per wait, with
 what it waits for and until when. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
@@ -420,6 +422,8 @@ type watcher struct {
 	lastUsage                      time.Time
 	usageErr                       string
 	usageReported                  time.Time
+	providerLastUsage              map[string]time.Time
+	providerUsageErr               map[string]string
 	// sinkPending are the events of the sink's verbs within sink.Window,
 	// sinking is set while their dispatch runs, sinkLedger claims each one
 	// once across the machine's watches.
