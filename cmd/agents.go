@@ -378,7 +378,7 @@ type registration struct {
 // open tasks are refused, since one entry holds one task.
 func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
 	var reg registration
-	var holder, lastTask string
+	var holder, lastTask, harness, model string
 	var keep *state.Keep
 	for _, x := range st.Agents {
 		own := x.Is(me)
@@ -390,6 +390,12 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		}
 		if x.Keep != nil && (own || keep == nil) {
 			keep = x.Keep
+		}
+		if x.Harness != "" && (own || harness == "") {
+			harness = x.Harness
+		}
+		if x.Model != "" && (own || model == "") {
+			model = x.Model
 		}
 		if !own {
 			if live(x.Party) {
@@ -407,7 +413,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
-	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep})
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep, Harness: harness, Model: model})
 	return reg, nil
 }
 
@@ -516,7 +522,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
 	desktop := t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
-		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
+		v := agentView{Agent: ag, Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
 		if w := ag.Import; w.Pending(a.now) {
 			v.Reachable = "importing, until " + clock(a.now, w.Until)
 		}
@@ -524,7 +530,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 			v.Reachable = "task not delivered: " + ag.Undelivered
 		}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
-			v.Reachable, v.Model = "live", s.Model
+			v.Reachable, v.Model = "live", cmp.Or(s.Model, ag.Model)
 			for _, c := range s.Commands {
 				if c.Remaining > 0 {
 					v.Reachable = "waiting, " + dur(c.Remaining) + " left"

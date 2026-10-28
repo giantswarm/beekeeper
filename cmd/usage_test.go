@@ -14,10 +14,17 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+type tightMachine struct{ platform.Machine }
+
+func (tightMachine) Mem() (machine.Mem, error) {
+	return machine.Mem{AvailableMiB: 10 << 10, TotalMiB: 96 << 10}, nil
+}
 
 const (
 	usageDirFlag   = "--dir"
@@ -653,5 +660,403 @@ func TestSnapshotUsageAndDiff(t *testing.T) {
 		return strings.Contains(s, "usage: 5h 60%") && strings.Contains(s, "target floor 2, ceiling 4")
 	}) {
 		t.Errorf("band-change diff = %q, want usage target floor 2, ceiling 4", d)
+	}
+}
+
+// TestParseAgyUsageAndStaleRead verifies parsing `agy -p /usage` TSV output
+// and checks that a stale or failed usage read yields ceiling 0, room 0 for
+// that provider rather than full room.
+func TestParseAgyUsageAndStaleRead(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+
+	tsv := strings.Join([]string{
+		"Gemini Models\tWeekly Limit Remaining\t78%\t2026-11-03T09:23:51Z",
+		"Gemini Models\tFive Hour Limit Remaining\t94%\t2026-10-28T05:23:51Z",
+		"Claude and GPT models\tWeekly Limit Remaining\t91%\t2026-11-03T11:39:11Z",
+		"Claude and GPT models\tFive Hour Limit Remaining\t89%\t2026-10-28T06:23:51Z",
+	}, "\n")
+	parsed, err := parseUsageOutput([]byte(tsv))
+	if err != nil {
+		t.Fatalf("parseUsageOutput TSV: %v", err)
+	}
+	gem, ok := parsed.Buckets[config.DefaultAgyGeminiBucket]
+	if !ok || gem.FiveHour == nil || gem.FiveHour.UsedPercent != 6 || gem.SevenDay == nil || gem.SevenDay.UsedPercent != 22 {
+		t.Fatalf("Gemini bucket = %+v", gem)
+	}
+	cl, ok := parsed.Buckets[config.DefaultAgyClaudeBucket]
+	if !ok || cl.FiveHour == nil || cl.FiveHour.UsedPercent != 11 || cl.SevenDay == nil || cl.SevenDay.UsedPercent != 9 {
+		t.Fatalf("Claude bucket = %+v", cl)
+	}
+
+	claudeFile := filepath.Join(dir, "claude-usage.json")
+	claudeExit := filepath.Join(dir, "claude-exit")
+	claudeReader := filepath.Join(dir, "read-claude")
+	if err := os.WriteFile(claudeReader, []byte("#!/bin/sh\nif [ -f \""+claudeExit+"\" ]; then exit 1; fi\ncat \""+claudeFile+"\"\n"), 0o700); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	agyFile := filepath.Join(dir, "agy-usage.tsv")
+	agyReader := filepath.Join(dir, "read-agy")
+	if err := os.WriteFile(agyReader, []byte("#!/bin/sh\ncat \""+agyFile+"\"\n"), 0o700); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agyFile, []byte(tsv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rawCfg := fmt.Sprintf(`capacity:
+  floor: 2
+  ceiling: 4
+  providers:
+    claude:
+      floor: 1
+      ceiling: 2
+      staleAfter: 15m
+      command: [%q]
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 2}
+      sevenDay:
+        - {upTo: 90, floor: 1, ceiling: 2}
+    agy:
+      floor: 1
+      ceiling: 2
+      command: [%q]
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 2}
+      sevenDay:
+        - {upTo: 90, floor: 1, ceiling: 2}
+  choices:
+    - {harness: claude, model: claude-opus-4-7}
+    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}
+`, claudeReader, agyReader)
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := time.Date(2026, 10, 28, 3, 0, 0, 0, time.UTC)
+
+	// 1. Stale reading via ageMinutes > staleAfter (15m) yields ceiling 0, room 0 for claude, falling through to agy.
+	if err := os.WriteFile(claudeFile, []byte(`{"ageMinutes":32,"fiveHour":{"usedPercent":10},"sevenDay":{"usedPercent":20}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}}
+	v, err := a.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp := v.Providers["claude"]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || !cp.Stale {
+		t.Fatalf("stale ageMinutes claude provider = %+v, want ceiling 0, room 0, stale=true", cp)
+	}
+	if ap := v.Providers["agy"]; ap == nil || ap.Ceiling != 2 || ap.Room != 2 {
+		t.Fatalf("agy provider = %+v, want ceiling 2, room 2", ap)
+	}
+	if v.Choice == nil || v.Choice.Harness != "agy" || v.Choice.Model != "gemini-3-1-pro-medium" {
+		t.Fatalf("choice on stale claude = %+v, want agy/gemini-3-1-pro-medium", v.Choice)
+	}
+
+	// 2. Stale reading via "at" timestamp older than staleAfter also yields ceiling 0, room 0.
+	staleAt := t0.Add(-20 * time.Minute).Format(time.RFC3339)
+	if err := os.WriteFile(claudeFile, []byte(fmt.Sprintf(`{"at":%q,"fiveHour":{"usedPercent":10},"sevenDay":{"usedPercent":20}}`, staleAt)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v2, err := a.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp := v2.Providers["claude"]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || !cp.Stale {
+		t.Fatalf("stale at claude provider = %+v, want ceiling 0, room 0, stale=true", cp)
+	}
+
+	// 3. Failed reading (exit 1) also yields ceiling 0, room 0 for claude (never full room).
+	if err := os.WriteFile(claudeExit, []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v3, err := a.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp := v3.Providers["claude"]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || cp.Error == "" {
+		t.Fatalf("failed claude provider = %+v, want ceiling 0, room 0, error set", cp)
+	}
+}
+
+// TestProvidersChoicesPaceMarginExcludeAndMachineGuards exercises per-provider
+// capacity verdicts, choice order, paceMargin, worker sevenDayMax vs --review,
+// --exclude, busy agent attribution per provider/bucket, machine guards capping
+// the total, watch once-per-tick USAGE output, and agents start --harness auto.
+func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+
+	rawCfg := `capacity:
+  floor: 2
+  ceiling: 3
+  reviewSkipPace: true
+  providers:
+    claude:
+      floor: 1
+      ceiling: 2
+      command: ["read-claude"]
+      fiveHourMax: 90
+      sevenDayMax: 95
+      paceMargin: 5
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 2}
+      sevenDay:
+        - {upTo: 95, floor: 1, ceiling: 2}
+    agy:
+      floor: 1
+      ceiling: 2
+      command: ["read-agy"]
+      fiveHourMax: 90
+      sevenDayMax: 95
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 2}
+      sevenDay:
+        - {upTo: 95, floor: 1, ceiling: 2}
+  choices:
+    - harness: claude
+      model: claude-opus-4-7
+      paceMargin: 5
+    - harness: agy
+      model: claude-opus-4-6-thinking
+      paceMargin: 0
+    - harness: agy
+      model: gemini-3-1-pro-medium
+      skipPace: true
+      sevenDayMax: 80
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	reset5h := t0.Add(3 * time.Hour).UTC()
+	// 84h remaining out of 168h => pace is exactly 50.0%.
+	reset7d := t0.Add(84 * time.Hour).UTC()
+
+	claude5h, claude7d := 20.0, 54.0 // 54% <= 50% + 5% margin => OK
+	agyClaude5h, agyClaude7d := 15.0, 48.0
+	agyGemini5h, agyGemini7d := 10.0, 72.0
+
+	reader := func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+		if len(cmd) > 0 && cmd[0] == "read-claude" {
+			return usageReading{
+				FiveHour: &usageWindow{UsedPercent: claude5h, ResetsAt: reset5h},
+				SevenDay: &usageWindow{UsedPercent: claude7d, ResetsAt: reset7d},
+			}, nil
+		}
+		return usageReading{
+			Buckets: map[string]usageBucket{
+				config.DefaultAgyClaudeBucket: {
+					FiveHour: &usageWindow{UsedPercent: agyClaude5h, ResetsAt: reset5h},
+					SevenDay: &usageWindow{UsedPercent: agyClaude7d, ResetsAt: reset7d},
+				},
+				config.DefaultAgyGeminiBucket: {
+					FiveHour: &usageWindow{UsedPercent: agyGemini5h, ResetsAt: reset5h},
+					SevenDay: &usageWindow{UsedPercent: agyGemini7d, ResetsAt: reset7d},
+				},
+			},
+			BucketOrder: []string{config.DefaultAgyGeminiBucket, config.DefaultAgyClaudeBucket},
+		}, nil
+	}
+
+	newApp := func(now time.Time, jsonOut bool) (*app, *bytes.Buffer) {
+		var out bytes.Buffer
+		// Clear cached provider usage files so each step sees the updated test numbers.
+		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile("claude")))
+		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile("agy")))
+		return &app{
+			cfgPath:   cfgPath,
+			cfg:       cfg,
+			store:     store,
+			now:       now,
+			out:       &out,
+			as:        agentOne,
+			json:      jsonOut,
+			readUsage: reader,
+		}, &out
+	}
+
+	// 1. claude 7d 54% is within pace 50% + 5% margin: first choice claude/claude-opus-4-7 wins.
+	//    Total room is capped by capacity.ceiling (3 < 2+2=4).
+	a1, out1 := newApp(t0, false)
+	if err := a1.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got1 := out1.String()
+	if !strings.Contains(got1, "provider claude:") ||
+		!strings.Contains(got1, "provider agy:") ||
+		!strings.Contains(got1, "choice: claude / claude-opus-4-7 (provider claude)") ||
+		!strings.Contains(got1, "room for 3 starts") {
+		t.Fatalf("step 1 capacity output:\n%s", got1)
+	}
+
+	// 2. --exclude claude-opus-4-7 skips the first choice and picks agy/claude-opus-4-6-thinking.
+	aEx, outEx := newApp(t0, true)
+	capEx := aEx.capacityCmd()
+	capEx.SetArgs([]string{"--exclude", "claude-opus-4-7"})
+	if err := capEx.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var parsedEx capacityView
+	if err := json.Unmarshal(outEx.Bytes(), &parsedEx); err != nil {
+		t.Fatal(err)
+	}
+	if parsedEx.Choice == nil || parsedEx.Choice.Harness != "agy" || parsedEx.Choice.Model != "claude-opus-4-6-thinking" ||
+		parsedEx.Choice.Bucket != config.DefaultAgyClaudeBucket {
+		t.Fatalf("excluded choice = %+v", parsedEx.Choice)
+	}
+
+	// 3. claude 7d moves to 56% (> 50% + 5% margin) -> ahead of pace, so agy/claude-opus-4-6-thinking wins.
+	claude7d = 56.0
+	a2, _ := newApp(t0, false)
+	v2, err := a2.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.Choice == nil || v2.Choice.Harness != "agy" || v2.Choice.Model != "claude-opus-4-6-thinking" {
+		t.Fatalf("step 3 choice = %+v, want agy/claude-opus-4-6-thinking", v2.Choice)
+	}
+
+	// 4. agy Claude bucket 7d moves to 52% (> 50% + 0% margin) -> falls through to
+	//    agy/gemini-3-1-pro-medium (skipPace: true, 72% < 80% worker cap).
+	agyClaude7d = 52.0
+	a3, _ := newApp(t0, false)
+	v3, err := a3.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v3.Choice == nil || v3.Choice.Harness != "agy" || v3.Choice.Model != "gemini-3-1-pro-medium" ||
+		v3.Choice.Bucket != config.DefaultAgyGeminiBucket {
+		t.Fatalf("step 4 choice = %+v, want agy/gemini-3-1-pro-medium", v3.Choice)
+	}
+
+	// 5. agy Gemini bucket 7d reaches 82% (>= 80% worker cap, < 95% provider stop):
+	//    - worker start gets no choice and room 0;
+	//    - --review skips pace and worker cap, picking claude/claude-opus-4-7 (or agy/gemini-3-1-pro-medium when claude + opus-4-6 are excluded).
+	agyGemini7d = 82.0
+	a4, _ := newApp(t0, false)
+	vWorker, err := a4.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vWorker.Room != 0 || vWorker.Choice == nil || vWorker.Choice.Harness != "" {
+		t.Fatalf("worker at 82%% gemini = room %d, choice %+v; want room 0 and no choice", vWorker.Room, vWorker.Choice)
+	}
+	a4Rev, _ := newApp(t0, false)
+	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, []string{"claude", "claude-opus-4-6-thinking"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vReview.Room == 0 || vReview.Choice == nil || vReview.Choice.Harness != "agy" || vReview.Choice.Model != "gemini-3-1-pro-medium" || !vReview.Choice.Review {
+		t.Fatalf("review at 82%% gemini = room %d, choice %+v; want agy/gemini-3-1-pro-medium", vReview.Room, vReview.Choice)
+	}
+
+	// 6. Busy agents count against their provider/bucket, and machine guards cap the total across providers.
+	claude7d = 40.0
+	agyClaude7d = 40.0
+	agyGemini7d = 40.0
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		w1 := tasked("ClaudeWorker1")
+		w1.Harness, w1.Model = "claude", "claude-opus-4-7"
+		w2 := tasked("ClaudeWorker2")
+		w2.Harness, w2.Model = "claude", "claude-opus-4-7"
+		w3 := tasked("AgyWorker1")
+		w3.Harness, w3.Model = "agy", "gemini-3-1-pro-medium"
+		st.Agents = []state.Agent{w1, w2, w3}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 2 busy on claude (at its ceiling of 2 -> room 0) + 1 busy on agy (ceiling 2 -> room 1),
+	// BUT total busy is 3, which is at top-level capacity.ceiling of 3 -> machineRoomCap caps agy to 0!
+	a5, _ := newApp(t0, false)
+	vCap, err := a5.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vCap.Room != 0 || vCap.Providers["claude"].Room != 0 || vCap.Providers["agy"].Room != 0 {
+		t.Fatalf("at top-level ceiling 3: total room=%d, claude=%d, agy=%d; want all 0",
+			vCap.Room, vCap.Providers["claude"].Room, vCap.Providers["agy"].Room)
+	}
+
+	// Free one claude worker so 1 busy on claude (room 1) + 1 busy on agy (room 1), total busy 2 < 3 => room 1.
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = st.Agents[1:]
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a6, _ := newApp(t0, false)
+	vOpen, err := a6.startCapacityWithOptions(context.Background(), false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vOpen.Room != 1 || vOpen.Choice == nil || vOpen.Choice.Harness != "claude" {
+		t.Fatalf("with 2 busy of 3: room=%d, choice=%+v; want room 1, claude", vOpen.Room, vOpen.Choice)
+	}
+
+	// Machine guard (low MemAvailable) caps all providers and total room to 0.
+	origMachine := plat.Machine
+	plat.Machine = tightMachine{Machine: origMachine}
+	aTight, _ := newApp(t0, false)
+	vTight, err := aTight.startCapacityWithOptions(context.Background(), false, nil, false)
+	plat.Machine = origMachine
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vTight.Room != 0 || vTight.Providers["claude"].Room != 0 || vTight.Providers["agy"].Room != 0 {
+		t.Fatalf("under low MemAvailable: total=%d, claude=%d, agy=%d; want all 0",
+			vTight.Room, vTight.Providers["claude"].Room, vTight.Providers["agy"].Room)
+	}
+
+	// 7. watch emits the per-provider USAGE line with choice once per tick, and
+	//    agents start --harness auto picks the first choice with room.
+	var watchOut bytes.Buffer
+	aWatch, _ := newApp(t0, false)
+	aWatch.out = &watchOut
+	w := aWatch.newWatcher(false, true)
+	w.now = t0
+	w.doctoring.Store(true)
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	t.Cleanup(func() { w.bg.Wait() })
+	w.pending(context.Background(), nil)
+	if got := watchOut.String(); !strings.Contains(got, "USAGE: claude: ") ||
+		!strings.Contains(got, "; agy: ") ||
+		!strings.Contains(got, "; choice: claude/claude-opus-4-7") {
+		t.Fatalf("watch providers USAGE line:\n%s", got)
+	}
+
+	brief := filepath.Join(dir, "auto-brief.md")
+	if err := os.WriteFile(brief, []byte("Work the auto task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubBackground(t, "backgrounded · "+bgShortID+" · AutoWorker\n", bgSession{ID: bgShortID, SessionID: bgID, Name: "AutoWorker"})
+	aAuto, outAuto := newApp(t0, false)
+	startCmd := aAuto.agentStartCmd()
+	startCmd.SilenceErrors = true
+	startCmd.SilenceUsage = true
+	startCmd.SetArgs([]string{"AutoWorker", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, "--harness", "auto"})
+	if err := startCmd.Execute(); err != nil {
+		t.Fatalf("agents start --harness auto: %v", err)
+	}
+	if !strings.Contains(outAuto.String(), "choice: claude / claude-opus-4-7 (provider claude)") ||
+		!strings.Contains(outAuto.String(), "its turns run on claude-opus-4-7") {
+		t.Fatalf("agents start --harness auto output:\n%s", outAuto.String())
 	}
 }

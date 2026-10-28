@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,10 +26,12 @@ import (
 // agents against the target, the headroom a new start needs and the verdict.
 type capacityView struct {
 	agentCount
-	Floor    int        `json:"floor"`
-	Ceiling  int        `json:"ceiling"`
-	Usage    *usageView `json:"usage,omitempty"`
-	Headroom *headroom  `json:"headroom"`
+	Floor     int                      `json:"floor"`
+	Ceiling   int                      `json:"ceiling"`
+	Usage     *usageView               `json:"usage,omitempty"`
+	Providers map[string]*providerView `json:"providers,omitempty"`
+	Choice    *choiceView              `json:"choice,omitempty"`
+	Headroom  *headroom                `json:"headroom"`
 	// Builds says the start judged builds: the build slot is then one of
 	// its guards.
 	Builds bool `json:"builds"`
@@ -40,6 +44,172 @@ type capacityView struct {
 	Notes []string `json:"notes,omitempty"`
 	// Stopped says the standing beekeeper stop, which no --force passes.
 	Stopped string `json:"stopped,omitempty"`
+}
+
+// bucketView is one usage bucket's windows and derived target within a
+// multi-bucket provider such as agy.
+type bucketView struct {
+	Name     string       `json:"name"`
+	Busy     []string     `json:"busy"`
+	Floor    int          `json:"floor"`
+	Ceiling  int          `json:"ceiling"`
+	Room     int          `json:"room"`
+	FiveHour *usageWindow `json:"fiveHour,omitempty"`
+	SevenDay *usageWindow `json:"sevenDay,omitempty"`
+	Pace     *float64     `json:"pace,omitempty"`
+	High     bool         `json:"high,omitempty"`
+	Blocks   []string     `json:"blocks,omitempty"`
+}
+
+func (b *bucketView) windowsLine(now time.Time) string {
+	return windowsPairLine(b.FiveHour, b.SevenDay, now)
+}
+
+// providerView is one provider's busy agents, usage windows, derived target
+// and capacity verdict.
+type providerView struct {
+	Name        string                 `json:"name"`
+	Busy        []string               `json:"busy"`
+	Floor       int                    `json:"floor"`
+	Ceiling     int                    `json:"ceiling"`
+	Room        int                    `json:"room"`
+	At          time.Time              `json:"at,omitzero"`
+	FiveHour    *usageWindow           `json:"fiveHour,omitempty"`
+	SevenDay    *usageWindow           `json:"sevenDay,omitempty"`
+	Pace        *float64               `json:"pace,omitempty"`
+	Buckets     map[string]*bucketView `json:"buckets,omitempty"`
+	bucketOrder []string
+	High        bool     `json:"high,omitempty"`
+	HighPercent float64  `json:"highPercent,omitempty"`
+	Stale       bool     `json:"stale,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	Blocks      []string `json:"blocks,omitempty"`
+	Verdict     string   `json:"verdict"`
+}
+
+func (p *providerView) findBucket(name string) *bucketView {
+	if len(p.Buckets) == 0 {
+		return nil
+	}
+	if b, ok := p.Buckets[name]; ok {
+		return b
+	}
+	for k, b := range p.Buckets {
+		if strings.EqualFold(k, name) {
+			return b
+		}
+	}
+	return nil
+}
+
+func (p *providerView) windowsSummary(now time.Time) string {
+	if p.Error != "" {
+		return "usage unknown (" + truncate(p.Error, 120) + ")"
+	}
+	if len(p.Buckets) > 0 {
+		var parts []string
+		for _, bName := range p.bucketOrder {
+			if bv := p.Buckets[bName]; bv != nil {
+				parts = append(parts, bName+" "+bv.windowsLine(now))
+			}
+		}
+		return strings.Join(parts, "; ")
+	}
+	if p.FiveHour != nil || p.SevenDay != nil {
+		return "usage " + windowsPairLine(p.FiveHour, p.SevenDay, now)
+	}
+	return ""
+}
+
+func (p *providerView) line(now time.Time) string {
+	s := fmt.Sprintf("%d busy of floor %d, ceiling %d", len(p.Busy), p.Floor, p.Ceiling)
+	if len(p.Busy) > 0 {
+		s += ": " + strings.Join(p.Busy, ", ")
+	}
+	if ws := p.windowsSummary(now); ws != "" {
+		s += "; " + ws
+	}
+	return s + "; " + p.Verdict
+}
+
+func (p *providerView) watchSummary(now time.Time) string {
+	s := fmt.Sprintf("%d busy of floor %d, ceiling %d", len(p.Busy), p.Floor, p.Ceiling)
+	if ws := p.windowsSummary(now); ws != "" {
+		s += ", " + ws
+	}
+	s += ", " + p.Verdict
+	if p.High {
+		s += " (USAGE HIGH)"
+	}
+	return s
+}
+
+func providerVerdict(room int, blocks []string) string {
+	switch {
+	case room == 1:
+		return "room for 1 start"
+	case room > 1:
+		return fmt.Sprintf("room for %d starts", room)
+	case len(blocks) > 0:
+		return "no start: " + strings.Join(blocks, "; ")
+	default:
+		return "no start: ceiling 0"
+	}
+}
+
+// choiceCandidate is one evaluated entry of capacity.choices.
+type choiceCandidate struct {
+	Harness  string `json:"harness"`
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+	Bucket   string `json:"bucket,omitempty"`
+	OK       bool   `json:"ok"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// choiceView is the result of evaluating capacity.choices for a start.
+type choiceView struct {
+	Harness    string            `json:"harness,omitempty"`
+	Model      string            `json:"model,omitempty"`
+	Provider   string            `json:"provider,omitempty"`
+	Bucket     string            `json:"bucket,omitempty"`
+	Review     bool              `json:"review,omitempty"`
+	Exclude    []string          `json:"exclude,omitempty"`
+	Reason     string            `json:"reason,omitempty"`
+	Candidates []choiceCandidate `json:"candidates,omitempty"`
+}
+
+func (c *choiceView) line() string {
+	if c == nil {
+		return "none"
+	}
+	if c.Harness != "" && c.Model != "" {
+		s := fmt.Sprintf("%s / %s (provider %s", c.Harness, c.Model, c.Provider)
+		if c.Bucket != "" {
+			s += ", bucket " + c.Bucket
+		}
+		if c.Review {
+			s += ", review"
+		}
+		return s + ")"
+	}
+	if c.Reason != "" {
+		return "none (" + c.Reason + ")"
+	}
+	return "none"
+}
+
+func (c *choiceView) summary() string {
+	if c == nil {
+		return "none"
+	}
+	if c.Harness != "" && c.Model != "" {
+		return c.Harness + "/" + c.Model
+	}
+	if c.Reason != "" {
+		return "none (" + c.Reason + ")"
+	}
+	return "none"
 }
 
 // agentCount sorts the roster: busy with a task, parked (kept on purpose, a
@@ -90,6 +260,109 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 		c.Busy = append(c.Busy, ag.Name)
 	}
 	return c
+}
+
+type providerAgents struct {
+	Busy       []string
+	BucketBusy map[string][]string
+}
+
+func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time) map[string]providerAgents {
+	out := make(map[string]providerAgents, len(k.Providers))
+	for _, name := range k.ProviderNames() {
+		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
+	}
+	sup, guide := st.SupervisorRole(), st.GuideRole()
+	for _, ag := range st.Agents {
+		p := ag.Party
+		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+			continue
+		}
+		if ag.Task == "" || ag.Done || keptBy(st, ag, now) != "" {
+			continue
+		}
+		s, live := claude.Live(sessions, p)
+		if live && (s.Waiting != nil || s.OwnWait(now, waitQuiet) != "") {
+			continue
+		}
+		harness, model := agentHarnessModel(st, sessions, ag)
+		prov, bucket := resolveAgentProviderBucket(k, harness, model)
+		pa := out[prov]
+		if pa.BucketBusy == nil {
+			pa.BucketBusy = map[string][]string{}
+		}
+		pa.Busy = append(pa.Busy, ag.Name)
+		if bucket != "" {
+			pa.BucketBusy[bucket] = append(pa.BucketBusy[bucket], ag.Name)
+		}
+		out[prov] = pa
+	}
+	return out
+}
+
+func agentHarnessModel(st *state.State, sessions []*claude.Session, ag state.Agent) (harness, model string) {
+	harness, model = strings.TrimSpace(ag.Harness), strings.TrimSpace(ag.Model)
+	for i := len(st.Starts) - 1; i >= 0; i-- {
+		s := st.Starts[i]
+		if s.Party.Is(ag.Party) || (s.Name != "" && s.Name == ag.Name) {
+			if harness == "" {
+				harness = strings.TrimSpace(s.Harness)
+			}
+			if model == "" {
+				model = strings.TrimSpace(s.Model)
+			}
+			break
+		}
+	}
+	if sess, live := claude.Live(sessions, ag.Party); live {
+		if harness == "" {
+			harness = strings.TrimSpace(sess.Harness)
+		}
+		if model == "" {
+			model = strings.TrimSpace(sess.Model)
+		}
+	}
+	if harness == "" {
+		switch {
+		case strings.HasPrefix(ag.HostSession, "omp_") || strings.HasPrefix(ag.Session, "omp_"):
+			harness = "omp"
+		case strings.HasPrefix(ag.HostSession, "agy_") || strings.HasPrefix(ag.Session, "agy_"):
+			harness = "agy"
+		default:
+			harness = "claude"
+		}
+	}
+	return harness, model
+}
+
+func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov, bucket string) {
+	h := cmp.Or(strings.TrimSpace(harness), "claude")
+	m := strings.TrimSpace(model)
+	for _, ch := range k.Choices {
+		if !strings.EqualFold(ch.Harness, h) {
+			continue
+		}
+		if m != "" && (strings.EqualFold(ch.Model, m) || strings.HasPrefix(strings.ToLower(m), strings.ToLower(ch.Model))) {
+			p := ch.EffectiveProvider()
+			return p, ch.EffectiveBucket(k.Providers[p])
+		}
+	}
+	for _, ch := range k.Choices {
+		if strings.EqualFold(ch.Harness, h) && m == "" {
+			p := ch.EffectiveProvider()
+			return p, ch.EffectiveBucket(k.Providers[p])
+		}
+	}
+	if _, ok := k.Providers[h]; ok {
+		return h, k.Providers[h].BucketFor(m)
+	}
+	if _, ok := k.Providers["claude"]; ok && (h == "" || h == "claude") {
+		return "claude", k.Providers["claude"].BucketFor(m)
+	}
+	if names := k.ProviderNames(); len(names) > 0 {
+		return names[0], k.Providers[names[0]].BucketFor(m)
+	}
+	return h, ""
 }
 
 // line says the count against the target in one line.
@@ -293,6 +566,482 @@ func newCapacity(c agentCount, k config.Capacity, h *headroom, builds bool) *cap
 	return v
 }
 
+type providerReadingResult struct {
+	reading usageReading
+	err     error
+	ok      bool
+}
+
+func deriveProviderReading(p config.Provider, r usageReading, now time.Time) (floor, ceiling int, high bool) {
+	if !p.Usage.Enabled() {
+		return p.Floor, p.Ceiling, false
+	}
+	if len(r.Buckets) > 0 {
+		maxCeiling := 0
+		allHigh := true
+		for _, bName := range bucketNames(r) {
+			b := r.Buckets[bName]
+			fh := effectiveWindow(b.FiveHour, now)
+			sd := effectiveSevenDayWindow(b.SevenDay, now)
+			dp, bh := p.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
+			maxCeiling = max(maxCeiling, dp.Ceiling)
+			if !bh {
+				allHigh = false
+			}
+		}
+		if maxCeiling == 0 {
+			return 0, 0, allHigh
+		}
+		c := min(p.Ceiling, maxCeiling)
+		return min(p.Floor, c), c, false
+	}
+	fh := effectiveWindow(r.FiveHour, now)
+	sd := effectiveSevenDayWindow(r.SevenDay, now)
+	dp, high := p.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
+	return dp.Floor, dp.Ceiling, high
+}
+
+func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time) *providerView {
+	busy := pa.Busy
+	if busy == nil {
+		busy = []string{}
+	}
+	pv := &providerView{Name: name, Busy: busy}
+	if pCfg.Usage.Enabled() {
+		pv.HighPercent = pCfg.Usage.EffectiveHighPercent()
+		if !res.ok || res.err != nil {
+			errMsg := "usage not read"
+			if res.err != nil {
+				errMsg = res.err.Error()
+			}
+			pv.Floor, pv.Ceiling, pv.Room = 0, 0, 0
+			pv.Error = errMsg
+			pv.Stale = strings.Contains(errMsg, "stale")
+			pv.Blocks = []string{"subscription usage unknown (" + errMsg + ")"}
+			pv.Verdict = providerVerdict(0, pv.Blocks)
+			return pv
+		}
+		r := res.reading
+		pv.At = r.At
+		if len(r.Buckets) > 0 {
+			pv.Buckets = make(map[string]*bucketView, len(r.Buckets))
+			pv.bucketOrder = bucketNames(r)
+			maxBucketCeiling := 0
+			anyBucketOpen := false
+			allHigh := true
+			var bucketBlocks []string
+			for _, bName := range pv.bucketOrder {
+				b := r.Buckets[bName]
+				fh := effectiveWindow(b.FiveHour, now)
+				sd := effectiveSevenDayWindow(b.SevenDay, now)
+				dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
+				bBusy := pa.BucketBusy[bName]
+				if bBusy == nil {
+					bBusy = []string{}
+				}
+				var bBlocks []string
+				switch {
+				case high:
+					bBlocks = append(bBlocks, highBlockText(fh, pv.HighPercent, now))
+				case pCfg.FiveHourMax > 0 && fh != nil && fh.UsedPercent >= pCfg.FiveHourMax:
+					bBlocks = append(bBlocks, fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(pCfg.FiveHourMax)))
+				case pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax:
+					bBlocks = append(bBlocks, fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax)))
+				case dp.Ceiling == 0:
+					bBlocks = append(bBlocks, ceilingZero)
+				case len(bBusy) >= dp.Ceiling:
+					bBlocks = append(bBlocks, fmt.Sprintf("%d busy at the ceiling of %d", len(bBusy), dp.Ceiling))
+				}
+				bRoom := 0
+				if len(bBlocks) == 0 {
+					bRoom = max(0, dp.Ceiling-len(bBusy))
+					anyBucketOpen = true
+				} else {
+					bucketBlocks = append(bucketBlocks, bName+": "+bBlocks[0])
+				}
+				if !high {
+					allHigh = false
+				}
+				maxBucketCeiling = max(maxBucketCeiling, dp.Ceiling)
+				pv.Buckets[bName] = &bucketView{
+					Name:     bName,
+					Busy:     bBusy,
+					Floor:    dp.Floor,
+					Ceiling:  dp.Ceiling,
+					Room:     bRoom,
+					FiveHour: fh,
+					SevenDay: sd,
+					Pace:     sdPace(sd),
+					High:     high,
+					Blocks:   bBlocks,
+				}
+			}
+			if maxBucketCeiling == 0 {
+				pv.Floor, pv.Ceiling, pv.Room = 0, 0, 0
+				pv.High = allHigh
+				pv.Blocks = bucketBlocks
+				pv.Verdict = providerVerdict(0, pv.Blocks)
+				return pv
+			}
+			pv.Ceiling = min(pCfg.Ceiling, maxBucketCeiling)
+			pv.Floor = min(pCfg.Floor, pv.Ceiling)
+			switch {
+			case pv.Ceiling == 0:
+				pv.Blocks = []string{ceilingZero}
+			case len(pv.Busy) >= pv.Ceiling:
+				pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
+			case !anyBucketOpen:
+				pv.Blocks = bucketBlocks
+			default:
+				pv.Room = pv.Ceiling - len(pv.Busy)
+				for _, bv := range pv.Buckets {
+					bv.Room = min(bv.Room, pv.Room)
+				}
+			}
+			pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
+			return pv
+		}
+		pv.FiveHour = effectiveWindow(r.FiveHour, now)
+		pv.SevenDay = effectiveSevenDayWindow(r.SevenDay, now)
+		pv.Pace = sdPace(pv.SevenDay)
+		dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pv.Pace)
+		pv.Floor, pv.Ceiling, pv.High = dp.Floor, dp.Ceiling, high
+	} else {
+		pv.Floor, pv.Ceiling = pCfg.Floor, pCfg.Ceiling
+	}
+	switch {
+	case pv.High:
+		pv.Blocks = []string{highBlockText(pv.FiveHour, pv.HighPercent, now)}
+	case pCfg.Usage.Enabled() && pCfg.FiveHourMax > 0 && pv.FiveHour != nil && pv.FiveHour.UsedPercent >= pCfg.FiveHourMax:
+		pv.Blocks = []string{fmt.Sprintf("5h %s at or past %s", pct(pv.FiveHour.UsedPercent), pct(pCfg.FiveHourMax))}
+	case pCfg.Usage.Enabled() && pCfg.SevenDayMax > 0 && pv.SevenDay != nil && pv.SevenDay.UsedPercent >= pCfg.SevenDayMax:
+		pv.Blocks = []string{fmt.Sprintf("7d %s at or past %s", pct(pv.SevenDay.UsedPercent), pct(pCfg.SevenDayMax))}
+	case pv.Ceiling == 0:
+		pv.Blocks = []string{ceilingZero}
+	case len(pv.Busy) >= pv.Ceiling:
+		pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
+	default:
+		pv.Room = pv.Ceiling - len(pv.Busy)
+	}
+	pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
+	return pv
+}
+
+func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config.Capacity, readings map[string]providerReadingResult, h *headroom, builds bool, exclude []string, review bool, now time.Time) *capacityView {
+	providers := make(map[string]*providerView, len(k.Providers))
+	sumFloor, sumCeiling, sumRoom := 0, 0, 0
+	for _, name := range k.ProviderNames() {
+		pv := buildSingleProviderView(name, k.Providers[name], pa[name], readings[name], now)
+		providers[name] = pv
+		sumFloor += pv.Floor
+		sumCeiling += pv.Ceiling
+		sumRoom += pv.Room
+	}
+	effCeiling := min(k.Ceiling, sumCeiling)
+	effFloor := min(k.Floor, min(sumFloor, effCeiling))
+	mBlocks := h.blocks(builds)
+	machineRoomCap := max(0, effCeiling-len(c.Busy))
+
+	for _, name := range k.ProviderNames() {
+		pv := providers[name]
+		if len(mBlocks) > 0 {
+			pv.Room = 0
+			pv.Blocks = append(pv.Blocks, mBlocks...)
+		} else if pv.Room > machineRoomCap {
+			pv.Room = machineRoomCap
+			if pv.Room == 0 && len(pv.Blocks) == 0 {
+				if k.Ceiling == 0 {
+					pv.Blocks = []string{ceilingZero}
+				} else {
+					pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}
+				}
+			}
+		}
+		for _, bv := range pv.Buckets {
+			bv.Room = min(bv.Room, pv.Room)
+		}
+		pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
+	}
+
+	v := &capacityView{
+		agentCount: c,
+		Floor:      effFloor,
+		Ceiling:    effCeiling,
+		Providers:  providers,
+		Headroom:   h,
+		Builds:     builds,
+	}
+	if line, blocks := h.swapGuard(); line != "" && !blocks {
+		v.Notes = append(v.Notes, line)
+	}
+	if !builds && h.slotBusy() {
+		v.Notes = append(v.Notes, noFreeSlot+": a start that builds (--builds) waits for it")
+	}
+
+	if len(k.Choices) > 0 {
+		v.Choice = evaluateChoices(k, providers, mBlocks, "", exclude, review, now)
+	}
+
+	switch {
+	case len(mBlocks) > 0:
+		v.Room = 0
+		if k.Ceiling == 0 {
+			v.Blocks = append([]string{ceilingZero}, mBlocks...)
+		} else if len(c.Busy) >= effCeiling && effCeiling > 0 {
+			v.Blocks = append([]string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}, mBlocks...)
+		} else {
+			v.Blocks = slices.Clone(mBlocks)
+		}
+	case len(k.Choices) > 0 && v.Choice != nil:
+		if v.Choice.Harness == "" {
+			v.Room = 0
+			v.Blocks = []string{"no choice has room: " + v.Choice.Reason}
+		} else {
+			choiceRoom := eligibleChoicesRoom(k, providers, v.Choice.Candidates)
+			v.Room = min(machineRoomCap, choiceRoom)
+			if v.Room == 0 {
+				v.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}
+			}
+		}
+	default:
+		v.Room = min(machineRoomCap, sumRoom)
+		if v.Room == 0 {
+			if k.Ceiling == 0 {
+				v.Blocks = []string{ceilingZero}
+			} else if len(c.Busy) >= effCeiling && sumRoom > 0 {
+				v.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}
+			} else {
+				for _, name := range k.ProviderNames() {
+					if pv := providers[name]; len(pv.Blocks) > 0 {
+						v.Blocks = append(v.Blocks, name+": "+strings.Join(pv.Blocks, "; "))
+					}
+				}
+			}
+		}
+	}
+	return v
+}
+
+func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, candidates []choiceCandidate) int {
+	provRoom := map[string]int{}
+	bucketSum := map[string]int{}
+	seenBucket := map[string]bool{}
+	for _, cand := range candidates {
+		if !cand.OK {
+			continue
+		}
+		pv := providers[cand.Provider]
+		if pv == nil {
+			continue
+		}
+		if cand.Bucket != "" && len(pv.Buckets) > 0 {
+			if bv := pv.findBucket(cand.Bucket); bv != nil {
+				key := cand.Provider + "/" + bv.Name
+				if !seenBucket[key] {
+					seenBucket[key] = true
+					bucketSum[cand.Provider] += bv.Room
+				}
+				provRoom[cand.Provider] = min(pv.Room, bucketSum[cand.Provider])
+				continue
+			}
+		}
+		provRoom[cand.Provider] = pv.Room
+	}
+	total := 0
+	for _, r := range provRoom {
+		total += r
+	}
+	return total
+}
+
+func normalizeExcludes(exclude []string) []string {
+	var out []string
+	for _, raw := range exclude {
+		for _, part := range strings.Split(raw, ",") {
+			if s := strings.TrimSpace(part); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
+	if len(excludes) == 0 {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSpace(ch.Harness))
+	m := strings.ToLower(strings.TrimSpace(ch.Model))
+	p := strings.ToLower(ch.EffectiveProvider())
+	b := strings.ToLower(strings.TrimSpace(ch.Bucket))
+	hm := h + "/" + m
+	pm := p + "/" + m
+
+	isKnownProviderOrHarness := func(tok string) bool {
+		if tok == h || tok == p || tok == "claude" || tok == "agy" || tok == "omp" {
+			return true
+		}
+		return slices.ContainsFunc(providerNames, func(n string) bool { return strings.EqualFold(n, tok) })
+	}
+
+	for _, raw := range excludes {
+		ex := strings.ToLower(strings.TrimSpace(raw))
+		if ex == "" {
+			continue
+		}
+		switch {
+		case strings.Contains(ex, "/"):
+			if ex == hm || ex == pm || strings.HasPrefix(hm, strings.TrimSuffix(ex, "*")) || strings.HasPrefix(pm, strings.TrimSuffix(ex, "*")) {
+				return true
+			}
+		case ex == h || ex == p || ex == m || (b != "" && ex == b):
+			return true
+		case !isKnownProviderOrHarness(ex) && strings.HasPrefix(m, strings.TrimSuffix(ex, "*")):
+			return true
+		}
+	}
+	return false
+}
+
+func evaluateChoices(k config.Capacity, providers map[string]*providerView, machineBlocks []string, stopped string, exclude []string, review bool, now time.Time) *choiceView {
+	normEx := normalizeExcludes(exclude)
+	cv := &choiceView{
+		Review:  review,
+		Exclude: normEx,
+	}
+	skipPaceForReview := review && k.EffectiveReviewSkipPace()
+	var reasons []string
+
+	for _, ch := range k.Choices {
+		provName := ch.EffectiveProvider()
+		pCfg := k.Providers[provName]
+		pv := providers[provName]
+		bucketName := ""
+		if pv != nil && len(pv.Buckets) > 0 {
+			bucketName = ch.EffectiveBucket(pCfg)
+		}
+		cand := choiceCandidate{
+			Harness:  ch.Harness,
+			Model:    ch.Model,
+			Provider: provName,
+			Bucket:   bucketName,
+		}
+		reason := evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), skipPaceForReview, now)
+		if reason == "" {
+			cand.OK = true
+			if cv.Harness == "" {
+				cv.Harness = ch.Harness
+				cv.Model = ch.Model
+				cv.Provider = provName
+				cv.Bucket = bucketName
+			}
+		} else {
+			cand.Reason = reason
+			reasons = append(reasons, fmt.Sprintf("%s/%s: %s", ch.Harness, ch.Model, reason))
+		}
+		cv.Candidates = append(cv.Candidates, cand)
+	}
+	if cv.Harness == "" && len(reasons) > 0 {
+		cv.Reason = strings.Join(reasons, "; ")
+	}
+	return cv
+}
+
+func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerView, bucketName string, machineBlocks []string, stopped string, excludes, providerNames []string, skipPaceForReview bool, now time.Time) string {
+	if choiceExcluded(ch, excludes, providerNames) {
+		return "excluded"
+	}
+	if stopped != "" {
+		return stopped
+	}
+	if len(machineBlocks) > 0 {
+		return strings.Join(machineBlocks, "; ")
+	}
+	if pv == nil {
+		return fmt.Sprintf("provider %s not configured", ch.EffectiveProvider())
+	}
+	if pv.Error != "" {
+		return fmt.Sprintf("provider %s usage unknown (%s)", pv.Name, pv.Error)
+	}
+
+	var fh, sd *usageWindow
+	if len(pv.Buckets) > 0 {
+		bv := pv.findBucket(bucketName)
+		if bv == nil {
+			return fmt.Sprintf("bucket %q not in %s usage output", bucketName, pv.Name)
+		}
+		fh, sd = bv.FiveHour, bv.SevenDay
+		if bv.High {
+			return highBlockText(fh, pv.HighPercent, now)
+		}
+		if max5h, ok := ch.EffectiveFiveHourMax(pCfg); ok && fh != nil && fh.UsedPercent >= max5h {
+			return fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(max5h))
+		}
+		if pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax {
+			return fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax))
+		}
+		if bv.Room <= 0 {
+			if len(bv.Blocks) > 0 {
+				return strings.Join(bv.Blocks, "; ")
+			}
+			if len(pv.Blocks) > 0 {
+				return strings.Join(pv.Blocks, "; ")
+			}
+			return fmt.Sprintf("no room on %s", pv.Name)
+		}
+	} else {
+		fh, sd = pv.FiveHour, pv.SevenDay
+		if pv.High {
+			return highBlockText(fh, pv.HighPercent, now)
+		}
+		if max5h, ok := ch.EffectiveFiveHourMax(pCfg); ok && fh != nil && fh.UsedPercent >= max5h {
+			return fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(max5h))
+		}
+		if pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax {
+			return fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax))
+		}
+		if pv.Room <= 0 {
+			if len(pv.Blocks) > 0 {
+				return strings.Join(pv.Blocks, "; ")
+			}
+			return fmt.Sprintf("no room on %s", pv.Name)
+		}
+	}
+
+	if !skipPaceForReview && sd != nil {
+		if max7d, ok := ch.EffectiveWorkerSevenDayMax(); ok && sd.UsedPercent >= max7d {
+			return fmt.Sprintf("7d %s at or past worker cap %s", pct(sd.UsedPercent), pct(max7d))
+		}
+	}
+	if !ch.SkipPace && !skipPaceForReview && sd != nil && sd.Pace != nil {
+		margin := ch.EffectivePaceMargin(pCfg)
+		over := math.Round((sd.UsedPercent-*sd.Pace)*10) / 10
+		if over > margin+1e-9 {
+			if margin == 0 {
+				return fmt.Sprintf("7d %s ahead of pace %s (+%s)", pct(sd.UsedPercent), pct(*sd.Pace), pct(over))
+			}
+			return fmt.Sprintf("7d %s ahead of pace %s (+%s > %s margin)", pct(sd.UsedPercent), pct(*sd.Pace), pct(over), pct(margin))
+		}
+	}
+	return ""
+}
+
+func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, review bool) *capacityView {
+	c := countAgents(st, sessions, a.now)
+	pa := countProviderAgents(st, sessions, k, a.now)
+	readings := make(map[string]providerReadingResult, len(k.Providers))
+	for _, name := range k.ProviderNames() {
+		p := k.Providers[name]
+		if !p.Usage.Enabled() {
+			continue
+		}
+		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
+		readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+	}
+	h := a.readHeadroom(ctx, k, a.watchSwap())
+	return buildProvidersCapacity(c, pa, k, readings, h, builds, exclude, review, a.now)
+}
+
 // withUsage attaches u to v and replaces or prepends the usage block when
 // subscription usage is unreadable or USAGE HIGH holds.
 func (v *capacityView) withUsage(u *usageView, now time.Time) *capacityView {
@@ -302,7 +1051,12 @@ func (v *capacityView) withUsage(u *usageView, now time.Time) *capacityView {
 	v.Usage = u
 	switch {
 	case u.Error != "":
-		v.Blocks = append([]string{"subscription usage unknown (" + u.Error + ")"}, v.Blocks...)
+		block := "subscription usage unknown (" + u.Error + ")"
+		if len(v.Blocks) > 0 && v.Blocks[0] == ceilingZero {
+			v.Blocks[0] = block
+		} else {
+			v.Blocks = append([]string{block}, v.Blocks...)
+		}
 		v.Room = 0
 	case u.High:
 		block := u.highBlock(now)
@@ -321,6 +1075,15 @@ func (v *capacityView) stopped(a *app, s *state.Stop) *capacityView {
 	if s != nil {
 		v.Stopped = a.stopText(s)
 		v.Blocks, v.Room = append([]string{v.Stopped}, v.Blocks...), 0
+		for _, pv := range v.Providers {
+			pv.Room = 0
+			pv.Blocks = append([]string{v.Stopped}, pv.Blocks...)
+			pv.Verdict = providerVerdict(0, pv.Blocks)
+		}
+		if v.Choice != nil && v.Choice.Harness != "" {
+			v.Choice.Harness, v.Choice.Model, v.Choice.Provider, v.Choice.Bucket = "", "", "", ""
+			v.Choice.Reason = v.Stopped
+		}
 	}
 	return v
 }
@@ -402,9 +1165,10 @@ func (a *app) watchSwap() *swapReading {
 }
 
 func (a *app) capacityCmd() *cobra.Command {
-	var builds bool
+	var builds, review bool
+	var exclude []string
 	c := &cobra.Command{
-		Use:   "capacity [--builds]",
+		Use:   "capacity [--builds] [--review] [--exclude <choice>]",
 		Short: "Busy agents against the target, the headroom for a start and the verdict",
 		Long: `Count the roster's agents against the supervisor's target (capacity.floor,
 capacity.ceiling; unset, 5 and 10) and say whether a new start fits. A
@@ -418,7 +1182,15 @@ capacity.usage.sevenDay (taking the lower floor and ceiling when both have
 bands), prints the windows on the capacity line and under usage in --json,
 and refuses unforced starts with "no start: usage high: …" once the 5-hour
 window reaches capacity.usage.highPercent (default 95%) until
-fiveHour.resetsAt. Busy is a roster agent
+fiveHour.resetsAt. When capacity.providers and capacity.choices are
+configured, beekeeper reads each provider's usage windows (such as Claude's
+JSON windows and agy -p /usage's model buckets), counts busy agents against
+the provider and bucket they run on, caps the total by the machine guards
+and capacity.ceiling, and prints each provider's windows and verdict plus
+the first non-excluded choice (--exclude) in capacity.choices whose
+provider has room, its 5-hour window below its threshold and its 7-day use
+within the weekly cap and pace margin (--review skips the weekly pace check
+and worker weekly cap when capacity.reviewSkipPace is true). Busy is a roster agent
 with a task that is neither parked, kept nor waiting: an agent kept on
 purpose (agents keep), one a timer wakes and one whose session waits on its
 person are parked; one whose session runs only waits (a sleep or a polling
@@ -467,9 +1239,15 @@ nothing; it makes no GitHub call.`,
 			if err != nil && !platform.Missing(err) {
 				return err
 			}
-			c := countAgents(st, sessions, a.now)
-			k, u := a.resolveUsage(cmd.Context(), a.liveCapacity())
-			v := newCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds).withUsage(u, a.now).stopped(a, st.Stop)
+			liveCap := a.liveCapacity()
+			var v *capacityView
+			if len(liveCap.Providers) > 0 {
+				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop)
+			} else {
+				c := countAgents(st, sessions, a.now)
+				k, u := a.resolveUsage(cmd.Context(), liveCap)
+				v = newCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds).withUsage(u, a.now).stopped(a, st.Stop)
+			}
 			if a.json {
 				return a.printJSON(struct {
 					*capacityView
@@ -477,19 +1255,27 @@ nothing; it makes no GitHub call.`,
 				}{v, v.verdict()})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-			capLine := c.line(k)
-			if u != nil {
-				capLine += "; " + u.capacitySuffix(a.now)
+			capLine := v.agentCount.line(config.Capacity{Floor: v.Floor, Ceiling: v.Ceiling})
+			if v.Usage != nil {
+				capLine += "; " + v.Usage.capacitySuffix(a.now)
 			}
 			p("capacity: %s", capLine)
-			if len(c.Parked) > 0 {
-				p("parked: %s", strings.Join(c.Parked, ", "))
+			for _, name := range liveCap.ProviderNames() {
+				if pv := v.Providers[name]; pv != nil {
+					p("provider %s: %s", name, pv.line(a.now))
+				}
 			}
-			if len(c.Waiting) > 0 {
-				p("waiting: %s", strings.Join(c.Waiting, ", "))
+			if v.Choice != nil {
+				p("choice: %s", v.Choice.line())
 			}
-			if len(c.Idle) > 0 {
-				p("idle: %s", strings.Join(c.Idle, ", "))
+			if len(v.Parked) > 0 {
+				p("parked: %s", strings.Join(v.Parked, ", "))
+			}
+			if len(v.Waiting) > 0 {
+				p("waiting: %s", strings.Join(v.Waiting, ", "))
+			}
+			if len(v.Idle) > 0 {
+				p("idle: %s", strings.Join(v.Idle, ", "))
 			}
 			p("%s", v.Headroom.line())
 			p("%s", v.verdict())
@@ -497,12 +1283,18 @@ nothing; it makes no GitHub call.`,
 		},
 	}
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
+	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, which skips the weekly pace check and worker weekly cap")
+	c.Flags().StringSliceVar(&exclude, excludeFlag, nil, "exclude a choice by model, harness/model, provider or harness (repeatable or comma-separated)")
 	return c
 }
 
 // buildsFlag marks a start whose task builds: the build slot is one of its
-// guards.
-const buildsFlag = "builds"
+// guards. reviewFlag marks a review start, excludeFlag excludes choices.
+const (
+	buildsFlag  = "builds"
+	reviewFlag  = "review"
+	excludeFlag = "exclude"
+)
 
 // gateStart judges capacity's verdict v for a start: room lets it through
 // (nothing to say), none refuses it (exit 3, the verdict's guards named)
@@ -523,17 +1315,31 @@ func gateStart(v *capacityView, force bool) (string, error) {
 // startGate reads the capacity verdict for a start that builds or not, as
 // beekeeper capacity reads it, and judges it (queueStart).
 func (a *app) startGate(ctx context.Context, name string, builds, force bool) (string, error) {
-	v, err := a.startCapacity(ctx, builds)
+	over, _, err := a.startGateWithOptions(ctx, name, builds, force, nil, false)
+	return over, err
+}
+
+func (a *app) startGateWithOptions(ctx context.Context, name string, builds, force bool, exclude []string, review bool) (string, *capacityView, error) {
+	v, err := a.startCapacityWithOptions(ctx, builds, exclude, review)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	o, wait, err := a.startSlot()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return queueStart(v, builds, force, wait,
+	var latest *capacityView
+	latest = v
+	over, err := queueStart(v, builds, force, wait,
 		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
-		func() (*capacityView, error) { return a.startCapacity(ctx, false) })
+		func() (*capacityView, error) {
+			next, err := a.startCapacityWithOptions(ctx, false, exclude, review)
+			if err == nil {
+				latest = next
+			}
+			return next, err
+		})
+	return over, latest, err
 }
 
 // startSlot is the build slot a start that builds queues for, in the slots
@@ -599,6 +1405,10 @@ func queueStart(v *capacityView, builds, force bool, wait string, await func() (
 
 // startCapacity is capacity's verdict for a start now.
 func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, error) {
+	return a.startCapacityWithOptions(ctx, builds, nil, false)
+}
+
+func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude []string, review bool) (*capacityView, error) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, err
@@ -607,8 +1417,12 @@ func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, er
 	if err != nil && !platform.Missing(err) {
 		return nil, err
 	}
+	liveCap := a.liveCapacity()
+	if len(liveCap.Providers) > 0 {
+		return a.resolveProvidersCapacity(ctx, st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop), nil
+	}
 	c := countAgents(st, sessions, a.now)
-	k, u := a.resolveUsage(ctx, a.liveCapacity())
+	k, u := a.resolveUsage(ctx, liveCap)
 	return newCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds).withUsage(u, a.now).stopped(a, st.Stop), nil
 }
 

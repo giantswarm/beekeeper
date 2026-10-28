@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -71,6 +72,10 @@ type snapshot struct {
 	// Usage is the subscription usage windows and derived capacity target,
 	// nil when capacity.usage.command is not configured.
 	Usage *usageView `json:"usage,omitempty"`
+	// Providers and Choice are the per-provider usage windows, verdicts and
+	// selected choice when capacity.providers is configured.
+	Providers map[string]*providerView `json:"providers,omitempty"`
+	Choice    *choiceView              `json:"choice,omitempty"`
 	// Unavailable are the sections whose platform part this build does not
 	// have: each prints one "not available" line instead.
 	Unavailable []string `json:"unavailable,omitempty"`
@@ -301,7 +306,14 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	}
 	s.Holds = a.activeHolds(st)
 	s.Quiet = a.quietSince(a.now.Add(-time.Hour))
-	_, s.Usage = a.resolveUsage(ctx, a.liveCapacity())
+	capCfg := a.liveCapacity()
+	if len(capCfg.Providers) > 0 {
+		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, false)
+		s.Providers = cv.Providers
+		s.Choice = cv.Choice
+	} else {
+		_, s.Usage = a.resolveUsage(ctx, capCfg)
+	}
 	if withBudget {
 		b, err := a.probeBudget(ctx)
 		if err != nil {
@@ -571,7 +583,9 @@ func (a *app) printSnapshot(s *snapshot) {
 	if len(s.Upgrades) > 0 {
 		p("upgrades: %s", strings.Join(upgradeWords(s.Upgrades, a.now), " · "))
 	}
-	if s.Usage != nil {
+	if len(s.Providers) > 0 {
+		p("%s", snapshotProvidersLine(a.liveCapacity(), s.Providers, s.Choice, a.now))
+	} else if s.Usage != nil {
 		p("%s", s.Usage.snapshotLine(a.now))
 	}
 	switch {
@@ -736,11 +750,53 @@ func diffSnapshots(prev, cur *snapshot) []string {
 			out = append(out, fmt.Sprintf("GitHub budget %d → %d (%d spent)", prev.Budget.Remaining, cur.Budget.Remaining, d))
 		}
 	}
-	if cur.Usage != nil && (prev.Usage == nil || cur.Usage.Floor != prev.Usage.Floor ||
+	if len(cur.Providers) > 0 && providersChanged(prev.Providers, cur.Providers, prev.Choice, cur.Choice) {
+		out = append(out, snapshotProvidersLine(config.Capacity{}, cur.Providers, cur.Choice, cur.At.Local()))
+	} else if cur.Usage != nil && (prev.Usage == nil || cur.Usage.Floor != prev.Usage.Floor ||
 		cur.Usage.Ceiling != prev.Usage.Ceiling || cur.Usage.High != prev.Usage.High || cur.Usage.Error != prev.Usage.Error) {
 		out = append(out, cur.Usage.snapshotLine(cur.At.Local()))
 	}
 	return out
+}
+
+func snapshotProvidersLine(k config.Capacity, providers map[string]*providerView, choice *choiceView, now time.Time) string {
+	names := k.ProviderNames()
+	if len(names) == 0 {
+		for n := range providers {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+	}
+	var parts []string
+	for _, name := range names {
+		if pv := providers[name]; pv != nil {
+			parts = append(parts, name+": "+pv.watchSummary(now))
+		}
+	}
+	if choice != nil {
+		parts = append(parts, "choice: "+choice.summary())
+	}
+	return "usage: " + strings.Join(parts, "; ")
+}
+
+func providersChanged(prev, cur map[string]*providerView, prevChoice, curChoice *choiceView) bool {
+	if len(prev) != len(cur) {
+		return true
+	}
+	for k, c := range cur {
+		p := prev[k]
+		if p == nil || p.Floor != c.Floor || p.Ceiling != c.Ceiling || p.Room != c.Room || p.High != c.High || p.Error != c.Error {
+			return true
+		}
+	}
+	pSum, cSum := "", ""
+	if prevChoice != nil {
+		pSum = prevChoice.summary()
+	}
+	if curChoice != nil {
+		cSum = curChoice.summary()
+	}
+	return pSum != cSum
 }
 
 func minus(a, b []string) []string {

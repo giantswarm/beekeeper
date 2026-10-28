@@ -118,7 +118,7 @@ The rest of the role is in this skill's `references/` folder, each file read whe
 and all of them at the first tick:
 
 - `references/scheduling.md`: `capacity.floor` to `capacity.ceiling` busy agents (`5` and `10`
-  when unset, or derived from `capacity.usage` windows; waiting ones hold no slot), the board,
+  when unset, or derived from `capacity.usage` / `capacity.providers` windows and `capacity.choices`; waiting ones hold no slot), the board,
   a worker for every ranked epic with open work, a fresh worker per task, the epics reported at a
   session's end. Read before filling free slots.
 - `references/merges-and-collisions.md`: merges, holds, lanes and hand-overs by name, sessions that

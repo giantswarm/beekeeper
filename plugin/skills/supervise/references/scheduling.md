@@ -23,7 +23,14 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   step and park, and holds unforced `agents start`, `agents resume` and `autoResume` until
   `fiveHour.resetsAt`; on `ENDED USAGE HIGH`, `autoResume` resumes settled `--on` parks and the
   supervisor resumes workers parked on the 5-hour usage window reset within the restored capacity
-  verdict. Until the verdict allows a start the supervisor starts nothing, an unstaffed epic included
+  verdict. When `capacity.providers` and `capacity.choices` are configured, beekeeper evaluates each
+  provider's windows and ceiling (counting busy agents against the provider and bucket they run on,
+  with a stale or failed usage read counting as `ceiling 0, room 0` for that provider, and the
+  machine guards and `capacity.ceiling` capping the total), prints each provider's windows and
+  verdict and the chosen `(harness, model)` pair in `beekeeper capacity` and once per `watch` tick,
+  and `agents start --harness auto` takes the first non-excluded choice (`--exclude`) with room
+  within its 5-hour threshold, worker weekly cap and 7-day pace margin (`--review` skips the pace
+  check and worker weekly cap). Until the verdict allows a start the supervisor starts nothing, an unstaffed epic included
   (below). At every tick below `capacity.floor`, the supervisor fills the free slots in the same
   turn, within the memory guards (`MemAvailable` well above the watch's floor, machine swap not
   growing, a free build slot, the kind clusters under `maxKindClusters`), and never starts past
