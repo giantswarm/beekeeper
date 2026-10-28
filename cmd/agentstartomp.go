@@ -179,12 +179,14 @@ func (a *app) ompNeedsVault(model string) bool {
 }
 
 // ompStartNeedsVault reports whether a brokered agents start, by its
-// arguments (start --harness=omp [--model=m] …), reads the vault.
+// arguments (start --harness=omp|auto [--model=m] [--exclude=e] …), reads the
+// vault.
 func (a *app) ompStartNeedsVault(args []string) bool {
 	if len(args) == 0 || args[0] != agentStartName {
 		return false
 	}
 	var harness, model string
+	var excludes []string
 	for _, arg := range args[1:] {
 		if arg == "--" {
 			break
@@ -195,8 +197,27 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 		if v, ok := strings.CutPrefix(arg, modelFlag+"="); ok {
 			model = v
 		}
+		if v, ok := strings.CutPrefix(arg, "--exclude="); ok {
+			excludes = append(excludes, strings.Trim(v, "[]"))
+		}
 	}
-	return harness == omp.Harness && a.ompNeedsVault(model)
+	switch harness {
+	case omp.Harness:
+		return a.ompNeedsVault(model)
+	case harnessAuto:
+		if model != "" {
+			return a.ompNeedsVault(model)
+		}
+		k := a.liveCapacity()
+		normEx := normalizeExcludes(excludes)
+		provNames := k.ProviderNames()
+		for _, ch := range k.Choices {
+			if ch.Harness == omp.Harness && !choiceExcluded(ch, normEx, provNames) && a.ompNeedsVault(ch.Model) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // credentialNames are the variables the credentials fill.

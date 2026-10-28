@@ -339,6 +339,12 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				}
 				targetModel := cmp.Or(strings.TrimSpace(model), ch.Model)
 				if ch.Harness == omp.Harness && a.ompStartBrokered(targetModel) {
+					if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
+						return err
+					}
+					if err := forwardBrokeredChoice(cmd, ch.Harness, targetModel); err != nil {
+						return err
+					}
 					return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
 				}
 				harness = ch.Harness
@@ -399,6 +405,13 @@ func validateStartHarness(harness, mode string) error {
 		return usageErr("--mode background and --harness %s: an %s agent is no Claude Code background session", harness, harness)
 	}
 	return nil
+}
+
+func forwardBrokeredChoice(cmd *cobra.Command, harness, model string) error {
+	if err := cmd.Flags().Set("harness", harness); err != nil {
+		return err
+	}
+	return cmd.Flags().Set("model", model)
 }
 
 func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir string) error {

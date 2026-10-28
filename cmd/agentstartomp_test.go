@@ -168,10 +168,19 @@ const (
 )
 
 // A brokered omp start on a provider of omp.providers reads the vault,
-// by its model or omp.model; any other start does not.
+// by its model, omp.model or --harness=auto choice; any other start does not.
 func TestOmpStartNeedsVault(t *testing.T) {
 	const ompHarness = "--harness=omp"
-	a := &app{cfg: &config.Config{Omp: config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{"spark": {APIKey: sparkRef}}}}}
+	const autoHarness = "--harness=auto"
+	a := &app{cfg: &config.Config{
+		Omp: config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{"spark": {APIKey: sparkRef}}},
+		Capacity: config.Capacity{
+			Choices: []config.Choice{
+				{Harness: claudeComm, Model: "claude-opus-4-7"},
+				{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
+			},
+		},
+	}}
 	for _, tc := range []struct {
 		args []string
 		want bool
@@ -179,13 +188,32 @@ func TestOmpStartNeedsVault(t *testing.T) {
 		{[]string{agentStartName, ompHarness, "--", "w", briefMD}, true},
 		{[]string{agentStartName, ompHarness, "--model=spark/other", "--", "w", briefMD}, true},
 		{[]string{agentStartName, ompHarness, "--model=ollama/m", "--", "w", briefMD}, false},
+		{[]string{agentStartName, autoHarness, "--", "w", briefMD}, true},
+		{[]string{agentStartName, autoHarness, "--exclude=[omp]", "--", "w", briefMD}, false},
+		{[]string{agentStartName, autoHarness, "--model=ollama/m", "--", "w", briefMD}, false},
 		{[]string{agentStartName, "--", "w", briefMD}, false},
 		{[]string{"wake", "--", "w", "hi"}, false},
 		{[]string{agentStartName, "--", ompHarness, briefMD}, false},
 	} {
 		if got := a.ompStartNeedsVault(tc.args); got != tc.want {
-			t.Errorf("ompStartNeedsVault(%q) = %v", tc.args, got)
+			t.Errorf("ompStartNeedsVault(%q) = %v, want %v", tc.args, got, tc.want)
 		}
+	}
+	// Forwarding a resolved --harness=auto choice rewrites the command's
+	// flags to --harness=omp and --model=<targetModel> for scratchArgv.
+	c := a.agentStartCmd()
+	if err := c.ParseFlags([]string{autoHarness}); err != nil {
+		t.Fatal(err)
+	}
+	if err := forwardBrokeredChoice(c, omp.Harness, sparkModel); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := a.scratchArgv(c, []string{"w", briefMD})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(argv, ompHarness) || !slices.Contains(argv, "--model="+sparkModel) || !a.ompStartNeedsVault(argv) {
+		t.Fatalf("forwarded scratchArgv = %q, ompStartNeedsVault = %v", argv, a.ompStartNeedsVault(argv))
 	}
 	if a.ompStartBrokered(sparkModel) {
 		t.Error("brokered without secret.session")
