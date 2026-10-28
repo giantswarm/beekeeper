@@ -797,6 +797,7 @@ const (
 	testReadClaude  = "read-claude"
 	testExcludeFlag = "--exclude"
 	testHarnessFlag = "--harness"
+	testDryRunFlag  = "--dry-run"
 )
 
 // TestProvidersChoicesPaceMarginExcludeAndMachineGuards exercises per-provider
@@ -1338,7 +1339,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdDryAgy := aDryAgy.agentStartCmd()
 	cmdDryAgy.SilenceErrors = true
 	cmdDryAgy.SilenceUsage = true
-	cmdDryAgy.SetArgs([]string{"DryAgy", brief, usageDirFlag, dir, "--dry-run", testHarnessFlag, harnessAuto})
+	cmdDryAgy.SetArgs([]string{"DryAgy", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto})
 	if err := cmdDryAgy.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking agy: %v", err)
 	}
@@ -1478,7 +1479,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdDryOmp := aDryOmp.agentStartCmd()
 	cmdDryOmp.SilenceErrors = true
 	cmdDryOmp.SilenceUsage = true
-	cmdDryOmp.SetArgs([]string{"DryOmp", brief, usageDirFlag, dir, "--dry-run", testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	cmdDryOmp.SetArgs([]string{"DryOmp", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
 	if err := cmdDryOmp.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking omp: %v", err)
 	}
@@ -1551,6 +1552,141 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		!strings.Contains(outExpAgy.String(), "started ExplicitAgy: agy agent agy_") ||
 		!strings.Contains(outExpAgy.String(), "on claude-opus-4-6-thinking") {
 		t.Fatalf("explicit --harness agy output:\n%s", outExpAgy.String())
+	}
+
+	// 2e. Regression coverage for round-2 review findings:
+	//     - --harness auto with --model evaluates the requested model against choices, exclusions, and its own bucket;
+	//     - Claude preflight validates the claude executable before printing choice:/started over or recording a force event;
+	//     - brokered OMP validates preflight before delegating and does not print choice: when preflight or the broker fails.
+	cfg.Capacity.Choices = []config.Choice{
+		{Harness: claudeComm, Model: testModelOpus47},
+		{Harness: harnessAgy, Model: testModelOpus46, SkipPace: true},
+		{Harness: harnessAgy, Model: testModelGemini, SkipPace: true},
+		{Harness: omp.Harness, Model: "provider/omp-model", Provider: omp.Harness, SkipPace: true},
+	}
+	rawCfgWithOpus46 := strings.Replace(rawCfg,
+		"    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}\n",
+		"    - {harness: agy, model: claude-opus-4-6-thinking, skipPace: true}\n    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}\n", 1)
+	if err := os.WriteFile(cfgPath, []byte(rawCfgWithOpus46), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agyClaude5h = 96.0 // agy Claude bucket is in USAGE HIGH (96%), while Gemini bucket is 10% (eligible)
+
+	// Unlisted --model with --harness auto is rejected with ExitUsage and empty output.
+	aUnknownModel, outUnknownModel := newApp()
+	cmdUnknownModel := aUnknownModel.agentStartCmd()
+	cmdUnknownModel.SilenceErrors = true
+	cmdUnknownModel.SilenceUsage = true
+	cmdUnknownModel.SetArgs([]string{"AutoUnknownModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, "not-in-choices"})
+	err = cmdUnknownModel.Execute()
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "not in capacity.choices") || outUnknownModel.String() != "" {
+		t.Fatalf("--harness auto with unknown --model: code=%d, err=%v, out=%q", Code(err), err, outUnknownModel.String())
+	}
+
+	// --exclude claude-opus-4-6-thinking --model claude-opus-4-6-thinking refuses in both dry-run and real start (even with --force), never announcing Gemini.
+	for _, isDry := range []bool{true, false} {
+		aExModel, outExModel := newApp()
+		cmdExModel := aExModel.agentStartCmd()
+		cmdExModel.SilenceErrors = true
+		cmdExModel.SilenceUsage = true
+		args := []string{"AutoExModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, testModelOpus46, modelFlag, testModelOpus46}
+		if isDry {
+			args = append(args, testDryRunFlag)
+		}
+		cmdExModel.SetArgs(args)
+		err = cmdExModel.Execute()
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "excluded") || outExModel.String() != "" {
+			t.Fatalf("--harness auto excluded --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outExModel.String())
+		}
+	}
+
+	// --model claude-opus-4-6-thinking without --force refuses because its Claude bucket is at 96% (even though Gemini is at 10%), in both dry-run and real start.
+	for _, isDry := range []bool{true, false} {
+		aHighModel, outHighModel := newApp()
+		cmdHighModel := aHighModel.agentStartCmd()
+		cmdHighModel.SilenceErrors = true
+		cmdHighModel.SilenceUsage = true
+		args := []string{"AutoHighModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46}
+		if isDry {
+			args = append(args, testDryRunFlag)
+		}
+		cmdHighModel.SetArgs(args)
+		err = cmdHighModel.Execute()
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agy/claude-opus-4-6-thinking: usage high: 5h 96% at or past 95%") || outHighModel.String() != "" {
+			t.Fatalf("--harness auto blocked bucket --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outHighModel.String())
+		}
+	}
+
+	// With --force, --model claude-opus-4-6-thinking prints choice: agy / claude-opus-4-6-thinking (the pair actually dispatched).
+	aForceModelDry, outForceModelDry := newApp()
+	cmdForceModelDry := aForceModelDry.agentStartCmd()
+	cmdForceModelDry.SilenceErrors = true
+	cmdForceModelDry.SilenceUsage = true
+	cmdForceModelDry.SetArgs([]string{"AutoForceModelDry", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, usageForceFlag})
+	if err := cmdForceModelDry.Execute(); err != nil {
+		t.Fatalf("--dry-run --harness auto --model --force: %v", err)
+	}
+	if !strings.Contains(outForceModelDry.String(), "choice: agy / claude-opus-4-6-thinking (provider agy, bucket Claude and GPT models)") ||
+		strings.Contains(outForceModelDry.String(), testModelGemini) {
+		t.Fatalf("--dry-run --harness auto --model --force output:\n%s", outForceModelDry.String())
+	}
+
+	// Claude preflight: with claude absent from PATH, an auto start with --force --mode background fails before printing choice:/started over or recording an event.
+	t.Setenv("PATH", binDir) // binDir has fake agy and omp, but no claude
+	evsBeforeNoClaude, err := store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aNoClaude, outNoClaude := newApp()
+	cmdNoClaude := aNoClaude.agentStartCmd()
+	cmdNoClaude.SilenceErrors = true
+	cmdNoClaude.SilenceUsage = true
+	cmdNoClaude.SetArgs([]string{"AutoNoClaude", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, modelFlag, testModelOpus47, usageForceFlag})
+	if err := cmdNoClaude.Execute(); err == nil {
+		t.Fatal("expected error when claude is absent from PATH")
+	}
+	if outNoClaude.String() != "" {
+		t.Fatalf("missing claude preflight printed output:\n%s", outNoClaude.String())
+	}
+	evsAfterNoClaude, err := store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evsAfterNoClaude) != len(evsBeforeNoClaude) {
+		t.Fatalf("missing claude preflight recorded state event: %+v", evsAfterNoClaude[len(evsBeforeNoClaude):])
+	}
+
+	// Brokered OMP preflight and unavailable broker: no premature choice: output on invalid dir or unavailable broker.
+	cfg.Secret.Session = true
+	cfg.Omp.ModelsFile = filepath.Join(dir, "omp-models.yml")
+	if err := os.WriteFile(cfg.Omp.ModelsFile, []byte("providers: {provider: {apiKey: PROVIDER_API_KEY}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Omp.Providers = map[string]config.OmpProvider{"provider": {APIKey: sparkRef}}
+	aBrokerBadDir, outBrokerBadDir := newApp()
+	cmdBrokerBadDir := aBrokerBadDir.agentStartCmd()
+	cmdBrokerBadDir.SilenceErrors = true
+	cmdBrokerBadDir.SilenceUsage = true
+	cmdBrokerBadDir.SetArgs([]string{"AutoBrokerBadDir", brief, usageDirFlag, filepath.Join(dir, "nonexistent"), testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	err = cmdBrokerBadDir.Execute()
+	if Code(err) != ExitUsage || outBrokerBadDir.String() != "" {
+		t.Fatalf("brokered omp invalid dir: code=%d, err=%v, out=%q", Code(err), err, outBrokerBadDir.String())
+	}
+
+	aBrokerUnavail, outBrokerUnavail := newApp()
+	cmdBrokerUnavail := aBrokerUnavail.agentStartCmd()
+	cmdBrokerUnavail.SilenceErrors = true
+	cmdBrokerUnavail.SilenceUsage = true
+	cmdBrokerUnavail.SetArgs([]string{"AutoBrokerUnavail", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	err = cmdBrokerUnavail.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no sandbox broker answers") || outBrokerUnavail.String() != "" {
+		t.Fatalf("brokered omp unavailable broker: code=%d, err=%v, out=%q", Code(err), err, outBrokerUnavail.String())
 	}
 }
 

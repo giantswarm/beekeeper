@@ -5,17 +5,20 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -168,19 +171,25 @@ const (
 )
 
 // A brokered omp start on a provider of omp.providers reads the vault,
-// by its model, omp.model or --harness=auto choice; any other start does not.
+// by its model, omp.model or the actual resolved --harness=auto choice; an
+// eligible non-vault choice ahead of a vault-backed omp fallback does not.
 func TestOmpStartNeedsVault(t *testing.T) {
 	const ompHarness = "--harness=omp"
 	const autoHarness = "--harness=auto"
-	a := &app{cfg: &config.Config{
-		Omp: config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{"spark": {APIKey: sparkRef}}},
-		Capacity: config.Capacity{
-			Choices: []config.Choice{
-				{Harness: claudeComm, Model: "claude-opus-4-7"},
-				{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
-			},
+	a := vaultApp(t, 20*time.Millisecond)
+	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{"spark": {APIKey: sparkRef}}}
+	a.cfg.Capacity = config.Capacity{
+		Floor:   1,
+		Ceiling: 2,
+		Providers: map[string]config.Provider{
+			claudeComm:  {Floor: 1, Ceiling: 1},
+			omp.Harness: {Floor: 1, Ceiling: 1},
 		},
-	}}
+		Choices: []config.Choice{
+			{Harness: claudeComm, Model: "claude-opus-4-7"},
+			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
+		},
+	}
 	for _, tc := range []struct {
 		args []string
 		want bool
@@ -188,8 +197,12 @@ func TestOmpStartNeedsVault(t *testing.T) {
 		{[]string{agentStartName, ompHarness, "--", "w", briefMD}, true},
 		{[]string{agentStartName, ompHarness, "--model=spark/other", "--", "w", briefMD}, true},
 		{[]string{agentStartName, ompHarness, "--model=ollama/m", "--", "w", briefMD}, false},
-		{[]string{agentStartName, autoHarness, "--", "w", briefMD}, true},
-		{[]string{agentStartName, autoHarness, "--exclude=[omp]", "--", "w", briefMD}, false},
+		// First choice is eligible claude/claude-opus-4-7, so auto does not need the vault.
+		{[]string{agentStartName, autoHarness, "--", "w", briefMD}, false},
+		// Excluding claude selects the vault-backed omp fallback, which needs the vault.
+		{[]string{agentStartName, autoHarness, "--exclude=[claude]", "--", "w", briefMD}, true},
+		{[]string{agentStartName, autoHarness, "--model=" + sparkModel, "--", "w", briefMD}, true},
+		{[]string{agentStartName, autoHarness, "--model=" + sparkModel, "--exclude=[omp]", "--", "w", briefMD}, false},
 		{[]string{agentStartName, autoHarness, "--model=ollama/m", "--", "w", briefMD}, false},
 		{[]string{agentStartName, "--", "w", briefMD}, false},
 		{[]string{"wake", "--", "w", "hi"}, false},
@@ -199,29 +212,61 @@ func TestOmpStartNeedsVault(t *testing.T) {
 			t.Errorf("ompStartNeedsVault(%q) = %v, want %v", tc.args, got, tc.want)
 		}
 	}
+	// With a locked vault and an eligible first claude choice ahead of an unused
+	// vault-backed omp fallback, brokeredVault runs the start handler without
+	// asking the vault; excluding claude selects omp and waits on the vault.
+	k := secret.NewKeeper(time.Hour, nil)
+	v := &vaultBroker{k: k, wait: 20 * time.Millisecond, signin: func(context.Context) (string, string, error) {
+		return "", "", errors.New("vault locked")
+	}}
+	called := false
+	h := a.brokeredVault(v, func(env []string) sandbox.Handler {
+		return func(context.Context, int, sandbox.Request) (sandbox.Reply, error) {
+			called = true
+			if env != nil {
+				t.Errorf("expected nil vault env for claude choice, got %q", env)
+			}
+			return sandbox.Reply{Out: "claude started"}, nil
+		}
+	})
+	r, err := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpAgents, Args: []string{agentStartName, autoHarness, "--", "w", briefMD}})
+	if err != nil || r.Code != 0 || !called || r.Out != "claude started" {
+		t.Fatalf("brokeredVault with eligible claude choice and locked vault: r=%+v, err=%v, called=%v", r, err, called)
+	}
+	called = false
+	rOmp, err := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpAgents, Args: []string{agentStartName, autoHarness, "--exclude=claude", "--", "w", briefMD}})
+	if err != nil || rOmp.Code != ExitVault || called {
+		t.Fatalf("brokeredVault when excluded claude falls back to omp on locked vault: r=%+v, err=%v, called=%v", rOmp, err, called)
+	}
+
 	// Forwarding a resolved --harness=auto choice rewrites the command's
-	// flags to --harness=omp and --model=<targetModel> for scratchArgv.
+	// flags to --harness=omp, --model=<targetModel>, and --choice=<line> for scratchArgv.
 	c := a.agentStartCmd()
 	if err := c.ParseFlags([]string{autoHarness}); err != nil {
 		t.Fatal(err)
 	}
-	if err := forwardBrokeredChoice(c, omp.Harness, sparkModel); err != nil {
+	if err := forwardBrokeredChoice(c, omp.Harness, sparkModel, "omp / spark/m (provider omp)"); err != nil {
 		t.Fatal(err)
 	}
 	argv, err := a.scratchArgv(c, []string{"w", briefMD})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(argv, ompHarness) || !slices.Contains(argv, "--model="+sparkModel) || !a.ompStartNeedsVault(argv) {
+	if !slices.Contains(argv, ompHarness) || !slices.Contains(argv, "--model="+sparkModel) ||
+		!slices.Contains(argv, "--choice=omp / spark/m (provider omp)") || !a.ompStartNeedsVault(argv) {
 		t.Fatalf("forwarded scratchArgv = %q, ompStartNeedsVault = %v", argv, a.ompStartNeedsVault(argv))
 	}
+	if !a.ompStartBrokered(sparkModel) {
+		t.Error("expected brokered with secret.session")
+	}
+	if !a.ompStartBrokered("") || a.ompStartBrokered("ollama/m") {
+		t.Error("the brokering does not follow the provider")
+	}
+	a.cfg.Secret.Session = false
 	if a.ompStartBrokered(sparkModel) {
 		t.Error("brokered without secret.session")
 	}
 	a.cfg.Secret.Session = true
-	if !a.ompStartBrokered("") || a.ompStartBrokered("ollama/m") {
-		t.Error("the brokering does not follow the provider")
-	}
 	t.Setenv(sandbox.Brokered, "1")
 	if a.ompStartBrokered(sparkModel) {
 		t.Error("the broker's own call brokered again")

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -185,36 +186,112 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 	if len(args) == 0 || args[0] != agentStartName {
 		return false
 	}
-	var harness, model string
-	var excludes []string
-	for _, arg := range args[1:] {
+	f := parseStartArgsForVault(args)
+	switch f.harness {
+	case omp.Harness:
+		return a.ompNeedsVault(f.model)
+	case harnessAuto:
+		return a.autoStartNeedsVault(f)
+	}
+	return false
+}
+
+type startVaultFlags struct {
+	harness    string
+	model      string
+	excludes   []string
+	review     bool
+	builds     bool
+	force      bool
+	scratchCfg string
+}
+
+func parseStartArgsForVault(args []string) startVaultFlags {
+	var f startVaultFlags
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
 			break
 		}
-		if v, ok := strings.CutPrefix(arg, "--harness="); ok {
-			harness = v
-		}
-		if v, ok := strings.CutPrefix(arg, modelFlag+"="); ok {
-			model = v
-		}
-		if v, ok := strings.CutPrefix(arg, "--exclude="); ok {
-			excludes = append(excludes, strings.Trim(v, "[]"))
+		switch {
+		case strings.HasPrefix(arg, "--harness="):
+			f.harness = strings.TrimPrefix(arg, "--harness=")
+		case arg == "--harness" && i+1 < len(args):
+			i++
+			f.harness = args[i]
+		case strings.HasPrefix(arg, modelFlag+"="):
+			f.model = strings.TrimPrefix(arg, modelFlag+"=")
+		case arg == modelFlag && i+1 < len(args):
+			i++
+			f.model = args[i]
+		case strings.HasPrefix(arg, "--exclude="):
+			f.excludes = append(f.excludes, strings.Trim(strings.TrimPrefix(arg, "--exclude="), "[]"))
+		case arg == "--exclude" && i+1 < len(args):
+			i++
+			f.excludes = append(f.excludes, strings.Trim(args[i], "[]"))
+		case arg == "--review" || arg == "--review=true":
+			f.review = true
+		case arg == "--builds" || arg == "--builds=true":
+			f.builds = true
+		case arg == "--force" || arg == "--force=true":
+			f.force = true
+		case strings.HasPrefix(arg, "--config="):
+			f.scratchCfg = strings.TrimPrefix(arg, "--config=")
+		case arg == "--config" && i+1 < len(args):
+			i++
+			f.scratchCfg = args[i]
 		}
 	}
-	switch harness {
-	case omp.Harness:
-		return a.ompNeedsVault(model)
-	case harnessAuto:
-		if model != "" {
-			return a.ompNeedsVault(model)
-		}
-		k := a.liveCapacity()
-		normEx := normalizeExcludes(excludes)
-		provNames := k.ProviderNames()
-		for _, ch := range k.Choices {
-			if ch.Harness == omp.Harness && !choiceExcluded(ch, normEx, provNames) && a.ompNeedsVault(ch.Model) {
-				return true
+	return f
+}
+
+func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
+	target := *a
+	if f.scratchCfg != "" && filepath.IsAbs(f.scratchCfg) {
+		if c, err := config.Load(f.scratchCfg); err == nil {
+			cfgCopy := *a.cfg
+			cfgCopy.StateDir, cfgCopy.LeaseDir = c.StateDir, c.LeaseDir
+			if len(cfgCopy.Capacity.Choices) == 0 && len(c.Capacity.Choices) > 0 {
+				cfgCopy.Capacity = c.Capacity
 			}
+			if len(cfgCopy.Omp.Providers) == 0 && len(c.Omp.Providers) > 0 {
+				cfgCopy.Omp = c.Omp
+			}
+			target.cfg = &cfgCopy
+			if stStore, err := state.Open(c.StateDir); err == nil {
+				target.store = stStore
+			}
+		}
+	}
+	k := target.liveCapacity()
+	if len(k.Choices) == 0 {
+		return false
+	}
+	if m := strings.TrimSpace(f.model); m != "" {
+		if !choicesHaveModel(k.Choices, m) {
+			return false
+		}
+		k = filterChoiceModel(k, m)
+	}
+	if len(k.Providers) > 0 {
+		st := &state.State{}
+		if target.store != nil {
+			if s, err := target.store.Read(); err == nil {
+				st = s
+			}
+		}
+		sessions, _, _ := target.sessions()
+		v := target.resolveProvidersCapacity(context.Background(), st, sessions, k, f.builds, f.excludes, f.review).stopped(&target, st.Stop)
+		ch, err := pickAutoChoice(v, f.force)
+		if err != nil || ch == nil {
+			return false
+		}
+		return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
+	}
+	normEx := normalizeExcludes(f.excludes)
+	for _, ch := range k.Choices {
+		if !choiceExcluded(ch, normEx, nil) {
+			return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
 		}
 	}
 	return false
