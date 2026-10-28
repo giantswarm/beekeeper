@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,8 +12,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const sshTestInspect = "inspect"
+
 type testExecutionTransport struct {
 	execution.Transport
+	start   func(context.Context, execution.StartRequest) (execution.Handle, error)
+	logs    func(context.Context, execution.Ref, execution.LogRequest) (execution.LogPage, error)
 	stop    func(context.Context, execution.Ref, execution.StopRequest) (execution.Ack, error)
 	inspect func(context.Context, execution.Ref) (execution.Observation, error)
 	sync    func(context.Context, execution.Ref) (execution.ControlResult, error)
@@ -55,6 +61,14 @@ func TestExecutionWatchReconcilesWithBoundedDeadlineAndThrottle(t *testing.T) {
 	}
 }
 
+func (f *testExecutionTransport) Start(ctx context.Context, r execution.StartRequest) (execution.Handle, error) {
+	return f.start(ctx, r)
+}
+
+func (f *testExecutionTransport) Logs(ctx context.Context, ref execution.Ref, q execution.LogRequest) (execution.LogPage, error) {
+	return f.logs(ctx, ref, q)
+}
+
 func (f *testExecutionTransport) Stop(ctx context.Context, r execution.Ref, q execution.StopRequest) (execution.Ack, error) {
 	return f.stop(ctx, r, q)
 }
@@ -88,7 +102,7 @@ func TestExecutionStopPersistsIntentBeforeSSHAndKeepsTask(t *testing.T) {
 		return execution.Ack{ID: q.ID, Stage: execution.Applied}, nil
 	}
 	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
-		return execution.Observation{}, &execution.UnreachableError{Operation: "inspect", Cause: errors.New("fixture disconnection")}
+		return execution.Observation{}, &execution.UnreachableError{Operation: sshTestInspect, Cause: errors.New("fixture disconnection")}
 	}
 	a.executionTransport = func(execution.Host) execution.Transport { return fake }
 	if err := a.stopExecution(context.Background(), r.Ref, "fixture stop"); err == nil {
@@ -192,5 +206,27 @@ func TestExecutionObservationCannotChangeOwnershipOrRevokeStopEvidence(t *testin
 	}
 	if !st.Starts[0].Execution.Observation.StopAcknowledged || st.Starts[0].Execution.Observation.ProcessState != execution.Exited {
 		t.Fatal("an older observation revoked acknowledged termination")
+	}
+}
+
+func TestExecutionLostLogsAndInspectExposeReachabilityWithoutChangingTask(t *testing.T) {
+	a, r := executionTestApp(t)
+	a.out = &bytes.Buffer{}
+	fake := &testExecutionTransport{logs: func(context.Context, execution.Ref, execution.LogRequest) (execution.LogPage, error) {
+		return execution.LogPage{}, &execution.UnreachableError{Operation: "logs", Cause: errors.New("fixture disconnection")}
+	}, inspect: func(context.Context, execution.Ref) (execution.Observation, error) {
+		return execution.Observation{}, &execution.UnreachableError{Operation: sshTestInspect, Cause: errors.New("fixture disconnection")}
+	}}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	if _, err := runAgents(a, "logs", r.Name); err == nil {
+		t.Fatal("lost logs reported success")
+	}
+	out, err := runAgents(a, sshTestInspect, r.Name)
+	if err == nil || !strings.Contains(out, `"reachability": "unreachable"`) || !strings.Contains(out, `"processState": "running"`) {
+		t.Fatalf("unreachable inspection: %s, %v", out, err)
+	}
+	st, err := a.store.Read()
+	if err != nil || st.Agents[0].Task != r.Task || st.Starts[0].Execution.Terminal() {
+		t.Fatal("read failure changed task or process ownership")
 	}
 }

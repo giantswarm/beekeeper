@@ -278,8 +278,9 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 }
 
 type providerAgents struct {
-	Busy       []string
-	BucketBusy map[string][]string
+	Unconfirmed []string
+	Busy        []string
+	BucketBusy  map[string][]string
 }
 
 func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time) map[string]providerAgents {
@@ -294,7 +295,18 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 				continue
 			}
 			r, _ := executionRecord(st, *ag.Execution)
-			if r == nil {
+			configured := false
+			if r != nil {
+				_, configured = out[r.Provider]
+			}
+			if r == nil || !configured {
+				// An unresolved reservation cannot become a fresh provider
+				// budget after a damaged record or configuration change.
+				for name, pa := range out {
+					pa.Busy = append(pa.Busy, ag.Name)
+					pa.Unconfirmed = append(pa.Unconfirmed, ag.Name)
+					out[name] = pa
+				}
 				continue
 			}
 			pa := out[r.Provider]
@@ -614,6 +626,12 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 		busy = []string{}
 	}
 	pv := &providerView{Name: name, Busy: busy}
+	if len(pa.Unconfirmed) > 0 {
+		pv.Error = "remote execution reservation is unresolved; inspect its registration and provider"
+		pv.Blocks = []string{pv.Error}
+		pv.Verdict = providerVerdict(0, pv.Blocks)
+		return pv
+	}
 	if pCfg.Enabled() {
 		pv.HighPercent = pCfg.EffectiveHighPercent()
 		if !res.ok || res.err != nil {
@@ -1282,7 +1300,7 @@ nothing; it makes no GitHub call.`,
 				if len(k.Providers) == 0 {
 					k, legacy = a.resolveUsage(cmd.Context(), k)
 				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, exclude, review)
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, exclude, review, harnessAuto, "")
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop)
 			} else {

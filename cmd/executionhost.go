@@ -375,8 +375,8 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Version != project.Version() || c.Harnesses[claudeComm] == "" {
 		return c, refused("execution host identity, protocol, binary, harness or policy does not match")
 	}
-	if c.Resources.ObservedAt.IsZero() || time.Since(c.Resources.ObservedAt) > time.Minute || c.Resources.ObservedAt.After(time.Now().Add(5*time.Second)) {
-		return c, refused("execution host resource observation is stale")
+	if err := c.Resources.Validate(time.Now()); err != nil {
+		return c, refused("%v", err)
 	}
 	return c, nil
 }

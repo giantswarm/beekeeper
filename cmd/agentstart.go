@@ -282,7 +282,22 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				return usageErr("an agent needs a name")
 			}
 			if host != "" && host != "local" {
-				return a.startSSHAgent(cmd, name, args[1], executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, DryRun: dryRun, Exclude: exclude})
+				base, ok := harnessByName(harness)
+				if harness == harnessAuto {
+					base, ok = claudeHarness{}, true
+				}
+				if !ok {
+					return validateStartHarness(harness, mode)
+				}
+				h, err := executionHarness(base, executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, Exclude: exclude}, briefFile)
+				if err != nil {
+					return err
+				}
+				sp := agentStart{name: name, task: task, model: model}
+				if dryRun {
+					return h.DryRun(cmd.Context(), a, sp, nil)
+				}
+				return h.Start(cmd.Context(), a, sp)
 			}
 			if repository != "" || gitRef != "" {
 				return usageErr("--repo and --ref require an SSH --host")
@@ -295,7 +310,6 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				if m := strings.TrimSpace(model); m != "" && !choicesHaveModel(choices, m) {
 					return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
 				}
-
 			}
 			if _, err := a.startMode(mode); err != nil {
 				return err

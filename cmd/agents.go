@@ -557,7 +557,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 			v.Reachable = "SSH reachability unknown; process unknown"
 			if r, _ := executionRecord(st, *ag.Execution); r != nil {
 				reach := r.Observation.Reachability
-				if r.Observation.ObservedAt.IsZero() || a.now.Sub(r.Observation.ObservedAt) > time.Minute {
+				if r.Observation.ReachabilityAt.IsZero() || a.now.Sub(r.Observation.ReachabilityAt) > time.Minute {
 					reach = "unknown (stale)"
 				}
 				v.Reachable = "SSH " + reach + "; process " + r.Observation.ProcessState

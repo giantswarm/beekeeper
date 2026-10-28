@@ -110,7 +110,8 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	}
 	ag := st.Agents[i]
 	if ag.Execution != nil {
-		return refused("remote wake is unavailable: https://github.com/giantswarm/beekeeper/issues/1714")
+		h := sshHarness{Harness: claudeHarness{}, ref: ag.Execution}
+		return h.Wake(a, by, ag, ag.Session, msg)
 	}
 	if st.Supervisor != nil && st.Supervisor.Is(by) {
 		// The supervisor's `yours <resource>` is the grant, as in a

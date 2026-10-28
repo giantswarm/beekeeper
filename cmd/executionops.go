@@ -117,6 +117,13 @@ func (a *app) executionInspectCmd() *cobra.Command {
 		}
 		o, err := a.inspectExecution(cmd.Context(), ref)
 		if err != nil {
+			// Show the persisted process evidence and fresh transport failure
+			// while retaining the operation's nonzero result.
+			if rec, _, readErr := a.recordedExecution(ref); readErr == nil {
+				if printErr := a.printJSON(rec.Observation); printErr != nil {
+					return printErr
+				}
+			}
 			return err
 		}
 		return a.printJSON(o)
@@ -157,6 +164,7 @@ func (a *app) executionLogsCmd() *cobra.Command {
 		}
 		page, err := a.executionClient(h).Logs(cmd.Context(), ref, execution.LogRequest{After: cursor, Limit: limit})
 		if err != nil {
+			a.executionFailure(ref, err)
 			return err
 		}
 		if a.json {

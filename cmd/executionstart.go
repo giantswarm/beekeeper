@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -24,10 +23,6 @@ type executionStartOptions struct {
 	Host, Repository, GitRef, Harness, Model, Mode, Dir, Task string
 	Desktop, Builds, Force, Review, DryRun                    bool
 	Exclude                                                   []string
-}
-
-func (a *app) startSSHAgent(cmd *cobra.Command, name, briefPath string, o executionStartOptions) error {
-	return a.startSSHExecution(cmd.Context(), name, briefPath, o)
 }
 
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
@@ -54,6 +49,16 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if len(guard.CredentialShapes(brief)) > 0 {
 		return refused("brief contains credential-shaped data; provision credentials independently on the execution host")
 	}
+	k := a.liveCapacity()
+	if o.Harness == harnessAuto {
+		if len(k.Choices) == 0 {
+			return usageErr("--harness auto: no capacity.choices configured")
+		}
+		if m := strings.TrimSpace(o.Model); m != "" && !choicesHaveModel(k.Choices, m) {
+			return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
+		}
+		k = filterChoiceModel(k, o.Model)
+	}
 	by, err := a.caller()
 	if err != nil {
 		return err
@@ -62,7 +67,6 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
-	k := a.liveCapacity()
 	readings := a.executionReadings(ctx, k)
 	var legacy *usageView
 	if len(k.Providers) == 0 {
@@ -77,9 +81,9 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		return err
 	}
 	exclude := append(slices.Clone(o.Exclude), "agy", "omp", "codex")
-	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, o.Review)
+	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, o.Review, o.Harness, o.Model)
 	if o.Harness == harnessAuto {
-		choice, err := pickAutoChoice(verdict, false)
+		choice, err := pickAutoChoice(verdict, o.Force)
 		if err != nil {
 			return err
 		}
@@ -88,7 +92,6 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if o.Harness != claudeComm || o.Model == "" {
 		return usageErr("remote claude requires an explicit --model or a configured auto choice")
 	}
-	verdict = verdict.forTarget(k, o.Harness, o.Model)
 	if _, err := gateStart(verdict, o.Force); err != nil {
 		return err
 	}
@@ -121,8 +124,9 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if len(k.Providers) > 0 && !reflect.DeepEqual(k.Providers, a.liveCapacity().Providers) {
 			return nil, refused("provider configuration changed during admission; retry")
 		}
-		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, o.Review).forTarget(k, r.Harness, r.Model)
-		if _, err := gateStart(v, o.Force); err != nil {
+		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, o.Review, r.Harness, r.Model)
+		over, err := gateStart(v, o.Force)
+		if err != nil {
 			return nil, err
 		}
 		for _, ag := range current.Agents {
@@ -140,7 +144,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		}
 		ref := r.Ref
 		current.Agents[len(current.Agents)-1].Execution = &ref
-		return []state.Event{event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider)}, nil
+		events := []state.Event{event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider)}
+		if over != "" {
+			events = append(events, event(by, "agents.start", "%s: started over %s (--force)", name, over))
+		}
+		return events, nil
 	})
 	if err != nil {
 		return err
@@ -161,17 +169,18 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 	return readings
 }
 
-func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]providerReadingResult, legacy *usageView, builds bool, exclude []string, review bool) *capacityView {
+func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]providerReadingResult, legacy *usageView, builds bool, exclude []string, review bool, harness, model string) *capacityView {
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
 	counts := countAgents(st, sessions, a.now)
 	var v *capacityView
-	if len(k.Providers) > 0 {
+	if len(k.Providers) > 0 || len(k.Choices) > 0 {
 		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now), k, readings, h, false, exclude, review, a.now)
 	} else {
 		v = newCapacity(counts, k, h, false).withUsage(legacy, a.now)
 	}
+	v = v.forTarget(k, harness, model)
 	v.Builds = builds
 	blocks := append([]string(nil), resources.Blocks...)
 	if builds {
@@ -180,8 +189,8 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	if executionHostBusy(st, host.Identity) >= host.MaxBusy {
 		blocks = append(blocks, "execution host maxBusy reached")
 	}
-	if resources.ObservedAt.IsZero() || time.Since(resources.ObservedAt) > time.Minute {
-		blocks = append(blocks, "execution host resources stale")
+	if err := resources.Validate(time.Now()); err != nil {
+		blocks = append(blocks, err.Error())
 	}
 	for _, b := range blocks {
 		v.Blocks = append(v.Blocks, "host "+string(host.Identity)+": "+b)
@@ -205,6 +214,13 @@ func executionHostBusy(st *state.State, host execution.HostID) int {
 	for _, s := range st.Starts {
 		if r := s.Execution; r != nil && r.Handle.Ref.Host == host && !r.Terminal() {
 			n++
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Execution != nil && ag.Execution.Host == host {
+			if rec, _ := executionRecord(st, *ag.Execution); rec == nil {
+				n++
+			}
 		}
 	}
 	return n

@@ -21,6 +21,7 @@ import (
 const sshTestExecutable = "/usr/local/bin/beekeeper"
 const sshTestConfig = "/etc/beekeeper/config.yaml"
 const sshTestSelector = "host-a"
+const sshTestRepository = "giantswarm/beekeeper"
 const sshTestTask = "implement the fixture task"
 
 func executionTestApp(t *testing.T) (*app, execution.StartRequest) {
@@ -34,7 +35,7 @@ func executionTestApp(t *testing.T) (*app, execution.StartRequest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := execution.StartRequest{Ref: execution.Ref{Host: sshTestSelector, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}, Coordinator: "coordinator", RequestID: uuid.NewString(), Name: "remote-worker", Task: sshTestTask, Repository: "giantswarm/beekeeper", GitRef: mainBranch, Harness: execution.HarnessClaude, Model: "opus", Prompt: "complete the fixture task", PolicyDigest: execution.Digest([]byte("fixture policy")), ConversationID: uuid.NewString(), ControlKey: key}
+	r := execution.StartRequest{Ref: execution.Ref{Host: sshTestSelector, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}, Coordinator: "coordinator", RequestID: uuid.NewString(), Name: "remote-worker", Task: sshTestTask, Repository: sshTestRepository, GitRef: mainBranch, Harness: execution.HarnessClaude, Model: "opus", Prompt: "complete the fixture task", PolicyDigest: execution.Digest([]byte("fixture policy")), ConversationID: uuid.NewString(), ControlKey: key}
 	h := execution.Host{Endpoint: execution.Endpoint{SSH: "host-a.example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: r.Ref.Host, WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{r.Repository: filepath.Join(root, "source")}, Harnesses: []string{execution.HarnessClaude}, PolicyDigest: r.PolicyDigest, MaxBusy: 2}
 	a := &app{store: store, out: io.Discard, now: time.Now().UTC(), cfg: &config.Config{StateDir: root, Agents: config.Agents{Hosts: map[string]config.ExecutionHost{sshTestSelector: h}}, Guide: config.Guide{Person: "reviewer"}}}
 	party := state.Party{Session: r.ConversationID, Name: r.Name, Host: string(r.Ref.Host)}
