@@ -50,6 +50,18 @@ func ConvLinkPath(stateDir, convID string) string {
 	return filepath.Join(stateDir, "agy", convID+".inbox")
 }
 
+// AgentConvPath maps an agent start id to the agy conversationId its init
+// event announced.
+func AgentConvPath(stateDir, id string) string {
+	return filepath.Join(stateDir, "agy", id+".conv")
+}
+
+// TranscriptPath is the transcript.jsonl path of the conversation convID under
+// brainDir.
+func TranscriptPath(brainDir, convID string) string {
+	return filepath.Join(brainDir, convID, ".system_generated", "logs", "transcript.jsonl")
+}
+
 // QueuedMessage is one message in an agy session's persistent inbox, carrying
 // a unique ID so at-least-once delivery across retries and restarts can
 // deduplicate messages and deliver each one in FIFO order once.
@@ -125,6 +137,13 @@ func dedupMessages(delivered []string, lists ...[]QueuedMessage) []QueuedMessage
 	return out
 }
 
+const (
+	eventInit           = "init"
+	stepUserInput       = "USER_INPUT"
+	stepPlannerResponse = "PLANNER_RESPONSE"
+	roleUser            = "user"
+)
+
 type transcriptLine struct {
 	Type    string `json:"type"`
 	Content string `json:"content"`
@@ -144,7 +163,7 @@ func transcriptUserInputs(path string) ([]string, bool) {
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
 	for sc.Scan() {
 		var line transcriptLine
-		if json.Unmarshal(sc.Bytes(), &line) == nil && line.Type == "USER_INPUT" {
+		if json.Unmarshal(sc.Bytes(), &line) == nil && line.Type == stepUserInput {
 			out = append(out, line.Content)
 		}
 	}
@@ -216,8 +235,8 @@ type streamContent struct {
 
 func streamLine(msg string) ([]byte, error) {
 	b, err := json.Marshal(streamMessage{
-		Event:   "user",
-		Message: streamContent{Role: "user", Content: strings.TrimSpace(msg)},
+		Event:   roleUser,
+		Message: streamContent{Role: roleUser, Content: strings.TrimSpace(msg)},
 	})
 	if err != nil {
 		return nil, err

@@ -223,8 +223,11 @@ moving is no change), or one "no change" line. --full prints everything.`,
 			var paused []*claude.Record
 			var ended []*claude.Session
 			if all {
-				paused = claude.StoppedRecords(a.cfg, v.raw, a.now.Add(-24*time.Hour))
-				ended = omp.Ended(a.cfg.Omp.SessionsDir, v.raw, a.now.Add(-24*time.Hour))
+				since := a.now.Add(-24 * time.Hour)
+				paused = claude.StoppedRecords(a.cfg, v.raw, since)
+				for _, h := range harnesses {
+					ended = append(ended, h.Ended(a.cfg, v.raw, since)...)
+				}
 			}
 			if a.json {
 				return a.printJSON(struct {
@@ -249,7 +252,7 @@ moving is no change), or one "no change" line. --full prints everything.`,
 							ago(a.now, time.UnixMilli(r.LastActivityAt)), r.Aside())
 					}
 					for _, e := range ended {
-						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\tomp\n", truncate(e.Name, 50), e.Cwd, ago(a.now, e.LastActive))
+						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\t%s\n", truncate(e.Name, 50), e.Cwd, ago(a.now, e.LastActive), cmp.Or(e.Harness, omp.Harness))
 					}
 					_ = w.Flush()
 				}
@@ -260,7 +263,7 @@ moving is no change), or one "no change" line. --full prints everything.`,
 				facts = append(facts, fact{Key: l, Sig: l, Line: l})
 			}
 			for _, e := range ended {
-				l := fmt.Sprintf("ended omp %q %s", e.Name, e.Cwd)
+				l := fmt.Sprintf("ended %s %q %s", cmp.Or(e.Harness, omp.Harness), e.Name, e.Cwd)
 				facts = append(facts, fact{Key: l, Sig: l, Line: l})
 			}
 			return a.delta("sessions", full, facts, printFull)
@@ -818,16 +821,11 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 	if s.Transcript == "" {
 		return nil, fmt.Errorf("no transcript found for %q", s.Name)
 	}
-	read := claude.Tail
-	switch {
-	case s.Harness == omp.Harness && tools:
-		read = omp.Follow
-	case s.Harness == omp.Harness:
-		read = omp.Tail
-	case tools:
-		read = claude.Follow
+	h := harnessForSession(s)
+	if tools {
+		return h.Follow(s.Transcript, n)
 	}
-	return read(s.Transcript, n)
+	return h.Tail(s.Transcript, n)
 }
 
 func (a *app) tailCmd() *cobra.Command {

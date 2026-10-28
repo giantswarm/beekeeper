@@ -61,11 +61,12 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   becomes an issue on the board, then a task; it is never parked in a note, and notes carry only
   decisions for a person. Each worker moves its own board item; the guide reconciles the board.
 - **A fresh worker per task.** A task goes to a worker started with `beekeeper agents start "<task>"
-  <brief file> --task "<task>"`, a model chosen for the task and a brief that carries only the
-  task: `agents start` puts the shipped worker rules ahead of it, and the worker reports through
+  <brief file> --task "<task>"` (`--harness claude|omp|agy|auto`, a model chosen for the task and a brief that carries only the
+  task): `agents start` puts the shipped worker rules ahead of it, and the worker reports through
   `agents idle --done --report`, parks through `agents park`, asks questions through `note add` and
   receives wakes through its inbox (`agents wake`; in Claude Code a message to `the supervisor` also
-  reaches whoever holds the role then); it shows in the desktop's sidebar under its name and on
+  reaches whoever holds the role then); it shows in the desktop's sidebar under its name (or in its
+  `beekeeper-omp-<id>` / `beekeeper-agy-<id>` unit for `omp` and `agy`) and on
   the roster busy from its start. Under `agents.mode: background` it starts as a background session
   with Remote Control instead (`claude agents`, `claude attach <id>`), with none of this session's
   `CLAUDE*` variables, and is on the roster when `agents start` returns: no `agents assign`, no

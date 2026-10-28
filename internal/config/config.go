@@ -78,6 +78,7 @@ type Config struct {
 	Overlaps Overlaps `yaml:"overlaps"`
 	Claude   Claude   `yaml:"claude"`
 	Omp      Omp      `yaml:"omp"`
+	Agy      Agy      `yaml:"agy"`
 	Desktop  Desktop  `yaml:"desktop"`
 	Memcap   Memcap   `yaml:"memcap"`
 	Lanes    []Lane   `yaml:"lanes"`
@@ -2402,9 +2403,10 @@ var DefaultModels = map[string]Model{
 	"claude-haiku-4-5":  {Input: 1, Output: 5, CacheWrite5m: 1.25, CacheWrite1h: 2, CacheRead: 0.1, ContextWindow: 200_000},
 }
 
-// Model returns the entry of model: its id, or its dated snapshot
-// ("claude-haiku-4-5-20251001"). Another model of the same family is not
-// priced like it.
+// Model returns the entry of model: its id, its dated snapshot
+// ("claude-haiku-4-5-20251001"), or its agy effort selector
+// ("claude-opus-5-5-high"). Another model of the same family is not priced
+// like it.
 func (m Metrics) Model(model string) (Model, bool) {
 	if p, ok := m.Models[model]; ok {
 		return p, true
@@ -2412,6 +2414,13 @@ func (m Metrics) Model(model string) (Model, bool) {
 	if i := len(model) - len("-20060102"); i > 0 && model[i] == '-' && isDigits(model[i+1:]) {
 		p, ok := m.Models[model[:i]]
 		return p, ok
+	}
+	for _, suf := range []string{"-low", "-medium", "-high"} {
+		if base, ok := strings.CutSuffix(model, suf); ok {
+			if p, ok := m.Models[base]; ok {
+				return p, true
+			}
+		}
 	}
 	return Model{}, false
 }
@@ -2466,6 +2475,28 @@ type OmpProvider struct {
 	// the provider's apiKey in ModelsFile names, so no file carries the
 	// value.
 	APIKey string `yaml:"apiKey"`
+}
+
+// Agy locates what agy (Antigravity CLI), the third local harness, keeps on
+// disk and how `agents start --harness agy` launches it.
+type Agy struct {
+	// BrainDir holds agy's conversation folders, each with
+	// .system_generated/logs/transcript.jsonl (default
+	// ~/.gemini/antigravity-cli/brain).
+	BrainDir string `yaml:"brainDir"`
+	// ProjectsDir holds agy's project definitions (~/.gemini/config/projects),
+	// used to match a working directory to `--project <id>` on start.
+	ProjectsDir string `yaml:"projectsDir"`
+	// ConversationsDir holds agy's conversation databases
+	// (~/.gemini/antigravity-cli/conversations).
+	ConversationsDir string `yaml:"conversationsDir"`
+	// RemoteControl passes --remote-control to `agy` when starting an agent.
+	RemoteControl bool `yaml:"remoteControl"`
+	// RemoteDaemon is the systemd user service of agy's remote view daemon
+	// (e.g. antigravity-cli-daemon): when set, `agents start --harness agy`
+	// runs `systemctl --user try-restart <remoteDaemon>` once the new
+	// conversation's database exists so the remote view lists it.
+	RemoteDaemon string `yaml:"remoteDaemon"`
 }
 
 // Desktop is how beekeeper shares the person's desktop.
@@ -2759,6 +2790,12 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
+	setStr(&c.Agy.BrainDir, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
+	setStr(&c.Agy.ProjectsDir, filepath.Join(home, ".gemini", "config", "projects"))
+	setStr(&c.Agy.ConversationsDir, filepath.Join(home, ".gemini", "antigravity-cli", "conversations"))
+	c.Agy.BrainDir = homePath(home, c.Agy.BrainDir)
+	c.Agy.ProjectsDir = homePath(home, c.Agy.ProjectsDir)
+	c.Agy.ConversationsDir = homePath(home, c.Agy.ConversationsDir)
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err

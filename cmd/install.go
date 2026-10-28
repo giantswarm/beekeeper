@@ -26,8 +26,8 @@ binary it runs from (or --binary):
 
   - the PreToolUse and PermissionRequest hooks in Claude Code's user
     settings ($CLAUDE_CONFIG_DIR, else ~/.claude/settings.json), and when
-    agy is installed the PreToolUse hook under "beekeeper" in
-    ~/.gemini/config/hooks.json and the embedded skills in
+    agy is installed the PreInvocation and PreToolUse hooks under
+    "beekeeper" in ~/.gemini/config/hooks.json and the embedded skills in
     <stateDir>/skills registered under "entries" in
     ~/.gemini/config/skills.json, merged into what is there;
   - the standby service (beekeeper watch --standby, with --notify when
