@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
@@ -418,11 +419,12 @@ And in ~/.gemini/config/hooks.json for agy:
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			switch formatFlag {
-			case claudeComm, "agy":
+			case claudeComm, "agy", codex.Harness:
 			default:
-				return usageErr("--format=%q: want claude or agy", formatFlag)
+				return usageErr("--format=%q: want claude, agy, or codex", formatFlag)
 			}
 			isAgy := formatFlag == "agy"
+			isCodex := formatFlag == codex.Harness
 			w := a.out
 			if cmd.OutOrStdout() != os.Stdout {
 				w = cmd.OutOrStdout()
@@ -440,6 +442,9 @@ And in ~/.gemini/config/hooks.json for agy:
 				return nil
 			}
 			cfgErr := a.loadConfig()
+			if isCodex {
+				return nil
+			}
 			sandboxed := a.sandboxed(cfgErr)
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
 				// every session on the machine, the desk's or not
@@ -497,7 +502,7 @@ And in ~/.gemini/config/hooks.json for agy:
 			return nil
 		},
 	}
-	preCmd.Flags().StringVar(&formatFlag, "format", claudeComm, "hook payload and output format: claude or agy")
+	preCmd.Flags().StringVar(&formatFlag, "format", claudeComm, "hook payload and output format: claude, agy, or codex")
 	c.AddCommand(preCmd)
 	c.AddCommand(&cobra.Command{
 		Use:   "posttooluse",

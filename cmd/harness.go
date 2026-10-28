@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -18,9 +19,9 @@ import (
 // Harness is a coding agent harness beekeeper starts, lists, follows, wakes,
 // stops and prices.
 type Harness interface {
-	// Name is the harness's short name ("" for Claude Code, "omp", "agy").
+	// Name is the harness's short name ("" for Claude Code, "omp", "agy", "codex").
 	Name() string
-	// HostPrefix prefixes a started session's HostSession ("local_", "omp_", "agy_").
+	// HostPrefix prefixes a started session's HostSession ("local_", "omp_", "agy_", "codex_").
 	HostPrefix() string
 	// EnvAgent is the environment variable a started session's shell carries, "" for Claude Code.
 	EnvAgent() string
@@ -53,6 +54,7 @@ var harnesses = []Harness{
 	claudeHarness{},
 	ompHarness{},
 	agyHarness{},
+	codexHarness{},
 }
 
 // harnessByName returns the harness for a --harness flag value.
@@ -64,6 +66,8 @@ func harnessByName(name string) (Harness, bool) {
 		return ompHarness{}, true
 	case agy.Harness:
 		return agyHarness{}, true
+	case codex.Harness:
+		return codexHarness{}, true
 	}
 	return nil, false
 }
@@ -271,4 +275,56 @@ func (agyHarness) ReadTranscript(a *app, s *claude.Session, now time.Time) (clau
 
 func (agyHarness) SpendTranscripts(cfg *config.Config, from, to time.Time) ([]claude.SpendTranscript, error) {
 	return agy.SpendTranscripts(cfg.Agy.BrainDir, from, to), nil
+}
+
+type codexHarness struct{}
+
+func (codexHarness) Name() string       { return codex.Harness }
+func (codexHarness) HostPrefix() string { return codex.HostPrefix }
+func (codexHarness) EnvAgent() string   { return codex.EnvAgent }
+
+func (codexHarness) Start(ctx context.Context, a *app, sp agentStart) error {
+	return a.startCodexAgent(ctx, sp)
+}
+
+func (codexHarness) DryRun(_ context.Context, a *app, sp agentStart, gaps []string) error {
+	return a.dryRunCodexStart(sp, gaps)
+}
+
+func (codexHarness) Wake(a *app, by state.Party, ag state.Agent, id, msg string) error {
+	return a.wakeCodex(by, ag, id, msg)
+}
+
+func (codexHarness) Send(a *app, name, id, msg string) error {
+	return a.sendCodex(name, id, msg)
+}
+
+func (codexHarness) Stop(ctx context.Context, a *app, id string) string {
+	return a.endCodex(ctx, id)
+}
+
+func (codexHarness) Discover(cfg *config.Config, t *proc.Table, now time.Time) []*claude.Session {
+	return codex.Discover(cfg.StateDir, cfg.Codex.SessionsDir, t, now)
+}
+
+func (codexHarness) Ended(cfg *config.Config, running []*claude.Session, since time.Time) []*claude.Session {
+	return codex.Ended(cfg.StateDir, cfg.Codex.SessionsDir, running, since)
+}
+
+func (codexHarness) Tail(path string, n int) ([]claude.Turn, error) {
+	return codex.Tail(path, n)
+}
+
+func (codexHarness) Follow(path string, n int) ([]claude.Turn, error) {
+	return codex.Follow(path, n)
+}
+
+func (codexHarness) ReadTranscript(a *app, s *claude.Session, now time.Time) (claude.Work, claude.Activity) {
+	work, act := codex.ReadTranscript(s.Transcript, now, s.Model)
+	act.Price(a.cfg.Metrics)
+	return work, act
+}
+
+func (codexHarness) SpendTranscripts(cfg *config.Config, from, to time.Time) ([]claude.SpendTranscript, error) {
+	return codex.SpendTranscripts(cfg.StateDir, cfg.Codex.SessionsDir, from, to), nil
 }

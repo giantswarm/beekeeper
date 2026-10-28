@@ -21,7 +21,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -1687,8 +1690,13 @@ func allowDeployRule(deploy string) string {
 func browseEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
-		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == stageRootEnv || k == guard.SharedEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") {
+		k, v, _ := strings.Cut(kv, "=")
+		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == stageRootEnv || k == guard.SharedEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") ||
+			k == omp.EnvAgent || k == omp.EnvName || k == omp.EnvCredentials ||
+			k == agy.EnvAgent || k == agy.EnvName ||
+			k == codex.EnvAgent || k == codex.EnvName ||
+			k == "CODEX_HOME" || k == "ZDOTDIR" ||
+			(k == "SHELL" && strings.HasSuffix(filepath.ToSlash(v), "/omp/bin/bash")) {
 			continue
 		}
 		out = append(out, kv)

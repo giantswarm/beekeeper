@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/machine"
@@ -334,6 +335,8 @@ func agentHarnessModel(st *state.State, sessions []*claude.Session, ag state.Age
 			harness = omp.Harness
 		case strings.HasPrefix(ag.HostSession, "agy_") || strings.HasPrefix(ag.Session, "agy_"):
 			harness = harnessAgy
+		case strings.HasPrefix(ag.HostSession, codex.HostPrefix) || strings.HasPrefix(ag.Session, codex.HostPrefix):
+			harness = codex.Harness
 		default:
 			harness = claudeComm
 		}
@@ -862,7 +865,7 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	pm := p + "/" + m
 
 	isKnownProviderOrHarness := func(tok string) bool {
-		if tok == h || tok == p || tok == claudeComm || tok == harnessAgy || tok == omp.Harness {
+		if tok == h || tok == p || tok == claudeComm || tok == harnessAgy || tok == omp.Harness || tok == codex.Harness {
 			return true
 		}
 		return slices.ContainsFunc(providerNames, func(n string) bool { return strings.EqualFold(n, tok) })
@@ -1331,6 +1334,8 @@ func (a *app) effectiveStartModel(harness, model string) string {
 	switch strings.TrimSpace(harness) {
 	case omp.Harness:
 		return strings.TrimSpace(a.cfg.Omp.Model)
+	case codex.Harness:
+		return strings.TrimSpace(a.cfg.Codex.Model)
 	case "", claudeComm:
 		return strings.TrimSpace(a.cfg.Agents.Model)
 	}

@@ -80,6 +80,7 @@ type Config struct {
 	Claude   Claude   `yaml:"claude"`
 	Omp      Omp      `yaml:"omp"`
 	Agy      Agy      `yaml:"agy"`
+	Codex    Codex    `yaml:"codex"`
 	Desktop  Desktop  `yaml:"desktop"`
 	Memcap   Memcap   `yaml:"memcap"`
 	Lanes    []Lane   `yaml:"lanes"`
@@ -2533,6 +2534,21 @@ type Agy struct {
 	RemoteDaemon string `yaml:"remoteDaemon"`
 }
 
+// Codex locates what Codex CLI keeps on disk and configures codex worker starts.
+type Codex struct {
+	// SessionsDir holds Codex rollout files (~/.codex/sessions).
+	SessionsDir string `yaml:"sessionsDir"`
+	// AuthFile is the Codex OAuth file symlinked into an isolated worker
+	// CODEX_HOME (~/.codex/auth.json).
+	AuthFile string `yaml:"authFile"`
+	// ConfigFile is the user's Codex config.toml whose [projects.*] trust
+	// tables are copied into an isolated worker CODEX_HOME (~/.codex/config.toml).
+	ConfigFile string `yaml:"configFile"`
+	// Model is the model `agents start --harness codex` starts an agent on
+	// without --model.
+	Model string `yaml:"model"`
+}
+
 // Desktop is how beekeeper shares the person's desktop.
 type Desktop struct {
 	// TypingQuiet is how long the person's keyboards and pointers stay
@@ -2845,6 +2861,12 @@ func (c *Config) defaults() error {
 	c.Agy.BrainDir = homePath(home, c.Agy.BrainDir)
 	c.Agy.ProjectsDir = homePath(home, c.Agy.ProjectsDir)
 	c.Agy.ConversationsDir = homePath(home, c.Agy.ConversationsDir)
+	setStr(&c.Codex.SessionsDir, filepath.Join(home, ".codex", "sessions"))
+	setStr(&c.Codex.AuthFile, filepath.Join(home, ".codex", "auth.json"))
+	setStr(&c.Codex.ConfigFile, filepath.Join(home, ".codex", "config.toml"))
+	c.Codex.SessionsDir = homePath(home, c.Codex.SessionsDir)
+	c.Codex.AuthFile = homePath(home, c.Codex.AuthFile)
+	c.Codex.ConfigFile = homePath(home, c.Codex.ConfigFile)
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err
