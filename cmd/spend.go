@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/omp"
 )
 
@@ -57,7 +58,9 @@ only; spend is the figure for a day or any other window.`,
 			if err != nil {
 				return err
 			}
-			s := claude.PriceSpend(append(ts, omp.SpendTranscripts(a.cfg.Omp.SessionsDir, from, to)...), from, to, a.cfg.Metrics)
+			ts = append(ts, omp.SpendTranscripts(a.cfg.Omp.SessionsDir, from, to)...)
+			ts = append(ts, codex.SpendTranscripts(a.cfg.StateDir, a.cfg.Codex.SessionsDir, from, to)...)
+			s := claude.PriceSpend(ts, from, to, a.cfg.Metrics)
 			if a.json {
 				return a.printJSON(s)
 			}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -605,6 +606,10 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 			out[i].line = a.endOmp(ctx, id)
 			continue
 		}
+		if id, ok := strings.CutPrefix(ag.HostSession, codex.HostPrefix); ok {
+			out[i].line = a.endCodex(ctx, id)
+			continue
+		}
 		host, why := a.archivable(st, ag)
 		if why != "" {
 			out[i].line, out[i].host = why, host
@@ -873,6 +878,27 @@ func (a *app) endOmp(ctx context.Context, id string) string {
 	return strings.Join(done, ", ")
 }
 
+func (a *app) endCodex(ctx context.Context, id string) string {
+	var done []string
+	if unit := codexUnit(id); plat.Launcher.State(ctx, unit) == holdActive {
+		if err := plat.Launcher.Stop(ctx, unit); err != nil {
+			return fmt.Sprintf("its codex unit %s runs on: %v", unit, err)
+		}
+		done = append(done, "stopped its codex unit "+unit)
+	}
+	removed, err := codex.RemoveInbox(codex.InboxPath(a.cfg.StateDir, id))
+	switch {
+	case err != nil:
+		done = append(done, fmt.Sprintf("its codex inbox stays: %v", err))
+	case removed:
+		done = append(done, "removed its codex inbox")
+	}
+	if len(done) == 0 {
+		return "a codex agent has no desktop session"
+	}
+	return strings.Join(done, ", ")
+}
+
 // archivable is the desktop session of agent ag the doctor or remove may
 // archive, and why it stays now: a why without a host is never archived,
 // one with a host only once its CLI runs no turn.
@@ -891,6 +917,9 @@ func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 func (a *app) archivableRecord(st *state.State, ag state.Party) (host, why string) {
 	if strings.HasPrefix(ag.HostSession, omp.HostPrefix) {
 		return "", "an omp agent has no desktop session"
+	}
+	if strings.HasPrefix(ag.HostSession, codex.HostPrefix) {
+		return "", "a codex agent has no desktop session"
 	}
 	i := st.StartIndex(ag)
 	if i < 0 {

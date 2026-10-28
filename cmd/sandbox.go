@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -362,7 +363,7 @@ const importOp = "import"
 
 // callerEnv are the variables that name the calling session, the only part
 // of its environment a brokered call takes over.
-var callerEnv = []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "CLAUDE_CONFIG_DIR", omp.EnvAgent, omp.EnvName}
+var callerEnv = []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "CLAUDE_CONFIG_DIR", omp.EnvAgent, omp.EnvName, codex.EnvAgent}
 
 // brokeredCallTimeout bounds a brokered call: op answers within a minute, a
 // rotation writes several files.

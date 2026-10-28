@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -466,9 +467,12 @@ func (a *app) sessionWorks(sessions []*claude.Session) []claude.Work {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			if s.Harness == omp.Harness {
+			switch s.Harness {
+			case omp.Harness:
 				out[i], _ = omp.ReadTranscript(s.Transcript, a.now)
-			} else {
+			case codex.Harness:
+				out[i], _ = codex.ReadTranscript(s.Transcript, a.now)
+			default:
 				out[i], _ = a.readTranscript(s.Transcript)
 			}
 		})

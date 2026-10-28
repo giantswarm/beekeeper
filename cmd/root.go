@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -213,7 +214,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd(), a.agyRunCmd())
+	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd(), a.agyRunCmd(), a.codexRunCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})
@@ -271,7 +272,7 @@ func (a *app) callerSession() (state.Party, error) {
 		return state.Party{Name: a.as}, nil
 	}
 	p := envParty(os.Getenv)
-	if os.Getenv(omp.EnvAgent) != "" {
+	if os.Getenv(omp.EnvAgent) != "" || os.Getenv(codex.EnvAgent) != "" {
 		return p, nil
 	}
 	if p.Session == "" {
@@ -300,6 +301,9 @@ func envParty(get func(string) string) state.Party {
 	if id := get(omp.EnvAgent); id != "" {
 		return state.Party{HostSession: omp.HostPrefix + id, Name: get(omp.EnvName)}
 	}
+	if id := get(codex.EnvAgent); id != "" {
+		return state.Party{HostSession: codex.HostPrefix + id, Name: get(codex.EnvName)}
+	}
 	return state.Party{
 		Session:     get("CLAUDE_CODE_SESSION_ID"),
 		HostSession: get("CLAUDE_CODE_HOST_SESSION_ID"),
@@ -317,9 +321,10 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 }
 
 // discover returns the running sessions of every harness: Claude Code's,
-// then omp's.
+// omp's, and codex's.
 func discover(cfg *config.Config, t *proc.Table, now time.Time) []*claude.Session {
-	return append(claude.Discover(cfg, t, now), omp.Discover(cfg.Omp.SessionsDir, t, now)...)
+	out := append(claude.Discover(cfg, t, now), omp.Discover(cfg.Omp.SessionsDir, t, now)...)
+	return append(out, codex.Discover(cfg.StateDir, cfg.Codex.SessionsDir, t, now)...)
 }
 
 func (a *app) printJSON(v any) error {

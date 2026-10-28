@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/peer"
@@ -195,6 +196,9 @@ func (a *app) readHandover(q string) (handover, error) {
 	p := h.agent.Party
 	if strings.HasPrefix(p.HostSession, omp.HostPrefix) {
 		return handover{}, refused("%q is an omp agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name)
+	}
+	if strings.HasPrefix(p.HostSession, codex.HostPrefix) {
+		return handover{}, refused("%q is a codex agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name)
 	}
 	for _, rl := range roles {
 		if r := rl.get(st); r.Holder != nil && r.Holder.Is(p) {

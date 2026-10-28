@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -223,8 +224,10 @@ moving is no change), or one "no change" line. --full prints everything.`,
 			var paused []*claude.Record
 			var ended []*claude.Session
 			if all {
-				paused = claude.StoppedRecords(a.cfg, v.raw, a.now.Add(-24*time.Hour))
-				ended = omp.Ended(a.cfg.Omp.SessionsDir, v.raw, a.now.Add(-24*time.Hour))
+				since := a.now.Add(-24 * time.Hour)
+				paused = claude.StoppedRecords(a.cfg, v.raw, since)
+				ended = append(omp.Ended(a.cfg.Omp.SessionsDir, v.raw, since), codex.Ended(a.cfg.StateDir, a.cfg.Codex.SessionsDir, v.raw, since)...)
+				slices.SortFunc(ended, func(a, b *claude.Session) int { return b.LastActive.Compare(a.LastActive) })
 			}
 			if a.json {
 				return a.printJSON(struct {
@@ -824,6 +827,10 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 		read = omp.Follow
 	case s.Harness == omp.Harness:
 		read = omp.Tail
+	case s.Harness == codex.Harness && tools:
+		read = codex.Follow
+	case s.Harness == codex.Harness:
+		read = codex.Tail
 	case tools:
 		read = claude.Follow
 	}

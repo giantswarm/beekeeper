@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -49,7 +50,7 @@ func stopBackground(t *proc.Table, self int, now time.Time) []claude.Command {
 // background and says so; nothing for a call --as another agent or of an
 // omp agent, whose CLI is not the caller's.
 func (a *app) stopOwnBackground() error {
-	if a.as != "" || os.Getenv(omp.EnvAgent) != "" {
+	if a.as != "" || os.Getenv(omp.EnvAgent) != "" || os.Getenv(codex.EnvAgent) != "" {
 		return nil
 	}
 	t, err := plat.Machine.Processes()

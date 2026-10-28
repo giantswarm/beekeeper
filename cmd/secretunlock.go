@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
@@ -18,7 +19,7 @@ import (
 
 // agentMarkers are the variables an agent session's commands carry: Claude
 // Code's, omp's, the sandbox's.
-var agentMarkers = []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT", omp.EnvAgent, sandbox.Env, sandbox.Brokered}
+var agentMarkers = []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT", omp.EnvAgent, codex.EnvAgent, sandbox.Env, sandbox.Brokered}
 
 // isTerminal reports whether fd is a terminal; tests replace it.
 var isTerminal = func(fd int) bool { return term.IsTerminal(fd) }

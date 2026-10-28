@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -104,11 +105,11 @@ func screenLocked() bool { return screenLocker() != "" }
 var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
-	var model, dir, task, harness, mode string
+	var nameFlag, model, dir, task, harness, mode string
 	var exclude []string
 	var desktop, builds, force, dryRun, review bool
 	c := &cobra.Command{
-		Use:   agentStartName + " <name> <brief file>",
+		Use:   agentStartName + " [--name <name>] [<name>] <brief file>",
 		Short: "Start an agent session in bypass: imported into the desktop, or a background session with Remote Control",
 		Long: `start starts a Claude Code session without a click and runs it in
 Claude Desktop from its first turn. Before the session exists, beekeeper
@@ -232,15 +233,37 @@ and agents with harness omp; agents wake writes a message to its inbox,
 which omp delivers at its next tool round or as its next turn. No desktop
 is involved and no import happens.
 
+--harness codex starts a Codex CLI agent instead: "beekeeper codex-run"
+driving "codex exec --json" / "codex exec resume --json" in bypass mode on
+--model (default: codex.model; with neither, the start is refused), in a
+transient user unit beekeeper-codex-<id> with an isolated CODEX_HOME, its
+FIFO inbox in beekeeper's state folder and the worker rules + brief as its
+first message. It is registered on the roster as codex_<id> under <name>
+and shows in sessions and agents with harness codex; agents wake writes a
+message to its inbox, delivered mid-turn by the PreToolUse hook or as the
+next turn via codex exec resume.
+
 --harness auto picks the first non-excluded (harness, model) pair in
 capacity.choices whose provider has room (5-hour window below threshold,
 weekly use within the choice's sevenDayMax worker cap and paceMargin).
 --exclude skips matching choices (by model, harness/model, provider, or
 harness; repeatable), and --review skips the weekly pace check and
 per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
-		Args: cobra.ExactArgs(2),
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := strings.TrimSpace(args[0])
+			var name, briefFile string
+			switch len(args) {
+			case 1:
+				if strings.TrimSpace(nameFlag) == "" {
+					return usageErr("accepts 2 arg(s), received 1")
+				}
+				name, briefFile = strings.TrimSpace(nameFlag), args[0]
+			case 2:
+				if strings.TrimSpace(nameFlag) != "" && strings.TrimSpace(nameFlag) != strings.TrimSpace(args[0]) {
+					return usageErr("--name %q and positional <name> %q disagree", nameFlag, args[0])
+				}
+				name, briefFile = strings.TrimSpace(args[0]), args[1]
+			}
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
@@ -261,14 +284,14 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			// an omp agent whose provider's key is in the vault starts where
 			// the vault session is: the host's broker
 			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
-				return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
+				return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
 			}
 			// a sandboxed session's start reads its brief and gives the
 			// agent its directory through the broker, within its own lists
-			if err := a.sandboxPaths([]string{args[1]}, []string{dir}); err != nil {
+			if err := a.sandboxPaths([]string{briefFile}, []string{dir}); err != nil {
 				return err
 			}
-			brief, err := readBrief(args[1])
+			brief, err := readBrief(briefFile)
 			if err != nil {
 				return err
 			}
@@ -303,8 +326,11 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					}
 				}
 				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
-				if harness == omp.Harness {
+				switch harness {
+				case omp.Harness:
 					return a.dryRunOmpStart(sp, gaps)
+				case codex.Harness:
+					return a.dryRunCodexStart(sp, gaps)
 				}
 				return a.dryRunStart(cmd.Context(), sp, gaps)
 			}
@@ -330,7 +356,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					model = ch.Model
 				}
 				if harness == omp.Harness && a.ompStartBrokered(model) {
-					return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
+					return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
 				}
 			}
 			if over != "" {
@@ -353,8 +379,11 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				}
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
-			if harness == omp.Harness {
+			switch harness {
+			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
+			case codex.Harness:
+				return a.startCodexAgent(cmd.Context(), sp)
 			}
 			sa, err := a.startAgent(cmd.Context(), sp)
 			if err != nil {
@@ -385,10 +414,11 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; auto: the chosen model)")
+	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
+	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; codex: codex.model; auto: the chosen model)")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
-	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude, omp, or auto")
+	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude, omp, codex, or auto")
 	c.Flags().StringArrayVar(&exclude, "exclude", nil, "exclude a choice from --harness auto (model, harness/model, provider, or harness; repeatable)")
 	c.Flags().BoolVar(&review, "review", false, "a desk review start: skip the 7-day pace check and worker weekly cap when capacity.reviewSkipPace is true")
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
@@ -401,14 +431,14 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 
 func validateStartHarness(harness, mode string) error {
 	switch harness {
-	case "", claudeComm, omp.Harness:
+	case "", claudeComm, omp.Harness, codex.Harness:
 	case harnessAgy:
 		return refused("no start: harness %q is not yet supported by agents start", harness)
 	default:
-		return usageErr("--harness %q: claude, omp, or auto", harness)
+		return usageErr("--harness %q: claude, omp, codex, or auto", harness)
 	}
-	if strings.TrimSpace(mode) == config.ModeBackground && harness == omp.Harness {
-		return usageErr("--mode background and --harness omp: an omp agent is no Claude Code background session")
+	if strings.TrimSpace(mode) == config.ModeBackground && (harness == omp.Harness || harness == codex.Harness) {
+		return usageErr("--mode background and --harness %s: a %s agent is no Claude Code background session", harness, harness)
 	}
 	return nil
 }
