@@ -654,10 +654,10 @@ faults but remedying none.`,
 					lines = append(lines, line)
 				}
 				codexInstalled := exe != "" && hasCodex()
-				if line := checkCodexHooks(home, a.cfg.StateDir, exe, codexInstalled); line != "" {
+				if line := checkCodexHooks(home, a.cfg.StateDir, exe, codexInstalled, a.cfg.Codex); line != "" {
 					lines = append(lines, line)
 				}
-				if line := checkCodexSkills(home, a.cfg.StateDir, codexInstalled); line != "" {
+				if line := checkCodexSkills(home, a.cfg.StateDir, codexInstalled, a.cfg.Codex); line != "" {
 					lines = append(lines, line)
 				}
 			}
@@ -789,10 +789,10 @@ func checkAgySkills(home, stateDir string, agyInstalled bool) string {
 	return install.CheckAgySkills(agySkillsPath(home, agyInstalled), stateDir, home)
 }
 
-// checkCodexHooks checks ~/.codex/hooks.json and <stateDir>/codex/home/hooks.json
+// checkCodexHooks checks <codexDir>/hooks.json and <stateDir>/codex/home/hooks.json
 // when codex is installed.
-func checkCodexHooks(home, stateDir, exe string, codexInstalled bool) string {
-	if line := install.CheckCodexHooks(codexHooksPath(home, codexInstalled), exe, home); line != "" {
+func checkCodexHooks(home, stateDir, exe string, codexInstalled bool, cfg ...config.Codex) string {
+	if line := install.CheckCodexHooks(codexHooksPath(home, codexInstalled, cfg...), exe, home); line != "" {
 		return line
 	}
 	if workerHooks := install.CodexWorkerHooks(stateDir); workerHooks != "" {
@@ -803,10 +803,10 @@ func checkCodexHooks(home, stateDir, exe string, codexInstalled bool) string {
 	return ""
 }
 
-// checkCodexSkills checks ~/.codex/skills and <stateDir>/codex/home/skills
+// checkCodexSkills checks <codexDir>/skills and <stateDir>/codex/home/skills
 // when codex is installed.
-func checkCodexSkills(home, stateDir string, codexInstalled bool) string {
-	if line := install.CheckCodexSkills(codexSkillsPath(home, codexInstalled), stateDir, home); line != "" {
+func checkCodexSkills(home, stateDir string, codexInstalled bool, cfg ...config.Codex) string {
+	if line := install.CheckCodexSkills(codexSkillsPath(home, codexInstalled, cfg...), stateDir, home); line != "" {
 		return line
 	}
 	if workerSkills := install.CodexWorkerSkills(stateDir); workerSkills != "" {

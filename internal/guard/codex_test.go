@@ -67,6 +67,8 @@ func TestCodexFailClosed(t *testing.T) {
 		"json_array":         []byte(`["Bash"]`),
 		"json_null":          []byte(`null`),
 		"wrong_event":        []byte(`{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"true"}}`),
+		"missing_event":      []byte(`{"tool_name":"Bash","tool_input":{"command":"true"}}`),
+		"unknown_tool":       []byte(`{"hook_event_name":"PreToolUse","tool_name":"UnknownTool","tool_input":{}}`),
 		"missing_tool_name":  []byte(`{"hook_event_name":"PreToolUse","tool_input":{"command":"true"}}`),
 		"empty_tool_name":    []byte(`{"hook_event_name":"PreToolUse","tool_name":"  ","tool_input":{"command":"true"}}`),
 		"non_obj_tool_input": []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":"str"}`),
@@ -438,5 +440,111 @@ func TestCodexRepoUnlockHelperReadsAndPatchesPassRunsDenied(t *testing.T) {
 	}
 	if paths := CodexPaths(raw); !slices.Contains(paths, full) {
 		t.Errorf("CodexPaths = %v, want %s included", paths, full)
+	}
+}
+
+// Desk review R1 regressions:
+// 1. Unquoted heredoc command substitutions (`apply_patch <<EOF` with `$(...)` or “ `...` “) are denied.
+// 2. `codexBashPureApplyPatch` returns `isPure == true` and preserves `additionalContext` (`repoReads`) on `Bash` `apply_patch <<'EOF'`.
+// 3. Indented or malformed `***` headers in `apply_patch` are checked and denied.
+// 4. Shell tool aliases (`exec_command`, `shell_command`, `shell`, `local_shell`, `bash`) and `update_plan` are handled.
+// 5. `decideCodexEvent` attaches `repoReads` (`additionalContext`) on `Bash` `git commit` and `Write` in another repository.
+func TestCodexReviewR1Regressions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	userCodex := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(userCodex, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	proj := repoWith(t, filepath.Join(t.TempDir(), "proj"), map[string]string{
+		claudeMD: projectRules,
+	})
+	otherA := repoWith(t, filepath.Join(t.TempDir(), "other-a"), map[string]string{
+		claudeMD: otherRules,
+	})
+	otherB := repoWith(t, filepath.Join(t.TempDir(), "other-b"), map[string]string{
+		claudeMD: "other-b rules",
+	})
+	otherC := repoWith(t, filepath.Join(t.TempDir(), "other-c"), map[string]string{
+		claudeMD: "other-c rules",
+	})
+	otherD := repoWith(t, filepath.Join(t.TempDir(), "other-d"), map[string]string{
+		claudeMD: "other-d rules",
+	})
+
+	h := readsHook(t, proj)
+	h.Self = testBeekeeperExe
+	h.Shell = zshCmd
+	h.SecretFiles = []string{"~/.ssh/id_*"}
+	h.Upstream = Upstream{Orgs: []string{allowedOrg}}
+
+	// 1. Unquoted heredocs on apply_patch (with or without command substitutions)
+	// and unquoted heredocs carrying forbidden command substitutions are denied.
+	for _, badCmd := range []string{
+		"apply_patch <<EOF\n*** Begin Patch\n*** Update File: README.md\n@@\n+$(git push --force origin main)\n*** End Patch\nEOF",
+		"apply_patch <<EOF\n*** Begin Patch\n*** Update File: README.md\n@@\n+$(cat ~/.ssh/id_ed25519)\n*** End Patch\nEOF",
+		"apply_patch <<-EOF\n*** Begin Patch\n*** Update File: README.md\n@@\n+`cat ~/.ssh/id_ed25519`\n*** End Patch\nEOF",
+		"apply_patch <<EOF\n*** Begin Patch\n*** Update File: README.md\n@@\n+plain line\n*** End Patch\nEOF",
+		"echo start && apply_patch <<EOF\n*** Begin Patch\n*** Update File: README.md\n@@\n+$(git push --force origin main)\n*** End Patch\nEOF",
+		"cat <<EOF > /tmp/out\n$(git push --force origin main)\nEOF",
+		"cat <<EOF > /tmp/out\n$(cat ~/.ssh/id_ed25519)\nEOF",
+		"cat <<EOF > /tmp/out\n$(cat ~/.codex/auth.json)\nEOF",
+	} {
+		if d := decideCodexCmd(t, h, proj, badCmd); d.PermissionDecision != decisionDeny {
+			t.Errorf("unquoted heredoc %q: got %+v, want deny", badCmd, d)
+		}
+	}
+
+	// 2. Pure Bash apply_patch <<'EOF' and cd && apply_patch <<'EOF' return isPure == true
+	// and return repoReads in additionalContext when writing to another repository.
+	patchA := "*** Begin Patch\n*** Update File: a.txt\n@@\n+hello\n*** End Patch"
+	pureCmd := "apply_patch <<'EOF'\n" + patchA + "\nEOF"
+	if isPure, reason, _ := h.codexBashPureApplyPatch(event{CWD: proj}, pureCmd, proj); !isPure || reason != "" {
+		t.Fatalf("codexBashPureApplyPatch(pureCmd) = (%v, %q), want (true, \"\")", isPure, reason)
+	}
+	if d := decideCodexCmd(t, h, otherA, pureCmd); d.PermissionDecision != "" || !strings.Contains(d.Context, otherRules) {
+		t.Errorf("Bash apply_patch in otherA: got %+v, want pass with %q in additionalContext", d, otherRules)
+	}
+	cdPureCmd := "cd " + otherB + " && apply_patch <<'EOF'\n" + patchA + "\nEOF"
+	if d := decideCodexCmd(t, h, proj, cdPureCmd); d.PermissionDecision != "" || !strings.Contains(d.Context, "other-b rules") {
+		t.Errorf("Bash cd && apply_patch in otherB: got %+v, want pass with other-b rules in additionalContext", d)
+	}
+
+	// 3. Indented or malformed `***` headers in apply_patch are checked and denied.
+	for _, badPatch := range []string{
+		"*** Begin Patch\n*** Update File: README.md\n@@\n+ok\n  *** Update File: ~/.codex/hooks.json\n@@\n+{}\n*** End Patch",
+		"\t*** Update File: ~/.codex/hooks.json\n@@\n+{}",
+		"*** Begin Patch\n*** Update File: README.md\n@@\n+ok\n*** Add File:~/.codex/hooks.json\n+{}\n*** End Patch",
+		"*** Begin Patch\n*** Update File: README.md\n@@\n+ok\n*** Unknown Header: foo\n*** End Patch",
+	} {
+		if d := decideCodexCall(t, h, proj, codexApplyPatchTool, map[string]any{commandKey: badPatch}); d.PermissionDecision != decisionDeny {
+			t.Errorf("indented/malformed apply_patch %q: got %+v, want deny", badPatch, d)
+		}
+		if d := decideCodexCmd(t, h, proj, "apply_patch <<'EOF'\n"+badPatch+"\nEOF"); d.PermissionDecision != decisionDeny {
+			t.Errorf("Bash indented/malformed apply_patch %q: got %+v, want deny", badPatch, d)
+		}
+	}
+
+	// 4. Documented shell tool aliases and update_plan are handled; unknown tools are denied.
+	for _, shellTool := range []string{"exec_command", "shell_command", "shell", "local_shell", "bash"} {
+		if d := decideCodexCall(t, h, proj, shellTool, map[string]any{codexCmdKey: "git push --force origin main"}); d.PermissionDecision != decisionDeny {
+			t.Errorf("%s force push: got %+v, want deny", shellTool, d)
+		}
+		d := decideCodexCall(t, h, proj, shellTool, map[string]any{codexCmdKey: "go test ./internal/..."})
+		if d.PermissionDecision != decisionAllow || !strings.Contains(d.UpdatedInput[codexCmdKey].(string), testBeekeeperExe+" run -- ") {
+			t.Errorf("%s build rewrite: got %+v", shellTool, d)
+		}
+	}
+	if d := decideCodexCall(t, h, proj, codexUpdatePlanTool, map[string]any{"plan": []any{}}); d.PermissionDecision != "" {
+		t.Errorf("update_plan: got %+v, want pass", d)
+	}
+
+	// 5. decideCodexEvent attaches repoReads on Bash git commit and Write in another repository.
+	if d := decideCodexCmd(t, h, proj, "git -C "+otherC+" commit -m msg"); d.PermissionDecision != "" || !strings.Contains(d.Context, "other-c rules") {
+		t.Errorf("Bash git commit in otherC: got %+v, want pass with other-c rules in additionalContext", d)
+	}
+	if d := decideCodexCall(t, h, proj, writeTool, map[string]any{filePathKey: filepath.Join(otherD, "main.go"), contentKey: "package main\n"}); d.PermissionDecision != "" || !strings.Contains(d.Context, "other-d rules") {
+		t.Errorf("Write in otherD: got %+v, want pass with other-d rules in additionalContext", d)
 	}
 }

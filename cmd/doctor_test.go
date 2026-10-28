@@ -471,4 +471,20 @@ func TestCheckCodexSkills(t *testing.T) {
 	if got := checkCodexSkills(home, stateDir, true); !strings.Contains(got, "serves the skills park unlike beekeeper") {
 		t.Errorf("stale skill file: got %q", got)
 	}
+
+	// Custom configured Codex.ConfigFile / Codex.AuthFile derives the user Codex directory.
+	customCodexDir := filepath.Join(home, "custom-codex")
+	customCfg := config.Codex{ConfigFile: filepath.Join(customCodexDir, "config.toml")}
+	if got := codexHooksPath(home, true, customCfg); got != filepath.Join(customCodexDir, "hooks.json") {
+		t.Errorf("codexHooksPath(customCfg) = %q", got)
+	}
+	if got := codexSkillsPath(home, true, customCfg); got != filepath.Join(customCodexDir, "skills") {
+		t.Errorf("codexSkillsPath(customCfg) = %q", got)
+	}
+	if got := checkCodexHooks(home, stateDir, "/usr/local/bin/beekeeper", true, customCfg); !strings.Contains(got, "~/custom-codex/hooks.json is missing; run `beekeeper install`") {
+		t.Errorf("checkCodexHooks(customCfg): got %q", got)
+	}
+	if got := checkCodexSkills(home, stateDir, true, customCfg); !strings.Contains(got, "~/custom-codex/skills is missing; run `beekeeper install`") {
+		t.Errorf("checkCodexSkills(customCfg): got %q", got)
+	}
 }

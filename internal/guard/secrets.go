@@ -1881,9 +1881,11 @@ type segment struct {
 	before, after string
 }
 
-// heredoc is a here-document: the offset of its << and its body.
+// heredoc is a here-document: the offset of its <<, its body, and whether its
+// delimiter was quoted (suppressing shell expansion in the body).
 type heredoc struct {
 	op, start, end int
+	quoted         bool
 }
 
 // shellScan is a command line with the contents of quotes, comments and
@@ -1901,9 +1903,10 @@ func scanShell(s string) shellScan {
 	b, p := []byte(s), []byte(s)
 	var docs []heredoc
 	var pending []struct {
-		op    int
-		delim string
-		tabs  bool
+		op     int
+		delim  string
+		tabs   bool
+		quoted bool
 	}
 	// frames: 't' top, 's' $( ), '"' double quotes, '`' backticks.
 	stack := []byte{'t'}
@@ -1982,10 +1985,11 @@ func scanShell(s string) shellScan {
 		case c == '<' && (i == 0 || s[i-1] != '<') && strings.HasPrefix(s[i:], "<<") && !strings.HasPrefix(s[i:], "<<<"):
 			if m := heredocOp.FindStringSubmatch(s[i:]); m != nil {
 				pending = append(pending, struct {
-					op    int
-					delim string
-					tabs  bool
-				}{i, m[2] + m[3] + m[4], m[1] == "-"})
+					op     int
+					delim  string
+					tabs   bool
+					quoted bool
+				}{i, m[2] + m[3] + m[4], m[1] == "-", m[2] != "" || m[3] != ""})
 				for k := i + 2; k < i+len(m[0]); k++ {
 					b[k] = '_'
 				}
@@ -2005,7 +2009,7 @@ func scanShell(s string) shellScan {
 						line = strings.TrimLeft(line, "\t")
 					}
 					if line == p.delim {
-						docs = append(docs, heredoc{p.op, body, pos})
+						docs = append(docs, heredoc{p.op, body, pos, p.quoted})
 						if end < 0 {
 							pos = len(s)
 						} else {
@@ -2014,7 +2018,7 @@ func scanShell(s string) shellScan {
 						break
 					}
 					if end < 0 {
-						docs = append(docs, heredoc{p.op, body, len(s)})
+						docs = append(docs, heredoc{p.op, body, len(s), p.quoted})
 						pos = len(s)
 						break
 					}

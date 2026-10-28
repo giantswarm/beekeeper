@@ -16,6 +16,8 @@ const (
 	codexApplyPatchTool = "apply_patch"
 	codexWriteStdinTool = "write_stdin"
 	codexViewImageTool  = "view_image"
+	codexUpdatePlanTool = "update_plan"
+	codexCmdKey         = "cmd"
 	codexCharsKey       = "chars"
 	codexPatchKey       = "pa" + "tch"
 	codexInputKey       = "input"
@@ -75,11 +77,69 @@ func DenyCodex(reason string) []byte {
 	})
 }
 
-var patchHeaderRe = regexp.MustCompile(`(?m)^\*\*\* (Add File|Update File|Delete File|Move to): (.+)$`)
+type codexPatchHeader struct {
+	op     string
+	target string
+}
+
+var patchHeaderLineRe = regexp.MustCompile(`^\*\*\* (Add File|Update File|Delete File|Move to): (.+)$`)
+
+// parseCodexPatchHeaders trims each line of patch (matching Codex's own
+// apply_patch line parser), validates every `***` header line, and returns the
+// file headers or a non-empty refusal reason.
+func parseCodexPatchHeaders(patch string) ([]codexPatchHeader, string) {
+	var headers []codexPatchHeader
+	for line := range strings.SplitSeq(patch, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "***") {
+			continue
+		}
+		switch trimmed {
+		case "*** Begin Patch", "*** End Patch", "*** End of File":
+			continue
+		}
+		m := patchHeaderLineRe.FindStringSubmatch(trimmed)
+		if m == nil {
+			return nil, "Refused: apply_patch call contains an unrecognized or malformed `***` header line; failing closed."
+		}
+		target := strings.TrimSpace(m[2])
+		if target == "" {
+			return nil, "Refused: apply_patch call contains an empty file header; failing closed."
+		}
+		headers = append(headers, codexPatchHeader{
+			op:     m[1],
+			target: target,
+		})
+	}
+	if len(headers) == 0 {
+		return nil, "Refused: apply_patch call names no file header; failing closed."
+	}
+	return headers, ""
+}
+
+func isCodexShellTool(toolName string) bool {
+	switch toolName {
+	case bashTool, "bash", "exec_command", "shell_command", "shell", "local_shell":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractCodexShellCommand(toolInput map[string]any) (cmd, key string, ok bool) {
+	if s, ok := toolInput[commandKey].(string); ok {
+		return s, commandKey, true
+	}
+	if s, ok := toolInput[codexCmdKey].(string); ok {
+		return s, codexCmdKey, true
+	}
+	return "", "", false
+}
 
 // ValidateCodexInput checks that input is a well-formed Codex PreToolUse JSON
-// object with valid tool_name, tool_input object, and required tool arguments,
-// and contains no NUL bytes. Returns a non-empty refusal reason when invalid.
+// object with hook_event_name == "PreToolUse", valid tool_name, tool_input
+// object, and required tool arguments, and contains no NUL bytes. Returns a
+// non-empty refusal reason when invalid.
 func ValidateCodexInput(input []byte) string {
 	if len(bytes.TrimSpace(input)) == 0 {
 		return codexFailClosedMsg
@@ -91,10 +151,8 @@ func ValidateCodexInput(input []byte) string {
 	if hasNULValue(top) {
 		return "Refused: invalid NUL byte in PreToolUse hook input (ValueError: embedded null byte); failing closed."
 	}
-	if evName, ok := top[hookEventKey]; ok {
-		if s, isStr := evName.(string); !isStr || s != PreToolUseEvent {
-			return codexFailClosedMsg
-		}
+	if s, isStr := top[hookEventKey].(string); !isStr || s != PreToolUseEvent {
+		return codexFailClosedMsg
 	}
 	toolName, ok := top[toolNameKey].(string)
 	if !ok || strings.TrimSpace(toolName) == "" {
@@ -109,28 +167,50 @@ func ValidateCodexInput(input []byte) string {
 			return codexFailClosedMsg
 		}
 	}
-	switch toolName {
-	case bashTool:
-		if _, ok := toolInput[commandKey].(string); !ok {
-			return "Refused: Bash call is missing a string `command` in tool_input; failing closed."
+	switch {
+	case isCodexShellTool(toolName):
+		if _, _, ok := extractCodexShellCommand(toolInput); !ok {
+			return "Refused: " + toolName + " call is missing a string `command` in tool_input; failing closed."
 		}
-	case codexApplyPatchTool:
+	case toolName == codexApplyPatchTool:
 		patch, ok := extractCodexPatch(toolInput)
 		if !ok || strings.TrimSpace(patch) == "" {
 			return "Refused: apply_patch call is missing a patch string in tool_input; failing closed."
 		}
-		if !patchHeaderRe.MatchString(patch) {
-			return "Refused: apply_patch call names no file header; failing closed."
+		if _, reason := parseCodexPatchHeaders(patch); reason != "" {
+			return reason
 		}
-	case codexWriteStdinTool:
+	case toolName == codexWriteStdinTool:
 		if _, ok := toolInput[codexCharsKey].(string); !ok {
 			return "Refused: write_stdin call is missing a string `chars` in tool_input; failing closed."
 		}
-	case codexViewImageTool:
+	case toolName == codexViewImageTool:
 		p, ok := toolInput[pathKey].(string)
 		if !ok || strings.TrimSpace(p) == "" {
 			return "Refused: view_image call is missing a non-empty string `path` in tool_input; failing closed."
 		}
+	case toolName == codexUpdatePlanTool:
+		return ""
+	case toolName == readTool || toolName == writeTool || toolName == editTool || toolName == multiEditTool:
+		p, ok := toolInput[filePathKey].(string)
+		if !ok || strings.TrimSpace(p) == "" {
+			p, ok = toolInput[pathKey].(string)
+		}
+		if !ok || strings.TrimSpace(p) == "" {
+			return "Refused: " + toolName + " call is missing a non-empty file path in tool_input; failing closed."
+		}
+	case toolName == notebookTool:
+		p, ok := toolInput[notebookPathKey].(string)
+		if !ok || strings.TrimSpace(p) == "" {
+			p, ok = toolInput[filePathKey].(string)
+		}
+		if !ok || strings.TrimSpace(p) == "" {
+			return "Refused: NotebookEdit call is missing a non-empty notebook_path in tool_input; failing closed."
+		}
+	case toolName == globTool || toolName == grepTool || toolName == SendMessageTool || toolName == AskTool || toolName == TaskStopTool:
+		return ""
+	default:
+		return "Refused: unrecognized PreToolUse tool_name `" + toolName + "` in Codex hook input; failing closed."
 	}
 	return ""
 }
@@ -189,8 +269,9 @@ func CodexPaths(input []byte) []string {
 	}
 	if ev.ToolName == codexApplyPatchTool {
 		if patch, ok := extractCodexPatch(ev.ToolInput); ok {
-			for _, m := range patchHeaderRe.FindAllStringSubmatch(patch, -1) {
-				t := expandHome(strings.TrimSpace(m[2]))
+			headers, _ := parseCodexPatchHeaders(patch)
+			for _, hdr := range headers {
+				t := expandHome(hdr.target)
 				if !filepath.IsAbs(t) && ev.CWD != "" {
 					t = filepath.Join(expandHome(ev.CWD), t)
 				}
@@ -262,20 +343,29 @@ func codexCWD(rawCWD string) string {
 }
 
 func (h Hook) codexSandboxCheck(ev event) string {
-	switch ev.ToolName {
-	case codexApplyPatchTool:
+	switch {
+	case isCodexShellTool(ev.ToolName):
+		cmd, _, _ := extractCodexShellCommand(ev.ToolInput)
+		synth := ev
+		synth.ToolName = bashTool
+		synth.ToolInput = map[string]any{commandKey: cmd}
+		return h.sandboxRefusal(synth)
+	case ev.ToolName == codexApplyPatchTool:
 		patch, _ := extractCodexPatch(ev.ToolInput)
-		for _, m := range patchHeaderRe.FindAllStringSubmatch(patch, -1) {
-			target := strings.TrimSpace(m[2])
+		headers, reason := parseCodexPatchHeaders(patch)
+		if reason != "" {
+			return reason
+		}
+		for _, hdr := range headers {
 			synth := ev
 			synth.ToolName = writeTool
-			synth.ToolInput = map[string]any{filePathKey: target}
+			synth.ToolInput = map[string]any{filePathKey: hdr.target}
 			if r := h.sandboxRefusal(synth); r != "" {
 				return r
 			}
 		}
 		return ""
-	case codexWriteStdinTool:
+	case ev.ToolName == codexWriteStdinTool:
 		chars, _ := ev.ToolInput[codexCharsKey].(string)
 		if chars == "" {
 			return ""
@@ -284,12 +374,14 @@ func (h Hook) codexSandboxCheck(ev event) string {
 		synth.ToolName = bashTool
 		synth.ToolInput = map[string]any{commandKey: chars}
 		return h.sandboxRefusal(synth)
-	case codexViewImageTool:
+	case ev.ToolName == codexViewImageTool:
 		p, _ := ev.ToolInput[pathKey].(string)
 		synth := ev
 		synth.ToolName = readTool
 		synth.ToolInput = map[string]any{filePathKey: p}
 		return h.sandboxRefusal(synth)
+	case ev.ToolName == codexUpdatePlanTool:
+		return ""
 	default:
 		return h.sandboxRefusal(ev)
 	}
@@ -317,8 +409,8 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 	}
 	ev.CWD = codexCWD(ev.CWD)
 
-	switch ev.ToolName {
-	case codexApplyPatchTool:
+	switch {
+	case ev.ToolName == codexApplyPatchTool:
 		patch, _ := extractCodexPatch(ev.ToolInput)
 		reason, ctx := h.checkCodexApplyPatch(ev, patch, ev.CWD)
 		if reason != "" {
@@ -329,7 +421,7 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 		}
 		return PassCodex()
 
-	case codexWriteStdinTool:
+	case ev.ToolName == codexWriteStdinTool:
 		if r := h.guideRefusal(ev); r != "" {
 			return DenyCodex(r)
 		}
@@ -342,7 +434,7 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 		}
 		return PassCodex()
 
-	case codexViewImageTool:
+	case ev.ToolName == codexViewImageTool:
 		p, _ := ev.ToolInput[pathKey].(string)
 		if r := h.codexPathRefusal(p, ev.CWD, false); r != "" {
 			return DenyCodex(r)
@@ -350,11 +442,17 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 		synth := ev
 		synth.ToolName = readTool
 		synth.ToolInput = map[string]any{filePathKey: p}
-		return h.decideCodexEvent(synth, "")
+		return h.decideCodexEvent(synth, "", "", "")
 
-	case bashTool:
-		origCmd, _ := ev.ToolInput[commandKey].(string)
-		if isPatch, patchReason, patchCtx := h.codexBashPureApplyPatch(ev, origCmd, ev.CWD); isPatch {
+	case ev.ToolName == codexUpdatePlanTool:
+		return PassCodex()
+
+	case isCodexShellTool(ev.ToolName):
+		origCmd, cmdKey, _ := extractCodexShellCommand(ev.ToolInput)
+		synth := ev
+		synth.ToolName = bashTool
+		synth.ToolInput = map[string]any{commandKey: origCmd}
+		if isPatch, patchReason, patchCtx := h.codexBashPureApplyPatch(synth, origCmd, ev.CWD); isPatch {
 			if patchReason != "" {
 				return DenyCodex(patchReason)
 			}
@@ -363,59 +461,71 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 			}
 			return PassCodex()
 		}
-		if r := h.codexBashRefusal(ev, origCmd, ev.CWD); r != "" {
-			return DenyCodex(r)
+		bashReason, bashCtx := h.codexBashRefusal(synth, origCmd, ev.CWD)
+		if bashReason != "" {
+			return DenyCodex(bashReason)
 		}
-		return h.decideCodexEvent(ev, origCmd)
+		return h.decideCodexEvent(synth, origCmd, cmdKey, bashCtx)
 
 	default:
 		if r := h.codexToolPathRefusal(ev); r != "" {
 			return DenyCodex(r)
 		}
-		return h.decideCodexEvent(ev, "")
+		return h.decideCodexEvent(ev, "", "", "")
 	}
 }
 
-func (h Hook) decideCodexEvent(ev event, origCmd string) []byte {
+func (h Hook) decideCodexEvent(ev event, origCmd, cmdKey, extraContext string) []byte {
 	h.freshLabs(ev)
 	raw := h.labProxy(ev, h.decide(ev))
-	if len(raw) == 0 {
-		return PassCodex()
+	var out hookOutput
+	if len(raw) > 0 {
+		var wrapper struct {
+			Output hookOutput `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal(raw, &wrapper); err != nil {
+			return DenyCodex("Refused: failed to decode internal PreToolUse decision; failing closed.")
+		}
+		out = wrapper.Output
+		if out.PermissionDecision == decisionDeny {
+			return DenyCodex(out.Reason)
+		}
 	}
-	var wrapper struct {
-		Output hookOutput `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal(raw, &wrapper); err != nil {
-		return DenyCodex("Refused: failed to decode internal PreToolUse decision; failing closed.")
-	}
-	out := wrapper.Output
-	if out.PermissionDecision == decisionDeny {
-		return DenyCodex(out.Reason)
+	reads := h.repoReads(ev)
+	ctx := out.AdditionalContext
+	for _, add := range []string{extraContext, reads} {
+		if add != "" && !strings.Contains(ctx, add) {
+			ctx = strings.TrimSpace(ctx + "\n\n" + add)
+		}
 	}
 	if ev.ToolName == bashTool && origCmd != "" && out.UpdatedInput != nil {
 		if newCmd, ok := out.UpdatedInput[commandKey].(string); ok && newCmd != "" && newCmd != origCmd {
+			if cmdKey == "" {
+				cmdKey = commandKey
+			}
 			return answerCodex(codexSpecificOutput{
 				PermissionDecision: decisionAllow,
-				Context:            out.AdditionalContext,
-				UpdatedInput:       map[string]any{commandKey: newCmd},
+				Context:            ctx,
+				UpdatedInput:       map[string]any{cmdKey: newCmd},
 			})
 		}
 	}
-	if out.AdditionalContext != "" {
+	if ctx != "" {
 		return answerCodex(codexSpecificOutput{
-			Context: out.AdditionalContext,
+			Context: ctx,
 		})
 	}
 	return PassCodex()
 }
 
 // codexCommandRefusal runs all Bash refusal checks on cmd without returning a
-// command rewrite (used for write_stdin).
+// command rewrite (used for write_stdin and unquoted heredoc command
+// substitutions).
 func (h Hook) codexCommandRefusal(ev event, cmd, cwd string) string {
 	if isPatch, patchReason, _ := h.codexBashPureApplyPatch(ev, cmd, cwd); isPatch {
 		return patchReason
 	}
-	if r := h.codexBashRefusal(ev, cmd, cwd); r != "" {
+	if r, _ := h.codexBashRefusal(ev, cmd, cwd); r != "" {
 		return r
 	}
 	synth := ev
@@ -444,9 +554,9 @@ func (h Hook) checkCodexApplyPatch(ev event, patch, cwd string) (reason, context
 	if r := h.guideRefusal(ev); r != "" {
 		return r, ""
 	}
-	matches := patchHeaderRe.FindAllStringSubmatch(patch, -1)
-	if len(matches) == 0 {
-		return "Refused: apply_patch call names no file header; failing closed.", ""
+	headers, errReason := parseCodexPatchHeaders(patch)
+	if errReason != "" {
+		return errReason, ""
 	}
 	var addedLines strings.Builder
 	for line := range strings.SplitSeq(patch, "\n") {
@@ -457,12 +567,9 @@ func (h Hook) checkCodexApplyPatch(ev event, patch, cwd string) (reason, context
 	}
 	addedContent := addedLines.String()
 
-	for _, m := range matches {
-		op := m[1]
-		target := strings.TrimSpace(m[2])
-		if target == "" {
-			return "Refused: apply_patch call contains an empty file header; failing closed.", ""
-		}
+	for _, hdr := range headers {
+		op := hdr.op
+		target := hdr.target
 		if r := h.codexPathRefusal(target, cwd, true); r != "" {
 			return r, ""
 		}
@@ -498,6 +605,45 @@ func (h Hook) checkCodexApplyPatch(ev event, patch, cwd string) (reason, context
 	return "", context
 }
 
+// heredocSubstitutions extracts command substitutions ($(...), $((...)), and
+// `...`) from an unquoted here-document body, where single and double quotes do
+// not suppress shell expansion (only backslash escapes do).
+func heredocSubstitutions(body string) []string {
+	var out []string
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c == '\\' && i+1 < len(body) {
+			i++
+			continue
+		}
+		if c == '$' && i+1 < len(body) && body[i+1] == '(' {
+			end := findClosingParen(body, i+1)
+			if i+2 < len(body) && body[i+2] == '(' && end > i+3 && body[end-1] == ')' {
+				out = append(out, heredocSubstitutions(body[i+3:end-1])...)
+			} else if end > i+2 && end <= len(body) {
+				out = append(out, body[i+2:end])
+			}
+			i = min(end, len(body))
+			continue
+		}
+		if c == '`' {
+			end := i + 1
+			var inner strings.Builder
+			for end < len(body) && body[end] != '`' {
+				if body[end] == '\\' && end+1 < len(body) && (body[end+1] == '`' || body[end+1] == '\\' || body[end+1] == '$') {
+					end++
+				}
+				inner.WriteByte(body[end])
+				end++
+			}
+			out = append(out, inner.String())
+			i = min(end, len(body))
+			continue
+		}
+	}
+	return out
+}
+
 // codexBashPureApplyPatch checks if a Bash command is a pure
 // `apply_patch <<'EOF' ... EOF` (optionally preceded by `cd <dir> &&`),
 // validating its targets and patch body directly so patching a repository file
@@ -508,25 +654,29 @@ func (h Hook) codexBashPureApplyPatch(ev event, cmd, cwd string) (isPure bool, r
 		return false, "", ""
 	}
 	hd := sc.heredocs[0]
-	if strings.TrimSpace(sc.plain[hd.end:]) != "" {
-		// Check that only the closing delimiter line follows hd.end.
-		tail := strings.TrimSpace(cmd[hd.end:])
-		if strings.Contains(tail, "\n") {
-			return false, "", ""
-		}
-	}
-	head := strings.TrimSpace(sc.plain[:hd.op])
-	if strings.ContainsAny(head, "|;()`$<>") {
+	if hd.op < 0 || hd.start <= hd.op || hd.end < hd.start || hd.end > len(cmd) {
 		return false, "", ""
 	}
-	segs := sc.segments()
+	m := heredocOp.FindStringSubmatch(cmd[hd.op : hd.start-1])
+	if m == nil || strings.TrimSpace(sc.plain[hd.op+len(m[0]):hd.start-1]) != "" {
+		return false, "", ""
+	}
+	if strings.Contains(strings.TrimSpace(cmd[hd.end:]), "\n") {
+		return false, "", ""
+	}
+	head := strings.TrimSpace(sc.plain[:hd.op])
+	if head == "" || strings.ContainsAny(head, "|;()`$<>") {
+		return false, "", ""
+	}
+	headSc := scanShell(head)
+	segs := headSc.segments()
 	if len(segs) == 0 || len(segs) > 2 {
 		return false, "", ""
 	}
 	patchCWD := cwd
 	switch len(segs) {
 	case 1:
-		w := shellWords(sc.plain[segs[0].start:segs[0].end])
+		w := shellWords(headSc.plain[segs[0].start:segs[0].end])
 		if len(w) != 1 || w[0] != codexApplyPatchTool {
 			return false, "", ""
 		}
@@ -534,18 +684,26 @@ func (h Hook) codexBashPureApplyPatch(ev event, cmd, cwd string) (isPure bool, r
 		if segs[0].after != "&&" {
 			return false, "", ""
 		}
-		w0 := shellWords(sc.plain[segs[0].start:segs[0].end])
-		w1 := shellWords(sc.plain[segs[1].start:segs[1].end])
+		w0 := shellWords(headSc.plain[segs[0].start:segs[0].end])
+		w1 := shellWords(headSc.plain[segs[1].start:segs[1].end])
 		if len(w0) != 2 || w0[0] != "cd" || len(w1) != 1 || w1[0] != codexApplyPatchTool {
 			return false, "", ""
 		}
-		states := walkSegments(sc, cwd, h.Upstream.Git != nil)
+		states := walkSegments(headSc, cwd, h.Upstream.Git != nil)
 		if len(states) < 2 || !states[1].known || states[1].dir == "" {
 			return true, "Refused: apply_patch after an unfollowed `cd` has an unknown working directory; failing closed.", ""
 		}
 		patchCWD = states[1].dir
 	}
 	patchBody := cmd[hd.start:hd.end]
+	if !hd.quoted {
+		for _, sub := range heredocSubstitutions(patchBody) {
+			if r := h.codexCommandRefusal(ev, sub, patchCWD); r != "" {
+				return true, r, ""
+			}
+		}
+		return true, "Refused: apply_patch heredoc delimiter must be quoted (<<'EOF') so shell command substitutions cannot run inside the patch body.", ""
+	}
 	r, ctx := h.checkCodexApplyPatch(ev, patchBody, patchCWD)
 	return true, r, ctx
 }
@@ -764,10 +922,19 @@ var (
 
 // codexBashRefusal checks a Bash command for writes/redirections/modifications
 // to guarded Codex homes ($CODEX_HOME and ~/.codex), secret files via symlinked
-// paths, inline apply_patch commands, and option/redirection abuse on exempted
-// beekeeper text commands.
-func (h Hook) codexBashRefusal(ev event, cmd, cwd string) string {
+// paths, inline apply_patch commands, unquoted heredoc command substitutions,
+// and option/redirection abuse on exempted beekeeper text commands.
+func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context string) {
 	rawSc := scanShell(cmd)
+	for _, hd := range rawSc.heredocs {
+		if !hd.quoted && hd.start <= hd.end && hd.end <= len(cmd) {
+			for _, sub := range heredocSubstitutions(cmd[hd.start:hd.end]) {
+				if r := h.codexCommandRefusal(ev, sub, cwd); r != "" {
+					return r, ""
+				}
+			}
+		}
+	}
 	outerPlain, inners, _ := opaquePlain(rawSc.plain)
 	sc := scanShell(outerPlain)
 	sc.heredocs = rawSc.heredocs
@@ -776,8 +943,12 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) string {
 	states := walkSegments(sc, cwd, h.Upstream.Git != nil)
 
 	for _, in := range inners {
-		if r := h.codexBashRefusal(ev, in, cwd); r != "" {
-			return r
+		r, ctx := h.codexBashRefusal(ev, in, cwd)
+		if r != "" {
+			return r, ""
+		}
+		if context == "" {
+			context = ctx
 		}
 	}
 
@@ -792,10 +963,10 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) string {
 			}
 			isWrite := strings.Contains(op, ">")
 			if r := h.codexPathRefusal(target, st.dir, isWrite); r != "" {
-				return r
+				return r, ""
 			}
 			if !isWrite && (isGuardedCodexHomePath(target, st.dir) || containsGuardedCodexHomeRef(target)) {
-				return codexHomeRefusalMsg
+				return codexHomeRefusalMsg, ""
 			}
 		}
 
@@ -804,18 +975,22 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) string {
 			continue
 		}
 		for _, words := range expandWordsList(rawWords, vars) {
-			if r := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known); r != "" {
-				return r
+			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known)
+			if r != "" {
+				return r, ""
+			}
+			if context == "" {
+				context = ctx
 			}
 		}
 	}
-	return ""
+	return "", context
 }
 
-func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool) string {
+func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool) (reason, context string) {
 	c := commandAt(words)
 	if c >= len(words) {
-		return ""
+		return "", ""
 	}
 	name := path.Base(words[c])
 	args := words[c+1:]
@@ -823,27 +998,39 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	// Check command word itself against guarded codex homes.
 	if (strings.Contains(words[c], "/") || strings.Contains(words[c], "~") || strings.Contains(words[c], "$")) &&
 		isGuardedCodexHomePath(words[c], dir) {
-		return codexHomeRefusalMsg
+		return codexHomeRefusalMsg, ""
 	}
 
 	// If apply_patch is invoked inside a non-pure Bash command line, validate
 	// its heredoc body and known directory or fail closed.
 	if name == codexApplyPatchTool {
 		if !known || dir == "" {
-			return "Refused: apply_patch after an unfollowed `cd` has an unknown working directory; failing closed."
+			return "Refused: apply_patch after an unfollowed `cd` has an unknown working directory; failing closed.", ""
 		}
 		sg := segs[segIdx]
 		foundHeredoc := false
 		for _, hd := range sc.heredocs {
 			if hd.op >= sg.start && hd.op < sg.end {
 				foundHeredoc = true
-				if r, _ := h.checkCodexApplyPatch(ev, cmd[hd.start:hd.end], dir); r != "" {
-					return r
+				if !hd.quoted {
+					for _, sub := range heredocSubstitutions(cmd[hd.start:hd.end]) {
+						if r := h.codexCommandRefusal(ev, sub, dir); r != "" {
+							return r, ""
+						}
+					}
+					return "Refused: apply_patch heredoc delimiter must be quoted (<<'EOF') so shell command substitutions cannot run inside the patch body.", ""
+				}
+				r, ctx := h.checkCodexApplyPatch(ev, cmd[hd.start:hd.end], dir)
+				if r != "" {
+					return r, ""
+				}
+				if context == "" {
+					context = ctx
 				}
 			}
 		}
 		if !foundHeredoc {
-			return "Refused: apply_patch in Bash without an inline heredoc patch cannot be verified; failing closed."
+			return "Refused: apply_patch in Bash without an inline heredoc patch cannot be verified; failing closed.", ""
 		}
 	}
 
@@ -866,14 +1053,14 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 			}
 			if optVal == unknownMarker || strings.Contains(optVal, unknownMarker) ||
 				isGuardedCodexHomePath(optVal, dir) || containsGuardedCodexHomeRef(optVal) {
-				return codexHomeRefusalMsg
+				return codexHomeRefusalMsg, ""
 			}
 			if r := h.codexPathRefusal(optVal, dir, false); r != "" {
-				return r
+				return r, ""
 			}
 			for _, pf := range h.PersonFolders {
 				if isUnderDir(wordPath(optVal, dir), expandHome(pf)) {
-					return "Refused: `" + a + "` names a protected folder."
+					return "Refused: `" + a + "` names a protected folder.", ""
 				}
 			}
 		}
@@ -889,7 +1076,7 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 				continue
 			}
 			if r := h.codexPathRefusal(a, dir, true); r != "" {
-				return r
+				return r, ""
 			}
 		}
 	}
@@ -898,21 +1085,21 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	if name == sourceCmd || name == "." {
 		for _, a := range args {
 			if !strings.HasPrefix(a, "-") && isGuardedCodexHomePath(a, dir) {
-				return codexHomeRefusalMsg
+				return codexHomeRefusalMsg, ""
 			}
 		}
 	}
 	if interpreters[name].code != nil || len(interpreters[name].file) > 0 {
 		for _, a := range args {
 			if isGuardedCodexHomePath(a, dir) || containsGuardedCodexHomeRef(a) {
-				return codexHomeRefusalMsg
+				return codexHomeRefusalMsg, ""
 			}
 		}
 	}
 	if shells[name] || name == evalCmd {
 		for _, a := range args {
 			if isGuardedCodexHomePath(a, dir) {
-				return codexHomeRefusalMsg
+				return codexHomeRefusalMsg, ""
 			}
 		}
 	}
@@ -929,11 +1116,11 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 				continue
 			}
 			if r := h.codexPathRefusal(a, dir, false); r != "" {
-				return r
+				return r, ""
 			}
 		}
 	}
-	return ""
+	return "", context
 }
 
 func isBeekeeperTextSubcommand(name string, args []string) bool {

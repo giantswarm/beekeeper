@@ -999,6 +999,25 @@ func TestCodexHooksAndSkills(t *testing.T) {
 		t.Errorf("after update: CheckCodexHooks = %q, want empty", got)
 	}
 
+	// Stale "*" matcher or narrowed "Bash" matcher is flagged by CheckCodexHooks and fixed by Install.
+	for _, badMatcher := range []string{"*", "Bash"} {
+		write(t, e.CodexHooks, `{"hooks":{"PreToolUse":[{"matcher":"`+badMatcher+`","hooks":[{"type":"command","command":"`+updatedExe+` hook pretooluse --format codex","timeout":30}]}]}}`)
+		if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); !strings.Contains(got, "differs from what install writes") {
+			t.Errorf("matcher %q: CheckCodexHooks = %q, want differs from what install writes", badMatcher, got)
+		}
+		if err := Install(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+		if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); got != "" {
+			t.Errorf("after fixing matcher %q: CheckCodexHooks = %q, want empty", badMatcher, got)
+		}
+	}
+	// Restore priorCodexHooks plus the installed entry before testing uninstall.
+	write(t, e.CodexHooks, priorCodexHooks)
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+
 	// Uninstall removes beekeeper's hook and skill links while preserving other-codex-hook and custom-user-skill.
 	if err := Uninstall(context.Background(), e, false); err != nil {
 		t.Fatal(err)
@@ -1015,5 +1034,26 @@ func TestCodexHooksAndSkills(t *testing.T) {
 	}
 	if exists(skillsDir) {
 		t.Errorf("uninstall left skillsDir %s", skillsDir)
+	}
+
+	// When both Agy and Codex skills share <stateDir>/skills, uninstalling Codex
+	// skills while Agy still uses <stateDir>/skills preserves <stateDir>/skills.
+	e.AgySkills = filepath.Join(home, ".gemini", "config", "skills.json")
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(skillsDir) {
+		t.Fatalf("Install did not create shared skillsDir %s", skillsDir)
+	}
+	eCodexOnly := e
+	eCodexOnly.AgySkills = ""
+	if err := Uninstall(context.Background(), eCodexOnly, false); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(skillsDir) {
+		t.Errorf("uninstalling Codex skills deleted shared skillsDir %s while Agy still uses it", skillsDir)
+	}
+	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); got != "" {
+		t.Errorf("Agy skills broken after Codex-only uninstall: %q", got)
 	}
 }

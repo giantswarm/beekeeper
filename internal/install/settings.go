@@ -577,8 +577,11 @@ func (e Env) planAgyUnskills(p *plan, m Manifest, removed map[string]bool, purge
 	if len(m.AgySkills) == 0 && m.AgySkillsDir == "" {
 		return nil
 	}
+	codexStillUses := func() bool {
+		return m.CodexSkillsDir == m.AgySkillsDir && (e.CodexSkills != "" || CheckCodexSkills(filepath.Join(e.Spec.Home, ".codex", "skills"), e.StateDir, e.Spec.Home) == "")
+	}
 	rmDir := func() error {
-		if m.AgySkillsDir == "" || purge || m.CodexSkillsDir == m.AgySkillsDir {
+		if m.AgySkillsDir == "" || purge || codexStillUses() {
 			return nil
 		}
 		return os.RemoveAll(m.AgySkillsDir)
@@ -707,26 +710,26 @@ func CodexHook(exe string) json.RawMessage {
 	return bytes.TrimSpace(b.Bytes())
 }
 
-// codexHookBinary returns the binary path and timeout of a Codex PreToolUse
-// entry that runs "<exe> hook pretooluse --format codex", or ("", 0) when raw
-// is not such an entry.
-func codexHookBinary(raw json.RawMessage) (string, int) {
+// codexHookBinary returns the binary path, matcher and timeout of a Codex
+// PreToolUse entry that runs "<exe> hook pretooluse --format codex", or
+// ("", "", 0) when raw is not such an entry.
+func codexHookBinary(raw json.RawMessage) (bin, matcher string, timeout int) {
 	var e hookEntry
 	if json.Unmarshal(raw, &e) != nil || len(e.Hooks) != 1 || e.Hooks[0].Type != hookTypeCommand {
-		return "", 0
+		return "", "", 0
 	}
 	f := strings.Fields(e.Hooks[0].Command)
 	if len(f) == 5 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format" && f[4] == "codex" {
-		return strings.Trim(f[0], `'"`), e.Hooks[0].Timeout
+		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
 	}
 	if len(f) == 4 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format=codex" {
-		return strings.Trim(f[0], `'"`), e.Hooks[0].Timeout
+		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
 	}
-	return "", 0
+	return "", "", 0
 }
 
 func isBeekeeperCodexHook(raw json.RawMessage) bool {
-	bin, _ := codexHookBinary(raw)
+	bin, _, _ := codexHookBinary(raw)
 	return filepath.Base(bin) == project.Name
 }
 
@@ -788,7 +791,7 @@ func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]strin
 		if sameJSON(r, want) || len(m.CodexHook) > 0 && sameJSON(r, m.CodexHook) {
 			return true
 		}
-		bin, _ := codexHookBinary(r)
+		bin, _, _ := codexHookBinary(r)
 		return bin == e.Exe
 	})
 	otherIdx := slices.IndexFunc(list, isBeekeeperCodexHook)
@@ -910,11 +913,11 @@ func CheckCodexHooks(path, exe, home string) string {
 		return ""
 	}
 	for _, r := range list {
-		gotExe, timeout := codexHookBinary(r)
+		gotExe, matcher, timeout := codexHookBinary(r)
 		if gotExe == "" {
 			continue
 		}
-		if timeout <= 0 {
+		if timeout <= 0 || (matcher != ".*" && matcher != "") {
 			return fmt.Sprintf("codex hooks: %s: the %s PreToolUse hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
 		}
 		if exe != "" && gotExe != exe {
@@ -1049,7 +1052,7 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 }
 
 // planCodexUnskills removes the skill symlinks install added under
-// e.CodexSkills (and the unpacked skills directory if not shared).
+// e.CodexSkills (and the unpacked skills directory if not shared with Agy).
 func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, purge bool) error {
 	if len(m.CodexSkillLinks) == 0 && m.CodexSkillsDir == "" {
 		return nil
@@ -1061,13 +1064,16 @@ func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, pur
 			removed[dst] = true
 		}
 	}
+	agyStillUses := func() bool {
+		return m.CodexSkillsDir == m.AgySkillsDir && (e.AgySkills == "" || CheckAgySkills(e.AgySkills, e.StateDir, e.Spec.Home) == "")
+	}
 	rmDir := func() error {
 		for _, dst := range toRemove {
 			if err := os.Remove(dst); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
 		}
-		if m.CodexSkillsDir != "" && !purge {
+		if m.CodexSkillsDir != "" && !purge && !agyStillUses() {
 			return os.RemoveAll(m.CodexSkillsDir)
 		}
 		return nil
@@ -1080,7 +1086,7 @@ func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, pur
 		p.add("remove", what+": "+project.Name+" skills", "", rmDir)
 		return nil
 	}
-	if m.CodexSkillsDir != "" && !purge && exists(m.CodexSkillsDir) {
+	if m.CodexSkillsDir != "" && !purge && !agyStillUses() && exists(m.CodexSkillsDir) {
 		p.add("remove", m.CodexSkillsDir, "", rmDir)
 	}
 	return nil
