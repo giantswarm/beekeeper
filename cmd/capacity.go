@@ -844,8 +844,9 @@ func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, 
 func normalizeExcludes(exclude []string) []string {
 	var out []string
 	for _, raw := range exclude {
+		raw = strings.Trim(strings.TrimSpace(raw), "[]")
 		for _, part := range strings.Split(raw, ",") {
-			if s := strings.TrimSpace(part); s != "" {
+			if s := strings.Trim(strings.TrimSpace(part), "[]"); s != "" {
 				out = append(out, s)
 			}
 		}
@@ -1014,8 +1015,16 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 }
 
 func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, review bool) *capacityView {
-	c := countAgents(st, sessions, a.now)
-	pa := countProviderAgents(st, sessions, k, a.now)
+	return a.resolveProvidersCapacityForModel(ctx, st, sessions, k, builds, exclude, review, "")
+}
+
+func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, review bool, wantModel string) *capacityView {
+	now := a.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	c := countAgents(st, sessions, now)
+	pa := countProviderAgents(st, sessions, k, now)
 	readings := make(map[string]providerReadingResult, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
@@ -1026,7 +1035,7 @@ func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, ses
 		readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
 	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
-	return buildProvidersCapacity(c, pa, k, readings, h, builds, exclude, review, a.now)
+	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, review, now)
 }
 
 // withUsage attaches u to v and replaces or prepends the usage block when
@@ -1144,6 +1153,9 @@ func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapRea
 
 // watchSwap is the watch's latest swap reading, nil when none is fresh.
 func (a *app) watchSwap() *swapReading {
+	if a.store == nil {
+		return nil
+	}
 	var r swapReading
 	if found, err := a.store.ReadFile(swapFile, &r); err != nil || !found || a.now.Sub(r.At) > swapFresh {
 		return nil
@@ -1228,7 +1240,7 @@ nothing; it makes no GitHub call.`,
 			}
 			liveCap := a.liveCapacity()
 			var v *capacityView
-			if len(liveCap.Providers) > 0 {
+			if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop)
 			} else {
 				c := countAgents(st, sessions, a.now)
@@ -1304,7 +1316,13 @@ func gateStart(v *capacityView, force bool) (string, error) {
 // explicit, and judges it (queueStart).
 func (a *app) startGateWithOptions(ctx context.Context, name, harness, model string, builds, force bool, exclude []string, review bool) (string, *capacityView, error) {
 	effModel := a.effectiveStartModel(harness, model)
-	v, err := a.startCapacityWithOptions(ctx, builds, exclude, review)
+	readCap := func(b bool) (*capacityView, error) {
+		if harness == harnessAuto {
+			return a.startCapacityForAuto(ctx, b, exclude, review, model)
+		}
+		return a.startCapacityWithOptions(ctx, b, exclude, review)
+	}
+	v, err := readCap(builds)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1317,7 +1335,7 @@ func (a *app) startGateWithOptions(ctx context.Context, name, harness, model str
 	over, err := queueStart(v, builds, force, wait,
 		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
 		func() (*capacityView, error) {
-			next, err := a.startCapacityWithOptions(ctx, false, exclude, review)
+			next, err := readCap(false)
 			if err == nil {
 				next = next.forTarget(a.liveCapacity(), harness, effModel)
 				latest = next
@@ -1466,6 +1484,10 @@ func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, er
 }
 
 func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude []string, review bool) (*capacityView, error) {
+	return a.startCapacityForAuto(ctx, builds, exclude, review, "")
+}
+
+func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []string, review bool, wantModel string) (*capacityView, error) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, err
@@ -1475,12 +1497,34 @@ func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude
 		return nil, err
 	}
 	liveCap := a.liveCapacity()
-	if len(liveCap.Providers) > 0 {
-		return a.resolveProvidersCapacity(ctx, st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop), nil
+	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
+		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, review, wantModel).stopped(a, st.Stop), nil
 	}
 	c := countAgents(st, sessions, a.now)
 	k, u := a.resolveUsage(ctx, liveCap)
 	return newCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds).withUsage(u, a.now).stopped(a, st.Stop), nil
+}
+
+func choicesHaveModel(choices []config.Choice, model string) bool {
+	m := strings.TrimSpace(model)
+	return slices.ContainsFunc(choices, func(ch config.Choice) bool {
+		return strings.EqualFold(strings.TrimSpace(ch.Model), m)
+	})
+}
+
+func filterChoiceModel(k config.Capacity, model string) config.Capacity {
+	m := strings.TrimSpace(model)
+	if m == "" || len(k.Choices) == 0 {
+		return k
+	}
+	var filtered []config.Choice
+	for _, ch := range k.Choices {
+		if strings.EqualFold(strings.TrimSpace(ch.Model), m) {
+			filtered = append(filtered, ch)
+		}
+	}
+	k.Choices = filtered
+	return k
 }
 
 // onlySlot reports whether the busy build slot alone stops the start.

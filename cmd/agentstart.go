@@ -106,7 +106,7 @@ func screenLocked() bool { return screenLocker() != "" }
 var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
-	var nameFlag, model, dir, task, harness, mode string
+	var nameFlag, model, dir, task, harness, mode, choiceLine string
 	var exclude []string
 	var desktop, builds, force, dryRun, review bool
 	c := &cobra.Command{
@@ -280,8 +280,14 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
-			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
-				return usageErr("--harness auto: no capacity.choices configured")
+			if harness == harnessAuto {
+				choices := a.liveCapacity().Choices
+				if len(choices) == 0 {
+					return usageErr("--harness auto: no capacity.choices configured")
+				}
+				if m := strings.TrimSpace(model); m != "" && !choicesHaveModel(choices, m) {
+					return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
+				}
 			}
 			if _, err := a.startMode(mode); err != nil {
 				return err
@@ -297,11 +303,6 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					return usageErr("an agy agent needs its model: --model (agy models lists them)")
 				}
 			}
-			// an omp agent whose provider's key is in the vault starts where
-			// the vault session is: the host's broker
-			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
-				return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
-			}
 			// a sandboxed session's start reads its brief and gives the
 			// agent its directory through the broker, within its own lists
 			if err := a.sandboxPaths([]string{briefFile}, []string{dir}); err != nil {
@@ -310,6 +311,14 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			brief, err := readBrief(briefFile)
 			if err != nil {
 				return err
+			}
+			// an omp agent whose provider's key is in the vault starts where
+			// the vault session is: the host's broker
+			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
+				if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
+					return err
+				}
+				return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
 			}
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
@@ -322,7 +331,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					}
 				}
 				if harness == harnessAuto {
-					v, err := a.startCapacityWithOptions(cmd.Context(), builds, exclude, review)
+					v, err := a.startCapacityForAuto(cmd.Context(), builds, exclude, review, model)
 					if err != nil {
 						return err
 					}
@@ -337,9 +346,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 						return err
 					}
 					harness = ch.Harness
-					if model == "" {
-						model = ch.Model
-					}
+					model = ch.Model
 				}
 				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
 				h, _ := harnessByName(harness)
@@ -359,15 +366,24 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				if err := validateStartHarness(ch.Harness, mode); err != nil {
 					return err
 				}
-				if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
+				if err := a.preflightStartTarget(cmd.Context(), ch.Harness, ch.Model, dir); err != nil {
 					return err
 				}
-				harness = ch.Harness
-				if model == "" {
-					model = ch.Model
-				}
-				if harness == omp.Harness && a.ompStartBrokered(model) {
+				if ch.Harness == omp.Harness && a.ompStartBrokered(ch.Model) {
+					if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.line()); err != nil {
+						return err
+					}
 					return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
+				}
+				harness = ch.Harness
+				model = ch.Model
+				choiceLine = ch.line()
+			} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
+				return err
+			}
+			if choiceLine != "" {
+				if _, err := fmt.Fprintf(a.out, "choice: %s\n", choiceLine); err != nil {
+					return err
 				}
 			}
 			if over != "" {
@@ -406,6 +422,8 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
 	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
+	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
+	_ = c.Flags().MarkHidden("choice")
 	return c
 }
 
@@ -426,7 +444,83 @@ func validateStartHarness(harness, mode string) error {
 	return nil
 }
 
+func forwardBrokeredChoice(cmd *cobra.Command, harness, model string, choiceLine ...string) error {
+	if err := cmd.Flags().Set("harness", harness); err != nil {
+		return err
+	}
+	if err := cmd.Flags().Set("model", model); err != nil {
+		return err
+	}
+	if len(choiceLine) > 0 && choiceLine[0] != "" && cmd.Flags().Lookup("choice") != nil {
+		return cmd.Flags().Set("choice", choiceLine[0])
+	}
+	return nil
+}
+
+func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir string) error {
+	switch harness {
+	case harnessAgy:
+		resolvedDir, err := a.agentDir(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		bin, err := exec.LookPath(agy.Comm)
+		if err != nil {
+			return err
+		}
+		_, err = agyModel(model, func() ([]string, error) { return agyModels(ctx, bin) })
+		return err
+	case omp.Harness:
+		resolvedDir, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		bin, err := exec.LookPath(omp.Comm)
+		if err != nil {
+			return err
+		}
+		m, err := ompModel(model, a.cfg.Omp.Model, func() ([]string, error) { return ompModels(ctx, bin) })
+		if err != nil {
+			return err
+		}
+		_, err = a.ompCredentials(m)
+		return err
+	case codex.Harness:
+		resolvedDir, err := a.agentDir(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		if _, err := a.codexModel(model); err != nil {
+			return err
+		}
+		_, err = exec.LookPath(codex.Comm)
+		return err
+	default:
+		resolvedDir, err := a.agentDir(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		_, err = exec.LookPath(claudeComm)
+		return err
+	}
+}
+
 func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
+	if v != nil && v.Stopped != "" {
+		return nil, refused("%s", v.verdict())
+	}
 	if v != nil && v.Choice != nil && v.Choice.Harness != "" && v.Choice.Model != "" {
 		return v.Choice, nil
 	}

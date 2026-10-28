@@ -550,11 +550,15 @@ func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capac
 }
 
 func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (usageReading, error) {
+	now := a.now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	var cached usageReading
 	var haveCached bool
 	if a.store != nil {
-		if found, err := a.store.ReadFile(file, &cached); err == nil && found && validateReadingAt(cached, u, a.now) == nil {
-			if usageFresh(cached, u, a.now) {
+		if found, err := a.store.ReadFile(file, &cached); err == nil && found && validateReadingAt(cached, u, now) == nil {
+			if usageFresh(cached, u, now) {
 				return cached, nil
 			}
 			haveCached = true
@@ -562,14 +566,14 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	}
 	r, err := a.execUsage(ctx, u)
 	if err == nil {
-		r.At = a.now.UTC()
-		err = validateReadingAt(r, u, a.now)
+		r.At = now.UTC()
+		err = validateReadingAt(r, u, now)
 	}
 	if err != nil {
 		if haveCached && inSandbox() {
 			grace := u
 			grace.Every = config.Duration{Duration: 2 * u.EffectiveEvery()}
-			if usageFresh(cached, grace, a.now) {
+			if usageFresh(cached, grace, now) {
 				return cached, nil
 			}
 		}

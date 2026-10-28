@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -179,24 +180,156 @@ func (a *app) ompNeedsVault(model string) bool {
 }
 
 // ompStartNeedsVault reports whether a brokered agents start, by its
-// arguments (start --harness=omp [--model=m] …), reads the vault.
+// arguments (start --harness=omp|auto [--model=m] [--exclude=e] …), reads the
+// vault.
 func (a *app) ompStartNeedsVault(args []string) bool {
 	if len(args) == 0 || args[0] != agentStartName {
 		return false
 	}
-	var harness, model string
-	for _, arg := range args[1:] {
+	f := parseStartArgsForVault(args)
+	switch f.harness {
+	case omp.Harness:
+		return a.ompNeedsVault(f.model)
+	case harnessAuto:
+		return a.autoStartNeedsVault(f)
+	}
+	return false
+}
+
+type startVaultFlags struct {
+	harness    string
+	model      string
+	excludes   []string
+	review     bool
+	builds     bool
+	force      bool
+	scratchCfg string
+}
+
+func parseStartArgsForVault(args []string) startVaultFlags {
+	var f startVaultFlags
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
 			break
 		}
-		if v, ok := strings.CutPrefix(arg, "--harness="); ok {
-			harness = v
-		}
-		if v, ok := strings.CutPrefix(arg, modelFlag+"="); ok {
-			model = v
+		switch {
+		case strings.HasPrefix(arg, "--harness="):
+			f.harness = strings.TrimPrefix(arg, "--harness=")
+		case arg == "--harness" && i+1 < len(args):
+			i++
+			f.harness = args[i]
+		case strings.HasPrefix(arg, modelFlag+"="):
+			f.model = strings.TrimPrefix(arg, modelFlag+"=")
+		case arg == modelFlag && i+1 < len(args):
+			i++
+			f.model = args[i]
+		case strings.HasPrefix(arg, "--exclude="):
+			f.excludes = append(f.excludes, strings.Trim(strings.TrimPrefix(arg, "--exclude="), "[]"))
+		case arg == "--exclude" && i+1 < len(args):
+			i++
+			f.excludes = append(f.excludes, strings.Trim(args[i], "[]"))
+		case arg == "--review" || arg == "--review=true":
+			f.review = true
+		case arg == "--builds" || arg == "--builds=true":
+			f.builds = true
+		case arg == "--force" || arg == "--force=true":
+			f.force = true
+		case strings.HasPrefix(arg, "--config="):
+			f.scratchCfg = strings.TrimPrefix(arg, "--config=")
+		case arg == "--config" && i+1 < len(args):
+			i++
+			f.scratchCfg = args[i]
 		}
 	}
-	return harness == omp.Harness && a.ompNeedsVault(model)
+	return f
+}
+
+func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
+	target := *a
+	if target.now.IsZero() {
+		target.now = time.Now()
+	}
+	if f.scratchCfg != "" {
+		if !filepath.IsAbs(f.scratchCfg) {
+			return false
+		}
+		p := target.sandboxPolicy()
+		cwd, err := os.Getwd()
+		if err != nil || target.sandboxPaths([]string{f.scratchCfg}, nil) != nil || !p.Readable(f.scratchCfg, cwd) {
+			return false
+		}
+		c, err := config.Load(f.scratchCfg)
+		if err != nil {
+			return false
+		}
+		if target.sandboxPaths(nil, []string{c.StateDir, c.LeaseDir}) != nil ||
+			(c.StateDir != "" && !p.Writable(c.StateDir, cwd)) ||
+			(c.LeaseDir != "" && !p.Writable(c.LeaseDir, cwd)) {
+			return false
+		}
+		cfgCopy := *a.cfg
+		cfgCopy.StateDir, cfgCopy.LeaseDir = c.StateDir, c.LeaseDir
+		target.cfg = &cfgCopy
+		target.store = nil
+		if fi, err := os.Stat(c.StateDir); err == nil && fi.IsDir() {
+			if stStore, err := state.Open(c.StateDir); err == nil {
+				target.store = stStore
+			}
+		}
+	}
+	k := target.liveCapacity()
+	if len(k.Choices) == 0 {
+		return false
+	}
+	wantModel := strings.TrimSpace(f.model)
+	if wantModel != "" && !choicesHaveModel(k.Choices, wantModel) {
+		return false
+	}
+	choicesCap := filterChoiceModel(k, wantModel)
+	if len(k.Providers) > 0 {
+		st := &state.State{}
+		if target.store != nil {
+			if s, err := target.store.Peek(); err == nil {
+				st = s
+			}
+		}
+		sessions, _, _ := target.sessions()
+		c := countAgents(st, sessions, target.now)
+		pa := countProviderAgents(st, sessions, k, target.now)
+		readings := make(map[string]providerReadingResult, len(k.Providers))
+		for _, name := range k.ProviderNames() {
+			p := k.Providers[name]
+			if !p.Enabled() {
+				continue
+			}
+			r, err := target.resolveReading(context.Background(), usageProviderFile(name), p.Usage)
+			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+		}
+		h := &headroom{
+			AvailableMiB:     max(64<<10, k.AvailMinMiB+1024),
+			AvailMinMiB:      k.AvailMinMiB,
+			SwapGrowthMaxMiB: k.SwapGrowthMaxMiB,
+			PSIMax:           k.SwapPSIMax,
+			LoadMax:          64,
+			Slots:            1,
+			SlotsFree:        1,
+			MaxLabs:          1,
+		}
+		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, f.review, target.now).stopped(&target, st.Stop)
+		ch, err := pickAutoChoice(v, f.force)
+		if err != nil || ch == nil {
+			return false
+		}
+		return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
+	}
+	normEx := normalizeExcludes(f.excludes)
+	for _, ch := range choicesCap.Choices {
+		if !choiceExcluded(ch, normEx, nil) {
+			return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
+		}
+	}
+	return false
 }
 
 // credentialNames are the variables the credentials fill.

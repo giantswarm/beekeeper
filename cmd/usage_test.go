@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -796,6 +797,7 @@ const (
 	testReadClaude  = "read-claude"
 	testExcludeFlag = "--exclude"
 	testHarnessFlag = "--harness"
+	testDryRunFlag  = "--dry-run"
 )
 
 // TestProvidersChoicesPaceMarginExcludeAndMachineGuards exercises per-provider
@@ -1070,6 +1072,81 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		!strings.Contains(outAuto.String(), "its turns run on claude-opus-4-7") {
 		t.Fatalf("agents start --harness auto output:\n%s", outAuto.String())
 	}
+
+	// 8. When claude and agy/Claude are ahead of pace and agy/Gemini is at 82% (>= 80% worker cap):
+	//    - a worker `agents start --harness auto` is refused with ExitRefused naming the choice reasons;
+	//    - `agents start --harness auto --review --exclude claude --exclude claude-opus-4-6-thinking`
+	//      skips the pace check and worker weekly cap and starts the session through the agy harness on gemini-3-1-pro-medium.
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claude7d = 56.0
+	agyClaude7d = 52.0
+	agyGemini7d = 82.0
+	aRefuse, outRefuse := newApp(t0, false)
+	refuseCmd := aRefuse.agentStartCmd()
+	refuseCmd.SilenceErrors = true
+	refuseCmd.SilenceUsage = true
+	refuseCmd.SetArgs([]string{"BlockedWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	err = refuseCmd.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: no choice has room:") ||
+		!strings.Contains(err.Error(), "7d 82% at or past worker cap 80%") || outRefuse.String() != "" {
+		t.Fatalf("worker --harness auto at 82%% gemini: code=%d, err=%v, out=%q", Code(err), err, outRefuse.String())
+	}
+
+	binDir := t.TempDir()
+	fakeAgy := filepath.Join(binDir, harnessAgy)
+	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\necho 'Available models:'\necho '  gemini-3-1-pro-medium'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	origLauncher := plat.Launcher
+	origProcMachine := plat.Machine
+	t.Cleanup(func() {
+		plat.Launcher = origLauncher
+		plat.Machine = origProcMachine
+	})
+	plat.Machine = tableMachine{plat.Machine}
+	plat.Launcher = &agyTestLauncher{
+		onStart: func(u platform.Unit) {
+			go func() {
+				var startID string
+				for _, e := range u.Env {
+					if v, ok := strings.CutPrefix(e, agy.EnvAgent+"="); ok {
+						startID = v
+					}
+				}
+				inbox := agy.InboxPath(cfg.StateDir, startID)
+				logPath := agy.StreamPath(cfg.StateDir, startID)
+				f, oerr := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test FIFO
+				if oerr != nil {
+					return
+				}
+				defer func() { _ = f.Close() }()
+				_, _ = bufio.NewReader(f).ReadString('\n')
+				_, _ = agy.Drain(inbox)
+				stream := `{"event":"init","conversation_id":"conv-review-agy"}` + "\n" +
+					`{"event":"step_update","step_update":{"conversation_id":"conv-review-agy","step_type":"user_input"}}` + "\n"
+				_ = os.WriteFile(logPath, []byte(stream), 0o600)
+			}()
+		},
+	}
+	aRevStart, outRevStart := newApp(t0, false)
+	revCmd := aRevStart.agentStartCmd()
+	revCmd.SilenceErrors = true
+	revCmd.SilenceUsage = true
+	revCmd.SetArgs([]string{"ReviewAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, "--review", testExcludeFlag, claudeComm, testExcludeFlag, testModelOpus46})
+	if err := revCmd.Execute(); err != nil {
+		t.Fatalf("agents start --harness auto --review: %v", err)
+	}
+	if !strings.Contains(outRevStart.String(), "choice: agy / gemini-3-1-pro-medium (provider agy, bucket Gemini Models, review)") ||
+		!strings.Contains(outRevStart.String(), "started ReviewAgy: agy agent agy_") ||
+		!strings.Contains(outRevStart.String(), "on gemini-3-1-pro-medium") {
+		t.Fatalf("agents start --harness auto --review output:\n%s", outRevStart.String())
+	}
 }
 
 // TestExplicitHarnessGateAndAutoHarnessValidation verifies that:
@@ -1262,7 +1339,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdDryAgy := aDryAgy.agentStartCmd()
 	cmdDryAgy.SilenceErrors = true
 	cmdDryAgy.SilenceUsage = true
-	cmdDryAgy.SetArgs([]string{"DryAgy", brief, usageDirFlag, dir, "--dry-run", testHarnessFlag, harnessAuto})
+	cmdDryAgy.SetArgs([]string{"DryAgy", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto})
 	if err := cmdDryAgy.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking agy: %v", err)
 	}
@@ -1289,29 +1366,65 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	aAutoAgyBadModel, _ := newApp()
+	evsBeforeBad, err := store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aAutoAgyBadModel, outAutoAgyBadModel := newApp()
 	cmdAutoAgyBadModel := aAutoAgyBadModel.agentStartCmd()
 	cmdAutoAgyBadModel.SilenceErrors = true
 	cmdAutoAgyBadModel.SilenceUsage = true
-	cmdAutoAgyBadModel.SetArgs([]string{"AutoAgyBadModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	cmdAutoAgyBadModel.SetArgs([]string{"AutoAgyBadModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, usageForceFlag})
 	err = cmdAutoAgyBadModel.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), `agy lists no model "gemini-3-1-pro-medium"`) {
 		t.Fatalf("--harness auto picking agy unlisted model: code=%d, err=%v", Code(err), err)
 	}
+	if outAutoAgyBadModel.String() != "" {
+		t.Fatalf("--harness auto unlisted model printed output before refusing:\n%s", outAutoAgyBadModel.String())
+	}
+	stAfterBad, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evsAfterBad, err := store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evsAfterBad) != len(evsBeforeBad) || len(stAfterBad.Agents) != 0 {
+		t.Fatalf("--harness auto unlisted model mutated state: events=%d (was %d), agents=%+v", len(evsAfterBad), len(evsBeforeBad), stAfterBad.Agents)
+	}
 
-	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\necho 'Available models:'\necho '  gemini-3-1-pro-medium'\n"), 0o755); err != nil { //nolint:gosec // test script
+	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\necho 'Available models:'\necho '  claude-opus-4-6-thinking'\necho '  gemini-3-1-pro-medium'\n"), 0o755); err != nil { //nolint:gosec // test script
 		t.Fatal(err)
 	}
 	origLauncher := plat.Launcher
-	t.Cleanup(func() { plat.Launcher = origLauncher })
+	origProcMachine := plat.Machine
+	t.Cleanup(func() {
+		plat.Launcher = origLauncher
+		plat.Machine = origProcMachine
+	})
+	plat.Machine = tableMachine{plat.Machine}
 	plat.Launcher = &agyTestLauncher{
 		onStart: func(u platform.Unit) {
 			go func() {
-				var startID string
+				var startID, ompID string
 				for _, e := range u.Env {
 					if v, ok := strings.CutPrefix(e, agy.EnvAgent+"="); ok {
 						startID = v
 					}
+					if v, ok := strings.CutPrefix(e, omp.EnvAgent+"="); ok {
+						ompID = v
+					}
+				}
+				if ompID != "" {
+					inbox := omp.InboxPath(cfg.StateDir, ompID)
+					f, oerr := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test FIFO
+					if oerr != nil {
+						return
+					}
+					defer func() { _ = f.Close() }()
+					_, _ = bufio.NewReader(f).ReadString('\n')
+					return
 				}
 				inbox := agy.InboxPath(cfg.StateDir, startID)
 				logPath := agy.StreamPath(cfg.StateDir, startID)
@@ -1341,13 +1454,32 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		!strings.Contains(outAutoAgy.String(), "on gemini-3-1-pro-medium") {
 		t.Fatalf("--harness auto agy start output:\n%s", outAutoAgy.String())
 	}
+	stAfterAgy, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stAfterAgy.Agents) != 1 || stAfterAgy.Agents[0].Name != "AutoAgy" ||
+		stAfterAgy.Agents[0].Harness != harnessAgy || stAfterAgy.Agents[0].Model != testModelGemini ||
+		!strings.HasPrefix(stAfterAgy.Agents[0].HostSession, agy.HostPrefix) {
+		t.Fatalf("roster after --harness auto agy start = %+v", stAfterAgy.Agents)
+	}
+	autoAgyID := strings.TrimPrefix(stAfterAgy.Agents[0].HostSession, agy.HostPrefix)
+	if _, serr := os.Stat(agy.InboxPath(cfg.StateDir, autoAgyID)); serr != nil {
+		t.Fatalf("expected FIFO inbox for AutoAgy: %v", serr)
+	}
 
-	// 2c. --dry-run --harness auto picking omp prints omp's dry-run command line, and --mode background --harness auto picking omp refuses.
+	// 2c. --dry-run and real start with --harness auto picking omp (when claude is high and agy is excluded).
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	aDryOmp, outDryOmp := newApp()
 	cmdDryOmp := aDryOmp.agentStartCmd()
 	cmdDryOmp.SilenceErrors = true
 	cmdDryOmp.SilenceUsage = true
-	cmdDryOmp.SetArgs([]string{"DryOmp", brief, usageDirFlag, dir, "--dry-run", testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	cmdDryOmp.SetArgs([]string{"DryOmp", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
 	if err := cmdDryOmp.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking omp: %v", err)
 	}
@@ -1365,6 +1497,196 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	err = cmdBgOmp.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--mode background and --harness omp") {
 		t.Fatalf("--mode background --harness auto picking omp: code=%d, err=%v", Code(err), err)
+	}
+
+	fakeOmp := filepath.Join(binDir, omp.Comm)
+	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"models\":[{\"selector\":\"provider/omp-model\"}]}'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	aAutoOmp, outAutoOmp := newApp()
+	cmdAutoOmp := aAutoOmp.agentStartCmd()
+	cmdAutoOmp.SilenceErrors = true
+	cmdAutoOmp.SilenceUsage = true
+	cmdAutoOmp.SetArgs([]string{"AutoOmp", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	if err := cmdAutoOmp.Execute(); err != nil {
+		t.Fatalf("--harness auto picking omp: %v", err)
+	}
+	if !strings.Contains(outAutoOmp.String(), "choice: omp / provider/omp-model (provider omp)") ||
+		!strings.Contains(outAutoOmp.String(), "started AutoOmp: omp agent omp_") ||
+		!strings.Contains(outAutoOmp.String(), "on provider/omp-model") {
+		t.Fatalf("--harness auto omp start output:\n%s", outAutoOmp.String())
+	}
+
+	// 2d. Refusal when no choice has room (all choices excluded or blocked), and explicit --harness agy unchanged.
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	aNone, outNone := newApp()
+	cmdNone := aNone.agentStartCmd()
+	cmdNone.SilenceErrors = true
+	cmdNone.SilenceUsage = true
+	cmdNone.SetArgs([]string{"NoChoiceWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy, testExcludeFlag, omp.Harness})
+	err = cmdNone.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: no choice has room: claude/claude-opus-4-7: usage high: 5h 96% at or past 95%") ||
+		!strings.Contains(err.Error(), "agy/gemini-3-1-pro-medium: excluded") ||
+		!strings.Contains(err.Error(), "omp/provider/omp-model: excluded") {
+		t.Fatalf("--harness auto with no choice having room: code=%d, err=%v", Code(err), err)
+	}
+	if outNone.String() != "" {
+		t.Fatalf("--harness auto refusal printed output:\n%s", outNone.String())
+	}
+
+	// Explicit --harness agy --model claude-opus-4-6-thinking still starts on agy as before.
+	aExpAgy, outExpAgy := newApp()
+	cmdExpAgy := aExpAgy.agentStartCmd()
+	cmdExpAgy.SilenceErrors = true
+	cmdExpAgy.SilenceUsage = true
+	cmdExpAgy.SetArgs([]string{"ExplicitAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAgy, modelFlag, testModelOpus46})
+	if err := cmdExpAgy.Execute(); err != nil {
+		t.Fatalf("explicit --harness agy: %v", err)
+	}
+	if strings.Contains(outExpAgy.String(), "choice:") ||
+		!strings.Contains(outExpAgy.String(), "started ExplicitAgy: agy agent agy_") ||
+		!strings.Contains(outExpAgy.String(), "on claude-opus-4-6-thinking") {
+		t.Fatalf("explicit --harness agy output:\n%s", outExpAgy.String())
+	}
+
+	// 2e. Regression coverage for round-2 review findings:
+	//     - --harness auto with --model evaluates the requested model against choices, exclusions, and its own bucket;
+	//     - Claude preflight validates the claude executable before printing choice:/started over or recording a force event;
+	//     - brokered OMP validates preflight before delegating and does not print choice: when preflight or the broker fails.
+	cfg.Capacity.Choices = []config.Choice{
+		{Harness: claudeComm, Model: testModelOpus47},
+		{Harness: harnessAgy, Model: testModelOpus46, SkipPace: true},
+		{Harness: harnessAgy, Model: testModelGemini, SkipPace: true},
+		{Harness: omp.Harness, Model: "provider/omp-model", Provider: omp.Harness, SkipPace: true},
+	}
+	rawCfgWithOpus46 := strings.Replace(rawCfg,
+		"    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}\n",
+		"    - {harness: agy, model: claude-opus-4-6-thinking, skipPace: true}\n    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}\n", 1)
+	if err := os.WriteFile(cfgPath, []byte(rawCfgWithOpus46), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agyClaude5h = 96.0 // agy Claude bucket is in USAGE HIGH (96%), while Gemini bucket is 10% (eligible)
+
+	// Unlisted --model with --harness auto is rejected with ExitUsage and empty output.
+	aUnknownModel, outUnknownModel := newApp()
+	cmdUnknownModel := aUnknownModel.agentStartCmd()
+	cmdUnknownModel.SilenceErrors = true
+	cmdUnknownModel.SilenceUsage = true
+	cmdUnknownModel.SetArgs([]string{"AutoUnknownModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, "not-in-choices"})
+	err = cmdUnknownModel.Execute()
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "not in capacity.choices") || outUnknownModel.String() != "" {
+		t.Fatalf("--harness auto with unknown --model: code=%d, err=%v, out=%q", Code(err), err, outUnknownModel.String())
+	}
+
+	// --exclude claude-opus-4-6-thinking --model claude-opus-4-6-thinking refuses in both dry-run and real start (even with --force), never announcing Gemini.
+	for _, isDry := range []bool{true, false} {
+		aExModel, outExModel := newApp()
+		cmdExModel := aExModel.agentStartCmd()
+		cmdExModel.SilenceErrors = true
+		cmdExModel.SilenceUsage = true
+		args := []string{"AutoExModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, testModelOpus46, modelFlag, testModelOpus46}
+		if isDry {
+			args = append(args, testDryRunFlag)
+		}
+		cmdExModel.SetArgs(args)
+		err = cmdExModel.Execute()
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "excluded") || outExModel.String() != "" {
+			t.Fatalf("--harness auto excluded --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outExModel.String())
+		}
+	}
+
+	// --model claude-opus-4-6-thinking without --force refuses because its Claude bucket is at 96% (even though Gemini is at 10%), in both dry-run and real start.
+	for _, isDry := range []bool{true, false} {
+		aHighModel, outHighModel := newApp()
+		cmdHighModel := aHighModel.agentStartCmd()
+		cmdHighModel.SilenceErrors = true
+		cmdHighModel.SilenceUsage = true
+		args := []string{"AutoHighModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46}
+		if isDry {
+			args = append(args, testDryRunFlag)
+		}
+		cmdHighModel.SetArgs(args)
+		err = cmdHighModel.Execute()
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agy/claude-opus-4-6-thinking: usage high: 5h 96% at or past 95%") || outHighModel.String() != "" {
+			t.Fatalf("--harness auto blocked bucket --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outHighModel.String())
+		}
+	}
+
+	// With --force, --model claude-opus-4-6-thinking prints choice: agy / claude-opus-4-6-thinking (the pair actually dispatched).
+	aForceModelDry, outForceModelDry := newApp()
+	cmdForceModelDry := aForceModelDry.agentStartCmd()
+	cmdForceModelDry.SilenceErrors = true
+	cmdForceModelDry.SilenceUsage = true
+	cmdForceModelDry.SetArgs([]string{"AutoForceModelDry", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, usageForceFlag})
+	if err := cmdForceModelDry.Execute(); err != nil {
+		t.Fatalf("--dry-run --harness auto --model --force: %v", err)
+	}
+	if !strings.Contains(outForceModelDry.String(), "choice: agy / claude-opus-4-6-thinking (provider agy, bucket Claude and GPT models)") ||
+		strings.Contains(outForceModelDry.String(), testModelGemini) {
+		t.Fatalf("--dry-run --harness auto --model --force output:\n%s", outForceModelDry.String())
+	}
+
+	// Claude preflight: with claude absent from PATH, an auto start with --force --mode background fails before printing choice:/started over or recording an event.
+	t.Setenv("PATH", binDir) // binDir has fake agy and omp, but no claude
+	evsBeforeNoClaude, err := store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aNoClaude, outNoClaude := newApp()
+	cmdNoClaude := aNoClaude.agentStartCmd()
+	cmdNoClaude.SilenceErrors = true
+	cmdNoClaude.SilenceUsage = true
+	cmdNoClaude.SetArgs([]string{"AutoNoClaude", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, modelFlag, testModelOpus47, usageForceFlag})
+	if err := cmdNoClaude.Execute(); err == nil {
+		t.Fatal("expected error when claude is absent from PATH")
+	}
+	if outNoClaude.String() != "" {
+		t.Fatalf("missing claude preflight printed output:\n%s", outNoClaude.String())
+	}
+	evsAfterNoClaude, err := store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evsAfterNoClaude) != len(evsBeforeNoClaude) {
+		t.Fatalf("missing claude preflight recorded state event: %+v", evsAfterNoClaude[len(evsBeforeNoClaude):])
+	}
+
+	// Brokered OMP preflight and unavailable broker: no premature choice: output on invalid dir or unavailable broker.
+	cfg.Secret.Session = true
+	cfg.Omp.ModelsFile = filepath.Join(dir, "omp-models.yml")
+	if err := os.WriteFile(cfg.Omp.ModelsFile, []byte("providers: {provider: {apiKey: PROVIDER_API_KEY}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Omp.Providers = map[string]config.OmpProvider{"provider": {APIKey: sparkRef}}
+	aBrokerBadDir, outBrokerBadDir := newApp()
+	cmdBrokerBadDir := aBrokerBadDir.agentStartCmd()
+	cmdBrokerBadDir.SilenceErrors = true
+	cmdBrokerBadDir.SilenceUsage = true
+	cmdBrokerBadDir.SetArgs([]string{"AutoBrokerBadDir", brief, usageDirFlag, filepath.Join(dir, "nonexistent"), testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	err = cmdBrokerBadDir.Execute()
+	if Code(err) != ExitUsage || outBrokerBadDir.String() != "" {
+		t.Fatalf("brokered omp invalid dir: code=%d, err=%v, out=%q", Code(err), err, outBrokerBadDir.String())
+	}
+
+	aBrokerUnavail, outBrokerUnavail := newApp()
+	cmdBrokerUnavail := aBrokerUnavail.agentStartCmd()
+	cmdBrokerUnavail.SilenceErrors = true
+	cmdBrokerUnavail.SilenceUsage = true
+	cmdBrokerUnavail.SetArgs([]string{"AutoBrokerUnavail", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	err = cmdBrokerUnavail.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no sandbox broker answers") || outBrokerUnavail.String() != "" {
+		t.Fatalf("brokered omp unavailable broker: code=%d, err=%v, out=%q", Code(err), err, outBrokerUnavail.String())
 	}
 }
 
@@ -1682,5 +2004,147 @@ capacity:
 	err = resClaude.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no resume: provider claude: usage high: 5h 97% at or past 95%") {
 		t.Fatalf("resume ParkedClaude under claude USAGE HIGH: code=%d, err=%v", Code(err), err)
+	}
+}
+
+func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	origMachine := plat.Machine
+	plat.Machine = tableMachine{plat.Machine}
+	t.Cleanup(func() { plat.Machine = origMachine })
+
+	rawCfg := `capacity:
+  floor: 1
+  ceiling: 4
+  providers:
+    claude:
+      floor: 1
+      ceiling: 2
+    agy:
+      floor: 1
+      ceiling: 2
+  choices:
+    - {harness: claude, model: claude-opus-4-7}
+    - {harness: agy, model: gemini-3-1-pro-medium}
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Fix https://github.com/giantswarm/beekeeper/issues/1684\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+
+	// 1. scratchArgv serializes --exclude without square brackets so a brokered child
+	//    agentStartCmd excludes claude and dispatches agy.
+	parentCmd := a.agentStartCmd()
+	if err := parentCmd.ParseFlags([]string{testHarnessFlag, harnessAuto, "--exclude", claudeComm, "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := a.scratchArgv(parentCmd, []string{"SandboxedAuto1", brief})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(argv, "--exclude=claude") || slices.Contains(argv, "--exclude=[claude]") {
+		t.Fatalf("scratchArgv serialized --exclude with brackets: %q", argv)
+	}
+	childArgs, _, err := scratchConfig(argv[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a.out = &out
+	childCmd := a.agentStartCmd()
+	childCmd.SilenceErrors = true
+	childCmd.SilenceUsage = true
+	childCmd.SetArgs(childArgs)
+	if err := childCmd.Execute(); err != nil {
+		t.Fatalf("brokered child agentStartCmd failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "choice: agy / gemini-3-1-pro-medium") {
+		t.Fatalf("brokered child did not exclude claude:\n%s", out.String())
+	}
+
+	// 2. Even if bracketed --exclude=[claude] is passed directly, normalizeExcludes strips brackets.
+	out.Reset()
+	bracketCmd := a.agentStartCmd()
+	bracketCmd.SilenceErrors = true
+	bracketCmd.SilenceUsage = true
+	bracketCmd.SetArgs([]string{testHarnessFlag, harnessAuto, "--exclude=[claude]", "--dry-run", "SandboxedAuto2", brief})
+	if err := bracketCmd.Execute(); err != nil {
+		t.Fatalf("bracketed --exclude failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "choice: agy / gemini-3-1-pro-medium") {
+		t.Fatalf("bracketed --exclude=[claude] did not exclude claude:\n%s", out.String())
+	}
+}
+
+func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	origMachine := plat.Machine
+	plat.Machine = tableMachine{plat.Machine}
+	t.Cleanup(func() { plat.Machine = origMachine })
+
+	rawCfg := `capacity:
+  floor: 1
+  ceiling: 4
+  providers:
+    shared-agy:
+      floor: 1
+      ceiling: 1
+  choices:
+    - {harness: agy, model: gemini-3-1-pro-medium, provider: shared-agy}
+    - {harness: agy, model: claude-opus-4-6-thinking, provider: shared-agy}
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	sup := tasked("Supervisor run 1")
+	busyGemini := tasked("BusyGemini")
+	busyGemini.Harness, busyGemini.Model = harnessAgy, testModelGemini
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Agents = []state.Agent{sup, busyGemini}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Fix https://github.com/giantswarm/beekeeper/issues/1684\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// BusyGemini runs on gemini-3-1-pro-medium, mapped via choices[0] to provider shared-agy (ceiling 1).
+	// Requesting --harness auto --model claude-opus-4-6-thinking must still attribute BusyGemini to
+	// shared-agy before filtering candidate choices to claude-opus-4-6-thinking, and refuse the start.
+	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+	cmd := a.agentStartCmd()
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, "BlockedWorker", brief})
+	err = cmd.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "1 busy at the ceiling of 1") {
+		t.Fatalf("expected refusal when shared provider ceiling 1 is held by another choice's model: code=%d, err=%v", Code(err), err)
 	}
 }

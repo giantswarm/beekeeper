@@ -924,6 +924,7 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 
 	for name, bad := range map[string]string{
 		"unknown provider in choice": "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: agy, model: m}\n",
+		"choices without providers":  "capacity:\n  choices:\n    - {harness: claude, model: m}\n",
 		"missing model in choice":    "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: claude}\n",
 		"provider without command":   "capacity:\n  providers:\n    claude: {fiveHourMax: 90}\n",
 		"descending paceCaps":        "capacity:\n  providers:\n    claude:\n      command: [r]\n      paceCaps:\n        - {overBy: 10, ceiling: 2}\n        - {overBy: 5, ceiling: 1}\n",
