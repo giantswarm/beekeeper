@@ -154,6 +154,9 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	agyInstalled := hasAgy()
 	e.AgyHooks = agyHooksPath(e.Spec.Home, agyInstalled)
 	e.AgySkills = agySkillsPath(e.Spec.Home, agyInstalled)
+	codexInstalled := hasCodex()
+	e.CodexHooks = codexHooksPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
+	e.CodexSkills = codexSkillsPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
 	e.StateDir = a.cfg.StateDir
 	e.Spec.Exe = e.Exe
 	if m, err := plat.Machine.Mem(); err == nil {
@@ -198,6 +201,53 @@ func agyConfigPath(home, name string, agyInstalled bool) string {
 	}
 	p := filepath.Join(home, ".gemini", "config", name)
 	if _, err := os.Lstat(p); err == nil || agyInstalled {
+		return p
+	}
+	return ""
+}
+
+// hasCodex reports whether the codex CLI is installed on PATH.
+func hasCodex() bool {
+	_, err := exec.LookPath("codex")
+	return err == nil
+}
+
+// userCodexDir derives the user's Codex home directory from cfg (ConfigFile or
+// AuthFile, matching codex.EnsureHome), falling back to ~/.codex when unset.
+func userCodexDir(home string, cfg ...config.Codex) string {
+	for _, c := range cfg {
+		if c.ConfigFile != "" {
+			return filepath.Dir(filepath.Clean(c.ConfigFile))
+		}
+		if c.AuthFile != "" {
+			return filepath.Dir(filepath.Clean(c.AuthFile))
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
+}
+
+// codexHooksPath returns <codexDir>/hooks.json when codex is installed or the
+// hooks file already exists, "" otherwise.
+func codexHooksPath(home string, codexInstalled bool, cfg ...config.Codex) string {
+	return codexConfigPath(home, "hooks.json", codexInstalled, cfg...)
+}
+
+// codexSkillsPath returns <codexDir>/skills when codex is installed or the
+// skills directory already exists, "" otherwise.
+func codexSkillsPath(home string, codexInstalled bool, cfg ...config.Codex) string {
+	return codexConfigPath(home, "skills", codexInstalled, cfg...)
+}
+
+func codexConfigPath(home, name string, codexInstalled bool, cfg ...config.Codex) string {
+	dir := userCodexDir(home, cfg...)
+	if dir == "" {
+		return ""
+	}
+	p := filepath.Join(dir, name)
+	if _, err := os.Lstat(p); err == nil || codexInstalled {
 		return p
 	}
 	return ""

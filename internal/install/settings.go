@@ -249,6 +249,8 @@ func AgyHook(exe string) json.RawMessage {
 	return bytes.TrimSpace(b.Bytes())
 }
 
+const pretooluseWord = "pretooluse"
+
 // agyHookBinary returns the binary path and timeout of an agy hook entry
 // that runs "<exe> hook pretooluse --format agy", or ("", 0) when raw is
 // not such an entry.
@@ -262,10 +264,10 @@ func agyHookBinary(raw json.RawMessage) (string, int) {
 		return "", 0
 	}
 	f := strings.Fields(list[0].Hooks[0].Command)
-	if len(f) == 5 && f[1] == hookWord && f[2] == "pretooluse" && f[3] == "--format" && f[4] == "agy" {
+	if len(f) == 5 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format" && f[4] == "agy" {
 		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
 	}
-	if len(f) == 4 && f[1] == hookWord && f[2] == "pretooluse" && f[3] == "--format=agy" {
+	if len(f) == 4 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format=agy" {
 		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
 	}
 	return "", 0
@@ -575,8 +577,11 @@ func (e Env) planAgyUnskills(p *plan, m Manifest, removed map[string]bool, purge
 	if len(m.AgySkills) == 0 && m.AgySkillsDir == "" {
 		return nil
 	}
+	codexStillUses := func() bool {
+		return m.CodexSkillsDir == m.AgySkillsDir && (e.CodexSkills != "" || CheckCodexSkills(filepath.Join(e.Spec.Home, ".codex", "skills"), e.StateDir, e.Spec.Home) == "")
+	}
 	rmDir := func() error {
-		if m.AgySkillsDir == "" || purge {
+		if m.AgySkillsDir == "" || purge || codexStillUses() {
 			return nil
 		}
 		return os.RemoveAll(m.AgySkillsDir)
@@ -683,6 +688,449 @@ func CheckAgySkills(path, stateDir, home string) string {
 	}
 	if stale := staleAgySkills(wantDir); len(stale) > 0 {
 		return fmt.Sprintf("agy skills: %s serves the skills %s unlike %s %s; run `beekeeper install`",
+			short(wantDir), strings.Join(stale, ", "), project.Name, project.Version())
+	}
+	return ""
+}
+
+// CodexHook is the PreToolUse entry install writes under hooks.PreToolUse in
+// Codex's hooks.json (~/.codex/hooks.json).
+func CodexHook(exe string) json.RawMessage {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(hookEntry{
+		Matcher: ".*",
+		Hooks: []hookCommand{{
+			Type:    hookTypeCommand,
+			Command: shellQuote(exe) + " " + hookWord + " pretooluse --format codex",
+			Timeout: 30,
+		}},
+	})
+	return bytes.TrimSpace(b.Bytes())
+}
+
+// codexHookBinary returns the binary path, matcher and timeout of a Codex
+// PreToolUse entry that runs "<exe> hook pretooluse --format codex", or
+// ("", "", 0) when raw is not such an entry.
+func codexHookBinary(raw json.RawMessage) (bin, matcher string, timeout int) {
+	var e hookEntry
+	if json.Unmarshal(raw, &e) != nil || len(e.Hooks) != 1 || e.Hooks[0].Type != hookTypeCommand {
+		return "", "", 0
+	}
+	f := strings.Fields(e.Hooks[0].Command)
+	if len(f) == 5 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format" && f[4] == "codex" {
+		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
+	}
+	if len(f) == 4 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format=codex" {
+		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
+	}
+	return "", "", 0
+}
+
+func isBeekeeperCodexHook(raw json.RawMessage) bool {
+	bin, _, _ := codexHookBinary(raw)
+	return filepath.Base(bin) == project.Name
+}
+
+// CodexWorkerHooks returns the hooks.json path inside beekeeper's isolated
+// worker CODEX_HOME (<stateDir>/codex/home/hooks.json), or "" when stateDir is
+// empty.
+func CodexWorkerHooks(stateDir string) string {
+	if stateDir == "" {
+		return ""
+	}
+	return filepath.Join(stateDir, "codex", "home", "hooks.json")
+}
+
+// CodexWorkerSkills returns the skills path inside beekeeper's isolated worker
+// CODEX_HOME (<stateDir>/codex/home/skills), or "" when stateDir is empty.
+func CodexWorkerSkills(stateDir string) string {
+	if stateDir == "" {
+		return ""
+	}
+	return filepath.Join(stateDir, "codex", "home", "skills")
+}
+
+// planCodexHooks writes or updates the PreToolUse entry in Codex's hooks.json
+// (~/.codex/hooks.json) and in the isolated worker CODEX_HOME
+// (<stateDir>/codex/home/hooks.json) when e.CodexHooks is set, preserving any
+// other hooks in those files.
+func (e Env) planCodexHooks(p *plan, m *Manifest) error {
+	if e.CodexHooks == "" {
+		return nil
+	}
+	if err := e.planCodexHooksFile(p, m, e.CodexHooks, &m.CodexHooksKeys, &m.CodexHooksCreated); err != nil {
+		return err
+	}
+	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
+		if err := e.planCodexHooksFile(p, m, workerHooks, &m.CodexWorkerHooksKeys, &m.CodexWorkerHooksCreated); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]string, created *bool) error {
+	if symlink(path) {
+		p.add("keep", path, "a symlink to "+resolve(path)+": install never writes through a link; "+
+			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
+		return nil
+	}
+	s, err := readSettings(path)
+	if err != nil {
+		return err
+	}
+	list, err := s.hooks("PreToolUse")
+	if err != nil {
+		return err
+	}
+	want := CodexHook(e.Exe)
+	what := path + ": " + project.Name + " PreToolUse hook"
+	idx := slices.IndexFunc(list, func(r json.RawMessage) bool {
+		if sameJSON(r, want) || len(m.CodexHook) > 0 && sameJSON(r, m.CodexHook) {
+			return true
+		}
+		bin, _, _ := codexHookBinary(r)
+		return bin == e.Exe
+	})
+	otherIdx := slices.IndexFunc(list, isBeekeeperCodexHook)
+	changed := false
+	switch {
+	case idx >= 0 && sameJSON(list[idx], want):
+		m.CodexHook = want
+		p.add("ok", what, "", nil)
+	case idx >= 0:
+		list[idx] = want
+		m.CodexHook = want
+		changed = true
+		p.add("update", what, "", nil)
+	case otherIdx >= 0:
+		p.add("keep", what, "a beekeeper hook with another command", nil)
+	default:
+		if !s.has("hooks") && !slices.Contains(*keys, "hooks") {
+			*keys = append(*keys, "hooks")
+		}
+		if _, ok := s.hooksObj()["PreToolUse"]; !ok && !slices.Contains(*keys, "hooks.PreToolUse") {
+			*keys = append(*keys, "hooks.PreToolUse")
+		}
+		list = append(list, want)
+		m.CodexHook = want
+		changed = true
+		p.add("add", what, "", nil)
+	}
+	if !changed {
+		return nil
+	}
+	s.setHooks("PreToolUse", list)
+	if !s.existed {
+		*created = true
+		m.addDirs(filepath.Dir(path))
+	}
+	raw := s.encode()
+	p.add(writeVerb(s.existed), path, "", func() error {
+		return writeFile(path, raw)
+	})
+	return nil
+}
+
+// planCodexUnhooks removes the PreToolUse entry install added to Codex's
+// hooks.json files, leaving any other hooks in place.
+func (e Env) planCodexUnhooks(p *plan, m Manifest, removed map[string]bool) error {
+	if len(m.CodexHook) == 0 || e.CodexHooks == "" {
+		return nil
+	}
+	if err := planCodexUnhooksFile(p, m.CodexHook, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
+		return err
+	}
+	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
+		if err := planCodexUnhooksFile(p, m.CodexHook, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func planCodexUnhooksFile(p *plan, hook json.RawMessage, path string, keys []string, created bool, removed map[string]bool) error {
+	if path == "" || symlink(path) {
+		return nil
+	}
+	s, err := readSettings(path)
+	if err != nil || !s.existed {
+		return err
+	}
+	list, err := s.hooks("PreToolUse")
+	if err != nil {
+		return err
+	}
+	kept := slices.DeleteFunc(slices.Clone(list), func(r json.RawMessage) bool {
+		return sameJSON(r, hook)
+	})
+	if len(kept) == len(list) {
+		return nil
+	}
+	p.add("remove", path+": "+project.Name+" PreToolUse hook", "", nil)
+	if len(kept) == 0 && slices.Contains(keys, "hooks.PreToolUse") {
+		s.delHooks("PreToolUse")
+	} else {
+		s.setHooks("PreToolUse", kept)
+	}
+	if slices.Contains(keys, "hooks") && len(s.hooksObj()) == 0 {
+		s.top.del("hooks")
+	}
+	if created && len(s.top) == 0 {
+		removed[path] = true
+		p.add("remove", path, "", func() error { return os.Remove(path) })
+	} else {
+		raw := s.encode()
+		p.add("update", path, "", func() error { return writeFile(path, raw) })
+	}
+	return nil
+}
+
+// CheckCodexHooks checks that Codex's hooks.json at path holds the PreToolUse
+// entry for project.Name (running exe when exe is non-empty); it returns a
+// one-line finding for `beekeeper doctor`, or "" when healthy or path is
+// empty.
+func CheckCodexHooks(path, exe, home string) string {
+	if path == "" {
+		return ""
+	}
+	short := (&plan{home: home}).tilde
+	s, err := readSettings(path)
+	if err != nil {
+		return fmt.Sprintf("codex hooks: %s: %v; run `beekeeper install`", short(path), err)
+	}
+	if !s.existed {
+		return fmt.Sprintf("codex hooks: %s is missing; run `beekeeper install`", short(path))
+	}
+	list, err := s.hooks("PreToolUse")
+	if err != nil {
+		return fmt.Sprintf("codex hooks: %s: %v; run `beekeeper install`", short(path), err)
+	}
+	want := CodexHook(exe)
+	if exe != "" && slices.ContainsFunc(list, func(r json.RawMessage) bool { return sameJSON(r, want) }) {
+		return ""
+	}
+	for _, r := range list {
+		gotExe, matcher, timeout := codexHookBinary(r)
+		if gotExe == "" {
+			continue
+		}
+		if timeout <= 0 || (matcher != ".*" && matcher != "") {
+			return fmt.Sprintf("codex hooks: %s: the %s PreToolUse hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
+		}
+		if exe != "" && gotExe != exe {
+			return fmt.Sprintf("codex hooks: %s runs %s instead of %s; run `beekeeper install`", short(path), short(gotExe), short(exe))
+		}
+		return ""
+	}
+	return fmt.Sprintf("codex hooks: %s lacks the %s PreToolUse hook; run `beekeeper install`", short(path), project.Name)
+}
+
+// planCodexSkills writes the embedded skills into AgySkillsDir(e.StateDir) and
+// symlinks each embedded skill into e.CodexSkills (~/.codex/skills/<name>)
+// when e.CodexSkills is set, leaving any other skill directories in place.
+func (e Env) planCodexSkills(p *plan, m *Manifest) error {
+	if e.CodexSkills == "" || e.StateDir == "" {
+		return nil
+	}
+	skillsDir := AgySkillsDir(e.StateDir)
+	what := e.CodexSkills + ": " + project.Name + " skills"
+	if symlink(e.CodexSkills) {
+		target := filepath.Clean(resolve(e.CodexSkills))
+		if target == filepath.Clean(skillsDir) && len(staleAgySkills(skillsDir)) == 0 {
+			m.CodexSkillsDir = skillsDir
+			p.add("ok", what, "", nil)
+			return nil
+		}
+		p.add("keep", e.CodexSkills, "a symlink to "+resolve(e.CodexSkills)+": install never writes through a link; "+
+			"replace the link with a directory for install to manage it, or edit the target yourself", nil)
+		return nil
+	}
+	names := plugin.SkillNames()
+	linksOK := true
+	anyExisted := exists(e.CodexSkills)
+	var links []string
+	for _, name := range names {
+		dst := filepath.Join(e.CodexSkills, name)
+		wantTarget := filepath.Join(skillsDir, name)
+		links = append(links, dst)
+		gotTarget, err := os.Readlink(dst)
+		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(wantTarget) {
+			linksOK = false
+		}
+	}
+	workerSkills := CodexWorkerSkills(e.StateDir)
+	if workerSkills != "" && filepath.Clean(workerSkills) != filepath.Clean(e.CodexSkills) {
+		links = append(links, workerSkills)
+		gotTarget, err := os.Readlink(workerSkills)
+		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(skillsDir) {
+			linksOK = false
+		}
+	}
+	userAgentsMD := filepath.Join(filepath.Dir(e.CodexSkills), "AGENTS.md")
+	workerAgentsMD := filepath.Join(e.StateDir, "codex", "home", "AGENTS.md")
+	hasUserAgentsMD := exists(userAgentsMD) && filepath.Clean(resolve(userAgentsMD)) != filepath.Clean(workerAgentsMD)
+	if hasUserAgentsMD {
+		links = append(links, workerAgentsMD)
+		gotTarget, err := os.Readlink(workerAgentsMD)
+		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(userAgentsMD) {
+			linksOK = false
+		}
+	}
+	skillsCurrent := len(staleAgySkills(skillsDir)) == 0
+	if linksOK && skillsCurrent {
+		m.CodexSkillLinks = links
+		m.CodexSkillsDir = skillsDir
+		p.add("ok", what, "", nil)
+		return nil
+	}
+	if !anyExisted {
+		m.addDirs(e.CodexSkills)
+	}
+	if workerSkills != "" {
+		m.addDirs(filepath.Dir(workerSkills))
+	}
+	m.CodexSkillLinks = links
+	m.CodexSkillsDir = skillsDir
+	verb := "add"
+	if anyExisted {
+		verb = "update"
+	}
+	p.add(verb, what, "", func() error {
+		if err := writeEmbeddedSkills(skillsDir); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(e.CodexSkills, 0o750); err != nil {
+			return err
+		}
+		for _, name := range names {
+			dst := filepath.Join(e.CodexSkills, name)
+			wantTarget := filepath.Join(skillsDir, name)
+			if gotTarget, err := os.Readlink(dst); err == nil && filepath.Clean(gotTarget) == filepath.Clean(wantTarget) {
+				continue
+			}
+			_ = os.RemoveAll(dst)
+			if err := os.Symlink(wantTarget, dst); err != nil {
+				return err
+			}
+		}
+		if workerSkills != "" && filepath.Clean(workerSkills) != filepath.Clean(e.CodexSkills) {
+			if err := os.MkdirAll(filepath.Dir(workerSkills), 0o700); err != nil {
+				return err
+			}
+			if gotTarget, err := os.Readlink(workerSkills); err != nil || filepath.Clean(gotTarget) != filepath.Clean(skillsDir) {
+				if fi, err := os.Lstat(workerSkills); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+					_ = os.Remove(workerSkills)
+				}
+				if _, err := os.Lstat(workerSkills); errors.Is(err, fs.ErrNotExist) {
+					if err := os.Symlink(skillsDir, workerSkills); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if hasUserAgentsMD {
+			if err := os.MkdirAll(filepath.Dir(workerAgentsMD), 0o700); err != nil {
+				return err
+			}
+			if gotTarget, err := os.Readlink(workerAgentsMD); err != nil || filepath.Clean(gotTarget) != filepath.Clean(userAgentsMD) {
+				if fi, err := os.Lstat(workerAgentsMD); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+					_ = os.Remove(workerAgentsMD)
+				}
+				if _, err := os.Lstat(workerAgentsMD); errors.Is(err, fs.ErrNotExist) {
+					if err := os.Symlink(userAgentsMD, workerAgentsMD); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	})
+	return nil
+}
+
+// planCodexUnskills removes the skill symlinks install added under
+// e.CodexSkills (and the unpacked skills directory if not shared with Agy).
+func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, purge bool) error {
+	if len(m.CodexSkillLinks) == 0 && m.CodexSkillsDir == "" {
+		return nil
+	}
+	var toRemove []string
+	for _, dst := range m.CodexSkillLinks {
+		if symlink(dst) {
+			toRemove = append(toRemove, dst)
+			removed[dst] = true
+		}
+	}
+	agyStillUses := func() bool {
+		return m.CodexSkillsDir == m.AgySkillsDir && (e.AgySkills == "" || CheckAgySkills(e.AgySkills, e.StateDir, e.Spec.Home) == "")
+	}
+	rmDir := func() error {
+		for _, dst := range toRemove {
+			if err := os.Remove(dst); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		if m.CodexSkillsDir != "" && !purge && !agyStillUses() {
+			return os.RemoveAll(m.CodexSkillsDir)
+		}
+		return nil
+	}
+	if len(toRemove) > 0 {
+		what := e.CodexSkills
+		if what == "" {
+			what = filepath.Dir(toRemove[0])
+		}
+		p.add("remove", what+": "+project.Name+" skills", "", rmDir)
+		return nil
+	}
+	if m.CodexSkillsDir != "" && !purge && !agyStillUses() && exists(m.CodexSkillsDir) {
+		p.add("remove", m.CodexSkillsDir, "", rmDir)
+	}
+	return nil
+}
+
+// CheckCodexSkills checks that Codex's skills directory at path links all
+// embedded skills in AgySkillsDir(stateDir) and that the skill files there
+// match what this binary embeds. Returns a one-line finding for
+// `beekeeper doctor`, or "" when healthy or path is empty.
+func CheckCodexSkills(path, stateDir, home string) string {
+	if path == "" || stateDir == "" {
+		return ""
+	}
+	short := (&plan{home: home}).tilde
+	wantDir := AgySkillsDir(stateDir)
+	if !exists(path) {
+		return fmt.Sprintf("codex skills: %s is missing; run `beekeeper install`", short(path))
+	}
+	if symlink(path) {
+		gotDir := filepath.Clean(resolve(path))
+		if gotDir != filepath.Clean(wantDir) {
+			return fmt.Sprintf("codex skills: %s points to %s instead of %s; run `beekeeper install`", short(path), short(gotDir), short(wantDir))
+		}
+	} else {
+		for _, name := range plugin.SkillNames() {
+			dst := filepath.Join(path, name)
+			wantTarget := filepath.Join(wantDir, name)
+			gotTarget, err := os.Readlink(dst)
+			if err != nil {
+				return fmt.Sprintf("codex skills: %s lacks the %s skill link; run `beekeeper install`", short(path), name)
+			}
+			if !filepath.IsAbs(gotTarget) {
+				gotTarget = filepath.Join(path, gotTarget)
+			}
+			if filepath.Clean(gotTarget) != filepath.Clean(wantTarget) {
+				return fmt.Sprintf("codex skills: %s/%s points to %s instead of %s; run `beekeeper install`", short(path), name, short(gotTarget), short(wantTarget))
+			}
+		}
+	}
+	if !exists(wantDir) {
+		return fmt.Sprintf("codex skills: %s is missing; run `beekeeper install`", short(wantDir))
+	}
+	if stale := staleAgySkills(wantDir); len(stale) > 0 {
+		return fmt.Sprintf("codex skills: %s serves the skills %s unlike %s %s; run `beekeeper install`",
 			short(wantDir), strings.Join(stale, ", "), project.Name, project.Version())
 	}
 	return ""

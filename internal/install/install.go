@@ -35,11 +35,14 @@ type Env struct {
 	// user hooks file (~/.gemini/config/hooks.json; empty when agy is
 	// not installed), AgySkills agy's user skills manifest
 	// (~/.gemini/config/skills.json; empty when agy is not installed),
+	// CodexHooks codex's user hooks file (~/.codex/hooks.json; empty
+	// when codex is not installed), CodexSkills codex's user skills
+	// directory (~/.codex/skills; empty when codex is not installed),
 	// Config beekeeper's config file, StateDir its state directory (the
 	// manifest's).
-	Settings, AgyHooks, AgySkills, Config, StateDir string
-	Setup                                           platform.Setup
-	Spec                                            platform.SetupSpec
+	Settings, AgyHooks, AgySkills, CodexHooks, CodexSkills, Config, StateDir string
+	Setup                                                                    platform.Setup
+	Spec                                                                     platform.SetupSpec
 	// Run runs one service manager command.
 	Run func(ctx context.Context, argv []string) error
 	Out io.Writer
@@ -64,6 +67,12 @@ func Install(ctx context.Context, e Env) error {
 		return err
 	}
 	if err := e.planAgySkills(p, &m); err != nil {
+		return err
+	}
+	if err := e.planCodexHooks(p, &m); err != nil {
+		return err
+	}
+	if err := e.planCodexSkills(p, &m); err != nil {
 		return err
 	}
 	e.planConfig(p, &m)
@@ -132,6 +141,12 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 		return err
 	}
 	if err := e.planAgyUnskills(p, m, removed, purge); err != nil {
+		return err
+	}
+	if err := e.planCodexUnhooks(p, m, removed); err != nil {
+		return err
+	}
+	if err := e.planCodexUnskills(p, m, removed, purge); err != nil {
 		return err
 	}
 	remove := func(path, why string, rm func(string) error) {
@@ -378,6 +393,19 @@ type Manifest struct {
 	AgySkillsDir     string          `json:"agySkillsDir,omitempty"`
 	AgySkillsEntries bool            `json:"agySkillsEntries,omitempty"`
 	AgySkillsCreated bool            `json:"agySkillsCreated,omitempty"`
+	// CodexHook is the PreToolUse entry install added to CodexHooks;
+	// CodexHooksKeys are the keys install created ("hooks",
+	// "hooks.PreToolUse"); CodexHooksCreated says it created CodexHooks, and
+	// CodexWorkerHooksCreated says it created <stateDir>/codex/home/hooks.json.
+	CodexHook               json.RawMessage `json:"codexHook,omitempty"`
+	CodexHooksKeys          []string        `json:"codexHooksKeys,omitempty"`
+	CodexHooksCreated       bool            `json:"codexHooksCreated,omitempty"`
+	CodexWorkerHooksKeys    []string        `json:"codexWorkerHooksKeys,omitempty"`
+	CodexWorkerHooksCreated bool            `json:"codexWorkerHooksCreated,omitempty"`
+	// CodexSkillLinks are the skill symlinks install added under CodexSkills;
+	// CodexSkillsDir is the directory of embedded skills they point at.
+	CodexSkillLinks []string `json:"codexSkillLinks,omitempty"`
+	CodexSkillsDir  string   `json:"codexSkillsDir,omitempty"`
 }
 
 func readManifest(path string) (Manifest, error) {

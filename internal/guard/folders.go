@@ -334,9 +334,8 @@ func (w *targetWalk) redirections(sg segment, st *deleteState, dir string) {
 			j++
 		}
 		switch {
-		case i > 0 && masked[i-1] == '<', // <> opens for reading too
-			strings.Contains(before, "[[") || strings.Contains(before, "(("), // a comparison
-			j < len(masked) && masked[j] == '&':                              // a descriptor duplicated
+		case strings.Contains(before, "[[") || strings.Contains(before, "(("), // a comparison
+			j < len(masked) && masked[j] == '&': // a descriptor duplicated
 			i = j
 			continue
 		}
