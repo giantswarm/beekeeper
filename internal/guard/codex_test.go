@@ -32,8 +32,8 @@ func decideCodexRaw(t *testing.T, h Hook, raw []byte) codexSpecificOutput {
 func decideCodexCall(t *testing.T, h Hook, cwd, tool string, input map[string]any) codexSpecificOutput {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{
-		sessionKey:   "01a181c2-b92d-7a30-a82f-eb4d91dfea2f",
-		"turn_id":    "01a181c2-bb09-7fe2-88b5-ef72acf13ff8",
+		sessionKey:   "sess-1",
+		"turn_id":    "turn-1",
 		"cwd":        cwd,
 		hookEventKey: PreToolUseEvent,
 		toolNameKey:  tool,
