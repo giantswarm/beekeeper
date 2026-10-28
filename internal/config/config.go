@@ -1409,7 +1409,7 @@ func (p Provider) Derive(fiveHour, sevenDay *float64) (derived Provider, high bo
 // 5-hour and 7-day windows and the 7-day even pace.
 func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Provider, high bool) {
 	derived = p
-	if !p.Usage.Enabled() {
+	if !p.Enabled() {
 		return derived, false
 	}
 	floor, ceiling, banded := p.Floor, p.Ceiling, false
@@ -1424,8 +1424,8 @@ func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Pro
 		}
 		floor, ceiling = min(floor, bf), min(ceiling, bc)
 	}
-	apply(fiveHour, p.Usage.FiveHour)
-	apply(sevenDay, p.Usage.SevenDay)
+	apply(fiveHour, p.FiveHour)
+	apply(sevenDay, p.SevenDay)
 	if banded {
 		if p.ceilingSet {
 			ceiling = min(ceiling, p.Ceiling)
@@ -1434,22 +1434,22 @@ func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Pro
 			floor = min(floor, p.Floor)
 		}
 	}
-	if sevenDay != nil && pace != nil && len(p.Usage.PaceCaps) > 0 {
+	if sevenDay != nil && pace != nil && len(p.PaceCaps) > 0 {
 		over := *sevenDay - *pace
-		for _, pc := range p.Usage.PaceCaps {
+		for _, pc := range p.PaceCaps {
 			if over >= pc.OverBy-1e-9 {
 				floor, ceiling = min(floor, pc.Floor), min(ceiling, pc.Ceiling)
 			}
 		}
 	}
-	if (p.Usage.fiveHourMaxSet || p.Usage.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.Usage.FiveHourMax {
+	if (p.fiveHourMaxSet || p.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.FiveHourMax {
 		floor, ceiling = 0, 0
 	}
-	if (p.Usage.sevenDayMaxSet || p.Usage.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.Usage.SevenDayMax {
+	if (p.sevenDayMaxSet || p.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.SevenDayMax {
 		floor, ceiling = 0, 0
 	}
 	floor = min(floor, ceiling)
-	if fiveHour != nil && *fiveHour >= p.Usage.EffectiveHighPercent() {
+	if fiveHour != nil && *fiveHour >= p.EffectiveHighPercent() {
 		derived.Floor, derived.Ceiling = 0, 0
 		return derived, true
 	}
@@ -2820,14 +2820,14 @@ func (c *Config) defaults() error {
 		if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
 			p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
 		}
-		if name == "agy" && len(p.Command) == 0 && p.Usage.hasFields() {
+		if name == "agy" && len(p.Command) == 0 && p.hasFields() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
 		baseFloor := c.Capacity.Floor
 		if p.floorSet {
 			baseFloor = p.Floor
 		}
-		p.Usage.defaults(home, baseFloor)
+		p.defaults(home, baseFloor)
 		c.Capacity.Providers[name] = p
 	}
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
@@ -3161,7 +3161,7 @@ func (c *Config) validate() error {
 		if p.Floor < 0 || p.Ceiling < p.Floor {
 			return fmt.Errorf("capacity.providers.%s: floor %d and ceiling %d; the ceiling is at least the floor", name, p.Floor, p.Ceiling)
 		}
-		if err := p.Usage.validateNamed("capacity.providers." + name); err != nil {
+		if err := p.validateNamed("capacity.providers." + name); err != nil {
 			return err
 		}
 	}

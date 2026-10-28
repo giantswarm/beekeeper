@@ -751,13 +751,13 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cp := v.Providers["claude"]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || !cp.Stale {
+	if cp := v.Providers[claudeComm]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || !cp.Stale {
 		t.Fatalf("stale ageMinutes claude provider = %+v, want ceiling 0, room 0, stale=true", cp)
 	}
-	if ap := v.Providers["agy"]; ap == nil || ap.Ceiling != 2 || ap.Room != 2 {
+	if ap := v.Providers[harnessAgy]; ap == nil || ap.Ceiling != 2 || ap.Room != 2 {
 		t.Fatalf("agy provider = %+v, want ceiling 2, room 2", ap)
 	}
-	if v.Choice == nil || v.Choice.Harness != "agy" || v.Choice.Model != "gemini-3-1-pro-medium" {
+	if v.Choice == nil || v.Choice.Harness != harnessAgy || v.Choice.Model != testModelGemini {
 		t.Fatalf("choice on stale claude = %+v, want agy/gemini-3-1-pro-medium", v.Choice)
 	}
 
@@ -770,7 +770,7 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cp := v2.Providers["claude"]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || !cp.Stale {
+	if cp := v2.Providers[claudeComm]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || !cp.Stale {
 		t.Fatalf("stale at claude provider = %+v, want ceiling 0, room 0, stale=true", cp)
 	}
 
@@ -782,10 +782,16 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cp := v3.Providers["claude"]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || cp.Error == "" {
+	if cp := v3.Providers[claudeComm]; cp == nil || cp.Ceiling != 0 || cp.Room != 0 || cp.Error == "" {
 		t.Fatalf("failed claude provider = %+v, want ceiling 0, room 0, error set", cp)
 	}
 }
+
+const (
+	testModelOpus47 = "claude-opus-4-7"
+	testModelOpus46 = "claude-opus-4-6-thinking"
+	testModelGemini = "gemini-3-1-pro-medium"
+)
 
 // TestProvidersChoicesPaceMarginExcludeAndMachineGuards exercises per-provider
 // capacity verdicts, choice order, paceMargin, worker sevenDayMax vs --review,
@@ -878,8 +884,8 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	newApp := func(now time.Time, jsonOut bool) (*app, *bytes.Buffer) {
 		var out bytes.Buffer
 		// Clear cached provider usage files so each step sees the updated test numbers.
-		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile("claude")))
-		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile("agy")))
+		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(claudeComm)))
+		_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(harnessAgy)))
 		return &app{
 			cfgPath:   cfgPath,
 			cfg:       cfg,
@@ -909,7 +915,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	// 2. --exclude claude-opus-4-7 skips the first choice and picks agy/claude-opus-4-6-thinking.
 	aEx, outEx := newApp(t0, true)
 	capEx := aEx.capacityCmd()
-	capEx.SetArgs([]string{"--exclude", "claude-opus-4-7"})
+	capEx.SetArgs([]string{"--exclude", testModelOpus47})
 	if err := capEx.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -917,7 +923,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	if err := json.Unmarshal(outEx.Bytes(), &parsedEx); err != nil {
 		t.Fatal(err)
 	}
-	if parsedEx.Choice == nil || parsedEx.Choice.Harness != "agy" || parsedEx.Choice.Model != "claude-opus-4-6-thinking" ||
+	if parsedEx.Choice == nil || parsedEx.Choice.Harness != harnessAgy || parsedEx.Choice.Model != testModelOpus46 ||
 		parsedEx.Choice.Bucket != config.DefaultAgyClaudeBucket {
 		t.Fatalf("excluded choice = %+v", parsedEx.Choice)
 	}
@@ -929,7 +935,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v2.Choice == nil || v2.Choice.Harness != "agy" || v2.Choice.Model != "claude-opus-4-6-thinking" {
+	if v2.Choice == nil || v2.Choice.Harness != harnessAgy || v2.Choice.Model != testModelOpus46 {
 		t.Fatalf("step 3 choice = %+v, want agy/claude-opus-4-6-thinking", v2.Choice)
 	}
 
@@ -941,7 +947,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v3.Choice == nil || v3.Choice.Harness != "agy" || v3.Choice.Model != "gemini-3-1-pro-medium" ||
+	if v3.Choice == nil || v3.Choice.Harness != harnessAgy || v3.Choice.Model != testModelGemini ||
 		v3.Choice.Bucket != config.DefaultAgyGeminiBucket {
 		t.Fatalf("step 4 choice = %+v, want agy/gemini-3-1-pro-medium", v3.Choice)
 	}
@@ -959,11 +965,11 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		t.Fatalf("worker at 82%% gemini = room %d, choice %+v; want room 0 and no choice", vWorker.Room, vWorker.Choice)
 	}
 	a4Rev, _ := newApp(t0, false)
-	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, []string{"claude", "claude-opus-4-6-thinking"}, true)
+	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, []string{claudeComm, testModelOpus46}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vReview.Room == 0 || vReview.Choice == nil || vReview.Choice.Harness != "agy" || vReview.Choice.Model != "gemini-3-1-pro-medium" || !vReview.Choice.Review {
+	if vReview.Room == 0 || vReview.Choice == nil || vReview.Choice.Harness != harnessAgy || vReview.Choice.Model != testModelGemini || !vReview.Choice.Review {
 		t.Fatalf("review at 82%% gemini = room %d, choice %+v; want agy/gemini-3-1-pro-medium", vReview.Room, vReview.Choice)
 	}
 
@@ -973,11 +979,11 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	agyGemini7d = 40.0
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		w1 := tasked("ClaudeWorker1")
-		w1.Harness, w1.Model = "claude", "claude-opus-4-7"
+		w1.Harness, w1.Model = claudeComm, testModelOpus47
 		w2 := tasked("ClaudeWorker2")
-		w2.Harness, w2.Model = "claude", "claude-opus-4-7"
+		w2.Harness, w2.Model = claudeComm, testModelOpus47
 		w3 := tasked("AgyWorker1")
-		w3.Harness, w3.Model = "agy", "gemini-3-1-pro-medium"
+		w3.Harness, w3.Model = harnessAgy, testModelGemini
 		st.Agents = []state.Agent{w1, w2, w3}
 		return nil, nil
 	}); err != nil {
@@ -990,9 +996,9 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vCap.Room != 0 || vCap.Providers["claude"].Room != 0 || vCap.Providers["agy"].Room != 0 {
+	if vCap.Room != 0 || vCap.Providers[claudeComm].Room != 0 || vCap.Providers[harnessAgy].Room != 0 {
 		t.Fatalf("at top-level ceiling 3: total room=%d, claude=%d, agy=%d; want all 0",
-			vCap.Room, vCap.Providers["claude"].Room, vCap.Providers["agy"].Room)
+			vCap.Room, vCap.Providers[claudeComm].Room, vCap.Providers[harnessAgy].Room)
 	}
 
 	// Free one claude worker so 1 busy on claude (room 1) + 1 busy on agy (room 1), total busy 2 < 3 => room 1.
@@ -1007,7 +1013,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vOpen.Room != 1 || vOpen.Choice == nil || vOpen.Choice.Harness != "claude" {
+	if vOpen.Room != 1 || vOpen.Choice == nil || vOpen.Choice.Harness != claudeComm {
 		t.Fatalf("with 2 busy of 3: room=%d, choice=%+v; want room 1, claude", vOpen.Room, vOpen.Choice)
 	}
 
@@ -1020,9 +1026,9 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vTight.Room != 0 || vTight.Providers["claude"].Room != 0 || vTight.Providers["agy"].Room != 0 {
+	if vTight.Room != 0 || vTight.Providers[claudeComm].Room != 0 || vTight.Providers[harnessAgy].Room != 0 {
 		t.Fatalf("under low MemAvailable: total=%d, claude=%d, agy=%d; want all 0",
-			vTight.Room, vTight.Providers["claude"].Room, vTight.Providers["agy"].Room)
+			vTight.Room, vTight.Providers[claudeComm].Room, vTight.Providers[harnessAgy].Room)
 	}
 
 	// 7. watch emits the per-provider USAGE line with choice once per tick, and
@@ -1051,7 +1057,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	startCmd := aAuto.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs([]string{"AutoWorker", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, "--harness", "auto"})
+	startCmd.SetArgs([]string{"AutoWorker", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, "--harness", harnessAuto})
 	if err := startCmd.Execute(); err != nil {
 		t.Fatalf("agents start --harness auto: %v", err)
 	}

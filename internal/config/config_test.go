@@ -878,24 +878,28 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Capacity.ProviderNames(); !slices.Equal(got, []string{"claude", "agy"}) {
+	const (
+		provClaude = "claude"
+		provAgy    = "agy"
+	)
+	if got := c.Capacity.ProviderNames(); !slices.Equal(got, []string{provClaude, provAgy}) {
 		t.Fatalf("ProviderNames = %v, want [claude agy]", got)
 	}
-	cl := c.Capacity.Providers["claude"]
+	cl := c.Capacity.Providers[provClaude]
 	if cl.Command[0] != filepath.Join(home, "bin", "claude-usage") || cl.EffectiveStaleAfter() != 15*time.Minute {
 		t.Errorf("claude provider = %+v", cl)
 	}
-	agy := c.Capacity.Providers["agy"]
+	agy := c.Capacity.Providers[provAgy]
 	if agy.Floor != 0 || agy.Ceiling != 2 || !slices.Equal(agy.Command, DefaultAgyUsageCommand) {
 		t.Errorf("agy provider = %+v", agy)
 	}
-	if got := c.Capacity.Choices[0]; got.EffectiveProvider() != "claude" || got.EffectivePaceMargin(cl) != 2 {
+	if got := c.Capacity.Choices[0]; got.EffectiveProvider() != provClaude || got.EffectivePaceMargin(cl) != 2 {
 		t.Errorf("choice[0] = %+v", got)
 	}
-	if got := c.Capacity.Choices[1]; got.EffectiveProvider() != "agy" || got.EffectiveBucket(agy) != DefaultAgyClaudeBucket {
+	if got := c.Capacity.Choices[1]; got.EffectiveProvider() != provAgy || got.EffectiveBucket(agy) != DefaultAgyClaudeBucket {
 		t.Errorf("choice[1] = %+v (bucket %q)", got, got.EffectiveBucket(agy))
 	}
-	if got := c.Capacity.Choices[2]; got.EffectiveProvider() != "agy" || got.EffectiveBucket(agy) != DefaultAgyGeminiBucket || !got.SkipPace {
+	if got := c.Capacity.Choices[2]; got.EffectiveProvider() != provAgy || got.EffectiveBucket(agy) != DefaultAgyGeminiBucket || !got.SkipPace {
 		t.Errorf("choice[2] = %+v (bucket %q)", got, got.EffectiveBucket(agy))
 	}
 	if max7d, ok := c.Capacity.Choices[2].EffectiveWorkerSevenDayMax(); !ok || max7d != 80 {

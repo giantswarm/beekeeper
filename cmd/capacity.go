@@ -179,9 +179,14 @@ type choiceView struct {
 	Candidates []choiceCandidate `json:"candidates,omitempty"`
 }
 
+const (
+	harnessAuto = "auto"
+	harnessAgy  = "agy"
+)
+
 func (c *choiceView) line() string {
 	if c == nil {
-		return "none"
+		return noProblems
 	}
 	if c.Harness != "" && c.Model != "" {
 		s := fmt.Sprintf("%s / %s (provider %s", c.Harness, c.Model, c.Provider)
@@ -194,22 +199,22 @@ func (c *choiceView) line() string {
 		return s + ")"
 	}
 	if c.Reason != "" {
-		return "none (" + c.Reason + ")"
+		return noProblems + " (" + c.Reason + ")"
 	}
-	return "none"
+	return noProblems
 }
 
 func (c *choiceView) summary() string {
 	if c == nil {
-		return "none"
+		return noProblems
 	}
 	if c.Harness != "" && c.Model != "" {
 		return c.Harness + "/" + c.Model
 	}
 	if c.Reason != "" {
-		return "none (" + c.Reason + ")"
+		return noProblems + " (" + c.Reason + ")"
 	}
-	return "none"
+	return noProblems
 }
 
 // agentCount sorts the roster: busy with a task, parked (kept on purpose, a
@@ -304,7 +309,7 @@ func agentHarnessModel(st *state.State, sessions []*claude.Session, ag state.Age
 	harness, model = strings.TrimSpace(ag.Harness), strings.TrimSpace(ag.Model)
 	for i := len(st.Starts) - 1; i >= 0; i-- {
 		s := st.Starts[i]
-		if s.Party.Is(ag.Party) || (s.Name != "" && s.Name == ag.Name) {
+		if s.Is(ag.Party) || (s.Name != "" && s.Name == ag.Name) {
 			if harness == "" {
 				harness = strings.TrimSpace(s.Harness)
 			}
@@ -327,16 +332,16 @@ func agentHarnessModel(st *state.State, sessions []*claude.Session, ag state.Age
 		case strings.HasPrefix(ag.HostSession, "omp_") || strings.HasPrefix(ag.Session, "omp_"):
 			harness = "omp"
 		case strings.HasPrefix(ag.HostSession, "agy_") || strings.HasPrefix(ag.Session, "agy_"):
-			harness = "agy"
+			harness = harnessAgy
 		default:
-			harness = "claude"
+			harness = claudeComm
 		}
 	}
 	return harness, model
 }
 
 func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov, bucket string) {
-	h := cmp.Or(strings.TrimSpace(harness), "claude")
+	h := cmp.Or(strings.TrimSpace(harness), claudeComm)
 	m := strings.TrimSpace(model)
 	for _, ch := range k.Choices {
 		if !strings.EqualFold(ch.Harness, h) {
@@ -356,8 +361,8 @@ func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov,
 	if _, ok := k.Providers[h]; ok {
 		return h, k.Providers[h].BucketFor(m)
 	}
-	if _, ok := k.Providers["claude"]; ok && (h == "" || h == "claude") {
-		return "claude", k.Providers["claude"].BucketFor(m)
+	if _, ok := k.Providers[claudeComm]; ok && (h == "" || h == claudeComm) {
+		return claudeComm, k.Providers[claudeComm].BucketFor(m)
 	}
 	if names := k.ProviderNames(); len(names) > 0 {
 		return names[0], k.Providers[names[0]].BucketFor(m)
@@ -573,7 +578,7 @@ type providerReadingResult struct {
 }
 
 func deriveProviderReading(p config.Provider, r usageReading, now time.Time) (floor, ceiling int, high bool) {
-	if !p.Usage.Enabled() {
+	if !p.Enabled() {
 		return p.Floor, p.Ceiling, false
 	}
 	if len(r.Buckets) > 0 {
@@ -607,8 +612,8 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 		busy = []string{}
 	}
 	pv := &providerView{Name: name, Busy: busy}
-	if pCfg.Usage.Enabled() {
-		pv.HighPercent = pCfg.Usage.EffectiveHighPercent()
+	if pCfg.Enabled() {
+		pv.HighPercent = pCfg.EffectiveHighPercent()
 		if !res.ok || res.err != nil {
 			errMsg := "usage not read"
 			if res.err != nil {
@@ -712,9 +717,9 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 	switch {
 	case pv.High:
 		pv.Blocks = []string{highBlockText(pv.FiveHour, pv.HighPercent, now)}
-	case pCfg.Usage.Enabled() && pCfg.FiveHourMax > 0 && pv.FiveHour != nil && pv.FiveHour.UsedPercent >= pCfg.FiveHourMax:
+	case pCfg.Enabled() && pCfg.FiveHourMax > 0 && pv.FiveHour != nil && pv.FiveHour.UsedPercent >= pCfg.FiveHourMax:
 		pv.Blocks = []string{fmt.Sprintf("5h %s at or past %s", pct(pv.FiveHour.UsedPercent), pct(pCfg.FiveHourMax))}
-	case pCfg.Usage.Enabled() && pCfg.SevenDayMax > 0 && pv.SevenDay != nil && pv.SevenDay.UsedPercent >= pCfg.SevenDayMax:
+	case pCfg.Enabled() && pCfg.SevenDayMax > 0 && pv.SevenDay != nil && pv.SevenDay.UsedPercent >= pCfg.SevenDayMax:
 		pv.Blocks = []string{fmt.Sprintf("7d %s at or past %s", pct(pv.SevenDay.UsedPercent), pct(pCfg.SevenDayMax))}
 	case pv.Ceiling == 0:
 		pv.Blocks = []string{ceilingZero}
@@ -878,7 +883,7 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	pm := p + "/" + m
 
 	isKnownProviderOrHarness := func(tok string) bool {
-		if tok == h || tok == p || tok == "claude" || tok == "agy" || tok == "omp" {
+		if tok == h || tok == p || tok == claudeComm || tok == harnessAgy || tok == "omp" {
 			return true
 		}
 		return slices.ContainsFunc(providerNames, func(n string) bool { return strings.EqualFold(n, tok) })
@@ -1032,7 +1037,7 @@ func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, ses
 	readings := make(map[string]providerReadingResult, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
-		if !p.Usage.Enabled() {
+		if !p.Enabled() {
 			continue
 		}
 		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
@@ -1255,7 +1260,7 @@ nothing; it makes no GitHub call.`,
 				}{v, v.verdict()})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-			capLine := v.agentCount.line(config.Capacity{Floor: v.Floor, Ceiling: v.Ceiling})
+			capLine := v.line(config.Capacity{Floor: v.Floor, Ceiling: v.Ceiling})
 			if v.Usage != nil {
 				capLine += "; " + v.Usage.capacitySuffix(a.now)
 			}
@@ -1312,13 +1317,8 @@ func gateStart(v *capacityView, force bool) (string, error) {
 	return "", refused("%s (beekeeper capacity; --force starts anyway)", v.verdict())
 }
 
-// startGate reads the capacity verdict for a start that builds or not, as
-// beekeeper capacity reads it, and judges it (queueStart).
-func (a *app) startGate(ctx context.Context, name string, builds, force bool) (string, error) {
-	over, _, err := a.startGateWithOptions(ctx, name, builds, force, nil, false)
-	return over, err
-}
-
+// startGateWithOptions reads the capacity verdict for a start that builds or not,
+// as beekeeper capacity reads it, and judges it (queueStart).
 func (a *app) startGateWithOptions(ctx context.Context, name string, builds, force bool, exclude []string, review bool) (string, *capacityView, error) {
 	v, err := a.startCapacityWithOptions(ctx, builds, exclude, review)
 	if err != nil {

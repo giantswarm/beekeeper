@@ -244,7 +244,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
-			if harness == "auto" && len(a.liveCapacity().Choices) == 0 {
+			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
 				return usageErr("--harness auto: no capacity.choices configured")
 			}
 			// an omp agent whose provider's key is in the vault starts where
@@ -282,7 +282,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 						return err
 					}
 				}
-				if harness == "auto" {
+				if harness == harnessAuto {
 					v, err := a.startCapacityWithOptions(cmd.Context(), builds, exclude, review)
 					if err != nil {
 						return err
@@ -307,7 +307,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if err != nil {
 				return err
 			}
-			if harness == "auto" {
+			if harness == harnessAuto {
 				ch, err := pickAutoChoice(v, force)
 				if err != nil {
 					return err
@@ -343,7 +343,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			switch harness {
 			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
-			case "", "claude":
+			case "", claudeComm:
 			default:
 				return usageErr("--harness %q: claude, omp, or auto", harness)
 			}

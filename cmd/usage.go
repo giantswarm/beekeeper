@@ -245,7 +245,7 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 		if err != nil || math.IsNaN(val) || math.IsInf(val, 0) || val < 0 || val > 100 {
 			return usageReading{}, fmt.Errorf("invalid percentage %q in %q", fields[2], line)
 		}
-		used := val
+		var used float64
 		if strings.Contains(label, "remaining") {
 			used = math.Round(max(0, 100-val)*10) / 10
 		} else {
@@ -280,10 +280,6 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 		return usageReading{}, fmt.Errorf("invalid usage output: %s", truncate(oneLine(string(raw)), 120))
 	}
 	return r, nil
-}
-
-func validateReading(r usageReading, u config.Usage) error {
-	return validateReadingAt(r, u, time.Time{})
 }
 
 func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
@@ -490,7 +486,7 @@ func (a *app) cachedProvidersCapacity(k config.Capacity) (config.Capacity, *usag
 	anyRead := false
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
-		if !p.Usage.Enabled() {
+		if !p.Enabled() {
 			sumFloor += p.Floor
 			sumCeiling += p.Ceiling
 			anyRead = true
@@ -593,7 +589,7 @@ func (a *app) providersUsageHighBlock(ctx context.Context, k config.Capacity) st
 	var highReasons []string
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
-		if !p.Usage.Enabled() {
+		if !p.Enabled() {
 			return ""
 		}
 		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
@@ -614,7 +610,7 @@ func (a *app) providersUsageHighBlock(ctx context.Context, k config.Capacity) st
 			return ""
 		}
 		fh := effectiveWindow(r.FiveHour, a.now)
-		highReasons = append(highReasons, name+": "+highBlockText(fh, p.Usage.EffectiveHighPercent(), a.now))
+		highReasons = append(highReasons, name+": "+highBlockText(fh, p.EffectiveHighPercent(), a.now))
 	}
 	if len(highReasons) == 0 {
 		return ""
@@ -710,7 +706,7 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
-			if p.Usage.Enabled() && w.providerUsageNeedsRefresh(name, p.Usage, now) {
+			if p.Enabled() && w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				return true
 			}
 		}
@@ -748,7 +744,7 @@ func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.
 	if len(k.Providers) > 0 {
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
-			if !p.Usage.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
+			if !p.Enabled() || !w.providerUsageNeedsRefresh(name, p.Usage, now) {
 				continue
 			}
 			w.mu.Lock()
@@ -888,7 +884,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	if !w.chores {
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
-			if !p.Usage.Enabled() {
+			if !p.Enabled() {
 				continue
 			}
 			if _, err := w.resolveReading(ctx, usageProviderFile(name), p.Usage); err != nil {
@@ -923,7 +919,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	readings := map[string]providerReadingResult{}
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
-		if !p.Usage.Enabled() {
+		if !p.Enabled() {
 			continue
 		}
 		w.mu.Lock()
