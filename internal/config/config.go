@@ -928,6 +928,24 @@ var DefaultAgyUsageCommand = []string{"agy", "-p", "/usage"}
 // rollout transcripts in-process.
 var DefaultCodexUsageCommand = []string{"codex", "usage"}
 
+// KindSubscription and KindSelfHosted are capacity.providers.<name>.kind. A
+// subscription provider has a usage reader and a pace; a self-hosted provider
+// (a model served on the desk's own machines, such as an omp agent on a local
+// model) has neither: only a ceiling of sessions at once, its own.
+const (
+	KindSubscription = "subscription"
+	KindSelfHosted   = "self-hosted"
+)
+
+// DefaultSelfHostedCeiling is the ceiling of busy sessions a self-hosted
+// provider runs with when it sets no ceiling of its own: the machine guards
+// still bound every start, so an unset ceiling is generous rather than tight.
+const DefaultSelfHostedCeiling = 10
+
+// DefaultServeModeStale is how long a cached serving-mode reading stays fresh
+// before capacity.providers.<name>.serveModeCommand runs again.
+const DefaultServeModeStale = time.Minute
+
 // DefaultAgyGeminiBucket and DefaultAgyClaudeBucket are the usage bucket names
 // `agy -p /usage` prints for Gemini and Claude/GPT models.
 const (
@@ -981,14 +999,83 @@ type Capacity struct {
 	reviewSkipPaceSet bool
 }
 
-// Provider configures one subscription provider (such as claude, agy or codex):
-// its own floor and ceiling of busy agents and its usage reader and thresholds.
+// Provider configures one provider (such as claude, agy or codex): its own
+// floor and ceiling of busy agents and its usage reader and thresholds. A
+// provider of Kind self-hosted (a model served on the desk's own machines)
+// sets no usage reader: its ceiling alone bounds its busy sessions, and
+// capacity.ceiling bounds only the subscription providers' total.
 type Provider struct {
-	Floor      int `yaml:"floor"`
-	Ceiling    int `yaml:"ceiling"`
-	floorSet   bool
-	ceilingSet bool
-	Usage      `yaml:",inline"`
+	// Kind is KindSubscription (the default: a usage reader and a pace) or
+	// KindSelfHosted (no usage reader; a ceiling of sessions at once).
+	Kind             string `yaml:"kind"`
+	Floor            int    `yaml:"floor"`
+	Ceiling          int    `yaml:"ceiling"`
+	floorSet         bool
+	ceilingSet       bool
+	ServeModeCommand []string `yaml:"serveModeCommand"`
+	// ServeModeCeilings maps a serving mode read by ServeModeCommand to the
+	// ceiling it stands for; a mode naming none falls back to Ceiling.
+	ServeModeCeilings map[string]int `yaml:"serveModeCeilings"`
+	// ServeModeStale is how long a cached serving-mode reading stays fresh
+	// before ServeModeCommand runs again (default 1m).
+	ServeModeStale Duration `yaml:"serveModeStaleAfter"`
+	Usage          `yaml:",inline"`
+}
+
+// SelfHosted reports whether this provider is a model served on the desk's
+// own machines: no usage reader, no pace, a ceiling of its own.
+func (p Provider) SelfHosted() bool {
+	return strings.EqualFold(strings.TrimSpace(p.Kind), KindSelfHosted)
+}
+
+// HasServeMode reports whether this provider's ceiling follows a serving
+// mode read by serveModeCommand.
+func (p Provider) HasServeMode() bool {
+	return p.SelfHosted() && len(p.ServeModeCommand) > 0
+}
+
+// EffectiveServeModeStale is how long a cached serving-mode reading stays
+// fresh before beekeeper runs serveModeCommand again (default 1m).
+func (p Provider) EffectiveServeModeStale() time.Duration {
+	if p.ServeModeStale.Duration > 0 {
+		return p.ServeModeStale.Duration
+	}
+	return DefaultServeModeStale
+}
+
+// ServeModeCeiling is the ceiling the serving mode mode stands for, and
+// whether the provider names one for it.
+func (p Provider) ServeModeCeiling(mode string) (int, bool) {
+	if c, ok := p.ServeModeCeilings[mode]; ok {
+		return c, true
+	}
+	for k, c := range p.ServeModeCeilings {
+		if strings.EqualFold(k, mode) {
+			return c, true
+		}
+	}
+	return 0, false
+}
+
+// ServeModeReading is one read of a self-hosted provider's serving mode: when
+// it was read, the mode the command answered with, and why the read failed, if
+// it did. The ceiling the mode names is the provider's, resolved by
+// ServeModeCeiling.
+type ServeModeReading struct {
+	At   time.Time `json:"at,omitzero"`
+	Mode string    `json:"mode,omitempty"`
+	Err  string    `json:"error,omitempty"`
+}
+
+// WithServeMode returns the provider with r applied: the ceiling the mode it
+// names, falling back to Ceiling while the mode names none or the read failed.
+func (p Provider) WithServeMode(r ServeModeReading) Provider {
+	if r.Mode != "" && r.Err == "" {
+		if c, ok := p.ServeModeCeiling(r.Mode); ok {
+			p.Ceiling = c
+		}
+	}
+	return p
 }
 
 // Choice is one (harness, model) candidate in Capacity.Choices for
@@ -1292,13 +1379,17 @@ func (p *PaceCap) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// UnmarshalYAML decodes floor, ceiling and either inline or nested usage fields
-// on a provider.
+// UnmarshalYAML decodes kind, floor, ceiling and either inline or nested usage
+// fields on a provider.
 func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	var fc struct {
-		Floor   *int   `yaml:"floor"`
-		Ceiling *int   `yaml:"ceiling"`
-		Usage   *Usage `yaml:"usage"`
+		Kind             *string        `yaml:"kind"`
+		Floor            *int           `yaml:"floor"`
+		Ceiling          *int           `yaml:"ceiling"`
+		Usage            *Usage         `yaml:"usage"`
+		ServeModeStale   *Duration      `yaml:"serveModeStaleAfter"`
+		ServeModeCmd     *[]string      `yaml:"serveModeCommand"`
+		ServeModeCeiling map[string]int `yaml:"serveModeCeilings"`
 	}
 	if err := n.Decode(&fc); err != nil {
 		return err
@@ -1308,6 +1399,18 @@ func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	}
 	if fc.Usage != nil {
 		p.Usage = *fc.Usage
+	}
+	if fc.Kind != nil {
+		p.Kind = *fc.Kind
+	}
+	if fc.ServeModeStale != nil {
+		p.ServeModeStale = *fc.ServeModeStale
+	}
+	if fc.ServeModeCmd != nil {
+		p.ServeModeCommand = *fc.ServeModeCmd
+	}
+	if fc.ServeModeCeiling != nil {
+		p.ServeModeCeilings = fc.ServeModeCeiling
 	}
 	if fc.Floor != nil {
 		p.Floor, p.floorSet = *fc.Floor, true
@@ -2935,11 +3038,25 @@ func (c *Config) defaults() error {
 	c.Capacity.Usage.defaults(home, c.Capacity.Floor)
 	for _, name := range slices.Sorted(maps.Keys(c.Capacity.Providers)) {
 		p := c.Capacity.Providers[name]
-		if !p.ceilingSet && p.Ceiling == 0 {
-			p.Ceiling = c.Capacity.Ceiling
-		}
-		if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
-			p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
+		if p.SelfHosted() {
+			// A self-hosted provider has no subscription to keep on pace:
+			// capacity.ceiling, which a desk lowers to hold one on its week,
+			// does not set its target. Without a ceiling of its own it runs
+			// DefaultSelfHostedCeiling sessions at once, bounded by the
+			// machine guards.
+			if !p.ceilingSet {
+				p.Ceiling = DefaultSelfHostedCeiling
+			}
+			if !p.floorSet {
+				p.Floor = max(0, min(p.Ceiling, c.Capacity.Floor))
+			}
+		} else {
+			if !p.ceilingSet && p.Ceiling == 0 {
+				p.Ceiling = c.Capacity.Ceiling
+			}
+			if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
+				p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
+			}
 		}
 		if name == "agy" && len(p.Command) == 0 && p.hasFields() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
@@ -3315,8 +3432,35 @@ func (c *Config) validate() error {
 			return errors.New("capacity.providers: empty provider name")
 		}
 		p := c.Capacity.Providers[name]
+		if k := strings.TrimSpace(p.Kind); k != "" && k != KindSubscription && k != KindSelfHosted {
+			return fmt.Errorf("capacity.providers.%s.kind: %q is not %s or %s", name, p.Kind, KindSubscription, KindSelfHosted)
+		}
 		if p.Floor < 0 || p.Ceiling < p.Floor {
 			return fmt.Errorf("capacity.providers.%s: floor %d and ceiling %d; the ceiling is at least the floor", name, p.Floor, p.Ceiling)
+		}
+		if p.SelfHosted() {
+			if p.Usage.Enabled() {
+				return fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted)
+			}
+			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeCeilings)) {
+				if p.ServeModeCeilings[mode] < 0 {
+					return fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d is negative", name, mode, p.ServeModeCeilings[mode])
+				}
+			}
+			if len(p.ServeModeCommand) > 0 {
+				if strings.TrimSpace(p.ServeModeCommand[0]) == "" {
+					return fmt.Errorf("capacity.providers.%s.serveModeCommand[0]: empty executable", name)
+				}
+				if len(p.ServeModeCeilings) == 0 {
+					return fmt.Errorf("capacity.providers.%s.serveModeCommand: no serveModeCeilings: the command's modes name no ceiling", name)
+				}
+			} else if len(p.ServeModeCeilings) > 0 {
+				return fmt.Errorf("capacity.providers.%s.serveModeCeilings: no serveModeCommand: the ceilings name no mode reader", name)
+			}
+			continue
+		}
+		if len(p.ServeModeCommand) > 0 || len(p.ServeModeCeilings) > 0 {
+			return fmt.Errorf("capacity.providers.%s: serveModeCommand and serveModeCeilings belong to a %s provider", name, KindSelfHosted)
 		}
 		if err := p.validateNamed("capacity.providers." + name); err != nil {
 			return err

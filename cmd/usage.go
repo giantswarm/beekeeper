@@ -518,6 +518,81 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 	return runUsageCommand(ctx, u.Command, u.EffectiveTimeout())
 }
 
+// serveModeFile is the state's side file holding a self-hosted provider's
+// latest serving-mode reading.
+func serveModeFile(name string) string {
+	return "serve-mode-" + unsafeKey.ReplaceAllString(name, "_") + ".json"
+}
+
+// serveMode is the provider's serving mode now: the cached reading while it is
+// fresh, else one read by running serveModeCommand. A failed or stale read is
+// returned as an error: the provider keeps its configured ceiling, and the
+// line says the mode is unknown rather than naming one it did not read.
+func (a *app) serveMode(ctx context.Context, name string, p config.Provider) config.ServeModeReading {
+	if !p.HasServeMode() {
+		return config.ServeModeReading{}
+	}
+	now := a.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	fresh := func(r config.ServeModeReading) bool {
+		return !r.At.IsZero() && !r.At.After(now.Add(time.Minute)) && now.Sub(r.At) <= p.EffectiveServeModeStale()
+	}
+	var cached config.ServeModeReading
+	var haveCached bool
+	if a.store != nil {
+		if found, err := a.store.ReadFile(serveModeFile(name), &cached); err == nil && found {
+			if fresh(cached) {
+				return cached
+			}
+			haveCached = true
+		}
+	}
+	r, err := a.runServeMode(ctx, p)
+	if err != nil {
+		// In the agent sandbox, where the command cannot run, a reading the
+		// host's watch wrote within twice the freshness window stands.
+		if haveCached && inSandbox() && now.Sub(cached.At) <= 2*p.EffectiveServeModeStale() {
+			return cached
+		}
+		return config.ServeModeReading{Err: err.Error()}
+	}
+	r.At = now.UTC()
+	if a.store != nil {
+		_ = a.store.WriteFile(serveModeFile(name), r)
+	}
+	return r
+}
+
+// runServeMode runs the provider's serving-mode command and reads the mode off
+// its stdout: the first word it prints.
+func (a *app) runServeMode(ctx context.Context, p config.Provider) (config.ServeModeReading, error) {
+	if a.readServeMode != nil {
+		return a.readServeMode(ctx, p.ServeModeCommand, p.EffectiveServeModeStale())
+	}
+	ctx, cancel := context.WithTimeout(ctx, config.DefaultUsageTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, p.ServeModeCommand[0], p.ServeModeCommand[1:]...) //nolint:gosec // the configured serving-mode command
+	var stdout, stderr bytes.Buffer
+	c.Stdout, c.Stderr = &stdout, &stderr
+	if err := c.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return config.ServeModeReading{}, fmt.Errorf("serving mode command timed out: %s", strings.Join(p.ServeModeCommand, " "))
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return config.ServeModeReading{}, fmt.Errorf("serving mode command: %s", msg)
+	}
+	fields := strings.Fields(stdout.String())
+	if len(fields) == 0 {
+		return config.ServeModeReading{}, errors.New("serving mode command printed no mode")
+	}
+	return config.ServeModeReading{Mode: fields[0]}, nil
+}
+
 func (a *app) readCodexUsage() (usageReading, error) {
 	var stateDir, sessionsDir string
 	if a.cfg != nil {
@@ -583,12 +658,24 @@ func (a *app) cachedUsageCapacity(k config.Capacity) (config.Capacity, *usageVie
 func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, providerErrs map[string]string) (config.Capacity, *usageView) {
 	derived := k
 	sumFloor, sumCeiling := 0, 0
+	subFloor, subCeiling := 0, 0
+	anySubscription := false
 	var errs []string
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
+		if p.SelfHosted() {
+			// The self-hosted provider's ceiling is its own; capacity.ceiling
+			// holds back only the subscriptions.
+			sumFloor += p.Floor
+			sumCeiling += p.Ceiling
+			continue
+		}
 		if !p.Enabled() {
 			sumFloor += p.Floor
 			sumCeiling += p.Ceiling
+			anySubscription = true
+			subFloor += p.Floor
+			subCeiling += p.Ceiling
 			continue
 		}
 		if uerr := providerErrs[name]; uerr != "" {
@@ -616,8 +703,14 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
 		sumFloor += pv.Floor
 		sumCeiling += pv.Ceiling
+		anySubscription = true
+		subFloor += pv.Floor
+		subCeiling += pv.Ceiling
 	}
-	derived.Ceiling = min(k.Ceiling, sumCeiling)
+	derived.Ceiling = sumCeiling
+	if anySubscription {
+		derived.Ceiling = min(k.Ceiling, subCeiling) + (sumCeiling - subCeiling)
+	}
 	derived.Floor = min(k.Floor, min(sumFloor, derived.Ceiling))
 	var u *usageView
 	if len(errs) > 0 {
@@ -1106,6 +1199,17 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 
 	c := countAgents(st, sessions, w.now)
 	pa := countProviderAgents(st, sessions, k, w.now)
+	for _, name := range k.ProviderNames() {
+		p := k.Providers[name]
+		if !p.SelfHosted() {
+			continue
+		}
+		// A self-hosted provider reads no subscription usage; its ceiling may
+		// follow the serving mode of the model it serves.
+		r := w.app.serveMode(ctx, name, p)
+		readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+		k.Providers[name] = p.WithServeMode(r)
+	}
 	w.mu.Lock()
 	swap := w.swap
 	w.mu.Unlock()
@@ -1126,6 +1230,18 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		}
 		pv := v.Providers[name]
 		if pv == nil {
+			continue
+		}
+		if pv.Kind == config.KindSelfHosted {
+			// No subscription behind it: no USAGE HIGH, nothing to tell its
+			// workers to park for; its own ceiling is the only guard.
+			allHigh = false
+			if pv.ServingModeError != "" {
+				w.fail("serve-mode-error-"+name, "SERVE MODE %s unreadable: %s", name, pv.ServingModeError)
+			} else {
+				w.clear("serve-mode-error-" + name)
+			}
+			parts = append(parts, name+": "+pv.watchSummary(w.now))
 			continue
 		}
 		if pv.Error != "" {
