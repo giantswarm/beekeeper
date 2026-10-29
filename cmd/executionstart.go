@@ -160,6 +160,13 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 	readings := map[string]providerReadingResult{}
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
+		if p.SelfHosted() {
+			// A self-hosted provider reads no subscription usage; its ceiling
+			// may follow the serving mode of the model it serves.
+			r := a.serveMode(ctx, name, p)
+			readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+			continue
+		}
 		if !p.Enabled() {
 			continue
 		}

@@ -230,3 +230,95 @@ func TestExecutionAutoModelValidationDryRunAndLocalSelection(t *testing.T) {
 		t.Fatal("local selector used an SSH path")
 	}
 }
+
+// The serving-mode ceiling of a self-hosted provider stands during admission:
+// readings must not rewrite the shared capacity map, or every start would
+// refuse with "provider configuration changed during admission".
+func TestExecutionAdmissionServeModeCeiling(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	const provLocal = "local-model"
+	host := a.cfg.Agents.Hosts[sshTestSelector]
+	raw := "capacity:\n" +
+		"  ceiling: 10\n" +
+		"  providers:\n" +
+		"    " + claudeComm + ":\n" +
+		"      ceiling: 5\n" +
+		"    " + provLocal + ":\n" +
+		"      kind: self-hosted\n" +
+		"      ceiling: 5\n" +
+		"      serveModeCommand: [read-serve-mode]\n" +
+		"      serveModeCeilings:\n" +
+		"        " + serveModeFull + ": 1\n" +
+		"  choices:\n" +
+		"    - harness: " + claudeComm + "\n" +
+		"      model: " + bgModel + "\n" +
+		"      provider: " + claudeComm + "\n" +
+		"agents:\n" +
+		"  hosts:\n" +
+		"    " + sshTestSelector + ":\n" +
+		"      ssh: " + host.SSH + "\n" +
+		"      executable: " + host.Executable + "\n" +
+		"      config: " + host.Config + "\n" +
+		"      identity: " + string(host.Identity) + "\n" +
+		"      workspaceRoot: " + host.WorkspaceRoot + "\n" +
+		"      repositories:\n" +
+		"        " + sshTestRepository + ": " + host.Repositories[sshTestRepository] + "\n" +
+		"      harnesses: [" + claudeComm + "]\n" +
+		"      policyDigest: " + host.PolicyDigest + "\n" +
+		"      maxBusy: 2\n"
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	full := "stateDir: " + a.cfg.StateDir + "\nleaseDir: " + a.cfg.LeaseDir + "\nmemcap: {slotDir: " + filepath.Join(dir, "slots") + "}\n" +
+		"claude: {projectsDir: " + filepath.Join(dir, "projects") + ", sessionsDir: " + filepath.Join(dir, "sessions") + "}\n" + raw
+	if err := os.WriteFile(cfgPath, []byte(full), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture rewrote the capacity in memory; the disk config is the
+	// truth for both sides of the admission re-check.
+	cfg2, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.cfgPath = cfgPath
+	a.cfg.Capacity = cfg2.Capacity
+	modeReads := 0
+	a.readServeMode = func(context.Context, []string, time.Duration) (config.ServeModeReading, error) {
+		modeReads++
+		return config.ServeModeReading{Mode: serveModeFull}, nil
+	}
+	fake := &testExecutionTransport{}
+	var handle execution.Handle
+	fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+		handle = execution.Handle{Ref: r.Ref, Repository: r.Repository, Commit: strings.Repeat("a", 40), Workspace: path.Join(a.cfg.Agents.Hosts[sshTestSelector].WorkspaceRoot, string(r.Ref.Execution), "workspace"), Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}
+		return handle, nil
+	}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		return execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true}, nil
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	if err := a.startSSHExecution(context.Background(), "worker-serve", brief, executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}); err != nil {
+		t.Fatalf("serve-mode ceiling broke admission: %v", err)
+	}
+	if modeReads == 0 {
+		t.Fatal("the serving mode of the self-hosted provider was never read")
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Starts) != 1 {
+		t.Fatalf("admission reserved %d executions, want 1", len(st.Starts))
+	}
+	// The shared config keeps the configured ceiling: reading the serving
+	// mode never mutated it, so the admission re-check cannot fire.
+	if got := a.cfg.Capacity.Providers[provLocal].Ceiling; got != 5 {
+		t.Fatalf("configured ceiling mutated to %d, want 5", got)
+	}
+	if err := os.Remove(filepath.Join(a.store.Dir(), serveModeFile(provLocal))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	a.executionReadings(context.Background(), a.liveCapacity())
+	if got := a.cfg.Capacity.Providers[provLocal].Ceiling; got != 5 {
+		t.Fatalf("executionReadings mutated the configured ceiling to %d, want 5", got)
+	}
+}
