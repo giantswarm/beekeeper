@@ -441,9 +441,6 @@ func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov,
 			return p, ch.EffectiveBucket(k.Providers[p])
 		}
 	}
-	if _, ok := k.Providers[h]; ok {
-		return h, k.Providers[h].BucketFor(m)
-	}
 	// An omp model is <provider>/<id>: its provider is the one it names, when
 	// the desk configures it. Else the first self-hosted provider whose model
 	// prefix the selector carries (omp's default provider, unset, "local");
@@ -899,6 +896,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	sumFloor, sumCeiling := 0, 0
 	subFloor, subCeiling := 0, 0
 	anySubscription := false
+	anySelfHosted := false
 	for _, name := range k.ProviderNames() {
 		pCfg := k.Providers[name]
 		pv := buildSingleProviderView(name, pCfg, pa[name], readings[name], now)
@@ -908,7 +906,9 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 		// capacity.ceiling caps the subscription providers, not a self-hosted
 		// one: a desk that lowers capacity.ceiling to 0 to keep a subscription
 		// on its weekly pace still starts on its own model.
-		if !pCfg.SelfHosted() {
+		if pCfg.SelfHosted() {
+			anySelfHosted = true
+		} else {
 			anySubscription = true
 			subFloor += pv.Floor
 			subCeiling += pv.Ceiling
@@ -1023,7 +1023,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	case len(mBlocks) > 0:
 		v.Room = 0
 		switch {
-		case k.Ceiling == 0 && selfHostedRoom == 0:
+		case k.Ceiling == 0 && selfHostedRoom == 0 && anySubscription && !anySelfHosted:
 			v.Blocks = append([]string{ceilingZero}, mBlocks...)
 		case machineBusy >= effCeiling && effCeiling > 0:
 			v.Blocks = append([]string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}, mBlocks...)
@@ -1046,12 +1046,13 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 		if v.Room == 0 {
 			// The total capacity.ceiling holds the subscription side to
 			// refuses a start only when it took room a subscription provider
-			// had; otherwise every provider keeps its own block (a failed
-			// usage read, USAGE HIGH, its own ceiling), which is what the
-			// verdict says.
-			if k.Ceiling > 0 && anySubscription && subHadRoom && subRoomCap == 0 {
+			// had; with no self-hosted provider in the pool the total names
+			// the verdict. Otherwise every provider keeps its own block (a
+			// failed usage read, USAGE HIGH, its own ceiling), and the verdict
+			// names each of them.
+			if !anySelfHosted && k.Ceiling > 0 && anySubscription && subHadRoom && subRoomCap == 0 {
 				v.Blocks = []string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}
-			} else if k.Ceiling == 0 && selfHostedRoom == 0 {
+			} else if !anySelfHosted && k.Ceiling == 0 && anySubscription && subHadRoom {
 				v.Blocks = []string{ceilingZero}
 			} else {
 				for _, name := range k.ProviderNames() {

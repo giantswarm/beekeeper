@@ -3152,6 +3152,50 @@ omp:
 	if !strings.Contains(got, "room for 2 starts") {
 		t.Fatalf("verdict with the self-hosted provider open:\n%s", got)
 	}
+
+	// With the self-hosted provider full, its verdict names its own block
+	// and the subscription's, never a bare ceiling 0.
+	selfHostedAgents(t, store, "OmpBusyOne", "OmpBusyTwo")
+	out.Reset()
+	if err := a.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got = out.String()
+	if strings.Contains(got, "no start: ceiling 0") {
+		t.Fatalf("verdict with the self-hosted provider full hides its block:\n%s", got)
+	}
+	if !strings.Contains(got, "claude: subscription usage unknown (endpoint timeout)") || !strings.Contains(got, "local-model: 2 busy at the ceiling of 2") {
+		t.Fatalf("verdict with the self-hosted provider full:\n%s", got)
+	}
+
+	// At capacity.ceiling 0 the same holds: the subscription's ceiling 0
+	// rides its own provider's name, the self-hosted block stays apart.
+	selfHostedAgents(t, store)
+	if err := os.WriteFile(cfgPath, []byte(strings.Replace(providerRaw, "ceiling: 10", "ceiling: 0", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfHostedAgents(t, store, "OmpBusyOne", "OmpBusyTwo")
+	out.Reset()
+	a = newSelfHostedApp(cfgPath, cfg, store, &out, t0)
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{}, errors.New("endpoint timeout")
+	}
+	if err := a.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got = out.String()
+	if strings.Contains(got, "no start: ceiling 0") {
+		t.Fatalf("verdict at ceiling 0 with the self-hosted provider full hides its block:\n%s", got)
+	}
+	// The failed read stands at claude's own ceiling 0: the verdict names
+	// each provider's block, the total's ceiling 0 never overrides it.
+	if !strings.Contains(got, "claude: subscription usage unknown (endpoint timeout)") || !strings.Contains(got, "local-model: 2 busy at the ceiling of 2") {
+		t.Fatalf("verdict at ceiling 0 with the self-hosted provider full:\n%s", got)
+	}
 }
 
 // TestSelfHostedNoChoicesFallback covers an omp start with no
@@ -3177,5 +3221,34 @@ func TestSelfHostedNoChoicesFallback(t *testing.T) {
 	}
 	if p, _ := resolveAgentProviderBucket(two, omp.Harness, "b-local/x"); p != "b-local" {
 		t.Fatalf("omp model by prefix resolved to %q, want b-local", p)
+	}
+	// A self-hosted provider named omp never shadows the model selector: the
+	// <provider>/ prefix of the model resolves first, and a model naming no
+	// provider falls to the sole self-hosted provider other than omp.
+	named := config.Capacity{Providers: map[string]config.Provider{
+		omp.Harness:    {Kind: config.KindSelfHosted, Ceiling: 2},
+		selfHostedProv: {Kind: config.KindSelfHosted, Ceiling: 2},
+	}}
+	if p, _ := resolveAgentProviderBucket(named, omp.Harness, selfHostedTestModel); p != selfHostedProv {
+		t.Fatalf("omp model shadowed by a provider named omp: resolved to %q, want %s", p, selfHostedProv)
+	}
+	if p, _ := resolveAgentProviderBucket(named, omp.Harness, omp.Harness+"/worker-model"); p != omp.Harness {
+		t.Fatalf("omp model naming the omp provider resolved to %q, want %s", p, omp.Harness)
+	}
+	// A subscription harness never resolves to a self-hosted provider named
+	// after it: with no subscription provider in the pool the harness's own
+	// name stands, and the self-hosted provider keeps its room to omp.
+	subOnly := config.Capacity{Providers: map[string]config.Provider{
+		claudeComm:     {Ceiling: 4, Usage: config.Usage{Command: []string{"read-claude"}}},
+		selfHostedProv: {Kind: config.KindSelfHosted, Ceiling: 2},
+	}}
+	if p, _ := resolveAgentProviderBucket(subOnly, claudeComm, "opus"); p != claudeComm {
+		t.Fatalf("claude harness resolved to %q, want claude", p)
+	}
+	sh := config.Capacity{Providers: map[string]config.Provider{
+		claudeComm: {Kind: config.KindSelfHosted, Ceiling: 2},
+	}}
+	if p, _ := resolveAgentProviderBucket(sh, claudeComm, "opus"); p != claudeComm {
+		t.Fatalf("claude harness against a self-hosted provider named claude resolved to %q, want claude (no room, held)", p)
 	}
 }
