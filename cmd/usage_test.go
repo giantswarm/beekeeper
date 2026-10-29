@@ -1592,7 +1592,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		t.Fatalf("--harness auto with unknown --model: code=%d, err=%v, out=%q", Code(err), err, outUnknownModel.String())
 	}
 
-	// --exclude claude-opus-4-6-thinking --model claude-opus-4-6-thinking refuses in both dry-run and real start (even with --force), never announcing Gemini.
+	// --exclude claude-opus-4-6-thinking --model claude-opus-4-6-thinking refuses in both dry-run and real start (even with --force), never announcing Gemini. A dry run shows only the build slot it would find; the refusal's words are in its error.
 	for _, isDry := range []bool{true, false} {
 		aExModel, outExModel := newApp()
 		cmdExModel := aExModel.agentStartCmd()
@@ -1604,8 +1604,11 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		}
 		cmdExModel.SetArgs(args)
 		err = cmdExModel.Execute()
-		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "excluded") || outExModel.String() != "" {
-			t.Fatalf("--harness auto excluded --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outExModel.String())
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "excluded") {
+			t.Fatalf("--harness auto excluded --model (dry=%v): code=%d, err=%v", isDry, Code(err), err)
+		}
+		if got := outExModel.String(); got != "" && got != "build slot: free\n" {
+			t.Fatalf("--harness auto excluded --model (dry=%v): out=%q", isDry, got)
 		}
 	}
 
@@ -1621,8 +1624,11 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		}
 		cmdHighModel.SetArgs(args)
 		err = cmdHighModel.Execute()
-		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agy/claude-opus-4-6-thinking: usage high: 5h 96% at or past 95%") || outHighModel.String() != "" {
-			t.Fatalf("--harness auto blocked bucket --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outHighModel.String())
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agy/claude-opus-4-6-thinking: usage high: 5h 96% at or past 95%") {
+			t.Fatalf("--harness auto blocked bucket --model (dry=%v): code=%d, err=%v", isDry, Code(err), err)
+		}
+		if got := outHighModel.String(); got != "" && got != "build slot: free\n" {
+			t.Fatalf("--harness auto blocked bucket --model (dry=%v): out=%q", isDry, got)
 		}
 	}
 
@@ -3419,10 +3425,9 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	}
 
 	// At ceiling 5 with the self-hosted provider at its own full 3 and no
-	// claude session busy, a claude start still has room: capacity.ceiling
-	// bounds it together with the other busy sessions of the roster — 5
-	// minus the 3 omp sessions, so 2 — never with the block of the provider
-	// that is full.
+	// claude session busy, a claude start still has the whole room of 5:
+	// the self-hosted provider's busy sessions weigh on its own ceiling,
+	// never on capacity.ceiling or on a harness none of its providers claims.
 	cfg5, store5 := loadOnlySelfHosted(t, cfgPath, 5, false)
 	if err := store5.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = nil
@@ -3442,10 +3447,10 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude gate at ceiling 5 with the self-hosted provider full: %v", err)
 	}
-	if v.Room != 2 {
-		t.Fatalf("claude target room = %d, want 2 with 3 of the ceiling of 5 on the self-hosted provider", v.Room)
+	if v.Room != 5 {
+		t.Fatalf("claude target room = %d, want the whole ceiling of 5 with its own sessions free", v.Room)
 	}
-	// One claude session busy then takes one of that room: 1 left.
+	// One claude session busy then takes one of that room: 4 left.
 	if err := store5.Update(func(st *state.State) ([]state.Event, error) {
 		busy := tasked("ClaudeBusy")
 		st.Agents = append(st.Agents, busy)
@@ -3459,8 +3464,8 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude gate at ceiling 5 with its own session busy: %v", err)
 	}
-	if v2.Room != 1 {
-		t.Fatalf("claude target room with one claude busy = %d, want 2 minus its own busy session", v2.Room)
+	if v2.Room != 4 {
+		t.Fatalf("claude target room with one claude busy = %d, want 5 minus its own busy session", v2.Room)
 	}
 }
 
@@ -3503,7 +3508,9 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 		plat.Launcher = origLauncher
 		plat.Machine = origProcMachine
 	})
-	plat.Machine = tableMachine{plat.Machine}
+	// The gate reads the machine's guards for real: roomyMachine's spare
+	// memory and load keep the verdict on the desk's numbers, not the host's.
+	plat.Machine = roomyMachine{plat.Machine}
 	plat.Launcher = &agyTestLauncher{onStart: func(u platform.Unit) {
 		go func() {
 			var ompID string
@@ -3528,9 +3535,20 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 	if err := startHarness(aOmp, "DryOmpRoom", brief, dir, omp.Harness, "", true); err != nil {
 		t.Fatalf("--dry-run omp at ceiling 0: %v\n%s", err, ompOut.String())
 	}
-	if !strings.Contains(ompOut.String(), "dry run: DryOmpRoom") ||
+	if !strings.Contains(ompOut.String(), "room for 3 starts") ||
+		!strings.Contains(ompOut.String(), "dry run: DryOmpRoom") ||
 		!strings.Contains(ompOut.String(), "as an omp agent on "+selfHostedTestModel) {
 		t.Fatalf("--dry-run omp output:\n%s", ompOut.String())
+	}
+	// The same with no --harness: the auto choice prints its line, and the
+	// gate's verdict with it.
+	var autoOut bytes.Buffer
+	aAuto := newSelfHostedApp(cfgPath, cfg, store, &autoOut, t0)
+	if err := startHarness(aAuto, "DryOmpAuto", brief, dir, harnessAuto, "", true); err != nil {
+		t.Fatalf("--dry-run auto at ceiling 0: %v\n%s", err, autoOut.String())
+	}
+	if !strings.Contains(autoOut.String(), "room for 3 starts") {
+		t.Fatalf("--dry-run auto output:\n%s", autoOut.String())
 	}
 	st, err := store.Read()
 	if err != nil {

@@ -42,15 +42,14 @@ type capacityView struct {
 	Blocks []string `json:"blocks,omitempty"`
 	// subRoomCap is the room capacity.ceiling still leaves the subscription
 	// providers together; selfHostedRoom is the room the self-hosted providers
-	// have, which capacity.ceiling never bounds. forTarget bounds a target
-	// that resolves to no provider of its own by the subscription side alone.
-	// unassignedRoom is the room the same cap leaves the starts of no
-	// provider entry on a desk whose providers are all self-hosted: the
-	// providers' own blocks empty Room, and forTarget raises it back for one
-	// of those starts.
+	// have, which capacity.ceiling never bounds. unassignedBusy counts the
+	// busy sessions of no provider of the pool: forTarget bounds a target
+	// that resolves to no provider of its own by capacity.ceiling minus
+	// those alone — never by the busy agents of a self-hosted provider,
+	// which weigh on its own ceiling only.
 	subRoomCap     int
 	selfHostedRoom int
-	unassignedRoom int
+	unassignedBusy int
 	// Notes is what a start that fits should know: disk swap growing
 	// without memory pressure, the busy build slot a start without builds
 	// does not wait for.
@@ -580,7 +579,7 @@ func (h *headroom) blocks(builds bool) []string {
 	if line, blocks := h.swapGuard(); blocks {
 		out = append(out, line)
 	}
-	if h.LoadErr == "" && h.LoadMax > 0 && h.Load1 > h.LoadMax {
+	if h.LoadErr == "" && h.LoadMax > 0 && h.Load1 >= 2*h.LoadMax {
 		out = append(out, fmt.Sprintf("1m load %.0f over %.0f", h.Load1, h.LoadMax))
 	}
 	if builds && h.slotBusy() {
@@ -962,12 +961,25 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	// minus the busy agents that resolve to no provider of the pool — an agent
 	// of the pool belongs to its provider's own target, never to this one.
 	subscriptionCap := max(0, min(k.Ceiling, subCeiling)-subscriptionBusy)
+	// unassignedBusy is capacity's own count of the busy sessions of no
+	// provider of the pool, the weight forTarget names in the verdict of a
+	// start that resolves to no provider: with a subscription provider in
+	// the pool every busy agent weighs on its side, with none only those of
+	// no provider of the pool.
+	unassignedBusy := 0
 	if !anySubscription {
-		assigned := 0
+		assigned := map[string]bool{}
 		for _, name := range k.ProviderNames() {
-			assigned += len(providers[name].Busy)
+			for _, n := range providers[name].Busy {
+				assigned[n] = true
+			}
 		}
-		subscriptionCap = max(0, k.Ceiling-(len(c.Busy)-assigned))
+		for _, n := range c.Busy {
+			if !assigned[n] {
+				unassignedBusy++
+			}
+		}
+		subscriptionCap = max(0, k.Ceiling-unassignedBusy)
 	}
 	subRoomCap := subscriptionCap
 	// A self-hosted start belongs to no subscription, so capacity.ceiling caps
@@ -991,8 +1003,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 		// self-hosted provider, and forTarget judges one of those.
 		selfHosted := pCfg.SelfHosted()
 		left := subRoomCap
-		switch {
-		case selfHosted:
+		if selfHosted {
 			left = pv.Room
 		}
 		if !selfHosted && pv.Room > 0 {
@@ -1030,6 +1041,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 		Builds:         builds,
 		subRoomCap:     subRoomCap,
 		selfHostedRoom: selfHostedRoom,
+		unassignedBusy: unassignedBusy,
 	}
 	if line, blocks := h.swapGuard(); line != "" && !blocks {
 		v.Notes = append(v.Notes, line)
@@ -1064,37 +1076,14 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 			// the choices of no provider entry to — never the other way, a
 			// self-hosted provider at its ceiling holding a desk with a free
 			// capacity.ceiling from every start.
-			v.Room = choiceRoom
-			if !anySubscription {
-				v.Room = max(choiceRoom, min(subRoomCap, machineRoomCap))
-			}
-			v.Room = min(v.Room, machineRoomCap)
+			v.Room = min(choiceRoom, machineRoomCap)
 			if v.Room == 0 {
 				v.Blocks = []string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}
 			}
 		}
-		// The cap's room for a start of no provider entry rides apart, not
-		// in Room: a full self-hosted provider empties Room, and forTarget
-		// raises it back to this for a harness the providers do not claim.
-		if !anySubscription {
-			v.unassignedRoom = min(subRoomCap, machineRoomCap)
-		}
 	default:
 		v.Room = min(machineRoomCap, sumRoom)
-		if v.Room == 0 && !anySubscription && subRoomCap > 0 {
-			// capacity.ceiling has room; the self-hosted provider's own
-			// target is full. The verdict is the provider's block — the
-			// harnesses with no provider entry are not refused by this
-			// total, they are judged by the cap in forTarget.
-			// The room the cap leaves them rides apart, not in Room: a
-			// start of such a harness raises it again there.
-			v.unassignedRoom = subRoomCap
-			for _, name := range k.ProviderNames() {
-				if pv := providers[name]; len(pv.Blocks) > 0 {
-					v.Blocks = append(v.Blocks, name+": "+strings.Join(pv.Blocks, "; "))
-				}
-			}
-		} else if v.Room == 0 {
+		if v.Room == 0 {
 			// The total capacity.ceiling holds the subscription side to
 			// refuses a start only when it took room a subscription provider
 			// had; with no self-hosted provider in the pool the total names
@@ -1102,11 +1091,6 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 			// failed usage read, USAGE HIGH, its own ceiling), and the verdict
 			// names each of them.
 			switch {
-			case k.Ceiling == 0 && !anySubscription:
-				// capacity.ceiling 0 of such a desk holds the starts of no
-				// provider entry; it names the verdict only when the
-				// self-hosted room is gone as well.
-				v.Blocks = []string{ceilingZero}
 			case !anySelfHosted && k.Ceiling > 0 && anySubscription && subHadRoom && subRoomCap == 0:
 				v.Blocks = []string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}
 			case !anySelfHosted && k.Ceiling == 0 && anySubscription && subHadRoom:
@@ -1121,18 +1105,6 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 		}
 	}
 	return v
-}
-
-// anySubscriptionProvider says whether k holds a provider that is not
-// self-hosted: with none, capacity.ceiling bounds the starts that run on no
-// self-hosted provider alone, and every busy agent of the roster weighs on it.
-func anySubscriptionProvider(k config.Capacity) bool {
-	for _, name := range k.ProviderNames() {
-		if !k.Providers[name].SelfHosted() {
-			return true
-		}
-	}
-	return false
 }
 
 // totalCeilingBlock is the block naming the total a start hit. With a
@@ -1475,56 +1447,9 @@ func (a *app) liveCapacity() config.Capacity {
 	return a.cfg.Capacity
 }
 
-// dryRunAvailMiB is the MemAvailable the dry run's gate reads when the
-// machine's memory stands under the desk's floor: a dry run claims none, so
-// memory never blocks one.
-const dryRunAvailMiB = 1 << 20
-
-// dryRunGate is the mark startGateWithOptions judges a start's dry run by:
-// the start gate of --dry-run, which judges the desk's own numbers (the busy
-// agents against capacity.ceiling, the providers' ceilings, pace and usage)
-// while the machine's guards — MemAvailable, swap, load, the kind labs and
-// the build slot — stand open for it: a dry run claims no memory, joins no
-// queue and starts no process.
-type dryRunGate struct{}
-
-// dryRunCapacityContext marks ctx as a dry run's start gate.
-func dryRunCapacityContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, dryRunGate{}, true)
-}
-
-// ctxIsDryRunGate reports whether ctx carries the dry run's mark.
-func ctxIsDryRunGate(ctx context.Context) bool {
-	return ctx.Value(dryRunGate{}) != nil
-}
-
 // readHeadroom reads the machine's headroom now against k; swap is the
-// watch's latest reading, nil without a fresh one. The dry run's gate
-// (dryRunGate) reads it with the machine's guards open: its verdict is the
-// desk's own numbers.
+// watch's latest reading, nil without a fresh one.
 func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapReading) *headroom {
-	if ctxIsDryRunGate(ctx) {
-		// The machine's guards stay open for the dry run: memory the
-		// platform cannot report, or sits below the floor, is the dry run's
-		// stand-in, never a block of its own — a real start reads it live.
-		m, err := plat.Machine.Mem()
-		avail, memErr := dryRunAvailMiB, ""
-		if err == nil && m.AvailableMiB >= k.AvailMinMiB {
-			avail = m.AvailableMiB
-		}
-		_, slots := a.slotView()
-		return &headroom{
-			AvailableMiB:     avail,
-			AvailMinMiB:      k.AvailMinMiB,
-			MemErr:           memErr,
-			SwapGrowthMaxMiB: k.SwapGrowthMaxMiB,
-			PSIMax:           k.SwapPSIMax,
-			LoadMax:          a.cfg.Watch.LoadLimit(runtime.NumCPU()),
-			MaxLabs:          a.cfg.KindClusters(m.TotalMiB),
-			Slots:            slots,
-			SlotsFree:        slots,
-		}
-	}
 	slotDir, slots := a.slotView()
 	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
 	m, err := plat.Machine.Mem()
@@ -1800,31 +1725,27 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 		return v
 	}
 	prov, bucket := resolveAgentProviderBucket(k, harness, model)
-	// A harness the desk's providers claim none of — claude, agy, codex on a
-	// desk with only a self-hosted provider. capacity.ceiling itself bounds
-	// it, and every busy session of the roster weighs on it: a claude
-	// session busy at ceiling 0 still leaves no room. A self-hosted
-	// provider's own ceiling is none of its business, so the cap's room of
-	// v.unassignedRoom bounds it, not the room the providers' blocks left
-	// in v.Room.
 	pv := v.Providers[prov]
-	// On an all-self-hosted desk a target whose provider is not self-hosted
-	// (a harness the providers claim none of) belongs to no self-hosted
-	// pool: capacity.ceiling bounds it alone, and every busy session of the
-	// roster weighs on it — a claude session busy at ceiling 0 still leaves
-	// no room. A self-hosted provider's own ceiling is none of its business.
-	unassigned := pv == nil ||
-		(pv.Kind != config.KindSelfHosted && !anySubscriptionProvider(k))
-	if pv == nil || unassigned {
-		cap := v.subRoomCap
-		if !anySubscriptionProvider(k) {
-			cap = max(0, k.Ceiling-len(v.Busy))
+	if pv == nil {
+		// A harness the desk's providers claim none of — claude, agy, codex
+		// on a desk with only a self-hosted provider: capacity.ceiling
+		// itself bounds it, and only the busy sessions of no provider of the
+		// pool weigh on it (v.unassignedBusy); the busy agents of a
+		// self-hosted provider belong to its own ceiling, never to this
+		// target. The machine's guards weigh on every target alike.
+		if mBlocks := v.Headroom.blocks(v.Builds); len(mBlocks) > 0 {
+			v.Room = 0
+			v.Blocks = mBlocks
+			return v
 		}
-		v.Room = cap
-		if cap == 0 {
-			v.Blocks = []string{ceilingZero}
-		} else {
+		v.Room = v.subRoomCap
+		switch {
+		case v.subRoomCap > 0:
 			v.Blocks = nil
+		case k.Ceiling == 0:
+			v.Blocks = []string{ceilingZero}
+		default:
+			v.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", v.unassignedBusy, k.Ceiling)}
 		}
 		return v
 	}

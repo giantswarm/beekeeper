@@ -33,7 +33,10 @@ func (roomyMachine) Mem() (machine.Mem, error) {
 	return machine.Mem{AvailableMiB: 45 << 10, TotalMiB: 96 << 10}, nil
 }
 func (roomyMachine) MemoryPressure() (float64, error) { return 0, nil }
-func (roomyMachine) Load() ([3]float64, error)        { return [3]float64{3, 3, 3}, nil }
+
+// Load keeps a start's room whatever the cores of the host running the test:
+// 3 stays under every desk's limit, the per-core default included.
+func (roomyMachine) Load() ([3]float64, error) { return [3]float64{3, 3, 3}, nil }
 func (roomyMachine) Processes() (*proc.Table, error) {
 	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
 }
@@ -182,7 +185,8 @@ func TestCapacityVerdict(t *testing.T) {
 		{"PSI alone", 3, false, func(h *headroom) { h.PSI = 12 }, roomSeven},
 		{"swap unrated", 3, false, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, roomSeven},
 		{"swap full, flat", 3, false, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, roomSeven},
-		{"load", 3, false, func(h *headroom) { h.Load1 = 60 }, "no start: 1m load 60 over 48"},
+		{"load", 3, false, func(h *headroom) { h.Load1 = 120 }, "no start: 1m load 120 over 48"},
+		{"load once over the cap", 3, false, func(h *headroom) { h.Load1 = 60 }, roomSeven},
 		{"load unknown", 3, false, func(h *headroom) { h.Load1, h.LoadErr = 60, "no /proc/loadavg" }, roomSeven},
 		{"load unbounded", 3, false, func(h *headroom) { h.Load1, h.LoadMax = 60, 0 }, roomSeven},
 		{"slot busy, no build", 3, false, func(h *headroom) { h.SlotsFree = 0 }, roomSeven + slotNote},
