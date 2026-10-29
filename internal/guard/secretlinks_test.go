@@ -59,6 +59,7 @@ func TestSecretLinkOperations(t *testing.T) {
 		{"option_operand", "ln -t -s " + secret, true},
 		{"link_and_read", "ln -s " + secret + "; cat " + secret, true},
 		{"new_link_and_read", "ln -s " + secret + " new.json; cat new.json", true},
+		{"variable_link_read", `src=` + secret + `; dst=new.json; ln -s "$src" "$dst"; cat new.json`, true},
 		{"helper", `link() { ln -sfn "$1" "$2"; }; link ` + secret + " " + profile, false},
 		{"helper_check", `link() {
 	local src="$1" dst="$2"
@@ -74,6 +75,9 @@ func TestSecretLinkOperations(t *testing.T) {
 		{"helper_redirect", `link() { ln -sfn "$1" "$2" < "$1"; }; link ` + secret + " " + profile, true},
 		{"helper_unknown", `link() { unknown "$1"; }; link ` + secret, true},
 		{"helper_nested", `inner() { ln -sfn "$1" "$2"; }; link() { inner "$1" "$2"; }; link ` + secret + " " + profile, false},
+		{"helper_spread", `link() { ln -sfn "$@"; }; link ` + secret + " " + profile, false},
+		{"helper_spread_read", `link() { ln -sfn "$@"; }; link ` + secret + ` new.json; cat new.json`, true},
+		{"helper_global_read", `src=` + secret + `; link() { ln -sfn "$src" "$1"; }; link new.json; cat new.json`, true},
 		{"helper_new_link_read", `link() { local src="$1" dst="$2"; ln -sfn "$src" "$dst"; }; link ` + secret + ` new.json; cat new.json`, true},
 		{"helper_redefined", `link() { ln -sfn "$1" "$2"; }; link() { cat "$1"; }; link ` + secret, true},
 		{"helper_shadow", `ln() { cat "$1"; }; link() { ln -sfn "$1" "$2"; }; link ` + secret + " " + profile, true},

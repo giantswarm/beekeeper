@@ -543,7 +543,12 @@ func helperLinks(fn *syntax.FuncDecl, args []string, helpers map[string]*syntax.
 			}
 			var words []string
 			for _, a := range node.Args {
-				words = append(words, expandVars(shellWordText(a), vars))
+				word := shellWordText(a)
+				if word == "$@" || word == "${@}" {
+					words = append(words, args...)
+				} else {
+					words = append(words, expandVars(word, vars))
+				}
 			}
 			if words[0] == "ln" {
 				links = append(links, words[1:])
@@ -561,6 +566,12 @@ func helperLinks(fn *syntax.FuncDecl, args []string, helpers map[string]*syntax.
 func (g secretGuard) linkedFiles(sc shellScan, segs []segment, vars map[string][]string, helpers map[string]*syntax.FuncDecl, dirs []string) secretFiles {
 	f := g.files
 	f.globs = slices.Clone(f.globs)
+	literals := map[string]string{}
+	for name, vals := range vars {
+		if len(vals) == 1 {
+			literals[name] = vals[0]
+		}
+	}
 	var links [][]string
 	for _, sg := range segs {
 		for _, w := range expandWordsList(shellWords(sc.plain[sg.start:sg.end]), vars) {
@@ -579,8 +590,12 @@ func (g secretGuard) linkedFiles(sc shellScan, segs []segment, vars map[string][
 	// Revisit to cover chains of links, regardless of branch or command order.
 	for range len(links) {
 		for _, args := range links {
+			resolved := make([]string, len(args))
+			for i, arg := range args {
+				resolved[i] = expandVars(arg, literals)
+			}
 			for _, dir := range dirs {
-				for _, p := range symbolicLinkPaths(args, dir) {
+				for _, p := range symbolicLinkPaths(resolved, dir) {
 					if f.match(p.source) != "" && !slices.Contains(f.globs, p.link) {
 						f.globs = append(f.globs, p.link)
 					}
