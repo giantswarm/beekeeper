@@ -1592,7 +1592,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		t.Fatalf("--harness auto with unknown --model: code=%d, err=%v, out=%q", Code(err), err, outUnknownModel.String())
 	}
 
-	// --exclude claude-opus-4-6-thinking --model claude-opus-4-6-thinking refuses in both dry-run and real start (even with --force), never announcing Gemini. A dry run shows only the build slot it would find; the refusal's words are in its error.
+	// --exclude claude-opus-4-6-thinking --model claude-opus-4-6-thinking refuses in both dry-run and real start (even with --force), never announcing Gemini. The refusal comes before any verdict: its words are in its error, never in its output.
 	for _, isDry := range []bool{true, false} {
 		aExModel, outExModel := newApp()
 		cmdExModel := aExModel.agentStartCmd()
@@ -1604,11 +1604,8 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		}
 		cmdExModel.SetArgs(args)
 		err = cmdExModel.Execute()
-		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "excluded") {
-			t.Fatalf("--harness auto excluded --model (dry=%v): code=%d, err=%v", isDry, Code(err), err)
-		}
-		if got := outExModel.String(); got != "" && got != slotFreeLine {
-			t.Fatalf("--harness auto excluded --model (dry=%v): out=%q", isDry, got)
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "excluded") || outExModel.String() != "" {
+			t.Fatalf("--harness auto excluded --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outExModel.String())
 		}
 	}
 
@@ -1624,11 +1621,8 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		}
 		cmdHighModel.SetArgs(args)
 		err = cmdHighModel.Execute()
-		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agy/claude-opus-4-6-thinking: usage high: 5h 96% at or past 95%") {
-			t.Fatalf("--harness auto blocked bucket --model (dry=%v): code=%d, err=%v", isDry, Code(err), err)
-		}
-		if got := outHighModel.String(); got != "" && got != slotFreeLine {
-			t.Fatalf("--harness auto blocked bucket --model (dry=%v): out=%q", isDry, got)
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agy/claude-opus-4-6-thinking: usage high: 5h 96% at or past 95%") || outHighModel.String() != "" {
+			t.Fatalf("--harness auto blocked bucket --model (dry=%v): code=%d, err=%v, out=%q", isDry, Code(err), err, outHighModel.String())
 		}
 	}
 

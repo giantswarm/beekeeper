@@ -563,10 +563,6 @@ const (
 const (
 	noFreeSlot  = "no free build slot"
 	ceilingZero = "ceiling 0"
-	// slotFreeLine is the line a dry run prints for a build slot that
-	// stands free: the wait a start that builds would take its turn in
-	// takes its place when the slot is busy.
-	slotFreeLine = "build slot: free\n"
 )
 
 // blocks says what stops a new start: memory, swap, load and the labs stop
@@ -583,7 +579,7 @@ func (h *headroom) blocks(builds bool) []string {
 	if line, blocks := h.swapGuard(); blocks {
 		out = append(out, line)
 	}
-	if h.LoadErr == "" && h.LoadMax > 0 && h.Load1 >= 2*h.LoadMax {
+	if h.LoadErr == "" && h.LoadMax > 0 && h.Load1 > h.LoadMax {
 		out = append(out, fmt.Sprintf("1m load %.0f over %.0f", h.Load1, h.LoadMax))
 	}
 	if builds && h.slotBusy() {
@@ -1828,11 +1824,11 @@ func (a *app) dryRunSlot() error {
 	if err != nil {
 		return err
 	}
-	line := slotFreeLine
+	line := "build slot: free"
 	if !free {
-		line = fmt.Sprintf("build slot: busy, the start waits its turn up to %s for %s", wait, strings.TrimSuffix(why, "\n")) + "\n"
+		line = fmt.Sprintf("build slot: busy, the start waits its turn up to %s for %s", wait, strings.TrimSuffix(why, "\n"))
 	}
-	_, err = fmt.Fprint(a.out, line)
+	_, err = fmt.Fprintln(a.out, line)
 	return err
 }
 

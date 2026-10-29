@@ -185,8 +185,7 @@ func TestCapacityVerdict(t *testing.T) {
 		{"PSI alone", 3, false, func(h *headroom) { h.PSI = 12 }, roomSeven},
 		{"swap unrated", 3, false, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, roomSeven},
 		{"swap full, flat", 3, false, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, roomSeven},
-		{"load", 3, false, func(h *headroom) { h.Load1 = 120 }, "no start: 1m load 120 over 48"},
-		{"load once over the cap", 3, false, func(h *headroom) { h.Load1 = 60 }, roomSeven},
+		{"load", 3, false, func(h *headroom) { h.Load1 = 60 }, "no start: 1m load 60 over 48"},
 		{"load unknown", 3, false, func(h *headroom) { h.Load1, h.LoadErr = 60, "no /proc/loadavg" }, roomSeven},
 		{"load unbounded", 3, false, func(h *headroom) { h.Load1, h.LoadMax = 60, 0 }, roomSeven},
 		{"slot busy, no build", 3, false, func(h *headroom) { h.SlotsFree = 0 }, roomSeven + slotNote},
@@ -389,7 +388,7 @@ func TestDryRunSlotNamesTheWait(t *testing.T) {
 	t.Setenv("MEMCAP_WAIT", "8m")
 	var out bytes.Buffer
 	a := &app{cfg: &config.Config{}, out: &out}
-	if err := a.dryRunSlot(); err != nil || out.String() != slotFreeLine {
+	if err := a.dryRunSlot(); err != nil || out.String() != "build slot: free\n" {
 		t.Fatalf("dry run on free slots = %q, %v", out.String(), err)
 	}
 	holdSlots(t, state)

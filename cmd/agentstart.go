@@ -349,15 +349,18 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				task = briefTask(brief)
 			}
 			gaps := pluginGaps(cmd.Context())
-			// A start that builds waits for its slot, so the build slot stops one; a
-			// dry run never queues. The machine's guards — MemAvailable, swap, load,
-			// the kind labs — weigh on a dry run as on any start, and a verdict
-			// without room still refuses the dry run with exit 3 (--force aside),
-			// its words in the error. A dry run that passes prints the verdict with
-			// it: the room the desk's numbers leave.
+			// The dry run is judged by the same start gate a real start is,
+			// and prints its verdict: the machine's guards — MemAvailable,
+			// swap, load, the kind labs — weigh on it as on any start, only
+			// the build slot is the dry run's to show, with --builds, as the
+			// wait it would find, never joined. The gate itself never queues.
+			// A verdict without room still refuses the dry run with exit 3
+			// (--force aside), its words in the error.
 			if dryRun {
-				if err := a.dryRunSlot(); err != nil {
-					return err
+				if builds {
+					if err := a.dryRunSlot(); err != nil {
+						return err
+					}
 				}
 				over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, false, force, exclude, review)
 				if err != nil {
