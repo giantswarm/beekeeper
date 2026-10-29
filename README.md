@@ -555,6 +555,13 @@ refusal names the read that passes, built from the key names the file holds (nev
 and so do `omp` and `beekeeper`, which read the file without printing it. A file that is no YAML or
 JSON document has no key-stripped read.
 
+Creating or replacing a symbolic link (`ln -s`, `ln -sfn`) and checking it (`readlink`, `test -L`,
+`test -e`, `test -h`, `[ -e ]`, `stat`) only use paths and metadata and pass. A script's helper
+gets the same allowance when every command in its body, including substitutions and branches,
+only handles paths or metadata. Content reads and copies remain refused, including reads through
+an existing link or a link created earlier in the same command or script. A helper that both links
+and reads a credential file is refused.
+
 Refused unless their output ends in an allowed form:
 
 - `kubectl get` of Secrets (by kind, `secret/<name>`, in a list such as `cm,secret`, by `--raw` path)

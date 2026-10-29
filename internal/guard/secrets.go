@@ -182,6 +182,9 @@ type secretGuard struct {
 	cwd string
 	// files are the files known to hold secret values (secretfiles.go).
 	files secretFiles
+	// metadata holds helpers whose complete bodies have been checked. A false
+	// entry shadows a utility and must not inherit its metadata exemption.
+	metadata map[string]bool
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -211,6 +214,12 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		dirs = append(dirs, within(g.cwd, m[1]))
 	}
 	vars := scanVars(sc, segs)
+	helpers := metadataFunctions(cmd)
+	g.metadata = map[string]bool{}
+	for name, fn := range helpers {
+		g.metadata[name] = fn != nil
+	}
+	g.files = g.linkedFiles(sc, segs, vars, helpers, dirs)
 	copied, copyLeak := g.copiedUnlocks(sc, segs, vars, depth)
 	if copyLeak != nil {
 		return copyLeak

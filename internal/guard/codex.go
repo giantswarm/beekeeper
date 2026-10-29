@@ -791,13 +791,21 @@ func isUnderDir(p, dir string) bool {
 }
 
 func isGuardedCodexHomePath(rawPath, cwd string) bool {
+	return guardedCodexPath(rawPath, cwd, true)
+}
+
+// A link replacement follows its parent directory, but not the old link's
+// target. Keep the Codex home write guard without treating that as a read.
+func guardedCodexPath(rawPath, cwd string, followLeaf bool) bool {
 	p := wordPath(rawPath, cwd)
 	if p == "" {
 		return false
 	}
 	cands := []string{p}
-	if real, err := resolveSymlinkPath(p); err == nil && real != "" && real != p {
-		cands = append(cands, real)
+	if followLeaf {
+		if real, err := resolveSymlinkPath(p); err == nil && real != "" && real != p {
+			cands = append(cands, real)
+		}
 	}
 	if dirReal, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil && dirReal != "" {
 		joined := filepath.Clean(filepath.Join(dirReal, filepath.Base(p)))
@@ -940,6 +948,10 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 	sc.heredocs = rawSc.heredocs
 	segs := sc.segments()
 	vars := scanVars(sc, segs)
+	metadata := map[string]bool{}
+	for name, fn := range metadataFunctions(cmd) {
+		metadata[name] = fn != nil
+	}
 	states := walkSegments(sc, cwd, h.Upstream.Git != nil)
 
 	for _, in := range inners {
@@ -975,7 +987,7 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 			continue
 		}
 		for _, words := range expandWordsList(rawWords, vars) {
-			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known)
+			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known, metadata)
 			if r != "" {
 				return r, ""
 			}
@@ -987,13 +999,18 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 	return "", context
 }
 
-func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool) (reason, context string) {
+func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool, metadata map[string]bool) (reason, context string) {
 	c := commandAt(words)
 	if c >= len(words) {
 		return "", ""
 	}
 	name := path.Base(words[c])
 	args := words[c+1:]
+	isSymbolic := symbolicLinkCommand(name, args)
+	isMeta := metaCmds[name] || isSymbolic
+	if safe, helper := metadata[name]; helper {
+		isMeta, isSymbolic = safe, false
+	}
 
 	// Check command word itself against guarded codex homes.
 	if (strings.Contains(words[c], "/") || strings.Contains(words[c], "~") || strings.Contains(words[c], "$")) &&
@@ -1069,7 +1086,13 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	// Check commands that write, modify, copy, link, or delete files against guarded codex homes.
 	isWriteCmd := writeCmdsMap[name] ||
 		((name == "s"+"ed" || name == gsedCmd || name == perlCmd) && hasInPlaceFlag(args))
-	if isWriteCmd {
+	if isSymbolic {
+		for _, p := range symbolicLinkPaths(args, dir) {
+			if guardedCodexPath(p.link, dir, false) {
+				return codexHomeRefusalMsg, ""
+			}
+		}
+	} else if isWriteCmd {
 		for _, a := range args {
 			a = strings.TrimPrefix(strings.TrimPrefix(a, "if="), "of=")
 			if strings.HasPrefix(a, "-") {
@@ -1107,7 +1130,7 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	// Check every argument of non-metadata commands for secret files (e.g. symlinked auth.json).
 	isQuietGrep := grepCmds[name] && slices.ContainsFunc(args, grepQuiet.MatchString)
 	isJQ := name == "jq" || name == gojqCmd || name == "yq"
-	if !metaCmds[name] && !isQuietGrep && !isJQ && !isBeekeeperTextSubcommand(name, args) {
+	if !isMeta && !isQuietGrep && !isJQ && !isBeekeeperTextSubcommand(name, args) {
 		for _, a := range args {
 			if _, v, ok := strings.Cut(a, "="); ok {
 				a = v
