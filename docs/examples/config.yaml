@@ -275,10 +275,21 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
         - {upTo: 90, floor: 1, ceiling: 2}
       sevenDay:
         - {upTo: 95, floor: 1, ceiling: 2}
+    codex:
+      floor: 1
+      ceiling: 2
+      command: [codex, usage]     # default for codex; reads the freshest token_count rate_limits event across rollout transcripts
+      fiveHourMax: 90
+      sevenDayMax: 95
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 2}
+      sevenDay:
+        - {upTo: 95, floor: 1, ceiling: 2}
   choices:                  # ordered (harness, model) candidates for agents start --harness auto and beekeeper capacity
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}
     - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true, sevenDayMax: 80}
+    - {harness: codex, model: gpt-5.4, paceMargin: 0}
 stop:                       # beekeeper stop, besides beekeeper's own units and the standby service
   units: [desk-guard.timer] # more user units the stop stops while they run and beekeeper resume starts again; default: none
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies

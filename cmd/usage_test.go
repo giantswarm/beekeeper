@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -2146,5 +2147,261 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	err = cmd.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "1 busy at the ceiling of 1") {
 		t.Fatalf("expected refusal when shared provider ceiling 1 is held by another choice's model: code=%d, err=%v", Code(err), err)
+	}
+}
+
+func TestCodexProviderUsageAndAutoHarness(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	origLauncher := plat.Launcher
+	origMachine := plat.Machine
+	t.Cleanup(func() {
+		plat.Launcher = origLauncher
+		plat.Machine = origMachine
+	})
+	plat.Machine = tableMachine{plat.Machine}
+
+	rawCfg := `codex:
+  model: gpt-5.4
+capacity:
+  floor: 1
+  ceiling: 4
+  providers:
+    claude:
+      floor: 1
+      ceiling: 2
+      command: ["read-claude"]
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 2}
+      sevenDay:
+        - {upTo: 95, floor: 1, ceiling: 2}
+    codex:
+      floor: 1
+      ceiling: 2
+      staleAfter: 15m
+      fiveHourMax: 90
+      sevenDayMax: 95
+      fiveHour:
+        - {upTo: 90, floor: 1, ceiling: 2}
+      sevenDay:
+        - {upTo: 95, floor: 1, ceiling: 2}
+  choices:
+    - {harness: claude, model: claude-opus-4-7}
+    - {harness: codex, model: gpt-5.4, sevenDayMax: 80, paceMargin: 0}
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.Capacity.Providers[codex.Harness].Command, config.DefaultCodexUsageCommand) {
+		t.Fatalf("providers.codex.command = %v, want %v", cfg.Capacity.Providers[codex.Harness].Command, config.DefaultCodexUsageCommand)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC)
+	reset5h := t0.Add(3 * time.Hour).UTC()
+	// 84h remaining of 168h => 50% elapsed weekly pace.
+	reset7d := t0.Add(84 * time.Hour).UTC()
+
+	if err := store.WriteFile(usageProviderFile(claudeComm), usageReading{
+		At:       t0,
+		FiveHour: &usageWindow{UsedPercent: 96, ResetsAt: reset5h},
+		SevenDay: &usageWindow{UsedPercent: 40, ResetsAt: reset7d},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	writeCodexRollout := func(baseDir, rel string, mod time.Time, lines ...string) {
+		t.Helper()
+		p := filepath.Join(baseDir, rel)
+		if mkErr := os.MkdirAll(filepath.Dir(p), 0o750); mkErr != nil {
+			t.Fatal(mkErr)
+		}
+		if wErr := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); wErr != nil {
+			t.Fatal(wErr)
+		}
+		if !mod.IsZero() {
+			_ = os.Chtimes(p, mod, mod)
+		}
+	}
+
+	// 1. No rollout files yet -> codex fails closed (ceiling 0, room 0).
+	var capOut bytes.Buffer
+	aCap := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &capOut, as: usageCaller}
+	capCmd := aCap.capacityCmd()
+	if err := capCmd.Execute(); err != nil {
+		t.Fatalf("capacity with no codex rollouts: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of floor 0, ceiling 0; usage unknown (no codex rollout files found); no start: subscription usage unknown (no codex rollout files found)") {
+		t.Fatalf("expected codex fail-closed when no rollouts exist, got:\n%s", capOut.String())
+	}
+
+	// 2. Session A has a valid dual-window reading (5h 18%, 7d 40% vs pace 50%), while newer Session B
+	//    was just started and has written only session_meta + turn_context -> codex uses Session A's reading!
+	writeCodexRollout(cfg.Codex.SessionsDir, "2026/10/28/rollout-a.jsonl", t0.Add(-2*time.Minute),
+		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":18,"window_minutes":300,"resets_at":%d},"secondary":{"used_percent":40,"window_minutes":10080,"resets_at":%d},"plan_type":"plus","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
+			t0.Add(-2*time.Minute).Format(time.RFC3339), reset5h.Unix(), reset7d.Unix()),
+	)
+	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-b-meta.jsonl", t0,
+		fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":"t-meta","cwd":%q}}`, t0.Format(time.RFC3339), dir),
+		fmt.Sprintf(`{"timestamp":%q,"type":"turn_context","payload":{"cwd":%q,"model":"gpt-5.4"}}`, t0.Format(time.RFC3339), dir),
+	)
+
+	capOut.Reset()
+	if err := aCap.capacityCmd().Execute(); err != nil {
+		t.Fatalf("capacity with valid codex rollout + metadata-only newer rollout: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of floor 1, ceiling 2; usage 5h 18%") ||
+		!strings.Contains(capOut.String(), "room for 2 starts") ||
+		!strings.Contains(capOut.String(), "choice: codex / gpt-5.4 (provider codex)") {
+		t.Fatalf("capacity output with dual-window codex rollout:\n%s", capOut.String())
+	}
+
+	// 3. Pro plan single-window reading (`primary` window_minutes 10080, `secondary` null) in a fresher event:
+	//    succeeds even though fiveHour bands are configured, and enforces weekly pace / sevenDayMax vs --review.
+	//    At 7d 85% (above worker sevenDayMax 80 and pace 50%, below provider sevenDayMax 95):
+	//    normal choice is blocked on 7d/pace, while --review selects codex / gpt-5.4.
+	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-c-pro.jsonl", t0,
+		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":85,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
+			t0.Add(-time.Minute).Format(time.RFC3339), reset7d.Unix()),
+	)
+	capOut.Reset()
+	if err := aCap.capacityCmd().Execute(); err != nil {
+		t.Fatalf("capacity on Pro single-window codex reading: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of floor 1, ceiling 2; usage 7d 85%") ||
+		!strings.Contains(capOut.String(), "choice: none (claude/claude-opus-4-7: usage high: 5h 96% at or past 95%") ||
+		!strings.Contains(capOut.String(), "codex/gpt-5.4: 7d 85% at or past worker cap 80%") {
+		t.Fatalf("capacity normal mode at 85%% 7d:\n%s", capOut.String())
+	}
+
+	capOut.Reset()
+	revCmd := aCap.capacityCmd()
+	revCmd.SetArgs([]string{"--review"})
+	if err := revCmd.Execute(); err != nil {
+		t.Fatalf("capacity --review on Pro single-window codex reading: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "choice: codex / gpt-5.4 (provider codex, review)") {
+		t.Fatalf("capacity --review should select codex / gpt-5.4:\n%s", capOut.String())
+	}
+
+	// 4. Lower 7d to 40% (within pace 50% and worker cap 80%), then test `agents start --harness auto`
+	//    in both --dry-run and real unit launch modes.
+	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-c-pro.jsonl", t0,
+		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":40,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
+			t0.Format(time.RFC3339), reset7d.Unix()),
+	)
+
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, codex.Comm)
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // test binary
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	brief := filepath.Join(dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the codex task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var dryOut bytes.Buffer
+	aDry := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &dryOut, as: usageCaller}
+	dryCmd := aDry.agentStartCmd()
+	dryCmd.SilenceErrors = true
+	dryCmd.SilenceUsage = true
+	dryCmd.SetArgs([]string{"DryCodexAuto", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto})
+	if err := dryCmd.Execute(); err != nil {
+		t.Fatalf("--dry-run --harness auto picking codex: %v", err)
+	}
+	if !strings.Contains(dryOut.String(), "choice: codex / gpt-5.4 (provider codex)") ||
+		!strings.Contains(dryOut.String(), "as a codex agent on gpt-5.4") {
+		t.Fatalf("--dry-run --harness auto codex output:\n%s", dryOut.String())
+	}
+
+	plat.Launcher = &agyTestLauncher{
+		onStart: func(u platform.Unit) {
+			go func() {
+				var startID string
+				for _, e := range u.Env {
+					if v, ok := strings.CutPrefix(e, codex.EnvAgent+"="); ok {
+						startID = v
+					}
+				}
+				if startID == "" {
+					return
+				}
+				inbox := codex.InboxPath(cfg.StateDir, startID)
+				logPath := codex.LogPath(cfg.StateDir, startID)
+				f, oerr := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test FIFO
+				if oerr != nil {
+					return
+				}
+				defer func() { _ = f.Close() }()
+				_, _ = bufio.NewReader(f).ReadString('\n')
+				stream := `{"type":"thread.started","thread_id":"thread-auto-codex"}` + "\n" +
+					`{"type":"turn.started"}` + "\n"
+				_ = os.WriteFile(logPath, []byte(stream), 0o600)
+			}()
+		},
+	}
+
+	var startOut bytes.Buffer
+	aStart := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &startOut, as: usageCaller}
+	startCmd := aStart.agentStartCmd()
+	startCmd.SilenceErrors = true
+	startCmd.SilenceUsage = true
+	startCmd.SetArgs([]string{"AutoCodexWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	if err := startCmd.Execute(); err != nil {
+		t.Fatalf("--harness auto picking codex: %v", err)
+	}
+	if !strings.Contains(startOut.String(), "choice: codex / gpt-5.4 (provider codex)") ||
+		!strings.Contains(startOut.String(), "started AutoCodexWorker: codex agent codex_") ||
+		!strings.Contains(startOut.String(), "on gpt-5.4") {
+		t.Fatalf("--harness auto codex start output:\n%s", startOut.String())
+	}
+
+	// 5. Explicit stopped or invalid reading in the newest rollout event fails closed (room 0),
+	//    and a reading older than staleAfter (15m) also fails closed as stale.
+	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-d-stopped.jsonl", t0.Add(time.Minute),
+		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":50,"window_minutes":10080,"resets_at":%d},"spend_control_reached":true}}}`,
+			t0.Add(time.Minute).Format(time.RFC3339), reset7d.Unix()),
+	)
+	capOut.Reset()
+	aStopped := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0.Add(time.Minute), out: &capOut, as: usageCaller}
+	if err := aStopped.capacityCmd().Execute(); err != nil {
+		t.Fatalf("capacity on stopped codex reading: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (codex spend control reached); no start: subscription usage unknown (codex spend control reached)") {
+		t.Fatalf("expected codex spend_control_reached to fail closed, got:\n%s", capOut.String())
+	}
+
+	_ = os.Remove(filepath.Join(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-d-stopped.jsonl"))
+	capOut.Reset()
+	aStale := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0.Add(20 * time.Minute), out: &capOut, as: usageCaller}
+	if err := aStale.capacityCmd().Execute(); err != nil {
+		t.Fatalf("capacity on stale codex reading: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (usage reading is stale") {
+		t.Fatalf("expected stale codex reading to fail closed, got:\n%s", capOut.String())
+	}
+
+	// 6. Future SourceAt timestamp (> now + 1m) is rejected by validateReadingAt and fails closed.
+	tFuture := t0.Add(10 * time.Minute)
+	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-e-future.jsonl", tFuture,
+		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
+			tFuture.Format(time.RFC3339), reset7d.Unix()),
+	)
+	capOut.Reset()
+	aFuture := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &capOut, as: usageCaller}
+	if err := aFuture.capacityCmd().Execute(); err != nil {
+		t.Fatalf("capacity on future codex reading: %v", err)
+	}
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
+		t.Fatalf("expected future codex reading to fail closed, got:\n%s", capOut.String())
 	}
 }

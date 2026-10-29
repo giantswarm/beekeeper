@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -70,14 +71,15 @@ type usageBucket struct {
 // usageReading is the timestamped output of a usage command stored in
 // usageFile or usageProviderFile.
 type usageReading struct {
-	At          time.Time              `json:"at"`
-	SourceAt    time.Time              `json:"sourceAt,omitzero"`
-	AgeMinutes  *float64               `json:"ageMinutes,omitempty"`
-	Stale       bool                   `json:"stale,omitempty"`
-	FiveHour    *usageWindow           `json:"fiveHour,omitempty"`
-	SevenDay    *usageWindow           `json:"sevenDay,omitempty"`
-	Buckets     map[string]usageBucket `json:"buckets,omitempty"`
-	BucketOrder []string               `json:"bucketOrder,omitempty"`
+	At           time.Time              `json:"at"`
+	SourceAt     time.Time              `json:"sourceAt,omitzero"`
+	AgeMinutes   *float64               `json:"ageMinutes,omitempty"`
+	Stale        bool                   `json:"stale,omitempty"`
+	SingleWindow bool                   `json:"singleWindow,omitempty"`
+	FiveHour     *usageWindow           `json:"fiveHour,omitempty"`
+	SevenDay     *usageWindow           `json:"sevenDay,omitempty"`
+	Buckets      map[string]usageBucket `json:"buckets,omitempty"`
+	BucketOrder  []string               `json:"bucketOrder,omitempty"`
 }
 
 // usageView is how capacity, watch and snapshot present subscription usage and
@@ -222,9 +224,42 @@ func parseUsageJSON(raw []byte) (usageReading, error) {
 		}
 	}
 	if r.FiveHour == nil && r.SevenDay == nil && len(r.Buckets) == 0 {
+		if cr, ok, cerr := parseCodexRateLimitsJSON(raw); ok {
+			return cr, cerr
+		}
 		return usageReading{}, errors.New("usage output has neither fiveHour nor sevenDay")
 	}
 	return r, nil
+}
+
+func parseCodexRateLimitsJSON(raw []byte) (usageReading, bool, error) {
+	var probe struct {
+		Type                string          `json:"type"`
+		RateLimits          json.RawMessage `json:"rate_limits"`
+		Primary             json.RawMessage `json:"primary"`
+		Secondary           json.RawMessage `json:"secondary"`
+		RateLimitReached    *string         `json:"rate_limit_reached_type"`
+		SpendControlReached *bool           `json:"spend_control_reached"`
+		Payload             *struct {
+			Type       string          `json:"type"`
+			RateLimits json.RawMessage `json:"rate_limits"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return usageReading{}, false, nil
+	}
+	isCodex := len(probe.RateLimits) > 0 || len(probe.Primary) > 0 || len(probe.Secondary) > 0 ||
+		probe.RateLimitReached != nil || probe.SpendControlReached != nil ||
+		probe.Type == "token_count" ||
+		(probe.Payload != nil && (probe.Payload.Type == "token_count" || len(probe.Payload.RateLimits) > 0))
+	if !isCodex {
+		return usageReading{}, false, nil
+	}
+	cr, err := codex.ParseRateLimits(raw, time.Time{})
+	if err != nil {
+		return usageReading{}, true, err
+	}
+	return codexUsageToReading(cr), true, nil
 }
 
 // parseAgyUsage parses the tab-separated lines printed by `agy -p /usage`:
@@ -300,11 +335,21 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(age), dur(maxAge))
 		}
 	}
-	if !r.SourceAt.IsZero() && !now.IsZero() && now.Sub(r.SourceAt) > maxAge {
-		return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.SourceAt)), dur(maxAge))
+	if !r.SourceAt.IsZero() && !now.IsZero() {
+		if r.SourceAt.After(now.Add(time.Minute)) {
+			return fmt.Errorf("usage reading timestamp %s is in the future", r.SourceAt.Format(time.RFC3339))
+		}
+		if now.Sub(r.SourceAt) > maxAge {
+			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.SourceAt)), dur(maxAge))
+		}
 	}
-	if !r.At.IsZero() && !now.IsZero() && now.Sub(r.At) > maxAge {
-		return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
+	if !r.At.IsZero() && !now.IsZero() {
+		if r.At.After(now.Add(time.Minute)) {
+			return fmt.Errorf("usage reading timestamp %s is in the future", r.At.Format(time.RFC3339))
+		}
+		if now.Sub(r.At) > maxAge {
+			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
+		}
 	}
 	if len(r.Buckets) > 0 {
 		for _, bName := range bucketNames(r) {
@@ -325,9 +370,9 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 	switch {
 	case r.FiveHour == nil && r.SevenDay == nil:
 		return errors.New("usage output has neither fiveHour nor sevenDay")
-	case len(u.FiveHour) > 0 && r.FiveHour == nil:
+	case len(u.FiveHour) > 0 && r.FiveHour == nil && !r.SingleWindow:
 		return errors.New("usage output omits fiveHour (capacity.usage.fiveHour is configured)")
-	case u.HighPercentSet() && r.FiveHour == nil:
+	case u.HighPercentSet() && r.FiveHour == nil && !r.SingleWindow:
 		return errors.New("usage output omits fiveHour (capacity.usage.highPercent is configured)")
 	case len(u.SevenDay) > 0 && r.SevenDay == nil:
 		return errors.New("usage output omits sevenDay (capacity.usage.sevenDay is configured)")
@@ -467,7 +512,55 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 	if a.readUsage != nil {
 		return a.readUsage(ctx, u.Command, u.EffectiveTimeout())
 	}
+	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
+		return a.readCodexUsage()
+	}
 	return runUsageCommand(ctx, u.Command, u.EffectiveTimeout())
+}
+
+func (a *app) readCodexUsage() (usageReading, error) {
+	var stateDir, sessionsDir string
+	if a.cfg != nil {
+		stateDir = a.cfg.StateDir
+		sessionsDir = a.cfg.Codex.SessionsDir
+	}
+	cr, err := codex.ReadUsage(stateDir, sessionsDir)
+	if err != nil {
+		return usageReading{}, err
+	}
+	return codexUsageToReading(cr), nil
+}
+
+func (a *app) useCodexRolloutUsage(u config.Usage, cached usageReading) bool {
+	if a.readUsage != nil || !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
+		return false
+	}
+	var stateDir, sessionsDir string
+	if a.cfg != nil {
+		stateDir = a.cfg.StateDir
+		sessionsDir = a.cfg.Codex.SessionsDir
+	}
+	return codex.HasRollouts(stateDir, sessionsDir) || !cached.SourceAt.IsZero()
+}
+
+func codexUsageToReading(cr codex.UsageReading) usageReading {
+	r := usageReading{
+		SourceAt:     cr.At,
+		SingleWindow: cr.FiveHour == nil && cr.SevenDay != nil,
+	}
+	if cr.FiveHour != nil {
+		r.FiveHour = &usageWindow{
+			UsedPercent: cr.FiveHour.UsedPercent,
+			ResetsAt:    cr.FiveHour.ResetsAt,
+		}
+	}
+	if cr.SevenDay != nil {
+		r.SevenDay = &usageWindow{
+			UsedPercent: cr.SevenDay.UsedPercent,
+			ResetsAt:    cr.SevenDay.ResetsAt,
+		}
+	}
+	return r
 }
 
 // cachedUsageCapacity derives Capacity from a fresh usage.json (or cached
@@ -558,7 +651,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	var haveCached bool
 	if a.store != nil {
 		if found, err := a.store.ReadFile(file, &cached); err == nil && found && validateReadingAt(cached, u, now) == nil {
-			if usageFresh(cached, u, now) {
+			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
 				return cached, nil
 			}
 			haveCached = true
@@ -802,6 +895,7 @@ func (w *watcher) usageNeedsRefresh(k config.Capacity, now time.Time) bool {
 func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now time.Time) bool {
 	var cached usageReading
 	if found, err := w.store.ReadFile(usageProviderFile(name), &cached); err == nil && found &&
+		!w.useCodexRolloutUsage(u, cached) &&
 		usageFresh(cached, u, now) && validateReadingAt(cached, u, now) == nil {
 		return false
 	}

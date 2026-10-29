@@ -923,6 +923,11 @@ const (
 // DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
 var DefaultAgyUsageCommand = []string{"agy", "-p", "/usage"}
 
+// DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
+// beekeeper reads the freshest token_count rate_limits event across Codex
+// rollout transcripts in-process.
+var DefaultCodexUsageCommand = []string{"codex", "usage"}
+
 // DefaultAgyGeminiBucket and DefaultAgyClaudeBucket are the usage bucket names
 // `agy -p /usage` prints for Gemini and Claude/GPT models.
 const (
@@ -956,8 +961,8 @@ type Capacity struct {
 	// 7-day usage windows read by a configured command; unset, Floor and
 	// Ceiling stand as configured.
 	Usage Usage `yaml:"usage"`
-	// Providers configures per-provider (e.g. claude, agy) usage readers,
-	// window thresholds and floor/ceiling targets. Busy agents count
+	// Providers configures per-provider (e.g. claude, agy, codex) usage
+	// readers, window thresholds and floor/ceiling targets. Busy agents count
 	// against the provider they run on, while the machine guards and
 	// Capacity.Ceiling cap the total.
 	Providers     map[string]Provider `yaml:"providers"`
@@ -976,8 +981,8 @@ type Capacity struct {
 	reviewSkipPaceSet bool
 }
 
-// Provider configures one subscription provider (such as claude or agy): its
-// own floor and ceiling of busy agents and its usage reader and thresholds.
+// Provider configures one subscription provider (such as claude, agy or codex):
+// its own floor and ceiling of busy agents and its usage reader and thresholds.
 type Provider struct {
 	Floor      int `yaml:"floor"`
 	Ceiling    int `yaml:"ceiling"`
@@ -989,7 +994,7 @@ type Provider struct {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
-	// Harness is the agent harness to start ("claude", "agy", "omp").
+	// Harness is the agent harness to start ("claude", "agy", "codex", "omp").
 	Harness string `yaml:"harness" json:"harness"`
 	// Model is the model selector passed to the harness.
 	Model string `yaml:"model" json:"model"`
@@ -2938,6 +2943,9 @@ func (c *Config) defaults() error {
 		}
 		if name == "agy" && len(p.Command) == 0 && p.hasFields() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
+		}
+		if name == "codex" && len(p.Command) == 0 && p.hasFields() {
+			p.Command = slices.Clone(DefaultCodexUsageCommand)
 		}
 		baseFloor := c.Capacity.Floor
 		if p.floorSet {
