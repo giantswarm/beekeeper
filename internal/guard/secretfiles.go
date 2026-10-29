@@ -27,6 +27,7 @@ const (
 	statCommand   = "stat"
 	testCommand   = "test"
 	falseWord     = "false"
+	bracedAllArgs = "${@}"
 )
 
 // SecretFiles are the files every session's hook guards, globs allowed, ~/
@@ -538,7 +539,7 @@ func metadataFunctions(cmd string) map[string]*syntax.FuncDecl {
 				ok = false
 			case *syntax.ParamExp:
 				word := shellWordText(&syntax.Word{Parts: []syntax.WordPart{node}})
-				ok = word == "$@" || word == "${@}" || pathVar.FindString(word) == word
+				ok = word == "$@" || word == bracedAllArgs || pathVar.FindString(word) == word
 			case *syntax.Assign:
 				ok = !node.Append && node.Index == nil && node.Array == nil &&
 					(node.Value == nil || simpleHelperWord(node.Value) && !strings.Contains(shellWordText(node.Value), "@"))
@@ -596,8 +597,8 @@ func metadataFunctions(cmd string) map[string]*syntax.FuncDecl {
 func simpleHelperWord(w *syntax.Word) bool {
 	ok := true
 	word := shellWordText(w)
-	if strings.Contains(word, "$@") || strings.Contains(word, "${@}") {
-		return word == "$@" || word == "${@}"
+	if strings.Contains(word, "$@") || strings.Contains(word, bracedAllArgs) {
+		return word == "$@" || word == bracedAllArgs
 	}
 	syntax.Walk(w, func(n syntax.Node) bool {
 		switch n.(type) {
@@ -639,7 +640,7 @@ func helperLinks(fn *syntax.FuncDecl, args []string, helpers map[string]*syntax.
 			var words []string
 			for _, a := range node.Args {
 				word := shellWordText(a)
-				if word == "$@" || word == "${@}" {
+				if word == "$@" || word == bracedAllArgs {
 					words = append(words, args...)
 				} else {
 					words = append(words, expandVars(word, vars))

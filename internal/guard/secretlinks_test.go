@@ -87,7 +87,7 @@ func TestSecretLinkOperations(t *testing.T) {
 		{"helper_recursive", `link() { link "$1" "$2"; }; link ` + sourcePath + " " + profile, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, mode := range []string{"direct", "script", "check"} {
+			for _, mode := range []string{"direct", "script", secretLinkCheck} {
 				command := tc.command
 				if mode != "direct" {
 					p := filepath.Join(home, "installer.sh")
@@ -95,7 +95,7 @@ func TestSecretLinkOperations(t *testing.T) {
 						t.Fatal(err)
 					}
 					command = "bash " + ShellQuote(p)
-					if mode == "check" {
+					if mode == secretLinkCheck {
 						command += " --check"
 					}
 				}

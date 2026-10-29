@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const secretLinkCheck = "check"
+
 // These reads were refused by origin/main and allowed by the reviewed change.
 // Commands are only inspected, using synthetic files outside the working tree.
 func TestSecretLinkReviewedReads(t *testing.T) {
@@ -36,27 +38,27 @@ func TestSecretLinkReviewedReads(t *testing.T) {
 		name, command string
 		adapters      []string
 	}{
-		{"param_read", "link() { ln -sfn \"${1:?}\" \"${2:?}\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{"bash", "codex"}},
-		{"default_read", "link() { ln -sfn \"$1\" \"${2:-new.json}\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{"bash", "codex"}},
-		{"star_read", "link() { ln -sfn $*; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{"bash", "codex"}},
-		{"local_substitution", "link() { local dst=\"$(dirname \"$2\")/$(basename \"$2\")\"; ln -sfn \"$1\" \"$dst\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{"bash", "codex"}},
-		{"loop", "link() { for f in \"$@\"; do ln -s \"$f\" .; done; }; link \"$HOME/.tool/auth.json\"; cat auth.json", []string{"bash", "codex"}},
-		{"printf_source", "link() { printf -v v \"%s\" \"$1\"; ln -s \"$v\" \"$2\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{"bash", "codex"}},
+		{"param_read", "link() { ln -sfn \"${1:?}\" \"${2:?}\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{bashCmd, "codex"}},
+		{"default_read", "link() { ln -sfn \"$1\" \"${2:-new.json}\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{bashCmd, "codex"}},
+		{"star_read", "link() { ln -sfn $*; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{bashCmd, "codex"}},
+		{"local_substitution", "link() { local dst=\"$(dirname \"$2\")/$(basename \"$2\")\"; ln -sfn \"$1\" \"$dst\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{bashCmd, "codex"}},
+		{"loop", "link() { for f in \"$@\"; do ln -s \"$f\" .; done; }; link \"$HOME/.tool/auth.json\"; cat auth.json", []string{bashCmd, "codex"}},
+		{"printf_source", "link() { printf -v v \"%s\" \"$1\"; ln -s \"$v\" \"$2\"; }; link \"$HOME/.tool/auth.json\" new.json; cat new.json", []string{bashCmd, "codex"}},
 		{"cd_relative", "cd \"$HOME/.tool\" && ln -s auth.json \"$WORK/new.json\" && cat \"$WORK/new.json\"", []string{"codex"}},
-		{"trailing_slash", "ln -s \"$HOME/.tool/auth.json\" newdir/; cat newdir/auth.json", []string{"bash", "codex"}},
-		{"glob_source", "ln -s \"$HOME/.tool/\"*auth* multi; jq 'del(.. | .foo?)' multi/auth.json", []string{"bash", "codex"}},
-		{"read_glob", "ln -s \"$HOME/.tool/auth.json\" new1.json; cat new*", []string{"bash", "codex"}},
-		{"recursive_grep", "ln -s \"$HOME/.tool/auth.json\" new1.json; rg token .", []string{"bash", "codex"}},
-		{"nested_shell", "bash -c 'ln -s \"$HOME/.tool/auth.json\" new.json'; cat new.json", []string{"bash", "codex"}},
-		{"nested_eval", "eval 'ln -s \"$HOME/.tool/auth.json\" new.json'; cat new.json", []string{"bash", "codex"}},
-		{"nested_script", "bash installer.sh && cat new.json", []string{"bash", "codex"}},
-		{"nested_heredoc", "bash <<'END'\nln -s \"$HOME/.tool/auth.json\" new.json\nEND\ncat new.json", []string{"bash", "codex"}},
-		{"nested_python", "ln -s \"$HOME/.tool/auth.json\" new.json; python3 -c 'open(\"new.json\").read()'", []string{"bash", "codex"}},
-		{"link_input_substitution", "ln -s \"$HOME/.tool/auth.json\" new.json; echo \"$(<new.json)\"", []string{"bash", "codex"}},
-		{"link_backtick", "ln -s \"$HOME/.tool/auth.json\" new.json; echo \"` <new.json `\"", []string{"bash", "codex"}},
+		{"trailing_slash", "ln -s \"$HOME/.tool/auth.json\" newdir/; cat newdir/auth.json", []string{bashCmd, "codex"}},
+		{"glob_source", "ln -s \"$HOME/.tool/\"*auth* multi; jq 'del(.. | .foo?)' multi/auth.json", []string{bashCmd, "codex"}},
+		{"read_glob", "ln -s \"$HOME/.tool/auth.json\" new1.json; cat new*", []string{bashCmd, "codex"}},
+		{"recursive_grep", "ln -s \"$HOME/.tool/auth.json\" new1.json; rg token .", []string{bashCmd, "codex"}},
+		{"nested_shell", "bash -c 'ln -s \"$HOME/.tool/auth.json\" new.json'; cat new.json", []string{bashCmd, "codex"}},
+		{"nested_eval", "eval 'ln -s \"$HOME/.tool/auth.json\" new.json'; cat new.json", []string{bashCmd, "codex"}},
+		{"nested_script", "bash installer.sh && cat new.json", []string{bashCmd, "codex"}},
+		{"nested_heredoc", "bash <<'END'\nln -s \"$HOME/.tool/auth.json\" new.json\nEND\ncat new.json", []string{bashCmd, "codex"}},
+		{"nested_python", "ln -s \"$HOME/.tool/auth.json\" new.json; python3 -c 'open(\"new.json\").read()'", []string{bashCmd, "codex"}},
+		{"link_input_substitution", "ln -s \"$HOME/.tool/auth.json\" new.json; echo \"$(<new.json)\"", []string{bashCmd, "codex"}},
+		{"link_backtick", "ln -s \"$HOME/.tool/auth.json\" new.json; echo \"` <new.json `\"", []string{bashCmd, "codex"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			modes := []string{"direct", "script", "check"}
+			modes := []string{"direct", "script", secretLinkCheck}
 			if tc.name == "cd_relative" {
 				// The base already allows the script variants; they are deferred
 				// with the other pre-existing cases in the follow-up issue.
@@ -70,7 +72,7 @@ func TestSecretLinkReviewedReads(t *testing.T) {
 						t.Fatal(err)
 					}
 					cmd = "bash " + ShellQuote(p)
-					if mode == "check" {
+					if mode == secretLinkCheck {
 						cmd += " --check"
 					}
 				}
