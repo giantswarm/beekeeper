@@ -610,7 +610,7 @@ func (st *ghBodyState) evalSegmentStdout(segIdx int, words, redirs []ghToken, di
 	switch name {
 	case "print" + "f":
 		return evalPrintfArgs(args)
-	case "echo":
+	case echoCommand:
 		return evalEchoArgs(args)
 	case "cat":
 		return st.evalCatArgs(segIdx, args, redirs, dir, known, segVars)

@@ -116,11 +116,18 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	oldMachine := plat.Machine
 	hl := &haltLauncher{installed: map[string]string{}}
 	plat.Launcher = hl
-	plat.Machine = tableMachine{plat.Machine}
-	defer func() {
+	// The gate reads the machine's guards for real, so the test gives it a
+	// roomy one: memory and load with room to spare, whatever the host
+	// running the test carries. testMachine rides every platform reload
+	// below: a config-driven start rebuilds the platform, and the stub's
+	// Mem is not available on every build.
+	testMachine = roomyMachine{plat.Machine}
+	plat.Machine = testMachine
+	t.Cleanup(func() {
+		testMachine = nil
 		plat.Launcher = oldLauncher
 		plat.Machine = oldMachine
-	}()
+	})
 
 	oldSend := sendCodexWhenReady
 	var deliveredInbox, deliveredMsg string
@@ -250,7 +257,11 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfgPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("stateDir: "+stateDir+"\nleaseDir: "+leaseDir+"\n"), 0o600); err != nil {
+	// The dry run's gate reads the machine's guards for real (its own
+	// review's demand), so the config carries a memory floor the roomy
+	// machine of the launcher stub above clears: the guard weighs on the
+	// dry run as on a real start, here one that fits.
+	if err := os.WriteFile(cfgPath, []byte("stateDir: "+stateDir+"\nleaseDir: "+leaseDir+"\ncapacity:\n  availMinMiB: 1024\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
@@ -309,11 +320,16 @@ func TestStartCodexValidationCleanupAndStop(t *testing.T) {
 	oldMachine := plat.Machine
 	hl := &haltLauncher{installed: map[string]string{}}
 	plat.Launcher = hl
-	plat.Machine = tableMachine{plat.Machine}
-	defer func() {
+	// The gate reads the machine's guards for real: a roomy machine keeps
+	// this test about the identity, not the memory reading. testMachine
+	// rides the reloads of the config-driven starts below.
+	testMachine = roomyMachine{plat.Machine}
+	plat.Machine = testMachine
+	t.Cleanup(func() {
+		testMachine = nil
 		plat.Launcher = oldLauncher
 		plat.Machine = oldMachine
-	}()
+	})
 
 	store, err := state.Open(stateDir)
 	if err != nil {

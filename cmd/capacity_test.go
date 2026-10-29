@@ -33,7 +33,10 @@ func (roomyMachine) Mem() (machine.Mem, error) {
 	return machine.Mem{AvailableMiB: 45 << 10, TotalMiB: 96 << 10}, nil
 }
 func (roomyMachine) MemoryPressure() (float64, error) { return 0, nil }
-func (roomyMachine) Load() ([3]float64, error)        { return [3]float64{3, 3, 3}, nil }
+
+// Load keeps a start's room whatever the cores of the host running the test:
+// 3 stays under every desk's limit, the per-core default included.
+func (roomyMachine) Load() ([3]float64, error) { return [3]float64{3, 3, 3}, nil }
 func (roomyMachine) Processes() (*proc.Table, error) {
 	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
 }

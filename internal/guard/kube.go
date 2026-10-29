@@ -287,7 +287,7 @@ func kubeArgs(args []string, values map[string]bool) ([]string, map[string]strin
 
 func dryRun(flags map[string]string) bool {
 	v, ok := flags[flagDryRun]
-	return ok && v != "none" && v != "false"
+	return ok && v != "none" && v != falseWord
 }
 
 func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {

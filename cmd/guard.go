@@ -971,6 +971,10 @@ func (a *app) loadConfig() error {
 		}
 	}
 	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp, QuietUnits: a.cfg.Units.Quiet})
+	if testMachine != nil {
+		// A test holds the machine's guards in hand: a reload keeps it.
+		plat.Machine = testMachine
+	}
 	if !a.hook {
 		unconfineUnheld(os.Stderr)
 	}

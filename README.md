@@ -555,6 +555,16 @@ refusal names the read that passes, built from the key names the file holds (nev
 and so do `omp` and `beekeeper`, which read the file without printing it. A file that is no YAML or
 JSON document has no key-stripped read.
 
+One symbolic-link operation (`ln -s`, `ln -sf`, `ln -sfn`) with two literal paths passes, together
+with metadata checks (`readlink`, `test -L`, `test -e`, `test -h`, `[ -e ]`, `stat`). Path variables
+must each be assigned a literal value once, before the operation. A standalone installer invoked
+as `bash <script>` or `sh <script>` (optionally followed by `--check`) may wrap it in a helper
+whose entire body is one such `ln` with `"$1" "$2"` or `"$@"` called with exactly two operands.
+The invocation must contain no other command, assignment or redirection. Codex also checks the
+script's link destinations against its protected home. Globs, reassignment, branches, loops,
+additional helper commands and nested shell code get no link exemption. A command or script that
+also reads or copies the credential file is refused, including a read through the new link.
+
 Refused unless their output ends in an allowed form:
 
 - `kubectl get` of Secrets (by kind, `secret/<name>`, in a list such as `cm,secret`, by `--raw` path)
@@ -1986,7 +1996,7 @@ that turn, past the window's focus, and its reopen warms the desktop's CLI once 
 later desktop turns are the desktop's. Every headless wake of one of beekeeper's starts runs under
 its role's profile too. `start` and the log say `its task runs as a headless turn under profile
 <name>`; without a profile they say `its task runs as a desktop turn`, as before.
-`agents start --dry-run` prints the profile applied, the first turn's command line and the first prompt.
+`agents start --dry-run` prints the profile applied, the first turn's command line and the first prompt, and is judged by the same start gate a real start is: the start gate's verdict prints with it (the auto choice, and with `--force` the verdict it goes over), and a verdict without room refuses the dry run with exit 3 too, `--force` aside.
 
 `beekeeper agents` shows an agent in a headless turn (a fallback, a successor's first turn, a wake
 turn) `live, first turn running` or `live, wake turn running` and says under its table how many
