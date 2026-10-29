@@ -426,6 +426,12 @@ func TestRunNamesTheCapsVictim(t *testing.T) {
 }
 
 func TestRunRecordsItsStartAndEnd(t *testing.T) {
+	// The fixture supplies its own identity; the caller must not override it
+	// while the hook rewrites or runs the command.
+	t.Setenv("ZDOTDIR", t.TempDir())
+	for _, name := range callerEnv {
+		t.Setenv(name, "")
+	}
 	dir, env := capped(t)
 	if _, errOut, rc := zsh(t, env, rewrite(t, `echo  built;  if false; then go test ./...; fi`)); rc != 0 {
 		t.Fatalf("rc %d, stderr %q", rc, errOut)

@@ -64,7 +64,7 @@ const (
 )
 
 // procReaders are the commands that name a /proc file without printing it.
-var procReaders = map[string]bool{"ls": true, "stat": true, "test": true, "[": true, "wc": true, "file": true}
+var procReaders = map[string]bool{"ls": true, statCommand: true, testCommand: true, "[": true, "wc": true, "file": true}
 
 // Options that take a value, so that the value is not taken for options.
 var (

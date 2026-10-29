@@ -182,6 +182,12 @@ type secretGuard struct {
 	cwd string
 	// files are the files known to hold secret values (secretfiles.go).
 	files secretFiles
+	// metadata holds helpers whose complete bodies have been checked. An empty
+	// entry shadows a utility and must not inherit its metadata exemption.
+	metadata         map[string]string
+	linkAllowance    linkAllowance
+	noLinks          bool
+	standaloneScript string
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -211,6 +217,9 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		dirs = append(dirs, within(g.cwd, m[1]))
 	}
 	vars := scanVars(sc, segs)
+	g.metadata = metadataFunctions(cmd)
+	g.linkAllowance = simpleLinkAllowance(cmd, g.metadata)
+	g.standaloneScript = standaloneLinkScript(cmd)
 	copied, copyLeak := g.copiedUnlocks(sc, segs, vars, depth)
 	if copyLeak != nil {
 		return copyLeak
@@ -218,6 +227,7 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	for i, sg := range segs {
 		words := shellWords(sc.plain[sg.start:sg.end])
 		for _, exp := range expandWordsList(words, vars) {
+			exp = g.linkAllowance.resolve(exp)
 			if l := g.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
 				return l
 			}
@@ -243,8 +253,8 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 // the command line so a guarded tool run through $X or a loop is seen.
 func scanVars(sc shellScan, segs []segment) map[string][]string {
 	out := map[string][]string{}
-	for k, v := range assignments(sc.plain) {
-		out[k] = append(out[k], v)
+	for _, m := range assignment.FindAllStringSubmatch(sc.plain, -1) {
+		out[m[1]] = append(out[m[1]], strings.Trim(m[2], `'"`))
 	}
 	for _, sg := range segs {
 		w := shellWords(sc.plain[sg.start:sg.end])
@@ -412,6 +422,11 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 // redirections, here-strings and here-documents, git -c aliases, eval's
 // words, a sourced script and a script run by its path.
 func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int, words []string, copied map[string]string, depth int) *leak {
+	g.noLinks = true
+	if depth == 0 && g.standaloneScript != "" {
+		g.noLinks = false
+		return g.unlockOrScript(wordPath(g.standaloneScript, g.cwd), copied, depth)
+	}
 	if envCmd := envSplitCommand(words); envCmd != "" {
 		if l := g.scan(envCmd, depth+1); l != nil {
 			return l
@@ -595,7 +610,7 @@ func (g secretGuard) stageInputLeak(sc shellScan, sg segment, copied map[string]
 		return nil
 	}
 	stageName := path.Base(stageWords[scIdx])
-	if stageName == "echo" || stageName == "printf" {
+	if stageName == echoCommand || stageName == printfCommand {
 		if l := g.scan(strings.Join(stageWords[scIdx+1:], " "), depth+1); l != nil {
 			return l
 		}

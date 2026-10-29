@@ -17,6 +17,14 @@ import (
 // the transcript. Their metadata passes, and so does a jq or yq read that
 // strips every credential key the file holds, or keeps only key names.
 
+const (
+	echoCommand   = "echo"
+	printfCommand = "printf"
+	statCommand   = "stat"
+	testCommand   = "test"
+	falseWord     = "false"
+)
+
 // SecretFiles are the files every session's hook guards, globs allowed, ~/
 // for the home directory; secret.files adds to them.
 var SecretFiles = []string{
@@ -48,7 +56,7 @@ var (
 	plainKey = regexp.MustCompile(`^[A-Za-z_]\w*$`)
 	// metaCmds print a file's metadata or move it, never its content.
 	metaCmds = map[string]bool{
-		"ls": true, "stat": true, "file": true, "wc": true, "du": true, "test": true, "[": true, "[[": true,
+		"ls": true, statCommand: true, "file": true, "wc": true, "du": true, testCommand: true, "[": true, "[[": true,
 		"realpath": true, "readlink": true, "dirname": true, "basename": true, "touch": true, "chmod": true,
 		"chown": true, findCmd: true, "lsof": true, "fuser": true, "namei": true, "getfacl": true, "mv": true,
 		"rm": true, "trash": true, "trash-put": true, "omp": true, selfCmd: true,
@@ -169,11 +177,21 @@ func wordPath(w, dir string) string {
 // prints only counts or names, or a jq or yq read that strips it.
 func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 	k := commandAt(words)
-	if k == len(words) || len(g.files.globs) == 0 {
+	if len(g.files.globs) == 0 {
 		return nil
 	}
-	name, args := path.Base(words[k]), words[k+1:]
+	var name string
+	var args []string
+	if k < len(words) {
+		name, args = path.Base(words[k]), words[k+1:]
+	}
 	isMeta := metaCmds[name]
+	if _, shadow := g.metadata[name]; shadow {
+		isMeta = false
+	}
+	if !g.noLinks && g.linkAllowance.allowed && g.files.symbolicMetadata(linkArgs(name, args, g.metadata), dirs) {
+		isMeta = true
+	}
 	isGrep := grepCmds[name]
 	recursive := !isMeta && (name == "rg" || name == "ag" || isGrep && slices.ContainsFunc(args, grepRecursive.MatchString))
 	file := ""
@@ -181,11 +199,14 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 		isInputRedir := strings.HasPrefix(w, "<") && !strings.HasPrefix(w, "<<") && !strings.HasPrefix(w, "<&") ||
 			strings.HasPrefix(w, "0<") && !strings.HasPrefix(w, "0<&") ||
 			i > 0 && (words[i-1] == "<" || words[i-1] == "0<" || words[i-1] == "<>")
+		if !g.noLinks && g.linkAllowance.allowed && k == len(words) && !isInputRedir {
+			continue
+		}
 		isSelfConfig := name == selfCmd && (strings.HasPrefix(w, "--config=") || i > 0 && words[i-1] == flagConfig)
 		if isMeta && !isInputRedir && !isSelfConfig {
 			continue
 		}
-		if i <= k && !strings.HasPrefix(w, "<") && !strings.Contains(w, "/") && !strings.Contains(w, "=") {
+		if i <= k && !isInputRedir && !strings.Contains(w, "/") && !strings.Contains(w, "=") {
 			continue // a bare command or wrapper word, resolved on PATH
 		}
 		if i > 0 && (words[i-1] == ">" || words[i-1] == ">>" || words[i-1] == ">|" || words[i-1] == "2>" || words[i-1] == "2>>" || words[i-1] == "2>|" || words[i-1] == "&>" || words[i-1] == "&>>") || strings.HasPrefix(w, ">") || strings.HasPrefix(w, "2>") || strings.HasPrefix(w, "&>") {

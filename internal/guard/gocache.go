@@ -74,7 +74,7 @@ func (h Hook) goClean(env, args []string) string {
 	}
 	for _, a := range args[1:] {
 		flag, val, _ := strings.Cut(strings.TrimPrefix(a, "-"), "=")
-		if !strings.HasPrefix(a, "-") || val == "false" {
+		if !strings.HasPrefix(a, "-") || val == falseWord {
 			continue
 		}
 		switch flag {

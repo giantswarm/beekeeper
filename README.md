@@ -555,6 +555,16 @@ refusal names the read that passes, built from the key names the file holds (nev
 and so do `omp` and `beekeeper`, which read the file without printing it. A file that is no YAML or
 JSON document has no key-stripped read.
 
+One symbolic-link operation (`ln -s`, `ln -sf`, `ln -sfn`) with two literal paths passes, together
+with metadata checks (`readlink`, `test -L`, `test -e`, `test -h`, `[ -e ]`, `stat`). Path variables
+must each be assigned a literal value once, before the operation. A standalone installer invoked
+as `bash <script>` or `sh <script>` (optionally followed by `--check`) may wrap it in a helper
+whose entire body is one such `ln` with `"$1" "$2"` or `"$@"` called with exactly two operands.
+The invocation must contain no other command, assignment or redirection. Codex also checks the
+script's link destinations against its protected home. Globs, reassignment, branches, loops,
+additional helper commands and nested shell code get no link exemption. A command or script that
+also reads or copies the credential file is refused, including a read through the new link.
+
 Refused unless their output ends in an allowed form:
 
 - `kubectl get` of Secrets (by kind, `secret/<name>`, in a list such as `cm,secret`, by `--raw` path)
