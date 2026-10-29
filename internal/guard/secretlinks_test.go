@@ -21,7 +21,7 @@ func TestSecretLinkOperations(t *testing.T) {
 	if err := os.Symlink(auth, filepath.Join(home, "profile.json")); err != nil {
 		t.Fatal(err)
 	}
-	h := Hook{SecretFiles: []string{"~/.tool/auth.json"}}
+	h := Hook{SecretFiles: []string{secretLinkFile}}
 	const sourcePath = `"$HOME/.tool/auth.json"`
 	const profile = `"$HOME/profile.json"`
 	for _, tc := range []struct {
@@ -29,8 +29,9 @@ func TestSecretLinkOperations(t *testing.T) {
 		deny          bool
 	}{
 		{"create", "ln -s " + sourcePath + " new.json", false},
+		{"force", "ln -sf " + sourcePath + " " + profile, false},
 		{"replace", "ln -sfn " + sourcePath + " " + profile, false},
-		{"long_option", "ln --symbolic --force --no-dereference " + sourcePath + " " + profile, false},
+		{"long_option", "ln --symbolic --force --no-dereference " + sourcePath + " " + profile, true},
 		{"readlink", "readlink " + profile, false},
 		{"test_L", "test -L " + profile, false},
 		{"test_e", "test -e " + sourcePath, false},
@@ -60,9 +61,13 @@ func TestSecretLinkOperations(t *testing.T) {
 		{"link_and_read", "ln -s " + sourcePath + "; cat " + sourcePath, true},
 		{"new_link_and_read", "ln -s " + sourcePath + " new.json; cat new.json", true},
 		{"new_link_wrong_strip", "ln -s " + sourcePath + ` new.json; cat new.json | jq 'del(.. | .apiKey?)'`, true},
-		{"new_link_strip", "ln -s " + sourcePath + ` new.json; cat new.json | jq 'del(.. | .token?)'`, false},
+		{"new_link_strip", "ln -s " + sourcePath + ` new.json; cat new.json | jq 'del(.. | .token?)'`, true},
 		{"variable_link_read", `src=` + sourcePath + `; dst=new.json; ln -s "$src" "$dst"; cat new.json`, true},
 		{"helper", `link() { ln -sfn "$1" "$2"; }; link ` + sourcePath + " " + profile, false},
+		{"helper_create", `link() { ln -s "$1" "$2"; }; link ` + sourcePath + " " + profile, false},
+		{"helper_force", `link() { ln -sf "$1" "$2"; }; link ` + sourcePath + " " + profile, false},
+		{"assigned_helper", `link() { ln -sfn "$1" "$2"; }; src=` + sourcePath + `; dst=new.json; link "$src" "$dst"`, false},
+		{"metadata_checks", "ln -s " + sourcePath + ` new.json; readlink new.json; test -L new.json; [ -e new.json ]`, false},
 		{"helper_check", `link() {
 	local src="$1" dst="$2"
 	mkdir -p "$(dirname "$dst")"
@@ -72,11 +77,11 @@ func TestSecretLinkOperations(t *testing.T) {
 		ln -sfn "$src" "$dst"
 	fi
 	printf '%s\n' "$dst"
-}; link ` + sourcePath + " " + profile, false},
+}; link ` + sourcePath + " " + profile, true},
 		{"helper_read", `link() { ln -sfn "$1" "$2"; cat "$1"; }; link ` + sourcePath + " " + profile, true},
 		{"helper_redirect", `link() { ln -sfn "$1" "$2" < "$1"; }; link ` + sourcePath + " " + profile, true},
 		{"helper_unknown", `link() { unknown "$1"; }; link ` + sourcePath, true},
-		{"helper_nested", `inner() { ln -sfn "$1" "$2"; }; link() { inner "$1" "$2"; }; link ` + sourcePath + " " + profile, false},
+		{"helper_nested", `inner() { ln -sfn "$1" "$2"; }; link() { inner "$1" "$2"; }; link ` + sourcePath + " " + profile, true},
 		{"helper_spread", `link() { ln -sfn "$@"; }; link ` + sourcePath + " " + profile, false},
 		{"helper_spread_read", `link() { ln -sfn "$@"; }; link ` + sourcePath + ` new.json; cat new.json`, true},
 		{"helper_global_read", `src=` + sourcePath + `; link() { ln -sfn "$src" "$1"; }; link new.json; cat new.json`, true},

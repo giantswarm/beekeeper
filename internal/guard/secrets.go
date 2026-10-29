@@ -182,9 +182,12 @@ type secretGuard struct {
 	cwd string
 	// files are the files known to hold secret values (secretfiles.go).
 	files secretFiles
-	// metadata holds helpers whose complete bodies have been checked. A false
+	// metadata holds helpers whose complete bodies have been checked. An empty
 	// entry shadows a utility and must not inherit its metadata exemption.
-	metadata map[string]bool
+	metadata         map[string]string
+	linkAllowance    linkAllowance
+	noLinks          bool
+	standaloneScript bool
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -192,9 +195,6 @@ const maxScript = 64 << 10
 
 // leak returns the leak cmd would expose, nil when it exposes none.
 func (g secretGuard) leak(cmd string) *leak {
-	// Scans copy the guard, but nested shells and scripts must publish links
-	// back to the enclosing command before its later readers are inspected.
-	g.files.links = map[string]string{}
 	return g.scan(cmd, 0)
 }
 
@@ -216,18 +216,10 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	for _, m := range cdArg.FindAllStringSubmatch(sc.plain, -1) {
 		dirs = append(dirs, within(g.cwd, m[1]))
 	}
-	for _, st := range walkSegments(sc, g.cwd, false) {
-		if st.known && !slices.Contains(dirs, st.dir) {
-			dirs = append(dirs, st.dir)
-		}
-	}
 	vars := scanVars(sc, segs)
-	helpers := metadataFunctions(cmd)
-	g.metadata = map[string]bool{}
-	for name, fn := range helpers {
-		g.metadata[name] = fn != nil
-	}
-	g.files = g.linkedFiles(sc, segs, vars, helpers, dirs)
+	g.metadata = metadataFunctions(cmd)
+	g.linkAllowance = simpleLinkAllowance(cmd, g.metadata)
+	g.standaloneScript = len(segs) == 1
 	copied, copyLeak := g.copiedUnlocks(sc, segs, vars, depth)
 	if copyLeak != nil {
 		return copyLeak
@@ -235,6 +227,7 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	for i, sg := range segs {
 		words := shellWords(sc.plain[sg.start:sg.end])
 		for _, exp := range expandWordsList(words, vars) {
+			exp = g.linkAllowance.resolve(exp)
 			if l := g.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
 				return l
 			}
@@ -260,8 +253,8 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 // the command line so a guarded tool run through $X or a loop is seen.
 func scanVars(sc shellScan, segs []segment) map[string][]string {
 	out := map[string][]string{}
-	for k, v := range assignments(sc.plain) {
-		out[k] = append(out[k], v)
+	for _, m := range assignment.FindAllStringSubmatch(sc.plain, -1) {
+		out[m[1]] = append(out[m[1]], strings.Trim(m[2], `'"`))
 	}
 	for _, sg := range segs {
 		w := shellWords(sc.plain[sg.start:sg.end])
@@ -429,6 +422,7 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 // redirections, here-strings and here-documents, git -c aliases, eval's
 // words, a sourced script and a script run by its path.
 func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int, words []string, copied map[string]string, depth int) *leak {
+	g.noLinks = true
 	if envCmd := envSplitCommand(words); envCmd != "" {
 		if l := g.scan(envCmd, depth+1); l != nil {
 			return l
@@ -523,6 +517,13 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 				continue
 			}
 			if bareRedirect.MatchString(arg) || redirection.MatchString(arg) {
+				continue
+			}
+			if script && depth == 0 && g.standaloneScript {
+				if l := g.unlockOrScript(arg, copied, depth); l != nil {
+					return l
+				}
+				script = false
 				continue
 			}
 			if l := g.scan(arg, depth+1); l != nil {
@@ -683,6 +684,11 @@ func (g secretGuard) script(p string, depth int) *leak {
 	raw, err := os.ReadFile(p) //nolint:gosec // a script the command line runs, read to scan it
 	if err != nil || bytes.IndexByte(raw, 0) >= 0 {
 		return nil
+	}
+	// A standalone installer may contain the simple allowance. Shell code
+	// nested in another command or script always uses the base refusal.
+	if depth == 0 && g.standaloneScript {
+		g.noLinks = false
 	}
 	if l := g.scan(string(raw), depth+1); l != nil {
 		l.what += ", run from " + filepath.Base(p)

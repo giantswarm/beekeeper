@@ -555,12 +555,13 @@ refusal names the read that passes, built from the key names the file holds (nev
 and so do `omp` and `beekeeper`, which read the file without printing it. A file that is no YAML or
 JSON document has no key-stripped read.
 
-Creating or replacing a symbolic link (`ln -s`, `ln -sfn`) and checking it (`readlink`, `test -L`,
-`test -e`, `test -h`, `[ -e ]`, `stat`) only use paths and metadata and pass. A script's helper
-gets the same allowance when every command in its body, including substitutions and branches,
-only handles paths or metadata. Content reads and copies remain refused, including reads through
-an existing link or a link created earlier in the same command or script. A helper that both links
-and reads a credential file is refused.
+One symbolic-link operation (`ln -s`, `ln -sf`, `ln -sfn`) with two literal paths passes, together
+with metadata checks (`readlink`, `test -L`, `test -e`, `test -h`, `[ -e ]`, `stat`). Path variables
+must each be assigned a literal value once, before the operation. A standalone installer script
+may wrap it in a helper whose entire body is one such `ln` with `"$1" "$2"` or `"$@"` called with
+exactly two operands. Globs, reassignment, branches, loops,
+additional helper commands and nested shell code get no link exemption. A command or script that
+also reads or copies the credential file is refused, including a read through the new link.
 
 Refused unless their output ends in an allowed form:
 

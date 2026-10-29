@@ -948,11 +948,8 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 	sc.heredocs = rawSc.heredocs
 	segs := sc.segments()
 	vars := scanVars(sc, segs)
-	helpers := metadataFunctions(cmd)
-	metadata := map[string]bool{}
-	for name, fn := range helpers {
-		metadata[name] = fn != nil
-	}
+	metadata := metadataFunctions(cmd)
+	allowance := simpleLinkAllowance(cmd, metadata)
 	states := walkSegments(sc, cwd, h.Upstream.Git != nil)
 
 	for _, in := range inners {
@@ -988,15 +985,8 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 			continue
 		}
 		for _, words := range expandWordsList(rawWords, vars) {
-			c := commandAt(words)
-			if c < len(words) {
-				for _, args := range helperLinks(helpers[words[c]], words[c+1:], helpers, 0) {
-					if r := codexLinkWriteRefusal(args, st.dir); r != "" {
-						return r, ""
-					}
-				}
-			}
-			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known, metadata)
+			words = allowance.resolve(words)
+			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known, metadata, allowance.allowed)
 			if r != "" {
 				return r, ""
 			}
@@ -1008,17 +998,18 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 	return "", context
 }
 
-func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool, metadata map[string]bool) (reason, context string) {
+func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool, metadata map[string]string, linksAllowed bool) (reason, context string) {
 	c := commandAt(words)
 	if c >= len(words) {
 		return "", ""
 	}
 	name := path.Base(words[c])
 	args := words[c+1:]
-	isSymbolic := newSecretFiles(h.SecretFiles).symbolicMetadata(name, args, []string{dir})
+	link := linkArgs(name, args, metadata)
+	isSymbolic := linksAllowed && newSecretFiles(h.SecretFiles).symbolicMetadata(link, []string{dir})
 	isMeta := metaCmds[name] || isSymbolic
-	if safe, helper := metadata[name]; helper {
-		isMeta, isSymbolic = safe, false
+	if _, helper := metadata[name]; helper {
+		isMeta = isSymbolic
 	}
 
 	// Check command word itself against guarded codex homes.
@@ -1096,7 +1087,7 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	isWriteCmd := writeCmdsMap[name] ||
 		((name == "s"+"ed" || name == gsedCmd || name == perlCmd) && hasInPlaceFlag(args))
 	if isSymbolic {
-		if r := codexLinkWriteRefusal(args, dir); r != "" {
+		if r := codexLinkWriteRefusal(link, dir); r != "" {
 			return r, ""
 		}
 	} else if isWriteCmd {

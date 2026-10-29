@@ -12,6 +12,7 @@ const (
 	secretLinkDirect = "direct"
 	secretLinkScript = "script"
 	secretLinkCodex  = "codex"
+	secretLinkFile   = "~/.tool/auth.json"
 )
 
 // These reads were refused by origin/main and allowed by the reviewed change.
@@ -38,7 +39,7 @@ func TestSecretLinkReviewedReads(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(work, "installer.sh"), []byte("ln -s \"$HOME/.tool/auth.json\" new.json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	h := Hook{SecretFiles: []string{"~/.tool/auth.json", "~/.tool/other.json"}}
+	h := Hook{SecretFiles: []string{secretLinkFile, "~/.tool/other.json"}}
 	for _, tc := range []struct {
 		name, command string
 		adapters      []string

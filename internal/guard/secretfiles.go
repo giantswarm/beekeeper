@@ -1,19 +1,15 @@
 package guard
 
 import (
-	"bytes"
 	"fmt"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // Files known to hold secret values are never read whole by an agent: a cat,
@@ -27,7 +23,6 @@ const (
 	statCommand   = "stat"
 	testCommand   = "test"
 	falseWord     = "false"
-	bracedAllArgs = "${@}"
 )
 
 // SecretFiles are the files every session's hook guards, globs allowed, ~/
@@ -76,9 +71,6 @@ var (
 type secretFiles struct {
 	// globs are absolute patterns.
 	globs []string
-	// links keeps the original guarded file for links this call creates. Its
-	// credential keys, rather than an absent destination's, govern filters.
-	links map[string]string
 	// home is the home directory; a directory that contains a guarded file
 	// counts for a recursive search only below it.
 	home string
@@ -117,11 +109,6 @@ func (f secretFiles) match(p string) string {
 	if strings.ContainsAny(p, "*?[") {
 		m, _ := filepath.Glob(p)
 		cands = append(cands, m...)
-		for link := range f.links {
-			if ok, _ := filepath.Match(p, link); ok {
-				cands = append(cands, link)
-			}
-		}
 	}
 	for _, c := range cands {
 		real, err := filepath.EvalSymlinks(c)
@@ -132,9 +119,6 @@ func (f secretFiles) match(p string) string {
 		for _, x := range []string{c, real, dirReal} {
 			if x == "" || err != nil && x == real {
 				continue
-			}
-			if target := f.links[x]; target != "" {
-				return target
 			}
 			for _, g := range f.globs {
 				if ok, _ := filepath.Match(g, x); ok {
@@ -147,26 +131,19 @@ func (f secretFiles) match(p string) string {
 }
 
 // under returns a guarded file below the directory dir, "" for none; dir
-// counts only below the home directory for existing files, so a search of
-// the whole home or root is no read of its dot-directories. Links created
-// in this call are checked in any directory.
+// counts only below the home directory, so a search of the whole home or
+// the root is no read of its dot-directories.
 func (f secretFiles) under(dir string) string {
-	// New links may be outside HOME and do not exist on disk yet.
-	for link, target := range f.links {
-		if strings.HasPrefix(link, dir+string(filepath.Separator)) {
-			return target
-		}
-	}
 	if f.home == "" || !strings.HasPrefix(dir, f.home+string(filepath.Separator)) {
 		return ""
 	}
 	for _, g := range f.globs {
 		if strings.HasPrefix(g, dir+string(filepath.Separator)) {
 			if m, _ := filepath.Glob(g); len(m) > 0 {
-				return f.match(m[0])
+				return m[0]
 			}
 			if !strings.ContainsAny(g, "*?[") {
-				return f.match(g)
+				return g
 			}
 		}
 	}
@@ -200,7 +177,7 @@ func wordPath(w, dir string) string {
 // prints only counts or names, or a jq or yq read that strips it.
 func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 	k := commandAt(words)
-	if k == len(words) && len(g.files.links) == 0 || len(g.files.globs) == 0 {
+	if len(g.files.globs) == 0 {
 		return nil
 	}
 	var name string
@@ -208,16 +185,12 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 	if k < len(words) {
 		name, args = path.Base(words[k]), words[k+1:]
 	}
-	isMeta := metaCmds[name] || g.files.symbolicMetadata(name, args, dirs)
-	if safe, helper := g.metadata[name]; helper {
-		isMeta = safe
+	isMeta := metaCmds[name]
+	if _, shadow := g.metadata[name]; shadow {
+		isMeta = false
 	}
-	// Inline programs can compute a new link's path in ways the shell scanner
-	// cannot resolve. Keep this refusal local to links created in this call.
-	if len(g.files.links) > 0 && !shells[name] && readProgram(args, interpreters[name]).kind == programCode {
-		link := slices.Sorted(maps.Keys(g.files.links))[0]
-		file := g.files.links[link]
-		return &leak{what: "an inline program after linking a secret file", safe: fileReadSafe(file), never: true}
+	if !g.noLinks && g.linkAllowance.allowed && g.files.symbolicMetadata(linkArgs(name, args, g.metadata), dirs) {
+		isMeta = true
 	}
 	isGrep := grepCmds[name]
 	recursive := !isMeta && (name == "rg" || name == "ag" || isGrep && slices.ContainsFunc(args, grepRecursive.MatchString))
@@ -226,6 +199,9 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 		isInputRedir := strings.HasPrefix(w, "<") && !strings.HasPrefix(w, "<<") && !strings.HasPrefix(w, "<&") ||
 			strings.HasPrefix(w, "0<") && !strings.HasPrefix(w, "0<&") ||
 			i > 0 && (words[i-1] == "<" || words[i-1] == "0<" || words[i-1] == "<>")
+		if k == len(words) && !isInputRedir {
+			continue
+		}
 		isSelfConfig := name == selfCmd && (strings.HasPrefix(w, "--config=") || i > 0 && words[i-1] == flagConfig)
 		if isMeta && !isInputRedir && !isSelfConfig {
 			continue
@@ -391,319 +367,4 @@ func (h Hook) secretFileRefusal(ev event) string {
 		return ""
 	}
 	return leak{what: ev.ToolName + " of " + file + ", a file that holds secret values", at: ev.ToolName, safe: fileReadSafe(file)}.reason()
-}
-
-// symbolicLink recognizes ln's symbolic form without mistaking an option's
-// value (ln -t -s ...) for -s. Unknown options keep the conservative refusal.
-func symbolicLink(args []string) (operands []string, targetDir string, symbolic bool) {
-	options := true
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case options && a == "--":
-			options = false
-		case options && (a == "--target-directory" || a == "--suffix"):
-			if i+1 >= len(args) {
-				return nil, "", false
-			}
-			i++
-			if a == "--target-directory" {
-				targetDir = args[i]
-			}
-		case options && strings.HasPrefix(a, "--target-directory="):
-			targetDir = strings.TrimPrefix(a, "--target-directory=")
-		case options && strings.HasPrefix(a, "--suffix="):
-		case options && a == "--symbolic":
-			symbolic = true
-		case options && (a == "--force" || a == "--no-dereference" || a == "--no-target-directory" || a == "--verbose"):
-		case options && strings.HasPrefix(a, "--"):
-			return nil, "", false
-		case options && strings.HasPrefix(a, "-") && a != "-":
-			for j := 1; j < len(a); j++ {
-				switch a[j] {
-				case 's':
-					symbolic = true
-				case 'f', 'n', 'T', 'v', 'i', 'b':
-				case 't', 'S':
-					value := a[j+1:]
-					if value == "" {
-						if i+1 >= len(args) {
-							return nil, "", false
-						}
-						i++
-						value = args[i]
-					}
-					if a[j] == 't' {
-						targetDir = value
-					}
-					j = len(a)
-				default:
-					return nil, "", false
-				}
-			}
-		default:
-			operands = append(operands, a)
-		}
-	}
-	if len(operands) > 2 || targetDir != "" && len(operands) > 1 ||
-		slices.ContainsFunc(operands, func(s string) bool { return strings.ContainsAny(s, "*?[") }) {
-		return nil, "", false
-	}
-	return operands, targetDir, symbolic && len(operands) > 0
-}
-
-func symbolicLinkCommand(name string, args []string) bool {
-	if name != "ln" {
-		return false
-	}
-	_, _, ok := symbolicLink(args)
-	return ok
-}
-
-func (f secretFiles) symbolicMetadata(name string, args, dirs []string) bool {
-	if !symbolicLinkCommand(name, args) {
-		return false
-	}
-	for _, dir := range dirs {
-		for _, p := range symbolicLinkPaths(args, dir) {
-			if f.under(p.source) != "" || f.under(p.alternate) != "" {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-type symbolicPath struct{ source, alternate, link string }
-
-func symbolicLinkPaths(args []string, dir string) []symbolicPath {
-	operands, targetDir, ok := symbolicLink(args)
-	if !ok {
-		return nil
-	}
-	sources, dest := operands, wordPath(targetDir, dir)
-	inDir := targetDir != "" || len(operands) == 1
-	if !inDir {
-		sources, dest = operands[:len(operands)-1], wordPath(operands[len(operands)-1], dir)
-		inDir = strings.HasSuffix(operands[len(operands)-1], "/")
-		if info, err := os.Stat(dest); err == nil && info.IsDir() {
-			inDir = true
-		}
-	} else if targetDir == "" {
-		dest = dir
-	}
-	var paths []symbolicPath
-	for _, src := range sources {
-		link := dest
-		if inDir {
-			link = filepath.Join(dest, filepath.Base(src))
-		}
-		paths = append(paths, symbolicPath{wordPath(src, filepath.Dir(link)), wordPath(src, dir), link})
-	}
-	return paths
-}
-
-// metadataFunctions proves a helper safe from its body, never from its name.
-// Parsing failures, redefinitions, recursion, redirections and unknown calls
-// give it no exemption. Walk includes substitutions and every branch.
-func metadataFunctions(cmd string) map[string]*syntax.FuncDecl {
-	f, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
-	if err != nil {
-		return nil
-	}
-	decls := map[string]*syntax.FuncDecl{}
-	syntax.Walk(f, func(n syntax.Node) bool {
-		if fn, ok := n.(*syntax.FuncDecl); ok {
-			if _, exists := decls[fn.Name.Value]; exists {
-				decls[fn.Name.Value] = nil
-			} else {
-				decls[fn.Name.Value] = fn
-			}
-		}
-		return true
-	})
-	safe := map[string]*syntax.FuncDecl{}
-	var check func(string, int) bool
-	check = func(name string, depth int) bool {
-		fn := decls[name]
-		if fn == nil || depth > 4 {
-			return false
-		}
-		ok := true
-		syntax.Walk(fn.Body, func(n syntax.Node) bool {
-			if !ok {
-				return false
-			}
-			switch node := n.(type) {
-			case *syntax.Redirect, *syntax.FuncDecl, *syntax.ForClause, *syntax.WhileClause, *syntax.CaseClause:
-				ok = false
-			case *syntax.ParamExp:
-				word := shellWordText(&syntax.Word{Parts: []syntax.WordPart{node}})
-				ok = word == "$@" || word == bracedAllArgs || pathVar.FindString(word) == word
-			case *syntax.Assign:
-				ok = !node.Append && node.Index == nil && node.Array == nil &&
-					(node.Value == nil || simpleHelperWord(node.Value) && !strings.Contains(shellWordText(node.Value), "@"))
-			case *syntax.CallExpr:
-				if len(node.Args) == 0 {
-					break // an assignment; its substitutions are still walked
-				}
-				verb := node.Args[0].Lit()
-				if _, defined := decls[verb]; defined {
-					ok = check(verb, depth+1)
-					for _, a := range node.Args[1:] {
-						ok = ok && simpleHelperWord(a)
-					}
-					break
-				}
-				switch verb {
-				case "readlink", statCommand, testCommand, "[", ":", "dirname", "basename", "mkdir", echoCommand, "return", "true", falseWord:
-				case printfCommand:
-					for _, a := range node.Args[1:] {
-						if strings.HasPrefix(shellWordText(a), "-v") {
-							ok = false
-						}
-					}
-				case "ln":
-					var args []string
-					for _, a := range node.Args[1:] {
-						if !simpleHelperWord(a) {
-							ok = false
-							break
-						}
-						args = append(args, shellWordText(a))
-					}
-					ok = ok && symbolicLinkCommand(verb, args)
-				default:
-					ok = false
-				}
-			}
-			return ok
-		})
-		return ok
-	}
-	for name, fn := range decls {
-		if check(name, 0) {
-			safe[name] = fn
-		} else {
-			safe[name] = nil // a shadowed utility is not the built-in command
-		}
-	}
-	return safe
-}
-
-// Only literal words and bare parameter references are resolved by helperLinks.
-// In particular, substitutions in assignments or link operands are not paths
-// the guard can prove without running shell code.
-func simpleHelperWord(w *syntax.Word) bool {
-	ok := true
-	word := shellWordText(w)
-	if strings.Contains(word, "$@") || strings.Contains(word, bracedAllArgs) {
-		return word == "$@" || word == bracedAllArgs
-	}
-	syntax.Walk(w, func(n syntax.Node) bool {
-		switch n.(type) {
-		case *syntax.CmdSubst, *syntax.ProcSubst, *syntax.ArithmExp:
-			ok = false
-		}
-		return ok
-	})
-	return ok
-}
-
-func shellWordText(w *syntax.Word) string {
-	var b bytes.Buffer
-	_ = syntax.NewPrinter().Print(&b, w)
-	return strings.Join(shellWords(b.String()), " ")
-}
-
-// helperLinks collects the ln operations of a proven metadata helper. Local
-// assignments and positional arguments are paths, never evaluated as code.
-func helperLinks(fn *syntax.FuncDecl, args []string, helpers map[string]*syntax.FuncDecl, depth int) [][]string {
-	if fn == nil || depth > 4 {
-		return nil
-	}
-	vars := map[string]string{}
-	for i, arg := range args {
-		vars[strconv.Itoa(i+1)] = arg
-	}
-	var links [][]string
-	syntax.Walk(fn.Body, func(n syntax.Node) bool {
-		switch node := n.(type) {
-		case *syntax.Assign:
-			if node.Name != nil && node.Value != nil {
-				vars[node.Name.Value] = expandVars(shellWordText(node.Value), vars)
-			}
-		case *syntax.CallExpr:
-			if len(node.Args) == 0 {
-				break
-			}
-			var words []string
-			for _, a := range node.Args {
-				word := shellWordText(a)
-				if word == "$@" || word == bracedAllArgs {
-					words = append(words, args...)
-				} else {
-					words = append(words, expandVars(word, vars))
-				}
-			}
-			if words[0] == "ln" {
-				links = append(links, words[1:])
-			} else if helper := helpers[words[0]]; helper != nil {
-				links = append(links, helperLinks(helper, words[1:], helpers, depth+1)...)
-			}
-		}
-		return true
-	})
-	return links
-}
-
-// linkedFiles guards the destinations of links created by this call too: they
-// may not exist on disk when the hook inspects a later cat or archive command.
-func (g secretGuard) linkedFiles(sc shellScan, segs []segment, vars map[string][]string, helpers map[string]*syntax.FuncDecl, dirs []string) secretFiles {
-	f := g.files
-	if f.links == nil {
-		f.links = map[string]string{}
-	}
-	literals := map[string]string{}
-	for name, vals := range vars {
-		if len(vals) == 1 {
-			literals[name] = vals[0]
-		}
-	}
-	var links [][]string
-	for _, sg := range segs {
-		for _, w := range expandWordsList(shellWords(sc.plain[sg.start:sg.end]), vars) {
-			k := commandAt(w)
-			if k == len(w) {
-				continue
-			}
-			_, helper := helpers[w[k]]
-			if filepath.Base(w[k]) == "ln" && !helper {
-				links = append(links, w[k+1:])
-			} else {
-				links = append(links, helperLinks(helpers[w[k]], w[k+1:], helpers, 0)...)
-			}
-		}
-	}
-	// Revisit to cover chains of links, regardless of branch or command order.
-	for range len(links) {
-		for _, args := range links {
-			resolved := make([]string, len(args))
-			for i, arg := range args {
-				resolved[i] = expandVars(arg, literals)
-			}
-			for _, dir := range dirs {
-				for _, p := range symbolicLinkPaths(resolved, dir) {
-					target := f.match(p.source)
-					if target == "" {
-						target = f.match(p.alternate)
-					}
-					if target != "" {
-						f.links[p.link] = target
-					}
-				}
-			}
-		}
-	}
-	return f
 }
