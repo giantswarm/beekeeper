@@ -176,7 +176,10 @@ desktop turn, which no profile reaches. --dry-run prints the profile
 applied, the first turn's command line and the first prompt, and starts
 nothing; with --builds it first prints the build slot as the start would
 find it, "free" or the wait with the slots' holders and the waiters ahead,
-without joining the queue or holding a slot.
+without joining the queue or holding a slot. The dry run is judged by the
+same start gate a real start is, and prints its verdict: the auto choice,
+and with --force the verdict it goes over; a verdict without room refuses
+the dry run with exit 3 too (--force aside).
 
 A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
@@ -346,17 +349,29 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				task = briefTask(brief)
 			}
 			gaps := pluginGaps(cmd.Context())
+			// The dry run is judged by the same start gate a real start is,
+			// and prints its verdict: the machine's guards — MemAvailable,
+			// swap, load, the kind labs — weigh on it as on any start, only
+			// the build slot is the dry run's to show, with --builds, as the
+			// wait it would find, never joined. The gate itself never queues.
+			// A verdict without room still refuses the dry run with exit 3
+			// (--force aside), its words in the error.
 			if dryRun {
 				if builds {
 					if err := a.dryRunSlot(); err != nil {
 						return err
 					}
 				}
-				if harness == harnessAuto {
-					v, err := a.startCapacityForAuto(cmd.Context(), builds, exclude, review, model)
-					if err != nil {
+				over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, false, force, exclude, review)
+				if err != nil {
+					return err
+				}
+				if over == "" && v != nil && v.Room > 0 {
+					if _, err := fmt.Fprintf(a.out, "%s\n", v.verdict()); err != nil {
 						return err
 					}
+				}
+				if harness == harnessAuto {
 					ch, err := pickAutoChoice(v, force)
 					if err != nil {
 						return err
@@ -369,6 +384,11 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 					}
 					harness = ch.Harness
 					model = ch.Model
+				}
+				if over != "" {
+					if _, err := fmt.Fprintf(a.out, "dry run over %s (--force)\n", over); err != nil {
+						return err
+					}
 				}
 				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
 				h, _ := harnessByName(harness)
