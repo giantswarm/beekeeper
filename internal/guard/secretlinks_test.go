@@ -87,24 +87,24 @@ func TestSecretLinkOperations(t *testing.T) {
 		{"helper_recursive", `link() { link "$1" "$2"; }; link ` + sourcePath + " " + profile, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, mode := range []string{"direct", "script", secretLinkCheck} {
+			for _, mode := range []string{secretLinkDirect, secretLinkScript, secretLinkCheck} {
 				command := tc.command
-				if mode != "direct" {
+				if mode != secretLinkDirect {
 					p := filepath.Join(home, "installer.sh")
 					if err := os.WriteFile(p, []byte("#!/bin/sh\n"+command+"\n"), 0o600); err != nil {
 						t.Fatal(err)
 					}
-					command = "bash " + ShellQuote(p)
+					command = bashCmd + " " + ShellQuote(p)
 					if mode == secretLinkCheck {
 						command += " --check"
 					}
 				}
 				t.Run(mode, func(t *testing.T) {
-					for _, adapter := range []string{"bash", "codex"} {
+					for _, adapter := range []string{bashCmd, secretLinkCodex} {
 						t.Run(adapter, func(t *testing.T) {
 							var denied bool
 							var reason string
-							if adapter == "codex" {
+							if adapter == secretLinkCodex {
 								d := decideCodexCmd(t, h, home, command)
 								denied, reason = d.PermissionDecision == decisionDeny, d.Reason
 							} else if d := decide(t, h, home, command, nil); d != nil {
