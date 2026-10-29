@@ -21,7 +21,7 @@ func TestSecretLinkRoundTwoProbes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h := Hook{SecretFiles: []string{secretLinkFile, "~/.tool/other.json"}}
+	h := Hook{SecretFiles: []string{authFixturePath, "~/.tool/other.json"}}
 	for _, tc := range []struct {
 		name, command string
 		deny          bool

@@ -21,7 +21,7 @@ func TestSecretLinkOperations(t *testing.T) {
 	if err := os.Symlink(auth, filepath.Join(home, "profile.json")); err != nil {
 		t.Fatal(err)
 	}
-	h := Hook{SecretFiles: []string{secretLinkFile}}
+	h := Hook{SecretFiles: []string{authFixturePath}}
 	const sourcePath = `"$HOME/.tool/auth.json"`
 	const profile = `"$HOME/profile.json"`
 	for _, tc := range []struct {
