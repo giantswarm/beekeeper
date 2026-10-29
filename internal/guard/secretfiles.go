@@ -25,6 +25,7 @@ const (
 	echoCommand   = "echo"
 	printfCommand = "printf"
 	statCommand   = "stat"
+	testCommand   = "test"
 	falseWord     = "false"
 )
 
@@ -59,7 +60,7 @@ var (
 	plainKey = regexp.MustCompile(`^[A-Za-z_]\w*$`)
 	// metaCmds print a file's metadata or move it, never its content.
 	metaCmds = map[string]bool{
-		"ls": true, statCommand: true, "file": true, "wc": true, "du": true, "test": true, "[": true, "[[": true,
+		"ls": true, statCommand: true, "file": true, "wc": true, "du": true, testCommand: true, "[": true, "[[": true,
 		"realpath": true, "readlink": true, "dirname": true, "basename": true, "touch": true, "chmod": true,
 		"chown": true, findCmd: true, "lsof": true, "fuser": true, "namei": true, "getfacl": true, "mv": true,
 		"rm": true, "trash": true, "trash-put": true, "omp": true, selfCmd: true,
@@ -503,7 +504,7 @@ func metadataFunctions(cmd string) map[string]*syntax.FuncDecl {
 					break
 				}
 				switch verb {
-				case "readlink", statCommand, "test", "[", ":", "dirname", "basename", "mkdir", printfCommand, echoCommand, "return", "true", falseWord:
+				case "readlink", statCommand, testCommand, "[", ":", "dirname", "basename", "mkdir", printfCommand, echoCommand, "return", "true", falseWord:
 				case "ln":
 					var args []string
 					for _, a := range node.Args[1:] {
