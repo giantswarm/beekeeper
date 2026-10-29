@@ -956,6 +956,24 @@ const DefaultSelfHostedCeiling = 10
 // before capacity.providers.<name>.serveModeCommand runs again.
 const DefaultServeModeStale = time.Minute
 
+// DefaultServeModeSwitchTimeout is how long a serving-mode switch command may
+// run before beekeeper ends it and leaves the mode as its reader reports it.
+const DefaultServeModeSwitchTimeout = time.Minute
+
+// ServeMode is one serving mode of a self-hosted provider: the machine's
+// nodes it occupies while it runs, and the sessions of the model it sustains.
+type ServeMode struct {
+	// Nodes are the machine's nodes the mode occupies: a claim of one of
+	// them is the generic constraint "needs node N exclusively", and the
+	// model never runs in this mode while a constraint holds one. An
+	// empty list occupies no node and no constraint can hold it back.
+	Nodes []string `yaml:"nodes"`
+	// Sessions is the ceiling of busy sessions the model serves while the
+	// mode runs: what the provider's ceiling drops to during a drain into
+	// this mode, and stands at once the switch left it.
+	Sessions int `yaml:"sessions"`
+}
+
 // DefaultAgyGeminiBucket and DefaultAgyClaudeBucket are the usage bucket names
 // `agy -p /usage` prints for Gemini and Claude/GPT models.
 const (
@@ -1026,6 +1044,19 @@ type Provider struct {
 	// ServeModeCeilings maps a serving mode read by ServeModeCommand to the
 	// ceiling it stands for; a mode naming none falls back to Ceiling.
 	ServeModeCeilings map[string]int `yaml:"serveModeCeilings"`
+	// ServeModeModes is every serving mode the platform's tool can switch
+	// the model into: the nodes each occupies and the sessions it sustains.
+	// With it configured, a task or lease may claim one of the nodes
+	// exclusively, and beekeeper keeps the model out of every mode that
+	// occupies a held node (see ServeMode).
+	ServeModeModes map[string]ServeMode `yaml:"serveModeModes"`
+	// ServeModeSwitchCommand switches the model into the mode named as its
+	// last argument: beekeeper relays to the platform's own tool and holds
+	// no control of the model itself.
+	ServeModeSwitch []string `yaml:"serveModeSwitchCommand"`
+	// ServeModeSwitchTimeout is how long a switch may take before beekeeper
+	// ends it and leaves the mode as its reader reports it (default 1m).
+	ServeModeSwitchTimeout Duration `yaml:"serveModeSwitchTimeout"`
 	// ServeModeStale is how long a cached serving-mode reading stays fresh
 	// before ServeModeCommand runs again (default 1m).
 	ServeModeStale Duration `yaml:"serveModeStaleAfter"`
@@ -1056,6 +1087,9 @@ func (p Provider) EffectiveServeModeStale() time.Duration {
 // ServeModeCeiling is the ceiling the serving mode mode stands for, and
 // whether the provider names one for it.
 func (p Provider) ServeModeCeiling(mode string) (int, bool) {
+	if m, ok := p.serveMode(mode); ok {
+		return m.Sessions, true
+	}
 	if c, ok := p.ServeModeCeilings[mode]; ok {
 		return c, true
 	}
@@ -1065,6 +1099,43 @@ func (p Provider) ServeModeCeiling(mode string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// HasServeModeSwitch reports whether the provider can be switched into
+// another serving mode: the platform's own switch command, and the modes it
+// knows to switch between.
+func (p Provider) HasServeModeSwitch() bool {
+	return p.HasServeMode() && len(p.ServeModeSwitch) > 0 && len(p.ServeModeModes) > 0
+}
+
+// EffectiveServeModeSwitchTimeout is how long a switch of this provider's
+// serving mode may take (default 1m).
+func (p Provider) EffectiveServeModeSwitchTimeout() time.Duration {
+	if p.ServeModeSwitchTimeout.Duration > 0 {
+		return p.ServeModeSwitchTimeout.Duration
+	}
+	return DefaultServeModeSwitchTimeout
+}
+
+// serveMode is the mode named mode, matched case-insensitively, and whether
+// the provider knows it.
+func (p Provider) serveMode(mode string) (ServeMode, bool) {
+	if m, ok := p.ServeModeModes[mode]; ok {
+		return m, true
+	}
+	for k, m := range p.ServeModeModes {
+		if strings.EqualFold(k, mode) {
+			return m, true
+		}
+	}
+	return ServeMode{}, false
+}
+
+// ServeModeNodes are the machine's nodes the serving mode mode occupies, and
+// whether the provider knows the mode.
+func (p Provider) ServeModeNodes(mode string) ([]string, bool) {
+	m, ok := p.serveMode(mode)
+	return m.Nodes, ok
 }
 
 // ServeModeReading is one read of a self-hosted provider's serving mode: when
@@ -1395,13 +1466,16 @@ func (p *PaceCap) UnmarshalYAML(n *yaml.Node) error {
 // fields on a provider.
 func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	var fc struct {
-		Kind             *string        `yaml:"kind"`
-		Floor            *int           `yaml:"floor"`
-		Ceiling          *int           `yaml:"ceiling"`
-		Usage            *Usage         `yaml:"usage"`
-		ServeModeStale   *Duration      `yaml:"serveModeStaleAfter"`
-		ServeModeCmd     *[]string      `yaml:"serveModeCommand"`
-		ServeModeCeiling map[string]int `yaml:"serveModeCeilings"`
+		Kind             *string              `yaml:"kind"`
+		Floor            *int                 `yaml:"floor"`
+		Ceiling          *int                 `yaml:"ceiling"`
+		Usage            *Usage               `yaml:"usage"`
+		ServeModeStale   *Duration            `yaml:"serveModeStaleAfter"`
+		ServeModeCmd     *[]string            `yaml:"serveModeCommand"`
+		ServeModeCeiling map[string]int       `yaml:"serveModeCeilings"`
+		ServeModeModes   map[string]ServeMode `yaml:"serveModeModes"`
+		ServeModeSwitch  *[]string            `yaml:"serveModeSwitchCommand"`
+		ServeModeSwitchT *Duration            `yaml:"serveModeSwitchTimeout"`
 	}
 	if err := n.Decode(&fc); err != nil {
 		return err
@@ -1423,6 +1497,15 @@ func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	}
 	if fc.ServeModeCeiling != nil {
 		p.ServeModeCeilings = fc.ServeModeCeiling
+	}
+	if fc.ServeModeModes != nil {
+		p.ServeModeModes = fc.ServeModeModes
+	}
+	if fc.ServeModeSwitch != nil {
+		p.ServeModeSwitch = *fc.ServeModeSwitch
+	}
+	if fc.ServeModeSwitchT != nil {
+		p.ServeModeSwitchTimeout = *fc.ServeModeSwitchT
 	}
 	if fc.Floor != nil {
 		p.Floor, p.floorSet = *fc.Floor, true
@@ -3483,11 +3566,43 @@ func (c *Config) validate() error {
 				if strings.TrimSpace(p.ServeModeCommand[0]) == "" {
 					return fmt.Errorf("capacity.providers.%s.serveModeCommand[0]: empty executable", name)
 				}
-				if len(p.ServeModeCeilings) == 0 {
+				if len(p.ServeModeCeilings) == 0 && len(p.ServeModeModes) == 0 {
 					return fmt.Errorf("capacity.providers.%s.serveModeCommand: no serveModeCeilings: the command's modes name no ceiling", name)
 				}
-			} else if len(p.ServeModeCeilings) > 0 {
+			} else if len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 {
 				return fmt.Errorf("capacity.providers.%s.serveModeCeilings: no serveModeCommand: the ceilings name no mode reader", name)
+			}
+			if len(p.ServeModeModes) > 0 && len(p.ServeModeCommand) == 0 {
+				return fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeCommand: the modes name no mode reader", name)
+			}
+			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeCommand) == 0 {
+				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeCommand: the switch has no mode reader", name)
+			}
+			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeModes) == 0 {
+				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeModes: the switch knows no mode to switch into", name)
+			}
+			if len(p.ServeModeSwitch) > 0 && strings.TrimSpace(p.ServeModeSwitch[0]) == "" {
+				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand[0]: empty executable", name)
+			}
+			if len(p.ServeModeModes) > 0 && len(p.ServeModeSwitch) == 0 {
+				return fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeSwitchCommand: the modes name no switch", name)
+			}
+			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeModes)) {
+				m := p.ServeModeModes[mode]
+				if strings.TrimSpace(mode) == "" {
+					return fmt.Errorf("capacity.providers.%s.serveModeModes: empty mode name", name)
+				}
+				if m.Sessions < 0 {
+					return fmt.Errorf("capacity.providers.%s.serveModeModes.%s: sessions %d is negative", name, mode, m.Sessions)
+				}
+				if c, ok := p.ServeModeCeilings[mode]; ok && c != m.Sessions {
+					return fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions)
+				}
+				for _, n := range m.Nodes {
+					if strings.TrimSpace(n) == "" {
+						return fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode)
+					}
+				}
 			}
 			continue
 		}
@@ -3615,10 +3730,33 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 	return Lane{}, false
 }
 
+// serveModeNodeNames are the machine's nodes named by any self-hosted
+// provider's serving modes: the resources a claim of one of them is the
+// generic constraint "needs node N exclusively". A node a mode occupies is
+// leasable even where resources does not list it.
+func (c Capacity) serveModeNodeNames() []string {
+	set := map[string]bool{}
+	for _, p := range c.Providers {
+		if !p.SelfHosted() {
+			continue
+		}
+		for _, m := range p.ServeModeModes {
+			for _, n := range m.Nodes {
+				set[n] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
 // Leasable returns every resource a session can lease: the configured ones,
-// the model server when one is watched, the browser last.
+// the nodes a self-hosted serving mode occupies, the model server when one is
+// watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
+	if n := c.Capacity.serveModeNodeNames(); len(n) > 0 {
+		out = append(out, n...)
+	}
 	if c.Ollama.URL != "" || c.Lemonade.URL != "" {
 		out = append(out, ModelServer)
 	}

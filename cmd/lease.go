@@ -222,6 +222,17 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		}
 	}
 	dir := lease.Dir(a.cfg.LeaseDir)
+	// A node a self-hosted mode occupies is a constraint: the model drains
+	// to the mode that runs without the node and switches there before the
+	// lease is taken. A switch that fails refuses the claim; the mode
+	// stands as the command reports it.
+	modeLine, modeEvs, err := a.prepareServeModeClaim(res)
+	if err != nil {
+		return "", err
+	}
+	if modeLine != "" {
+		_, _ = fmt.Fprint(a.out, modeLine+"\n")
+	}
 	var msg string
 	var refusal error
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -242,7 +253,7 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 			return evs, nil
 		}
 		if cur, _ := dir.Get(res); cur != nil {
-			if cur.Party().Is(me) {
+			if cur.Party().Name == me.Name && !slices.ContainsFunc(modeEvs, func(e state.Event) bool { return e.Verb == verbServeSwitch }) {
 				msg = fmt.Sprintf("held by you since %s: %s was yours already", clock(a.now, cur.SinceTime()), res+lab)
 				return evs, nil
 			}
@@ -317,13 +328,17 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		msg += labNote
 		if budget > 0 {
 			msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
-			return append(evs, event(me, verbLeaseClaim, "%s: %s (%d GiB)", res, purpose, budget)), nil
+			return append(append(evs, modeEvs...), event(me, verbLeaseClaim, "%s: %s (%d GiB)%s", res, purpose, budget, modeLine)), nil
 		}
 		if unblock != "" {
 			msg += " to unblock its upgrade: " + unblock
-			return append(evs, event(me, verbLeaseClaim, "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
+			return append(append(evs, modeEvs...), event(me, verbLeaseClaim, "%s: %s (upgrade unblock: %s)%s", res, purpose, unblock, modeLine)), nil
 		}
-		return append(evs, event(me, verbLeaseClaim, "%s: %s", res, purpose)), nil
+		if modeLine != "" {
+			msg += modeLine
+			evs = append(evs, modeEvs...)
+		}
+		return append(evs, event(me, verbLeaseClaim, "%s: %s%s", res, purpose, modeLine)), nil
 	})
 	if err == nil {
 		err = refusal
@@ -511,6 +526,15 @@ lab's next claim.`,
 			})
 			if err != nil {
 				return err
+			}
+			// A node a self-hosted mode occupies is a constraint: once it is
+			// free and no constraint needs it, the model switches back and
+			// its ceiling rises again. The release itself never waits on the
+			// switch: a failing switch back says so, the mode stands as the
+			// command reports it, and the watch retries the request.
+			if servedLine, servedEvs := a.finishServeModeRelease(res); servedLine != "" {
+				msg += servedLine
+				_ = a.store.Record(servedEvs...)
 			}
 			_, err = fmt.Fprintln(a.out, msg)
 			return err
