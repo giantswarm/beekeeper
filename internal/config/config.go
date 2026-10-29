@@ -3439,7 +3439,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("capacity.providers.%s: floor %d and ceiling %d; the ceiling is at least the floor", name, p.Floor, p.Ceiling)
 		}
 		if p.SelfHosted() {
+<<<<<<< HEAD
 			if p.Enabled() {
+=======
+			if p.Usage.Enabled() {
+>>>>>>> origin/self-hosted-capacity
 				return fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted)
 			}
 			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeCeilings)) {
