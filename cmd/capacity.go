@@ -563,6 +563,10 @@ const (
 const (
 	noFreeSlot  = "no free build slot"
 	ceilingZero = "ceiling 0"
+	// slotFreeLine is the line a dry run prints for a build slot that
+	// stands free: the wait a start that builds would take its turn in
+	// takes its place when the slot is busy.
+	slotFreeLine = "build slot: free\n"
 )
 
 // blocks says what stops a new start: memory, swap, load and the labs stop
@@ -1824,11 +1828,11 @@ func (a *app) dryRunSlot() error {
 	if err != nil {
 		return err
 	}
-	line := "build slot: free"
+	line := slotFreeLine
 	if !free {
-		line = fmt.Sprintf("build slot: busy, the start waits its turn up to %s for %s", wait, strings.TrimSuffix(why, "\n"))
+		line = fmt.Sprintf("build slot: busy, the start waits its turn up to %s for %s", wait, strings.TrimSuffix(why, "\n")) + "\n"
 	}
-	_, err = fmt.Fprintln(a.out, line)
+	_, err = fmt.Fprint(a.out, line)
 	return err
 }
 

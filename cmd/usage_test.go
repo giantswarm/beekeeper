@@ -1607,7 +1607,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "excluded") {
 			t.Fatalf("--harness auto excluded --model (dry=%v): code=%d, err=%v", isDry, Code(err), err)
 		}
-		if got := outExModel.String(); got != "" && got != "build slot: free\n" {
+		if got := outExModel.String(); got != "" && got != slotFreeLine {
 			t.Fatalf("--harness auto excluded --model (dry=%v): out=%q", isDry, got)
 		}
 	}
@@ -1627,7 +1627,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agy/claude-opus-4-6-thinking: usage high: 5h 96% at or past 95%") {
 			t.Fatalf("--harness auto blocked bucket --model (dry=%v): code=%d, err=%v", isDry, Code(err), err)
 		}
-		if got := outHighModel.String(); got != "" && got != "build slot: free\n" {
+		if got := outHighModel.String(); got != "" && got != slotFreeLine {
 			t.Fatalf("--harness auto blocked bucket --model (dry=%v): out=%q", isDry, got)
 		}
 	}

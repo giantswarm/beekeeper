@@ -389,7 +389,7 @@ func TestDryRunSlotNamesTheWait(t *testing.T) {
 	t.Setenv("MEMCAP_WAIT", "8m")
 	var out bytes.Buffer
 	a := &app{cfg: &config.Config{}, out: &out}
-	if err := a.dryRunSlot(); err != nil || out.String() != "build slot: free\n" {
+	if err := a.dryRunSlot(); err != nil || out.String() != slotFreeLine {
 		t.Fatalf("dry run on free slots = %q, %v", out.String(), err)
 	}
 	holdSlots(t, state)

@@ -118,12 +118,16 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	plat.Launcher = hl
 	// The gate reads the machine's guards for real, so the test gives it a
 	// roomy one: memory and load with room to spare, whatever the host
-	// running the test carries.
-	plat.Machine = roomyMachine{plat.Machine}
-	defer func() {
+	// running the test carries. testMachine rides every platform reload
+	// below: a config-driven start rebuilds the platform, and the stub's
+	// Mem is not available on every build.
+	testMachine = roomyMachine{plat.Machine}
+	plat.Machine = testMachine
+	t.Cleanup(func() {
+		testMachine = nil
 		plat.Launcher = oldLauncher
 		plat.Machine = oldMachine
-	}()
+	})
 
 	oldSend := sendCodexWhenReady
 	var deliveredInbox, deliveredMsg string
@@ -317,12 +321,15 @@ func TestStartCodexValidationCleanupAndStop(t *testing.T) {
 	hl := &haltLauncher{installed: map[string]string{}}
 	plat.Launcher = hl
 	// The gate reads the machine's guards for real: a roomy machine keeps
-	// this test about the identity, not the memory reading.
-	plat.Machine = roomyMachine{plat.Machine}
-	defer func() {
+	// this test about the identity, not the memory reading. testMachine
+	// rides the reloads of the config-driven starts below.
+	testMachine = roomyMachine{plat.Machine}
+	plat.Machine = testMachine
+	t.Cleanup(func() {
+		testMachine = nil
 		plat.Launcher = oldLauncher
 		plat.Machine = oldMachine
-	}()
+	})
 
 	store, err := state.Open(stateDir)
 	if err != nil {
