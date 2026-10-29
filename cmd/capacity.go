@@ -1504,14 +1504,13 @@ func ctxIsDryRunGate(ctx context.Context) bool {
 // desk's own numbers.
 func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapReading) *headroom {
 	if ctxIsDryRunGate(ctx) {
+		// The machine's guards stay open for the dry run: memory the
+		// platform cannot report, or sits below the floor, is the dry run's
+		// stand-in, never a block of its own — a real start reads it live.
 		m, err := plat.Machine.Mem()
-		avail := m.AvailableMiB
-		memErr := ""
-		if err != nil {
-			memErr = err.Error()
-			avail = dryRunAvailMiB
-		} else if avail < k.AvailMinMiB {
-			avail = dryRunAvailMiB
+		avail, memErr := dryRunAvailMiB, ""
+		if err == nil && m.AvailableMiB >= k.AvailMinMiB {
+			avail = m.AvailableMiB
 		}
 		_, slots := a.slotView()
 		return &headroom{
