@@ -101,7 +101,7 @@ func TestSecretLinkOperations(t *testing.T) {
 					}
 					command = bashCmd + " " + ShellQuote(p)
 					if mode == secretLinkCheck {
-						command += " --check"
+						command += secretLinkCheckArg
 					}
 				}
 				t.Run(mode, func(t *testing.T) {
@@ -157,9 +157,9 @@ func TestSecretLinkCodexHomeWrites(t *testing.T) {
 						if err := os.WriteFile(filepath.Join(home, "installer.sh"), []byte(cmd+"\n"), 0o600); err != nil {
 							t.Fatal(err)
 						}
-						cmd = "bash installer.sh"
+						cmd = secretLinkInstaller
 						if mode == secretLinkCheck {
-							cmd += " --check"
+							cmd += secretLinkCheckArg
 						}
 					}
 					if d := decideCodexCmd(t, Hook{}, home, cmd); d.PermissionDecision != decisionDeny {

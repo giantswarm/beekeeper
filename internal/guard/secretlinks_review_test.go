@@ -8,11 +8,13 @@ import (
 )
 
 const (
-	secretLinkCheck  = "check"
-	secretLinkDirect = "direct"
-	secretLinkScript = "script"
-	secretLinkCodex  = "codex"
-	authFixturePath  = "~/.tool/auth.json"
+	secretLinkCheck     = "check"
+	secretLinkDirect    = "direct"
+	secretLinkScript    = "script"
+	secretLinkCodex     = "codex"
+	authFixturePath     = "~/.tool/auth.json"
+	secretLinkCheckArg  = " --check"
+	secretLinkInstaller = "bash installer.sh"
 )
 
 // These reads were refused by origin/main and allowed by the reviewed change.
@@ -79,7 +81,7 @@ func TestSecretLinkReviewedReads(t *testing.T) {
 					}
 					cmd = bashCmd + " " + ShellQuote(p)
 					if mode == secretLinkCheck {
-						cmd += " --check"
+						cmd += secretLinkCheckArg
 					}
 				}
 				t.Run(mode, func(t *testing.T) {
