@@ -1985,7 +1985,7 @@ that turn, past the window's focus, and its reopen warms the desktop's CLI once 
 later desktop turns are the desktop's. Every headless wake of one of beekeeper's starts runs under
 its role's profile too. `start` and the log say `its task runs as a headless turn under profile
 <name>`; without a profile they say `its task runs as a desktop turn`, as before.
-`agents start --dry-run` prints the profile applied, the first turn's command line and the first prompt.
+`agents start --dry-run` prints the profile applied, the first turn's command line and the first prompt, and is judged by the same start gate a real start is: the start gate's verdict prints with it (the auto choice, and with `--force` the verdict it goes over), and a verdict without room refuses the dry run with exit 3 too, `--force` aside.
 
 `beekeeper agents` shows an agent in a headless turn (a fallback, a successor's first turn, a wake
 turn) `live, first turn running` or `live, wake turn running` and says under its table how many

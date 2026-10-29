@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -3250,5 +3251,292 @@ func TestSelfHostedNoChoicesFallback(t *testing.T) {
 	}}
 	if p, _ := resolveAgentProviderBucket(sh, claudeComm, "opus"); p != claudeComm {
 		t.Fatalf("claude harness against a self-hosted provider named claude resolved to %q, want claude (no room, held)", p)
+	}
+}
+
+// loadOnlySelfHosted loads the only-self-hosted desk at the given
+// capacity.ceiling and opens its state: a desk whose capacity.providers
+// holds only a self-hosted provider, so capacity.ceiling bounds the starts
+// of the harnesses that have no provider entry, and the self-hosted ceiling
+// bounds the omp starts alone. With choices, capacity.choices holds the one
+// omp choice; without, the desk configures no choices at all.
+func loadOnlySelfHosted(t *testing.T, cfgPath string, ceiling int, choices bool) (*config.Config, *state.FileStore) {
+	t.Helper()
+	const onlySelfHostedRaw = `capacity:
+  floor: 0
+  ceiling: CEILING
+  providers:
+    local-model:
+      kind: self-hosted
+      ceiling: 3
+`
+	raw := onlySelfHostedRaw
+	if choices {
+		raw += `  choices:
+    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true}
+`
+	}
+	raw += `omp:
+  model: local-model/worker-model
+`
+	raw = strings.Replace(raw, "CEILING", strconv.Itoa(ceiling), 1)
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, store
+}
+
+// startHarness runs one agents start of the harness ("" the default claude)
+// and returns its error; dryRun adds --dry-run.
+func startHarness(a *app, name, brief, dir, harness, model string, dryRun bool) error {
+	sc := a.agentStartCmd()
+	sc.SilenceErrors = true
+	sc.SilenceUsage = true
+	args := []string{name, brief, usageDirFlag, dir}
+	if dryRun {
+		args = append(args, testDryRunFlag)
+	}
+	if harness != "" {
+		args = append(args, testHarnessFlag, harness)
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	sc.SetArgs(args)
+	return sc.Execute()
+}
+
+// TestSelfHostedOnlyCeilingBoundsOthers covers the desk with only a
+// self-hosted provider: capacity.ceiling 0 refuses every claude, agy and
+// codex start with its own hold, never the self-hosted room, while the omp
+// choice keeps its room up to the provider's ceiling; at ceiling 5 the
+// unconfigured harnesses keep a room of 5 minus their own busy sessions, and
+// a full self-hosted provider blocks none of them.
+func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	cfg, store := loadOnlySelfHosted(t, cfgPath, 0, false)
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	brief := filepath.Join(dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// capacity.ceiling 0, nothing busy: the verdict is the self-hosted room,
+	// yet a claude, agy or codex start refuses on ceiling 0 — not with the
+	// self-hosted room lent by the empty-provider fallback, and not refused
+	// only once the self-hosted provider fills.
+	var out bytes.Buffer
+	if err := newSelfHostedApp(cfgPath, cfg, store, &out, t0).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "room for 3 starts") {
+		t.Fatalf("capacity at ceiling 0 with only a self-hosted provider:\n%s", out.String())
+	}
+	for _, tc := range []struct{ name, harness, model string }{
+		{"ClaudeCeilingZero", "", "claude-opus-4-7"},
+		{"AgyCeilingZero", harnessAgy, "gemini-3-1-pro-medium"},
+		{"CodexCeilingZero", codex.Harness, "gpt-5.4"},
+	} {
+		var startOut bytes.Buffer
+		a := newSelfHostedApp(cfgPath, cfg, store, &startOut, t0)
+		err := startHarness(a, tc.name, brief, dir, tc.harness, tc.model, false)
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") {
+			t.Fatalf("%s start at ceiling 0: code=%d err=%v", tc.name, Code(err), err)
+		}
+	}
+	// omp keeps its own room up to the provider ceiling of 3.
+	fakeOmp := filepath.Join(dir, omp.Comm)
+	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"models\":[{\"selector\":\""+selfHostedTestModel+"\"}]}'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	origLauncher := plat.Launcher
+	origProcMachine := plat.Machine
+	t.Cleanup(func() {
+		plat.Launcher = origLauncher
+		plat.Machine = origProcMachine
+	})
+	plat.Machine = tableMachine{plat.Machine}
+	plat.Launcher = &agyTestLauncher{onStart: func(u platform.Unit) {
+		go func() {
+			var ompID string
+			for _, e := range u.Env {
+				if v, ok := strings.CutPrefix(e, omp.EnvAgent+"="); ok {
+					ompID = v
+				}
+			}
+			if ompID == "" {
+				return
+			}
+			f, oerr := os.OpenFile(omp.InboxPath(cfg.StateDir, ompID), os.O_RDWR, 0) //nolint:gosec // test FIFO
+			if oerr != nil {
+				return
+			}
+			defer func() { _ = f.Close() }()
+			_, _ = bufio.NewReader(f).ReadString('\n')
+		}()
+	}}
+	ompApp := func(out *bytes.Buffer) *app {
+		return newSelfHostedApp(cfgPath, cfg, store, out, t0)
+	}
+	out.Reset()
+	if err := startHarness(ompApp(&out), "OmpRoomOne", brief, dir, omp.Harness, "", false); err != nil {
+		t.Fatalf("omp start at ceiling 0: %v\n%s", err, out.String())
+	}
+	// Its busy sessions never shrink the omp room below the provider ceiling.
+	out.Reset()
+	if err := startHarness(ompApp(&out), "OmpRoomTwo", brief, dir, omp.Harness, "", false); err != nil {
+		t.Fatalf("second omp start at ceiling 0: %v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := startHarness(ompApp(&out), "OmpRoomThree", brief, dir, omp.Harness, "", false); err != nil {
+		t.Fatalf("third omp start at ceiling 0: %v\n%s", err, out.String())
+	}
+	// The provider is full at 3; omp refuses on its own ceiling.
+	out.Reset()
+	err := startHarness(ompApp(&out), "OmpOverProvider", brief, dir, omp.Harness, "", false)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider local-model: 3 busy at the ceiling of 3") {
+		t.Fatalf("fourth omp start: code=%d err=%v", Code(err), err)
+	}
+	// The verdict a claude start reads then still holds ceiling 0, and a
+	// claude start on it refuses with the hold's own words.
+	var capOut bytes.Buffer
+	if err := newSelfHostedApp(cfgPath, cfg, store, &capOut, t0).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var claudeOut bytes.Buffer
+	err = startHarness(newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0), "ClaudeProviderFull", brief, dir, claudeComm, "claude-opus-4-7", false)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") ||
+		strings.Contains(err.Error(), "no choice has room") {
+		t.Fatalf("claude start with the self-hosted provider full: code=%d err=%v\n%s", Code(err), err, capOut.String())
+	}
+
+	// At ceiling 5 with the self-hosted provider at its own full 3 and no
+	// claude session busy, a claude start still has room: capacity.ceiling
+	// bounds it together with the other busy sessions of the roster — 5
+	// minus the 3 omp sessions, so 2 — never with the block of the provider
+	// that is full.
+	cfg5, store5 := loadOnlySelfHosted(t, cfgPath, 5, false)
+	if err := store5.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		for _, n := range []string{"OmpBusyOne", "OmpBusyTwo", "OmpBusyThree"} {
+			w := tasked(n)
+			w.Harness, w.Model = omp.Harness, selfHostedTestModel
+			st.Agents = append(st.Agents, w)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var claudeRoom bytes.Buffer
+	aClaude := newSelfHostedApp(cfgPath, cfg5, store5, &claudeRoom, t0)
+	aClaude.json = true
+	_, v, err := aClaude.startGateWithOptions(context.Background(), "ClaudeAtFive", claudeComm, "claude-opus-4-7", false, true, nil, false)
+	if err != nil {
+		t.Fatalf("claude gate at ceiling 5 with the self-hosted provider full: %v", err)
+	}
+	if v.Room != 2 {
+		t.Fatalf("claude target room = %d, want 2 with 3 of the ceiling of 5 on the self-hosted provider", v.Room)
+	}
+	// One claude session busy then takes one of that room: 1 left.
+	if err := store5.Update(func(st *state.State) ([]state.Event, error) {
+		busy := tasked("ClaudeBusy")
+		st.Agents = append(st.Agents, busy)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	aClaude2 := newSelfHostedApp(cfgPath, cfg5, store5, &claudeRoom, t0)
+	aClaude2.json = true
+	_, v2, err := aClaude2.startGateWithOptions(context.Background(), "ClaudeAtFiveBusy", claudeComm, "claude-opus-4-7", false, true, nil, false)
+	if err != nil {
+		t.Fatalf("claude gate at ceiling 5 with its own session busy: %v", err)
+	}
+	if v2.Room != 1 {
+		t.Fatalf("claude target room with one claude busy = %d, want 2 minus its own busy session", v2.Room)
+	}
+}
+
+// TestSelfHostedOnlyDryRunPrintsVerdict covers the dry run of a desk with
+// only a self-hosted provider: with an explicit --harness it runs the start
+// gate and prints its verdict — the refused harnesses exit 3 on the very
+// words the real start refuses with, the omp choice prints its room — and
+// starts nothing.
+func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	cfg, store := loadOnlySelfHosted(t, cfgPath, 0, true)
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	brief := filepath.Join(dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An agy dry run with a model refuses on the gate: the held ceiling, the
+	// same words the real start refuses with.
+	var agyOut bytes.Buffer
+	aAgy := newSelfHostedApp(cfgPath, cfg, store, &agyOut, t0)
+	err := startHarness(aAgy, "DryAgyHeld", brief, dir, harnessAgy, "gemini-3-1-pro-medium", true)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") {
+		t.Fatalf("--dry-run agy at ceiling 0: code=%d err=%v", Code(err), err)
+	}
+	// A claude dry run refuses alike.
+	var claudeOut bytes.Buffer
+	err = startHarness(newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0), "DryClaudeHeld", brief, dir, claudeComm, "claude-opus-4-7", true)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") {
+		t.Fatalf("--dry-run claude at ceiling 0: code=%d err=%v", Code(err), err)
+	}
+	// The dry run of the harness with no room starts nothing, while the omp
+	// dry run with room prints its turn.
+	fakeOmp := filepath.Join(dir, omp.Comm)
+	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"models\":[{\"selector\":\""+selfHostedTestModel+"\"}]}'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	origLauncher := plat.Launcher
+	origProcMachine := plat.Machine
+	t.Cleanup(func() {
+		plat.Launcher = origLauncher
+		plat.Machine = origProcMachine
+	})
+	plat.Machine = tableMachine{plat.Machine}
+	plat.Launcher = &agyTestLauncher{onStart: func(u platform.Unit) {
+		go func() {
+			var ompID string
+			for _, e := range u.Env {
+				if v, ok := strings.CutPrefix(e, omp.EnvAgent+"="); ok {
+					ompID = v
+				}
+			}
+			if ompID == "" {
+				return
+			}
+			f, oerr := os.OpenFile(omp.InboxPath(cfg.StateDir, ompID), os.O_RDWR, 0) //nolint:gosec // test FIFO
+			if oerr != nil {
+				return
+			}
+			defer func() { _ = f.Close() }()
+			_, _ = bufio.NewReader(f).ReadString('\n')
+		}()
+	}}
+	var ompOut bytes.Buffer
+	aOmp := newSelfHostedApp(cfgPath, cfg, store, &ompOut, t0)
+	if err := startHarness(aOmp, "DryOmpRoom", brief, dir, omp.Harness, "", true); err != nil {
+		t.Fatalf("--dry-run omp at ceiling 0: %v\n%s", err, ompOut.String())
+	}
+	if !strings.Contains(ompOut.String(), "dry run: DryOmpRoom") ||
+		!strings.Contains(ompOut.String(), "as an omp agent on "+selfHostedTestModel) {
+		t.Fatalf("--dry-run omp output:\n%s", ompOut.String())
+	}
+	st, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Agents) != 0 || len(st.Starts) != 0 {
+		t.Fatalf("dry run started something: %d agents, %d starts", len(st.Agents), len(st.Starts))
 	}
 }
