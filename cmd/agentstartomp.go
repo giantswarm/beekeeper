@@ -305,7 +305,6 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 				// ceiling may follow the serving mode of the model it serves.
 				r := target.serveMode(context.Background(), name, p)
 				readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
-				k.Providers[name] = p.WithServeMode(r)
 				continue
 			}
 			if !p.Enabled() {

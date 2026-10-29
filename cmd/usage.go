@@ -1228,7 +1228,6 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		// follow the serving mode of the model it serves.
 		r := w.serveMode(ctx, name, p)
 		readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
-		k.Providers[name] = p.WithServeMode(r)
 	}
 	w.mu.Lock()
 	swap := w.swap

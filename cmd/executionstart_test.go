@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -228,5 +229,36 @@ func TestExecutionAutoModelValidationDryRunAndLocalSelection(t *testing.T) {
 	a.out.(*bytes.Buffer).Reset()
 	if _, err := runAgents(a, agentStartName, workerRole, brief, "--host", executionLocal, "--repo", sshTestRepository); Code(err) != ExitUsage || probes != 1 {
 		t.Fatal("local selector used an SSH path")
+	}
+}
+
+// The serving-mode ceiling of a self-hosted provider stands during admission:
+// readings must not rewrite the shared capacity map, or every start would
+// refuse with "provider configuration changed during admission".
+func TestExecutionAdmissionServeModeCeiling(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	const provLocal = "local-model"
+	a.cfg.Capacity.Providers[provLocal] = config.Provider{
+		Kind:             config.KindSelfHosted,
+		Ceiling:          5,
+		ServeModeCommand: []string{"read-serve-mode"},
+		ServeModeCeilings: map[string]int{
+			serveModeFull: 1,
+		},
+	}
+	a.cfg.Capacity.Choices = append(a.cfg.Capacity.Choices, config.Choice{Harness: omp.Harness, Model: provLocal + "/worker-model", Provider: provLocal})
+	h := a.cfg.Agents.Hosts[sshTestSelector]
+	h.Harnesses = append(h.Harnesses, omp.Harness)
+	a.cfg.Agents.Hosts[sshTestSelector] = h
+	a.readServeMode = func(context.Context, []string, time.Duration) (config.ServeModeReading, error) {
+		return config.ServeModeReading{Mode: serveModeFull}, nil
+	}
+	err := a.startSSHExecution(context.Background(), "worker-omp", brief, executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: omp.Harness, Model: provLocal + "/worker-model"})
+	if err != nil && strings.Contains(err.Error(), "provider configuration changed") {
+		t.Fatalf("serve-mode ceiling broke admission: %v", err)
+	}
+	// The shared config keeps the configured ceiling: no caller mutated it.
+	if got := a.cfg.Capacity.Providers[provLocal].Ceiling; got != 5 {
+		t.Fatalf("configured ceiling mutated to %d, want 5", got)
 	}
 }

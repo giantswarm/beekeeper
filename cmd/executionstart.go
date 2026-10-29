@@ -165,7 +165,6 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 			// may follow the serving mode of the model it serves.
 			r := a.serveMode(ctx, name, p)
 			readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
-			k.Providers[name] = p.WithServeMode(r)
 			continue
 		}
 		if !p.Enabled() {

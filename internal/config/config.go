@@ -921,12 +921,12 @@ const (
 )
 
 // DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
-var DefaultAgyUsageCommand = []string{"agy", "-p", "/usage"}
+var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
 // DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
 // beekeeper reads the freshest token_count rate_limits event across Codex
 // rollout transcripts in-process.
-var DefaultCodexUsageCommand = []string{"codex", "usage"}
+var DefaultCodexUsageCommand = []string{CodexHarness, "usage"}
 
 // KindSubscription and KindSelfHosted are capacity.providers.<name>.kind. A
 // subscription provider has a usage reader and a pace; a self-hosted provider
@@ -937,9 +937,15 @@ const (
 	KindSelfHosted   = "self-hosted"
 )
 
-// OmpHarness is the agent harness a self-hosted provider serves: the only
-// harness whose choices may name a self-hosted provider.
-const OmpHarness = "omp"
+// The agent harness names, the subscription ones besides OmpHarness: a
+// capacity.providers entry of one of these names is that subscription's
+// provider, never a self-hosted one.
+const (
+	OmpHarness    = "omp"
+	ClaudeHarness = "claude"
+	AgyHarness    = "agy"
+	CodexHarness  = "codex"
+)
 
 // DefaultSelfHostedCeiling is the ceiling of busy sessions a self-hosted
 // provider runs with when it sets no ceiling of its own: the machine guards
@@ -1122,7 +1128,7 @@ type Choice struct {
 // EffectiveProvider returns the provider name in Capacity.Providers that
 // governs this choice.
 func (c Choice) EffectiveProvider() string {
-	return cmp.Or(strings.TrimSpace(c.Provider), strings.TrimSpace(c.Harness), "claude")
+	return cmp.Or(strings.TrimSpace(c.Provider), strings.TrimSpace(c.Harness), ClaudeHarness)
 }
 
 // EffectiveBucket returns the usage bucket name for this choice on p.
@@ -1647,9 +1653,9 @@ func (k Capacity) ProviderNames() []string {
 			out = append(out, name)
 		}
 	}
-	if _, ok := k.Providers["claude"]; ok && !seen["claude"] {
-		seen["claude"] = true
-		out = append(out, "claude")
+	if _, ok := k.Providers[ClaudeHarness]; ok && !seen[ClaudeHarness] {
+		seen[ClaudeHarness] = true
+		out = append(out, ClaudeHarness)
 	}
 	for _, name := range slices.Sorted(maps.Keys(k.Providers)) {
 		if !seen[name] {
@@ -3068,10 +3074,10 @@ func (c *Config) defaults() error {
 				p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
 			}
 		}
-		if name == "agy" && len(p.Command) == 0 && p.hasFields() {
+		if name == AgyHarness && len(p.Command) == 0 && p.hasFields() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
-		if name == "codex" && len(p.Command) == 0 && p.hasFields() {
+		if name == CodexHarness && len(p.Command) == 0 && p.hasFields() {
 			p.Command = slices.Clone(DefaultCodexUsageCommand)
 		}
 		baseFloor := c.Capacity.Floor
@@ -3449,6 +3455,13 @@ func (c *Config) validate() error {
 			return fmt.Errorf("capacity.providers.%s: floor %d and ceiling %d; the ceiling is at least the floor", name, p.Floor, p.Ceiling)
 		}
 		if p.SelfHosted() {
+			// claude, agy and codex are the subscription harnesses' names: a
+			// self-hosted provider under one would be matched by a
+			// subscription start's fallback and hand it its room.
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case ClaudeHarness, AgyHarness, CodexHarness:
+				return fmt.Errorf("capacity.providers.%s: %s names the %s subscription; a %s provider has another name", name, name, name, KindSelfHosted)
+			}
 			if p.Enabled() {
 				return fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted)
 			}

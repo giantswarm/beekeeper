@@ -2434,6 +2434,12 @@ omp:
 // selfHostedTestModel is the model selector of the self-hosted provider.
 const selfHostedTestModel = "local-model/worker-model"
 
+// serveModeFull is the full-power serving mode of the test mode reader.
+const serveModeFull = "full"
+
+// selfHostedProv is the self-hosted provider name of the resolution tests.
+const selfHostedProv = "local-model"
+
 // newSelfHostedApp builds the app a self-hosted capacity test starts from.
 func newSelfHostedApp(cfgPath string, cfg *config.Config, store state.Store, out *bytes.Buffer, now time.Time) *app {
 	return &app{
@@ -2792,7 +2798,7 @@ omp:
 	}
 	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 
-	mode := "full"
+	mode := serveModeFull
 	var modeErr error
 	reads := 0
 	newApp := func(out *bytes.Buffer) *app {
@@ -2819,7 +2825,7 @@ omp:
 	if err := newApp(&out).capacityCmd().Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "provider local-model: 0 busy of ceiling 2; serving mode full; room for 2 starts") {
+	if !strings.Contains(out.String(), "provider local-model: 0 busy of ceiling 2; serving mode "+serveModeFull+"; room for 2 starts") {
 		t.Fatalf("capacity in mode full:\n%s", out.String())
 	}
 
@@ -3056,5 +3062,120 @@ omp:
 	}
 	if !strings.Contains(startOut.String(), "started OmpNoChoices: omp agent omp_") {
 		t.Fatalf("omp start output:\n%s", startOut.String())
+	}
+}
+
+// TestSelfHostedWatchSilentAtCeilingZero covers the watch: with
+// capacity.ceiling configured 0, busy agents reaching the self-hosted
+// provider's own ceiling raise neither CAPACITY LOW nor CAPACITY FULL — the
+// derived ceiling carries the self-hosted room, the configured hold stands.
+func TestSelfHostedWatchSilentAtCeilingZero(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte(selfHostedRawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	selfHostedAgents(t, store, "OmpBusyOne", "OmpBusyTwo")
+	var watchOut bytes.Buffer
+	aWatch := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &watchOut}
+	w := aWatch.newWatcher(false, true)
+	w.now = t0
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { return roomy() }
+	// The derived ceiling is the self-hosted one (2); busy is 2, so a naive
+	// check against the derived total would raise CAPACITY FULL.
+	if k, u := w.currentUsage(w.liveCapacity(), t0); k.Ceiling == 0 {
+		t.Fatalf("derived ceiling = %d, want the self-hosted room above the held total (u %+v)", k.Ceiling, u)
+	}
+	w.capacity(context.Background(), supervised(2), nil)
+	if s := watchOut.String(); strings.Contains(s, "CAPACITY FULL") || strings.Contains(s, "CAPACITY LOW") {
+		t.Fatalf("watch at configured ceiling 0 with busy at the self-hosted ceiling:\n%s", s)
+	}
+}
+
+// TestSelfHostedUsageUnknownKeepsProviderBlock covers the no-choices verdict:
+// with a positive capacity.ceiling and a subscription provider whose usage
+// read failed (its own ceiling 0), the verdict names that provider's block,
+// not a bare "ceiling 0", and the self-hosted provider's room stands.
+func TestSelfHostedUsageUnknownKeepsProviderBlock(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	providerRaw := `capacity:
+  floor: 0
+  ceiling: 10
+  providers:
+    claude:
+      ceiling: 4
+      command: [read-claude]
+    local-model:
+      kind: self-hosted
+      ceiling: 2
+omp:
+  model: local-model/worker-model
+`
+	if err := os.WriteFile(cfgPath, []byte(providerRaw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	a := newSelfHostedApp(cfgPath, cfg, store, &out, t0)
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{}, errors.New("endpoint timeout")
+	}
+	if err := a.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "no start: ceiling 0") {
+		t.Fatalf("provider-pool verdict hides the provider's own block:\n%s", got)
+	}
+	if !strings.Contains(got, "provider claude: 0 busy of floor 0, ceiling 0; usage unknown (endpoint timeout)") {
+		t.Fatalf("claude line on the failed read:\n%s", got)
+	}
+	if !strings.Contains(got, "provider local-model: 0 busy of ceiling 2; room for 2 starts") {
+		t.Fatalf("self-hosted line stays open:\n%s", got)
+	}
+	if !strings.Contains(got, "room for 2 starts") {
+		t.Fatalf("verdict with the self-hosted provider open:\n%s", got)
+	}
+}
+
+// TestSelfHostedNoChoicesFallback covers an omp start with no
+// capacity.choices: the model's <provider>/ prefix wins when it names a
+// provider, and with a prefix that names none (models.yml's provider need
+// not carry the capacity.providers key), the sole self-hosted provider
+// takes the agent.
+func TestSelfHostedNoChoicesFallback(t *testing.T) {
+	k := config.Capacity{Providers: map[string]config.Provider{selfHostedProv: {Kind: config.KindSelfHosted, Ceiling: 2}}}
+	if p, _ := resolveAgentProviderBucket(k, omp.Harness, "local/worker-model"); p != selfHostedProv {
+		t.Fatalf("omp model with an unknown prefix resolved to %q, want the sole self-hosted provider", p)
+	}
+	if p, _ := resolveAgentProviderBucket(k, omp.Harness, selfHostedTestModel); p != selfHostedProv {
+		t.Fatalf("omp model with its own prefix resolved to %q, want %s", p, selfHostedProv)
+	}
+	// Two self-hosted providers and no prefix match: unresolved, not guessed.
+	two := config.Capacity{Providers: map[string]config.Provider{
+		"a-local": {Kind: config.KindSelfHosted, Ceiling: 2},
+		"b-local": {Kind: config.KindSelfHosted, Ceiling: 2},
+	}}
+	if p, _ := resolveAgentProviderBucket(two, omp.Harness, "other/worker-model"); p != omp.Harness {
+		t.Fatalf("ambiguous omp model resolved to %q, want no provider", p)
+	}
+	if p, _ := resolveAgentProviderBucket(two, omp.Harness, "b-local/x"); p != "b-local" {
+		t.Fatalf("omp model by prefix resolved to %q, want b-local", p)
 	}
 }
