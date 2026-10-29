@@ -3,6 +3,7 @@ package guard
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,6 +20,13 @@ import (
 // a Read, a less, a jq . or a grep that prints their lines puts the values in
 // the transcript. Their metadata passes, and so does a jq or yq read that
 // strips every credential key the file holds, or keeps only key names.
+
+const (
+	echoCommand   = "echo"
+	printfCommand = "printf"
+	statCommand   = "stat"
+	falseWord     = "false"
+)
 
 // SecretFiles are the files every session's hook guards, globs allowed, ~/
 // for the home directory; secret.files adds to them.
@@ -51,7 +59,7 @@ var (
 	plainKey = regexp.MustCompile(`^[A-Za-z_]\w*$`)
 	// metaCmds print a file's metadata or move it, never its content.
 	metaCmds = map[string]bool{
-		"ls": true, "stat": true, "file": true, "wc": true, "du": true, "test": true, "[": true, "[[": true,
+		"ls": true, statCommand: true, "file": true, "wc": true, "du": true, "test": true, "[": true, "[[": true,
 		"realpath": true, "readlink": true, "dirname": true, "basename": true, "touch": true, "chmod": true,
 		"chown": true, findCmd: true, "lsof": true, "fuser": true, "namei": true, "getfacl": true, "mv": true,
 		"rm": true, "trash": true, "trash-put": true, "omp": true, selfCmd: true,
@@ -66,6 +74,9 @@ var (
 type secretFiles struct {
 	// globs are absolute patterns.
 	globs []string
+	// links keeps the original guarded file for links this call creates. Its
+	// credential keys, rather than an absent destination's, govern filters.
+	links map[string]string
 	// home is the home directory; a directory that contains a guarded file
 	// counts for a recursive search only below it.
 	home string
@@ -115,6 +126,9 @@ func (f secretFiles) match(p string) string {
 			if x == "" || err != nil && x == real {
 				continue
 			}
+			if target := f.links[x]; target != "" {
+				return target
+			}
 			for _, g := range f.globs {
 				if ok, _ := filepath.Match(g, x); ok {
 					return x
@@ -135,10 +149,10 @@ func (f secretFiles) under(dir string) string {
 	for _, g := range f.globs {
 		if strings.HasPrefix(g, dir+string(filepath.Separator)) {
 			if m, _ := filepath.Glob(g); len(m) > 0 {
-				return m[0]
+				return f.match(m[0])
 			}
 			if !strings.ContainsAny(g, "*?[") {
-				return g
+				return f.match(g)
 			}
 		}
 	}
@@ -489,7 +503,7 @@ func metadataFunctions(cmd string) map[string]*syntax.FuncDecl {
 					break
 				}
 				switch verb {
-				case "readlink", "stat", "test", "[", ":", "dirname", "basename", "mkdir", "printf", "echo", "return", "true", "false":
+				case "readlink", statCommand, "test", "[", ":", "dirname", "basename", "mkdir", printfCommand, echoCommand, "return", "true", falseWord:
 				case "ln":
 					var args []string
 					for _, a := range node.Args[1:] {
@@ -566,6 +580,10 @@ func helperLinks(fn *syntax.FuncDecl, args []string, helpers map[string]*syntax.
 func (g secretGuard) linkedFiles(sc shellScan, segs []segment, vars map[string][]string, helpers map[string]*syntax.FuncDecl, dirs []string) secretFiles {
 	f := g.files
 	f.globs = slices.Clone(f.globs)
+	f.links = maps.Clone(f.links)
+	if f.links == nil {
+		f.links = map[string]string{}
+	}
 	literals := map[string]string{}
 	for name, vals := range vars {
 		if len(vals) == 1 {
@@ -596,8 +614,11 @@ func (g secretGuard) linkedFiles(sc shellScan, segs []segment, vars map[string][
 			}
 			for _, dir := range dirs {
 				for _, p := range symbolicLinkPaths(resolved, dir) {
-					if f.match(p.source) != "" && !slices.Contains(f.globs, p.link) {
-						f.globs = append(f.globs, p.link)
+					if target := f.match(p.source); target != "" {
+						if !slices.Contains(f.globs, p.link) {
+							f.globs = append(f.globs, p.link)
+						}
+						f.links[p.link] = target
 					}
 				}
 			}

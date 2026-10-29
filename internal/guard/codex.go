@@ -948,8 +948,9 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 	sc.heredocs = rawSc.heredocs
 	segs := sc.segments()
 	vars := scanVars(sc, segs)
+	helpers := metadataFunctions(cmd)
 	metadata := map[string]bool{}
-	for name, fn := range metadataFunctions(cmd) {
+	for name, fn := range helpers {
 		metadata[name] = fn != nil
 	}
 	states := walkSegments(sc, cwd, h.Upstream.Git != nil)
@@ -987,6 +988,14 @@ func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context strin
 			continue
 		}
 		for _, words := range expandWordsList(rawWords, vars) {
+			c := commandAt(words)
+			if c < len(words) {
+				for _, args := range helperLinks(helpers[words[c]], words[c+1:], helpers, 0) {
+					if r := codexLinkWriteRefusal(args, st.dir); r != "" {
+						return r, ""
+					}
+				}
+			}
 			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known, metadata)
 			if r != "" {
 				return r, ""
@@ -1087,10 +1096,8 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	isWriteCmd := writeCmdsMap[name] ||
 		((name == "s"+"ed" || name == gsedCmd || name == perlCmd) && hasInPlaceFlag(args))
 	if isSymbolic {
-		for _, p := range symbolicLinkPaths(args, dir) {
-			if guardedCodexPath(p.link, dir, false) {
-				return codexHomeRefusalMsg, ""
-			}
+		if r := codexLinkWriteRefusal(args, dir); r != "" {
+			return r, ""
 		}
 	} else if isWriteCmd {
 		for _, a := range args {
@@ -1144,6 +1151,15 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 		}
 	}
 	return "", context
+}
+
+func codexLinkWriteRefusal(args []string, dir string) string {
+	for _, p := range symbolicLinkPaths(args, dir) {
+		if guardedCodexPath(p.link, dir, false) {
+			return codexHomeRefusalMsg
+		}
+	}
+	return ""
 }
 
 func isBeekeeperTextSubcommand(name string, args []string) bool {

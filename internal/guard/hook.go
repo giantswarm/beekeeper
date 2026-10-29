@@ -607,7 +607,7 @@ func textCommand(words []string) bool {
 	if !textCommands[name] {
 		return false
 	}
-	if name == "printf" {
+	if name == printfCommand {
 		return len(words) == 1 || !strings.HasPrefix(words[1], "-") // printf -v sets a variable
 	}
 	subs, ok := textSubcommands[name]

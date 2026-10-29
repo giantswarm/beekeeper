@@ -604,7 +604,7 @@ func (g secretGuard) stageInputLeak(sc shellScan, sg segment, copied map[string]
 		return nil
 	}
 	stageName := path.Base(stageWords[scIdx])
-	if stageName == "echo" || stageName == "printf" {
+	if stageName == echoCommand || stageName == printfCommand {
 		if l := g.scan(strings.Join(stageWords[scIdx+1:], " "), depth+1); l != nil {
 			return l
 		}

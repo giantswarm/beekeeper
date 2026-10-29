@@ -22,45 +22,47 @@ func TestSecretLinkOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := Hook{SecretFiles: []string{"~/.tool/auth.json"}}
-	const secret = `"$HOME/.tool/auth.json"`
+	const sourcePath = `"$HOME/.tool/auth.json"`
 	const profile = `"$HOME/profile.json"`
 	for _, tc := range []struct {
 		name, command string
 		deny          bool
 	}{
-		{"create", "ln -s " + secret + " new.json", false},
-		{"replace", "ln -sfn " + secret + " " + profile, false},
-		{"long_option", "ln --symbolic --force --no-dereference " + secret + " " + profile, false},
+		{"create", "ln -s " + sourcePath + " new.json", false},
+		{"replace", "ln -sfn " + sourcePath + " " + profile, false},
+		{"long_option", "ln --symbolic --force --no-dereference " + sourcePath + " " + profile, false},
 		{"readlink", "readlink " + profile, false},
 		{"test_L", "test -L " + profile, false},
-		{"test_e", "test -e " + secret, false},
+		{"test_e", "test -e " + sourcePath, false},
 		{"test_h", "test -h " + profile, false},
-		{"bracket_e", "[ -e " + secret + " ]", false},
+		{"bracket_e", "[ -e " + sourcePath + " ]", false},
 		{"stat", "stat " + profile, false},
-		{"grep_count", "grep -c token " + secret, false},
-		{"grep_files", "grep -l token " + secret, false},
-		{"keys", "jq keys " + secret, false},
-		{"cat", "cat " + secret, true},
-		{"copy", "cp " + secret + " copy.json", true},
-		{"source", "source " + secret, true},
-		{"dot", ". " + secret, true},
-		{"redirect", "cat < " + secret, true},
-		{"metadata_redirect", "stat " + profile + " < " + secret, true},
-		{"grep_lines", "grep token " + secret, true},
-		{"base64", "base64 " + secret, true},
-		{"head", "head " + secret, true},
-		{"tail", "tail " + secret, true},
+		{"grep_count", "grep -c token " + sourcePath, false},
+		{"grep_files", "grep -l token " + sourcePath, false},
+		{"keys", "jq keys " + sourcePath, false},
+		{"cat", "cat " + sourcePath, true},
+		{"copy", "cp " + sourcePath + " copy.json", true},
+		{"source", "source " + sourcePath, true},
+		{"dot", ". " + sourcePath, true},
+		{"redirect", "cat < " + sourcePath, true},
+		{"metadata_redirect", "stat " + profile + " < " + sourcePath, true},
+		{"grep_lines", "grep token " + sourcePath, true},
+		{"base64", "base64 " + sourcePath, true},
+		{"head", "head " + sourcePath, true},
+		{"tail", "tail " + sourcePath, true},
 		{"copy_dereference", "cp -L " + profile + " copy.json", true},
 		{"rsync_dereference", "rsync -L " + profile + " copy.json", true},
-		{"tar", "tar -cf archive.tar " + secret, true},
-		{"zip", "zip archive.zip " + secret, true},
+		{"tar", "tar -cf archive.tar " + sourcePath, true},
+		{"zip", "zip archive.zip " + sourcePath, true},
 		{"read_link", "cat " + profile, true},
-		{"hard_link", "ln " + secret + " new.json", true},
-		{"option_operand", "ln -t -s " + secret, true},
-		{"link_and_read", "ln -s " + secret + "; cat " + secret, true},
-		{"new_link_and_read", "ln -s " + secret + " new.json; cat new.json", true},
-		{"variable_link_read", `src=` + secret + `; dst=new.json; ln -s "$src" "$dst"; cat new.json`, true},
-		{"helper", `link() { ln -sfn "$1" "$2"; }; link ` + secret + " " + profile, false},
+		{"hard_link", "ln " + sourcePath + " new.json", true},
+		{"option_operand", "ln -t -s " + sourcePath, true},
+		{"link_and_read", "ln -s " + sourcePath + "; cat " + sourcePath, true},
+		{"new_link_and_read", "ln -s " + sourcePath + " new.json; cat new.json", true},
+		{"new_link_wrong_strip", "ln -s " + sourcePath + ` new.json; cat new.json | jq 'del(.. | .apiKey?)'`, true},
+		{"new_link_strip", "ln -s " + sourcePath + ` new.json; cat new.json | jq 'del(.. | .token?)'`, false},
+		{"variable_link_read", `src=` + sourcePath + `; dst=new.json; ln -s "$src" "$dst"; cat new.json`, true},
+		{"helper", `link() { ln -sfn "$1" "$2"; }; link ` + sourcePath + " " + profile, false},
 		{"helper_check", `link() {
 	local src="$1" dst="$2"
 	mkdir -p "$(dirname "$dst")"
@@ -70,26 +72,26 @@ func TestSecretLinkOperations(t *testing.T) {
 		ln -sfn "$src" "$dst"
 	fi
 	printf '%s\n' "$dst"
-}; link ` + secret + " " + profile, false},
-		{"helper_read", `link() { ln -sfn "$1" "$2"; cat "$1"; }; link ` + secret + " " + profile, true},
-		{"helper_redirect", `link() { ln -sfn "$1" "$2" < "$1"; }; link ` + secret + " " + profile, true},
-		{"helper_unknown", `link() { unknown "$1"; }; link ` + secret, true},
-		{"helper_nested", `inner() { ln -sfn "$1" "$2"; }; link() { inner "$1" "$2"; }; link ` + secret + " " + profile, false},
-		{"helper_spread", `link() { ln -sfn "$@"; }; link ` + secret + " " + profile, false},
-		{"helper_spread_read", `link() { ln -sfn "$@"; }; link ` + secret + ` new.json; cat new.json`, true},
-		{"helper_global_read", `src=` + secret + `; link() { ln -sfn "$src" "$1"; }; link new.json; cat new.json`, true},
-		{"helper_new_link_read", `link() { local src="$1" dst="$2"; ln -sfn "$src" "$dst"; }; link ` + secret + ` new.json; cat new.json`, true},
-		{"helper_redefined", `link() { ln -sfn "$1" "$2"; }; link() { cat "$1"; }; link ` + secret, true},
-		{"helper_shadow", `ln() { cat "$1"; }; link() { ln -sfn "$1" "$2"; }; link ` + secret + " " + profile, true},
-		{"helper_substitution", `link() { ln -sfn "$(cat "$1")" "$2"; }; link ` + secret + " " + profile, true},
-		{"helper_recursive", `link() { link "$1" "$2"; }; link ` + secret + " " + profile, true},
+}; link ` + sourcePath + " " + profile, false},
+		{"helper_read", `link() { ln -sfn "$1" "$2"; cat "$1"; }; link ` + sourcePath + " " + profile, true},
+		{"helper_redirect", `link() { ln -sfn "$1" "$2" < "$1"; }; link ` + sourcePath + " " + profile, true},
+		{"helper_unknown", `link() { unknown "$1"; }; link ` + sourcePath, true},
+		{"helper_nested", `inner() { ln -sfn "$1" "$2"; }; link() { inner "$1" "$2"; }; link ` + sourcePath + " " + profile, false},
+		{"helper_spread", `link() { ln -sfn "$@"; }; link ` + sourcePath + " " + profile, false},
+		{"helper_spread_read", `link() { ln -sfn "$@"; }; link ` + sourcePath + ` new.json; cat new.json`, true},
+		{"helper_global_read", `src=` + sourcePath + `; link() { ln -sfn "$src" "$1"; }; link new.json; cat new.json`, true},
+		{"helper_new_link_read", `link() { local src="$1" dst="$2"; ln -sfn "$src" "$dst"; }; link ` + sourcePath + ` new.json; cat new.json`, true},
+		{"helper_redefined", `link() { ln -sfn "$1" "$2"; }; link() { cat "$1"; }; link ` + sourcePath, true},
+		{"helper_shadow", `ln() { cat "$1"; }; link() { ln -sfn "$1" "$2"; }; link ` + sourcePath + " " + profile, true},
+		{"helper_substitution", `link() { ln -sfn "$(cat "$1")" "$2"; }; link ` + sourcePath + " " + profile, true},
+		{"helper_recursive", `link() { link "$1" "$2"; }; link ` + sourcePath + " " + profile, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, mode := range []string{"direct", "script", "check"} {
 				command := tc.command
 				if mode != "direct" {
 					p := filepath.Join(home, "installer.sh")
-					if err := os.WriteFile(p, []byte("#!/bin/sh\n"+command+"\n"), 0o700); err != nil {
+					if err := os.WriteFile(p, []byte("#!/bin/sh\n"+command+"\n"), 0o600); err != nil {
 						t.Fatal(err)
 					}
 					command = "bash " + ShellQuote(p)
@@ -137,6 +139,9 @@ func TestSecretLinkCodexHomeWrites(t *testing.T) {
 		`ln -s config.json "$HOME/profile/hooks.json"`,
 		`ln -s config.json "$HOME/profile"`,
 		`ln -st "$HOME/profile" config.json`,
+		`link() { ln -sfn "$1" "$2"; }; link "$HOME/.codex/auth.json" "$HOME/.codex/hooks.json"`,
+		`link() { ln -sfn "$1" "$2"; }; link "$HOME/.codex/auth.json" "$HOME/profile/hooks.json"`,
+		`link() { ln -sfn "$@"; }; link "$HOME/.codex/auth.json" "$HOME/.codex/hooks.json"`,
 	} {
 		if d := decideCodexCmd(t, Hook{}, home, cmd); d.PermissionDecision != decisionDeny {
 			t.Errorf("Codex home link write passed: %s", cmd)
