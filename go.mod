@@ -12,7 +12,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/giantswarm/go-selfupdate v1.7.1
-	github.com/giantswarm/mcp-toolkit v0.4.7
+	github.com/giantswarm/mcp-toolkit v0.4.8
 	github.com/giantswarm/selfupdate-cosign v0.3.17
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-logr/logr v1.4.4
