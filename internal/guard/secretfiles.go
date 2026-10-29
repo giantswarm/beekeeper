@@ -199,7 +199,7 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 		isInputRedir := strings.HasPrefix(w, "<") && !strings.HasPrefix(w, "<<") && !strings.HasPrefix(w, "<&") ||
 			strings.HasPrefix(w, "0<") && !strings.HasPrefix(w, "0<&") ||
 			i > 0 && (words[i-1] == "<" || words[i-1] == "0<" || words[i-1] == "<>")
-		if k == len(words) && !isInputRedir {
+		if !g.noLinks && g.linkAllowance.allowed && k == len(words) && !isInputRedir {
 			continue
 		}
 		isSelfConfig := name == selfCmd && (strings.HasPrefix(w, "--config=") || i > 0 && words[i-1] == flagConfig)

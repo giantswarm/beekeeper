@@ -933,6 +933,17 @@ var (
 // paths, inline apply_patch commands, unquoted heredoc command substitutions,
 // and option/redirection abuse on exempted beekeeper text commands.
 func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context string) {
+	if script := standaloneLinkScript(cmd); script != "" {
+		if raw, state := readScript(wordPath(script, cwd)); state == scriptRead {
+			if r, ctx := h.codexBashTextRefusal(ev, string(raw), cwd); r != "" {
+				return r, ctx
+			}
+		}
+	}
+	return h.codexBashTextRefusal(ev, cmd, cwd)
+}
+
+func (h Hook) codexBashTextRefusal(ev event, cmd, cwd string) (reason, context string) {
 	rawSc := scanShell(cmd)
 	for _, hd := range rawSc.heredocs {
 		if !hd.quoted && hd.start <= hd.end && hd.end <= len(cmd) {

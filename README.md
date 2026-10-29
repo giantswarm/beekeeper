@@ -557,9 +557,11 @@ JSON document has no key-stripped read.
 
 One symbolic-link operation (`ln -s`, `ln -sf`, `ln -sfn`) with two literal paths passes, together
 with metadata checks (`readlink`, `test -L`, `test -e`, `test -h`, `[ -e ]`, `stat`). Path variables
-must each be assigned a literal value once, before the operation. A standalone installer script
-may wrap it in a helper whose entire body is one such `ln` with `"$1" "$2"` or `"$@"` called with
-exactly two operands. Globs, reassignment, branches, loops,
+must each be assigned a literal value once, before the operation. A standalone installer invoked
+as `bash <script>` or `sh <script>` (optionally followed by `--check`) may wrap it in a helper
+whose entire body is one such `ln` with `"$1" "$2"` or `"$@"` called with exactly two operands.
+The invocation must contain no other command, assignment or redirection. Codex also checks the
+script's link destinations against its protected home. Globs, reassignment, branches, loops,
 additional helper commands and nested shell code get no link exemption. A command or script that
 also reads or copies the credential file is refused, including a read through the new link.
 

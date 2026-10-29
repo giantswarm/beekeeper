@@ -82,6 +82,33 @@ func plainLinkStmt(st *syntax.Stmt) bool {
 	return len(st.Redirs) == 0 && !st.Negated && !st.Background && !st.Coprocess && !st.Disown
 }
 
+// Only a plain top-level shell invocation may grant its script the allowance.
+// Executable arguments to another utility always keep the base refusal.
+func standaloneLinkScript(cmd string) string {
+	f, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil || len(f.Stmts) != 1 || !plainLinkStmt(f.Stmts[0]) {
+		return ""
+	}
+	call, ok := f.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Assigns) != 0 || len(call.Args) < 2 || len(call.Args) > 3 {
+		return ""
+	}
+	for _, arg := range call.Args {
+		if !literalLinkWord(arg, nil) {
+			return ""
+		}
+	}
+	name := call.Args[0].Lit()
+	if name != bashCmd && name != "sh" || len(call.Args) == 3 && call.Args[2].Lit() != "--check" {
+		return ""
+	}
+	p := shellWordText(call.Args[1])
+	if p == "" || strings.HasPrefix(p, "-") || strings.HasPrefix(p, "+") || strings.ContainsAny(p, "*?[") {
+		return ""
+	}
+	return p
+}
+
 // Only HOME and variables already assigned a literal once can expand here.
 func literalLinkWord(w *syntax.Word, vars map[string]string) bool {
 	ok := true

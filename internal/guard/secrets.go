@@ -187,7 +187,7 @@ type secretGuard struct {
 	metadata         map[string]string
 	linkAllowance    linkAllowance
 	noLinks          bool
-	standaloneScript bool
+	standaloneScript string
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -219,7 +219,7 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	vars := scanVars(sc, segs)
 	g.metadata = metadataFunctions(cmd)
 	g.linkAllowance = simpleLinkAllowance(cmd, g.metadata)
-	g.standaloneScript = len(segs) == 1
+	g.standaloneScript = standaloneLinkScript(cmd)
 	copied, copyLeak := g.copiedUnlocks(sc, segs, vars, depth)
 	if copyLeak != nil {
 		return copyLeak
@@ -423,6 +423,10 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 // words, a sourced script and a script run by its path.
 func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int, words []string, copied map[string]string, depth int) *leak {
 	g.noLinks = true
+	if depth == 0 && g.standaloneScript != "" {
+		g.noLinks = false
+		return g.unlockOrScript(wordPath(g.standaloneScript, g.cwd), copied, depth)
+	}
 	if envCmd := envSplitCommand(words); envCmd != "" {
 		if l := g.scan(envCmd, depth+1); l != nil {
 			return l
@@ -517,13 +521,6 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 				continue
 			}
 			if bareRedirect.MatchString(arg) || redirection.MatchString(arg) {
-				continue
-			}
-			if script && depth == 0 && g.standaloneScript {
-				if l := g.unlockOrScript(arg, copied, depth); l != nil {
-					return l
-				}
-				script = false
 				continue
 			}
 			if l := g.scan(arg, depth+1); l != nil {
@@ -684,11 +681,6 @@ func (g secretGuard) script(p string, depth int) *leak {
 	raw, err := os.ReadFile(p) //nolint:gosec // a script the command line runs, read to scan it
 	if err != nil || bytes.IndexByte(raw, 0) >= 0 {
 		return nil
-	}
-	// A standalone installer may contain the simple allowance. Shell code
-	// nested in another command or script always uses the base refusal.
-	if depth == 0 && g.standaloneScript {
-		g.noLinks = false
 	}
 	if l := g.scan(string(raw), depth+1); l != nil {
 		l.what += ", run from " + filepath.Base(p)

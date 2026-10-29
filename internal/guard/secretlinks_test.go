@@ -139,17 +139,34 @@ func TestSecretLinkCodexHomeWrites(t *testing.T) {
 	if err := os.Symlink(filepath.Join(home, ".codex"), filepath.Join(home, "profile")); err != nil {
 		t.Fatal(err)
 	}
-	for _, cmd := range []string{
-		`ln -s config.json "$HOME/.codex/hooks.json"`,
-		`ln -s config.json "$HOME/profile/hooks.json"`,
-		`ln -s config.json "$HOME/profile"`,
-		`ln -st "$HOME/profile" config.json`,
-		`link() { ln -sfn "$1" "$2"; }; link "$HOME/.codex/auth.json" "$HOME/.codex/hooks.json"`,
-		`link() { ln -sfn "$1" "$2"; }; link "$HOME/.codex/auth.json" "$HOME/profile/hooks.json"`,
-		`link() { ln -sfn "$@"; }; link "$HOME/.codex/auth.json" "$HOME/.codex/hooks.json"`,
+	for _, tc := range []struct{ name, command string }{
+		{"direct_destination", `ln -s config.json "$HOME/.codex/hooks.json"`},
+		{"linked_destination", `ln -s config.json "$HOME/profile/hooks.json"`},
+		{"directory_destination", `ln -s config.json "$HOME/profile"`},
+		{"target_option", `ln -st "$HOME/profile" config.json`},
+		{"helper", `link() { ln -sfn "$1" "$2"; }; link "$HOME/.codex/auth.json" "$HOME/.codex/hooks.json"`},
+		{"helper_linked_destination", `link() { ln -sfn "$1" "$2"; }; link "$HOME/.codex/auth.json" "$HOME/profile/hooks.json"`},
+		{"helper_spread", `link() { ln -sfn "$@"; }; link "$HOME/.codex/auth.json" "$HOME/.codex/hooks.json"`},
+		{"secret_source", `ln -sfn "$HOME/.codex/auth.json" "$HOME/.codex/hooks.json"`},
 	} {
-		if d := decideCodexCmd(t, Hook{}, home, cmd); d.PermissionDecision != decisionDeny {
-			t.Errorf("Codex home link write passed: %s", cmd)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			for _, mode := range []string{secretLinkDirect, secretLinkScript, secretLinkCheck} {
+				t.Run(mode, func(t *testing.T) {
+					cmd := tc.command
+					if mode != secretLinkDirect {
+						if err := os.WriteFile(filepath.Join(home, "installer.sh"), []byte(cmd+"\n"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+						cmd = "bash installer.sh"
+						if mode == secretLinkCheck {
+							cmd += " --check"
+						}
+					}
+					if d := decideCodexCmd(t, Hook{}, home, cmd); d.PermissionDecision != decisionDeny {
+						t.Error("refused = false, want true")
+					}
+				})
+			}
+		})
 	}
 }
