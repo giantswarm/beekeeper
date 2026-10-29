@@ -1206,7 +1206,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		}
 		// A self-hosted provider reads no subscription usage; its ceiling may
 		// follow the serving mode of the model it serves.
-		r := w.app.serveMode(ctx, name, p)
+		r := w.serveMode(ctx, name, p)
 		readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
 		k.Providers[name] = p.WithServeMode(r)
 	}
