@@ -266,46 +266,6 @@ func serveModeDrainTarget(p config.Provider, res string) string {
 	return best
 }
 
-// serveModeLower is the mode the constraints allow sustaining fewer
-// sessions than run; "" when the model already runs the lowest of them.
-// A failed switch that left the model wider than its constraints allow is
-// asked again against the mode the machine was meant to drain to.
-func serveModeLower(p config.Provider, running string, heldFn func(mode string) []string) string {
-	best := ""
-	modes := mapsKeys(p.ServeModeModes)
-	slices.Sort(modes)
-	for _, mode := range modes {
-		if len(heldFn(mode)) > 0 || mode == running {
-			continue
-		}
-		if c, ok := p.ServeModeCeiling(mode); ok && running != "" {
-			if rc, rok := p.ServeModeCeiling(running); rok && c >= rc {
-				continue
-			} else if !rok {
-				continue
-			}
-		}
-		if best == "" {
-			best = mode
-		}
-	}
-	return best
-}
-
-// serveModeHighest is the mode sustaining the most sessions, whatever nodes
-// it occupies: what the desk runs with while no constraint weighs on it.
-func serveModeHighest(p config.Provider) string {
-	best, bestSessions := "", -1
-	modes := mapsKeys(p.ServeModeModes)
-	slices.Sort(modes)
-	for _, mode := range modes {
-		if s := p.ServeModeModes[mode].Sessions; s > bestSessions {
-			best, bestSessions = mode, s
-		}
-	}
-	return best
-}
-
 // reconcileServeModes brings every self-hosted provider's serving mode to
 // what its constraints ask for: it lowers the ceiling of a model whose mode
 // occupies a newly held node (drain), runs the platform's own switch once
@@ -579,7 +539,7 @@ func (a *app) takeServeModeLock(name string) (func(), error) {
 	}
 	unlock := func() { _ = os.Remove(path) }
 	take := func() (bool, error) {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // the lock file beside the state, its own name
 		if err != nil {
 			if errors.Is(err, os.ErrExist) {
 				return false, nil
@@ -601,7 +561,7 @@ func (a *app) takeServeModeLock(name string) (func(), error) {
 	// switch never holds the machine's switches forever. The retry runs at
 	// most once: a switch that took the lock beside the reap keeps it, and
 	// this caller stands refused like any second switch.
-	if raw, rerr := os.ReadFile(path); rerr == nil {
+	if raw, rerr := os.ReadFile(path); rerr == nil { //nolint:gosec // the lock file this process just found
 		if pid, cerr := strconv.Atoi(strings.TrimSpace(string(raw))); cerr == nil && !proc.Alive(pid) {
 			_ = os.Remove(path)
 			if ok, err := take(); err != nil {

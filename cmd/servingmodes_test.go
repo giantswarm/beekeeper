@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -100,7 +101,7 @@ func newServingModesTest(t *testing.T) *servingModesTest {
 	// the config's own names are rewritten to them, so no command name ever
 	// resolves on the machine.
 	fake := filepath.Join(dir, "serve-mode")
-	if err := os.WriteFile(fake, []byte(fakeModeScript), 0o700); err != nil {
+	if err := os.WriteFile(fake, []byte(fakeModeScript), 0o700); err != nil { //nolint:gosec // the fake platform tool, an executable script
 		t.Fatal(err)
 	}
 	p := cfg.Capacity.Providers[selfHostedProv]
@@ -135,8 +136,9 @@ func newServingModesTest(t *testing.T) *servingModesTest {
 func (s *servingModesTest) app(out *bytes.Buffer) *app {
 	a := &app{cfgPath: s.cfgPath, cfg: s.cfg, store: s.store, now: s.now, out: out, as: usageCaller}
 	// The scenario's fakes live in the in-memory config: every liveCapacity
-	// read of every command instance falls back to it, as the machine's own
-	// config file would.
+	// read falls back to it. The file named by configLive loads only when it
+	// exists, so a scenario that rewrites the machine's config keeps being
+	// seen by every command instance, as the machine's own file would.
 	a.configLive = filepath.Join(s.dir, "no-such-config.yaml")
 	// The fake platform tools live in the scratch dir; the env names the
 	// mode file and the scenario's fail files.
@@ -171,7 +173,7 @@ if [ -z "$1" ]; then cat "$MODE_DIR/mode"; exit 0; fi
 ` + body + `
 `
 	fake := s.cfg.Capacity.Providers[selfHostedProv].ServeModeSwitch[0]
-	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil { //nolint:gosec // the fake switcher, an executable script
 		s.t.Fatal(err)
 	}
 }
@@ -233,7 +235,7 @@ func (s *servingModesTest) agents(names ...string) {
 		st.Agents = nil
 		for _, n := range names {
 			w := tasked(n)
-			w.Harness, w.Model = "omp", selfHostedTestModel
+			w.Harness, w.Model = omp.Harness, selfHostedTestModel
 			st.Agents = append(st.Agents, w)
 		}
 		return nil, nil
@@ -490,7 +492,7 @@ func TestServingModesSwitchBackAndRaise(t *testing.T) {
 	if out, err := s.claimNode("GpuJob"); err != nil {
 		t.Fatalf("the claim that starts the drain: %v\n%s", err, out)
 	}
-	s.releaseNode("GpuJob")
+	_, _ = s.releaseNode("GpuJob")
 	s.setMode(servingModeFull)
 	if out, err := s.claimNode("GpuJobA"); err == nil || !strings.Contains(err.Error(), "drains") {
 		t.Fatalf("a claim over the model's sessions:\n%s\nerr: %v", out, err)
@@ -693,6 +695,7 @@ sleep 2
 		close(firstDone)
 	}()
 	<-inside
+	//nolint:gosec // the test's own lock file
 	if raw, rerr := os.ReadFile(lockPath); rerr != nil || strings.TrimSpace(string(raw)) != strconv.Itoa(os.Getpid()) {
 		t.Fatalf("the running switch does not hold the machine's lock: %q %v", raw, rerr)
 	}
