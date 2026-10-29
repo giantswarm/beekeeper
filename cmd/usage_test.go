@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -2404,4 +2405,408 @@ capacity:
 	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
 		t.Fatalf("expected future codex reading to fail closed, got:\n%s", capOut.String())
 	}
+}
+
+// selfHostedRawCfg is a desk with one subscription provider held at ceiling 0
+// (its subscription ahead of its weekly pace) and one self-hosted provider on
+// a model served on the machine, whose ceiling is its own.
+const selfHostedRawCfg = `capacity:
+  floor: 0
+  ceiling: 0
+  providers:
+    claude:
+      floor: 1
+      ceiling: 2
+    local-model:
+      kind: self-hosted
+      ceiling: 2
+  choices:
+    - harness: claude
+      model: claude-opus-4-7
+    - harness: omp
+      model: local-model/worker-model
+      provider: local-model
+      skipPace: true
+omp:
+  model: local-model/worker-model
+`
+
+// selfHostedTestModel is the model selector of the self-hosted provider.
+const selfHostedTestModel = "local-model/worker-model"
+
+// newSelfHostedApp builds the app a self-hosted capacity test starts from.
+func newSelfHostedApp(cfgPath string, cfg *config.Config, store state.Store, out *bytes.Buffer, now time.Time) *app {
+	return &app{
+		cfgPath: cfgPath,
+		cfg:     cfg,
+		store:   store,
+		now:     now,
+		out:     out,
+		as:      usageCaller,
+	}
+}
+
+func selfHostedAgents(t *testing.T, store *state.FileStore, names ...string) {
+	t.Helper()
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		for _, n := range names {
+			w := tasked(n)
+			w.Harness, w.Model = omp.Harness, selfHostedTestModel
+			st.Agents = append(st.Agents, w)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSelfHostedProviderCeiling covers the first two Expected lines of the
+// issue: a desk whose subscription is held at capacity.ceiling 0 still starts
+// on its self-hosted provider, the self-hosted ceiling alone refuses a start
+// past its own sessions at once, and a machine guard refuses both providers.
+func TestSelfHostedProviderCeiling(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte(selfHostedRawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Capacity.Providers["local-model"]; !got.SelfHosted() || got.Ceiling != 2 {
+		t.Fatalf("local-model provider = %+v, want self-hosted with its own ceiling of 2", got)
+	}
+	if got := cfg.Capacity.Ceiling; got != 0 {
+		t.Fatalf("capacity.ceiling = %d, want the configured 0", got)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	// 1. capacity.ceiling 0: the subscription provider's starts are paused,
+	//    the self-hosted provider's are not. It reads no subscription usage,
+	//    so the self-hosted choice is the one left standing.
+	var out bytes.Buffer
+	a := newSelfHostedApp(cfgPath, cfg, store, &out, t0)
+	if err := a.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\nroom for 2 starts") {
+		t.Fatalf("capacity at subscription ceiling 0:\n%s", got)
+	}
+	if !strings.Contains(got, "provider local-model: 0 busy of ceiling 2; room for 2 starts") {
+		t.Fatalf("self-hosted provider line:\n%s", got)
+	}
+	if !strings.Contains(got, "provider claude: 0 busy of floor 1, ceiling 2; no start: ceiling 0") {
+		t.Fatalf("subscription provider line:\n%s", got)
+	}
+	// The subscription's choice has no room, so the self-hosted one is what a
+	// start would get.
+	if !strings.Contains(got, "choice: omp / local-model/worker-model (provider local-model)") {
+		t.Fatalf("choice line:\n%s", got)
+	}
+
+	// --json shows the self-hosted provider's sessions and ceiling.
+	var jsonOut bytes.Buffer
+	aJSON := newSelfHostedApp(cfgPath, cfg, store, &jsonOut, t0)
+	aJSON.json = true
+	if err := aJSON.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var parsed capacityView
+	if err := json.Unmarshal(jsonOut.Bytes(), &parsed); err != nil {
+		t.Fatalf("capacity --json: %v\n%s", err, jsonOut.String())
+	}
+	pv := parsed.Providers["local-model"]
+	if pv == nil || pv.Kind != config.KindSelfHosted || pv.Ceiling != 2 || pv.Room != 2 {
+		t.Fatalf("self-hosted provider in --json = %+v, want kind self-hosted, ceiling 2, room 2", pv)
+	}
+	if parsed.Room != 2 {
+		t.Fatalf("room at subscription ceiling 0 = %d, want 2", parsed.Room)
+	}
+
+	// agents start --harness omp goes through on the self-hosted ceiling.
+	// agents start --harness omp goes through on the self-hosted ceiling: its
+	// start is judged against the self-hosted provider, not the held
+	// subscription's ceiling.
+	brief := filepath.Join(dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeOmp := filepath.Join(dir, omp.Comm)
+	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"models\":[{\"selector\":\"local-model/worker-model\"}]}'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	origLauncher := plat.Launcher
+	origProcMachine := plat.Machine
+	t.Cleanup(func() {
+		plat.Launcher = origLauncher
+		plat.Machine = origProcMachine
+	})
+	plat.Machine = tableMachine{plat.Machine}
+	plat.Launcher = &agyTestLauncher{onStart: func(u platform.Unit) {
+		go func() {
+			var ompID string
+			for _, e := range u.Env {
+				if v, ok := strings.CutPrefix(e, omp.EnvAgent+"="); ok {
+					ompID = v
+				}
+			}
+			if ompID == "" {
+				return
+			}
+			f, oerr := os.OpenFile(omp.InboxPath(cfg.StateDir, ompID), os.O_RDWR, 0) //nolint:gosec // test FIFO
+			if oerr != nil {
+				return
+			}
+			defer func() { _ = f.Close() }()
+			_, _ = bufio.NewReader(f).ReadString('\n')
+		}()
+	}}
+	var startOut bytes.Buffer
+	aStart := newSelfHostedApp(cfgPath, cfg, store, &startOut, t0)
+	cmdStart := aStart.agentStartCmd()
+	cmdStart.SilenceErrors = true
+	cmdStart.SilenceUsage = true
+	cmdStart.SetArgs([]string{"OmpOnHeldSubscription", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	if err := cmdStart.Execute(); err != nil {
+		t.Fatalf("agents start --harness omp at subscription ceiling 0: %v\n%s", err, startOut.String())
+	}
+	if !strings.Contains(startOut.String(), "started OmpOnHeldSubscription: omp agent omp_") ||
+		!strings.Contains(startOut.String(), "on local-model/worker-model") {
+		t.Fatalf("omp start output:\n%s", startOut.String())
+	}
+
+	// agents start --harness auto picks the self-hosted choice while the
+	// subscription's provider is held at ceiling 0.
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var autoOut bytes.Buffer
+	aAuto := newSelfHostedApp(cfgPath, cfg, store, &autoOut, t0)
+	cmdAuto := aAuto.agentStartCmd()
+	cmdAuto.SilenceErrors = true
+	cmdAuto.SilenceUsage = true
+	cmdAuto.SetArgs([]string{"OmpByAuto", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	if err := cmdAuto.Execute(); err != nil {
+		t.Fatalf("agents start --harness auto at subscription ceiling 0: %v\n%s", err, autoOut.String())
+	}
+	if !strings.Contains(autoOut.String(), "choice: omp / local-model/worker-model (provider local-model)") ||
+		!strings.Contains(autoOut.String(), "started OmpByAuto: omp agent omp_") {
+		t.Fatalf("--harness auto start output:\n%s", autoOut.String())
+	}
+
+	// 2. The self-hosted ceiling refuses a start past its own sessions.
+	selfHostedAgents(t, store, "OmpBusyOne", "OmpBusyTwo")
+	var capOut bytes.Buffer
+	aFull := newSelfHostedApp(cfgPath, cfg, store, &capOut, t0)
+	if err := aFull.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(capOut.String(), "provider local-model: 2 busy of ceiling 2: OmpBusyOne, OmpBusyTwo; no start: 2 busy at the ceiling of 2") {
+		t.Fatalf("capacity at the self-hosted ceiling:\n%s", capOut.String())
+	}
+	capOut.Reset()
+	aFullJSON := newSelfHostedApp(cfgPath, cfg, store, &capOut, t0)
+	aFullJSON.json = true
+	if err := aFullJSON.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var fullParsed capacityView
+	if err := json.Unmarshal(capOut.Bytes(), &fullParsed); err != nil {
+		t.Fatalf("capacity --json at the ceiling: %v\n%s", err, capOut.String())
+	}
+	if fullParsed.Room != 0 || fullParsed.Providers["local-model"].Room != 0 {
+		t.Fatalf("room at the self-hosted ceiling = %d, provider room %d; want 0", fullParsed.Room, fullParsed.Providers["local-model"].Room)
+	}
+	var refusOut bytes.Buffer
+	aRefuse := newSelfHostedApp(cfgPath, cfg, store, &refusOut, t0)
+	cmdRefuse := aRefuse.agentStartCmd()
+	cmdRefuse.SilenceErrors = true
+	cmdRefuse.SilenceUsage = true
+	cmdRefuse.SetArgs([]string{"OmpOverCeiling", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	err = cmdRefuse.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider local-model: 2 busy at the ceiling of 2") {
+		t.Fatalf("omp start at the self-hosted ceiling: code=%d err=%v", Code(err), err)
+	}
+	// A claude start still refuses on the held subscription, not on the
+	// self-hosted ceiling.
+	var claudeOut bytes.Buffer
+	aClaude := newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0)
+	cmdClaude := aClaude.agentStartCmd()
+	cmdClaude.SilenceErrors = true
+	cmdClaude.SilenceUsage = true
+	cmdClaude.SetArgs([]string{"ClaudeWhileHeld", brief, usageDirFlag, dir})
+	err = cmdClaude.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: ceiling 0") {
+		t.Fatalf("claude start while the subscription is held: code=%d err=%v", Code(err), err)
+	}
+}
+
+// TestSelfHostedMachineGuardRefusesBoth covers the last Expected line: a
+// machine guard refuses a start on the self-hosted provider and on the
+// subscription alike.
+func TestSelfHostedMachineGuardRefusesBoth(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte(selfHostedRawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	brief := filepath.Join(dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The machine is short of MemAvailable: every start refuses, whichever
+	// provider it would run on.
+	orig := plat
+	tight := platform.Stub()
+	tight.Machine = tightMachine{Machine: tight.Machine}
+	plat = tight
+	t.Cleanup(func() { plat = orig })
+
+	var out bytes.Buffer
+	a := newSelfHostedApp(cfgPath, cfg, store, &out, t0)
+	if err := a.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "no start: MemAvailable 10.0 GiB under 20 GiB") {
+		t.Fatalf("capacity on a tight machine:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "provider local-model: 0 busy of ceiling 2; no start: MemAvailable 10.0 GiB under 20 GiB") {
+		t.Fatalf("self-hosted provider on a tight machine:\n%s", out.String())
+	}
+
+	var ompOut bytes.Buffer
+	aOmp := newSelfHostedApp(cfgPath, cfg, store, &ompOut, t0)
+	cmdOmp := aOmp.agentStartCmd()
+	cmdOmp.SilenceErrors = true
+	cmdOmp.SilenceUsage = true
+	cmdOmp.SetArgs([]string{"OmpOnTightMachine", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	err = cmdOmp.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider local-model: MemAvailable 10.0 GiB under 20 GiB") {
+		t.Fatalf("omp start on a tight machine: code=%d err=%v", Code(err), err)
+	}
+
+	var claudeOut bytes.Buffer
+	aClaude := newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0)
+	cmdClaude := aClaude.agentStartCmd()
+	cmdClaude.SilenceErrors = true
+	cmdClaude.SilenceUsage = true
+	cmdClaude.SetArgs([]string{"ClaudeOnTightMachine", brief, usageDirFlag, dir})
+	err = cmdClaude.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: MemAvailable 10.0 GiB under 20 GiB") {
+		t.Fatalf("claude start on a tight machine: code=%d err=%v", Code(err), err)
+	}
+}
+
+// TestSelfHostedProviderServeMode covers the serving mode deriving a
+// self-hosted provider's ceiling: the mode's ceiling replaces the configured
+// one, an unknown mode falls back to it, and a provider without a mode reader
+// keeps its ceiling as configured.
+func TestSelfHostedProviderServeMode(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	rawCfg := `capacity:
+  ceiling: 0
+  providers:
+    local-model:
+      kind: self-hosted
+      ceiling: 3
+      serveModeCommand: [read-serve-mode]
+      serveModeCeilings:
+        full: 2
+        tiny: 1
+  choices:
+    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true}
+omp:
+  model: local-model/worker-model
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+
+	mode := "full"
+	var modeErr error
+	reads := 0
+	newApp := func(out *bytes.Buffer) *app {
+		a := newSelfHostedApp(cfgPath, cfg, store, out, t0)
+		a.readServeMode = func(_ context.Context, _ []string, _ time.Duration) (config.ServeModeReading, error) {
+			reads++
+			if modeErr != nil {
+				return config.ServeModeReading{}, modeErr
+			}
+			return config.ServeModeReading{Mode: mode}, nil
+		}
+		return a
+	}
+	// clearServeMode drops the cached reading so the next call runs the reader
+	// again; servingModeStaleAfter is the other way a stale mode re-reads.
+	clearServeMode := func() {
+		if err := os.Remove(filepath.Join(cfg.StateDir, serveModeFile("local-model"))); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+
+	// The mode's ceiling bounds the provider: full runs 2 sessions at once.
+	var out bytes.Buffer
+	if err := newApp(&out).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "provider local-model: 0 busy of ceiling 2; serving mode full; room for 2 starts") {
+		t.Fatalf("capacity in mode full:\n%s", out.String())
+	}
+
+	// A cached reading serves the next call without running the reader again.
+	out.Reset()
+	if err := newApp(&out).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 {
+		t.Fatalf("serving mode read %d times, want the cached one reused", reads)
+	}
+
+	// An unknown mode falls back to the configured ceiling, naming the mode.
+	mode = "turbo"
+	clearServeMode()
+	out.Reset()
+	if err := newApp(&out).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "provider local-model: 0 busy of ceiling 3; serving mode turbo; room for 3 starts") {
+		t.Fatalf("capacity in an unlisted mode:\n%s", out.String())
+	}
+
+	// A failed read keeps the configured ceiling and says the mode is unknown.
+	modeErr = errors.New("mode reader down")
+	clearServeMode()
+	out.Reset()
+	if err := newApp(&out).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "provider local-model: 0 busy of ceiling 3; serving mode unknown (mode reader down); room for 3 starts") {
+		t.Fatalf("capacity on a failed mode read:\n%s", out.String())
+	}
+	modeErr = nil
 }

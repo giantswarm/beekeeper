@@ -87,6 +87,11 @@ type providerView struct {
 	Error       string   `json:"error,omitempty"`
 	Blocks      []string `json:"blocks,omitempty"`
 	Verdict     string   `json:"verdict"`
+	// Kind is "self-hosted" for a provider with no subscription behind it: no
+	// usage reader, no pace, a ceiling of sessions at once of its own.
+	Kind             string `json:"kind,omitempty"`
+	ServingMode      string `json:"servingMode,omitempty"`
+	ServingModeError string `json:"servingModeError,omitempty"`
 }
 
 func (p *providerView) findBucket(name string) *bucketView {
@@ -105,6 +110,15 @@ func (p *providerView) findBucket(name string) *bucketView {
 }
 
 func (p *providerView) windowsSummary(now time.Time) string {
+	if p.Kind == config.KindSelfHosted {
+		if p.ServingModeError != "" {
+			return "serving mode unknown (" + truncate(p.ServingModeError, 120) + ")"
+		}
+		if p.ServingMode != "" {
+			return "serving mode " + p.ServingMode
+		}
+		return ""
+	}
 	if p.Error != "" {
 		return "usage unknown (" + truncate(p.Error, 120) + ")"
 	}
@@ -124,6 +138,19 @@ func (p *providerView) windowsSummary(now time.Time) string {
 }
 
 func (p *providerView) line(now time.Time) string {
+	if p.Kind == config.KindSelfHosted {
+		// A self-hosted provider shows the sessions it runs against its own
+		// ceiling; it has no usage windows, only the serving mode its ceiling
+		// may follow.
+		s := fmt.Sprintf("%d busy of ceiling %d", len(p.Busy), p.Ceiling)
+		if len(p.Busy) > 0 {
+			s += ": " + strings.Join(p.Busy, ", ")
+		}
+		if ws := p.windowsSummary(now); ws != "" {
+			s += "; " + ws
+		}
+		return s + "; " + p.Verdict
+	}
 	s := fmt.Sprintf("%d busy of floor %d, ceiling %d", len(p.Busy), p.Floor, p.Ceiling)
 	if len(p.Busy) > 0 {
 		s += ": " + strings.Join(p.Busy, ", ")
@@ -135,6 +162,13 @@ func (p *providerView) line(now time.Time) string {
 }
 
 func (p *providerView) watchSummary(now time.Time) string {
+	if p.Kind == config.KindSelfHosted {
+		s := fmt.Sprintf("%d busy of ceiling %d", len(p.Busy), p.Ceiling)
+		if ws := p.windowsSummary(now); ws != "" {
+			s += ", " + ws
+		}
+		return s + ", " + p.Verdict
+	}
 	s := fmt.Sprintf("%d busy of floor %d, ceiling %d", len(p.Busy), p.Floor, p.Ceiling)
 	if ws := p.windowsSummary(now); ws != "" {
 		s += ", " + ws
@@ -618,9 +652,16 @@ type providerReadingResult struct {
 	reading usageReading
 	err     error
 	ok      bool
+	// serveMode is a self-hosted provider's serving-mode read, and
+	// serveModeErr why that read failed.
+	serveMode    string
+	serveModeErr string
 }
 
 func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time) *providerView {
+	if pCfg.SelfHosted() {
+		return buildSelfHostedProviderView(name, pCfg, pa, res, now)
+	}
 	busy := pa.Busy
 	if busy == nil {
 		busy = []string{}
@@ -759,33 +800,136 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 	return pv
 }
 
+// buildSelfHostedProviderView fills the view of a self-hosted provider: a
+// model served on the desk's own machines, which has no subscription behind
+// it and so no usage reader, no pace and no USAGE HIGH. Its ceiling of busy
+// sessions is its own — the one its serving mode names, when it has one, else
+// the configured ceiling — and only its busy agents count against it. The
+// machine guards and, for the subscription providers, capacity.ceiling still
+// cap what a start needs.
+func buildSelfHostedProviderView(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time) *providerView {
+	busy := pa.Busy
+	if busy == nil {
+		busy = []string{}
+	}
+	pv := &providerView{Name: name, Busy: busy, Kind: config.KindSelfHosted}
+	if len(pa.Unconfirmed) > 0 {
+		pv.Error = "remote execution reservation is unresolved; inspect its registration and provider"
+		pv.Blocks = []string{pv.Error}
+		pv.Verdict = providerVerdict(0, pv.Blocks)
+		return pv
+	}
+	pv.Ceiling = pCfg.Ceiling
+	pv.Floor = pCfg.Floor
+	pv.ServingMode = res.serveMode
+	if pCfg.HasServeMode() {
+		if res.serveModeErr != "" {
+			// The mode could not be read: the provider keeps its configured
+			// ceiling, and the line says the mode is unknown.
+			pv.ServingModeError = res.serveModeErr
+		} else if pv.ServingMode == "" {
+			pv.ServingModeError = "serving mode not read"
+		}
+	}
+	switch {
+	case pv.Ceiling == 0:
+		pv.Blocks = []string{ceilingZero}
+	case len(pv.Busy) >= pv.Ceiling:
+		pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
+	default:
+		pv.Room = pv.Ceiling - len(pv.Busy)
+	}
+	pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
+	return pv
+}
+
 func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config.Capacity, readings map[string]providerReadingResult, h *headroom, builds bool, exclude []string, review bool, now time.Time) *capacityView {
 	providers := make(map[string]*providerView, len(k.Providers))
 	sumFloor, sumCeiling, sumRoom := 0, 0, 0
+	subFloor, subCeiling := 0, 0
+	anySubscription := false
 	for _, name := range k.ProviderNames() {
-		pv := buildSingleProviderView(name, k.Providers[name], pa[name], readings[name], now)
+		pCfg := k.Providers[name]
+		pv := buildSingleProviderView(name, pCfg, pa[name], readings[name], now)
 		providers[name] = pv
 		sumFloor += pv.Floor
 		sumCeiling += pv.Ceiling
 		sumRoom += pv.Room
+		// capacity.ceiling caps the subscription providers, not a self-hosted
+		// one: a desk that lowers capacity.ceiling to 0 to keep a subscription
+		// on its weekly pace still starts on its own model.
+		if !pCfg.SelfHosted() {
+			anySubscription = true
+			subFloor += pv.Floor
+			subCeiling += pv.Ceiling
+		}
 	}
-	effCeiling := min(k.Ceiling, sumCeiling)
+	effCeiling := sumCeiling
+	// The total capacity.ceiling caps is the subscription providers': a desk
+	// lowers it to 0 to keep a subscription on its weekly pace, and a
+	// self-hosted provider's ceiling stands untouched beside it.
+	if anySubscription {
+		effCeiling = min(k.Ceiling, subCeiling) + (sumCeiling - subCeiling)
+	}
 	effFloor := min(k.Floor, min(sumFloor, effCeiling))
 	mBlocks := h.blocks(builds)
-	machineRoomCap := max(0, effCeiling-len(c.Busy))
+	// selfHostedRoom is the room the self-hosted providers still have: starts
+	// they take belong to no subscription, so capacity.ceiling — which a desk
+	// lowers to 0 to hold a subscription on its weekly pace — never refuses
+	// one of them.
+	selfHostedRoom := 0
+	for _, name := range k.ProviderNames() {
+		if k.Providers[name].SelfHosted() {
+			selfHostedRoom += providers[name].Room
+		}
+	}
+	// subscriptionBusy is the busy agents of the subscription providers;
+	// machineBusy those weighing against the total. A self-hosted agent asks
+	// nothing of a subscription, so capacity.ceiling — which a desk lowers to
+	// 0 to hold one on its weekly pace — bounds the subscription side alone
+	// and never counts them.
+	subscriptionBusy, machineBusy := 0, len(c.Busy)
+	for _, name := range k.ProviderNames() {
+		if !k.Providers[name].SelfHosted() {
+			subscriptionBusy += len(providers[name].Busy)
+		}
+	}
+	if k.Ceiling == 0 {
+		machineBusy = subscriptionBusy
+	}
+	subRoomCap := max(0, min(k.Ceiling, subCeiling)-subscriptionBusy)
+	if !anySubscription {
+		subRoomCap = max(0, effCeiling-len(c.Busy))
+	}
+	// A self-hosted start belongs to no subscription, so capacity.ceiling caps
+	// none of it: the total it leaves is its own room, not what the
+	// subscription side has left.
+	machineRoomCap := subRoomCap + selfHostedRoom
 
 	for _, name := range k.ProviderNames() {
+		pCfg := k.Providers[name]
 		pv := providers[name]
+		// left is what the total still leaves this provider: a self-hosted
+		// provider is bounded by its own ceiling alone, never by the total
+		// capacity.ceiling holds the subscription side to.
+		selfHosted := pCfg.SelfHosted()
+		left := subRoomCap
+		if selfHosted {
+			left = pv.Room
+		}
 		if len(mBlocks) > 0 {
 			pv.Room = 0
 			pv.Blocks = append(pv.Blocks, mBlocks...)
-		} else if pv.Room > machineRoomCap {
-			pv.Room = machineRoomCap
+		} else if pv.Room > left {
+			pv.Room = left
 			if pv.Room == 0 && len(pv.Blocks) == 0 {
-				if k.Ceiling == 0 {
+				switch {
+				case k.Ceiling == 0 && !selfHosted:
 					pv.Blocks = []string{ceilingZero}
-				} else {
-					pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}
+				case selfHosted:
+					pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
+				default:
+					pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", subscriptionBusy, min(k.Ceiling, subCeiling))}
 				}
 			}
 		}
@@ -817,11 +961,12 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	switch {
 	case len(mBlocks) > 0:
 		v.Room = 0
-		if k.Ceiling == 0 {
+		switch {
+		case k.Ceiling == 0 && selfHostedRoom == 0:
 			v.Blocks = append([]string{ceilingZero}, mBlocks...)
-		} else if len(c.Busy) >= effCeiling && effCeiling > 0 {
-			v.Blocks = append([]string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}, mBlocks...)
-		} else {
+		case machineBusy >= effCeiling && effCeiling > 0:
+			v.Blocks = append([]string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}, mBlocks...)
+		default:
 			v.Blocks = slices.Clone(mBlocks)
 		}
 	case len(k.Choices) > 0 && v.Choice != nil:
@@ -832,16 +977,16 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 			choiceRoom := eligibleChoicesRoom(k, providers, v.Choice.Candidates)
 			v.Room = min(machineRoomCap, choiceRoom)
 			if v.Room == 0 {
-				v.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}
+				v.Blocks = []string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}
 			}
 		}
 	default:
 		v.Room = min(machineRoomCap, sumRoom)
 		if v.Room == 0 {
-			if k.Ceiling == 0 {
+			if k.Ceiling == 0 && selfHostedRoom == 0 {
 				v.Blocks = []string{ceilingZero}
-			} else if len(c.Busy) >= effCeiling && sumRoom > 0 {
-				v.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(c.Busy), effCeiling)}
+			} else if anySubscription && subscriptionBusy >= min(k.Ceiling, subCeiling) && sumRoom > 0 {
+				v.Blocks = []string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}
 			} else {
 				for _, name := range k.ProviderNames() {
 					if pv := providers[name]; len(pv.Blocks) > 0 {
@@ -852,6 +997,18 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 		}
 	}
 	return v
+}
+
+// totalCeilingBlock is the block naming the total a start hit. With a
+// subscription provider in the pool that total is the one capacity.ceiling
+// holds the subscription side to; alone, the providers' own ceilings are the
+// total, and capacity.ceiling caps none of them.
+func totalCeilingBlock(k config.Capacity, subscriptionBusy, subCeiling, effCeiling int, anySubscription bool) string {
+	busy, ceiling := subscriptionBusy, effCeiling
+	if anySubscription {
+		ceiling = min(k.Ceiling, subCeiling)
+	}
+	return fmt.Sprintf("%d busy at the ceiling of %d", busy, ceiling)
 }
 
 func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, candidates []choiceCandidate) int {
@@ -1079,6 +1236,17 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		r, err := a.resolveReading(ctx, usageProviderFile(name), p.Usage)
 		readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
 	}
+	for _, name := range k.ProviderNames() {
+		p := k.Providers[name]
+		if !p.SelfHosted() {
+			continue
+		}
+		// A self-hosted provider reads no subscription usage; its ceiling may
+		// follow the serving mode of the model it serves.
+		r := a.serveMode(ctx, name, p)
+		readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+		k.Providers[name] = p.WithServeMode(r)
+	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
 	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, review, now)
 }
@@ -1230,12 +1398,19 @@ window reaches capacity.usage.highPercent (default 95%) until
 fiveHour.resetsAt. When capacity.providers and capacity.choices are
 configured, beekeeper reads each provider's usage windows (such as Claude's
 JSON windows and agy -p /usage's model buckets), counts busy agents against
-the provider and bucket they run on, caps the total by the machine guards
-and capacity.ceiling, and prints each provider's windows and verdict plus
-the first non-excluded choice (--exclude) in capacity.choices whose
+the provider and bucket they run on, caps the subscription providers' total by
+the machine guards and capacity.ceiling, and prints each provider's windows and
+verdict plus the first non-excluded choice (--exclude) in capacity.choices whose
 provider has room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and pace margin (--review skips the weekly pace check
-and worker weekly cap when capacity.reviewSkipPace is true). Busy is a roster agent
+and worker weekly cap when capacity.reviewSkipPace is true). A provider of
+kind self-hosted (a model served on the desk's own machines, such as an omp
+agent on a local model) reads no subscription usage and has no pace: its
+ceiling of busy sessions is its own, optionally the one its serving mode names
+(serveModeCommand and serveModeCeilings), and capacity.ceiling bounds none of
+it — a desk that lowers capacity.ceiling to 0 to keep a subscription on its
+weekly pace still starts on its own model, with the machine guards as the only
+further bound; its line shows the sessions it runs and that ceiling. Busy is a roster agent
 with a task that is neither parked, kept nor waiting: an agent kept on
 purpose (agents keep), one a timer wakes and one whose session waits on its
 person are parked; one whose session runs only waits (a sleep or a polling

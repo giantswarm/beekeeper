@@ -144,6 +144,9 @@ type app struct {
 	origin func(pid int, keys []string) (string, []string, error)
 	// readUsage runs capacity.usage.command; nil is runUsageCommand.
 	readUsage func(ctx context.Context, command []string, timeout time.Duration) (usageReading, error)
+	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs
+	// the command itself.
+	readServeMode func(ctx context.Context, command []string, stale time.Duration) (config.ServeModeReading, error)
 }
 
 // requesterOrigin is a brokered request's working directory and the keys'
