@@ -922,12 +922,68 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 		t.Errorf("at highPercent 95%%: got (%d, %d, high=%v), want (0, 0, true)", dp.Floor, dp.Ceiling, high)
 	}
 
+	// A self-hosted provider fails closed: no subscription fields, no
+	// half-configured serving mode, no subscription choice on it, and its
+	// ceiling follows a ~/ serveModeCommand and a floor of its own.
+	t.Run("self-hosted rejections", func(t *testing.T) {
+		for name, raw := range map[string]string{
+			"with a usage command":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      command: [r]\n",
+			"with a usage threshold": "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      fiveHourMax: 90\n",
+			"with buckets":           "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      buckets: {m: b}\n",
+			"negative serve stale":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 2}\n      serveModeStaleAfter: -1m\n",
+			"empty mode name":        "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {\" \": 2}\n",
+			"negative mode ceiling":  "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {full: -1}\n",
+			"command without modes":  "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n",
+			"modes without command":  "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCeilings: {full: 2}\n",
+			"claude choice on local": "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: claude, model: m, provider: local-model}\n",
+			"agy choice on local":    "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: agy, model: m, provider: local-model}\n",
+			"codex choice on local":  "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: codex, model: m, provider: local-model}\n",
+		} {
+			if _, err := Load(writeTemp(t, raw)); err == nil {
+				t.Errorf("%s: loaded invalid config", name)
+			}
+		}
+	})
+	t.Run("self-hosted defaults", func(t *testing.T) {
+		raw := "capacity:\n  ceiling: 10\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [\"~/bin/read-serve-mode\"]\n      serveModeCeilings: {full: 3}\n"
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers["local-model"]
+		if p.Floor != 0 {
+			t.Errorf("self-hosted floor = %d, want 0", p.Floor)
+		}
+		if p.Ceiling != 10 {
+			t.Errorf("self-hosted ceiling = %d, want the configured 10", p.Ceiling)
+		}
+		if p.ServeModeCommand[0] != filepath.Join(home, "bin", "read-serve-mode") {
+			t.Errorf("serveModeCommand = %v, want the home-expanded path", p.ServeModeCommand)
+		}
+		// A serving mode below the floor keeps floor and ceiling consistent.
+		clamped := p.WithServeMode(ServeModeReading{Mode: "tiny"})
+		if clamped.Ceiling != 10 || clamped.Floor != 0 {
+			t.Errorf("WithServeMode(unknown) = (%d, %d), want the configured (10, 0)", clamped.Ceiling, clamped.Floor)
+		}
+	})
+
 	for name, bad := range map[string]string{
 		"unknown provider in choice": "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: agy, model: m}\n",
 		"choices without providers":  "capacity:\n  choices:\n    - {harness: claude, model: m}\n",
 		"missing model in choice":    "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: claude}\n",
 		"provider without command":   "capacity:\n  providers:\n    claude: {fiveHourMax: 90}\n",
 		"descending paceCaps":        "capacity:\n  providers:\n    claude:\n      command: [r]\n      paceCaps:\n        - {overBy: 10, ceiling: 2}\n        - {overBy: 5, ceiling: 1}\n",
+		"self-hosted with command":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      command: [r]\n",
+		"self-hosted with fields":    "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      fiveHourMax: 90\n",
+		"self-hosted with buckets":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      buckets: {m: b}\n",
+		"self-hosted stale negative": "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 2}\n      serveModeStaleAfter: -1m\n",
+		"self-hosted empty mode":     "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {\" \": 2}\n",
+		"self-hosted negative ceil":  "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {full: -1}\n",
+		"self-hosted mode no ceil":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n",
+		"self-hosted ceil no mode":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCeilings: {full: 2}\n",
+		"claude choice on local":     "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: claude, model: m, provider: local-model}\n",
+		"agy choice on local":        "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: agy, model: m, provider: local-model}\n",
+		"codex choice on local":      "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: codex, model: m, provider: local-model}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeTemp(t, bad)); err == nil {

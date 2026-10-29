@@ -937,6 +937,10 @@ const (
 	KindSelfHosted   = "self-hosted"
 )
 
+// OmpHarness is the agent harness a self-hosted provider serves: the only
+// harness whose choices may name a self-hosted provider.
+const OmpHarness = "omp"
+
 // DefaultSelfHostedCeiling is the ceiling of busy sessions a self-hosted
 // provider runs with when it sets no ceiling of its own: the machine guards
 // still bound every start, so an unset ceiling is generous rather than tight.
@@ -1068,11 +1072,13 @@ type ServeModeReading struct {
 }
 
 // WithServeMode returns the provider with r applied: the ceiling the mode it
-// names, falling back to Ceiling while the mode names none or the read failed.
+// names, falling back to Ceiling while the mode names none or the read failed,
+// and its floor clamped under that ceiling.
 func (p Provider) WithServeMode(r ServeModeReading) Provider {
 	if r.Mode != "" && r.Err == "" {
 		if c, ok := p.ServeModeCeiling(r.Mode); ok {
 			p.Ceiling = c
+			p.Floor = min(p.Floor, c)
 		}
 	}
 	return p
@@ -3043,12 +3049,16 @@ func (c *Config) defaults() error {
 			// capacity.ceiling, which a desk lowers to hold one on its week,
 			// does not set its target. Without a ceiling of its own it runs
 			// DefaultSelfHostedCeiling sessions at once, bounded by the
-			// machine guards.
+			// machine guards. Its floor is 0: nothing here needs a minimum
+			// number of busy sessions; only its ceiling bounds it.
 			if !p.ceilingSet {
 				p.Ceiling = DefaultSelfHostedCeiling
 			}
 			if !p.floorSet {
-				p.Floor = max(0, min(p.Ceiling, c.Capacity.Floor))
+				p.Floor = 0
+			}
+			for i := range p.ServeModeCommand {
+				p.ServeModeCommand[i] = homePath(home, p.ServeModeCommand[i])
 			}
 		} else {
 			if !p.ceilingSet && p.Ceiling == 0 {
@@ -3442,7 +3452,16 @@ func (c *Config) validate() error {
 			if p.Enabled() {
 				return fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted)
 			}
+			if p.hasFields() {
+				return fmt.Errorf("capacity.providers.%s: a %s provider has no usage windows: remove its usage fields", name, KindSelfHosted)
+			}
+			if p.ServeModeStale.Duration < 0 {
+				return fmt.Errorf("capacity.providers.%s.serveModeStaleAfter: %s is negative", name, p.ServeModeStale.Duration)
+			}
 			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeCeilings)) {
+				if strings.TrimSpace(mode) == "" {
+					return fmt.Errorf("capacity.providers.%s.serveModeCeilings: empty mode name", name)
+				}
 				if p.ServeModeCeilings[mode] < 0 {
 					return fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d is negative", name, mode, p.ServeModeCeilings[mode])
 				}
@@ -3480,6 +3499,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin)
 		}
 		prov := ch.EffectiveProvider()
+		if p, ok := c.Capacity.Providers[prov]; ok && p.SelfHosted() && !strings.EqualFold(strings.TrimSpace(ch.Harness), OmpHarness) {
+			return fmt.Errorf("capacity.choices[%d]: harness %q is a subscription; %s is a %s provider", i, ch.Harness, prov, KindSelfHosted)
+		}
 		if _, ok := c.Capacity.Providers[prov]; !ok {
 			return fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov)
 		}

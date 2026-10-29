@@ -2528,7 +2528,6 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 		t.Fatalf("room at subscription ceiling 0 = %d, want 2", parsed.Room)
 	}
 
-	// agents start --harness omp goes through on the self-hosted ceiling.
 	// agents start --harness omp goes through on the self-hosted ceiling: its
 	// start is judged against the self-hosted provider, not the held
 	// subscription's ceiling.
@@ -2646,6 +2645,52 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	err = cmdClaude.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: ceiling 0") {
 		t.Fatalf("claude start while the subscription is held: code=%d err=%v", Code(err), err)
+	}
+
+	// 3. Only the self-hosted provider is full while the subscription's
+	// ceiling is back: the choice auto takes is then the subscription's.
+	rawOpen := `capacity:
+  floor: 0
+  ceiling: 10
+  providers:
+    claude:
+      floor: 1
+      ceiling: 2
+    local-model:
+      kind: self-hosted
+      ceiling: 2
+  choices:
+    - harness: claude
+      model: claude-opus-4-7
+    - harness: omp
+      model: local-model/worker-model
+      provider: local-model
+      skipPace: true
+omp:
+  model: local-model/worker-model
+`
+	if err := os.WriteFile(cfgPath, []byte(rawOpen), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgOpen, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The two busy omp agents stay on the roster: local-model is at its
+	// ceiling of 2, claude has room.
+	var openOut bytes.Buffer
+	aOpen := newSelfHostedApp(cfgPath, cfgOpen, store, &openOut, t0)
+	if err := aOpen.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(openOut.String(), "choice: claude / claude-opus-4-7 (provider claude)") {
+		t.Fatalf("auto choice with the self-hosted provider full:\n%s", openOut.String())
+	}
+	if !strings.Contains(openOut.String(), "provider local-model: 2 busy of ceiling 2: OmpBusyOne, OmpBusyTwo; no start: 2 busy at the ceiling of 2") {
+		t.Fatalf("self-hosted provider full, subscription open:\n%s", openOut.String())
+	}
+	if !strings.Contains(openOut.String(), "room for") {
+		t.Fatalf("room with the subscription open:\n%s", openOut.String())
 	}
 }
 
@@ -2809,4 +2854,207 @@ omp:
 		t.Fatalf("capacity on a failed mode read:\n%s", out.String())
 	}
 	modeErr = nil
+
+	// The tiny mode's ceiling of 1 bounds the starts: the second one on the
+	// one busy session refuses.
+	mode = "tiny"
+	clearServeMode()
+	out.Reset()
+	if err := newApp(&out).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "provider local-model: 0 busy of ceiling 1; serving mode tiny; room for 1 start") {
+		t.Fatalf("capacity in mode tiny:\n%s", out.String())
+	}
+	selfHostedAgents(t, store, "OmpTinyBusy")
+	out.Reset()
+	if err := newApp(&out).capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "provider local-model: 1 busy of ceiling 1: OmpTinyBusy; serving mode tiny; no start: 1 busy at the ceiling of 1") {
+		t.Fatalf("capacity in mode tiny at its ceiling:\n%s", out.String())
+	}
+}
+
+// TestSelfHostedParkedNotCounted covers the counting rule: busy agents on the
+// self-hosted model count against its ceiling, parked and waiting ones do not.
+func TestSelfHostedParkedNotCounted(t *testing.T) {
+	_, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte(selfHostedRawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	// One busy, one kept (parked) and one a timer wakes, all on the
+	// self-hosted model: only the busy one holds a slot.
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		busy := tasked("OmpBusy")
+		busy.Harness, busy.Model = omp.Harness, selfHostedTestModel
+		kept := tasked("OmpKept")
+		kept.Harness, kept.Model = omp.Harness, selfHostedTestModel
+		kept.Keep = &state.Keep{Reason: "on a decision"}
+		woken := tasked("OmpWoken")
+		woken.Harness, woken.Model = omp.Harness, selfHostedTestModel
+		st.Agents = append(st.Agents, busy, kept, woken)
+		st.Timers = []state.Timer{{ID: 3, Due: t0.Add(time.Hour), What: "the batch ended", Wake: "OmpWoken"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a := newSelfHostedApp(cfgPath, cfg, store, &out, t0)
+	if err := a.capacityCmd().Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "provider local-model: 1 busy of ceiling 2: OmpBusy; room for 1 start") {
+		t.Fatalf("capacity with parked and waiting omp agents:\n%s", out.String())
+	}
+}
+
+// TestSelfHostedSubscriptionHarnessOrdering covers the resolution rule: a
+// subscription harness never resolves to a self-hosted provider, whichever
+// order capacity.providers lists them in, and an omp model resolves by its
+// <provider>/ prefix even with no capacity.choices configured.
+func TestSelfHostedSubscriptionHarnessOrdering(t *testing.T) {
+	// claude sorts before local-model, but the self-hosted ceiling test's
+	// order is what guards the alphabetical-first fallback: use a desk where
+	// the self-hosted provider is the one a naive names[0] fallback picks.
+	dir, cfgPath := isolateUsageTestEnv(t)
+	const provLocal = "a-local"
+	raw := `capacity:
+  floor: 0
+  ceiling: 0
+  providers:
+    ` + provLocal + `:
+      kind: self-hosted
+      ceiling: 2
+    claude:
+      floor: 1
+      ceiling: 2
+omp:
+  model: ` + provLocal + `/worker-model
+`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Capacity.ProviderNames(); len(got) == 0 || got[0] != provLocal {
+		t.Fatalf("provider names %v, want the self-hosted one first", got)
+	}
+	k := cfg.Capacity
+	// A claude harness keeps its own provider; agy and codex, unconfigured,
+	// fall back to the claude subscription provider — never to the
+	// self-hosted provider listed first.
+	if p, _ := resolveAgentProviderBucket(k, claudeComm, "claude-opus-4-7"); p != claudeComm {
+		t.Fatalf("claude harness resolved to %q, want claude", p)
+	}
+	if p, _ := resolveAgentProviderBucket(k, harnessAgy, "gemini-3-1-pro-medium"); p != claudeComm {
+		t.Fatalf("agy harness resolved to %q, want claude", p)
+	}
+	if p, _ := resolveAgentProviderBucket(k, codex.Harness, "gpt-5.4"); p != claudeComm {
+		t.Fatalf("codex harness resolved to %q, want claude", p)
+	}
+	// An omp model resolves by its <provider>/ prefix, without choices.
+	if p, _ := resolveAgentProviderBucket(k, omp.Harness, provLocal+"/worker-model"); p != provLocal {
+		t.Fatalf("omp model resolved to %q, want %s", p, provLocal)
+	}
+	// With only a self-hosted provider in the pool, even the omp harness's
+	// fallback leaves the provider unresolved rather than borrowing it.
+	ompOnly := config.Capacity{Providers: map[string]config.Provider{provLocal: {Kind: config.KindSelfHosted, Ceiling: 2}}}
+	if p, _ := resolveAgentProviderBucket(ompOnly, harnessAgy, "gemini-3-1-pro-medium"); p != harnessAgy {
+		t.Fatalf("agy harness with only a self-hosted provider resolved to %q, want none", p)
+	}
+	// A claude, agy or codex start refuses on the held subscription at
+	// ceiling 0 — never on the self-hosted room the fallback would lend.
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	brief := filepath.Join(dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		harness string
+		model   string
+	}{
+		{"ClaudeAtCeilingZero", "", ""},
+		{"AgyAtCeilingZero", harnessAgy, "gemini-3-1-pro-medium"},
+		{"CodexAtCeilingZero", codex.Harness, "gpt-5.4"},
+	} {
+		var out bytes.Buffer
+		a := newSelfHostedApp(cfgPath, cfg, store, &out, t0)
+		sc := a.agentStartCmd()
+		sc.SilenceErrors = true
+		sc.SilenceUsage = true
+		args := []string{tc.name, brief, usageDirFlag, dir}
+		if tc.harness != "" {
+			args = append(args, testHarnessFlag, tc.harness)
+		}
+		if tc.model != "" {
+			args = append(args, "--model", tc.model)
+		}
+		sc.SetArgs(args)
+		err := sc.Execute()
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: ceiling 0") {
+			t.Fatalf("%s start at subscription ceiling 0: code=%d err=%v", tc.name, Code(err), err)
+		}
+	}
+	// An omp start goes through on the self-hosted provider, no choices and
+	// capacity.ceiling 0 aside.
+	fakeOmp := filepath.Join(dir, omp.Comm)
+	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"models\":[{\"selector\":\""+provLocal+"/worker-model\"}]}'\n"), 0o755); err != nil { //nolint:gosec // test script
+		t.Fatal(err)
+	}
+	origLauncher := plat.Launcher
+	origProcMachine := plat.Machine
+	t.Cleanup(func() {
+		plat.Launcher = origLauncher
+		plat.Machine = origProcMachine
+	})
+	plat.Machine = tableMachine{plat.Machine}
+	plat.Launcher = &agyTestLauncher{onStart: func(u platform.Unit) {
+		go func() {
+			var ompID string
+			for _, e := range u.Env {
+				if v, ok := strings.CutPrefix(e, omp.EnvAgent+"="); ok {
+					ompID = v
+				}
+			}
+			if ompID == "" {
+				return
+			}
+			f, oerr := os.OpenFile(omp.InboxPath(cfg.StateDir, ompID), os.O_RDWR, 0) //nolint:gosec // test FIFO
+			if oerr != nil {
+				return
+			}
+			defer func() { _ = f.Close() }()
+			_, _ = bufio.NewReader(f).ReadString('\n')
+		}()
+	}}
+	var startOut bytes.Buffer
+	aStart := newSelfHostedApp(cfgPath, cfg, store, &startOut, t0)
+	cmdStart := aStart.agentStartCmd()
+	cmdStart.SilenceErrors = true
+	cmdStart.SilenceUsage = true
+	cmdStart.SetArgs([]string{"OmpNoChoices", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	if err := cmdStart.Execute(); err != nil {
+		t.Fatalf("agents start --harness omp without choices: %v\n%s", err, startOut.String())
+	}
+	if !strings.Contains(startOut.String(), "started OmpNoChoices: omp agent omp_") {
+		t.Fatalf("omp start output:\n%s", startOut.String())
+	}
 }

@@ -40,6 +40,12 @@ type capacityView struct {
 	// Room is how many starts fit; Blocks says what stops one when none does.
 	Room   int      `json:"room"`
 	Blocks []string `json:"blocks,omitempty"`
+	// subRoomCap is the room capacity.ceiling still leaves the subscription
+	// providers together; selfHostedRoom is the room the self-hosted providers
+	// have, which capacity.ceiling never bounds. forTarget bounds a target
+	// that resolves to no provider of its own by the subscription side alone.
+	subRoomCap     int
+	selfHostedRoom int
 	// Notes is what a start that fits should know: disk swap growing
 	// without memory pressure, the busy build slot a start without builds
 	// does not wait for.
@@ -438,11 +444,47 @@ func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov,
 	if _, ok := k.Providers[h]; ok {
 		return h, k.Providers[h].BucketFor(m)
 	}
+	// An omp model is <provider>/<id>: its provider is the one it names, when
+	// the desk configures it. Else the first self-hosted provider whose model
+	// prefix the selector carries (omp's default provider, unset, "local");
+	// with no selector at all, the only self-hosted provider, if there is
+	// exactly one.
+	if h == omp.Harness {
+		if p := ompProvider(m); p != "" {
+			if _, ok := k.Providers[p]; ok {
+				return p, k.Providers[p].BucketFor(m)
+			}
+		}
+		var selfHosted []string
+		for _, name := range k.ProviderNames() {
+			if k.Providers[name].SelfHosted() {
+				selfHosted = append(selfHosted, name)
+			}
+		}
+		for _, name := range selfHosted {
+			if m != "" && strings.HasPrefix(strings.ToLower(m), strings.ToLower(name+"/")) {
+				return name, k.Providers[name].BucketFor(m)
+			}
+		}
+		if m == "" && len(selfHosted) == 1 {
+			return selfHosted[0], k.Providers[selfHosted[0]].BucketFor(m)
+		}
+		return h, ""
+	}
 	if _, ok := k.Providers[claudeComm]; ok && (h == "" || h == claudeComm) {
 		return claudeComm, k.Providers[claudeComm].BucketFor(m)
 	}
+	// A subscription harness never resolves to a self-hosted provider: its
+	// room would let a subscription start pass a capacity.ceiling of 0, the
+	// very hold that pauses it. With no subscription provider in the pool,
+	// the harness's own name is the provider, and no view bounds it.
 	if names := k.ProviderNames(); len(names) > 0 {
-		return names[0], k.Providers[names[0]].BucketFor(m)
+		for _, name := range names {
+			if !k.Providers[name].SelfHosted() {
+				return name, k.Providers[name].BucketFor(m)
+			}
+		}
+		return h, ""
 	}
 	return h, ""
 }
@@ -888,15 +930,15 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	// nothing of a subscription, so capacity.ceiling — which a desk lowers to
 	// 0 to hold one on its weekly pace — bounds the subscription side alone
 	// and never counts them.
-	subscriptionBusy, machineBusy := 0, len(c.Busy)
+	subscriptionBusy := 0
 	for _, name := range k.ProviderNames() {
 		if !k.Providers[name].SelfHosted() {
 			subscriptionBusy += len(providers[name].Busy)
 		}
 	}
-	if k.Ceiling == 0 {
-		machineBusy = subscriptionBusy
-	}
+	// The subscription side stands alone under capacity.ceiling; a self-hosted
+	// agent asks nothing of it and never weighs against it.
+	machineBusy := subscriptionBusy
 	subRoomCap := max(0, min(k.Ceiling, subCeiling)-subscriptionBusy)
 	if !anySubscription {
 		subRoomCap = max(0, effCeiling-len(c.Busy))
@@ -940,12 +982,14 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	}
 
 	v := &capacityView{
-		agentCount: c,
-		Floor:      effFloor,
-		Ceiling:    effCeiling,
-		Providers:  providers,
-		Headroom:   h,
-		Builds:     builds,
+		agentCount:     c,
+		Floor:          effFloor,
+		Ceiling:        effCeiling,
+		Providers:      providers,
+		Headroom:       h,
+		Builds:         builds,
+		subRoomCap:     subRoomCap,
+		selfHostedRoom: selfHostedRoom,
 	}
 	if line, blocks := h.swapGuard(); line != "" && !blocks {
 		v.Notes = append(v.Notes, line)
@@ -974,7 +1018,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 			v.Room = 0
 			v.Blocks = []string{"no choice has room: " + v.Choice.Reason}
 		} else {
-			choiceRoom := eligibleChoicesRoom(k, providers, v.Choice.Candidates)
+			choiceRoom := eligibleChoicesRoom(k, providers, v.Choice.Candidates, subRoomCap)
 			v.Room = min(machineRoomCap, choiceRoom)
 			if v.Room == 0 {
 				v.Blocks = []string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}
@@ -983,10 +1027,18 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	default:
 		v.Room = min(machineRoomCap, sumRoom)
 		if v.Room == 0 {
-			if k.Ceiling == 0 && selfHostedRoom == 0 {
-				v.Blocks = []string{ceilingZero}
-			} else if anySubscription && subscriptionBusy >= min(k.Ceiling, subCeiling) && sumRoom > 0 {
+			if anySubscription && subscriptionBusy >= min(k.Ceiling, subCeiling) {
+				// The subscription side is at the ceiling capacity.ceiling
+				// holds it to: name that total, and a full self-hosted
+				// provider its own block rather than "ceiling 0".
 				v.Blocks = []string{totalCeilingBlock(k, subscriptionBusy, subCeiling, effCeiling, anySubscription)}
+				for _, name := range k.ProviderNames() {
+					if pv := providers[name]; pv.Kind == config.KindSelfHosted && len(pv.Blocks) > 0 {
+						v.Blocks = append(v.Blocks, name+": "+strings.Join(pv.Blocks, "; "))
+					}
+				}
+			} else if k.Ceiling == 0 && selfHostedRoom == 0 {
+				v.Blocks = []string{ceilingZero}
 			} else {
 				for _, name := range k.ProviderNames() {
 					if pv := providers[name]; len(pv.Blocks) > 0 {
@@ -1007,11 +1059,16 @@ func totalCeilingBlock(k config.Capacity, subscriptionBusy, subCeiling, effCeili
 	busy, ceiling := subscriptionBusy, effCeiling
 	if anySubscription {
 		ceiling = min(k.Ceiling, subCeiling)
+		if ceiling == 0 {
+			// capacity.ceiling is 0: the subscription side is held at the
+			// ceiling itself, not at a derived total of busy agents.
+			return ceilingZero
+		}
 	}
 	return fmt.Sprintf("%d busy at the ceiling of %d", busy, ceiling)
 }
 
-func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, candidates []choiceCandidate) int {
+func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, candidates []choiceCandidate, subRoomCap int) int {
 	provRoom := map[string]int{}
 	bucketSum := map[string]int{}
 	seenBucket := map[string]bool{}
@@ -1036,11 +1093,18 @@ func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, 
 		}
 		provRoom[cand.Provider] = pv.Room
 	}
-	total := 0
-	for _, r := range provRoom {
-		total += r
+	// The subscription providers' room is shared: capacity.ceiling caps them
+	// together, so the choices on them together have at most subRoomCap. A
+	// self-hosted provider's room stands apart from that cap.
+	subTotal, selfTotal := 0, 0
+	for name, r := range provRoom {
+		if providers[name].Kind == config.KindSelfHosted {
+			selfTotal += r
+		} else {
+			subTotal += r
+		}
 	}
-	return total
+	return min(subTotal, subRoomCap) + selfTotal
 }
 
 func normalizeExcludes(exclude []string) []string {
@@ -1608,6 +1672,15 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 	prov, bucket := resolveAgentProviderBucket(k, harness, model)
 	pv := v.Providers[prov]
 	if pv == nil {
+		// The target resolves to no configured provider: it belongs to no
+		// self-hosted pool, so only the subscription side bounds it — never
+		// the self-hosted room riding in v.Room.
+		if v.subRoomCap < v.Room {
+			v.Room = v.subRoomCap
+			if v.Room == 0 {
+				v.Blocks = []string{ceilingZero}
+			}
+		}
 		return v
 	}
 	if bucket != "" && len(pv.Buckets) > 0 {

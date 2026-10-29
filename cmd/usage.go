@@ -659,15 +659,28 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 	derived := k
 	sumFloor, sumCeiling := 0, 0
 	subFloor, subCeiling := 0, 0
+	// subDerivedCeiling is the subscription providers' own ceiling as the
+	// cached readings derive it; selfHostedCeiling the self-hosted providers'
+	// own, which capacity.ceiling never caps.
+	subDerivedCeiling, selfHostedCeiling := 0, 0
 	anySubscription := false
 	var errs []string
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if p.SelfHosted() {
 			// The self-hosted provider's ceiling is its own; capacity.ceiling
-			// holds back only the subscriptions.
+			// holds back only the subscriptions. The cached serving-mode
+			// reading, while fresh, sets it.
+			if p.HasServeMode() && a.store != nil {
+				var r config.ServeModeReading
+				if found, err := a.store.ReadFile(serveModeFile(name), &r); err == nil && found &&
+					r.At.After(now.Add(-2*p.EffectiveServeModeStale())) && !r.At.After(now) {
+					p = p.WithServeMode(r)
+				}
+			}
 			sumFloor += p.Floor
 			sumCeiling += p.Ceiling
+			selfHostedCeiling += p.Ceiling
 			continue
 		}
 		if !p.Enabled() {
@@ -676,6 +689,7 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			anySubscription = true
 			subFloor += p.Floor
 			subCeiling += p.Ceiling
+			subDerivedCeiling += p.Ceiling
 			continue
 		}
 		if uerr := providerErrs[name]; uerr != "" {
@@ -706,10 +720,16 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 		anySubscription = true
 		subFloor += pv.Floor
 		subCeiling += pv.Ceiling
+		subDerivedCeiling += pv.Ceiling
 	}
-	derived.Ceiling = sumCeiling
+	derived.Ceiling = selfHostedCeiling + subDerivedCeiling
 	if anySubscription {
-		derived.Ceiling = min(k.Ceiling, subCeiling) + (sumCeiling - subCeiling)
+		// capacity.ceiling caps the subscription providers, not the
+		// self-hosted ones: a desk that lowers it to 0 suppresses CAPACITY
+		// LOW and CAPACITY FULL (k.Ceiling stays 0 for the watch) and holds
+		// the subscription side to 0, while the self-hosted ceiling stands
+		// beside it.
+		derived.Ceiling = min(k.Ceiling, subDerivedCeiling) + selfHostedCeiling
 	}
 	derived.Floor = min(k.Floor, min(sumFloor, derived.Ceiling))
 	var u *usageView
