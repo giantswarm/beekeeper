@@ -25,8 +25,8 @@ func TestSecretLinkRoundThreeProbes(t *testing.T) {
 		{"indirect_variable", `src="$HOME/.tool/auth.json"; ref=src; cat "${!ref}"`, ""},
 		{"find_script", `find . .. -maxdepth 0 -exec cat new.json \; -o -exec bash installer.sh \;`, `link() { ln -sfn "$1" "$2"; }; link "$HOME/.tool/auth.json" new.json`},
 		{"sed_script", `sed -e 'e' -e '$e cat new.json' installer.sh`, `link() { ln -sfn "$1" "$2"; }; link "$HOME/.tool/auth.json" new.json`},
-		{"script_home_write", secretLinkInstaller, `ln -sfn "$HOME/.tool/auth.json" "$HOME/.tool/hooks.json"`},
-		{"helper_script_home_write", secretLinkInstaller, `link() { ln -sfn "$1" "$2"; }; link "$HOME/.tool/auth.json" "$HOME/.tool/hooks.json"`},
+		{"script_home_write", installerCommand, `ln -sfn "$HOME/.tool/auth.json" "$HOME/.tool/hooks.json"`},
+		{"helper_script_home_write", installerCommand, `link() { ln -sfn "$1" "$2"; }; link "$HOME/.tool/auth.json" "$HOME/.tool/hooks.json"`},
 		{"script_home_write_check", `bash installer.sh --check`, `ln -sfn "$HOME/.tool/auth.json" "$HOME/.tool/hooks.json"`},
 		{"helper_script_home_write_check", `bash installer.sh --check`, `link() { ln -sfn "$1" "$2"; }; link "$HOME/.tool/auth.json" "$HOME/.tool/hooks.json"`},
 	} {
