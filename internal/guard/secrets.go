@@ -192,6 +192,9 @@ const maxScript = 64 << 10
 
 // leak returns the leak cmd would expose, nil when it exposes none.
 func (g secretGuard) leak(cmd string) *leak {
+	// Scans copy the guard, but nested shells and scripts must publish links
+	// back to the enclosing command before its later readers are inspected.
+	g.files.links = map[string]string{}
 	return g.scan(cmd, 0)
 }
 
@@ -212,6 +215,11 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	dirs := []string{g.cwd}
 	for _, m := range cdArg.FindAllStringSubmatch(sc.plain, -1) {
 		dirs = append(dirs, within(g.cwd, m[1]))
+	}
+	for _, st := range walkSegments(sc, g.cwd, false) {
+		if st.known && !slices.Contains(dirs, st.dir) {
+			dirs = append(dirs, st.dir)
+		}
 	}
 	vars := scanVars(sc, segs)
 	helpers := metadataFunctions(cmd)

@@ -1015,7 +1015,7 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	}
 	name := path.Base(words[c])
 	args := words[c+1:]
-	isSymbolic := symbolicLinkCommand(name, args)
+	isSymbolic := newSecretFiles(h.SecretFiles).symbolicMetadata(name, args, []string{dir})
 	isMeta := metaCmds[name] || isSymbolic
 	if safe, helper := metadata[name]; helper {
 		isMeta, isSymbolic = safe, false
