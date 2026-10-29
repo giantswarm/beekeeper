@@ -220,6 +220,9 @@ func (f secretFiles) symbolicMetadata(args, dirs []string) bool {
 			return false
 		}
 		for _, p := range paths {
+			if p.source == "" || p.alternate == "" {
+				return false
+			}
 			for _, source := range []string{p.source, p.alternate} {
 				if f.under(source) != "" {
 					return false
