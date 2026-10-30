@@ -1948,6 +1948,32 @@ type Supervisor struct {
 	// Scope says what the supervisor watches, in a sentence or two; empty,
 	// the prompt names the resources, lanes and installations configured.
 	Scope string `yaml:"scope"`
+	// ReviewRounds is how many review rounds `supervisor loop` starts for
+	// a pull request (default 1): after the last round's request for
+	// changes the worker fixes them and merges on the loop's go without
+	// another review.
+	ReviewRounds int `yaml:"reviewRounds"`
+	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
+	// templates of the briefs the loop starts a reviewer and the next
+	// worker with (.URL, .Repo, .Number, .Head, .Round, .Worker). Empty:
+	// a built-in review brief, and no worker start.
+	ReviewBrief string `yaml:"reviewBrief"`
+	WorkerBrief string `yaml:"workerBrief"`
+	// PostInstall is the command the loop runs after it installed a
+	// release; empty: none.
+	PostInstall []string `yaml:"postInstall"`
+	// Classifier is the command that classifies a report or park the
+	// loop's rules cannot: the event as JSON on stdin, {"class",
+	// "confidence"} on stdout. Empty: none, every such event goes to the
+	// guide unclassified, as one below ClassifierConfidence (default 0.8).
+	Classifier           []string `yaml:"classifier"`
+	ClassifierConfidence float64  `yaml:"classifierConfidence"`
+	// LoopInterval is the loop's pass (30s), ReleaseEvery how often it
+	// looks for a release (10m), NoteDue the due time of the decisions it
+	// files for the guide's person (24h).
+	LoopInterval Duration `yaml:"loopInterval"`
+	ReleaseEvery Duration `yaml:"releaseEvery"`
+	NoteDue      Duration `yaml:"noteDue"`
 }
 
 // Role configures a relayed role, the supervisor's or the guide's: the
@@ -2856,6 +2882,17 @@ func (c *Config) defaults() error {
 	// debounces a supervisor someone woke.
 	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
 	c.Supervisor.defaults(home)
+	if c.Supervisor.ReviewRounds == 0 {
+		c.Supervisor.ReviewRounds = 1
+	}
+	if c.Supervisor.ClassifierConfidence == 0 {
+		c.Supervisor.ClassifierConfidence = 0.8
+	}
+	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
+	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
+	c.Supervisor.ReviewBrief = homePath(home, c.Supervisor.ReviewBrief)
+	c.Supervisor.WorkerBrief = homePath(home, c.Supervisor.WorkerBrief)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
@@ -3389,6 +3426,12 @@ func (c *Config) validate() error {
 	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
 		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)
+	}
+	if c.Supervisor.ReviewRounds < 0 {
+		return fmt.Errorf("supervisor.reviewRounds: %d is fewer than one review round (0 is the default, 1)", c.Supervisor.ReviewRounds)
+	}
+	if k := c.Supervisor.ClassifierConfidence; k < 0 || k > 1 {
+		return fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k)
 	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {
