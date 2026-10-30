@@ -351,3 +351,57 @@ func TestModeBackgroundRefusesDesktopAndOmp(t *testing.T) {
 		}
 	}
 }
+
+// agents remove stops a background session beekeeper started (claude
+// stop) and leaves a session its person started running.
+func TestAgentsRemoveStopsABackgroundStart(t *testing.T) {
+	a, out := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	p := state.Party{Session: bgID, Name: bgName}
+	mine := state.Party{Session: "7a2b3c4d-0000-4000-8000-000000000001", Name: "person's session"}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: t.TempDir(), At: time.Now(), Background: true})
+		st.Agents = append(st.Agents, state.Agent{Party: p, Task: bgTask}, state.Agent{Party: mine, Task: bgTask})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	remove := func(name string) {
+		t.Helper()
+		c := a.agentsCmd()
+		c.SetArgs([]string{loopRemove, name})
+		c.SetContext(t.Context())
+		if err := c.Execute(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := stubBackground(t, "")
+	remove(bgName)
+	if len(*calls) != 1 || !slices.Equal((*calls)[0].argv[1:], []string{bgStopCmd, bgShortID}) {
+		t.Errorf("calls %+v", *calls)
+	}
+	if !strings.Contains(out.String(), "stopped its background session "+bgShortID) {
+		t.Errorf("output:\n%s", out)
+	}
+	*calls = nil
+	remove(mine.Name)
+	if len(*calls) != 0 {
+		t.Errorf("a person's session was stopped: %+v", *calls)
+	}
+	if st, _ := a.store.Read(); len(st.Agents) != 0 {
+		t.Errorf("roster %+v", st.Agents)
+	}
+	// The supervisor's own background session stays.
+	sv := state.Party{Session: "s1", Name: agentOne}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: sv, Mode: state.ModeBypass, Dir: t.TempDir(), At: time.Now(), Background: true})
+		st.Agents = append(st.Agents, state.Agent{Party: sv, Task: bgTask})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	remove(agentOne)
+	if len(*calls) != 0 || !strings.Contains(out.String(), "supervisor's or the guide's role") {
+		t.Errorf("the supervisor's session: calls %+v, output:\n%s", *calls, out)
+	}
+}

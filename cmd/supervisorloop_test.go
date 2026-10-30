@@ -60,6 +60,8 @@ type loopRig struct {
 	broker func() (string, error)
 	// failRecord fails the store's Record of the first event it accepts.
 	failRecord func(state.Event) bool
+	// inTurn says a session runs a turn.
+	inTurn func(state.Party) bool
 }
 
 // loopFakeBinary is the loop's binary as the rig says it.
@@ -125,10 +127,12 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.command = func([]string) (string, int) { return "", 0 }
 	r.pull = superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Green: true}
 	r.broker = func() (string, error) { return "no broker runs", nil }
-	run, read, command, binary, broker := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker
+	r.inTurn = func(state.Party) bool { return false }
+	run, read, command, binary, broker, turn := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker = run, read, command, binary, broker
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn = run, read, command, binary, broker, turn
 	})
+	loopInTurn = func(_ *app, p state.Party) bool { return r.inTurn(p) }
 	loopBinary = func() replaceable { return loopFakeBinary{r} }
 	loopBroker = func(context.Context) (string, error) { return r.broker() }
 	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
@@ -362,6 +366,79 @@ func TestLoopTakesADoneWorkerOffTheRosterAndStartsTheNext(t *testing.T) {
 	r.pass(t)
 	if c := r.called(agentsName); c != nil {
 		t.Errorf("acted again: %v", c)
+	}
+}
+
+// started puts name on the roster as a session beekeeper started.
+func (r *loopRig) started(t *testing.T, name, session string) {
+	t.Helper()
+	p := state.Party{Name: name, Session: session}
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == name }); i >= 0 {
+			st.Agents[i].Party = p
+		} else {
+			st.Agents = append(st.Agents, state.Agent{Party: p, Task: "review " + loopURL})
+		}
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: "background", By: loopParty, At: time.Now()})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoopRetiresTheReviewerAndTheMergedWorker(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-session")
+	r.pass(t)
+	reviewer := r.called(agentsName, agentStartName)[2]
+	r.started(t, reviewer, "reviewer-session")
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
+	}
+	// The reviewer still writes its report: the retirement waits.
+	r.inTurn = func(p state.Party) bool { return p.Session == "reviewer-session" }
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove); c != nil {
+		t.Fatalf("removed in its turn: %v", c)
+	}
+	r.inTurn = func(state.Party) bool { return false }
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, reviewer); c == nil {
+		t.Fatalf("the reviewer stays: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+		t.Errorf("the worker left before its merge: %v", c)
+	}
+	// The worker merges and never reports.
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("the merged worker stays: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.done"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "merged after the merge go") {
+		t.Errorf("logged %+v", evs)
+	}
+	r.pass(t)
+	if c := r.called(agentsName); c != nil {
+		t.Errorf("acted again: %v", c)
+	}
+}
+
+func TestLoopNeverRetiresASessionItsPersonStarted(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove); c != nil || len(r.logged(t, "supervisor.done")) != 0 {
+		t.Errorf("a person's session was retired: %v", c)
 	}
 }
 
