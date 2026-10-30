@@ -15,7 +15,11 @@ const (
 	release = "v1.2.0"
 )
 
-var t0 = time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+var (
+	t0 = time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	// t1 is when a round's reviewer posts its verdict.
+	t1 = t0.Add(time.Minute)
+)
 
 func parked(at time.Time) []Worker {
 	return []Worker{{Name: worker, ParkedOn: pr, ParkedAt: at}}
@@ -83,16 +87,89 @@ func TestAnApprovedHeadGetsTheMergeGo(t *testing.T) {
 	if a := only(t, Plan(Input{Pulls: pull(head1, true, rev), Rounds: 1, Taken: taken(t, t0, started)}), KindGo); a.Agent != worker {
 		t.Errorf("go = %+v", a)
 	}
-	// An approval of an older head is no go for the new one.
-	old := Review{ID: "R1", Head: head2, Verdict: Approved}
-	if acts := Plan(Input{Workers: parked(t0), Pulls: pull(head1, false, old), Rounds: 1, Taken: taken(t, t0, started)}); len(acts) != 0 {
-		t.Errorf("an approval of another head gave %+v", acts)
+}
+
+// Every merge go needs every check on its head green.
+func TestAnApprovalGivesNoGoWithoutGreenChecks(t *testing.T) {
+	rev := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	// pull's green false stands for a failed, a pending and an absent
+	// check alike: parseLoopPull reads each as not green.
+	if acts := Plan(Input{Workers: parked(t0), Pulls: pull(head1, false, rev), Rounds: 1, Taken: taken(t, t0, started)}); len(acts) != 0 {
+		t.Errorf("an approved head with red checks got %+v", acts)
+	}
+	// Nor the fixes of the last round.
+	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
+	acts := []Action{started, {Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker}}
+	if got := Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, false, changes), Rounds: 1, Taken: taken(t, t0, acts...)}); len(got) != 0 {
+		t.Errorf("a fixed head with red checks got %+v", got)
+	}
+}
+
+// Only the verdict of the loop's last round, on its head and posted after
+// it started, counts.
+func TestAnOldVerdictAuthorizesNothing(t *testing.T) {
+	// A verdict of nobody's round: the loop reviews before any go.
+	stray := Review{ID: "R0", Head: head1, Verdict: Approved, At: t0.Add(-time.Hour)}
+	if a := only(t, Plan(Input{Workers: parked(t0), Pulls: pull(head1, true, stray), Rounds: 1}), KindReview); a.Round != 1 {
+		t.Errorf("review = %+v", a)
+	}
+	// Round 1 approved head 1; the head moved and round 2 runs on head 2.
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	acts := []Action{
+		{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
+	}
+	tk := taken(t, t0, acts...)
+	tk = append(tk, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
+	if got := Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved), Rounds: 2, Taken: tk}); len(got) != 0 {
+		t.Errorf("round 1's approval gave the in-flight round's head %+v", got)
+	}
+	// A verdict on head 2 from before round 2 started is no verdict of it.
+	early := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(time.Hour)}
+	if got := Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved, early), Rounds: 2, Taken: tk}); len(got) != 0 {
+		t.Errorf("a verdict from before round 2 gave %+v", got)
+	}
+	late := Review{ID: "R3", Head: head2, Verdict: Approved, At: t0.Add(3 * time.Hour)}
+	if a := only(t, Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved, late), Rounds: 2, Taken: tk}), KindGo); a.Head != head2 {
+		t.Errorf("go = %+v", a)
+	}
+}
+
+// A head that moved past an approval is a new review, or the guide's.
+func TestAHeadPastTheLastApproval(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	in := Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved), Rounds: 2, Taken: tk}
+	if a := only(t, Plan(in), KindReview); a.Round != 2 || a.Head != head2 {
+		t.Errorf("review = %+v", a)
+	}
+	in.Rounds = 1
+	only(t, Plan(in), KindEscalate)
+}
+
+// Findings reach the worker even when its head moved before the loop saw
+// them, and its fixes count only after it parked again.
+func TestFindingsAreForwardedAfterTheHeadMoved(t *testing.T) {
+	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "fix x", At: t1}
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	in := Input{Workers: parked(t0), Pulls: pull(head2, true, changes), Rounds: 1, Taken: taken(t, t0, started)}
+	if a := only(t, Plan(in), KindForward); !strings.HasSuffix(a.Message, "fix x") {
+		t.Errorf("forward = %+v", a)
+	}
+	fwd := Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker}
+	in.Taken = append(in.Taken, taken(t, t0.Add(2*time.Minute), fwd)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a park from before the forward got %+v", got)
+	}
+	in.Workers = parked(t0.Add(time.Hour))
+	if a := only(t, Plan(in), KindGo); a.Head != head2 {
+		t.Errorf("go = %+v", a)
 	}
 }
 
 func TestAReviewAskingForChangesIsForwardedWordForWord(t *testing.T) {
 	body := "Review: changes requested\nHead reviewed: `" + head1 + "`\n\n- cmd/x.go:12: the nil map panics"
-	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: body}
+	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: body, At: t1}
 	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
 	a := only(t, Plan(Input{Workers: parked(t0), Pulls: pull(head1, true, rev), Rounds: 1, Taken: taken(t, t0, started)}), KindForward)
 	if !strings.HasSuffix(a.Message, body) || !strings.Contains(a.Message, "no further review runs") {
@@ -105,7 +182,7 @@ func TestAReviewAskingForChangesIsForwardedWordForWord(t *testing.T) {
 }
 
 func TestTheNextRoundStartsOnTheFixedHead(t *testing.T) {
-	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested}
+	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	acts := []Action{
 		{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
 		{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker},
@@ -117,7 +194,7 @@ func TestTheNextRoundStartsOnTheFixedHead(t *testing.T) {
 }
 
 func TestTheFixesOfTheLastRoundMergeWithoutAnotherReview(t *testing.T) {
-	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested}
+	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	acts := []Action{
 		{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
 		{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker},
@@ -132,7 +209,7 @@ func TestTheFixesOfTheLastRoundMergeWithoutAnotherReview(t *testing.T) {
 }
 
 func TestOpenFindingsPastTheLastRoundGoToTheGuide(t *testing.T) {
-	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested}
+	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	acts := []Action{
 		{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
 		{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker},
@@ -219,8 +296,8 @@ func TestWhatTheRulesCannotPlaceIsClassified(t *testing.T) {
 }
 
 func TestAWorkersQuestionForSomeoneElseGoesToTheGuide(t *testing.T) {
-	ev := Event{At: t0, Verb: VerbNoteAdd, Agent: worker, Detail: "#4 which lab?"}
-	in := Input{Person: "pat", Workers: []Worker{{Name: worker}}, Events: []Event{ev}, Notes: []Note{{ID: 4, For: "supervisor", By: worker, Text: "which lab?"}}}
+	// Asked whenever: the open note decides, no event needed.
+	in := Input{Person: "pat", Workers: []Worker{{Name: worker}}, Notes: []Note{{ID: 4, For: "supervisor", By: worker, Text: "which lab?"}}}
 	a := only(t, Plan(in), KindQuestion)
 	if a.Note != 4 {
 		t.Errorf("question = %+v", a)
@@ -228,6 +305,10 @@ func TestAWorkersQuestionForSomeoneElseGoesToTheGuide(t *testing.T) {
 	in.Notes[0].For = "Pat"
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("a note for the guide's person already: %+v", got)
+	}
+	in.Notes[0].For, in.Notes[0].By = "supervisor", "someone off the roster"
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a note of no worker: %+v", got)
 	}
 }
 
@@ -273,7 +354,7 @@ func TestEventAgent(t *testing.T) {
 		{VerbDone, worker + " done: fix it", worker},
 		{VerbReport, worker + ": merged: v1", worker},
 		{VerbPark, worker + ": parked on " + pr + ": review", worker},
-		{VerbNoteAdd, "#3 which lab?", "title"},
+		{"lease.claim", "lab-1: for x", "title"},
 		{VerbDone, "garbled", "title"},
 	} {
 		if got := EventAgent(c.verb, c.detail, "title"); got != c.want {

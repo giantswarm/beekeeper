@@ -41,7 +41,6 @@ const (
 	VerbReport  = "agents.report"
 	VerbProblem = "agents.problem"
 	VerbPark    = "agents.park"
-	VerbNoteAdd = "note.add"
 )
 
 // The verdicts of a review.
@@ -78,10 +77,16 @@ type Review struct {
 	At      time.Time
 }
 
-// verdict is the latest review of p with a verdict on head, nil when none.
-func (p Pull) verdict(head string) *Review {
+// verdictSlack is how much earlier than its round's start a verdict may
+// be stamped: GitHub's clock and the machine's differ a little.
+const verdictSlack = 30 * time.Second
+
+// verdict is round rd's verdict: the latest review with one on the round's
+// head submitted after the round started; nil while the round runs. A
+// verdict of an earlier round, or of nobody's round, never counts.
+func (p Pull) verdict(rd round) *Review {
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
-		if r := p.Reviews[i]; r.Verdict != "" && (head == "" || sameHead(r.Head, head)) {
+		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(rd.at.Add(-verdictSlack)) {
 			return &p.Reviews[i]
 		}
 	}
@@ -156,7 +161,7 @@ type Action struct {
 	SelfHosted bool
 	// Message is what the worker or the guide is told.
 	Message string
-	// Event is the event a classify or question action routes.
+	// Event is the event a done, next or classify action acts on.
 	Event *Event
 	// Note is the note a question re-addresses.
 	Note int
@@ -192,27 +197,33 @@ func Detail(a Action, what string) string {
 	return a.Line(a.Agent + ": " + what)
 }
 
+// round is a review round the loop started: the head it reviews and when.
+type round struct {
+	head string
+	at   time.Time
+}
+
 // ledger is what the taken actions say.
 type ledger struct {
 	keys map[string]Taken
-	// rounds are the review rounds each pull request had, escalated the
-	// pull requests handed to the guide, ended the ones merged or closed.
-	rounds          map[string]int
-	escalated       map[string]bool
-	ended           map[string]bool
-	reviewer        map[string]string // a pull request's worker, from its last review
-	lastReviewStart map[string]time.Time
+	// rounds are the review rounds each pull request had, oldest first,
+	// escalated the pull requests handed to the guide, ended the ones
+	// merged or closed.
+	rounds    map[string][]round
+	escalated map[string]bool
+	ended     map[string]bool
+	reviewer  map[string]string // a pull request's worker, from its last review
 }
 
 func newLedger(taken []Taken) ledger {
-	l := ledger{keys: map[string]Taken{}, rounds: map[string]int{}, escalated: map[string]bool{}, ended: map[string]bool{}, reviewer: map[string]string{}, lastReviewStart: map[string]time.Time{}}
+	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]bool{}, ended: map[string]bool{}, reviewer: map[string]string{}}
 	for _, t := range taken {
 		l.keys[t.Key] = t
 		switch t.Kind {
 		case KindReview:
-			l.rounds[t.Ref]++
+			_, head, _ := strings.Cut(t.Key, "@")
+			l.rounds[t.Ref] = append(l.rounds[t.Ref], round{head: head, at: t.At})
 			l.reviewer[t.Ref] = t.Agent
-			l.lastReviewStart[t.Ref] = t.At
 		case KindEscalate:
 			l.escalated[t.Ref] = true
 		case KindEnd:
@@ -296,7 +307,7 @@ func Plan(in Input) []Action {
 			continue
 		}
 		if p.State == Merged || p.State == Closed {
-			if l.rounds[ref] > 0 {
+			if len(l.rounds[ref]) > 0 {
 				add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: strings.ToLower(p.State)})
 			}
 			continue
@@ -310,45 +321,75 @@ func Plan(in Input) []Action {
 			continue
 		}
 		base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
-		used := l.rounds[ref]
-		switch v := p.verdict(p.Head); {
-		case v != nil && v.Verdict == Approved:
-			add(goAction(base, "its review approved head "+short(p.Head)))
-		case v != nil && v.Verdict == ChangesRequested:
+		rs := l.rounds[ref]
+		review := func() {
+			a := base
+			a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, len(rs)+1, w.SelfHosted
+			add(a)
+		}
+		escalate := func(why string) {
+			a := base
+			a.Key, a.Kind = escalateKey(ref), KindEscalate
+			a.Message = fmt.Sprintf("%s: %d review round(s) used, %s", p.URL, len(rs), why)
+			add(a)
+		}
+		if len(rs) == 0 {
+			if p.Green && isParked {
+				review()
+			}
+			continue
+		}
+		last := rs[len(rs)-1]
+		v := p.verdict(last)
+		if v == nil {
+			continue // the round runs
+		}
+		left := len(rs) < rounds
+		switch v.Verdict {
+		case Approved:
+			if sameHead(last.head, p.Head) {
+				if p.Green {
+					add(goAction(base, fmt.Sprintf("review round %d approved head %s", len(rs), short(p.Head))))
+				}
+				continue
+			}
+			// The head moved past the approval: a new head is a new
+			// review, or the guide's when no round is left.
+			if !p.Green || !isParked || !w.ParkedAt.After(v.At) {
+				continue
+			}
+			if left {
+				review()
+				continue
+			}
+			escalate(fmt.Sprintf("the last approved head %s and the worker parked on head %s", short(last.head), short(p.Head)))
+		case ChangesRequested:
 			fk := forwardKey(ref, v.ID)
 			if !l.has(fk) {
 				a := base
 				a.Key, a.Kind = fk, KindForward
-				a.Message = forwardMessage(p, *v, used < rounds)
+				a.Message = forwardMessage(p, *v, left)
 				add(a)
 				continue
 			}
-			// The worker parked again on the head the review asked
-			// changes of, and no round is left: the guide decides.
-			if used >= rounds && isParked && w.ParkedAt.After(l.keys[fk].At) {
-				a := base
-				a.Key, a.Kind = escalateKey(ref), KindEscalate
-				a.Message = fmt.Sprintf("%s: %d review round(s) used, the last asked for changes on head %s and the worker parked again without a new head", p.URL, used, short(p.Head))
-				add(a)
-			}
-		default:
-			if !p.Green || !isParked {
+			// The fixes count once the worker parked after the forward.
+			if !isParked || !w.ParkedAt.After(l.keys[fk].At) {
 				continue
 			}
-			if used < rounds {
-				if l.has(reviewKey(ref, p.Head)) {
-					continue
+			if sameHead(p.Head, last.head) {
+				if !left {
+					escalate(fmt.Sprintf("the last asked for changes on head %s and the worker parked again without a new head", short(p.Head)))
 				}
-				a := base
-				a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, used+1, w.SelfHosted
-				add(a)
 				continue
 			}
-			// Every round is used and the head moved past the last
-			// verdict: the fixes merge without another review.
-			if last := p.verdict(""); last != nil && !sameHead(last.Head, p.Head) {
-				add(goAction(base, fmt.Sprintf("%d review round(s) used; head %s follows the last verdict (%s on %s)", used, short(p.Head), last.Verdict, short(last.Head))))
+			if !p.Green {
+				continue
 			}
+			if left {
+				review()
+				continue
+			}
+			add(goAction(base, fmt.Sprintf("%d review round(s) used; head %s carries the fixes of the last round's findings on %s", len(rs), short(p.Head), short(last.head))))
 		}
 	}
 	// paired is a report agents idle --done logged with its done: the
@@ -389,19 +430,16 @@ func Plan(in Input) []Action {
 				ev := e
 				add(Action{Key: eventKey(KindClassify, e), Kind: KindClassify, Agent: e.Agent, Event: &ev})
 			}
-		case VerbNoteAdd:
-			id, ok := NoteID(e.Detail)
-			if !ok || !roster[e.Agent] {
-				continue
-			}
-			i := slices.IndexFunc(in.Notes, func(n Note) bool { return n.ID == id })
-			if i < 0 || in.Person == "" || strings.EqualFold(in.Notes[i].For, in.Person) {
-				continue
-			}
-			ev := e
-			add(Action{Key: fmt.Sprintf("question #%d", id), Kind: KindQuestion, Agent: e.Agent, Note: id, Event: &ev,
-				Message: fmt.Sprintf("note #%d of %s for %q: %s", id, e.Agent, in.Notes[i].For, in.Notes[i].Text)})
 		}
+	}
+	// A worker's open question for someone else than the guide's person,
+	// whenever it was asked.
+	for _, n := range in.Notes {
+		if !roster[n.By] || in.Person == "" || n.For == "" || strings.EqualFold(n.For, in.Person) {
+			continue
+		}
+		add(Action{Key: fmt.Sprintf("question #%d", n.ID), Kind: KindQuestion, Agent: n.By, Note: n.ID,
+			Message: fmt.Sprintf("note #%d of %s for %q: %s", n.ID, n.By, n.For, n.Text)})
 	}
 	if in.Release != "" {
 		add(Action{Key: "release " + in.Release, Kind: KindRelease, Version: in.Release})
@@ -459,15 +497,6 @@ func ParkedOn(detail string) (on, waits string) {
 		return on, waits
 	}
 	return "", strings.TrimPrefix(rest, ": ")
-}
-
-// NoteID reads a note.add detail ("#12 …").
-func NoteID(detail string) (int, bool) {
-	var id int
-	if _, err := fmt.Sscanf(detail, "#%d", &id); err != nil || id <= 0 {
-		return 0, false
-	}
-	return id, true
 }
 
 // short is a commit's short form.
