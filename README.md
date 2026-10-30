@@ -90,7 +90,8 @@ for its turn or following its devctl, as does a `merge-child` before it hands it
 owner. A running watch keeps the code it started with: every watch, `--once` included, says
 `WATCH STALE` once per watch whose binary was replaced, naming the version it runs and the one
 installed, and that a re-arm (a restart) picks the new one up; no watch re-executes itself.
-`beekeeper self-update --check` exits 125 while a newer release is out.
+`beekeeper self-update --check` exits 125 while a newer release is out. A running pre-release (a
+release candidate) is kept on the newest release candidate too; a release only takes releases.
 
 An install leaves the older binaries already running on their old code until they end or are
 re-armed: the `agents start` of a worker started before it (its desktop reopen saves the state
