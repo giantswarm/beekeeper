@@ -58,7 +58,7 @@ runs, 4 in the session a relay relieved).`,
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return a.roleStatus(supervisorRole) },
 	}
-	c.AddCommand(start, a.relayCmd(supervisorRole, supervisorRelayLong), a.supervisorReopenCmd(), stop, status)
+	c.AddCommand(start, a.relayCmd(supervisorRole, supervisorRelayLong), a.supervisorReopenCmd(), stop, status, a.supervisorLoopCmd())
 	return c
 }
 
