@@ -109,7 +109,7 @@ func (a *app) agentStartCmd() *cobra.Command {
 	var nameFlag, model, dir, task, harness, mode, choiceLine string
 	var host, repository, gitRef string
 	var exclude []string
-	var desktop, builds, force, dryRun, review bool
+	var desktop, builds, force, dryRun, review, ofSelfHosted bool
 	c := &cobra.Command{
 		Use:   agentStartName + " [--name <name>] [<name>] <brief file>",
 		Short: "Start an agent session in bypass: imported into the desktop, or a background session with Remote Control",
@@ -261,11 +261,15 @@ message in its inbox, which codex-run delivers as the next turn via codex
 exec resume.
 
 --harness auto picks the first non-excluded (harness, model) pair in
-capacity.choices whose provider has room (5-hour window below threshold,
-weekly use within the choice's sevenDayMax worker cap and paceMargin).
---exclude skips matching choices (by model, harness/model, provider, or
-harness; repeatable), and --review skips the weekly pace check and
-per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
+capacity.choices whose provider has room (5-hour and 7-day windows below
+their stops, weekly use within the choice's sevenDayMax worker cap and not
+ahead of the even pace), the pick beekeeper capacity pick prints. Without
+--harness a desk with capacity.choices starts on that pick too (unless
+--model names a model none of them has: claude then), one without them on
+claude. --exclude skips matching choices (by model, harness/model, provider,
+or harness; repeatable). --review marks a review start, decided like any
+start; --review-of-self-hosted marks the review of a self-hosted model's
+work, which takes no choice on a self-hosted provider.`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var name, briefFile string
@@ -284,6 +288,8 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
+			harness = a.defaultStartHarness(harness, model)
+			kind := startKind(review, ofSelfHosted)
 			if host != "" && host != "local" {
 				base, ok := harnessByName(harness)
 				if harness == harnessAuto {
@@ -292,7 +298,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 				if !ok {
 					return validateStartHarness(harness, mode)
 				}
-				h, err := executionHarness(base, executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, Exclude: exclude}, briefFile)
+				h, err := executionHarness(base, executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, ReviewOfSelfHosted: ofSelfHosted, Exclude: exclude}, briefFile)
 				if err != nil {
 					return err
 				}
@@ -362,7 +368,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 						return err
 					}
 				}
-				over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, false, force, exclude, review)
+				over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, false, force, exclude, kind)
 				if err != nil {
 					return err
 				}
@@ -396,7 +402,7 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
-			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, review)
+			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, kind)
 			if err != nil {
 				return err
 			}
@@ -459,9 +465,10 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
-	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude, omp, agy, codex, or auto")
+	c.Flags().StringVar(&harness, "harness", "", "the agent harness: claude, omp, agy, codex, or auto (default: auto with capacity.choices, else claude)")
 	c.Flags().StringArrayVar(&exclude, "exclude", nil, "exclude a choice from --harness auto (model, harness/model, provider, or harness; repeatable)")
-	c.Flags().BoolVar(&review, "review", false, "a desk review start: skip the 7-day pace check and worker weekly cap when capacity.reviewSkipPace is true")
+	c.Flags().BoolVar(&review, reviewFlag, false, "a desk review start, decided like any start")
+	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the review of a self-hosted model's work: no choice on a self-hosted provider")
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
@@ -470,6 +477,20 @@ per-choice sevenDayMax worker cap when capacity.reviewSkipPace is true.`,
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
 	return c
+}
+
+// defaultStartHarness is a start's harness: the one named, else auto (the
+// pick of capacity.choices) on a desk with choices, unless model names a
+// model none of them has, else claude.
+func (a *app) defaultStartHarness(harness, model string) string {
+	if harness = strings.TrimSpace(harness); harness != "" {
+		return harness
+	}
+	choices := a.liveCapacity().Choices
+	if m := strings.TrimSpace(model); len(choices) == 0 || m != "" && !choicesHaveModel(choices, m) {
+		return claudeComm
+	}
+	return harnessAuto
 }
 
 func validateStartHarness(harness, mode string) error {
