@@ -3554,6 +3554,9 @@ func (c *Config) validate() error {
 			if p.ServeModeStale.Duration < 0 {
 				return fmt.Errorf("capacity.providers.%s.serveModeStaleAfter: %s is negative", name, p.ServeModeStale.Duration)
 			}
+			if p.ServeModeSwitchTimeout.Duration < 0 {
+				return fmt.Errorf("capacity.providers.%s.serveModeSwitchTimeout: %s is negative", name, p.ServeModeSwitchTimeout.Duration)
+			}
 			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeCeilings)) {
 				if strings.TrimSpace(mode) == "" {
 					return fmt.Errorf("capacity.providers.%s.serveModeCeilings: empty mode name", name)
@@ -3606,8 +3609,9 @@ func (c *Config) validate() error {
 			}
 			continue
 		}
-		if len(p.ServeModeCommand) > 0 || len(p.ServeModeCeilings) > 0 {
-			return fmt.Errorf("capacity.providers.%s: serveModeCommand and serveModeCeilings belong to a %s provider", name, KindSelfHosted)
+		if len(p.ServeModeCommand) > 0 || len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 ||
+			len(p.ServeModeSwitch) > 0 || p.ServeModeSwitchTimeout.Duration != 0 {
+			return fmt.Errorf("capacity.providers.%s: serveModeCommand, serveModeCeilings, serveModeModes and serveModeSwitchCommand belong to a %s provider", name, KindSelfHosted)
 		}
 		if err := p.validateNamed("capacity.providers." + name); err != nil {
 			return err

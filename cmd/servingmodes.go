@@ -12,13 +12,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -127,6 +127,17 @@ func (a *app) writeServeModeState(name string, s ServeModeState) {
 	}
 }
 
+// nodeHeldByOthers says whether the lease record of the node stands held by
+// a party other than this caller: a lease held of the node is the generic
+// constraint "needs node N exclusively"; the node this caller holds itself
+// is its own claim's or release's, never a constraint standing behind it.
+// The party, not its name alone: a CLI run by hand and the machine's own
+// actor can carry the same name and are not the same holder.
+func (a *app) nodeHeldByOthers(dir lease.Dir, n string) bool {
+	h, err := dir.Get(n)
+	return err == nil && h != nil && !h.Party().Is(a.actor())
+}
+
 // serveModeNodesHeld are the machine's nodes a serving mode would occupy
 // that a constraint holds: of the held leases, those the mode occupies.
 // The lease's own name decides: a node claimed is the generic constraint
@@ -138,19 +149,16 @@ func (a *app) serveModeNodesHeld(p config.Provider, mode string, dir lease.Dir) 
 	}
 	var held []string
 	for _, n := range nodes {
-		if n == a.serveModeSwitching {
-			// The node whose claim or release runs this switch stands
-			// claimed by that very claim: its own switch is never held
-			// back by its own node.
-			continue
-		}
-		if h, err := dir.Get(n); err == nil && h != nil {
+		if a.nodeHeldByOthers(dir, n) {
 			// A lease held of the node is the constraint; the node this
 			// caller holds itself is its own claim's or release's, never
-			// a constraint standing behind it.
-			if h.Party().Name != a.actor().Name {
-				held = append(held, n)
-			}
+			// a constraint standing behind it — except the node whose
+			// claim or release runs a switch right now: the caller asks
+			// for that node as held itself, and its own switch never
+			// stands behind its own node.
+			held = append(held, n)
+		} else if n == a.serveModeSwitching {
+			held = append(held, n)
 		}
 	}
 	return held
@@ -168,33 +176,63 @@ func drainCeiling(p config.Provider, heldFn func(mode string) []string) (int, bo
 	return p.ServeModeCeiling(want.Mode)
 }
 
-func mapsKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
+// modeIsHeld says whether a constraint holds a node the mode occupies: the
+// nodes heldBy names for the mode, those of the mode itself among them.
+func modeIsHeld(p config.Provider, mode string, heldBy func(string) []string) bool {
+	return modeHeld(p, mode, heldBy(mode))
 }
 
 // serveModeReadings is the provider's serving-mode reading for a capacity
 // view: the mode the reader reports, the mode a switch waits to run into,
 // whose ceiling drains the provider while busy sessions finish or park, and
-// the ceiling the constraints held right now allow: the mode they permit
-// names it, so a node claimed lowers the model's ceiling to what the mode
-// without the node sustains, before any switch runs.
+// the ceiling the constraints held right now stand under: a node claimed
+// lowers the model's ceiling to the mode the machine runs with — a
+// constraint lowers and never raises — and a drain holds the provider at
+// the ceiling of the mode it drains to.
 func (a *app) serveModeReadings(ctx context.Context, name string, p config.Provider) providerReadingResult {
 	r := a.serveMode(ctx, name, p)
 	res := providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
-	if sm, err := a.serveModeState(name); err == nil {
+	dir := lease.Dir(a.cfg.LeaseDir)
+	heldBy := func(mode string) []string { return a.serveModeNodesHeld(p, mode, dir) }
+	// The ceiling the constraints stand the provider under: a mode the
+	// constraints hold — one of its nodes stands claimed — keeps the
+	// provider at the mode the machine ran before it moved (the recorded
+	// one, if a switch moved it, else what it runs now); the drain of a
+	// mode the constraints allow narrows the provider to the mode it
+	// drains into. The narrower of the readings holds.
+	ceiling, hasCeiling := 0, false
+	narrow := func(c int, ok bool) {
+		if ok && (!hasCeiling || c < ceiling) {
+			ceiling, hasCeiling = c, true
+		}
+	}
+	if modeIsHeld(p, r.Mode, heldBy) {
+		if st, err := a.serveModeState(name); err == nil && st.Mode != "" && !strings.EqualFold(st.Mode, r.Mode) {
+			narrow(p.ServeModeCeiling(st.Mode))
+		} else {
+			narrow(p.ServeModeCeiling(r.Mode))
+		}
+	} else {
+		narrow(drainCeiling(p, heldBy))
+	}
+	// The state and the request file are one request: the request the
+	// constraint asked for is the newer one, and the machine's record
+	// names the same drain. The pending mode is the one that is not the
+	// mode the model already runs — a request settled by a switch that
+	// ran is no drain.
+	if sm, err := a.serveModeState(name); err == nil && sm.Pending != "" && !strings.EqualFold(sm.Pending, r.Mode) {
 		res.pendingMode = sm.Pending
 	}
-	if pnd, err := a.pendingServeMode(name); err == nil && pnd.Pending != "" {
+	if pnd, err := a.pendingServeMode(name); err == nil && pnd.Pending != "" && !strings.EqualFold(pnd.Pending, r.Mode) {
 		res.pendingMode = pnd.Pending
 	}
-	dir := lease.Dir(a.cfg.LeaseDir)
-	if c, ok := drainCeiling(p, func(mode string) []string { return a.serveModeNodesHeld(p, mode, dir) }); ok {
-		res.hasConstraintCeiling, res.constraintCeiling = true, c
+	// The drain waiting narrows the provider to the ceiling of the mode
+	// it drains into: no session starts on the model beyond what the
+	// mode the machine moves to sustains.
+	if res.pendingMode != "" {
+		narrow(p.ServeModeCeiling(res.pendingMode))
 	}
+	res.hasConstraintCeiling, res.constraintCeiling = hasCeiling, ceiling
 	return res
 }
 
@@ -225,18 +263,16 @@ type serveModeTarget struct {
 }
 
 // serveModeWanted is the mode a self-hosted provider should run in, read
-// from its modes and the constraints held: the mode sustaining the most
-// sessions among those occupying no held node. The full mode runs while no
-// constraint holds its node; a constraint drains the model to the mode
-// without it.
+// from its modes and the constraints held: the widest mode occupying no held
+// node — the same selection serveModeAllowed makes on the held set, so
+// claim, release, watch and capacity never disagree on the mode the machine
+// runs. heldFn names which of the mode's nodes stand held.
 func serveModeWanted(p config.Provider, heldFn func(mode string) []string) serveModeTarget {
 	best, bestSessions := "", -1
 	// The modes in name order: with two modes of equal sessions the
 	// wanted one is the same in every process, not the map's order.
-	modes := mapsKeys(p.ServeModeModes)
-	slices.Sort(modes)
-	for _, mode := range modes {
-		if len(heldFn(mode)) > 0 {
+	for _, mode := range slices.Sorted(maps.Keys(p.ServeModeModes)) {
+		if modeHeld(p, mode, heldFn(mode)) {
 			continue
 		}
 		if s := p.ServeModeModes[mode].Sessions; s > bestSessions {
@@ -246,24 +282,39 @@ func serveModeWanted(p config.Provider, heldFn func(mode string) []string) serve
 	return serveModeTarget{Mode: best}
 }
 
-// serveModeDrainTarget is the mode a constraint on node res drains the model
-// into: the mode sustaining the fewest sessions among those that run without
-// res. The drain goes as low as the modes allow: the model gives up as much
-// room as it can while the node stands claimed. "" when no mode runs without
-// the node.
-func serveModeDrainTarget(p config.Provider, res string) string {
+// serveModeAllowed is the mode the machine runs while the held nodes stand:
+// the mode sustaining the most sessions among those occupying none of them.
+// It is the same selection in every place the machine decides a mode — the
+// claim's drain, the release's switch back, the watch's reconcile and the
+// capacity's constraint ceiling — so a drain never asks for a mode a later
+// tick would want again: where one mode is free of a node and a wider one is
+// held by another node, the model runs the widest mode the constraints allow
+// and the claim of the held one waits behind its holder. "" when no mode
+// runs without the held nodes: the constraint has nowhere to drain to.
+func serveModeAllowed(p config.Provider, held []string) string {
 	best, bestSessions := "", -1
-	modes := mapsKeys(p.ServeModeModes)
-	slices.Sort(modes)
+	// The modes in name order: with two modes of equal sessions the
+	// allowed one is the same in every process, not the map's order.
+	modes := slices.Sorted(maps.Keys(p.ServeModeModes))
 	for _, mode := range modes {
-		if slices.Contains(p.ServeModeModes[mode].Nodes, res) {
+		if modeHeld(p, mode, held) {
 			continue
 		}
-		if s := p.ServeModeModes[mode].Sessions; bestSessions < 0 || s < bestSessions {
+		if s := p.ServeModeModes[mode].Sessions; s > bestSessions {
 			best, bestSessions = mode, s
 		}
 	}
 	return best
+}
+
+// modeHeld says whether any held node is one the mode occupies.
+func modeHeld(p config.Provider, mode string, held []string) bool {
+	for _, n := range p.ServeModeModes[mode].Nodes {
+		if slices.Contains(held, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // reconcileServeModes brings every self-hosted provider's serving mode to
@@ -319,21 +370,49 @@ func (a *app) reconcileServeMode(ctx context.Context, name string, p config.Prov
 		a.writeServeModeState(name, st)
 		return nil
 	}
+	// A constraint lowers the model, never raises it: a wanted mode wider
+	// than the model runs is no drain while a node stands claimed — the
+	// machine moved down for a reason and stays down; the wider mode comes
+	// back with the release. With no node held, the wanted mode is the
+	// widest of all and this never fires.
+	if r.Mode != "" && !strings.EqualFold(want.Mode, r.Mode) &&
+		ceilingOf(p, want.Mode) > ceilingOf(p, r.Mode) && len(a.serveModeHeldNodes()) > 0 {
+		want.Mode = r.Mode
+	}
 	// A drain already asked for stands: the watch keeps working on the
 	// request the constraints last allowed, and a lower one it recorded
-	// than the constraints allow now is the constraint's own.
-	// A drain of a node no constraint holds any more is no drain: its
-	// request fell with the lease that asked for it, and the mode it
-	// named would hold the machine narrower than the constraints allow.
-	if pnd, err := a.pendingServeMode(name); err == nil && pnd.Pending != "" {
-		if pnd.Node != "" {
-			if held, gerr := dir.Get(pnd.Node); gerr == nil && held == nil {
+	// than the constraints allow now is the constraint's own. A drain of
+	// a node no constraint holds any more and no claim of it waits any
+	// more is no drain: its request fell with the lease that asked for
+	// it, and the mode it named would hold the machine narrower than the
+	// constraints allow. The lease of a claim still waiting on the drain
+	// stands only after the switch ran, so a claim whose node is free is
+	// matched against its own record: a pending drain naming the node
+	// keeps its request while the model still runs over the drain's
+	// ceiling — the sessions have not left the model — and falls once
+	// they have, when the switch is retried right here.
+	if pnd, err := a.pendingServeMode(name); err == nil && pnd.Pending != "" && pnd.Node != "" {
+		if held, gerr := dir.Get(pnd.Node); gerr == nil && held == nil {
+			drop := true
+			if _, perr := a.serveModeState(name); perr == nil {
+				if busy, berr := a.busyOnProvider(name); berr == nil {
+					if c, ok := p.ServeModeCeiling(pnd.Pending); ok && len(busy) > c {
+						// The model still runs the sessions the drain
+						// waits for: the claim it stands for has not
+						// been granted, and its drain keeps its node.
+						drop = false
+					}
+				}
+			}
+			if drop {
 				pnd.Node = ""
 				a.writePendingServeMode(name, pnd)
 			}
 		}
-		if c, ok := p.ServeModeCeiling(pnd.Pending); pnd.Node != "" && ok && c < p.ServeModeModes[want.Mode].Sessions {
-			want.Mode = pnd.Pending
+		if pnd.Node != "" {
+			if c, ok := p.ServeModeCeiling(pnd.Pending); ok && c < p.ServeModeModes[want.Mode].Sessions {
+				want.Mode = pnd.Pending
+			}
 		}
 	}
 	if strings.EqualFold(st.Mode, want.Mode) {
@@ -344,9 +423,15 @@ func (a *app) reconcileServeMode(ctx context.Context, name string, p config.Prov
 	}
 	// A switch waits: the ceiling of the wanted mode holds while the model
 	// drains or a switch is asked for, and the switch runs once nothing on
-	// the model stands in the way.
+	// the model stands in the way. The node the drain waits for is the
+	// constraint's own record; a drain the watch opens itself names none.
 	if st.Pending == "" || !strings.EqualFold(st.Pending, want.Mode) {
-		st.Pending, st.Since, st.Reason = want.Mode, now, "the model's sessions drain"
+		pnd, perr := a.pendingServeMode(name)
+		node := ""
+		if perr == nil && pnd.Pending != "" && strings.EqualFold(pnd.Pending, want.Mode) {
+			node = pnd.Node
+		}
+		st.Pending, st.Since, st.Reason, st.Node = want.Mode, now, "the model's sessions drain", node
 		a.writeServeModeState(name, st)
 		a.writePendingServeMode(name, ServeModeState{Mode: st.Mode, Node: st.Node, Pending: st.Pending, Since: st.Since, Reason: st.Reason})
 		if err := a.store.Record(event(a.actor(), verbServeDrain, "%s: %s -> %s: %s", name, st.Mode, want.Mode, st.Reason)); err != nil {
@@ -364,14 +449,12 @@ func (a *app) reconcileServeMode(ctx context.Context, name string, p config.Prov
 		a.writeServeModeState(name, st)
 		return nil
 	}
-	// The mode a constraint asked for stands until its holder releases:
-	// what the constraints ask for now decides the switch.
+	// The model drained: the switch runs. A request whose node stands free
+	// again is a claim still waiting for its grant or a constraint that
+	// fell: the node names only what a pending switch waits for, and it
+	// clears here so an old one never holds a later switch refused.
 	if pnd, err := a.pendingServeMode(name); err == nil && pnd.Node != "" {
 		if held, gerr := dir.Get(pnd.Node); gerr == nil && held == nil {
-			// The holder released and the constraint is gone: the request
-			// is retried right here. The node clears with it — it names
-			// only the constraint a pending switch still waits for, and
-			// an old one would hold a later switch of the node refused.
 			pnd.Node = ""
 			a.writePendingServeMode(name, pnd)
 		}
@@ -446,12 +529,20 @@ func (a *app) switchServeMode(ctx context.Context, name, mode string, timeout ti
 	}
 	if a.serveModeLockStandsHere == nil {
 		a.serveModeLockStandsHere = map[string]bool{}
+		a.serveModeSwitchingTo = map[string]string{}
 	}
 	if a.serveModeLockStandsHere[name] {
 		return refused("another serving-mode switch of %s runs; only one runs at a time", name)
 	}
 	a.serveModeLockStandsHere[name] = true
-	defer func() { a.serveModeLockStandsHere[name] = false }()
+	if a.serveModeSwitchingTo == nil {
+		a.serveModeSwitchingTo = map[string]string{}
+	}
+	a.serveModeSwitchingTo[name] = mode
+	defer func() {
+		a.serveModeLockStandsHere[name] = false
+		delete(a.serveModeSwitchingTo, name)
+	}()
 
 	if timeout <= 0 {
 		timeout = p.EffectiveServeModeSwitchTimeout()
@@ -590,12 +681,8 @@ func runServeModeSwitchCommand(ctx context.Context, p config.Provider, mode, dir
 	c := exec.CommandContext(ctx, p.ServeModeSwitch[0], append(slices.Clone(p.ServeModeSwitch[1:]), mode)...) //nolint:gosec // the configured switch command
 	// The switch's own timeout must end its process: a switcher that
 	// leaves a child holding the mode would keep the machine's one-switch
-	// lock past the timeout, and the retry would wait on the orphan. The
-	// kill reaches the whole process group, so a switcher that runs its
-	// work in a child dies with it.
-	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	c.WaitDelay = 5 * time.Second
+	// lock past the timeout, and the retry would wait on the orphan.
+	armServeModeSwitch(c)
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if dir != "" || len(env) > 0 {

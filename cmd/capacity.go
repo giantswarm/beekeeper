@@ -130,7 +130,11 @@ func (p *providerView) windowsSummary(now time.Time) string {
 			return "serving mode unknown (" + truncate(p.ServingModeError, 120) + ")"
 		}
 		if p.ServingMode != "" {
-			return "serving mode " + p.ServingMode
+			line := "serving mode " + p.ServingMode
+			if p.DrainTo != "" {
+				line += " (draining to " + p.DrainTo + ")"
+			}
+			return line
 		}
 		return ""
 	}

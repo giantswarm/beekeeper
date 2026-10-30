@@ -167,6 +167,10 @@ type app struct {
 	// same provider never runs beside another within one command, and
 	// the machine's lock stays the rule across commands.
 	serveModeLockStandsHere map[string]bool
+	// serveModeSwitchingTo names, per provider, the mode a switch running
+	// in this process runs into: status and the watch say it while the
+	// command holds the machine's lock.
+	serveModeSwitchingTo map[string]string
 }
 
 // requesterOrigin is a brokered request's working directory and the keys'
