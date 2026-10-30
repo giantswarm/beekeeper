@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -745,5 +747,125 @@ func TestLoopReadsTheClassifiersStdoutAlone(t *testing.T) {
 func TestTheDefaultReviewBriefReportsWithAProblemLine(t *testing.T) {
 	if !strings.Contains(defaultReviewBrief, "--problem none") {
 		t.Errorf("the brief's report lacks --problem: %s", defaultReviewBrief)
+	}
+}
+
+// The loop, with no supervisor session or watch, takes the same timer
+// transitions as watch and delivers the wake only after saving them.
+func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
+	const probeTimer = "probe"
+	for _, kind := range []string{"wall-clock", probeTimer} {
+		t.Run(kind, func(t *testing.T) {
+			r := newLoopRig(t)
+			ready := false
+			checks := 0
+			fakeRead(t, func(string) ([]byte, error) {
+				checks++
+				if !ready {
+					return nil, errors.New("not ready")
+				}
+				return nil, nil
+			})
+			wakes := 0
+			was := wakeOwner
+			wakeOwner = func(_ *app, _ context.Context, _ state.Party, who, msg, _ string) error {
+				wakes++
+				st, err := r.a.store.Read()
+				if err != nil || len(st.Timers) != 0 {
+					t.Errorf("wake before timer saved: %+v, %v", st, err)
+				}
+				if who != loopWorker || !strings.Contains(msg, "timer #1") {
+					t.Errorf("wake %q: %s", who, msg)
+				}
+				return nil
+			}
+			t.Cleanup(func() { wakeOwner = was })
+			timer := state.Timer{ID: 1, Due: time.Now().Add(-time.Minute), Wake: loopWorker, What: "check result", Every: time.Nanosecond}
+			if kind == probeTimer {
+				timer.Probe = probeHolds
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Timers = []state.Timer{timer}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if kind == probeTimer {
+				r.pass(t)
+				st, _ := r.a.store.Read()
+				if checks != 1 || wakes != 0 || len(st.Timers) != 1 || st.Timers[0].Reason != "not ready" {
+					t.Fatalf("pending probe: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
+				}
+			}
+			ready = true
+			r.pass(t)
+			if wakes != 1 {
+				t.Fatalf("due %s timer: got %d wakes, want 1", kind, wakes)
+			}
+			// A new app and store reopen the persisted state after a restart.
+			reopened, err := state.Open(r.a.store.Dir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			restarted := *r.a
+			restarted.store = reopened
+			if err := restarted.runSupervisorLoop(context.Background(), true); err != nil {
+				t.Fatal(err)
+			}
+			if wakes != 1 || len(r.logged(t, "timer.fired")) != 1 {
+				t.Fatalf("timer fired again: %d wakes", wakes)
+			}
+		})
+	}
+}
+
+// Line-only timers belong to the supervisor's watch, including its desktop
+// notification. The loop must neither check nor consume them.
+func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
+	for _, conditional := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conditional=%t", conditional), func(t *testing.T) {
+			r := newLoopRig(t)
+			checks, wakes := 0, 0
+			wasWake := wakeOwner
+			wakeOwner = func(_ *app, _ context.Context, _ state.Party, _, _, _ string) error {
+				wakes++
+				return nil
+			}
+			t.Cleanup(func() { wakeOwner = wasWake })
+			fakeRead(t, func(string) ([]byte, error) { checks++; return nil, nil })
+			timer := state.Timer{ID: 1, Due: time.Now().Add(-time.Minute), What: "look at result"}
+			if conditional {
+				timer.Probe = probeHolds
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Timers = []state.Timer{timer, {ID: 2, Due: timer.Due, Wake: loopWorker, What: "wake worker"}}
+				st.Supervisor = &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if checks != 0 || wakes != 1 || len(st.Timers) != 1 || !st.Timers[0].Fired.IsZero() || !st.Timers[0].Checked.IsZero() {
+				t.Fatalf("loop took watch-only timer: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
+			}
+			if !conditional {
+				lines, evs := firePending(st, nil, r.a.now)
+				if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "timer.due" {
+					t.Fatalf("firePending lost plain timer after loop: %v, %+v", lines, evs)
+				}
+			}
+			w, desktop, out := notifyingWatch(t, r.a.store.Dir(), false)
+			w.now = r.a.now
+			live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
+			w.pending(context.Background(), live)
+			w.timerActs.Wait()
+			if !strings.Contains(out.String(), "TIMER:") || len(desktop.sent) != 1 || !strings.Contains(desktop.sent[0].Summary, fmt.Sprintf("timer #%d", timer.ID)) {
+				t.Fatalf("watch lost timer line or notification: %s; %+v", out, desktop.sent)
+			}
+		})
 	}
 }

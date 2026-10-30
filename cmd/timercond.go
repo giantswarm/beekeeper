@@ -115,13 +115,22 @@ func (f timerFire) message() string {
 // has not held for timerStuckAfter is a line once. It returns the
 // lines, events and fires, and whether it changed st.
 func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]string, []state.Event, []timerFire, bool) {
+	return settleTimersMatching(st, found, now, nil)
+}
+
+// timerActs distinguishes wakes and commands from watch-only reminders.
+func timerActs(t state.Timer) bool { return t.Wake != "" || t.Run != "" }
+
+// settleTimersMatching leaves timers rejected by accept untouched. A nil
+// predicate accepts every timer, as watch does.
+func settleTimersMatching(st *state.State, found map[int]checkResult, now time.Time, accept func(state.Timer) bool) ([]string, []state.Event, []timerFire, bool) {
 	var lines []string
 	var evs []state.Event
 	var fires []timerFire
 	changed := false
 	kept := st.Timers[:0]
 	for _, t := range st.Timers {
-		if !t.Auto() || t.Due.After(now) || (st.Stop != nil && t.Wake != "") {
+		if (accept != nil && !accept(t)) || !t.Auto() || t.Due.After(now) || (st.Stop != nil && t.Wake != "") {
 			// A wake timer due while beekeeper is stopped fires after the resume.
 			kept = append(kept, t)
 			continue

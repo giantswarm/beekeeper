@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -197,6 +199,8 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  timers    due wall-clock and conditional timers send their wakes or run
+            their commands, as in watch; line-only reminders stay with watch
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, or after the last round's findings were forwarded
@@ -271,6 +275,20 @@ type supervisorLoop struct {
 	releaseAt time.Time
 	// stages are the release stages finished, by key.
 	stages map[string]bool
+	// timerActs are timer side effects; shutdown and re-exec await them.
+	timerActs sync.WaitGroup
+}
+
+// loopOutput serializes loop transitions with asynchronous timer output.
+type loopOutput struct {
+	mu  sync.Mutex
+	out io.Writer
+}
+
+func (w *loopOutput) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.out.Write(p)
 }
 
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
@@ -284,10 +302,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	out := a.out
+	a.out = &loopOutput{out: out}
+	defer func() { a.out = out }()
 	l, err := a.newSupervisorLoop()
 	if err != nil {
 		return err
 	}
+	defer l.timerActs.Wait()
 	for {
 		a.now = time.Now()
 		if err := l.pass(ctx); err != nil {
@@ -333,12 +355,16 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 			return err
 		}
+		l.timerActs.Wait()
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
 		}
 	}
 	st, err := a.store.Read()
 	if err != nil {
+		return err
+	}
+	if err := l.fireTimers(ctx, st); err != nil {
 		return err
 	}
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person}
@@ -963,4 +989,45 @@ func loopEventAgent(st *state.State, e state.Event) string {
 		by = st.Agents[i].Name
 	}
 	return superloop.EventAgent(e.Verb, e.Detail, by)
+}
+
+// fireTimers takes only timers with wakes or commands; watch retains line-only
+// reminders and their desktop notifications. Checks run outside the state
+// lock; settling inside Update lets a concurrent watch take a timer first
+// without either firing it twice. Side effects follow the successful save.
+func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error {
+	a := l.a
+	var acting []state.Timer
+	for _, t := range st.Timers {
+		if timerActs(t) {
+			acting = append(acting, t)
+		}
+	}
+	found := checkTimers(ctx, acting, a.now, lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st))
+	// Avoid a write on every idle loop pass.
+	_, _, _, changed := settleTimersMatching(st, found, a.now, timerActs)
+	if !changed {
+		return nil
+	}
+	var lines []string
+	var fires []timerFire
+	if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+		var evs []state.Event
+		lines, evs, fires, _ = settleTimersMatching(current, found, a.now, timerActs)
+		return evs, nil
+	}); err != nil {
+		return err
+	}
+	// Each batch keeps its own time: later passes update a.now while these
+	// wakes and commands can still be running.
+	snapshot := *a
+	w := &watcher{app: &snapshot}
+	for _, line := range lines {
+		w.emitNow("timer", "%s", line)
+	}
+	l.timerActs.Go(func() {
+		w.actTimers(ctx, fires)
+		w.timerActs.Wait()
+	})
+	return nil
 }
