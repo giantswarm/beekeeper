@@ -189,10 +189,13 @@ func TestCheckPassesOnTheLatestRelease(t *testing.T) {
 	}
 }
 
+// The newest release candidate the fake GitHub carries.
+const newestRC = "v0.4.0-rc.12"
+
 // The release candidates GitHub lists, newest first, after the last release.
 func candidates() []selfupdate.SourceRelease {
 	return []selfupdate.SourceRelease{
-		release("v0.4.0-rc.12"), release("v0.4.0-rc.11"), release("v0.4.0-rc.10"), release("v0.4.0-rc.9"), release(latestV),
+		release(newestRC), release("v0.4.0-rc.11"), release("v0.4.0-rc.10"), release("v0.4.0-rc.9"), release(latestV),
 	}
 }
 
@@ -204,17 +207,17 @@ func TestCheckReportsANewerPrerelease(t *testing.T) {
 		if !errors.Is(err, ErrOutdated) {
 			t.Errorf("%s: Run(check) = %v, want ErrOutdated\n%s", current, err, out.String())
 		}
-		if res.Latest != "v0.4.0-rc.12" || !res.Newer || res.Updated {
+		if res.Latest != newestRC || !res.Newer || res.Updated {
 			t.Errorf("%s: result %+v", current, res)
 		}
 	}
 }
 
 func TestCheckPassesOnTheLatestPrerelease(t *testing.T) {
-	setup(t, "v0.4.0-rc.12", &fakeSource{releases: candidates()})
+	setup(t, newestRC, &fakeSource{releases: candidates()})
 	var out bytes.Buffer
 	res, err := Run(context.Background(), &out, true)
-	if err != nil || res.Newer || res.Latest != "v0.4.0-rc.12" {
+	if err != nil || res.Newer || res.Latest != newestRC {
 		t.Errorf("Run(check) = %+v, %v", res, err)
 	}
 }
@@ -232,7 +235,7 @@ func TestCheckSkipsPrereleasesOnARelease(t *testing.T) {
 
 // A release after the candidates is newer than each of them.
 func TestCheckReportsAReleaseAfterAPrerelease(t *testing.T) {
-	setup(t, "v0.4.0-rc.12", &fakeSource{releases: append([]selfupdate.SourceRelease{release("v0.4.0")}, candidates()...)})
+	setup(t, newestRC, &fakeSource{releases: append([]selfupdate.SourceRelease{release("v0.4.0")}, candidates()...)})
 	res, err := Run(context.Background(), io.Discard, true)
 	if !errors.Is(err, ErrOutdated) || res.Latest != "v0.4.0" {
 		t.Errorf("Run(check) = %+v, %v", res, err)
@@ -316,7 +319,7 @@ func TestInstallsANewerPrereleaseOnceTheBundleVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() = %v\n%s", err, out.String())
 	}
-	if !res.Updated || res.Latest != "v0.4.0-rc.12" {
+	if !res.Updated || res.Latest != newestRC {
 		t.Errorf("result %+v", res)
 	}
 	if got, _ := os.ReadFile(filepath.Clean(exe)); string(got) != newBinary {
