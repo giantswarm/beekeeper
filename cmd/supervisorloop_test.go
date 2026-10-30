@@ -747,3 +747,48 @@ func TestTheDefaultReviewBriefReportsWithAProblemLine(t *testing.T) {
 		t.Errorf("the brief's report lacks --problem: %s", defaultReviewBrief)
 	}
 }
+
+// The loop, with no supervisor session or watch, takes the same timer
+// transitions as watch and delivers the wake only after saving them.
+func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
+ for _, kind := range []string{"wall-clock", "probe"} {
+  t.Run(kind, func(t *testing.T) {
+   r := newLoopRig(t)
+   ready := false
+   checks := 0
+   fakeRead(t, func(string) ([]byte, error) {
+    checks++
+    if !ready { return nil, errors.New("not ready") }
+    return nil, nil
+   })
+   wakes := 0
+   was := wakeOwner
+   wakeOwner = func(_ *app, _ context.Context, _ state.Party, who, msg, _ string) error {
+    wakes++
+    st, err := r.a.store.Read()
+    if err != nil || len(st.Timers) != 0 { t.Errorf("wake before timer saved: %+v, %v", st, err) }
+    if who != loopWorker || !strings.Contains(msg, "timer #1") { t.Errorf("wake %q: %s", who, msg) }
+    return nil
+   }
+   t.Cleanup(func(){ wakeOwner = was })
+   timer := state.Timer{ID: 1, Due: time.Now().Add(-time.Minute), Wake: loopWorker, What: "check result", Every: time.Nanosecond}
+   if kind == "probe" { timer.Probe = "true" }
+   if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+    st.Timers = []state.Timer{timer}
+    return nil, nil
+   }); err != nil { t.Fatal(err) }
+   if kind == "probe" {
+    r.pass(t)
+    st, _ := r.a.store.Read()
+    if checks != 1 || wakes != 0 || len(st.Timers) != 1 || st.Timers[0].Reason != "not ready" {
+     t.Fatalf("pending probe: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
+    }
+   }
+   ready = true
+   r.pass(t)
+   if wakes != 1 { t.Fatalf("due %s timer: got %d wakes, want 1", kind, wakes) }
+   r.pass(t) // restarting the loop cannot fire it twice
+   if wakes != 1 || len(r.logged(t, "timer.fired")) != 1 { t.Fatalf("timer fired again: %d wakes", wakes) }
+  })
+ }
+}

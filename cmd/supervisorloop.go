@@ -197,6 +197,8 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  timers    due wall-clock and conditional timers fire and send their wakes
+            or run their commands, as in watch
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, or after the last round's findings were forwarded
@@ -339,6 +341,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	st, err := a.store.Read()
 	if err != nil {
+		return err
+	}
+	if err := l.fireTimers(ctx, st); err != nil {
 		return err
 	}
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person}
@@ -963,4 +968,32 @@ func loopEventAgent(st *state.State, e state.Event) string {
 		by = st.Agents[i].Name
 	}
 	return superloop.EventAgent(e.Verb, e.Detail, by)
+}
+
+// fireTimers uses the watch's timer transitions. Checks run outside the state
+// lock; settling inside Update lets a concurrent watch take a timer first
+// without either firing it twice. Side effects follow the successful save.
+func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error {
+ a := l.a
+ found := checkTimers(ctx, st.Timers, a.now, lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st))
+ // Avoid a write on every idle loop pass.
+ if _, _, _, changed := settleTimers(st, found, a.now); !changed {
+  return nil
+ }
+ var lines []string
+ var fires []timerFire
+ if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+  var evs []state.Event
+  lines, evs, fires, _ = settleTimers(current, found, a.now)
+  return evs, nil
+ }); err != nil {
+  return err
+ }
+ w := &watcher{app: a}
+ for _, line := range lines {
+  w.emitNow("timer", "%s", line)
+ }
+ w.actTimers(ctx, fires)
+ w.timerActs.Wait()
+ return nil
 }
