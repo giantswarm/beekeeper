@@ -1,6 +1,7 @@
 package superloop
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -261,6 +262,83 @@ func TestADoneWorkerLeavesTheRosterThenTheNextStarts(t *testing.T) {
 	in.Taken = append(in.Taken, taken(t, t0, n)...)
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("after the next start: %+v", got)
+	}
+}
+
+func TestAReviewerLeavesOnceItsVerdictIsActedOn(t *testing.T) {
+	reviewer := ReviewerName(pr, 1)
+	if reviewer != "Review r 7 r1" {
+		t.Fatalf("reviewer name = %q", reviewer)
+	}
+	workers := append(parked(t0), Worker{Name: reviewer, Started: true})
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	in := Input{Workers: workers, Pulls: pull(head1, true, Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}), Rounds: 1, Taken: tk}
+	g := only(t, Plan(in), KindGo)
+	in.Taken = append(in.Taken, taken(t, t1, g)...)
+	d := only(t, Plan(in), KindDone)
+	if d.Agent != reviewer || d.Ref != pr || d.Event != nil {
+		t.Errorf("done = %+v", d)
+	}
+	in.Taken = append(in.Taken, taken(t, t1, d)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("after the reviewer left: %+v", got)
+	}
+	// A reviewer its person started stays.
+	in.Workers = append(parked(t0), Worker{Name: reviewer})
+	in.Taken = append(tk, taken(t, t1, g)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a person's session was retired: %+v", got)
+	}
+}
+
+func TestAForwardedVerdictRetiresItsReviewer(t *testing.T) {
+	reviewer := ReviewerName(pr, 1)
+	workers := append(parked(t0), Worker{Name: reviewer, Started: true})
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	in := Input{Workers: workers, Pulls: pull(head1, true, Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}), Rounds: 2, Taken: tk}
+	f := only(t, Plan(in), KindForward)
+	in.Taken = append(in.Taken, taken(t, t1, f)...)
+	if d := only(t, Plan(in), KindDone); d.Agent != reviewer {
+		t.Errorf("done = %+v", d)
+	}
+}
+
+func TestAMergedWorkerLeavesWhetherItReportedOrNot(t *testing.T) {
+	w := parked(t0)
+	w[0].Started = true
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	tk = append(tk, taken(t, t1, Action{Key: goKey(pr, head1), Kind: KindGo, Ref: pr, Agent: worker})...)
+	merged := map[string]Pull{pr: {Ref: pr, URL: prURL, State: Merged, Head: head1}}
+	in := Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk}
+	acts := Plan(in)
+	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone })
+	if len(acts) != 2 || i < 0 || acts[i].Agent != worker || acts[i].Ref != pr {
+		t.Fatalf("want the end and the worker's done, got %+v", acts)
+	}
+	// Its turn ran on past the end: the merged pull request stays read
+	// until the worker left.
+	in.Taken = append(in.Taken, taken(t, t1, acts[1-i])...)
+	if got := Tracked(w, in.Taken); len(got) != 1 || got[0] != pr {
+		t.Fatalf("tracked after the end = %v", got)
+	}
+	d := only(t, Plan(in), KindDone)
+	in.Taken = append(in.Taken, taken(t, t1, d)...)
+	if got := Tracked(w, in.Taken); len(got) != 0 {
+		t.Errorf("tracked after the worker left = %v", got)
+	}
+	// A worker its person started stays; one that reported done leaves by
+	// its own done.
+	if got := Plan(Input{Workers: parked(t0), Pulls: merged, Rounds: 1, Taken: tk}); len(got) != 1 || got[0].Kind != KindEnd {
+		t.Errorf("a person's worker: %+v", got)
+	}
+	done := Event{At: t1, Verb: VerbDone, Agent: worker, Detail: worker + " done: merged"}
+	acts = Plan(Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk, Events: []Event{done}})
+	if n := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone && a.Event == nil }); n >= 0 {
+		t.Errorf("a reported worker was retired too: %+v", acts)
+	}
+	// No go, no retirement.
+	if got := Plan(Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk[:1]}); len(got) != 1 || got[0].Kind != KindEnd {
+		t.Errorf("without the go: %+v", got)
 	}
 }
 
