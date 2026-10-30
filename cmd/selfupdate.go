@@ -42,8 +42,9 @@ func (a *app) selfUpdateCmd() *cobra.Command {
 		Short: "Replace this binary with the latest signed release (--check only asks)",
 		Long: `Look up the latest release of ` + update.Repository + ` and, when it is newer
 than this binary, install its binary for this OS and architecture over the
-running executable. --check only reports both versions: exit 125 when a
-newer release exists, 0 when this is the latest.
+running executable. A pre-release (a release candidate) looks among the
+pre-releases too, a release only among releases. --check only reports both
+versions: exit 125 when a newer release exists, 0 when this is the latest.
 
 Release binaries are signed in CI (cosign, keyless) and published next to
 their Sigstore bundle. The download is installed only after that bundle
