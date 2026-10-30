@@ -102,6 +102,10 @@ type providerView struct {
 	Kind             string `json:"kind,omitempty"`
 	ServingMode      string `json:"servingMode,omitempty"`
 	ServingModeError string `json:"servingModeError,omitempty"`
+	// DrainTo is the mode a serving-mode switch waits to run into: while
+	// it stands, the provider's ceiling is that mode's and no session
+	// starts on the model.
+	DrainTo string `json:"drainTo,omitempty"`
 }
 
 func (p *providerView) findBucket(name string) *bucketView {
@@ -125,7 +129,11 @@ func (p *providerView) windowsSummary(now time.Time) string {
 			return "serving mode unknown (" + truncate(p.ServingModeError, 120) + ")"
 		}
 		if p.ServingMode != "" {
-			return "serving mode " + p.ServingMode
+			line := "serving mode " + p.ServingMode
+			if p.DrainTo != "" {
+				line += " (draining to " + p.DrainTo + ")"
+			}
+			return line
 		}
 		return ""
 	}
@@ -700,6 +708,17 @@ type providerReadingResult struct {
 	// serveModeErr why that read failed.
 	serveMode    string
 	serveModeErr string
+	// pendingMode is the mode a serving-mode switch waits to run into:
+	// while it stands, the provider drains to that mode's ceiling and no
+	// session starts on the model.
+	pendingMode string
+	// hasConstraintCeiling is whether constraintCeiling says anything:
+	// set when the constraints held name a mode and the provider runs in
+	// one the constraints allow.
+	hasConstraintCeiling bool
+	// constraintCeiling is the ceiling the constraints held right now
+	// allow: the sessions the mode they permit sustains.
+	constraintCeiling int
 }
 
 func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgents, res providerReadingResult, now time.Time) *providerView {
@@ -866,9 +885,25 @@ func buildSelfHostedProviderView(name string, pCfg config.Provider, pa providerA
 	// The mode's ceiling, applied here rather than on the shared config: no
 	// caller's capacity map changes.
 	eff := pCfg.WithServeMode(config.ServeModeReading{Mode: res.serveMode, Err: res.serveModeErr})
+	if res.hasConstraintCeiling && res.constraintCeiling < eff.Ceiling {
+		// A constraint holds a node the running mode occupies: the
+		// provider's ceiling is the mode the constraints allow, even
+		// before the switch into it ran.
+		eff.Ceiling, eff.Floor = res.constraintCeiling, min(eff.Floor, res.constraintCeiling)
+	}
+	if res.pendingMode != "" {
+		// A pending switch to a mode the constraints allow lowers the
+		// provider's ceiling to that mode's while the model drains.
+		if c, ok := pCfg.ServeModeCeiling(res.pendingMode); ok && c < eff.Ceiling {
+			eff.Ceiling, eff.Floor = c, min(eff.Floor, c)
+		}
+	}
 	pv.Ceiling = eff.Ceiling
 	pv.Floor = eff.Floor
 	pv.ServingMode = res.serveMode
+	if res.pendingMode != "" && !strings.EqualFold(res.pendingMode, res.serveMode) {
+		pv.DrainTo = res.pendingMode
+	}
 	if pCfg.HasServeMode() {
 		if res.serveModeErr != "" {
 			// The mode could not be read: the provider keeps its configured
@@ -1363,8 +1398,7 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		}
 		// A self-hosted provider reads no subscription usage; its ceiling may
 		// follow the serving mode of the model it serves.
-		r := a.serveMode(ctx, name, p)
-		readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
 	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, review, now)

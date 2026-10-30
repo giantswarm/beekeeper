@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -576,6 +577,9 @@ func (a *app) runServeMode(ctx context.Context, p config.Provider) (config.Serve
 	c := exec.CommandContext(ctx, p.ServeModeCommand[0], p.ServeModeCommand[1:]...) //nolint:gosec // the configured serving-mode command
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
+	if len(a.serveModeEnv) > 0 {
+		c.Env = append(os.Environ(), a.serveModeEnv...)
+	}
 	if err := c.Run(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return config.ServeModeReading{}, fmt.Errorf("serving mode command timed out: %s", strings.Join(p.ServeModeCommand, " "))
@@ -1225,9 +1229,9 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			continue
 		}
 		// A self-hosted provider reads no subscription usage; its ceiling may
-		// follow the serving mode of the model it serves.
-		r := w.serveMode(ctx, name, p)
-		readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+		// follow the serving mode of the model it serves, and the modes a
+		// node constraint holds back lower it before any switch ran.
+		readings[name] = w.serveModeReadings(ctx, name, p)
 	}
 	w.mu.Lock()
 	swap := w.swap

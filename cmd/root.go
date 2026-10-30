@@ -147,6 +147,22 @@ type app struct {
 	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs
 	// the command itself.
 	readServeMode func(ctx context.Context, command []string, stale time.Duration) (config.ServeModeReading, error)
+	// serveModeEnv reaches the configured serving-mode reader and switcher.
+	serveModeEnv []string
+	// switchServeModeRun runs a self-hosted provider's
+	// serveModeSwitchCommand; nil runs the command itself.
+	switchServeModeRun func(ctx context.Context, command []string, mode string) (string, error)
+	// serveModeSwitching names the node whose claim or release runs a
+	// serving-mode switch right now: while that switch runs, the node
+	// counts not held — its record stands for the switch's own party.
+	serveModeSwitching string
+	// serveModeSwitchHeld lets a test watch the machine's switch lock:
+	// called while the lock stands, it reports what it sees.
+	serveModeSwitchHeld func(name string)
+	// serveModeSwitchingTo names, per provider, the mode a switch running
+	// in this process runs into: status and the watch say it while the
+	// command holds the machine's lock.
+	serveModeSwitchingTo map[string]string
 }
 
 // requesterOrigin is a brokered request's working directory and the keys'

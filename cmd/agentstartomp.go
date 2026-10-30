@@ -302,9 +302,10 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			p := k.Providers[name]
 			if p.SelfHosted() {
 				// A self-hosted provider reads no subscription usage; its
-				// ceiling may follow the serving mode of the model it serves.
-				r := target.serveMode(context.Background(), name, p)
-				readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+				// ceiling may follow the serving mode of the model it
+				// serves, and a node constraint holds the model down to the
+				// mode free of the node before any switch ran.
+				readings[name] = target.serveModeReadings(context.Background(), name, p)
 				continue
 			}
 			if !p.Enabled() {

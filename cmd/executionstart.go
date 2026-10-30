@@ -162,9 +162,10 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 		p := k.Providers[name]
 		if p.SelfHosted() {
 			// A self-hosted provider reads no subscription usage; its ceiling
-			// may follow the serving mode of the model it serves.
-			r := a.serveMode(ctx, name, p)
-			readings[name] = providerReadingResult{serveMode: r.Mode, serveModeErr: r.Err}
+			// may follow the serving mode of the model it serves, and a node
+			// constraint holds the model down to the mode free of the node
+			// before any switch ran.
+			readings[name] = a.serveModeReadings(ctx, name, p)
 			continue
 		}
 		if !p.Enabled() {

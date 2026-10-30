@@ -88,6 +88,10 @@ type statusView struct {
 	// Stopped says the standing beekeeper stop, with its reason; empty
 	// without one.
 	Stopped string `json:"stopped,omitempty"`
+	// Serving is the serving modes of the self-hosted providers: the mode
+	// each runs in with the sessions it sustains, and each node
+	// constraint held with the mode that stands while it holds.
+	Serving string `json:"serving,omitempty"`
 }
 
 func (a *app) status() (*statusView, error) {
@@ -110,6 +114,7 @@ func (a *app) status() (*statusView, error) {
 		return nil, err
 	}
 	v.Busy = len(countAgents(st, sessions, a.now).Busy)
+	v.Serving = a.serveModeStatusLine()
 	if st.Supervisor != nil {
 		v.Supervisor = st.Supervisor.Name
 		if missing {
@@ -204,6 +209,9 @@ func (v *statusView) line() string {
 		holds += "; " + list(len(v.Lifted), "lifted", "lifted", v.Lifted)
 	}
 	line := fmt.Sprintf("%s; %s; %s; %d due; busy %d/%d-%d", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due, v.Busy, v.Floor, v.Ceiling)
+	if v.Serving != "" {
+		line += "; " + v.Serving
+	}
 	if len(v.VaultWaits) > 0 {
 		line += "; vault locked: " + list(len(v.VaultWaits), "call waits", "calls wait", v.VaultWaits)
 	}

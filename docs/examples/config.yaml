@@ -293,6 +293,11 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
       #   full: 4
       #   tiny: 1
       # serveModeStaleAfter: 1m   # how long a cached mode stands before the command runs again
+      # serveModeModes:     # every mode the platform's tool can switch into: the nodes it occupies and the sessions it sustains
+      #   full: {nodes: [node-a, node-b], sessions: 4}   # a claim of a node it occupies is the constraint "needs node-a exclusively"
+      #   tiny: {nodes: [node-a], sessions: 1}           # the mode that runs while node-b stands claimed
+      # serveModeSwitchCommand: [~/.local/bin/switch-serving-mode]  # switches into the mode named as its last argument; beekeeper relays, holds no control of its own
+      # serveModeSwitchTimeout: 1m  # how long a switch may take before beekeeper ends it and leaves the mode as its reader reports it
   choices:                  # ordered (harness, model) candidates for agents start --harness auto and beekeeper capacity
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}

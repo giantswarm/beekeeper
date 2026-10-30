@@ -433,6 +433,12 @@ type watcher struct {
 	// sweeping is set while the exposure sweep runs, lastSweep when it began.
 	sweeping  atomic.Bool
 	lastSweep time.Time
+	// serving is set while the self-hosted providers' serving modes are
+	// reconciled, lastServing when that last began: a drain waits for the
+	// model's sessions, and the watch runs the switch the moment they are
+	// gone.
+	serving     atomic.Bool
+	lastServing time.Time
 	// teleporting is set while the Teleport login is read, lastTeleport
 	// when it began.
 	teleporting  atomic.Bool
@@ -1411,6 +1417,14 @@ func (w *watcher) poll(ctx context.Context) {
 	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
 		w.lastTeleport = now
 		w.inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
+	}
+	if now.Sub(w.lastServing) >= w.readEvery(th.Interval.Duration) {
+		w.lastServing = now
+		// A drain of a self-hosted model waits for its sessions: the watch
+		// runs the switch the constraint asked for once they are gone.
+		w.inFlight(ctx, th.Interval.Duration, &w.serving, func(ctx context.Context) {
+			_ = w.reconcileServeModes(ctx)
+		})
 	}
 	if w.cfg.Central.Enabled() && now.Sub(w.lastCentral) >= w.readEvery(th.Interval.Duration) {
 		w.lastCentral = now
