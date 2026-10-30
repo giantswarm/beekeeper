@@ -147,10 +147,6 @@ type app struct {
 	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs
 	// the command itself.
 	readServeMode func(ctx context.Context, command []string, stale time.Duration) (config.ServeModeReading, error)
-	// configLive replaces the configuration file a liveCapacity read opens;
-	// empty is cfgPath. A test whose fakes live only in its in-memory config
-	// points it at a path that loads nothing.
-	configLive string
 	// serveModeEnv reaches the configured serving-mode reader and switcher.
 	serveModeEnv []string
 	// switchServeModeRun runs a self-hosted provider's
@@ -163,10 +159,6 @@ type app struct {
 	// serveModeSwitchHeld lets a test watch the machine's switch lock:
 	// called while the lock stands, it reports what it sees.
 	serveModeSwitchHeld func(name string)
-	// serveModeLockStandsHere is one app's own switches: a switch of the
-	// same provider never runs beside another within one command, and
-	// the machine's lock stays the rule across commands.
-	serveModeLockStandsHere map[string]bool
 	// serveModeSwitchingTo names, per provider, the mode a switch running
 	// in this process runs into: status and the watch say it while the
 	// command holds the machine's lock.

@@ -3758,8 +3758,10 @@ func (c Capacity) serveModeNodeNames() []string {
 // watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
-	if n := c.Capacity.serveModeNodeNames(); len(n) > 0 {
-		out = append(out, n...)
+	for _, n := range c.Capacity.serveModeNodeNames() {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
 	}
 	if c.Ollama.URL != "" || c.Lemonade.URL != "" {
 		out = append(out, ModelServer)

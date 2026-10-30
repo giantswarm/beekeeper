@@ -582,7 +582,7 @@ func (a *app) serveModeStatusLine() string {
 // right now in this process: the machine's lock is what it holds while the
 // command runs. "" when no switch of it runs here.
 func (a *app) serveModeSwitchingName(name string) string {
-	if a.serveModeLockStandsHere != nil && a.serveModeLockStandsHere[name] {
+	if a.serveModeSwitchingTo[name] != "" {
 		return a.serveModeSwitchingTo[name]
 	}
 	return ""

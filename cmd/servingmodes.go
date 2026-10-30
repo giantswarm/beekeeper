@@ -527,20 +527,13 @@ func (a *app) switchServeMode(ctx context.Context, name, mode string, timeout ti
 	if a.serveModeSwitchHeld != nil {
 		a.serveModeSwitchHeld(name)
 	}
-	if a.serveModeLockStandsHere == nil {
-		a.serveModeLockStandsHere = map[string]bool{}
-		a.serveModeSwitchingTo = map[string]string{}
-	}
-	if a.serveModeLockStandsHere[name] {
-		return refused("another serving-mode switch of %s runs; only one runs at a time", name)
-	}
-	a.serveModeLockStandsHere[name] = true
 	if a.serveModeSwitchingTo == nil {
 		a.serveModeSwitchingTo = map[string]string{}
 	}
+	// The machine's lock above spans the whole command; the guard below
+	// only names this process's own switch for status and the watch.
 	a.serveModeSwitchingTo[name] = mode
 	defer func() {
-		a.serveModeLockStandsHere[name] = false
 		delete(a.serveModeSwitchingTo, name)
 	}()
 

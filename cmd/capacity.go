@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -1472,15 +1471,8 @@ func (v *capacityView) verdict() string {
 // liveCapacity returns the current Capacity from the active configuration
 // file (cfgPath or loadedCfg) without mutating a.cfg across goroutines; it
 // falls back to a.cfg.Capacity when no configuration file path is active or
-// on a read or parse error. configLive, when set, replaces that file: a test
-// whose fakes live only in its in-memory config points it at a path that
-// loads no capacity, and the loaded config stands.
+// on a read or parse error.
 func (a *app) liveCapacity() config.Capacity {
-	if p := a.configLive; p != "" {
-		if raw, err := os.ReadFile(filepath.Clean(p)); err == nil && len(raw) == 0 { //nolint:gosec // the test seam's own path, set by its own code
-			return a.cfg.Capacity
-		}
-	}
 	if p := cmp.Or(a.cfgPath, a.loadedCfg); p != "" {
 		if c, err := config.Load(p); err == nil {
 			return c.Capacity
