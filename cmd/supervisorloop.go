@@ -207,9 +207,10 @@ its key first in the detail):
             and the worker parked again on a new head while a round is
             left (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
-            built-in brief; a worker on a self-hosted provider's model gets
-            one on no self-hosted provider (--harness auto --exclude
-            <provider>)
+            built-in brief, on capacity's pick (--harness auto with
+            capacity.choices), decided like any start; a worker on a
+            self-hosted provider's model gets one on no self-hosted provider
+            (--review-of-self-hosted)
   go        every check on the head green, and either the last round's
             verdict approves that head, or no round is left, its verdict
             asked for changes, they were forwarded and the worker parked
@@ -731,12 +732,12 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	name := fmt.Sprintf("Review %s %d r%d", repoName(r.Repo), r.N, act.Round)
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
-	if k := l.a.cfg.Capacity; len(k.Choices) > 0 {
+	if len(l.a.cfg.Capacity.Choices) > 0 {
+		// The reviewer takes capacity's pick, decided as a worker's start
+		// is; a self-hosted model's work gets one on no self-hosted provider.
 		args = append(args, "--harness", harnessAuto)
 		if act.SelfHosted {
-			for _, p := range selfHostedProviders(k) {
-				args = append(args, "--exclude", p)
-			}
+			args = append(args, "--"+reviewOfSelfHostedFlag)
 		}
 	}
 	if err := l.claim(act, name); err != nil {
@@ -756,18 +757,6 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 func repoName(repo string) string {
 	_, name, _ := strings.Cut(repo, "/")
 	return name
-}
-
-// selfHostedProviders are the self-hosted providers of k, sorted.
-func selfHostedProviders(k config.Capacity) []string {
-	var out []string
-	for name, p := range k.Providers {
-		if p.SelfHosted() {
-			out = append(out, name)
-		}
-	}
-	slices.Sort(out)
-	return out
 }
 
 // selfHostedModel reports whether model is a choice of a self-hosted

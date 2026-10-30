@@ -223,20 +223,50 @@ type choiceCandidate struct {
 
 // choiceView is the result of evaluating capacity.choices for a start.
 type choiceView struct {
-	Harness    string            `json:"harness,omitempty"`
-	Model      string            `json:"model,omitempty"`
-	Provider   string            `json:"provider,omitempty"`
-	Bucket     string            `json:"bucket,omitempty"`
-	Review     bool              `json:"review,omitempty"`
-	Exclude    []string          `json:"exclude,omitempty"`
-	Reason     string            `json:"reason,omitempty"`
-	Candidates []choiceCandidate `json:"candidates,omitempty"`
+	Harness  string `json:"harness,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Bucket   string `json:"bucket,omitempty"`
+	Review   bool   `json:"review,omitempty"`
+	// ReviewOfSelfHosted says the start reviews a self-hosted model's work:
+	// no choice on a self-hosted provider is eligible.
+	ReviewOfSelfHosted bool              `json:"reviewOfSelfHosted,omitempty"`
+	Exclude            []string          `json:"exclude,omitempty"`
+	Reason             string            `json:"reason,omitempty"`
+	Candidates         []choiceCandidate `json:"candidates,omitempty"`
 }
 
 const (
 	harnessAuto = "auto"
 	harnessAgy  = "agy"
 )
+
+// startFor is the start a decision is for: a worker's, a review's, or the
+// review of a pull request a self-hosted model's worker wrote. Every kind is
+// decided by the same gates; the last alone takes no choice on a self-hosted
+// provider.
+type startFor int
+
+const (
+	forWorker startFor = iota
+	forReview
+	forReviewOfSelfHosted
+)
+
+// startKind is the start for the review and review-of-self-hosted flags.
+func startKind(review, ofSelfHosted bool) startFor {
+	switch {
+	case ofSelfHosted:
+		return forReviewOfSelfHosted
+	case review:
+		return forReview
+	}
+	return forWorker
+}
+
+// selfHostedReviewer is a self-hosted choice's reason for the review of a
+// self-hosted model's work.
+const selfHostedReviewer = "the work of a self-hosted model gets a reviewer on a provider that is not self-hosted"
 
 func (c *choiceView) line() string {
 	if c == nil {
@@ -930,7 +960,7 @@ func buildSelfHostedProviderView(name string, pCfg config.Provider, pa providerA
 // target (capacity.ceiling bounds the subscription providers' total, never a
 // self-hosted provider's), the headroom against a start, and the first
 // choice whose provider has room.
-func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config.Capacity, readings map[string]providerReadingResult, h *headroom, builds bool, exclude []string, review bool, now time.Time) *capacityView {
+func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config.Capacity, readings map[string]providerReadingResult, h *headroom, builds bool, exclude []string, kind startFor, now time.Time) *capacityView {
 	providers := make(map[string]*providerView, len(k.Providers))
 	sumFloor, sumCeiling := 0, 0
 	subFloor, subCeiling := 0, 0
@@ -1086,7 +1116,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 	}
 
 	if len(k.Choices) > 0 {
-		v.Choice = evaluateChoices(k, providers, mBlocks, "", exclude, review, now)
+		v.Choice = evaluateChoices(k, providers, mBlocks, "", exclude, kind, now)
 	}
 
 	switch {
@@ -1248,13 +1278,15 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	return false
 }
 
-func evaluateChoices(k config.Capacity, providers map[string]*providerView, machineBlocks []string, stopped string, exclude []string, review bool, now time.Time) *choiceView {
+// evaluateChoices takes the first choice every gate lets through, the same
+// gates for every kind of start: no review skips the pace or a weekly cap.
+func evaluateChoices(k config.Capacity, providers map[string]*providerView, machineBlocks []string, stopped string, exclude []string, kind startFor, now time.Time) *choiceView {
 	normEx := normalizeExcludes(exclude)
 	cv := &choiceView{
-		Review:  review,
-		Exclude: normEx,
+		Review:             kind != forWorker,
+		ReviewOfSelfHosted: kind == forReviewOfSelfHosted,
+		Exclude:            normEx,
 	}
-	skipPaceForReview := review && k.EffectiveReviewSkipPace()
 	var reasons []string
 
 	for _, ch := range k.Choices {
@@ -1271,7 +1303,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			Provider: provName,
 			Bucket:   bucketName,
 		}
-		reason := evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), skipPaceForReview, now)
+		reason := evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, now)
 		if reason == "" {
 			cand.OK = true
 			if cv.Harness == "" {
@@ -1292,9 +1324,12 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 	return cv
 }
 
-func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerView, bucketName string, machineBlocks []string, stopped string, excludes, providerNames []string, skipPaceForReview bool, now time.Time) string {
+func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerView, bucketName string, machineBlocks []string, stopped string, excludes, providerNames []string, kind startFor, now time.Time) string {
 	if choiceExcluded(ch, excludes, providerNames) {
 		return "excluded"
+	}
+	if kind == forReviewOfSelfHosted && pCfg.SelfHosted() {
+		return selfHostedReviewer
 	}
 	if stopped != "" {
 		return stopped
@@ -1353,29 +1388,31 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 		}
 	}
 
-	if !skipPaceForReview && sd != nil {
+	if sd != nil {
 		if max7d, ok := ch.EffectiveWorkerSevenDayMax(); ok && sd.UsedPercent >= max7d {
 			return fmt.Sprintf("7d %s at or past worker cap %s", pct(sd.UsedPercent), pct(max7d))
 		}
 	}
-	if !ch.SkipPace && !skipPaceForReview && sd != nil && sd.Pace != nil {
-		margin := ch.EffectivePaceMargin(pCfg)
+	// No start runs ahead of the even pace: a margin, the choice's or its
+	// provider's, may only tighten it, and skipPace no longer waives it.
+	if sd != nil && sd.Pace != nil {
+		margin := min(ch.EffectivePaceMargin(pCfg), pCfg.PaceMargin, 0)
 		over := math.Round((sd.UsedPercent-*sd.Pace)*10) / 10
 		if over > margin+1e-9 {
-			if margin == 0 {
+			if over > 0 {
 				return fmt.Sprintf("7d %s ahead of pace %s (+%s)", pct(sd.UsedPercent), pct(*sd.Pace), pct(over))
 			}
-			return fmt.Sprintf("7d %s ahead of pace %s (+%s > %s margin)", pct(sd.UsedPercent), pct(*sd.Pace), pct(over), pct(margin))
+			return fmt.Sprintf("7d %s within %s points of pace %s", pct(sd.UsedPercent), strconv.FormatFloat(-margin, 'f', -1, 64), pct(*sd.Pace))
 		}
 	}
 	return ""
 }
 
-func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, review bool) *capacityView {
-	return a.resolveProvidersCapacityForModel(ctx, st, sessions, k, builds, exclude, review, "")
+func (a *app) resolveProvidersCapacity(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, kind startFor) *capacityView {
+	return a.resolveProvidersCapacityForModel(ctx, st, sessions, k, builds, exclude, kind, "")
 }
 
-func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, review bool, wantModel string) *capacityView {
+func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.State, sessions []*claude.Session, k config.Capacity, builds bool, exclude []string, kind startFor, wantModel string) *capacityView {
 	now := a.now
 	if now.IsZero() {
 		now = time.Now()
@@ -1401,7 +1438,7 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
-	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, review, now)
+	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, kind, now)
 }
 
 // withUsage attaches u to v and replaces or prepends the usage block when
@@ -1531,10 +1568,10 @@ func (a *app) watchSwap() *swapReading {
 
 func (a *app) capacityCmd() *cobra.Command {
 	var host string
-	var builds, review bool
+	var builds, review, ofSelfHosted bool
 	var exclude []string
 	c := &cobra.Command{
-		Use:   "capacity [--host <host>] [--builds] [--review] [--exclude <choice>]",
+		Use:   "capacity [--host <host>] [--builds] [--review] [--review-of-self-hosted] [--exclude <choice>]",
 		Short: "Busy agents against the target, the headroom for a start and the verdict",
 		Long: `Count the roster's agents against the supervisor's target (capacity.floor,
 capacity.ceiling; unset, 5 and 10) and say whether a new start fits. A
@@ -1556,8 +1593,12 @@ the provider and bucket they run on, caps the subscription providers' total by
 the machine guards and capacity.ceiling, and prints each provider's windows and
 verdict plus the first non-excluded choice (--exclude) in capacity.choices whose
 provider has room, its 5-hour window below its threshold and its 7-day use
-within the weekly cap and pace margin (--review skips the weekly pace check
-and worker weekly cap when capacity.reviewSkipPace is true). A provider of
+within the weekly cap and at or under the even pace of its 7-day window.
+Every start is decided alike: --review marks a review start, which skips no
+gate (capacity.reviewSkipPace, a choice's skipPace and a positive paceMargin
+no longer let a start run ahead of the pace), and --review-of-self-hosted
+marks the review of a self-hosted model's work, which takes no choice on a
+self-hosted provider. capacity pick prints that choice alone. A provider of
 kind self-hosted (a model served on the desk's own machines, such as an omp
 agent on a local model) reads no subscription usage and has no pace: its
 ceiling of busy sessions is its own, optionally the one its serving mode names
@@ -1630,9 +1671,9 @@ nothing; it makes no GitHub call.`,
 				if len(k.Providers) == 0 {
 					k, legacy = a.resolveUsage(cmd.Context(), k)
 				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, exclude, review, harnessAuto, "")
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, exclude, startKind(review, ofSelfHosted), harnessAuto, "")
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, review).stopped(a, st.Stop)
+				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted)).stopped(a, st.Stop)
 			} else {
 				c := countAgents(st, sessions, a.now)
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
@@ -1674,18 +1715,98 @@ nothing; it makes no GitHub call.`,
 	}
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
-	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, which skips the weekly pace check and worker weekly cap")
+	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, decided like any start")
+	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the verdict for the review of a self-hosted model's work: no self-hosted provider")
 	c.Flags().StringSliceVar(&exclude, excludeFlag, nil, "exclude a choice by model, harness/model, provider or harness (repeatable or comma-separated)")
+	c.AddCommand(a.capacityPickCmd())
 	return c
 }
 
 // buildsFlag marks a start whose task builds: the build slot is one of its
-// guards. reviewFlag marks a review start, excludeFlag excludes choices.
+// guards. reviewFlag marks a review start, reviewOfSelfHostedFlag the review
+// of a self-hosted model's work, excludeFlag excludes choices.
 const (
-	buildsFlag  = "builds"
-	reviewFlag  = "review"
-	excludeFlag = "exclude"
+	buildsFlag             = "builds"
+	reviewFlag             = "review"
+	reviewOfSelfHostedFlag = "review-of-self-hosted"
+	excludeFlag            = "exclude"
 )
+
+// pickView is capacity pick's answer: the start's harness and model, or
+// none, with the decision behind it.
+type pickView struct {
+	Pick     string        `json:"pick"`
+	Harness  string        `json:"harness,omitempty"`
+	Model    string        `json:"model,omitempty"`
+	Provider string        `json:"provider,omitempty"`
+	Bucket   string        `json:"bucket,omitempty"`
+	Reason   string        `json:"reason,omitempty"`
+	Capacity *capacityView `json:"capacity,omitempty"`
+	Verdict  string        `json:"verdict,omitempty"`
+}
+
+// pickNone is capacity pick's line when no start fits.
+const pickNone = "none"
+
+// newPick is v's start: its choice while v has room and no stop stands, else
+// none with what stops it.
+func newPick(v *capacityView) *pickView {
+	p := &pickView{Pick: pickNone, Capacity: v, Verdict: v.verdict()}
+	ch := v.Choice
+	switch {
+	case v.Stopped != "":
+		p.Reason = v.Stopped
+	case ch == nil:
+		p.Reason = "no capacity.choices configured"
+	case ch.Harness == "" || ch.Model == "":
+		p.Reason = cmp.Or(ch.Reason, "no choice in capacity.choices")
+	case v.Room <= 0:
+		p.Reason = strings.Join(v.Blocks, "; ")
+	default:
+		p.Pick = ch.Harness + " " + ch.Model
+		p.Harness, p.Model, p.Provider, p.Bucket = ch.Harness, ch.Model, ch.Provider, ch.Bucket
+	}
+	return p
+}
+
+func (a *app) capacityPickCmd() *cobra.Command {
+	var ofSelfHosted bool
+	c := &cobra.Command{
+		Use:   "pick [--review-of-self-hosted]",
+		Short: "The harness and model the next start takes, or none",
+		Long: `Print the one start capacity's decision allows now, as "<harness> <model>",
+or "none". The decision is the one agents start without --harness, the
+supervisor loop's reviewers and its next starts take: the first entry of
+capacity.choices whose provider is configured and has a free slot under its
+running-session ceiling, whose 5-hour and 7-day windows are under their stop
+percent, whose 7-day use is not ahead of the even pace of its window, with the
+machine's headroom as a hard gate and capacity.ceiling bounding the
+subscription providers together. A review is decided exactly like a worker
+start. --review-of-self-hosted decides the reviewer of a pull request a
+self-hosted model's worker wrote: no choice on a self-hosted provider. --json
+prints the pick with every choice's reason, each provider's windows and
+verdict, and the headroom. Exit 0 either way; reads only.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			kind := forWorker
+			if ofSelfHosted {
+				kind = forReviewOfSelfHosted
+			}
+			v, err := a.startCapacityForAuto(cmd.Context(), false, nil, kind, "")
+			if err != nil {
+				return err
+			}
+			p := newPick(v)
+			if a.json {
+				return a.printJSON(p)
+			}
+			_, err = fmt.Fprintln(a.out, p.Pick)
+			return err
+		},
+	}
+	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "decide the reviewer of a self-hosted model's work: no self-hosted provider")
+	return c
+}
 
 // gateStart judges capacity's verdict v for a start: room lets it through
 // (nothing to say), none refuses it (exit 3, the verdict's guards named)
@@ -1706,13 +1827,13 @@ func gateStart(v *capacityView, force bool) (string, error) {
 // startGateWithOptions reads the capacity verdict for a start that builds or not,
 // as beekeeper capacity reads it, narrowed to the target harness/model when
 // explicit, and judges it (queueStart).
-func (a *app) startGateWithOptions(ctx context.Context, name, harness, model string, builds, force bool, exclude []string, review bool) (string, *capacityView, error) {
+func (a *app) startGateWithOptions(ctx context.Context, name, harness, model string, builds, force bool, exclude []string, kind startFor) (string, *capacityView, error) {
 	effModel := a.effectiveStartModel(harness, model)
 	readCap := func(b bool) (*capacityView, error) {
 		if harness == harnessAuto {
-			return a.startCapacityForAuto(ctx, b, exclude, review, model)
+			return a.startCapacityForAuto(ctx, b, exclude, kind, model)
 		}
-		return a.startCapacityWithOptions(ctx, b, exclude, review)
+		return a.startCapacityWithOptions(ctx, b, exclude, kind)
 	}
 	v, err := readCap(builds)
 	if err != nil {
@@ -1892,14 +2013,14 @@ func queueStart(v *capacityView, builds, force bool, wait string, await func() (
 
 // startCapacity is capacity's verdict for a start now.
 func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, error) {
-	return a.startCapacityWithOptions(ctx, builds, nil, false)
+	return a.startCapacityWithOptions(ctx, builds, nil, forWorker)
 }
 
-func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude []string, review bool) (*capacityView, error) {
-	return a.startCapacityForAuto(ctx, builds, exclude, review, "")
+func (a *app) startCapacityWithOptions(ctx context.Context, builds bool, exclude []string, kind startFor) (*capacityView, error) {
+	return a.startCapacityForAuto(ctx, builds, exclude, kind, "")
 }
 
-func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []string, review bool, wantModel string) (*capacityView, error) {
+func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []string, kind startFor, wantModel string) (*capacityView, error) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, err
@@ -1910,7 +2031,7 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	}
 	liveCap := a.liveCapacity()
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, review, wantModel).stopped(a, st.Stop), nil
+		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).stopped(a, st.Stop), nil
 	}
 	c := countAgents(st, sessions, a.now)
 	k, u := a.resolveUsage(ctx, liveCap)

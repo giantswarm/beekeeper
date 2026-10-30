@@ -254,21 +254,6 @@ func TestLoopTakesAParkedPullRequestFromReviewToTheMergeGo(t *testing.T) {
 	}
 }
 
-func TestLoopReviewOfASelfHostedWorkerExcludesTheSelfHostedProviders(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Capacity = config.Capacity{
-		Providers: map[string]config.Provider{loopLocal: {Kind: config.KindSelfHosted}, config.ClaudeHarness: {}},
-		Choices:   []config.Choice{{Harness: config.OmpHarness, Model: loopQwen, Provider: loopLocal}, {Harness: config.ClaudeHarness, Model: "opus"}},
-	}
-	r.park(t, loopPR, time.Now())
-	_ = r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents[0].Model = loopQwen; return nil, nil })
-	r.pass(t)
-	start := r.called(agentsName, agentStartName)
-	if !slices.Contains(start, "--harness") || !slices.Contains(start, "--exclude") || start[len(start)-1] != loopLocal {
-		t.Errorf("the reviewer start = %v", start)
-	}
-}
-
 func TestLoopWaitsForRoomForAReviewer(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
