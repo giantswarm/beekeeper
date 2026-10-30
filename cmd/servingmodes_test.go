@@ -379,11 +379,11 @@ func TestServingModesConstraintRefusal(t *testing.T) {
 	}
 
 	// A mode that occupies no constrained node still switches in.
-	if err := s.app(&bytes.Buffer{}).switchServeMode(context.Background(), selfHostedProv, "single", 0); err != nil {
+	if err := s.app(&bytes.Buffer{}).switchServeMode(context.Background(), selfHostedProv, servingModeSingle, 0); err != nil {
 		t.Fatalf("switch into a mode with no nodes: %v", err)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q, want %q", m, servingModeSingle)
 	}
 }
 
@@ -444,13 +444,13 @@ func TestServingModesDrainAndSwitch(t *testing.T) {
 	if len(evs) < 2 || evs[0].Verb != verbServeDrain || evs[1].Verb != verbServeSwitch {
 		t.Fatalf("the drain and switch are not in the event log:\n%s", eventLines(evs))
 	}
-	if !strings.Contains(eventLines(evs), servingModeFull+" -> single") {
+	if !strings.Contains(eventLines(evs), servingModeFull+" -> "+servingModeSingle) {
 		t.Fatalf("the switch event names no modes:\n%s", eventLines(evs))
 	}
 	// One event of the switch that ran: the machine switched once.
 	sw := 0
 	for _, e := range s.events(verbServeSwitch) {
-		if strings.Contains(e.Detail, servingModeFull+" -> single"+": switched") {
+		if strings.Contains(e.Detail, servingModeFull+" -> "+servingModeSingle+": switched") {
 			sw++
 		}
 	}
@@ -495,8 +495,8 @@ func TestServingModesSwitchBackAndRaise(t *testing.T) {
 	if out, err := s.claimNode("GpuJobA"); err != nil {
 		t.Fatalf("claim: %v\n%s", err, out)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q after the claim, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q after the claim, want %q", m, servingModeSingle)
 	}
 	// The holder's own retry needs no switch: the node is granted as it
 	// stands, and a further claim waits behind the constraint already
@@ -504,14 +504,14 @@ func TestServingModesSwitchBackAndRaise(t *testing.T) {
 	if out, err := s.claimNode("GpuJobA"); err != nil {
 		t.Fatalf("the holder's retry: %v\n%s", err, out)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q beside its holder, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q beside its holder, want %q", m, servingModeSingle)
 	}
 	if out, err := s.claimNode("GpuJobB"); err == nil || !strings.Contains(err.Error(), "waits behind") {
 		t.Fatalf("a claim behind the holder of the node:\n%s\nerr: %v", out, err)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q while the holder stands, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q while the holder stands, want %q", m, servingModeSingle)
 	}
 	// The release of the node: the node free, the model switches back.
 	if out, err := s.releaseNode("GpuJobA"); err != nil {
@@ -548,16 +548,16 @@ func TestServingModesSwitchBackAndRaise(t *testing.T) {
 	if out, err := s.releaseNode("GpuJobA"); err != nil {
 		t.Fatalf("release of the drain: %v\n%s", err, out)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q after the retried drain, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q after the retried drain, want %q", m, servingModeSingle)
 	}
 	// The waiting claim takes the node and the model stays in the mode
 	// the constraints allow.
 	if out, err := s.claimNode("GpuJobB"); err != nil {
 		t.Fatalf("the waiting claim: %v\n%s", err, out)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q while the further holder stands, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q while the further holder stands, want %q", m, servingModeSingle)
 	}
 	if out, err := s.releaseNode("GpuJobB"); err != nil {
 		t.Fatalf("release of the further holder: %v\n%s", err, out)
@@ -612,8 +612,8 @@ echo "switched to $1"
 	if line, err := s.claimNode("GpuJob"); err != nil {
 		t.Fatalf("claim after the reason passed: %v\n%s", err, line)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q after the claim, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q after the claim, want %q", m, servingModeSingle)
 	}
 
 	// The release asks for the switch back, and it runs: the model comes
@@ -655,8 +655,8 @@ echo "switched to $1"
 	if line, err := s.claimNode("GpuJob"); err != nil {
 		t.Fatalf("claim with the reason gone: %v\n%s", err, line)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q after the claim, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q after the claim, want %q", m, servingModeSingle)
 	}
 	// The holder releases the node; the switch back runs and the ceiling
 	// rises again.
@@ -801,13 +801,13 @@ func TestServingModesStatusAndWatch(t *testing.T) {
 	if out, err := s.claimNode("GpuJob"); err != nil {
 		t.Fatalf("claim during the full mode: %v\n%s", err, out)
 	}
-	if line := s.statusLine(); !strings.Contains(line, fullModeNode+" held (serving mode single (2 sessions)") {
+	if line := s.statusLine(); !strings.Contains(line, fullModeNode+" held (serving mode "+servingModeSingle+" (2 sessions)") {
 		t.Fatalf("status while the constraint holds:\n%s", line)
 	}
 	if evs := s.events(verbServeDrain); len(evs) == 0 {
 		t.Fatal("the drain left no event")
 	}
-	if !strings.Contains(eventLines(s.events(verbServeSwitch)), servingModeFull+" -> single") {
+	if !strings.Contains(eventLines(s.events(verbServeSwitch)), servingModeFull+" -> "+servingModeSingle) {
 		t.Fatalf("the switch over the constraint is not in the event log:\n%s", eventLines(s.events(verbServeSwitch)))
 	}
 }

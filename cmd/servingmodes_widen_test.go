@@ -11,7 +11,7 @@ import (
 // back with the release.
 func TestServingModesNoWidening(t *testing.T) {
 	s := newServingModesTest(t)
-	s.setMode("single")
+	s.setMode(servingModeSingle)
 	s.agents("BusyOne", "BusyTwo")
 
 	// node-b is free, single runs free of it, and the constraints allow
@@ -20,8 +20,8 @@ func TestServingModesNoWidening(t *testing.T) {
 	if out, err := s.claimNode("GpuJob"); err != nil {
 		t.Fatalf("claim: %v\n%s", err, out)
 	}
-	if m := s.mode(); m != "single" {
-		t.Fatalf("the mode is %q after the claim, want single", m)
+	if m := s.mode(); m != servingModeSingle {
+		t.Fatalf("the mode is %q after the claim, want %q", m, servingModeSingle)
 	}
 	if evs := s.events(verbServeSwitch); len(evs) != 0 {
 		t.Fatalf("a claim widened the model:\n%s", eventLines(evs))

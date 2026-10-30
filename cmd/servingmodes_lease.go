@@ -251,7 +251,7 @@ func (a *app) prepareServeModeClaim(res string) (string, []state.Event, error) {
 			// free falls with this read, and the target is what the
 			// constraints allow right now — the widest mode free of the
 			// held nodes, never a wider one than the model runs.
-			if stR, errR := a.serveModeState(name); !(errR == nil && stR.Node == res && stR.Pending != "") &&
+			if stR, errR := a.serveModeState(name); (errR != nil || stR.Node != res || stR.Pending == "") &&
 				want.Mode != "" && r.Mode != "" && !strings.EqualFold(want.Mode, r.Mode) &&
 				ceilingOf(p, want.Mode) > ceilingOf(p, r.Mode) {
 				want.Mode = r.Mode
