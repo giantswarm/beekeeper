@@ -336,6 +336,21 @@ func TestAMergedWorkerLeavesWhetherItReportedOrNot(t *testing.T) {
 	if n := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone && a.Event == nil }); n >= 0 {
 		t.Errorf("a reported worker was retired too: %+v", acts)
 	}
+	// A worker parked on anything but its pull request still works (its
+	// release, a timer); one parked on the pull request is done.
+	busy := parked(t0)
+	busy[0].Started, busy[0].ParkedOn = true, "release v1.2.3"
+	if got := Plan(Input{Workers: busy, Pulls: merged, Rounds: 1, Taken: tk}); len(got) != 1 || got[0].Kind != KindEnd {
+		t.Errorf("a worker parked on its release: %+v", got)
+	}
+	if got := Tracked(busy, append(tk, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr})...)); len(got) != 0 {
+		t.Errorf("tracked for a worker parked on its release = %v", got)
+	}
+	free := parked(t0)
+	free[0].Started, free[0].ParkedOn = true, ""
+	if d := Plan(Input{Workers: free, Pulls: merged, Rounds: 1, Taken: tk}); !slices.ContainsFunc(d, func(a Action) bool { return a.Kind == KindDone && a.Agent == worker }) {
+		t.Errorf("an idle worker stays: %+v", d)
+	}
 	// No go, no retirement.
 	if got := Plan(Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk[:1]}); len(got) != 1 || got[0].Kind != KindEnd {
 		t.Errorf("without the go: %+v", got)

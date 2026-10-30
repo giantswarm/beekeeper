@@ -265,11 +265,15 @@ func (l ledger) actedAfter(ref string, at time.Time) bool {
 
 // workerDue reports whether the worker the go for ref was given to waits
 // for its retirement: a beekeeper-started session on the roster, not
-// retired yet.
+// retired yet, and done with its task: not parked, or parked on ref
+// itself. One parked on anything else (a release, a timer, a note) still
+// has work to do.
 func (l ledger) workerDue(ref string, workers []Worker) bool {
 	agent := l.goAgent[ref]
 	return agent != "" && !l.has(retireKey(ref, retiredWorker)) &&
-		slices.ContainsFunc(workers, func(w Worker) bool { return w.Name == agent && w.Started })
+		slices.ContainsFunc(workers, func(w Worker) bool {
+			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref)
+		})
 }
 
 // ReviewerName is the roster name of the reviewer of round rd of ref

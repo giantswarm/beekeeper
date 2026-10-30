@@ -330,7 +330,8 @@ func (a *app) wakeBackground(ctx context.Context, by state.Party, w wakeTarget, 
 
 // stopBackgroundStart stops p's background session when beekeeper started
 // it as one (claude stop, which keeps its conversation) and says what it
-// did; false for any other session. One that runs a turn stays.
+// did; false for any other session. One that runs a turn, or holds or held
+// the supervisor's or the guide's role, stays.
 func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.Party) (string, bool) {
 	i := st.StartIndex(p)
 	if i < 0 || !st.Starts[i].Background {
@@ -338,6 +339,9 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	}
 	id := st.Starts[i].Session
 	short := id[:min(8, len(id))]
+	if roleKeeps(st, p) {
+		return fmt.Sprintf("its background session %s stays: it holds or held the supervisor's or the guide's role, and no relay relieved it", short), true
+	}
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
 	}

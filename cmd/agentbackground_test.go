@@ -391,4 +391,17 @@ func TestAgentsRemoveStopsABackgroundStart(t *testing.T) {
 	if st, _ := a.store.Read(); len(st.Agents) != 0 {
 		t.Errorf("roster %+v", st.Agents)
 	}
+	// The supervisor's own background session stays.
+	sv := state.Party{Session: "s1", Name: agentOne}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: sv, Mode: state.ModeBypass, Dir: t.TempDir(), At: time.Now(), Background: true})
+		st.Agents = append(st.Agents, state.Agent{Party: sv, Task: bgTask})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	remove(agentOne)
+	if len(*calls) != 0 || !strings.Contains(out.String(), "supervisor's or the guide's role") {
+		t.Errorf("the supervisor's session: calls %+v, output:\n%s", *calls, out)
+	}
 }
