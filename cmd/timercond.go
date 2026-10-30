@@ -229,3 +229,19 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	_ = w.store.Log(event(watchParty, "timer.ran", "#%d exit %d (%s): %s", f.t.ID, rc, path, f.t.Run))
 	w.emitNow("timer", "TIMER RAN: #%d exit %d, output in %s: %s", f.t.ID, rc, path, truncate(f.t.What, 200))
 }
+
+// dueTimers reports plain timers once, leaving them open until timer done.
+func dueTimers(st *state.State, now time.Time) ([]string, []state.Event) {
+	var lines []string
+	var evs []state.Event
+	for i := range st.Timers {
+		t := &st.Timers[i]
+		if t.Auto() || !state.Due(t.Due, t.Fired, now) {
+			continue
+		}
+		t.Fired = now.UTC()
+		lines = append(lines, fmt.Sprintf("TIMER: #%d due %s: %s (beekeeper timer done %d)", t.ID, clock(now, t.Due), truncate(t.What, 200), t.ID))
+		evs = append(evs, event(watchParty, "timer.due", "#%d %s", t.ID, t.What))
+	}
+	return lines, evs
+}
