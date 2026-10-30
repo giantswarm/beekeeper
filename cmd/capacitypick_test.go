@@ -39,6 +39,8 @@ type pickRig struct {
 	claude, codex    [2]float64
 	reset5h, reset7d time.Time
 	choices          string
+	// claudeExtra is more of the claude provider's configuration.
+	claudeExtra string
 }
 
 func newPickRig(t *testing.T, choices string) *pickRig {
@@ -62,7 +64,7 @@ func (r *pickRig) configure(extra string) {
     claude:
       ceiling: 2
       command: ["read-claude"]
-      fiveHourMax: 90
+` + r.claudeExtra + `      fiveHourMax: 90
       sevenDayMax: 95
     codex:
       ceiling: 2
@@ -241,6 +243,55 @@ func TestCapacityPickReviewOfSelfHostedWorkTakesNoSelfHostedProvider(t *testing.
 	}
 	if !strings.Contains(p.Reason, "a reviewer on a provider that is not self-hosted") {
 		t.Errorf("capacity pick --review-of-self-hosted --json reason = %q", p.Reason)
+	}
+}
+
+// --force overrides capacity, never the one restriction: a forced review of
+// a self-hosted model's work with only the self-hosted choice free does not
+// land on it.
+func TestForcedReviewOfSelfHostedWorkNeverLandsOnASelfHostedProvider(t *testing.T) {
+	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
+`+subscriptionChoices)
+	r.claude[1], r.codex[1] = 60, 60
+	brief := filepath.Join(r.dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("Review the work.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, out := r.app(false)
+	c := a.agentStartCmd()
+	c.SilenceErrors, c.SilenceUsage = true, true
+	c.SetArgs([]string{"Forced", brief, usageDirFlag, r.dir, testDryRunFlag, "--" + reviewFlag, ofSelfHostedArg, usageForceFlag})
+	err := c.Execute()
+	if strings.Contains(out.String(), "choice: omp") {
+		t.Fatalf("a forced review of self-hosted work landed on the self-hosted provider (err %v):\n%s", err, out.String())
+	}
+	if err != nil {
+		t.Fatalf("forced review start: %v", err)
+	}
+	if !strings.Contains(out.String(), "choice: claude / "+pickOpus) {
+		t.Errorf("forced review start:\n%s", out.String())
+	}
+}
+
+// A choice's paceMargin never loosens its provider's tighter one.
+func TestCapacityPickKeepsTheProvidersTighterPaceMargin(t *testing.T) {
+	r := newPickRig(t, `    - {harness: claude, model: opus-x, paceMargin: 5}
+    - {harness: codex, model: gpt-x}
+`)
+	r.claudeExtra = "      paceMargin: -5\n"
+	r.configure("")
+	r.claude[1] = 47
+	r.want(codex.Harness + " " + pickGPT)
+	var p struct {
+		Capacity struct {
+			Choice struct{ Candidates []choiceCandidate }
+		}
+	}
+	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Capacity.Choice.Candidates[0].Reason; got != "7d 47% within 5 points of pace 50%" {
+		t.Errorf("reason under the pace within the margin = %q", got)
 	}
 }
 

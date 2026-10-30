@@ -592,7 +592,9 @@ func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
 	}
 	if force && v != nil && v.Choice != nil {
 		for _, cand := range v.Choice.Candidates {
-			if cand.Reason != "excluded" {
+			// --force overrides capacity, never an exclusion or the one
+			// restriction on the review of a self-hosted model's work.
+			if cand.Reason != "excluded" && cand.Reason != selfHostedReviewer {
 				return &choiceView{
 					Harness:  cand.Harness,
 					Model:    cand.Model,
@@ -602,7 +604,7 @@ func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
 				}, nil
 			}
 		}
-		return nil, refused("no start: all capacity.choices excluded")
+		return nil, refused("no start: all capacity.choices excluded or barred from the review of a self-hosted model's work")
 	}
 	if v != nil && len(v.Blocks) > 0 {
 		return nil, refused("no start: %s", strings.Join(v.Blocks, "; "))

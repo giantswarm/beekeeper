@@ -1393,16 +1393,16 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 			return fmt.Sprintf("7d %s at or past worker cap %s", pct(sd.UsedPercent), pct(max7d))
 		}
 	}
-	// No start runs ahead of the even pace: a margin may only tighten it,
-	// and skipPace no longer waives it.
+	// No start runs ahead of the even pace: a margin, the choice's or its
+	// provider's, may only tighten it, and skipPace no longer waives it.
 	if sd != nil && sd.Pace != nil {
-		margin := min(ch.EffectivePaceMargin(pCfg), 0)
+		margin := min(ch.EffectivePaceMargin(pCfg), pCfg.PaceMargin, 0)
 		over := math.Round((sd.UsedPercent-*sd.Pace)*10) / 10
 		if over > margin+1e-9 {
-			if margin == 0 {
+			if over > 0 {
 				return fmt.Sprintf("7d %s ahead of pace %s (+%s)", pct(sd.UsedPercent), pct(*sd.Pace), pct(over))
 			}
-			return fmt.Sprintf("7d %s ahead of pace %s (+%s > %s margin)", pct(sd.UsedPercent), pct(*sd.Pace), pct(over), pct(margin))
+			return fmt.Sprintf("7d %s within %s points of pace %s", pct(sd.UsedPercent), strconv.FormatFloat(-margin, 'f', -1, 64), pct(*sd.Pace))
 		}
 	}
 	return ""
