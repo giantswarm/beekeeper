@@ -2216,8 +2216,15 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		lines = append(lines, l)
 		evs = append(evs, event(watchParty, "note.due", "#%d %s", n.ID, n.Text))
 	}
-	tl, te := dueTimers(st, now)
-	lines, evs = append(lines, tl...), append(evs, te...)
+	for i := range st.Timers {
+		t := &st.Timers[i]
+		if t.Auto() || !state.Due(t.Due, t.Fired, now) {
+			continue
+		}
+		t.Fired = now.UTC()
+		lines = append(lines, fmt.Sprintf("TIMER: #%d due %s: %s (beekeeper timer done %d)", t.ID, clock(now, t.Due), truncate(t.What, 200), t.ID))
+		evs = append(evs, event(watchParty, "timer.due", "#%d %s", t.ID, t.What))
+	}
 	for i := range st.Records {
 		r := &st.Records[i]
 		_, live := claude.Live(sessions, r.Session)

@@ -115,13 +115,22 @@ func (f timerFire) message() string {
 // has not held for timerStuckAfter is a line once. It returns the
 // lines, events and fires, and whether it changed st.
 func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]string, []state.Event, []timerFire, bool) {
+	return settleTimersMatching(st, found, now, nil)
+}
+
+// timerActs distinguishes wakes and commands from watch-only reminders.
+func timerActs(t state.Timer) bool { return t.Wake != "" || t.Run != "" }
+
+// settleTimersMatching leaves timers rejected by accept untouched. A nil
+// predicate accepts every timer, as watch does.
+func settleTimersMatching(st *state.State, found map[int]checkResult, now time.Time, accept func(state.Timer) bool) ([]string, []state.Event, []timerFire, bool) {
 	var lines []string
 	var evs []state.Event
 	var fires []timerFire
 	changed := false
 	kept := st.Timers[:0]
 	for _, t := range st.Timers {
-		if !t.Auto() || t.Due.After(now) || (st.Stop != nil && t.Wake != "") {
+		if (accept != nil && !accept(t)) || !t.Auto() || t.Due.After(now) || (st.Stop != nil && t.Wake != "") {
 			// A wake timer due while beekeeper is stopped fires after the resume.
 			kept = append(kept, t)
 			continue
@@ -228,20 +237,4 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	}
 	_ = w.store.Log(event(watchParty, "timer.ran", "#%d exit %d (%s): %s", f.t.ID, rc, path, f.t.Run))
 	w.emitNow("timer", "TIMER RAN: #%d exit %d, output in %s: %s", f.t.ID, rc, path, truncate(f.t.What, 200))
-}
-
-// dueTimers reports plain timers once, leaving them open until timer done.
-func dueTimers(st *state.State, now time.Time) ([]string, []state.Event) {
-	var lines []string
-	var evs []state.Event
-	for i := range st.Timers {
-		t := &st.Timers[i]
-		if t.Auto() || !state.Due(t.Due, t.Fired, now) {
-			continue
-		}
-		t.Fired = now.UTC()
-		lines = append(lines, fmt.Sprintf("TIMER: #%d due %s: %s (beekeeper timer done %d)", t.ID, clock(now, t.Due), truncate(t.What, 200), t.ID))
-		evs = append(evs, event(watchParty, "timer.due", "#%d %s", t.ID, t.What))
-	}
-	return lines, evs
 }
