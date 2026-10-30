@@ -751,7 +751,8 @@ func TestTheDefaultReviewBriefReportsWithAProblemLine(t *testing.T) {
 // The loop, with no supervisor session or watch, takes the same timer
 // transitions as watch and delivers the wake only after saving them.
 func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
-	for _, kind := range []string{"wall-clock", "probe"} {
+	const probeTimer = "probe"
+	for _, kind := range []string{"wall-clock", probeTimer} {
 		t.Run(kind, func(t *testing.T) {
 			r := newLoopRig(t)
 			ready := false
@@ -778,8 +779,8 @@ func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
 			}
 			t.Cleanup(func() { wakeOwner = was })
 			timer := state.Timer{ID: 1, Due: time.Now().Add(-time.Minute), Wake: loopWorker, What: "check result", Every: time.Nanosecond}
-			if kind == "probe" {
-				timer.Probe = "true"
+			if kind == probeTimer {
+				timer.Probe = probeHolds
 			}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Timers = []state.Timer{timer}
@@ -787,7 +788,7 @@ func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if kind == "probe" {
+			if kind == probeTimer {
 				r.pass(t)
 				st, _ := r.a.store.Read()
 				if checks != 1 || wakes != 0 || len(st.Timers) != 1 || st.Timers[0].Reason != "not ready" {
