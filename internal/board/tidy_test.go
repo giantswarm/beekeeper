@@ -17,7 +17,7 @@ const (
 )
 
 const tidyMetaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[
-{"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog 📦"},{"id":"s3","name":"In Progress ⛏️"},{"id":"s9","name":doneValue}]}]}}}}}`
+{"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog 📦"},{"id":"s3","name":"In Progress ⛏️"},{"id":"s9","name":"Done ✅"}]}]}}}}}`
 
 // tidyGH answers Tidy's requests: the fields, the closed items in pages,
 // and records every write.
