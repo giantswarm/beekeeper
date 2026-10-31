@@ -1014,7 +1014,7 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 		"unknown provider in choice": "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: agy, model: m}\n",
 		"choices without providers":  "capacity:\n  choices:\n    - {harness: claude, model: m}\n",
 		"missing model in choice":    "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: claude}\n",
-		"provider without command":   "capacity:\n  providers:\n    claude: {fiveHourMax: 90}\n",
+		"provider without command":   "capacity:\n  providers:\n    custom: {fiveHourMax: 90}\n",
 		"descending paceCaps":        "capacity:\n  providers:\n    claude:\n      command: [r]\n      paceCaps:\n        - {overBy: 10, ceiling: 2}\n        - {overBy: 5, ceiling: 1}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1022,5 +1022,32 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 				t.Errorf("%s: loaded invalid config", name)
 			}
 		})
+	}
+}
+
+func TestClaudeUsageDefault(t *testing.T) {
+	for _, raw := range []string{"capacity: {providers: {claude: {}}}\n", "capacity: {providers: {claude: {ceiling: 2}}}\n"} {
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers[ClaudeHarness]
+		if !slices.Equal(p.Command, DefaultClaudeUsageCommand) || !p.Enabled() || p.EffectiveEvery() != DefaultUsageEvery {
+			t.Fatalf("claude default: %+v", p)
+		}
+	}
+	c, err := Load(writeTemp(t, "capacity: {providers: {claude: {command: [custom-reader]}}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Capacity.Providers[ClaudeHarness].Command; !slices.Equal(got, []string{"custom-reader"}) {
+		t.Fatal(got)
+	}
+	c, err = Load(writeTemp(t, "{}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Capacity.Providers[ClaudeHarness]; ok {
+		t.Fatal("created an unconfigured Claude provider")
 	}
 }

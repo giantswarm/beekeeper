@@ -72,15 +72,16 @@ type usageBucket struct {
 // usageReading is the timestamped output of a usage command stored in
 // usageFile or usageProviderFile.
 type usageReading struct {
-	At           time.Time              `json:"at"`
-	SourceAt     time.Time              `json:"sourceAt,omitzero"`
-	AgeMinutes   *float64               `json:"ageMinutes,omitempty"`
-	Stale        bool                   `json:"stale,omitempty"`
-	SingleWindow bool                   `json:"singleWindow,omitempty"`
-	FiveHour     *usageWindow           `json:"fiveHour,omitempty"`
-	SevenDay     *usageWindow           `json:"sevenDay,omitempty"`
-	Buckets      map[string]usageBucket `json:"buckets,omitempty"`
-	BucketOrder  []string               `json:"bucketOrder,omitempty"`
+	At            time.Time              `json:"at"`
+	SourceAt      time.Time              `json:"sourceAt,omitzero"`
+	AgeMinutes    *float64               `json:"ageMinutes,omitempty"`
+	Stale         bool                   `json:"stale,omitempty"`
+	NoPlanWindows bool                   `json:"noPlanWindows,omitempty"`
+	SingleWindow  bool                   `json:"singleWindow,omitempty"`
+	FiveHour      *usageWindow           `json:"fiveHour,omitempty"`
+	SevenDay      *usageWindow           `json:"sevenDay,omitempty"`
+	Buckets       map[string]usageBucket `json:"buckets,omitempty"`
+	BucketOrder   []string               `json:"bucketOrder,omitempty"`
 }
 
 // usageView is how capacity, watch and snapshot present subscription usage and
@@ -104,9 +105,24 @@ type usageHighLedger struct {
 }
 
 func runUsageCommand(ctx context.Context, command []string, timeout time.Duration) (usageReading, error) {
+	return runUsageCommandInDir(ctx, command, timeout, "")
+}
+
+func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Duration, dir string) (usageReading, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, command[0], command[1:]...) //nolint:gosec // the configured usage command
+	c.Dir = dir
+	if slices.Equal(command, config.DefaultClaudeUsageCommand) {
+		// The local probe is not a turn of the worker that requested it.
+		c.Env = make([]string, 0)
+		for _, entry := range os.Environ() {
+			key, _, _ := strings.Cut(entry, "=")
+			if key != claudeCodeEnv && !strings.HasPrefix(key, "CLAUDE_CODE_") {
+				c.Env = append(c.Env, entry)
+			}
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {
@@ -117,6 +133,9 @@ func runUsageCommand(ctx context.Context, command []string, timeout time.Duratio
 			return usageReading{}, fmt.Errorf("%s: %s", err, truncate(msg, 120))
 		}
 		return usageReading{}, err
+	}
+	if slices.Equal(command, config.DefaultClaudeUsageCommand) {
+		return parseClaudeUsage(stdout.Bytes(), time.Now())
 	}
 	return parseUsageOutput(stdout.Bytes())
 }
@@ -352,7 +371,10 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
 		}
 	}
-	if len(r.Buckets) > 0 {
+	if r.NoPlanWindows {
+		return nil
+	}
+	if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
 		for _, bName := range bucketNames(r) {
 			b := r.Buckets[bName]
 			switch {
@@ -515,6 +537,13 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 	}
 	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
 		return a.readCodexUsage()
+	}
+	if slices.Equal(u.Command, config.DefaultClaudeUsageCommand) {
+		dir := filepath.Join(a.cfg.StateDir, "usage", claudeComm)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return usageReading{}, err
+		}
+		return runUsageCommandInDir(ctx, u.Command, u.EffectiveTimeout(), dir)
 	}
 	return runUsageCommand(ctx, u.Command, u.EffectiveTimeout())
 }
@@ -893,7 +922,7 @@ func (a *app) singleProviderUsageHighBlock(ctx context.Context, prov, bucket str
 		return ""
 	}
 	pv := buildSingleProviderView(prov, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, a.now)
-	if len(pv.Buckets) > 0 && bucket != "" {
+	if len(pv.Buckets) > 0 && bucket != "" && !pv.supplementalBuckets {
 		if bv := pv.findBucket(bucket); bv != nil {
 			if bv.High {
 				return fmt.Sprintf("provider %s (%s): %s", prov, bv.Name, highBlockText(bv.FiveHour, pv.HighPercent, a.now))
@@ -1273,7 +1302,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.clear("usage-error-" + name)
 		}
 		parts = append(parts, name+": "+pv.watchSummary(w.now))
-		if len(pv.Buckets) > 0 {
+		if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			for _, bName := range pv.bucketOrder {
 				bv := pv.Buckets[bName]
 				if bv == nil {

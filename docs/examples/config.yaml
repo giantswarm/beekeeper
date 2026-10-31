@@ -255,7 +255,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
     claude:
       floor: 1
       ceiling: 4
-      command: [~/.local/bin/read-usage]
+      command: [claude, -p, /usage, --output-format, json] # default for claude, even with claude: {}; no model turn, no status line or credential reader
       staleAfter: 15m       # a reading older than staleAfter or a failed read yields ceiling 0, room 0 for this provider
       fiveHourMax: 90
       sevenDayMax: 95
