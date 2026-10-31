@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -345,13 +346,8 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
 	}
-	bin, err := exec.LookPath("claude")
-	if err != nil {
+	if err := a.bgStop(ctx, id); err != nil {
 		return fmt.Sprintf("its background session %s stays: %v", short, err), true
-	}
-	// claude stop takes the daemon's short id, not the session's.
-	if out, err := bgRun(ctx, "", cleanEnv(os.Environ(), a.explicitConfig()), []string{bin, bgStopCmd, short}); err != nil {
-		return fmt.Sprintf("its background session %s stays: claude stop: %v (%s)", short, err, firstLines(out)), true
 	}
 	return fmt.Sprintf("stopped its background session %s (claude attach %s brings it back)", short, short), true
 }
@@ -379,4 +375,84 @@ func (a *app) reviveBackground(ctx context.Context, holder state.Party, msg stri
 		return fmt.Errorf("%s: %w", holder.Name, errNoBackground)
 	}
 	return a.resumeBackground(ctx, w, msg)
+}
+
+// parkStoppedEvent is the event of a parked background session the watch
+// stopped.
+const parkStoppedEvent = "agents.parkstop"
+
+// parkedResident is the parked agents of st whose background session,
+// started by beekeeper, still runs in sessions after its turn ended: a
+// parked session waits on what its park names and keeps nothing in memory
+// meanwhile, since its wake resumes it from its transcript (claude --bg
+// --resume). A session in a turn (a headless turn of it in t, a running
+// command, its transcript or a subagent's written within stewardQuiet of
+// now), a park already resumable (the watch resumes it), an agent on an
+// execution host and the supervisor's or the guide's session stay.
+func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time) []state.Party {
+	var out []state.Party
+	for _, ag := range st.Agents {
+		if ag.Park == nil || !ag.Park.Resumable.IsZero() || ag.Execution != nil || ag.Session == "" {
+			continue
+		}
+		if i := st.StartIndex(ag.Party); i < 0 || !st.Starts[i].Background {
+			continue
+		}
+		if roleKeeps(st, ag.Party) {
+			continue
+		}
+		live, busy := false, false
+		for _, s := range sessions {
+			if s.ID != ag.Session {
+				continue
+			}
+			live = true
+			if headlessTurn(t, s.ID) != "" || len(s.Commands) > 0 || now.Sub(s.LastActive) < stewardQuiet || now.Sub(s.LastSubagent) < stewardQuiet {
+				busy = true
+			}
+		}
+		if live && !busy {
+			out = append(out, ag.Party)
+		}
+	}
+	return out
+}
+
+// bgStop stops the background session id (claude stop, which keeps its
+// conversation for claude --bg --resume).
+func (a *app) bgStop(ctx context.Context, id string) error {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return err
+	}
+	// claude stop takes the daemon's short id, not the session's.
+	if out, err := bgRun(ctx, "", cleanEnv(os.Environ(), a.explicitConfig()), []string{bin, bgStopCmd, id[:min(8, len(id))]}); err != nil {
+		return fmt.Errorf("claude stop: %w (%s)", err, firstLines(out))
+	}
+	return nil
+}
+
+// stopParked stops the background sessions of parkedResident, each once
+// its turn ended, so a parked session costs the machine no memory; its wake
+// (agents wake, agents resume, the watch's resume or a timer's) resumes it
+// from its transcript. A stop that fails is a line, tried again next poll.
+func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*claude.Session) {
+	if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Park != nil }) {
+		return
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return // no turn is known to have ended
+	}
+	for _, p := range parkedResident(st, sessions, t, w.now) {
+		key := "park-stop-" + p.Session
+		short := p.Session[:min(8, len(p.Session))]
+		if err := w.bgStop(ctx, p.Session); err != nil {
+			w.fail(key, "PARKED SESSION STAYS %q: its background session %s keeps its memory: %v", p.Name, short, err)
+			continue
+		}
+		w.clear(key)
+		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
+		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
+	}
 }
