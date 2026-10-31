@@ -3,6 +3,7 @@
 Description=beekeeper: supervisor loop
 
 [Service]
+Environment=@TOOL_PATH@
 ExecStart=:@COMMAND@
 Restart=on-failure
 RestartSec=30s

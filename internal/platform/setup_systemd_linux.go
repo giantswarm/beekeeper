@@ -60,6 +60,7 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 			args += " --config " + quote(s.ConfigPath)
 		}
 		unit := strings.Replace(systemd.SupervisorLoopService, "@COMMAND@", args+" supervisor loop", 1)
+		unit = strings.Replace(unit, "@TOOL_PATH@", quote("PATH="+s.toolPath()), 1)
 		files = append(files, File{Path: filepath.Join(dir, "beekeeper-supervisor-loop.service"), Content: []byte(unit), Service: true})
 	}
 	if s.TeleportEvery > 0 {

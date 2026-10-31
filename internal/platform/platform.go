@@ -240,6 +240,9 @@ type SetupSpec struct {
 	SupervisorLoop bool
 	// ConfigPath is the explicit configuration the loop service reads.
 	ConfigPath string
+	// ToolPath is the installing process's PATH, retained for the loop's
+	// external tools when the service manager has a restricted environment.
+	ToolPath string
 }
 
 // Setup is what beekeeper install puts in place for this platform beside

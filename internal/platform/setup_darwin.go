@@ -78,13 +78,14 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 <plist version="1.0"><dict>
 <key>Label</key><string>%s</string>
 <key>ProgramArguments</key><array><string>%s</string>%s<string>supervisor</string><string>loop</string></array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string></dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 <key>ThrottleInterval</key><integer>30</integer>
 <key>StandardOutPath</key><string>%s</string>
 <key>StandardErrorPath</key><string>%s</string>
 </dict></plist>
-`, label, escapeXML(s.Exe), args, log, log)
+`, label, escapeXML(s.Exe), args, escapeXML(s.toolPath()), log, log)
 		files = append(files, File{Path: filepath.Join(s.Home, "Library", "LaunchAgents", label+".plist"), Content: loop, Service: true})
 	}
 	return files, skipped
