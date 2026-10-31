@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -106,6 +107,20 @@ func TestGoneAgentReadsTranscriptBetweenTurns(t *testing.T) {
 	views := a.agentViews(st, nil)
 	if !strings.Contains(views[0].Reachable, strings.TrimSpace(goneActivityPrefix)) {
 		t.Fatalf("view = %+v", views)
+	}
+	encoded, err := json.Marshal(views)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []struct {
+		Name      string
+		Reachable string
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 1 || decoded[0].Name != ag.Name || !strings.Contains(decoded[0].Reachable, strings.TrimSpace(goneActivityPrefix)) {
+		t.Fatalf("JSON hides gone state: %s", encoded)
 	}
 }
 
