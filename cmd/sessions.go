@@ -169,8 +169,10 @@ func (a *app) sessionsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sessions",
 		Short: "List the running sessions: what each is on, what it runs, what it holds",
-		Long: `List the running sessions, Claude Code's and omp's (oh-my-pi, marked
-"omp busy" or "omp idle"), most recently active first: the
+		Long: `List the running sessions across Claude Code, omp (oh-my-pi), agy
+(Antigravity) and codex, most recently active first. Non-Claude sessions
+are marked with their harness and state (for example, "omp busy" or
+"omp idle"). Each session shows the
 issue its record serves and the issues or pull requests its latest turns
 acted on (named in its gh and devctl commands and GitHub tool calls, or
 created; a ref it only quoted or read is no act), else the repository it
@@ -197,7 +199,8 @@ unknown".
 Overlaps name the issues, pull requests and repositories more than one
 session acts on now. --json keeps the refs a session only mentioned in
 its work's "mentioned". --all adds the sessions of the last 24 hours that run no
-CLI (paused or closed, not archived) and the omp sessions no process runs:
+Claude Code CLI (paused or closed, not archived) and the omp, agy and codex
+sessions no process runs:
 a message to them does not arrive.
 
 The session records (sessions serve) follow the table: which session serves

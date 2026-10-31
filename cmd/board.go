@@ -1024,12 +1024,9 @@ func (a *app) boardMoveCmd() *cobra.Command {
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
 board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
-Status. An issue of a repository outside the board's owner (a personal
-account's, another organisation's) is never added: its item on a project
-of the repository's own owner (a personal account's user project) moves
-there by that project's Status values, without a Team or the epic gate;
-on no such project, or on several, it is refused with the gh project
-item-add or item-edit recipe. Every GitHub call acts on the
+Status. Issues from any accessible repository are added to the configured
+board, regardless of the repository's owner, subject to GitHub permissions.
+Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
 for a personal account's repository) reaches the issue. The status is the
