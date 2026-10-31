@@ -73,6 +73,26 @@ func daemonRan(ctx context.Context, id string) bool {
 	return err == nil && slices.ContainsFunc(rows, func(r bgSession) bool { return r.SessionID == id && r.Kind == bgKind })
 }
 
+// daemonRunning returns the session ids the claude daemon lists as running
+// right now (claude agents --json without --all).
+func daemonRunning(ctx context.Context, config string) map[string]bool {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return nil
+	}
+	rows, err := bgList(ctx, bin, cleanEnv(os.Environ(), config), false)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if r.SessionID != "" {
+			out[r.SessionID] = true
+		}
+	}
+	return out
+}
+
 // bgKind is the kind claude agents gives a session the daemon runs.
 const bgKind = "background"
 
@@ -344,6 +364,9 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	}
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
+	}
+	if loopInTurn(a, p) {
+		return fmt.Sprintf("its background session %s stays: its CLI is in a turn", short), true
 	}
 	bin, err := exec.LookPath("claude")
 	if err != nil {
