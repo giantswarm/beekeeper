@@ -30,9 +30,9 @@ func TestSandboxRunReleasesEmptyScope(t *testing.T) {
 	})
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	exe := filepath.Join(t.TempDir(), "launcher")
-	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexec sleep 2\n"), 0700); err != nil {
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexec sleep 2\n"), 0700); err != nil { //nolint:gosec // executable fixture in the test's own directory
 		t.Fatal(err)
-	} //nolint:gosec // executable fixture in the test's own directory
+	}
 	saved := plat.Capper
 	plat.Capper = &fakeCapper{down: true}
 	t.Cleanup(func() { plat.Capper = saved })
@@ -41,7 +41,7 @@ func TestSandboxRunReleasesEmptyScope(t *testing.T) {
 	t.Cleanup(func() { scopePoll, scopeStartWait = oldPoll, oldStart })
 	var log bytes.Buffer
 	o := Options{Max: "1M", SlotDir: t.TempDir(), Slots: 1, Stderr: &log, Sandbox: sandboxTestCapper{sandbox.Capper{Dir: dir, Exe: exe}}}
-	if rc := Run(o, []string{"ignored"}); rc != 1 {
+	if rc := Run(o, []string{"sandbox-fixture"}); rc != 1 {
 		t.Fatalf("sandboxed empty scope exit %d, want watchdog failure: %s", rc, log.String())
 	}
 	lock, _, _ := acquire(o)

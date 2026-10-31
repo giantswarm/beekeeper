@@ -228,7 +228,7 @@ func TestBrokeredScopeState(t *testing.T) {
 	if _, err := h(context.Background(), 7, sandbox.Request{Unit: "../other"}); err == nil {
 		t.Fatal("arbitrary cgroup accepted")
 	}
-	c.err = fmt.Errorf("unreadable")
+	c.err = fmt.Errorf("scope read failed")
 	if _, err := h(context.Background(), 7, sandbox.Request{Unit: testRunUnit}); err == nil {
 		t.Fatal("read error lost")
 	}

@@ -4,17 +4,18 @@ package proc
 
 import (
 	"bufio"
-	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestStopIdleChecksIdentityAndEvidence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "slot.lock")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	f, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +29,7 @@ func TestStopIdleChecksIdentityAndEvidence(t *testing.T) {
 	}
 	_ = f.Close()
 	t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
-	probe, err := os.OpenFile(path, os.O_RDWR, 0600)
+	probe, err := os.OpenFile(filepath.Clean(path), os.O_RDWR, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}

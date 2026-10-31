@@ -163,10 +163,17 @@ func TestOrphanedScope(t *testing.T) {
 	}
 }
 
+const (
+	legacyHolderMode     = "legacy"
+	startedHolderKey     = "started"
+	startupDeadlineKey   = "startDeadline"
+	scopeReadFailureMode = "scope-read-error"
+)
+
 // Empty holders are different from orphaned scopes: their wrapper still
 // owns the flock but no command runs. Never infer this just from no child.
 func TestWatchRecoversEmptySlotHolders(t *testing.T) {
-	for _, mode := range []string{"deadline", "legacy", "unready", "live", "child", "changed-identity", "once", "changed-record", "unreadable"} {
+	for _, mode := range []string{"deadline", legacyHolderMode, "unready", holderLive, "child", "changed-identity", "once", "changed-record", scopeReadFailureMode} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("MEMCAP_STATE", "")
 			t.Setenv("MEMCAP_SLOTS", "")
@@ -185,20 +192,20 @@ func TestWatchRecoversEmptySlotHolders(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = lock.Unlock() }()
-			rec := map[string]any{"pid": 100, "since": since.UTC().Format(time.RFC3339), "scope": "memcap-100-000001", "started": started, "startDeadline": since}
-			if mode == "legacy" {
-				delete(rec, "scope")
-				delete(rec, "started")
-				delete(rec, "startDeadline")
+			rec := map[string]any{"pid": 100, "since": since.UTC().Format(time.RFC3339), kindScope: "memcap-100-000001", startedHolderKey: started, startupDeadlineKey: since}
+			if mode == legacyHolderMode {
+				delete(rec, kindScope)
+				delete(rec, startedHolderKey)
+				delete(rec, startupDeadlineKey)
 				if err := store.Log(state.Event{At: since.Add(time.Second), Verb: guard.VerbStart, Detail: liveSlotScope + " slot 1 max 1G: test"}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if mode == "unready" {
-				rec["startDeadline"] = now.Add(time.Hour)
+				rec[startupDeadlineKey] = now.Add(time.Hour)
 			}
 			if mode == "changed-identity" {
-				rec["started"] = started.Add(time.Second)
+				rec[startedHolderKey] = started.Add(time.Second)
 			}
 			raw, err := json.Marshal(rec)
 			if err != nil {
@@ -208,12 +215,12 @@ func TestWatchRecoversEmptySlotHolders(t *testing.T) {
 			if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
 				t.Fatal(err)
 			}
-			table := proc.NewTable(&proc.Process{PID: 100, Start: started, Comm: "beekeeper"})
+			table := proc.NewTable(&proc.Process{PID: 100, Start: started, Comm: pluginName})
 			if mode == "child" {
 				table = proc.NewTable(&proc.Process{PID: 100, Start: started}, &proc.Process{PID: 101, PPID: 100})
 			}
 			m := &slotMachine{Machine: plat.Machine, slices: map[string][]string{}, pids: map[string][]int{}}
-			capper := &emptyHolderCapper{live: mode == "live", bad: mode == "unreadable"}
+			capper := &emptyHolderCapper{live: mode == holderLive, bad: mode == scopeReadFailureMode}
 			savedM, savedC, savedStop := plat.Machine, plat.Capper, stopEmptyHolder
 			plat.Machine, plat.Capper = m, capper
 			t.Cleanup(func() { plat.Machine, plat.Capper, stopEmptyHolder = savedM, savedC, savedStop })
@@ -239,7 +246,7 @@ func TestWatchRecoversEmptySlotHolders(t *testing.T) {
 			w.slotsOn = mode != "once"
 			w.slotOrphans(now, table)
 			w.slotOrphans(now.Add(slotOrphanGrace), table)
-			want := mode == "deadline" || mode == "legacy"
+			want := mode == "deadline" || mode == legacyHolderMode
 			if (stops == 1) != want {
 				t.Fatalf("mode %s stops %d; output %s", mode, stops, out.String())
 			}
@@ -261,7 +268,7 @@ type emptyHolderCapper struct {
 
 func (c *emptyHolderCapper) ScopePopulated(string) (bool, error) {
 	if c.bad {
-		return false, fmt.Errorf("unreadable")
+		return false, fmt.Errorf("scope population unavailable")
 	}
 	return c.live, nil
 }
