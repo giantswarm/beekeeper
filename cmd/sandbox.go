@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -273,6 +274,7 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			spool := make(chan error, 1)
 			go func() {
 				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper, a.memcapCPU()), map[string]sandbox.Handler{
+					sandbox.OpScopeState: brokeredScopeState(plat.Capper),
 					sandbox.OpSecret:     a.brokeredVault(keeper, secretCall),
 					sandbox.OpVault:      brokeredVaultState(keeper),
 					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
@@ -549,4 +551,20 @@ func (a *app) sandboxPolicy() sandbox.Policy {
 	slotDir, _ := a.slotView()
 	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: slotDir, Exe: exe, ScanDir: a.scanDir(),
 		RuntimeDir: os.Getenv("XDG_RUNTIME_DIR")})
+}
+
+// brokeredScopeState exposes only population of memcap scopes, never an
+// arbitrary cgroup path supplied by the sandbox.
+func brokeredScopeState(c platform.Capper) sandbox.Handler {
+	return func(_ context.Context, _ int, r sandbox.Request) (sandbox.Reply, error) {
+		if !brokeredUnit.MatchString(r.Unit) {
+			return sandbox.Reply{}, fmt.Errorf("invalid run scope %q", r.Unit)
+		}
+		reader, ok := c.(interface{ ScopePopulated(string) (bool, error) })
+		if !ok {
+			return sandbox.Reply{}, errors.New("scope population unavailable")
+		}
+		live, err := reader.ScopePopulated(r.Unit)
+		return sandbox.Reply{Out: strconv.FormatBool(live)}, err
+	}
 }

@@ -337,6 +337,36 @@ func scopeArgs(name string, c Cap, argv []string) []string {
 	return append(append(args, "--"), argv...)
 }
 
+// ScopePopulated reports whether the scope or a descendant cgroup contains
+// processes. cgroup.events includes descendants, unlike cgroup.procs. A
+// missing scope is empty; other read failures leave the run alone.
+func (systemdCapper) ScopePopulated(name string) (bool, error) {
+	p := machine.FindMemcapScope(name + ".scope")
+	if p == "" {
+		return false, nil
+	}
+	return scopePopulated(p)
+}
+
+func scopePopulated(path string) (bool, error) {
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(path, "cgroup.events")))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		switch line {
+		case "populated 1":
+			return true, nil
+		case "populated 0":
+			return false, nil
+		}
+	}
+	return false, fmt.Errorf("cgroup.events has no populated value")
+}
+
 // Adopt starts the transient scope name around the running process pid
 // (the service manager's StartTransientUnit with PIDs, which systemd-run
 // --scope uses for itself) and waits until the process is in it.

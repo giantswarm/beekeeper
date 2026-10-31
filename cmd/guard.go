@@ -82,6 +82,13 @@ scope notices; run then names the victim in one line starting with
 When the command exits and leaves processes in its scope (a test's
 kube-apiserver), run stops the scope before it releases the slot and names
 them; a scope left that way would keep the slot busy for every other run.
+A launcher whose scope becomes empty is stopped and releases its slot;
+when the scope never starts, a 30s startup grace applies. A memory-short waiter yields its queue
+position only when its turn reaches a free slot. While builds occupy the
+slots, waiters keep FIFO order. The host watch also recovers expired, empty
+slot holders after checking their lifecycle and process identity. The run exits 1
+and reports the empty scope. Queue diagnostics also name an empty holder
+scope. Scope read errors leave the command running.
 Bound the command's parallelism rather than raising --max.
 
 --class names what kind of run it is. A build (the default: a build, test

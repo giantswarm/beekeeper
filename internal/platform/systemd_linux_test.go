@@ -218,3 +218,27 @@ func TestReapStopsWhatTheCommandLeftInItsScope(t *testing.T) {
 		t.Errorf("a second Reap = %v, %v; want nothing", left, err)
 	}
 }
+
+func TestScopePopulated(t *testing.T) {
+	for _, c := range []struct {
+		raw       string
+		live, bad bool
+	}{
+		{"populated 1\nfrozen 0\n", true, false},
+		{"populated 0\nfrozen 0\n", false, false},
+		{"frozen 0\n", false, true},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(dir+"/cgroup.events", []byte(c.raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		live, err := scopePopulated(dir)
+		if live != c.live || (err != nil) != c.bad {
+			t.Errorf("%q: %v %v", c.raw, live, err)
+		}
+	}
+	live, err := scopePopulated(t.TempDir())
+	if live || err != nil {
+		t.Fatalf("missing scope: %v %v", live, err)
+	}
+}

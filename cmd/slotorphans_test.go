@@ -3,10 +3,16 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -155,4 +161,114 @@ func TestOrphanedScope(t *testing.T) {
 			t.Errorf("%s: orphanedScope(%v) = %v, want %v", c.name, c.pids, got, c.want)
 		}
 	}
+}
+
+const (
+	legacyHolderMode     = "legacy"
+	startedHolderKey     = "started"
+	startupDeadlineKey   = "startDeadline"
+	scopeReadFailureMode = "scope-read-error"
+)
+
+// Empty holders are different from orphaned scopes: their wrapper still
+// owns the flock but no command runs. Never infer this just from no child.
+func TestWatchRecoversEmptySlotHolders(t *testing.T) {
+	for _, mode := range []string{"deadline", legacyHolderMode, "unready", holderLive, "child", "changed-identity", "once", "changed-record", scopeReadFailureMode} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("MEMCAP_STATE", "")
+			t.Setenv("MEMCAP_SLOTS", "")
+			dir := t.TempDir()
+			store, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := &config.Config{StateDir: t.TempDir(), Memcap: config.Memcap{SlotDir: dir, Slots: 1}}
+			now := time.Now()
+			started := now.Add(-2 * time.Hour)
+			since := now.Add(-time.Hour)
+			lock := flock.New(filepath.Join(dir, "1.lock"))
+			ok, err := lock.TryLock()
+			if err != nil || !ok {
+				t.Fatal(err)
+			}
+			defer func() { _ = lock.Unlock() }()
+			rec := map[string]any{"pid": 100, "since": since.UTC().Format(time.RFC3339), kindScope: "memcap-100-000001", startedHolderKey: started, startupDeadlineKey: since}
+			if mode == legacyHolderMode {
+				delete(rec, kindScope)
+				delete(rec, startedHolderKey)
+				delete(rec, startupDeadlineKey)
+				if err := store.Log(state.Event{At: since.Add(time.Second), Verb: guard.VerbStart, Detail: liveSlotScope + " slot 1 max 1G: test"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "unready" {
+				rec[startupDeadlineKey] = now.Add(time.Hour)
+			}
+			if mode == "changed-identity" {
+				rec[startedHolderKey] = started.Add(time.Second)
+			}
+			raw, err := json.Marshal(rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "1.holder")
+			if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+				t.Fatal(err)
+			}
+			table := proc.NewTable(&proc.Process{PID: 100, Start: started, Comm: pluginName})
+			if mode == "child" {
+				table = proc.NewTable(&proc.Process{PID: 100, Start: started}, &proc.Process{PID: 101, PPID: 100})
+			}
+			m := &slotMachine{Machine: plat.Machine, slices: map[string][]string{}, pids: map[string][]int{}}
+			capper := &emptyHolderCapper{live: mode == holderLive, bad: mode == scopeReadFailureMode}
+			savedM, savedC, savedStop := plat.Machine, plat.Capper, stopEmptyHolder
+			plat.Machine, plat.Capper = m, capper
+			t.Cleanup(func() { plat.Machine, plat.Capper, stopEmptyHolder = savedM, savedC, savedStop })
+			stops := 0
+			stopEmptyHolder = func(pid int, at time.Time, empty func() bool) error {
+				if pid != 100 || !at.Equal(started) {
+					t.Fatal("wrong process identity")
+				}
+				if mode == "changed-record" {
+					if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if !empty() {
+					return fmt.Errorf("evidence changed")
+				}
+				stops++
+				return lock.Unlock()
+			}
+			out := &bytes.Buffer{}
+			a := &app{cfg: cfg, store: store, now: now, out: out}
+			w := a.newWatcher(false, false)
+			w.slotsOn = mode != "once"
+			w.slotOrphans(now, table)
+			w.slotOrphans(now.Add(slotOrphanGrace), table)
+			want := mode == "deadline" || mode == legacyHolderMode
+			if (stops == 1) != want {
+				t.Fatalf("mode %s stops %d; output %s", mode, stops, out.String())
+			}
+			slots := machine.ReadSlots(dir, 1)
+			if slots[0].Free != want {
+				t.Fatalf("slot free %v want %v", slots[0].Free, want)
+			}
+			if want && !strings.Contains(out.String(), "STOPPED empty slot holder") {
+				t.Fatal(out.String())
+			}
+		})
+	}
+}
+
+type emptyHolderCapper struct {
+	platform.Capper
+	live, bad bool
+}
+
+func (c *emptyHolderCapper) ScopePopulated(string) (bool, error) {
+	if c.bad {
+		return false, fmt.Errorf("scope population unavailable")
+	}
+	return c.live, nil
 }
