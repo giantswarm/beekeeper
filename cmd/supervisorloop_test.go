@@ -14,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -121,6 +122,10 @@ func newLoopRig(t *testing.T) *loopRig {
 	cfg.Supervisor.LoopInterval.Duration = time.Second
 	cfg.Supervisor.ReleaseEvery.Duration = time.Hour
 	cfg.Supervisor.NoteDue.Duration = 24 * time.Hour
+	oldAlerts, oldResume := readLoopAlerts, loopResumable
+	t.Cleanup(func() { readLoopAlerts, loopResumable = oldAlerts, oldResume })
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
+	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
 	r.answer = func([]string) (string, int) { return "", 0 }

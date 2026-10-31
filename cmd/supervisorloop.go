@@ -199,6 +199,14 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  alerts    read installations every alerts.every, sharing the watch's
+            baseline lock; firing unowned alerts at alerts.pageSeverity
+            become notes for guide.person once per firing. A worker parked
+            on alert:<name> (alertname or installation/alertname) is woken;
+            an unresumable session is retired and its original task staffed
+            again, with a durable replacement intent across restarts
+  budget    every poll runs budget --gate; a refusal or unreadable budget
+            holds new worker/reviewer starts and event wakes and says so
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
   review    an agent parked on its pull request (agents park --on
@@ -279,7 +287,9 @@ type supervisorLoop struct {
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
-	releaseAt time.Time
+	releaseAt  time.Time
+	alertAt    time.Time
+	startsHeld bool
 	// stages are the release stages finished, by key.
 	stages map[string]bool
 	// timerActs are timer side effects; shutdown and re-exec await them.
@@ -366,6 +376,20 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
 		}
+	}
+	// Probe on every poll, including otherwise idle passes. A failed probe
+	// holds starts too: an unknown budget is no permission to spend it.
+	out, code, budgetErr := beekeeperRun(ctx, l.as("budget", "--gate")...)
+	l.startsHeld = budgetErr != nil || code != 0
+	if l.startsHeld {
+		l.sayOnce("budget", "SUPERVISOR STARTS HELD: GitHub budget gate: %s (%v)", oneLine(out), budgetErr)
+	} else {
+		delete(l.said, "budget")
+	}
+	if err := l.watchAlerts(ctx); err != nil {
+		l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
+	} else {
+		delete(l.said, "alerts")
 	}
 	st, err := a.store.Read()
 	if err != nil {
@@ -705,8 +729,8 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Worker string
-	Number, Round           int
+	URL, Repo, Head, Worker, Task string
+	Number, Round                 int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
@@ -747,6 +771,9 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	r, _ := parseRef(act.Ref)
 	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent})
 	if err != nil {
@@ -800,6 +827,9 @@ func selfHostedModel(k config.Capacity, model string) bool {
 // startNext starts the next ranked item with the worker brief, when
 // capacity has room.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	k := l.a.cfg.Supervisor
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
