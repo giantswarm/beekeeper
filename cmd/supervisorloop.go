@@ -253,13 +253,23 @@ its key first in the detail):
             supervisor.postInstall once, then self-update --check must
             find it the latest. A loop whose binary was replaced
             re-executes the installed one at its next pass
-  classify  a report or park the rules cannot place (agents.report without
-            agents.done, agents.problem, a park on nothing): the
+  classify  a report or park the rules cannot place: agents.report without
+            agents.done; agents.problem neither logged with an agents.done
+            nor of a reviewer matching its round's changes request the loop
+            forwarded; a park on nothing of an agent still parked
+            on nothing, with no timer that wakes it (timer add --wake), no
+            note its wait names (#12) and no open note of its own. The
             supervisor.classifier command, given the event as JSON on
             stdin, answers {"class":"needs-person|blocked|failed|question",
             "confidence":0.9}; the event goes to the guide (note add for
             guide.person) with its class, or unclassified below
             supervisor.classifierConfidence (0.8) or without a classifier
+  file      the problems a done report names that cite no issue URL
+            (https://github.com/<owner>/<repo>/issues/<n>): one note for
+            guide.person, into the guide's queue, to file them in their
+            owning repository, before the done; one citing its issue is
+            filed and rides with the done's log line, as does a
+            reviewer's that matches the changes request the loop forwarded
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -389,6 +399,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
 		}
+		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
 	}
 	for _, n := range st.Notes {
@@ -556,7 +567,7 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
-	case superloop.KindEscalate, superloop.KindClassify:
+	case superloop.KindEscalate, superloop.KindClassify, superloop.KindFile:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	}
 	if !done {
@@ -708,6 +719,8 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.install(ctx, act)
 	case superloop.KindClassify:
 		return l.classify(ctx, st, act)
+	case superloop.KindFile:
+		return l.toFile(ctx, st, act)
 	}
 	return "", fmt.Errorf("no transition for %s", act.Kind)
 }
@@ -972,6 +985,31 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 		return "", err
 	}
 	return fmt.Sprintf("%s to the guide (%s) on %s", e.Verb, label, ref), nil
+}
+
+// toFile puts the problems a done report found and filed nowhere in the
+// guide's queue: the supervisor files a worker's problems found, and no
+// supervisor session reads the watch's PROBLEM FOUND lines beside the loop.
+// The agent's done waits for it.
+func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	e := *act.Event
+	found := strings.Split(act.Message, "\n")
+	ref := agentRef(st, e.Agent)
+	if ref == "" {
+		if m := refURL.FindString(e.Detail + " " + act.Message); m != "" {
+			ref = m
+		}
+	}
+	if ref == "" {
+		return "", fmt.Errorf("%s's done report names no issue or pull request to file the guide's note on", e.Agent)
+	}
+	q := fmt.Sprintf("File in its owning repository what %s found (%d problem(s), no decision)", e.Agent, len(found))
+	if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s's done report at %s names, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), strings.Join(found, "; ")),
+		"the supervisor files a worker's problems found (worker-rules), and the report names no issue for these",
+		"the guide files each in its owning repository and closes this note"); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file, on %s", len(found), e.Agent, ref), nil
 }
 
 // agentRef is the issue or pull request the agent works: what it is

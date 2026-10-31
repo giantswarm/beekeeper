@@ -15,6 +15,8 @@ const (
 	head3   = "3333333333333333333333333333333333333333"
 	worker  = "worker one"
 	release = "v1.2.0"
+	// guidePerson is the guide's person.
+	guidePerson = "pat"
 )
 
 var (
@@ -394,7 +396,8 @@ func TestWhatTheRulesCannotPlaceIsClassified(t *testing.T) {
 		"a problem":             {At: t0, Verb: VerbProblem, Agent: worker, Detail: worker + ": CI is broken"},
 		"a park on nothing":     {At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: the person's call"},
 	} {
-		a := only(t, Plan(Input{Events: []Event{e}}), KindClassify)
+		ws := []Worker{{Name: worker, ParkedAt: t0}}
+		a := only(t, Plan(Input{Workers: ws, Events: []Event{e}}), KindClassify)
 		if a.Event == nil || a.Event.Detail != e.Detail {
 			t.Errorf("%s: classify = %+v", name, a)
 		}
@@ -411,7 +414,7 @@ func TestWhatTheRulesCannotPlaceIsClassified(t *testing.T) {
 
 func TestAWorkersQuestionForSomeoneElseGoesToTheGuide(t *testing.T) {
 	// Asked whenever: the open note decides, no event needed.
-	in := Input{Person: "pat", Workers: []Worker{{Name: worker}}, Notes: []Note{{ID: 4, For: "supervisor", By: worker, Text: "which lab?"}}}
+	in := Input{Person: guidePerson, Workers: []Worker{{Name: worker}}, Notes: []Note{{ID: 4, For: "supervisor", By: worker, Text: "which lab?"}}}
 	a := only(t, Plan(in), KindQuestion)
 	if a.Note != 4 {
 		t.Errorf("question = %+v", a)
@@ -475,6 +478,96 @@ func TestEventAgent(t *testing.T) {
 			t.Errorf("EventAgent(%s, %q) = %q, want %q", c.verb, c.detail, got, c.want)
 		}
 	}
+}
+
+// A problem of a done report reaches whoever files it: one naming its
+// issue is filed and rides with the done; one filed nowhere goes to the
+// guide's queue to file first, and the done follows.
+func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
+	done := Event{At: t0, Verb: VerbDone, Agent: worker, Detail: worker + " done: fix it"}
+	filed := Event{At: t0.Add(20 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": CI flakes in o/r, filed as https://github.com/o/r/issues/9"}
+	a := only(t, Plan(Input{Events: []Event{done, filed}}), KindDone)
+	if !strings.Contains(a.Message, "1 problem(s) filed") || !strings.Contains(a.Message, "issues/9") {
+		t.Errorf("done message = %q", a.Message)
+	}
+	unfiled := Event{At: t0.Add(30 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab's gate refuses a green head, o/r"}
+	in := Input{Events: []Event{done, filed, unfiled}}
+	f := only(t, Plan(in), KindFile)
+	if f.Message != "the lab's gate refuses a green head, o/r" || f.Event == nil || f.Event.Verb != VerbDone {
+		t.Errorf("file = %+v", f)
+	}
+	in.Taken = taken(t, t1, f)
+	a = only(t, Plan(in), KindDone)
+	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's queue") {
+		t.Errorf("done message after the file = %q", a.Message)
+	}
+	late := Event{At: t0.Add(time.Hour), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab is gone"}
+	if acts := Plan(Input{Events: []Event{done, late}}); len(acts) != 2 || acts[1].Kind != KindClassify {
+		t.Errorf("a problem logged later = %+v", acts)
+	}
+	if !Filed("see https://github.com/o/r/issues/9") || Filed("see https://github.com/o/r/pull/9") || Filed("o/r#9") {
+		t.Error("Filed takes only an issue's URL")
+	}
+}
+
+// A reviewer's problem that matches the changes request of its round the
+// loop forwards is the forward's, in the pass that forwards it and after;
+// one that does not match is the rules' to place.
+func TestAReviewersForwardedFindingIsNoNote(t *testing.T) {
+	reviewer := ReviewerName(pr, 1)
+	rv := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	ask := Review{ID: "r1", Head: head1, Verdict: ChangesRequested, Body: "1. The nil check of the parser is missing in Parse.", At: t1}
+	problem := Event{At: t1, Verb: VerbProblem, Agent: reviewer, Detail: reviewer + ": the parser's nil check is missing in Parse"}
+	other := Event{At: t1, Verb: VerbProblem, Agent: reviewer, Detail: reviewer + ": the build slot queue timed out twice locally"}
+	in := Input{Workers: parked(t0), Pulls: pull(head1, true, ask), Taken: rv, Events: []Event{problem}}
+	only(t, Plan(in), KindForward)
+	in.Taken = append(rv, taken(t, t1.Add(time.Minute), Action{Key: forwardKey(pr, "r1"), Kind: KindForward, Ref: pr, Agent: worker})...)
+	for _, a := range Plan(in) {
+		if a.Kind == KindClassify {
+			t.Errorf("a forwarded finding is classified: %+v", a)
+		}
+	}
+	in.Events = []Event{other}
+	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindClassify }) {
+		t.Error("a reviewer's problem the review does not name is dropped")
+	}
+	// With its done, the matching one is the forward's, the other is to
+	// file.
+	done := Event{At: t1, Verb: VerbDone, Agent: reviewer, Detail: reviewer + " done: review"}
+	in.Events = []Event{done, problem}
+	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindDone && a.Agent == reviewer }) {
+		t.Errorf("a reviewer's done with a forwarded finding = %+v", Plan(in))
+	}
+	in.Events = []Event{done, problem, other}
+	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindFile && a.Message == problemText(other) }) {
+		t.Errorf("a reviewer's done with its own problem = %+v", Plan(in))
+	}
+	// Without a forward (no changes request) the reviewer's problem is
+	// still the rules' to place.
+	in = Input{Workers: parked(t0), Pulls: pull(head1, true), Taken: rv, Events: []Event{problem}}
+	only(t, Plan(in), KindClassify)
+}
+
+// A park on nothing that waits on a timer or a note is a park.
+func TestAParkOnATimerOrANoteIsNoDecision(t *testing.T) {
+	park := Event{At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: the rollout's timer"}
+	for name, in := range map[string]Input{
+		"a timer wakes it":     {Workers: []Worker{{Name: worker, ParkedAt: t0, Waking: true}}},
+		"its wait names #12":   {Workers: []Worker{{Name: worker, ParkedAt: t0}}, Events: []Event{{At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: the answer of #12"}}},
+		"it asked a note":      {Workers: []Worker{{Name: worker, ParkedAt: t0}}, Notes: []Note{{ID: 3, For: guidePerson, By: worker}}, Person: guidePerson},
+		"it is parked no more": {Workers: []Worker{{Name: worker}}},
+		"it left the roster":   {},
+	} {
+		if in.Events == nil {
+			in.Events = []Event{park}
+		}
+		if got := Plan(in); len(got) != 0 {
+			t.Errorf("%s: %+v", name, got)
+		}
+	}
+	// A wait on owner/repo#n names no note.
+	in := Input{Workers: []Worker{{Name: worker, ParkedAt: t0}}, Events: []Event{{At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: the person's call on o/r#12"}}}
+	only(t, Plan(in), KindClassify)
 }
 
 // escalated is the pull request of TestOpenFindingsPastTheLastRoundGoToTheGuide
