@@ -554,12 +554,7 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 const (
 	labIssue7      = "teemow/lab#7"
 	foreignRefusal = "teemow/lab#7 is not on the board o/7 and is never added to it: its repository is outside o; an issue of teemow goes on a project of teemow's own"
-	homeRefusal    = foreignRefusal + ", and it is on no project of teemow: add it to one (`gh project item-add <number> --owner teemow --url https://github.com/teemow/lab/issues/7`), then `beekeeper board move teemow/lab#7 <status>` moves it there"
 )
-
-// homeInProgress is the In Progress option of a user project, without
-// the board's emoji.
-const homeInProgress = "In Progress"
 
 // homeItem is an item of the issue on project number of owner, whose
 // Status field FU has the options u1 Backlog and u2 In Progress.
@@ -572,89 +567,45 @@ func homeItem(id, project, owner string, number int, status string) string {
 "status":{"id":"FU","options":[{"id":"u1","name":"Backlog"},{"id":"u2","name":"In Progress"}]}}}`, id, project, st, number, owner)
 }
 
-func TestMoveMovesAnIssueOnItsOwnersProject(t *testing.T) {
-	// The issue of a personal account's repository is on its owner's user
-	// project, not on the board: it moves there by that project's values,
-	// no Team set, nothing added to the board.
-	items := func(nodes ...string) string {
-		return `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + strings.Join(nodes, ",") + `]}}}}}`
-	}
-	f := &fakeGH{t: t, item: items(homeItem("U1", "Q", "TeeMow", 1, "Backlog"))}
-	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
-	mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
-	if err != nil || *mv != (Moved{Ref: labIssue7, From: "Backlog", To: homeInProgress, Board: "teemow/1"}) || !slices.Equal(f.mutations, []string{"U1=u2"}) {
-		t.Fatalf("Move on the owner's project = %+v, %v; mutations %v", mv, err, f.mutations)
-	}
-	if !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
-		t.Errorf("acting on %q", f.repos)
-	}
-	// An item in the status already is not written; an unknown status is
-	// refused with the project's values.
-	f.mutations = nil
-	f.item = items(homeItem("U1", "Q", "teemow", 1, homeInProgress))
-	if mv, err := c.Move(context.Background(), labIssue7, "in progress"); err != nil || mv.From != mv.To || len(f.mutations) != 0 {
-		t.Errorf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
-	}
-	var r *Refusal
-	if _, err := c.Move(context.Background(), labIssue7, "done"); !errors.As(err, &r) || !strings.Contains(r.Reason, homeInProgress) {
-		t.Errorf("Move to an unknown status = %v", err)
-	}
-	// A project of another owner is none of the issue's own: refused with
-	// the recipe, nothing written.
-	f.mutations = nil
-	f.item = items(homeItem("U1", "Q", "someone", 1, "Backlog"))
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != homeRefusal || len(f.mutations) != 0 {
-		t.Errorf("Move on another owner's project = %v; mutations %v", err, f.mutations)
-	}
-	// Two projects of the owner: ambiguous, refused with the item-edit recipe.
-	f.item = items(homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U2", "R", "teemow", 2, ""))
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) ||
-		!strings.Contains(r.Reason, "teemow/1 (item U1), teemow/2 (item U2)") || !strings.Contains(r.Reason, "gh project item-edit --id") || len(f.mutations) != 0 {
-		t.Errorf("Move on two projects = %v; mutations %v", err, f.mutations)
-	}
-	// On the board as well, the board's item is the one that moves.
-	f.item = items(homeItem("U1", "Q", "teemow", 1, "Backlog"), `{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}`)
-	if mv, err := c.Move(context.Background(), labIssue7, "progress"); err != nil || mv.Board != "" || !slices.Equal(f.mutations, []string{"I3=s3"}) {
-		t.Errorf("Move of an item on the board = %+v, %v; mutations %v", mv, err, f.mutations)
+func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
+	for _, owner := range []string{"o", "personal"} {
+		for _, nodes := range []string{"", homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U1", "Q", "other", 1, "Backlog") + "," + homeItem("U2", "R", "teemow", 2, "Backlog")} {
+			t.Run(owner+nodes, func(t *testing.T) {
+				f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + nodes + `]}}}}}`,
+					added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
+				c := &Client{GH: f.run, Board: config.Board{Owner: owner, Project: 7, Team: "X"}}
+				mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
+				if err != nil || *mv != (Moved{Ref: labIssue7, To: inProgress, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{"add I7 to P", "I3=t1", "I3=s3"}) {
+					t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
+				}
+				if readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
+					t.Errorf("queries %q acting on %q", f.queries, f.repos)
+				}
+			})
+		}
 	}
 }
 
-func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
-	// The issue's projectItems name no item of the board: it is refused
-	// before anything is written, nothing added to the board.
+func TestMoveCrossOwnerUsesGitHubPermissions(t *testing.T) {
 	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`,
-		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
+		added: `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Resource not accessible by integration"}]}`}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
-	var r *Refusal
-	for _, ref := range []string{"https://github.com/teemow/lab/issues/7", labIssue7} {
-		if _, err := c.Move(context.Background(), ref, "backlog"); !errors.As(err, &r) || !strings.Contains(r.Reason, "is never added to it") || len(f.mutations) != 0 {
-			t.Errorf("Move(%s) = %v; mutations %v", ref, err, f.mutations)
-		}
+	var refused *Refusal
+	if _, err := c.Move(context.Background(), labIssue7, "unknown"); !errors.As(err, &refused) || len(f.mutations) != 0 {
+		t.Fatalf("unknown status: %v; mutations %v", err, f.mutations)
 	}
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != homeRefusal || len(f.mutations) != 0 {
-		t.Errorf("Move = %v; mutations %v", err, f.mutations)
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{"add I7 to P"}) {
+		t.Fatalf("permission denied: %v; mutations %v", err, f.mutations)
 	}
-	// Every call acts on the issue's repository, so the gh link picks the
-	// login that reaches it; the board's items are never read.
-	if readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
-		t.Errorf("queries %q acting on %q", f.queries, f.repos)
-	}
-	// An item its projectItems name is the issue's own: it moves, nothing added.
+	f.mutations = nil
 	f.item = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}]}}}}}`
 	if mv, err := c.Move(context.Background(), labIssue7, "progress"); err != nil || *mv != (Moved{Ref: labIssue7, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I3=s3"}) {
-		t.Errorf("Move of an item on the board = %+v, %v; mutations %v", mv, err, f.mutations)
+		t.Fatalf("existing item: %+v, %v; mutations %v", mv, err, f.mutations)
 	}
-	// The board's owner is matched without case: its issue is added.
 	f.mutations = nil
-	f.item = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`
-	if mv, err := c.Move(context.Background(), "O/r#7", "backlog"); err != nil || !mv.Added || !slices.Equal(f.mutations, []string{"add I7 to P", "I3=t1", "I3=s1"}) {
-		t.Errorf("Move of the owner's issue = %+v, %v; mutations %v", mv, err, f.mutations)
-	}
-	// Only an issue GitHub does not resolve is no issue, with its reason.
-	f.mutations = nil
-	f.item = `{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository with the name 'teemow/lab'."}]}`
-	if _, err := c.Move(context.Background(), labIssue7, "backlog"); !errors.As(err, &r) || r.Reason != "teemow/lab#7 is no issue: Could not resolve to a Repository with the name 'teemow/lab'." || len(f.mutations) != 0 {
-		t.Errorf("Move of no issue = %v; mutations %v", err, f.mutations)
+	f.item = `{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository"}]}`
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &refused) || !strings.Contains(err.Error(), "is no issue: Could not resolve") || len(f.mutations) != 0 {
+		t.Fatalf("unresolved issue: %v; mutations %v", err, f.mutations)
 	}
 }
 
