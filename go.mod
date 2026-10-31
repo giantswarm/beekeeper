@@ -14,7 +14,7 @@ require (
 	github.com/giantswarm/go-selfupdate v1.7.1
 	github.com/giantswarm/mcp-toolkit v0.4.8
 	github.com/giantswarm/selfupdate-cosign v0.3.18
-	github.com/go-jose/go-jose/v4 v4.1.6
+	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/go-logr/logr v1.4.4
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/gofrs/flock v0.13.1
