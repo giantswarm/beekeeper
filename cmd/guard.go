@@ -140,7 +140,12 @@ default half the cores) bounds the cores they use together, its CPUWeight
 (memcap.cpuWeight, default 50 against the desktop's slices' 100) their
 share while the desktop wants the cores too; run sets both at every slot it
 takes, the slots share them by equal weight, and the command starts at nice
-10. snapshot and free show the slice's budget and use.
+10. The command's own parallelism follows its slot's share of the quota:
+GOMAXPROCS and CARGO_BUILD_JOBS are the quota's whole cores over the slots,
+at least one, unless the caller sets them; no quota sets neither. A linter
+or a compile that starts a thread per core would otherwise keep every
+core's run queue full and lift the load that gates the starts. snapshot and
+free show the slice's budget and use.
 
 Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCAP_WAIT (8m, 60m with MEMCAP_BACKGROUND=1),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
