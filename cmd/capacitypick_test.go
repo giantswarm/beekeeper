@@ -233,7 +233,10 @@ func TestCapacityReviewIsDecidedLikeAWorkersStart(t *testing.T) {
 func TestCapacityPickReviewOfSelfHostedWorkTakesNoSelfHostedProvider(t *testing.T) {
 	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
 `+subscriptionChoices)
+	r.want("claude " + pickOpus)
+	r.claude[1], r.codex[1] = 60, 60
 	r.want("omp " + pickQwen)
+	r.claude[1], r.codex[1] = 40, 40
 	r.want("claude "+pickOpus, ofSelfHostedArg)
 	r.claude[1], r.codex[1] = 60, 60
 	r.want(noPick, ofSelfHostedArg)
@@ -331,5 +334,59 @@ func TestLoopReviewOfASelfHostedWorkerAsksForTheRestriction(t *testing.T) {
 	start := r.called(agentsName, agentStartName)
 	if !slices.Contains(start, ofSelfHostedArg) || slices.Contains(start, "--exclude") {
 		t.Errorf("the reviewer start = %v", start)
+	}
+}
+
+func TestCapacityPickFurthestBehindPace(t *testing.T) {
+	r := newPickRig(t, subscriptionChoices)
+	r.codex[1] = 20
+	r.want("codex " + pickGPT)
+	var p struct {
+		Capacity struct {
+			Choice struct {
+				Candidates []struct{ BehindPace *float64 }
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []float64{10, 30} {
+		got := p.Capacity.Choice.Candidates[i].BehindPace
+		if got == nil || *got != want {
+			t.Errorf("candidate %d behind pace = %v, want %v", i, got, want)
+		}
+	}
+}
+
+func TestCapacityPickPaceTieKeepsConfiguredOrder(t *testing.T) {
+	r := newPickRig(t, subscriptionChoices)
+	r.codex[1] = 20
+	r.want("codex " + pickGPT)
+	r.claude[1] = 20
+	r.want("claude " + pickOpus)
+	r.choices = `    - {harness: codex, model: gpt-x}
+    - {harness: claude, model: opus-x}
+`
+	r.configure("")
+	r.want("codex " + pickGPT)
+}
+
+func TestCapacityPickUsesChoicesBucketPace(t *testing.T) {
+	pace := 50.0
+	k := config.Capacity{Providers: map[string]config.Provider{claudeComm: {}, codex.Harness: {}}, Choices: []config.Choice{
+		{Harness: claudeComm, Model: pickOpus},
+		{Harness: codex.Harness, Model: pickGPT, Bucket: "model"},
+	}}
+	providers := map[string]*providerView{
+		claudeComm: {Room: 1, SevenDay: &usageWindow{UsedPercent: 40, Pace: &pace}},
+		codex.Harness: {Room: 1, SevenDay: &usageWindow{UsedPercent: 49, Pace: &pace}, Buckets: map[string]*bucketView{
+			"model":         {Room: 1, SevenDay: &usageWindow{UsedPercent: 20, Pace: &pace}},
+			"unused-bucket": {Room: 1, SevenDay: &usageWindow{UsedPercent: 50, Pace: &pace}},
+		}},
+	}
+	got := evaluateChoices(k, providers, nil, "", nil, forWorker, time.Now())
+	if got.Provider != codex.Harness {
+		t.Fatalf("bucket pick = %+v; candidates = %+v", got, got.Candidates)
 	}
 }

@@ -1015,7 +1015,9 @@ type Capacity struct {
 	providerOrder []string
 	// Choices is the ordered list of (harness, model) pairs that
 	// `agents start --harness auto` and `beekeeper capacity` evaluate:
-	// a start takes the first non-excluded choice whose provider has room,
+	// a start takes the eligible subscription furthest behind weekly pace,
+	// with order breaking ties and self-hosted choices as fallbacks. Each
+	// provider must have room,
 	// its 5-hour window below its threshold and its 7-day use within the
 	// weekly cap and not ahead of the even pace.
 	Choices []Choice `yaml:"choices"`
