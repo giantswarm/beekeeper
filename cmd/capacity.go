@@ -213,12 +213,13 @@ func providerVerdict(room int, blocks []string) string {
 
 // choiceCandidate is one evaluated entry of capacity.choices.
 type choiceCandidate struct {
-	Harness  string `json:"harness"`
-	Model    string `json:"model"`
-	Provider string `json:"provider"`
-	Bucket   string `json:"bucket,omitempty"`
-	OK       bool   `json:"ok"`
-	Reason   string `json:"reason,omitempty"`
+	Harness    string   `json:"harness"`
+	Model      string   `json:"model"`
+	Provider   string   `json:"provider"`
+	Bucket     string   `json:"bucket,omitempty"`
+	OK         bool     `json:"ok"`
+	Reason     string   `json:"reason,omitempty"`
+	BehindPace *float64 `json:"behindPace,omitempty"`
 }
 
 // choiceView is the result of evaluating capacity.choices for a start.
@@ -1278,8 +1279,9 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	return false
 }
 
-// evaluateChoices takes the first choice every gate lets through, the same
-// gates for every kind of start: no review skips the pace or a weekly cap.
+// evaluateChoices ranks eligible subscriptions by distance behind weekly pace.
+// Configured order breaks ties; self-hosted choices are fallbacks. The same
+// gates apply to every kind of start.
 func evaluateChoices(k config.Capacity, providers map[string]*providerView, machineBlocks []string, stopped string, exclude []string, kind startFor, now time.Time) *choiceView {
 	normEx := normalizeExcludes(exclude)
 	cv := &choiceView{
@@ -1288,6 +1290,8 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		Exclude:            normEx,
 	}
 	var reasons []string
+	bestSubscription := false
+	bestBehind := math.Inf(-1)
 
 	for _, ch := range k.Choices {
 		provName := ch.EffectiveProvider()
@@ -1306,7 +1310,20 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		reason := evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, now)
 		if reason == "" {
 			cand.OK = true
-			if cv.Harness == "" {
+			subscription := !pCfg.SelfHosted()
+			behind := 0.0
+			if subscription {
+				sd := pv.SevenDay
+				if len(pv.Buckets) > 0 {
+					sd = pv.findBucket(bucketName).SevenDay
+				}
+				if sd != nil && sd.Pace != nil {
+					behind = *sd.Pace - sd.UsedPercent
+					cand.BehindPace = &behind
+				}
+			}
+			if cv.Harness == "" || subscription && (!bestSubscription || behind > bestBehind) {
+				bestSubscription, bestBehind = subscription, behind
 				cv.Harness = ch.Harness
 				cv.Model = ch.Model
 				cv.Provider = provName
@@ -1591,8 +1608,9 @@ configured, beekeeper reads each provider's usage windows (such as Claude's
 JSON windows and agy -p /usage's model buckets), counts busy agents against
 the provider and bucket they run on, caps the subscription providers' total by
 the machine guards and capacity.ceiling, and prints each provider's windows and
-verdict plus the first non-excluded choice (--exclude) in capacity.choices whose
-provider has room, its 5-hour window below its threshold and its 7-day use
+verdict plus the eligible choice furthest behind its even 7-day pace, breaking
+ties by capacity.choices order, with self-hosted choices as fallbacks. Each
+provider must have room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and at or under the even pace of its 7-day window.
 Every start is decided alike: --review marks a review start, which skips no
 gate (capacity.reviewSkipPace, a choice's skipPace and a positive paceMargin
@@ -1776,15 +1794,18 @@ func (a *app) capacityPickCmd() *cobra.Command {
 		Short: "The harness and model the next start takes, or none",
 		Long: `Print the one start capacity's decision allows now, as "<harness> <model>",
 or "none". The decision is the one agents start without --harness, the
-supervisor loop's reviewers and its next starts take: the first entry of
-capacity.choices whose provider is configured and has a free slot under its
-running-session ceiling, whose 5-hour and 7-day windows are under their stop
-percent, whose 7-day use is not ahead of the even pace of its window, with the
+supervisor loop's reviewers and its next starts take: the eligible subscription
+furthest behind its even 7-day pace, with configured order breaking ties and
+self-hosted choices used when no subscription is eligible. Each eligible choice
+has a configured provider and a free slot under its running-session ceiling,
+5-hour and 7-day windows under their stop percent, and 7-day use not ahead of
+the even pace of its window, with the
 machine's headroom as a hard gate and capacity.ceiling bounding the
 subscription providers together. A review is decided exactly like a worker
 start. --review-of-self-hosted decides the reviewer of a pull request a
 self-hosted model's worker wrote: no choice on a self-hosted provider. --json
-prints the pick with every choice's reason, each provider's windows and
+prints the pick with every choice's reason and eligible subscription's distance
+behind pace, each provider's windows and
 verdict, and the headroom. Exit 0 either way; reads only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
