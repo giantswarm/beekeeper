@@ -43,6 +43,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return usageErr("--dir %s: not a directory", dir)
 	}
+	sp.brief = projectPrompt(dir, sp.brief)
 	bin, err := exec.LookPath(omp.Comm)
 	if err != nil {
 		return err

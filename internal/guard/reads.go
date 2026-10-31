@@ -248,6 +248,16 @@ func (h Hook) repoReads(ev event) string {
 // repo is a RepoRoot, its symlinks resolved.
 func MandatoryReads(repo string, budget int) string {
 	r := reader{repo: repo, seen: map[string]bool{}}
+	r.gather(repo)
+	if len(r.files) == 0 {
+		return ""
+	}
+	return r.render(budget)
+}
+
+// gather shares the safe instruction and import discovery between a first
+// write in another repository and a non-Claude worker's first prompt.
+func (r *reader) gather(repo string) {
 	for _, name := range []string{claudeMD, "AGENTS.md", filepath.Join(".claude", claudeMD)} {
 		r.add(filepath.Join(repo, name), importDepth)
 	}
@@ -259,17 +269,14 @@ func MandatoryReads(repo string, budget int) string {
 		return nil
 	})
 	if s := settingsDigest(r.safe(filepath.Join(repo, ".claude", "settings.json"))); s != "" {
-		r.files = append(r.files, read{rel: filepath.Join(".claude", "settings.json"), note: " (hooks and permissions; they do not run in your session)", body: s})
+		rel, _ := filepath.Rel(r.repo, filepath.Join(repo, ".claude", "settings.json"))
+		r.files = append(r.files, read{rel: rel, note: " (hooks and permissions; they do not run in your session)", body: s})
 	}
 	for _, f := range slices.Clone(r.files) {
 		for _, p := range f.mandatory {
 			r.add(p, 0)
 		}
 	}
-	if len(r.files) == 0 {
-		return ""
-	}
-	return r.render(budget)
 }
 
 type read struct {
@@ -393,9 +400,14 @@ const leftRoom = 500
 // render lays the files out within budget bytes: a file that does not fit is
 // cut with a note, and the ones after it are named for the agent to read.
 func (r *reader) render(budget int) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "beekeeper: your first change in the repository %s this session. Its instructions follow; they apply to "+
+	intro := fmt.Sprintf("beekeeper: your first change in the repository %s this session. Its instructions follow; they apply to "+
 		"your work in it, beside your own project's. Read the files they name before you go on.\n", r.repo)
+	return r.renderWithIntro(budget, intro)
+}
+
+func (r *reader) renderWithIntro(budget int, intro string) string {
+	var b strings.Builder
+	b.WriteString(intro)
 	var left []string
 	for _, f := range r.files {
 		head := "\n=== " + f.rel + f.note + " ===\n"
@@ -414,7 +426,7 @@ func (r *reader) render(budget int) string {
 	if len(left) > 0 {
 		b.WriteString(cutAt("\nLeft out for size, read them yourself: "+strings.Join(left, ", "), budget-b.Len()-1) + "\n")
 	}
-	return b.String()
+	return cutAt(b.String(), budget)
 }
 
 // cutAt is s cut to at most n bytes at a rune boundary, at the last line end

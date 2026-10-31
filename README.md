@@ -177,6 +177,23 @@ prompt that starts with its bare slash command, as the person types it. A succes
 `handover --prompt` (`guide handover --prompt`) start with it (`/beekeeper:supervise you take over …`),
 and a desk's own copy of a role skill carries the flag too.
 
+Non-Claude workers (`codex`, `agy` and `omp`) receive the working directory's Claude
+project instructions at the head of their first message, before the worker rules and task.
+The composition follows `CLAUDE.md`, its `@`imports, `.claude/rules/**/*.md`, and the
+same safe mandatory-reading discovery as the repository context hook, from the repository
+root down to the working directory. Outside Git, the working directory is the boundary.
+Secret-named files and imports outside that boundary are excluded. `agents start --dry-run`
+prints the composed instructions exactly as they enter the first message.
+
+An existing `AGENTS.md` is included and takes precedence over conflicting `CLAUDE.md`
+instructions, whether Git tracks it or not; rules nearer the working directory take
+precedence over their ancestors. A repository with only `AGENTS.md` keeps its native
+loading behavior. Stale local instruction files must be corrected at their source:
+beekeeper does not guess their intent from Git tracking status. The composition fits
+Codex's worker `project_doc_max_bytes` (262144 bytes); truncated and omitted files are
+named for the worker to read. It stays in the session's message history, never in a
+shared home file that another project's worker could overwrite.
+
 For `agy` (Antigravity CLI), `beekeeper install` writes the embedded skills to `<stateDir>/skills`
 (`~/.local/state/beekeeper/skills`) and registers `{"path": "<stateDir>/skills"}` under `"entries"`
 in `~/.gemini/config/skills.json` without touching other entries or `inherits` (`beekeeper doctor`
