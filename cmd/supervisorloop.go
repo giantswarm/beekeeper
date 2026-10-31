@@ -207,9 +207,10 @@ its key first in the detail):
             and the worker parked again on a new head while a round is
             left (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
-            built-in brief; a worker on a self-hosted provider's model gets
-            one on no self-hosted provider (--harness auto --exclude
-            <provider>)
+            built-in brief, on capacity's pick (--harness auto with
+            capacity.choices), decided like any start; a worker on a
+            self-hosted provider's model gets one on no self-hosted provider
+            (--review-of-self-hosted)
   go        every check on the head green, and either the last round's
             verdict approves that head, or no round is left, its verdict
             asked for changes, they were forwarded and the worker parked
@@ -225,7 +226,13 @@ its key first in the detail):
             the last approval: a decision for guide.person (note add); the
             loop leaves that pull request alone from then
   end       a reviewed pull request merged or closed: its tracking ends
-  done      agents.done: the agent leaves the roster (agents remove)
+  done      agents.done: the agent leaves the roster (agents remove);
+            the loop retires a session beekeeper started the same way,
+            once its turn ends: a reviewer once the loop acted on its
+            round's verdict (a go, forward, escalation, next round or
+            end), and the worker of a pull request the loop gave the go
+            for once it merged, reported or not. A session its person
+            started is never retired
   next      after a done, while capacity has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
@@ -369,7 +376,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person}
 	for _, ag := range st.Agents {
-		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model)}
+		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
 		}
@@ -651,14 +658,24 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindEnd:
 		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
 	case superloop.KindDone:
-		if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent })
+		if i < 0 {
 			return "already off the roster", nil
+		}
+		// A retirement waits for the session's turn to end: its last
+		// report is not cut off.
+		if act.Event == nil && loopInTurn(a, st.Agents[i].Party) {
+			l.sayOnce("turn "+act.Key, "SUPERVISOR DONE WAITS %s: its session runs a turn", act.Agent)
+			return "", errLoopLater
 		}
 		if err := l.claim(act, act.Agent); err != nil {
 			return "", err
 		}
 		if _, err := l.run(ctx, agentsName, loopRemove, act.Agent); err != nil {
 			return "", err
+		}
+		if act.Message != "" {
+			return "off the roster: " + act.Message, nil
 		}
 		return "off the roster", nil
 	case superloop.KindNext:
@@ -669,6 +686,12 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.classify(ctx, st, act)
 	}
 	return "", fmt.Errorf("no transition for %s", act.Kind)
+}
+
+// loopInTurn reports whether p's session runs a turn.
+var loopInTurn = func(a *app, p state.Party) bool {
+	_, ok := a.runningTurn(p)
+	return ok
 }
 
 // wake tells act's worker its message (agents wake), claimed first.
@@ -729,14 +752,14 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("Review %s %d r%d", repoName(r.Repo), r.N, act.Round)
+	name := superloop.ReviewerName(act.Ref, act.Round)
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
-	if k := l.a.cfg.Capacity; len(k.Choices) > 0 {
+	if len(l.a.cfg.Capacity.Choices) > 0 {
+		// The reviewer takes capacity's pick, decided as a worker's start
+		// is; a self-hosted model's work gets one on no self-hosted provider.
 		args = append(args, "--harness", harnessAuto)
 		if act.SelfHosted {
-			for _, p := range selfHostedProviders(k) {
-				args = append(args, "--exclude", p)
-			}
+			args = append(args, "--"+reviewOfSelfHostedFlag)
 		}
 	}
 	if err := l.claim(act, name); err != nil {
@@ -756,18 +779,6 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 func repoName(repo string) string {
 	_, name, _ := strings.Cut(repo, "/")
 	return name
-}
-
-// selfHostedProviders are the self-hosted providers of k, sorted.
-func selfHostedProviders(k config.Capacity) []string {
-	var out []string
-	for name, p := range k.Providers {
-		if p.SelfHosted() {
-			out = append(out, name)
-		}
-	}
-	slices.Sort(out)
-	return out
 }
 
 // selfHostedModel reports whether model is a choice of a self-hosted

@@ -180,8 +180,8 @@ func (a *app) ompNeedsVault(model string) bool {
 }
 
 // ompStartNeedsVault reports whether a brokered agents start, by its
-// arguments (start --harness=omp|auto [--model=m] [--exclude=e] …), reads the
-// vault.
+// arguments (start [--harness=omp|auto] [--model=m] [--exclude=e] …), reads
+// the vault: a start naming no harness takes capacity's pick as auto does.
 func (a *app) ompStartNeedsVault(args []string) bool {
 	if len(args) == 0 || args[0] != agentStartName {
 		return false
@@ -190,20 +190,21 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 	switch f.harness {
 	case omp.Harness:
 		return a.ompNeedsVault(f.model)
-	case harnessAuto:
+	case harnessAuto, "":
 		return a.autoStartNeedsVault(f)
 	}
 	return false
 }
 
 type startVaultFlags struct {
-	harness    string
-	model      string
-	excludes   []string
-	review     bool
-	builds     bool
-	force      bool
-	scratchCfg string
+	harness      string
+	model        string
+	excludes     []string
+	review       bool
+	ofSelfHosted bool
+	builds       bool
+	force        bool
+	scratchCfg   string
 }
 
 func parseStartArgsForVault(args []string) startVaultFlags {
@@ -231,6 +232,8 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 			f.excludes = append(f.excludes, strings.Trim(args[i], "[]"))
 		case arg == "--review" || arg == "--review=true":
 			f.review = true
+		case arg == "--"+reviewOfSelfHostedFlag || arg == "--"+reviewOfSelfHostedFlag+"=true":
+			f.ofSelfHosted = true
 		case arg == "--builds" || arg == "--builds=true":
 			f.builds = true
 		case arg == "--force" || arg == "--force=true":
@@ -324,7 +327,7 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			SlotsFree:        1,
 			MaxLabs:          1,
 		}
-		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, f.review, target.now).stopped(&target, st.Stop)
+		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, startKind(f.review, f.ofSelfHosted), target.now).stopped(&target, st.Stop)
 		ch, err := pickAutoChoice(v, f.force)
 		if err != nil || ch == nil {
 			return false

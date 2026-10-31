@@ -250,7 +250,6 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
     sevenDay:               # when both windows have bands, the lower floor and the lower ceiling apply
       - {upTo: 70, floor: 5, ceiling: 10}
       - {upTo: 90, floor: 2, ceiling: 4}
-  reviewSkipPace: true      # capacity --review and agents start --review skip a choice's weekly pace check and worker weekly cap
   providers:                # optional: per-provider usage readers, window thresholds and floor/ceiling targets (the machine guards and capacity.ceiling cap the subscription providers' total)
     claude:
       floor: 1
@@ -298,12 +297,12 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
       #   tiny: {nodes: [node-a], sessions: 1}           # the mode that runs while node-b stands claimed
       # serveModeSwitchCommand: [~/.local/bin/switch-serving-mode]  # switches into the mode named as its last argument; beekeeper relays, holds no control of its own
       # serveModeSwitchTimeout: 1m  # how long a switch may take before beekeeper ends it and leaves the mode as its reader reports it
-  choices:                  # ordered (harness, model) candidates for agents start --harness auto and beekeeper capacity
+  choices:                  # ordered (harness, model) candidates for agents start (no --harness, or --harness auto), beekeeper capacity pick and the supervisor loop; every start alike, none ahead of its provider's even 7-day pace
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}
-    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true, sevenDayMax: 80}
+    - {harness: agy, model: gemini-3-1-pro-medium, sevenDayMax: 80}
     - {harness: codex, model: gpt-5.4, paceMargin: 0}
-    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true}
+    - {harness: omp, model: local-model/worker-model, provider: local-model}
 stop:                       # beekeeper stop, besides beekeeper's own units and the standby service
   units: [desk-guard.timer] # more user units the stop stops while they run and beekeeper resume starts again; default: none
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies

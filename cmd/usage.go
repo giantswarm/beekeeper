@@ -1242,7 +1242,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	} else {
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
-	v := buildProvidersCapacity(c, pa, k, readings, h, false, nil, false, w.now).stopped(w.app, st.Stop)
+	v := buildProvidersCapacity(c, pa, k, readings, h, false, nil, forWorker, w.now).stopped(w.app, st.Stop)
 
 	var parts []string
 	allHigh := len(k.Providers) > 0

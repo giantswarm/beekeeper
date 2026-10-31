@@ -20,9 +20,9 @@ import (
 )
 
 type executionStartOptions struct {
-	Host, Repository, GitRef, Harness, Model, Mode, Dir, Task string
-	Desktop, Builds, Force, Review, DryRun                    bool
-	Exclude                                                   []string
+	Host, Repository, GitRef, Harness, Model, Mode, Dir, Task  string
+	Desktop, Builds, Force, Review, ReviewOfSelfHosted, DryRun bool
+	Exclude                                                    []string
 }
 
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
@@ -81,7 +81,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		return err
 	}
 	exclude := append(slices.Clone(o.Exclude), "agy", "omp", "codex")
-	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, o.Review, o.Harness, o.Model)
+	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
 	if o.Harness == harnessAuto {
 		choice, err := pickAutoChoice(verdict, o.Force)
 		if err != nil {
@@ -124,7 +124,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if len(k.Providers) > 0 && !reflect.DeepEqual(k.Providers, a.liveCapacity().Providers) {
 			return nil, refused("provider configuration changed during admission; retry")
 		}
-		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, o.Review, r.Harness, r.Model)
+		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), r.Harness, r.Model)
 		over, err := gateStart(v, o.Force)
 		if err != nil {
 			return nil, err
@@ -177,14 +177,14 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 	return readings
 }
 
-func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]providerReadingResult, legacy *usageView, builds bool, exclude []string, review bool, harness, model string) *capacityView {
+func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]providerReadingResult, legacy *usageView, builds bool, exclude []string, kind startFor, harness, model string) *capacityView {
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
 	counts := countAgents(st, sessions, a.now)
 	var v *capacityView
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
-		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now), k, readings, h, false, exclude, review, a.now)
+		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now), k, readings, h, false, exclude, kind, a.now)
 	} else {
 		v = newCapacity(counts, k, h, false).withUsage(legacy, a.now)
 	}

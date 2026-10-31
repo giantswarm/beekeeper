@@ -31,6 +31,8 @@ import (
 const (
 	bgFlag            = "--bg"
 	remoteControlFlag = "--remote-control"
+	// bgStopCmd stops a background session, keeping its conversation.
+	bgStopCmd = "stop"
 	// modeFlag is agents start's --mode.
 	modeFlag = "--mode"
 )
@@ -324,6 +326,34 @@ func (a *app) wakeBackground(ctx context.Context, by state.Party, w wakeTarget, 
 	_, err := fmt.Fprintf(a.out, "wake: %s had no running CLI: resumed background session %s in %s with the message as its turn (claude attach %s)\n",
 		w.name, w.id, w.dir, w.id[:min(8, len(w.id))])
 	return err
+}
+
+// stopBackgroundStart stops p's background session when beekeeper started
+// it as one (claude stop, which keeps its conversation) and says what it
+// did; false for any other session. One that runs a turn, or holds or held
+// the supervisor's or the guide's role, stays.
+func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.Party) (string, bool) {
+	i := st.StartIndex(p)
+	if i < 0 || !st.Starts[i].Background {
+		return "", false
+	}
+	id := st.Starts[i].Session
+	short := id[:min(8, len(id))]
+	if roleKeeps(st, p) {
+		return fmt.Sprintf("its background session %s stays: it holds or held the supervisor's or the guide's role, and no relay relieved it", short), true
+	}
+	if s, ok := a.runningTurn(p); ok {
+		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
+	}
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return fmt.Sprintf("its background session %s stays: %v", short, err), true
+	}
+	// claude stop takes the daemon's short id, not the session's.
+	if out, err := bgRun(ctx, "", cleanEnv(os.Environ(), a.explicitConfig()), []string{bin, bgStopCmd, short}); err != nil {
+		return fmt.Sprintf("its background session %s stays: claude stop: %v (%s)", short, err, firstLines(out)), true
+	}
+	return fmt.Sprintf("stopped its background session %s (claude attach %s brings it back)", short, short), true
 }
 
 // errNoBackground is a background wake of a session with no transcript or
