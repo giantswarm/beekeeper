@@ -145,7 +145,14 @@ func TestRemoteArchive(t *testing.T) {
 
 func TestRemoteFallbackAndExitRelay(t *testing.T) {
 	root := worktree(t)
-	t.Chdir(root)
+	// macOS temporary paths have a symlink prefix. Git returns the physical
+	// root while Getwd may retain PWD's alias; exercise that mismatch on Linux too.
+	alias := filepath.Join(t.TempDir(), "worktree-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(alias)
+	t.Setenv("PWD", alias)
 	t.Setenv("GOFLAGS", "")
 	t.Setenv("RUSTFLAGS", "")
 	t.Setenv("CARGO_ENCODED_RUSTFLAGS", "")

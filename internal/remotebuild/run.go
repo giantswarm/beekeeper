@@ -87,8 +87,15 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	if err != nil {
 		return fallback("not a git worktree")
 	}
-	root := strings.TrimSpace(string(rootBytes))
+	root, err := filepath.EvalSymlinks(strings.TrimSpace(string(rootBytes)))
+	if err != nil {
+		return fallback("worktree root unavailable")
+	}
 	cwd, err := os.Getwd()
+	if err != nil {
+		return fallback("working directory unavailable")
+	}
+	cwd, err = filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return fallback("working directory unavailable")
 	}
