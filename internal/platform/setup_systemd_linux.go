@@ -53,6 +53,16 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 		{Path: filepath.Join(dir, notifyUnit), Content: exe(systemd.StandbyService(s.Notify)), Service: true},
 		{Path: filepath.Join(dir, sandboxUnit), Content: exe(systemd.SandboxService), Service: true},
 	}
+	if s.SupervisorLoop {
+		quote := func(v string) string { return strconv.Quote(strings.ReplaceAll(v, "%", "%%")) }
+		args := quote(s.Exe)
+		if s.ConfigPath != "" {
+			args += " --config " + quote(s.ConfigPath)
+		}
+		unit := strings.Replace(systemd.SupervisorLoopService, "@COMMAND@", args+" supervisor loop", 1)
+		unit = strings.Replace(unit, "@TOOL_PATH@", quote("PATH="+s.toolPath()), 1)
+		files = append(files, File{Path: filepath.Join(dir, "beekeeper-supervisor-loop.service"), Content: []byte(unit), Service: true})
+	}
 	if s.TeleportEvery > 0 {
 		every := "OnCalendar=" + calendar(s.TeleportEvery)
 		files = append(files,

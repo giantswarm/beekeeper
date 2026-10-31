@@ -1,0 +1,12 @@
+# Written by beekeeper install when supervisor.loop is true.
+[Unit]
+Description=beekeeper: supervisor loop
+
+[Service]
+Environment=@TOOL_PATH@
+ExecStart=:@COMMAND@
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=default.target

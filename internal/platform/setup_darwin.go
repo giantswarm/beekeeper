@@ -65,7 +65,30 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 	if s.TeleportEvery > 0 {
 		skipped = append(skipped, "teleport keeper: not available on "+Name())
 	}
-	return []File{{Path: path, Content: plist, Service: true}}, skipped
+	files := []File{{Path: path, Content: plist, Service: true}}
+	if s.SupervisorLoop {
+		const label = "com.giantswarm.beekeeper.supervisor-loop"
+		args := ""
+		if s.ConfigPath != "" {
+			args = "<string>--config</string><string>" + escapeXML(s.ConfigPath) + "</string>"
+		}
+		log := escapeXML(filepath.Join(s.Home, "Library", "Logs", "beekeeper-supervisor-loop.log"))
+		loop := fmt.Appendf(nil, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>%s</string>
+<key>ProgramArguments</key><array><string>%s</string>%s<string>supervisor</string><string>loop</string></array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string></dict>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+<key>ThrottleInterval</key><integer>30</integer>
+<key>StandardOutPath</key><string>%s</string>
+<key>StandardErrorPath</key><string>%s</string>
+</dict></plist>
+`, label, escapeXML(s.Exe), args, escapeXML(s.toolPath()), log, log)
+		files = append(files, File{Path: filepath.Join(s.Home, "Library", "LaunchAgents", label+".plist"), Content: loop, Service: true})
+	}
+	return files, skipped
 }
 
 func escapeXML(s string) string {

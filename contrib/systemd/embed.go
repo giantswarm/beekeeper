@@ -50,3 +50,8 @@ var TeleportTimer string
 
 // TeleportTimerEvery is the timer's interval as shipped.
 const TeleportTimerEvery = "OnCalendar=*:0/10"
+
+// SupervisorLoopService runs the opt-in persistent supervisor loop.
+//
+//go:embed beekeeper-supervisor-loop.service
+var SupervisorLoopService string
