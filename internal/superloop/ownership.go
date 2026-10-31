@@ -40,6 +40,7 @@ const (
 	leftBefore  = "before"
 	leftAuthor  = "author"
 	leftTeam    = "team"
+	leftFiles   = "files"
 )
 
 // owner is whose review a pull request waits for, as the desk sees it.
@@ -97,6 +98,9 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 	}
 	if n := d.namedNever(p); n != "" {
 		return nobodys, leftNever, fmt.Sprintf("its title, branch or changes name %s of supervisor.ownership.never: the desk does no work on it", n)
+	}
+	if len(d.Never) > 0 && p.ChangedFiles > len(p.Files) {
+		return nobodys, leftFiles, fmt.Sprintf("it changes %d files and gh lists %d: the rest cannot be checked against supervisor.ownership.never", p.ChangedFiles, len(p.Files))
 	}
 	if len(d.Authors) > 0 && !slices.ContainsFunc(d.Authors, func(a string) bool { return strings.EqualFold(a, p.Author) }) {
 		return nobodys, leftAuthor, fmt.Sprintf("opened by %s, not by the desk (%s): it is not the desk's to review", p.Author, strings.Join(d.Authors, ", "))
@@ -170,12 +174,13 @@ func repoOf(ref string) string {
 	return repo
 }
 
-// ownerReviews are p's reviews by somebody other than its author and no
-// bot, submitted after since: the owning team's.
+// ownerReviews are p's reviews by a member or collaborator of its owner
+// other than its author and no bot, submitted after since: the owning
+// team's. Anybody else's review is no word of theirs.
 func ownerReviews(p Pull, since time.Time) []Review {
 	var out []Review
 	for _, r := range p.Reviews {
-		if r.Author != "" && !strings.EqualFold(r.Author, p.Author) && !strings.HasSuffix(r.Author, "[bot]") && r.At.After(since) {
+		if r.Member && r.Author != "" && !strings.EqualFold(r.Author, p.Author) && !strings.HasSuffix(r.Author, "[bot]") && r.At.After(since) {
 			out = append(out, r)
 		}
 	}

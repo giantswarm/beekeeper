@@ -649,13 +649,18 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 func TestParseLoopPull(t *testing.T) {
 	green := `{"state":"OPEN","url":"` + loopURL + `","headRefOid":"` + loopHead + `",
 	  "statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"state":"SUCCESS"},{"status":"COMPLETED","conclusion":"SKIPPED"}],
-	  "reviews":[{"id":"R2","state":"COMMENTED","body":"Review: approved\nHead reviewed: ` + "`1111111`" + `","submittedAt":"2026-10-30T10:00:00Z","commit":{"oid":"abc"}},
-	             {"id":"R1","state":"CHANGES_REQUESTED","body":"no","submittedAt":"2026-10-30T09:00:00Z","commit":{"oid":"` + loopHead + `"}}]}`
+	  "author":{"login":"` + loopDesk + `"},"title":"fix: x","headRefName":"fix/x","files":[{"path":"a.go"}],"changedFiles":2,
+	  "reviews":[{"id":"R2","state":"COMMENTED","author":{"login":"` + loopDesk + `"},"authorAssociation":"OWNER","body":"Review: approved\nHead reviewed: ` + "`1111111`" + `","submittedAt":"2026-10-30T10:00:00Z","commit":{"oid":"abc"}},
+	             {"id":"R1","state":"CHANGES_REQUESTED","author":{"login":"stranger"},"authorAssociation":"NONE","body":"no","submittedAt":"2026-10-30T09:00:00Z","commit":{"oid":"` + loopHead + `"}}]}`
 	p, err := parseLoopPull(loopPR, []byte(green))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !p.Green || len(p.Reviews) != 2 || p.Reviews[0].ID != "R1" || p.Reviews[1].Verdict != superloop.Approved || p.Reviews[1].Head != "1111111" {
+		t.Errorf("pull = %+v", p)
+	}
+	if p.Author != loopDesk || p.Title != "fix: x" || p.Branch != "fix/x" || !slices.Equal(p.Files, []string{"a.go"}) || p.ChangedFiles != 2 ||
+		p.Reviews[0].Author != "stranger" || p.Reviews[0].Member || !p.Reviews[1].Member {
 		t.Errorf("pull = %+v", p)
 	}
 	for name, rollup := range map[string]string{
@@ -1148,7 +1153,7 @@ func TestLoopLeavesAnotherTeamsPullRequestToThatTeamUntilThePersonOverrides(t *t
 	parkedAt := time.Now()
 	r.park(t, loopPR, parkedAt)
 	// The team reviewed it before the park: no block, no relay of it.
-	r.pull.Reviews = []superloop.Review{{ID: "R0", Author: "bob", Head: loopHead, Verdict: superloop.ChangesRequested, Body: "earlier findings", At: parkedAt.Add(-time.Minute)}}
+	r.pull.Reviews = []superloop.Review{{ID: "R0", Author: "bob", Member: true, Head: loopHead, Verdict: superloop.ChangesRequested, Body: "earlier findings", At: parkedAt.Add(-time.Minute)}}
 	r.pass(t)
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Fatalf("another team's pull request got a reviewer: %v", c)
@@ -1189,7 +1194,7 @@ func TestLoopRelaysTheOwningTeamsReview(t *testing.T) {
 	r.pass(t)
 	r.pull.Reviews = []superloop.Review{
 		{ID: "R1", Author: loopDesk, Head: loopHead, Body: "Review: approved", At: parkedAt.Add(time.Second)},
-		{ID: "R2", Author: "bob", Head: loopHead, Verdict: superloop.Approved, Body: "LGTM, thanks", At: parkedAt.Add(time.Second)},
+		{ID: "R2", Author: "bob", Member: true, Head: loopHead, Verdict: superloop.Approved, Body: "LGTM, thanks", At: parkedAt.Add(time.Second)},
 	}
 	r.pass(t)
 	wake := r.called(agentsName, agentWakeName, loopWorker)

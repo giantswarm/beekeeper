@@ -90,10 +90,12 @@ type Pull struct {
 	Green   bool
 	Reviews []Review // oldest first
 	// Author is the login that opened it; Title, Branch (its head branch)
-	// and Files (the paths it changes) are what may name a repository the
-	// desk does no work on.
+	// and Files (the paths it changes, ChangedFiles of them in all, which
+	// gh may list only in part) are what may name a repository the desk
+	// does no work on.
 	Author, Title, Branch string
 	Files                 []string
+	ChangedFiles          int
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
@@ -101,8 +103,11 @@ type Pull struct {
 
 // Review is one review of a pull request with a verdict.
 type Review struct {
-	ID      string
-	Author  string
+	ID     string
+	Author string
+	// Member is a review by a member or collaborator of the repository's
+	// owner: only such a review is the owning team's.
+	Member  bool
 	Head    string
 	Verdict string
 	Body    string

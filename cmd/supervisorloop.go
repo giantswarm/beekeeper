@@ -138,7 +138,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews,author,title,headRefName,files")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -189,13 +189,15 @@ type loopPullJSON struct {
 	Files  []struct {
 		Path string `json:"path"`
 	} `json:"files"`
-	Reviews []struct {
-		ID     string    `json:"id"`
-		Author loopLogin `json:"author"`
-		Body   string    `json:"body"`
-		State  string    `json:"state"`
-		At     time.Time `json:"submittedAt"`
-		Commit struct {
+	ChangedFiles int `json:"changedFiles"`
+	Reviews      []struct {
+		ID          string    `json:"id"`
+		Author      loopLogin `json:"author"`
+		Association string    `json:"authorAssociation"`
+		Body        string    `json:"body"`
+		State       string    `json:"state"`
+		At          time.Time `json:"submittedAt"`
+		Commit      struct {
 			OID string `json:"oid"`
 		} `json:"commit"`
 	} `json:"reviews"`
@@ -212,7 +214,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch}
+	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -225,7 +227,8 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		}
 	}
 	for _, r := range j.Reviews {
-		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
+		member := slices.Contains([]string{"MEMBER", "OWNER", "COLLABORATOR"}, r.Association)
+		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
 	}
 	slices.SortStableFunc(p.Reviews, func(x, y superloop.Review) int { return x.At.Compare(y.At) })
 	return p, nil
