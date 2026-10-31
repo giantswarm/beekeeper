@@ -3565,7 +3565,7 @@ func TestParseUsageIdleFiveHour(t *testing.T) {
 		name, window string
 		wantError    bool
 	}{
-		{"idle", `{"usedPercent":null,"resetsAt":null}`, false},
+		{"unopened window", `{"usedPercent":null,"resetsAt":null}`, false},
 		{"missing usage", `{"resetsAt":null}`, true},
 		{"missing reset", `{"usedPercent":null}`, true},
 		{"empty", `{}`, true},
