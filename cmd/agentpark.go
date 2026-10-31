@@ -93,6 +93,7 @@ again once the supervisor's next message re-tasks it, by SendMessage or
 agents wake: its task is that message's first line.`,
 		Example: `  beekeeper agents park --on 41 "Timo's answer on the rollout window"
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
+  beekeeper agents park --on alert:WorkloadDown "the workload alert firing again"
   beekeeper agents park --on hold:merges "the devctl release window my merge was refused on"
   beekeeper agents park "the supervisor's go"`,
 		Args: cobra.ExactArgs(1),
@@ -114,6 +115,7 @@ agents wake: its task is that message's first line.`,
 				if strings.TrimSpace(name) == "" {
 					return usageErr("--on alert:<name> needs an alert name")
 				}
+				on = alertParkPrefix + strings.TrimSpace(name)
 			} else if _, isNote := parkNote(on); on != "" && !isNote {
 				if _, _, central := parkCentralNote(on); !central {
 					r, ok := parseRef(on)
