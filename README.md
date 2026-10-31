@@ -35,6 +35,12 @@ a replaced binary is re-executed at the loop's next quiet pass, after
 pending timer actions finish. `beekeeper uninstall` removes the service
 recorded in `install.json`. The service is off by default.
 
+With `supervisor.workerBrief` configured, each pass fills the desk to
+`capacity.floor` from the next free ranked board items, including after a
+restart or roster loss without a done report. Each start rechecks capacity
+and stops when its gates refuse, the floor is reached, or the board offers
+nothing. The existing done-triggered next-item transition remains active.
+
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
 

@@ -302,7 +302,8 @@ its key first in the detail):
             end), and the worker of a pull request the loop gave the go
             for once it merged, reported or not. A session its person
             started is never retired
-  next      after a done, while capacity has room: the next item of board
+  next      after a done, and every pass below capacity.floor while capacity
+            has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
             configured, none starts
@@ -639,7 +640,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return l.fill(ctx, st, claims, in.Taken)
 }
 
 // ownership readies the desk's policy for a pass's reads: the logins the
@@ -1048,25 +1049,45 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 	if _, code, err := beekeeperRun(ctx, l.as("capacity")...); err != nil || code != 0 {
 		return "", errLoopLater
 	}
-	out, err := l.run(ctx, loopBoard, "next", "--json")
+	next, err := l.nextItem(ctx)
 	if err != nil {
 		return "", err
 	}
-	var next struct {
-		Pick *struct {
-			Ref   string `json:"ref"`
-			URL   string `json:"url"`
-			Title string `json:"title"`
-		} `json:"pick"`
-	}
-	if err := json.Unmarshal([]byte(out), &next); err != nil {
-		return "", fmt.Errorf("board next --json: %w", err)
-	}
-	if next.Pick == nil {
+	if next == nil {
 		return "the board offers nothing: no worker starts", nil
 	}
-	r, _ := parseRef(next.Pick.Ref)
-	brief, err := l.brief(k.WorkerBrief, "", "next "+next.Pick.Ref, briefData{URL: next.Pick.URL, Repo: r.Repo, Number: r.N})
+	return l.startItem(ctx, act, *next)
+}
+
+// nextItem is the board's first free ranked item, or nil when none is free.
+func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
+	out, err := l.run(ctx, loopBoard, "next", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var next struct {
+		Pick *loopBoardItem `json:"pick"`
+	}
+	if err := json.Unmarshal([]byte(out), &next); err != nil {
+		return nil, fmt.Errorf("board next --json: %w", err)
+	}
+	if next.Pick != nil {
+		if _, ok := parseRef(next.Pick.Ref); !ok {
+			return nil, fmt.Errorf("board next: invalid item ref %q", next.Pick.Ref)
+		}
+	}
+	return next.Pick, nil
+}
+
+type loopBoardItem struct {
+	Ref string `json:"ref"`
+	URL string `json:"url"`
+}
+
+func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	k := l.a.cfg.Supervisor
+	r, _ := parseRef(next.Ref)
+	brief, err := l.brief(k.WorkerBrief, "", "next "+next.Ref, briefData{URL: next.URL, Repo: r.Repo, Number: r.N})
 	if err != nil {
 		return "", err
 	}
@@ -1086,7 +1107,7 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 		}
 		return "", err
 	}
-	return fmt.Sprintf("%q started on %s", name, next.Pick.URL), nil
+	return fmt.Sprintf("%q started on %s", name, next.URL), nil
 }
 
 // install takes release act.Version through its stages, each resumed on a
