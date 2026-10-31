@@ -6,7 +6,7 @@ import "strings"
 // options. Stop at the script operand: later arguments cannot enable noexec.
 // Unknown options (especially -i, +n and -c) retain execution scanning.
 func shellSyntaxOnly(name string, args []string) bool {
-	if name != "bash" && name != "sh" && name != "dash" && name != "ksh" && name != "zsh" {
+	if !localShells[name] {
 		return false
 	}
 	noexec := false
