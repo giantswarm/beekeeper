@@ -109,6 +109,9 @@ type Worker struct {
 	// Started is a session beekeeper started: only such a one the loop
 	// retires; a session its person started stays.
 	Started bool
+	// Waking is an open timer that wakes the agent by name (timer add
+	// --wake): a park on nothing waits for it.
+	Waking bool
 }
 
 // Event is one line of the event log the loop acts on.
@@ -471,17 +474,61 @@ func Plan(in Input) []Action {
 			}
 		}
 	}
-	// paired is a report agents idle --done logged with its done: the
-	// two lines carry their own clocks, a moment apart.
+	// near reports whether a and b were logged a moment apart: the lines
+	// of one agents idle --done carry their own clocks.
+	near := func(a, b Event) bool {
+		d := a.At.Sub(b.At)
+		return a.Agent == b.Agent && d > -pairWithin && d < pairWithin
+	}
+	// paired is a report or problem agents idle --done logged with its
+	// done.
 	paired := func(r Event) bool {
-		return slices.ContainsFunc(in.Events, func(e Event) bool {
-			d := e.At.Sub(r.At)
-			return e.Verb == VerbDone && e.Agent == r.Agent && d > -pairWithin && d < pairWithin
-		})
+		return slices.ContainsFunc(in.Events, func(e Event) bool { return e.Verb == VerbDone && near(e, r) })
+	}
+	// forwarded is a problem of the reviewer of one of the loop's rounds
+	// whose changes request the loop forwarded (or forwards in this pass):
+	// the worker has it word for word.
+	forwarded := func(e Event) bool {
+		for ref, rs := range l.rounds {
+			for i, rd := range rs {
+				if ReviewerName(ref, i+1) != e.Agent {
+					continue
+				}
+				for _, t := range l.keys {
+					if t.Kind == KindForward && t.Ref == ref && !t.At.Before(rd.at) {
+						return true
+					}
+				}
+				if slices.ContainsFunc(out, func(a Action) bool { return a.Kind == KindForward && a.Ref == ref }) {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	roster := map[string]bool{}
+	workers := map[string]Worker{}
 	for _, w := range in.Workers {
 		roster[w.Name] = true
+		workers[w.Name] = w
+	}
+	// waiting is a park on nothing that still waits on something: a timer
+	// that wakes the agent, a note its wait names, or a note it asked
+	// that is open. One whose agent is no longer parked on nothing has
+	// nothing left to decide.
+	waiting := func(e Event) bool {
+		w, ok := workers[e.Agent]
+		if !ok || w.ParkedAt.IsZero() || w.ParkedOn != "" {
+			return true
+		}
+		if _, waits := ParkedOn(e.Detail); w.Waking || noteRef.MatchString(waits) {
+			return true
+		}
+		return slices.ContainsFunc(in.Notes, func(n Note) bool { return n.By == e.Agent })
+	}
+	classify := func(e Event) {
+		ev := e
+		add(Action{Key: eventKey(KindClassify, e), Kind: KindClassify, Agent: e.Agent, Event: &ev})
 	}
 	for _, e := range in.Events {
 		switch e.Verb {
@@ -489,25 +536,35 @@ func Plan(in Input) []Action {
 			dk := eventKey(KindDone, e)
 			ev := e
 			if !l.has(dk) {
-				add(Action{Key: dk, Kind: KindDone, Agent: e.Agent, Event: &ev})
+				a := Action{Key: dk, Kind: KindDone, Agent: e.Agent, Event: &ev}
+				var found []string
+				for _, p := range in.Events {
+					if p.Verb == VerbProblem && near(p, e) {
+						found = append(found, strings.TrimPrefix(p.Detail, p.Agent+": "))
+					}
+				}
+				if len(found) > 0 {
+					a.Message = fmt.Sprintf("its report names %d problem(s) found, the worker's to file in the owning repository: %s", len(found), strings.Join(found, "; "))
+				}
+				add(a)
 				continue
 			}
 			add(Action{Key: eventKey(KindNext, e), Kind: KindNext, Agent: e.Agent, Event: &ev})
 		case VerbReport:
 			// The final report rides with agents.done, which the rules
 			// classify.
-			if paired(e) {
-				continue
+			if !paired(e) {
+				classify(e)
 			}
-			ev := e
-			add(Action{Key: eventKey(KindClassify, e), Kind: KindClassify, Agent: e.Agent, Event: &ev})
 		case VerbProblem:
-			ev := e
-			add(Action{Key: eventKey(KindClassify, e), Kind: KindClassify, Agent: e.Agent, Event: &ev})
+			// A problem of a done report rides with its done; a
+			// reviewer's with the changes request the loop forwarded.
+			if !paired(e) && !forwarded(e) {
+				classify(e)
+			}
 		case VerbPark:
-			if on, _ := ParkedOn(e.Detail); on == "" {
-				ev := e
-				add(Action{Key: eventKey(KindClassify, e), Kind: KindClassify, Agent: e.Agent, Event: &ev})
+			if on, _ := ParkedOn(e.Detail); on == "" && !waiting(e) {
+				classify(e)
 			}
 		}
 	}
@@ -525,6 +582,9 @@ func Plan(in Input) []Action {
 	}
 	return out
 }
+
+// noteRef is a note a park's wait names (#12), not an issue's owner/repo#n.
+var noteRef = regexp.MustCompile(`(?:^|[^\w/.-])#\d+\b`)
 
 // pairWithin is how far apart a report and its done may be logged.
 const pairWithin = 5 * time.Second

@@ -244,8 +244,13 @@ its key first in the detail):
             supervisor.postInstall once, then self-update --check must
             find it the latest. A loop whose binary was replaced
             re-executes the installed one at its next pass
-  classify  a report or park the rules cannot place (agents.report without
-            agents.done, agents.problem, a park on nothing): the
+  classify  a report or park the rules cannot place: agents.report without
+            agents.done; agents.problem neither logged with an agents.done
+            (the done's log line names it, the worker files it in the
+            owning repository) nor of a reviewer whose changes request
+            the loop forwarded; a park on nothing of an agent still parked
+            on nothing, with no timer that wakes it (timer add --wake), no
+            note its wait names (#12) and no open note of its own. The
             supervisor.classifier command, given the event as JSON on
             stdin, answers {"class":"needs-person|blocked|failed|question",
             "confidence":0.9}; the event goes to the guide (note add for
@@ -380,6 +385,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
 		}
+		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
 	}
 	for _, n := range st.Notes {
