@@ -125,7 +125,7 @@ func TestRemoteWrapperInterrupt(t *testing.T) {
 	}
 }
 
-func TestRemoteRunThroughShellTransport(t *testing.T) { //nolint:gosec // executes scripts and reads files exclusively in owned temporary fixtures
+func TestRemoteRunThroughShellTransport(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux builder shell contract")
 	}
@@ -133,9 +133,9 @@ func TestRemoteRunThroughShellTransport(t *testing.T) { //nolint:gosec // execut
 	t.Chdir(root)
 	dir := t.TempDir()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nprintf 'remote output\\n'\nexit 37\n"), 0o750); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nprintf 'remote output\\n'\nexit 37\n"), 0o750); err != nil { //nolint:gosec // executable test fixture
 		t.Fatal(err)
-	} //nolint:gosec // executable test fixture
+	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GOFLAGS", "")
 	t.Setenv("RUSTFLAGS", "")
@@ -180,8 +180,8 @@ func TestRemoteRunThroughShellTransport(t *testing.T) { //nolint:gosec // execut
 	if !handled || rc != 37 || output.String() != "remote output\n" {
 		t.Fatalf("handled=%v rc=%d output=%q diagnostics=%s", handled, rc, output.String(), diagnostics.String())
 	}
-	source, err := os.ReadFile(filepath.Join(dir, "src", testMain))
+	source, err := os.ReadFile(filepath.Join(dir, "src", testMain)) //nolint:gosec // owned test fixture
 	if err != nil || string(source) != "edited source" {
 		t.Fatalf("source=%q err=%v", source, err)
-	} //nolint:gosec // owned test fixture
+	}
 }
