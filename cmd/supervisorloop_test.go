@@ -1271,18 +1271,19 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 // the log: the loop waits for the turn to end before running agents remove,
 // so stopBackgroundStart does not leave its background session running.
 func TestLoopWaitsForAnIdleTurnBeforeRemovingADoneAgent(t *testing.T) {
+	const sess = "w-in-turn"
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
-	r.started(t, loopWorker, "worker-session")
+	r.started(t, loopWorker, sess)
 	r.pull.State = superloop.Merged
 	r.pass(t)
-	done := event(state.Party{Name: loopWorker, Session: "worker-session"}, superloop.VerbDone, "%s done: fix %s", loopWorker, loopURL)
-	report := event(state.Party{Name: loopWorker, Session: "worker-session"}, superloop.VerbReport, "%s: merged %s", loopWorker, loopURL)
+	done := event(state.Party{Name: loopWorker, Session: sess}, superloop.VerbDone, "%s done: fix %s", loopWorker, loopURL)
+	report := event(state.Party{Name: loopWorker, Session: sess}, superloop.VerbReport, "%s: merged %s", loopWorker, loopURL)
 	report.At = done.At.Add(10 * time.Microsecond)
 	if err := r.a.store.Record(done, report); err != nil {
 		t.Fatal(err)
 	}
-	r.inTurn = func(p state.Party) bool { return p.Session == "worker-session" }
+	r.inTurn = func(p state.Party) bool { return p.Session == sess }
 	r.pass(t)
 	if c := r.called(agentsName, loopRemove); c != nil {
 		t.Fatalf("removed while its turn still ran: %v", c)
@@ -1300,15 +1301,17 @@ func TestLoopWaitsForAnIdleTurnBeforeRemovingADoneAgent(t *testing.T) {
 // toFile passes note add's question check and finds the pull request ref
 // from the worker's report after agents idle --done cleared its task and park.
 func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
+	const task = "fix the gate"
 	r := newLoopRig(t)
+	r.a.as = loopParty.Name
 	r.park(t, loopPR, time.Now())
 	r.pull.State = superloop.Merged
 	r.pass(t)
 	// agents idle --done clears Task and Park, leaving LastTask without a URL
 	// while the report carries the URL.
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Task, st.Agents[0].LastTask, st.Agents[0].Park, st.Agents[0].Done = "", "fix the gate", nil, true
-		st.WorkerReports = []state.WorkerReport{{By: st.Agents[0].Party, At: time.Now(), Task: "fix the gate", Text: "merged " + loopURL}}
+		st.Agents[0].Task, st.Agents[0].LastTask, st.Agents[0].Park, st.Agents[0].Done = "", task, nil, true
+		st.WorkerReports = []state.WorkerReport{{By: st.Agents[0].Party, At: time.Now(), Task: task, Text: "merged " + loopURL}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -1320,7 +1323,7 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.answer = func(args []string) (string, int) {
-		if len(args) >= 2 && args[0] == "note" && args[1] == loopAdd {
+		if len(args) >= 2 && args[0] == loopNote && args[1] == loopAdd {
 			var out bytes.Buffer
 			cmd := r.a.noteCmd()
 			cmd.SetArgs(args[1:])
@@ -1356,9 +1359,9 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 
 	doneWorker := state.Party{Session: "11111111-0000-4000-8000-000000000001", Name: loopWorker}
 	reviewer := state.Party{Session: "22222222-0000-4000-8000-000000000002", Name: loopReviewer}
-	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: "Guide run 3"}
-	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: "Guide run 4"}
-	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: "Guide run 5"}
+	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: "Guide run 8"}
+	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: "Guide run 9"}
+	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: "Guide run 10"}
 	staleIdle := state.Party{Session: "66666666-0000-4000-8000-000000000006", Name: "stale worker"}
 	personOwn := state.Party{Session: "77777777-0000-4000-8000-000000000007", Name: "person session"}
 
@@ -1369,14 +1372,14 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 		st.Agents = []state.Agent{
 			{Party: doneWorker, Done: true, IdleSince: now.Add(-time.Hour)},
 			// guide3 is still on the roster with its role task although relieved.
-			{Party: guide3, Task: "the guide's role as Guide run 3"},
-			{Party: guide5, Task: "the guide's role as Guide run 5"},
+			{Party: guide3, Task: "the guide's role as Guide run 8"},
+			{Party: guide5, Task: "the guide's role as Guide run 10"},
 			{Party: staleIdle, IdleSince: now.Add(-48 * time.Hour)},
 			{Party: personOwn, IdleSince: now.Add(-48 * time.Hour)},
 		}
 		st.SetGuideRole(state.Role{
 			Holder: &state.Supervisor{Party: guide5, Since: now.Add(-time.Hour)},
-			Run:    5,
+			Run:    10,
 			Relieved: []state.Relief{
 				{Party: guide3, By: guide4, At: now.Add(-2 * time.Hour), Taken: now.Add(-2 * time.Hour)},
 				{Party: guide4, By: guide5, At: now.Add(-time.Hour), Taken: now.Add(-time.Hour)},
@@ -1460,4 +1463,3 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 		t.Fatalf("roster after second pass = %v, want %v", roster, want)
 	}
 }
-

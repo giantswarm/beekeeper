@@ -501,10 +501,10 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 	a.cfg.Agents.Mode = config.ModeBackground
 	a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
 
-	doneWorker := state.Party{Session: "aaaaaaaa-0000-4000-8000-000000000001", Name: "worker one"}
-	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: "Guide run 3"}
-	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: "Guide run 4"}
-	personSession := state.Party{Session: "dddddddd-0000-4000-8000-000000000004", Name: "person session"}
+	doneWorker := state.Party{Session: "aaaaaaaa-0000-4000-8000-000000000001", Name: loopWorker}
+	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: "Guide run 1"}
+	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: "Guide run 2"}
+	personSession := state.Party{Session: "dddddddd-0000-4000-8000-000000000004", Name: "person own"}
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for _, p := range []state.Party{doneWorker, relievedGuide, activeGuide} {
@@ -514,12 +514,12 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 		// from st.Agents by its relay when activeGuide took over.
 		st.Agents = []state.Agent{
 			{Party: doneWorker, Done: true, IdleSince: now.Add(-10 * time.Minute)},
-			{Party: activeGuide, Task: "the guide's role as Guide run 4"},
+			{Party: activeGuide, Task: "the guide's role as Guide run 2"},
 			{Party: personSession, Done: true, IdleSince: now.Add(-10 * time.Minute)},
 		}
 		st.SetGuideRole(state.Role{
 			Holder:   &state.Supervisor{Party: activeGuide, Since: now.Add(-30 * time.Minute)},
-			Run:      4,
+			Run:      2,
 			Relieved: []state.Relief{{Party: relievedGuide, By: activeGuide, At: now.Add(-30 * time.Minute), Taken: now.Add(-30 * time.Minute)}},
 		})
 		return nil, nil
@@ -547,4 +547,3 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 		t.Fatalf("stopped = %v, want %v", stopped, want)
 	}
 }
-
