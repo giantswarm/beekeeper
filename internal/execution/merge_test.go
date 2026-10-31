@@ -15,7 +15,7 @@ func testMergeGrant(t *testing.T) (MergeAuthorization, MergeUse, string) {
 	now := time.Now()
 	g := MergeAuthorization{ID: "grant-one", Ref: f.r.Ref, Repository: f.r.Repository, PR: 7, Head: strings.Repeat("a", 40), Issuer: "supervisor", IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
 	use := MergeUse{ID: g.ID, Ref: g.Ref, Repository: g.Repository, PR: g.PR, Head: g.Head}
-	root := filepath.Join(t.TempDir(), "grants")
+	root := filepath.Join(f.s.Root, "grants")
 	if err := WriteMergeAuthorization(root, g, "issued", now); err != nil {
 		t.Fatal(err)
 	}

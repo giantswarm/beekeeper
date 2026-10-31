@@ -28,7 +28,10 @@ const sshTestTask = "implement the fixture task"
 
 func executionTestApp(t *testing.T) (*app, execution.StartRequest) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := state.Open(root)
 	if err != nil {
 		t.Fatal(err)
