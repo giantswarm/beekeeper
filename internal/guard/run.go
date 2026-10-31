@@ -449,6 +449,9 @@ func Run(o Options, argv []string) int {
 	}
 	unit := fmt.Sprintf("%s%d-%06d", prefix, os.Getpid(), time.Now().Nanosecond()%1000000)
 	head := CommandHead(argv)
+	if slot > 0 && !shared {
+		writeHolder(o, slot, argv, unit)
+	}
 	how := fmt.Sprintf("slot %d", slot)
 	switch {
 	case o.slotless():
@@ -532,7 +535,7 @@ func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool)
 }
 
 // waitForSlot takes a free slot in its turn of the slot queue and waits
-// until MemAvailable covers the cap, both within o.Wait: one line when the
+// until MemAvailable covers the cap without holding a slot, both within o.Wait: one line when the
 // wait starts, one when it ends. A slot the session holds, before or during
 // the wait, is shared at once: the slot without a lock. No slot within the
 // wait: 0, and the log names the command as not run.
@@ -544,7 +547,7 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 	slot := 0
 	// A queue that cannot be joined leaves the run to take a slot as it
 	// frees, as before the queue.
-	t, _ := enqueue(o.SlotDir, queuedRun(argv))
+	var t *ticket
 	defer func() { t.leave() }()
 	for {
 		var reason string
@@ -552,9 +555,19 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 			if n := sessionSlot(o, session); n > 0 {
 				return nil, n
 			}
+			m, memErr := plat.Machine.Mem()
+			short := memErr == nil && int64(m.AvailableMiB)<<10 < needKiB
+			if short {
+				t.leave()
+				t = nil
+			} else if t == nil {
+				t, _ = enqueue(o.SlotDir, queuedRun(argv))
+			}
 			turn, ahead := t.turn(o.Slots)
 			var occupied string
 			switch {
+			case short:
+				reason = fmt.Sprintf("memory: %d MiB available, the cap needs %d; no build slot held, outside the slot queue", m.AvailableMiB, needKiB>>10)
 			case !turn:
 				reason = fmt.Sprintf("its turn in the build slot queue:\n%s%s", holders(o), ahead)
 			default:
@@ -568,11 +581,7 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 			}
 		}
 		if lock != nil {
-			m, err := plat.Machine.Mem()
-			if err != nil || int64(m.AvailableMiB)<<10 >= needKiB {
-				break
-			}
-			reason = fmt.Sprintf("memory: %d MiB available, the cap needs %d", m.AvailableMiB, needKiB>>10)
+			break
 		}
 		now := time.Now()
 		if !now.Before(deadline) {
@@ -632,6 +641,12 @@ func holders(o Options) string {
 	for _, s := range machine.ReadSlots(o.SlotDir, o.Slots) {
 		if !s.Free {
 			fmt.Fprintf(&b, "  slot %d: %s\n", s.N, HolderText(s.Holder, now))
+			h, ok := ParseHolder(s.Holder)
+			if reader, supported := plat.Capper.(interface{ ScopePopulated(string) (bool, error) }); ok && supported && h.Scope != "" && now.Sub(h.Since) >= scopeStartWait {
+				if live, err := reader.ScopePopulated(h.Scope); err == nil && !live {
+					fmt.Fprintf(&b, "    no live processes in %s.scope; the launcher watchdog releases this slot\n", h.Scope)
+				}
+			}
 		}
 	}
 	return b.String()
@@ -643,8 +658,9 @@ type Holder struct {
 	PID     int
 	Session string
 	// Name is the holding session's name, "" when its run had none.
-	Name string
-	Cmd  string
+	Name  string
+	Scope string
+	Cmd   string
 	// Since is when the slot was taken, zero when the record has none.
 	Since time.Time
 }
@@ -657,7 +673,7 @@ func ParseHolder(raw string) (Holder, bool) {
 		return Holder{}, false
 	}
 	since, _ := time.Parse(time.RFC3339, h.Since)
-	return Holder{PID: h.PID, Session: h.Session, Name: h.Name, Cmd: h.Cmd, Since: since}, true
+	return Holder{PID: h.PID, Session: h.Session, Name: h.Name, Scope: h.Scope, Cmd: h.Cmd, Since: since}, true
 }
 
 // Who names the holder: its session's name, else its session id, and its
@@ -718,10 +734,15 @@ type holderRecord struct {
 	Since   string `json:"since"`
 	// Name is the session's name ($CLAUDE_CODE_SESSION_NAME), beekeeper's
 	// addition; memcap's readers skip it.
-	Name string `json:"name,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Scope string `json:"scope,omitempty"`
 }
 
-func writeHolder(o Options, slot int, argv []string) {
+func writeHolder(o Options, slot int, argv []string, scope ...string) {
+	unit := ""
+	if len(scope) > 0 {
+		unit = scope[0]
+	}
 	cmd := strings.ReplaceAll(commandHead(argv, 140), `"`, "'")
 	cwd, _ := os.Getwd()
 	f, err := os.OpenFile(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -732,8 +753,15 @@ func writeHolder(o Options, slot int, argv []string) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(holderRecord{PID: os.Getpid(), Session: sessionID(), CWD: cwd, Cmd: cmd, Max: o.Max,
-		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME")})
+		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME"), Scope: unit})
 }
+
+// A missing scope may still be starting; once populated, an empty scope
+// has finished. These are variables so lifecycle tests need not wait 30s.
+var (
+	scopePoll      = time.Second
+	scopeStartWait = 30 * time.Second
+)
 
 // scope runs argv in the capped scope unit, in the slot's slice, with env
 // over this process's environment.
@@ -757,12 +785,48 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv, env [
 		logf("%v", err)
 		return ExitNotFound
 	}
-	go func() {
-		for s := range sig {
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	// Only a capper that can inspect its scope participates. In particular,
+	// an unavailable scope reader must never turn a healthy run into a kill.
+	reader, monitored := capper.(interface{ ScopePopulated(string) (bool, error) })
+	ticker := time.NewTicker(scopePoll)
+	defer ticker.Stop()
+	started, since := false, time.Now()
+wait:
+	for {
+		select {
+		case err = <-done:
+			break wait
+		case s := <-sig:
 			_ = c.Process.Signal(s)
+		case <-ticker.C:
+			if !monitored {
+				continue
+			}
+			live, readErr := reader.ScopePopulated(unit)
+			if readErr != nil {
+				continue
+			}
+			if live {
+				started = true
+				continue
+			}
+			if !started && time.Since(since) < scopeStartWait {
+				continue
+			}
+			// Prefer a completed command's own status over the watchdog's.
+			select {
+			case err = <-done:
+				break wait
+			default:
+			}
+			logf("%s.scope has no live processes (slot %d); stopping its launcher and releasing the slot", unit, slot)
+			_ = c.Process.Kill()
+			_ = <-done
+			return 1
 		}
-	}()
-	err = c.Wait()
+	}
 	var ee *exec.ExitError
 	if err != nil && !errors.As(err, &ee) {
 		logf("%v", err)
