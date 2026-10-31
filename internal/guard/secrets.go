@@ -447,6 +447,11 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 	}
 	if c < len(words) {
 		name, args := path.Base(words[c]), words[c+1:]
+		if shellSyntaxOnly(name, args) {
+			// The caller's substitutions remain separate scan segments, and
+			// sourceLeak still checks files supplied directly to this command.
+			return nil
+		}
 		switch {
 		case name == evalCmd:
 			if l := g.scan(strings.Join(args, " "), depth+1); l != nil {
@@ -513,10 +518,15 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 		// Every argument is scanned as a command line of its own: a -c
 		// string, ssh's remote command, watch's; one word (zsh -ic f) too.
 		script := name != "ssh" && name != watchCmd && name != evalCmd && !slices.ContainsFunc(words[k+1:], isCFlag)
-		for _, arg := range words[k+1:] {
-			if strings.HasPrefix(arg, "-") {
+		args := words[k+1:]
+		for j := 0; j < len(args); j++ {
+			arg := args[j]
+			if strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "+") {
 				if isCFlag(arg) {
 					script = false
+				}
+				if script && (arg == "-o" || arg == "+o") && j+1 < len(args) {
+					j++ // shell option name, not the script operand
 				}
 				continue
 			}
