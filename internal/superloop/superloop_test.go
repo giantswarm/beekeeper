@@ -432,7 +432,6 @@ func TestANewerReleaseIsInstalledOnce(t *testing.T) {
 func TestWhatTheRulesCannotPlaceIsClassified(t *testing.T) {
 	for name, e := range map[string]Event{
 		"a report without done": {At: t0, Verb: VerbReport, Agent: worker, Detail: worker + ": stuck on the lab"},
-		"a problem":             {At: t0, Verb: VerbProblem, Agent: worker, Detail: worker + ": CI is broken"},
 		"a park on nothing":     {At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: the person's call"},
 	} {
 		ws := []Worker{{Name: worker, ParkedAt: t0}}
@@ -444,6 +443,7 @@ func TestWhatTheRulesCannotPlaceIsClassified(t *testing.T) {
 	for name, e := range map[string]Event{
 		"a park on a pull request": {At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked on " + pr + ": desk review"},
 		"a park on a note":         {At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked on #12: an answer"},
+		"a problem filed":          {At: t0, Verb: VerbProblem, Agent: worker, Detail: worker + ": CI is broken, https://github.com/o/r/issues/9"},
 	} {
 		if got := Plan(Input{Events: []Event{e}}); len(got) != 0 {
 			t.Errorf("%s: %+v", name, got)
@@ -541,7 +541,7 @@ func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 		t.Errorf("done message after the file = %q", a.Message)
 	}
 	late := Event{At: t0.Add(time.Hour), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab is gone"}
-	if acts := Plan(Input{Events: []Event{done, late}}); len(acts) != 2 || acts[1].Kind != KindClassify {
+	if acts := Plan(Input{Events: []Event{done, late}}); len(acts) != 2 || acts[1].Kind != KindFile || acts[1].Event.Verb != VerbProblem {
 		t.Errorf("a problem logged later = %+v", acts)
 	}
 	if !Filed("see https://github.com/o/r/issues/9") || Filed("see https://github.com/o/r/pull/9") || Filed("o/r#9") {
@@ -562,12 +562,12 @@ func TestAReviewersForwardedFindingIsNoNote(t *testing.T) {
 	only(t, Plan(in), KindForward)
 	in.Taken = append(rv, taken(t, t1.Add(time.Minute), Action{Key: forwardKey(pr, "r1"), Kind: KindForward, Ref: pr, Agent: worker})...)
 	for _, a := range Plan(in) {
-		if a.Kind == KindClassify {
-			t.Errorf("a forwarded finding is classified: %+v", a)
+		if a.Kind == KindClassify || a.Kind == KindFile {
+			t.Errorf("a forwarded finding is filed or classified: %+v", a)
 		}
 	}
 	in.Events = []Event{other}
-	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindClassify }) {
+	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindFile && a.Message == problemText(other) }) {
 		t.Error("a reviewer's problem the review does not name is dropped")
 	}
 	// With its done, the matching one is the forward's, the other is to
@@ -582,9 +582,9 @@ func TestAReviewersForwardedFindingIsNoNote(t *testing.T) {
 		t.Errorf("a reviewer's done with its own problem = %+v", Plan(in))
 	}
 	// Without a forward (no changes request) the reviewer's problem is
-	// still the rules' to place.
+	// still one to file.
 	in = Input{Workers: parked(t0), Pulls: pull(head1, true), Taken: rv, Events: []Event{problem}}
-	only(t, Plan(in), KindClassify)
+	only(t, Plan(in), KindFile)
 }
 
 // A park on nothing that waits on a timer or a note is a park.
@@ -609,8 +609,9 @@ func TestAParkOnATimerOrANoteIsNoDecision(t *testing.T) {
 	only(t, Plan(in), KindClassify)
 }
 
-// escalated is the pull request of TestOpenFindingsPastTheLastRoundGoToTheGuide
-// handed to the guide on head1, and the person's answer an hour later.
+// escalated is the pull request of TestOpenFindingsPastTheLastRoundGoBackToTheWorker
+// as an earlier loop handed it to the guide on head1, and the person's
+// answer an hour later.
 func escalated(t *testing.T, words string) Input {
 	t.Helper()
 	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
@@ -628,8 +629,11 @@ func escalated(t *testing.T, words string) Input {
 // The person's release of an escalation is the loop's merge go for the
 // head it named.
 func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
-	if got := Plan(escalated(t, "")); len(got) != 0 {
-		t.Errorf("an unanswered escalation got %+v", got)
+	// One nobody answered holds nothing: the loop's rework goes on.
+	unanswered := escalated(t, "")
+	only(t, Plan(unanswered), KindRework)
+	if got := Tracked(unanswered.Workers, unanswered.Taken, nil, Desk{}); !slices.Equal(got, []string{pr}) {
+		t.Errorf("an unanswered escalation is not tracked: %v", got)
 	}
 	for _, words := range []string{"Merge", "Merge — the findings are cosmetic", "you can merge", "OK, merge it."} {
 		in := escalated(t, words)
@@ -649,12 +653,12 @@ func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
 	// An answer to an older escalation, or to another note, counts not.
 	in := escalated(t, "Merge")
 	in.Answers[0].At = t0.Add(time.Hour)
-	if got := Plan(in); len(got) != 0 {
+	if got := only(t, Plan(in), KindRework); got.Head != head1 {
 		t.Errorf("an answer from before the escalation got %+v", got)
 	}
 	in = escalated(t, "Merge")
 	in.Answers[0].Question = "Decide what worker one does next about its problem (blocker)?"
-	if got := Plan(in); len(got) != 0 {
+	if got := only(t, Plan(in), KindRework); got.Head != head1 {
 		t.Errorf("an answer to another note got %+v", got)
 	}
 }

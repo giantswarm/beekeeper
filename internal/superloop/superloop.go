@@ -643,7 +643,7 @@ func Plan(in Input) []Action {
 				// and rework are the loop's; no merge question goes to the
 				// person, and an answered escalation of this head is
 				// handled above.
-				if !left && !(escalated && sameHead(esc.head, p.Head)) {
+				if !left && (!escalated || !sameHead(esc.head, p.Head)) {
 					a := base
 					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
 					a.Message = reworkMessage(p, cycles, rounds)

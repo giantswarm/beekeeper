@@ -954,7 +954,7 @@ func TestLoopReadsTheClassifiersStdoutAlone(t *testing.T) {
 	r.stderr = "model loaded in 2s\n"
 	r.park(t, "", time.Now())
 	r.pass(t)
-	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbProblem, "%s: the lab is gone", loopWorker)); err != nil {
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbReport, "%s: the lab is gone", loopWorker)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
