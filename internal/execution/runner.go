@@ -73,6 +73,17 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	args := []string{"--restricted", "--print", "--session-id", j.Handle.ConversationID, "--model", j.Request.Model, "--name", j.Request.Name, "--permission-mode", "acceptEdits", "--tools", tools, "--allowedTools", tools, "--settings", filepath.Join(s.Root, "settings.json"), "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--output-format", "stream-json", "--verbose", "--append-system-prompt-file", filepath.Join(s.Root, "CLAUDE.md")}
 	c := exec.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments; no daemon or resume
 	c.Dir, c.Env, c.Stdin = j.Handle.Workspace, env, strings.NewReader(j.Request.Prompt)
+	var stream *messageStream
+	if j.Request.Messaging {
+		args = append(args, "--input-format", "stream-json", "--replay-user-messages")
+		c.Args = append([]string{h.Executable}, args...)
+		stream, err = s.openMessageStream(ctx, ref)
+		if err != nil {
+			return err
+		}
+		defer stream.Close()
+		c.Stdin = stream.reader
+	}
 	logPath := filepath.Join(s.Root, string(ref.Execution)+".log")
 	if fi, e := os.Lstat(logPath); e == nil && !fi.Mode().IsRegular() {
 		return errors.New("invalid owned execution log")
@@ -94,6 +105,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		_ = s.update(ctx, ref, func(j *Journal) error { j.Phase, j.LastError = Failed, "harness process could not start"; return nil })
 		return errors.New("harness process could not start")
 	}
+	if stream != nil {
+		stream.Start(j.Request)
+	}
 	ready := false
 	scan := bufio.NewScanner(stdout)
 	scan.Buffer(make([]byte, 64<<10), MaxWire)
@@ -109,13 +123,20 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 			Subtype   string `json:"subtype"`
 			SessionID string `json:"session_id"`
 		}
+		if stream != nil {
+			if err := stream.Accept(line, j); err != nil {
+				_ = c.Process.Kill()
+				_ = c.Wait()
+				return err
+			}
+		}
 		if json.Unmarshal(line, &ev) == nil && ev.Type == "system" && ev.Subtype == "init" {
 			if ev.SessionID != j.Handle.ConversationID {
 				_ = c.Process.Kill()
 				_ = c.Wait()
 				return errors.New("harness conversation identity mismatch")
 			}
-			if !ready {
+			if !ready && stream == nil {
 				if err := s.update(ctx, ref, func(j *Journal) error { j.Ready = true; return nil }); err != nil {
 					_ = c.Process.Kill()
 					_ = c.Wait()
@@ -123,6 +144,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 				}
 				ready = true
 			}
+		}
+		if stream != nil && acceptedMessage(line, j.Handle.ConversationID, j.Request.RequestID) {
+			ready = true
 		}
 	}
 	if scan.Err() != nil {

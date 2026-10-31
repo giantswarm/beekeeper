@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -210,7 +212,15 @@ func (w *watcher) actTimers(ctx context.Context, fires []timerFire) {
 func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	quiet := *w.app // the wake's own report is not a watch line
 	quiet.out = io.Discard
+	if !f.t.Due.IsZero() {
+		quiet.executionRequestID = fmt.Sprintf("timer/%d/%s/%s", f.t.ID, f.t.Due.UTC().Format(time.RFC3339Nano), execution.Digest([]byte(f.message())))
+	}
 	if err := wakeOwner(&quiet, ctx, watchParty, f.t.Wake, f.message(), ""); err != nil {
+		var pending *executionDeliveryPending
+		if errors.As(err, &pending) {
+			w.emitNow("timer", "TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200))
+			return
+		}
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.t.ID, f.t.Wake, err, truncate(f.t.What, 200))
 	}
 }

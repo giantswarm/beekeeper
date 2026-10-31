@@ -17,8 +17,10 @@ supervisor use the same binary.
 The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
-stops. The [design](docs/ssh-execution-hosts.md) records the contract and the
-deferred remote wake, coordinator lease and merge authorization capabilities.
+stops. Remote wakes and resumes use durable ordered message receipts; inspect
+them with `agents messages` and reconcile with `agents hosts sync`. The
+[design](docs/ssh-execution-hosts.md) records the contract and the remaining
+coordinator lease and merge authorization work.
 
 ## Install
 

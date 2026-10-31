@@ -264,6 +264,11 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 		ag.Done = v.Finished
 		verb := "agents.idle"
 		if v.Finished {
+			if ag.Execution != nil {
+				if r, _ := executionRecord(st, *ag.Execution); r != nil {
+					r.Completed = true
+				}
+			}
 			verb = executionDone
 			clearRecords(st, me)
 		}

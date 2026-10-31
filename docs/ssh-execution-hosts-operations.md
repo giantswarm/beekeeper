@@ -1,14 +1,13 @@
 # Operating SSH execution hosts
 
-The first slice starts one managed, headless Claude Code turn on an explicitly
-selected SSH host. Each execution gets an isolated clone, an owned user service,
+Managed, headless Claude Code sessions run on an explicitly selected SSH host.
+Each execution gets an isolated clone, an owned user service,
 a conversation identifier, and one coordinator roster registration. Omitting
 `--host`, or selecting `--host local`, keeps the local launch path.
 
 Read the [design](ssh-execution-hosts.md) for the ownership and failure contract.
-Remote wake and resume are deferred to
-https://github.com/giantswarm/beekeeper/issues/1714, the expiring coordinator lease
-to https://github.com/giantswarm/beekeeper/issues/1715, and live remote merge
+Remote wake and resume use durable message receipts as described below. The expiring coordinator lease
+is tracked in https://github.com/giantswarm/beekeeper/issues/1715, and live remote merge
 authorization to https://github.com/giantswarm/beekeeper/issues/1716. Every remote
 merge is refused in this slice, including when a local approval exists.
 
@@ -180,9 +179,77 @@ commands nested inside `beekeeper run`, so wrapping an unavailable lifecycle or
 merge operation does not authorize it.
 
 The component does not adopt or archive personal sessions. Interactive remote
-tools, remote transcript reads through coordinator-local paths, unsolicited
-wakes, and automatic resumes are unavailable in this slice. Use owned execution
+tools and remote transcript reads through coordinator-local paths are unavailable. Use owned execution
 logs for output. Hooks inspect the supported tool surface and deny unavailable
 authority; arbitrary code and account-owner changes require OS isolation for a
 stronger boundary. A disconnected stop has no automatic lease expiry until its
 linked follow-up ships.
+
+## Deliver and reconcile messages
+
+New SSH starts use one owned runner and one streaming Claude conversation. A
+wake, note answer, timer, or park resume enters the coordinating outbox before
+transport delivery. The host stores the envelope before returning `stored`.
+Only a replay event with the exact message UUID and conversation ID establishes
+`accepted`; worker mutations retain their separate `applied` control receipts.
+The original sender, execution host, worker and generation remain attached to
+the envelope. Local wake behavior is unchanged.
+
+```sh
+beekeeper --request-id follow-up-one agents wake worker "Continue the task"
+beekeeper agents messages worker
+beekeeper agents hosts sync host-a
+beekeeper agents inspect worker --json
+```
+
+`agents messages` shows coordinating delivery state without message text.
+`agents inspect` shows host receipts, ordered acceptance cursor and process
+reachability. States are `pending` (coordinator only), `stored`, `uncertain`
+(a harness write was attempted), `accepted`, `resolved` (an operator skipped a
+blocked receipt without claiming acceptance), and `failed` (an unsent message found
+its runner already completed or ended). A failed receipt blocks later delivery
+and is not retried automatically. An unavailable or ended process
+is also visible through inspection; a transport failure never proves it ended.
+Wake exits nonzero until acceptance is confirmed. `hosts sync` and the watch
+reconcile the same durable identities, retry only unacknowledged envelopes, and
+never create a replacement process. A park remains until its resume is accepted.
+
+An explicit request ID binds the sender and text; conflicting reuse is refused.
+Without one, each CLI wake is a distinct send, including identical text. Use an
+explicit request ID for CLI retries, or let `hosts sync` retry the persisted
+outbox. Timer fires use their timer ID and original due time, note answers use
+their note/decision identity, and resumes use their original park identity.
+Repeating timer fires and separate CLI sends therefore remain distinct. Receipts
+and the acknowledged cursor remain for the execution's lifetime; sequence gaps
+stay queued and cannot overtake an uncertain message.
+
+The runner persists `uncertain` before writing to the harness and commits an
+ID-bearing acceptance evidence file before the journal receipt. Synchronization
+recovers a receipt lost after that evidence. If the harness might have consumed
+a message but no durable evidence survived, it remains uncertain for operator
+reconciliation: inspect the owned logs, then explicitly resolve the oldest
+blocked receipt if its outcome has been reconciled:
+
+```sh
+beekeeper agents messages resolve worker <message-uuid> --reason "Reconciled outcome; skip without replay"
+beekeeper agents hosts sync host-a
+```
+
+This records the reason in both journals, retains the receipt, and advances the
+cursor so later messages can flow. An uncertain write may already have been
+consumed, or may still finish; resolution neither cancels it nor resends it.
+Resolution does not count as acceptance or clear a park. If a deliberate new
+resume is needed, use a new explicit request ID. Resolve retries reuse the same
+message ID and reason. A different reason is refused. Completed and terminal
+executions skip message delivery; control reconciliation and inspection continue
+despite any message failure. Resolution never restarts an exited process.
+Accepted and resolved coordinator receipts discard message text while retaining
+the digest required to reject conflicting explicit retries.
+
+No automatic replay or new process can resolve ambiguous consumption safely.
+This is not a claim of crash-atomic model
+execution. Journal admission refuses before exceeding its bounded storage.
+
+Executions created before streaming-message support retain their original
+single-turn behavior and explicitly refuse remote wakes. Recovery does not
+upgrade or restart them.

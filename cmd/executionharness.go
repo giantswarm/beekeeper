@@ -47,8 +47,11 @@ func (h sshHarness) DryRun(ctx context.Context, a *app, sp agentStart, _ []strin
 	h.options.DryRun = true
 	return h.Start(ctx, a, sp)
 }
-func (sshHarness) Wake(*app, state.Party, state.Agent, string, string) error {
-	return execution.ErrUnsupported
+func (sshHarness) Wake(a *app, by state.Party, ag state.Agent, _ string, text string) error {
+	if a == nil || ag.Execution == nil {
+		return execution.ErrUnsupported
+	}
+	return a.enqueueExecutionWake(context.Background(), by, ag, text, nil)
 }
 func (sshHarness) Send(*app, string, string, string) error { return execution.ErrUnsupported }
 func (h sshHarness) Stop(ctx context.Context, a *app, _ string) string {

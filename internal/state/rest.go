@@ -177,6 +177,15 @@ func (v Start) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainSt
 
 type plainExecutionRecord ExecutionRecord
 
+type plainExecutionMessage ExecutionMessage
+
+func (v *ExecutionMessage) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainExecutionMessage)(v), &v.rest)
+}
+func (v ExecutionMessage) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainExecutionMessage(v), v.rest)
+}
+
 func (v *ExecutionRecord) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainExecutionRecord)(v), &v.rest)
 }

@@ -43,7 +43,7 @@ const (
 	Unreachable    = "unreachable"
 )
 
-var ErrUnsupported = errors.New("remote wake acceptance is not implemented; see https://github.com/giantswarm/beekeeper/issues/1714")
+var ErrUnsupported = errors.New("message acceptance is unavailable for this SSH execution or adapter; inspect the original execution before recovery")
 
 type HostID string
 type ExecutionID string
@@ -73,6 +73,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	Messaging      bool   `json:"messaging,omitempty"`
 	Builds         bool   `json:"builds"`
 	Ref            Ref    `json:"ref"`
 	RequestID      string `json:"requestID"`
@@ -142,15 +143,17 @@ type Handle struct {
 }
 
 type Observation struct {
-	Handle           Handle    `json:"handle"`
-	ProcessState     string    `json:"processState"`
-	Reachability     string    `json:"reachability"`
-	ObservedAt       time.Time `json:"observedAt"`
-	ReachabilityAt   time.Time `json:"reachabilityAt"`
-	Ready            bool      `json:"ready"`
-	StopRequested    bool      `json:"stopRequested"`
-	StopAcknowledged bool      `json:"stopAcknowledged"`
-	LastError        string    `json:"lastError,omitempty"`
+	Messages         []Delivery `json:"messages,omitempty"`
+	MessageSequence  uint64     `json:"messageSequence,omitempty"`
+	Handle           Handle     `json:"handle"`
+	ProcessState     string     `json:"processState"`
+	Reachability     string     `json:"reachability"`
+	ObservedAt       time.Time  `json:"observedAt"`
+	ReachabilityAt   time.Time  `json:"reachabilityAt"`
+	Ready            bool       `json:"ready"`
+	StopRequested    bool       `json:"stopRequested"`
+	StopAcknowledged bool       `json:"stopAcknowledged"`
+	LastError        string     `json:"lastError,omitempty"`
 }
 
 // FailedContact preserves the last process evidence. A transport failure
@@ -169,12 +172,21 @@ func (o Observation) FailedContact(err error, now time.Time) Observation {
 }
 
 type Envelope struct {
+	Sender   Sender `json:"sender"`
 	ID       string `json:"id"`
 	Sequence uint64 `json:"sequence"`
 	From     Ref    `json:"from"`
 	To       Ref    `json:"to"`
 	Kind     string `json:"kind"`
 	Text     string `json:"text"`
+}
+
+// Sender is the coordinating caller, retained across SSH and login shells.
+// From and To bind delivery to the owned execution and process generation.
+type Sender struct {
+	Session string `json:"session"`
+	Name    string `json:"name"`
+	Host    string `json:"host"`
 }
 
 type Ack struct {
