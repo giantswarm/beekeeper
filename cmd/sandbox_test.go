@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -201,5 +204,32 @@ func TestDevctlPath(t *testing.T) {
 	}
 	if got := devctlPath("devctl"); got != nil {
 		t.Errorf("devctl on PATH: %q, want the broker's PATH", got)
+	}
+}
+
+type populatedCapper struct {
+	recordingCapper
+	live bool
+	err  error
+}
+
+func (c *populatedCapper) ScopePopulated(string) (bool, error) { return c.live, c.err }
+
+func TestBrokeredScopeState(t *testing.T) {
+	c := &populatedCapper{}
+	h := brokeredScopeState(c)
+	for _, live := range []bool{false, true} {
+		c.live = live
+		r, err := h(context.Background(), 7, sandbox.Request{Op: sandbox.OpScopeState, Unit: testRunUnit})
+		if err != nil || r.Out != strconv.FormatBool(live) {
+			t.Fatalf("reply %+v %v", r, err)
+		}
+	}
+	if _, err := h(context.Background(), 7, sandbox.Request{Unit: "../other"}); err == nil {
+		t.Fatal("arbitrary cgroup accepted")
+	}
+	c.err = fmt.Errorf("unreadable")
+	if _, err := h(context.Background(), 7, sandbox.Request{Unit: testRunUnit}); err == nil {
+		t.Fatal("read error lost")
 	}
 }

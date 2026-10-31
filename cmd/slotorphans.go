@@ -2,10 +2,17 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // A run's scope sits in its build slot's slice, and a slot whose slice
@@ -31,6 +38,7 @@ func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
 	if t == nil {
 		return
 	}
+	w.emptySlotHolders(now, t)
 	if w.orphanSince == nil {
 		w.orphanSince = map[string]time.Time{}
 	}
@@ -105,4 +113,90 @@ func orphanedScope(t *proc.Table, pids []int) bool {
 		}
 	}
 	return adopted
+}
+
+// stopEmptyHolder uses a stable pidfd and rechecks evidence while the wrapper
+// is frozen, so a queued memory/cache waiter or a concurrent start is safe.
+var stopEmptyHolder = proc.StopIdle
+
+func (w *watcher) emptySlotHolders(now time.Time, t *proc.Table) {
+	reader, ok := plat.Capper.(interface{ ScopePopulated(string) (bool, error) })
+	if !ok {
+		return
+	}
+	if w.emptyHolderSince == nil {
+		w.emptyHolderSince = map[string]time.Time{}
+	}
+	dir, n := w.slotView()
+	found := map[string]bool{}
+	for _, slot := range machine.ReadSlots(dir, n) {
+		h, ok := guard.ParseHolder(slot.Holder)
+		if slot.Free || !ok || h.PID <= 1 || h.Since.IsZero() {
+			continue
+		}
+		p := t.ByPID[h.PID]
+		if p == nil || p.Start.IsZero() || len(t.Children(h.PID)) > 0 {
+			continue
+		}
+		if (h.Started.IsZero() && p.Start.After(h.Since)) || (!h.Started.IsZero() && !h.Started.Equal(p.Start)) {
+			continue
+		}
+		// Older holders have no scope/deadline metadata. A run.start event is
+		// proof that they passed the legitimate memory and cache waits.
+		scope := h.Scope
+		ready := !h.StartDeadline.IsZero() && !now.Before(h.StartDeadline)
+		if !ready {
+			events, err := w.store.Events(1, func(e state.Event) bool {
+				unit := guard.RunScope(e.Detail)
+				return e.Verb == guard.VerbStart && !e.At.Before(h.Since) && (strings.HasPrefix(unit, fmt.Sprintf("memcap-%d-", h.PID)) || strings.HasPrefix(unit, fmt.Sprintf("memcap-test-%d-", h.PID)))
+			})
+			if err == nil && len(events) > 0 {
+				scope = strings.TrimSuffix(guard.RunScope(events[0].Detail), ".scope")
+				ready = true
+			}
+		}
+		if !ready || scope == "" || now.Sub(h.Since) < slotOrphanGrace {
+			continue
+		}
+		empty := func() bool {
+			live, err := reader.ScopePopulated(scope)
+			if err != nil || live {
+				return false
+			}
+			s := plat.Machine.SlotSlice(guard.Options{SlotDir: dir}.SlotSlice(slot.N))
+			if s != nil && len(s.Scopes) > 0 {
+				return false
+			}
+			path := filepath.Join(dir, strconv.Itoa(slot.N)+".holder")
+			raw, err := os.ReadFile(filepath.Clean(path))
+			return err == nil && strings.TrimSpace(string(raw)) == slot.Holder
+		}
+		if !empty() {
+			continue
+		}
+		key := fmt.Sprintf("emptyholder:%d:%d:%d", slot.N, h.PID, p.Start.UnixNano())
+		found[key] = true
+		since, seen := w.emptyHolderSince[key]
+		if !seen {
+			since = now
+			w.emptyHolderSince[key] = now
+		}
+		w.emit(key, "EMPTY SLOT HOLDER: slot %d held by %s has no live process in %s.scope; the watch recovers it after the grace", slot.N, h.Who(), scope)
+		if !w.slotsOn || now.Sub(since) < slotOrphanGrace {
+			continue
+		}
+		err := stopEmptyHolder(h.PID, p.Start, empty)
+		w.check(key+".stop", err != nil, "EMPTY SLOT HOLDER STOP FAILED: slot %d: %v", slot.N, err)
+		if err == nil {
+			w.emitNow("emptyholder", "STOPPED empty slot holder %s of slot %d; its lock is released by process exit", h.Who(), slot.N)
+		} else {
+			found[key+".stop"] = true
+		}
+	}
+	w.clearMissing("emptyholder:", found)
+	for key := range w.emptyHolderSince {
+		if !found[key] {
+			delete(w.emptyHolderSince, key)
+		}
+	}
 }

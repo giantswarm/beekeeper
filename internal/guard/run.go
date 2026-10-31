@@ -226,6 +226,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // Options configure one capped run.
 type Options struct {
+	// scope is assigned before slot acquisition, so setup stalls are recoverable.
+	scope string
 	// StopWith is a verified managed execution service, never a CLI flag.
 	StopWith string
 	// Max is the scope's MemoryMax, a systemd size ("12G").
@@ -396,6 +398,11 @@ func Run(o Options, argv []string) int {
 		return 1
 	}
 
+	prefix := ScopePrefix
+	if o.Test {
+		prefix = TestScopePrefix
+	}
+	o.scope = fmt.Sprintf("%s%d-%06d", prefix, os.Getpid(), time.Now().Nanosecond()%1000000)
 	var lock *flock.Flock
 	slot := 0
 	if !o.slotless() {
@@ -443,15 +450,8 @@ func Run(o Options, argv []string) int {
 		env = append(env, gocache.HeldEnv+"="+o.GoCache)
 	}
 
-	prefix := ScopePrefix
-	if o.Test {
-		prefix = TestScopePrefix
-	}
-	unit := fmt.Sprintf("%s%d-%06d", prefix, os.Getpid(), time.Now().Nanosecond()%1000000)
+	unit := o.scope
 	head := CommandHead(argv)
-	if slot > 0 && !shared {
-		writeHolder(o, slot, argv, unit)
-	}
 	how := fmt.Sprintf("slot %d", slot)
 	switch {
 	case o.slotless():
@@ -555,28 +555,28 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 			if n := sessionSlot(o, session); n > 0 {
 				return nil, n
 			}
-			m, memErr := plat.Machine.Mem()
-			short := memErr == nil && int64(m.AvailableMiB)<<10 < needKiB
-			if short {
-				t.leave()
-				t = nil
-			} else if t == nil {
+			if t == nil {
 				t, _ = enqueue(o.SlotDir, queuedRun(argv))
 			}
 			turn, ahead := t.turn(o.Slots)
 			var occupied string
-			switch {
-			case short:
-				reason = fmt.Sprintf("memory: %d MiB available, the cap needs %d; no build slot held, outside the slot queue", m.AvailableMiB, needKiB>>10)
-			case !turn:
+			if !turn {
 				reason = fmt.Sprintf("its turn in the build slot queue:\n%s%s", holders(o), ahead)
-			default:
-				if lock, slot, occupied = acquire(o); lock != nil {
+			} else if lock, slot, occupied = acquire(o); lock == nil {
+				reason = fmt.Sprintf("a build slot (all %d held):\n%s%s", o.Slots, holders(o), occupied)
+			} else {
+				m, memErr := plat.Machine.Mem()
+				if memErr == nil && int64(m.AvailableMiB)<<10 < needKiB {
+					_ = lock.Unlock()
+					lock = nil
+					slot = 0
+					t.leave()
+					t = nil
+					reason = fmt.Sprintf("memory: %d MiB available, the cap needs %d; no build slot held, outside the slot queue", m.AvailableMiB, needKiB>>10)
+				} else {
 					writeHolder(o, slot, argv)
 					t.leave()
 					t = nil
-				} else {
-					reason = fmt.Sprintf("a build slot (all %d held):\n%s%s", o.Slots, holders(o), occupied)
 				}
 			}
 		}
@@ -644,7 +644,7 @@ func holders(o Options) string {
 			h, ok := ParseHolder(s.Holder)
 			if reader, supported := plat.Capper.(interface{ ScopePopulated(string) (bool, error) }); ok && supported && h.Scope != "" && now.Sub(h.Since) >= scopeStartWait {
 				if live, err := reader.ScopePopulated(h.Scope); err == nil && !live {
-					fmt.Fprintf(&b, "    no live processes in %s.scope; the launcher watchdog releases this slot\n", h.Scope)
+					fmt.Fprintf(&b, "    no live processes in %s.scope; the watch recovers this holder after its startup deadline\n", h.Scope)
 				}
 			}
 		}
@@ -658,9 +658,11 @@ type Holder struct {
 	PID     int
 	Session string
 	// Name is the holding session's name, "" when its run had none.
-	Name  string
-	Scope string
-	Cmd   string
+	Name          string
+	Scope         string
+	Started       time.Time
+	StartDeadline time.Time
+	Cmd           string
 	// Since is when the slot was taken, zero when the record has none.
 	Since time.Time
 }
@@ -673,7 +675,7 @@ func ParseHolder(raw string) (Holder, bool) {
 		return Holder{}, false
 	}
 	since, _ := time.Parse(time.RFC3339, h.Since)
-	return Holder{PID: h.PID, Session: h.Session, Name: h.Name, Scope: h.Scope, Cmd: h.Cmd, Since: since}, true
+	return Holder{PID: h.PID, Session: h.Session, Name: h.Name, Scope: h.Scope, Started: h.Started, StartDeadline: h.StartDeadline, Cmd: h.Cmd, Since: since}, true
 }
 
 // Who names the holder: its session's name, else its session id, and its
@@ -734,12 +736,14 @@ type holderRecord struct {
 	Since   string `json:"since"`
 	// Name is the session's name ($CLAUDE_CODE_SESSION_NAME), beekeeper's
 	// addition; memcap's readers skip it.
-	Name  string `json:"name,omitempty"`
-	Scope string `json:"scope,omitempty"`
+	Name          string    `json:"name,omitempty"`
+	Scope         string    `json:"scope,omitempty"`
+	Started       time.Time `json:"started,omitempty"`
+	StartDeadline time.Time `json:"startDeadline,omitempty"`
 }
 
 func writeHolder(o Options, slot int, argv []string, scope ...string) {
-	unit := ""
+	unit := o.scope
 	if len(scope) > 0 {
 		unit = scope[0]
 	}
@@ -753,7 +757,7 @@ func writeHolder(o Options, slot int, argv []string, scope ...string) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(holderRecord{PID: os.Getpid(), Session: sessionID(), CWD: cwd, Cmd: cmd, Max: o.Max,
-		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME"), Scope: unit})
+		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME"), Scope: unit, Started: holderStarted(), StartDeadline: time.Now().Add(2*max(o.Wait, time.Second) + scopeStartWait)})
 }
 
 // A missing scope may still be starting; once populated, an empty scope
@@ -964,3 +968,5 @@ func execve(argv []string, logf func(string, ...any)) int {
 	logf("%v", err)
 	return ExitNotFound
 }
+
+func holderStarted() time.Time { started, _ := proc.Started(os.Getpid()); return started }

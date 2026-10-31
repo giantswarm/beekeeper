@@ -83,9 +83,10 @@ When the command exits and leaves processes in its scope (a test's
 kube-apiserver), run stops the scope before it releases the slot and names
 them; a scope left that way would keep the slot busy for every other run.
 A launcher whose scope becomes empty is stopped and releases its slot;
-when the scope never starts, a 30s startup grace applies. A run waiting
-for memory holds neither a slot nor a place in the slot queue; it joins
-the queue once its memory is available. The run exits 1
+when the scope never starts, a 30s startup grace applies. A memory-short waiter yields its queue
+position only when its turn reaches a free slot. While builds occupy the
+slots, waiters keep FIFO order. The host watch also recovers expired, empty
+slot holders after checking their lifecycle and process identity. The run exits 1
 and reports the empty scope. Queue diagnostics also name an empty holder
 scope. Scope read errors leave the command running.
 Bound the command's parallelism rather than raising --max.

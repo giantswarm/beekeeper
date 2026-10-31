@@ -137,3 +137,44 @@ func TestMemoryWaitHoldsNoBuildSlot(t *testing.T) {
 		t.Fatalf("lock %v slot %d checked %v", lock, slot, checked)
 	}
 }
+
+func TestMemoryShortWaiterRetainsTicketWhileSlotsBusy(t *testing.T) {
+	saved := plat.Machine
+	plat.Machine = lowMem{Machine: saved}
+	t.Cleanup(func() { plat.Machine = saved })
+	o := Options{SlotDir: t.TempDir(), Slots: 1, Wait: time.Millisecond, Stderr: io.Discard}
+	holdSlot(t, o.SlotDir, 1, "other")
+	checked := false
+	logf := func(string, ...any) {
+		checked = true
+		if a := waiters(queueDir(o.SlotDir), ""); len(a) != 1 {
+			t.Errorf("busy-slot waiter lost ticket: %v", a)
+		}
+	}
+	lock, slot := waitForSlot(o, 8<<20, "", []string{"first"}, logf)
+	if lock != nil || slot != 0 || !checked {
+		t.Fatalf("unexpected result %v %d %v", lock, slot, checked)
+	}
+}
+
+func TestMemoryShortWaiterRetainsTicketBeforeItsTurn(t *testing.T) {
+	saved := plat.Machine
+	plat.Machine = lowMem{Machine: saved}
+	t.Cleanup(func() { plat.Machine = saved })
+	o := Options{SlotDir: t.TempDir(), Slots: 1, Wait: time.Millisecond, Stderr: io.Discard}
+	first, err := enqueue(o.SlotDir, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.leave()
+	logf := func(string, ...any) {
+		if a := waiters(queueDir(o.SlotDir), ""); len(a) != 2 {
+			t.Errorf("waiter before its turn lost ticket: %v", a)
+		}
+	}
+	lock, _ := waitForSlot(o, 8<<20, "", []string{"second"}, logf)
+	if lock != nil {
+		_ = lock.Unlock()
+		t.Fatal("second waiter acquired slot")
+	}
+}

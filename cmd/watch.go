@@ -495,8 +495,9 @@ type watcher struct {
 	worktreesNext     time.Time
 	// slotsOn stops orphaned slot scopes (not for --once); orphanSince is
 	// when the watch first saw each orphaned slot scope.
-	slotsOn     bool
-	orphanSince map[string]time.Time
+	slotsOn          bool
+	orphanSince      map[string]time.Time
+	emptyHolderSince map[string]time.Time
 	// doctored are the chore lines the doctor said, each said once.
 	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
