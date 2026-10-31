@@ -155,7 +155,7 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	}()
 	launchCtx, launchCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer launchCancel()
-	if err := r.exec(launchCtx, pod, nil, io.Discard, shellBash, "-c", start, "--", id, sub, shellCommand(argv), wrapper); err != nil {
+	if err := r.exec(launchCtx, pod, nil, io.Discard, shellBash, "-c", start, "--", id, sub, shellCommand(argv), wrapper, tool); err != nil {
 		// A lost launch reply is recoverable: follow waits for the run's journal.
 		_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: reconnecting to remote run journal")
 	}

@@ -18,13 +18,17 @@ func TestRemoteRunConfig(t *testing.T) {
     maxPods: 4
     placementTimeout: 45s
     idleTimeout: 2h
+    cache:
+      enabled: true
+      secret: build-cache
+      readOnly: true
 `)
 	c, err := parse("/config/test.yaml", raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := c.Run.Remote
-	if !r.Enabled || r.MaxPods != 4 || r.PlacementTimeout != 45*time.Second || r.IdleTimeout != 2*time.Hour || r.Images["go"] != "builder:test" {
+	if !r.Enabled || r.MaxPods != 4 || r.PlacementTimeout != 45*time.Second || r.IdleTimeout != 2*time.Hour || r.Images["go"] != "builder:test" || !r.Cache.Enabled || r.Cache.Secret != "build-cache" || !r.Cache.ReadOnly {
 		t.Fatalf("remote config not loaded: %+v", r)
 	}
 	if _, err := parse("/config/test.yaml", []byte("run:\n  remote:\n    enabled: true\n")); err == nil {
