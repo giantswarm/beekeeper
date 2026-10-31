@@ -193,6 +193,21 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 	return lines, evs, fires, changed
 }
 
+// wouldFireTimers says, for --once, what the auto timers of st would do at
+// now, found their checks: each line as a running watch would say it, marked
+// that --once writes nothing. It settles a copy; st and its timers stay as
+// they are, so a look by hand neither wakes nor closes another's timer.
+func (w *watcher) wouldFireTimers(st *state.State, found map[int]checkResult) {
+	scratch := state.State{Timers: slices.Clone(st.Timers), Stop: st.Stop}
+	lines, _, _, _ := settleTimers(&scratch, found, w.now)
+	for _, l := range lines {
+		if head, rest, ok := strings.Cut(l, ": "); ok {
+			l = head + " (--once writes nothing): " + rest
+		}
+		w.emitNow("pending", "%s", l)
+	}
+}
+
 // actTimers wakes the agents and runs the commands of the fired timers,
 // outside the poll: a wake by name takes seconds, a command up to
 // timerRunTimeout. A timer without either was its watch line.

@@ -254,7 +254,9 @@ keeps no value: the program, its subcommands and the flag names.
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
-polls once, keeps no mark and says every condition it finds; a read that
+polls once, keeps no mark and says every condition it finds; it fires no
+timer (no wake, no command, no close or re-arm), each one due a TIMER line
+marked that --once writes nothing; a read that
 fails (the state, a source, GitHub) is a line and makes it exit 1, so a
 silent --once with exit 0 means nothing changed. The notes' read is said
 on the NOTE path: NOTE REFS UNREADABLE when GitHub fails it, NOTE REFS
@@ -1886,6 +1888,11 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		over, kept = nil, nil
 	}
 	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st))
+	var settles func(state.Timer) bool // nil: a running watch settles every timer
+	if !w.chores {
+		w.wouldFireTimers(st, found)
+		settles = func(state.Timer) bool { return false }
+	}
 	var fires []timerFire
 	var defaulted, overtaken []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
@@ -1902,7 +1909,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
-		tl, te, tf, touched := settleTimers(st, found, w.now)
+		tl, te, tf, touched := settleTimersMatching(st, found, w.now, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
