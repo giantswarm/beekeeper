@@ -315,3 +315,56 @@ func TestSSHStoredMessageFailsOnlyOnConfirmedRunnerExit(t *testing.T) {
 		t.Fatal("delivery failure recovery started another process")
 	}
 }
+
+func TestSSHResolveBlockedReceiptUnblocksQueueWithoutReplay(t *testing.T) {
+	for _, stage := range []string{Failed, Uncertain} {
+		t.Run(stage, func(t *testing.T) {
+			f := testFixture(t)
+			f.r.Messaging = true
+			ctx := context.Background()
+			if _, err := f.s.Start(ctx, f.r); err != nil {
+				t.Fatal(err)
+			}
+			one := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "blocked"}
+			two := one
+			two.ID = newID()
+			two.Sequence = 2
+			if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error {
+				if _, err := j.Messages.Store(f.r.Ref, one); err != nil {
+					return err
+				}
+				if _, err := j.Messages.Store(f.r.Ref, two); err != nil {
+					return err
+				}
+				d := j.Messages.Entries[one.ID]
+				d.Stage = stage
+				j.Messages.Entries[one.ID] = d
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			q := MessageResolution{ID: one.ID, Reason: "operator reconciled uncertain delivery"}
+			ack, err := f.s.ResolveMessage(ctx, f.r.Ref, q)
+			if err != nil || ack.Stage != Resolved {
+				t.Fatalf("resolve failed: %+v %v", ack, err)
+			}
+			if _, err := f.s.ResolveMessage(ctx, f.r.Ref, q); err != nil {
+				t.Fatal(err)
+			}
+			j, _ := f.s.Read(f.r.Ref)
+			if next, ok := j.Messages.Next(); !ok || next.ID != two.ID {
+				t.Fatal("blocked cursor did not advance")
+			}
+			if j.Messages.Entries[one.ID].Stage == Accepted || len(f.launcher.starts) != 0 {
+				t.Fatal("resolution claimed consumption or relaunched")
+			}
+			if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error { return j.Messages.Accept(one.ID) }); err != nil {
+				t.Fatal("late echo after resolution killed the stream", err)
+			}
+			q.Reason = "changed reason"
+			if _, err := f.s.ResolveMessage(ctx, f.r.Ref, q); err == nil {
+				t.Fatal("conflicting resolution silently replaced audit reason")
+			}
+		})
+	}
+}

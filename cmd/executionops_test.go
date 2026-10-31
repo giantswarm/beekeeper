@@ -16,12 +16,20 @@ const sshTestInspect = "inspect"
 
 type testExecutionTransport struct {
 	execution.Transport
+	resolve func(context.Context, execution.Ref, execution.MessageResolution) (execution.Ack, error)
 	message func(context.Context, execution.Ref, execution.Envelope) (execution.Ack, error)
 	start   func(context.Context, execution.StartRequest) (execution.Handle, error)
 	logs    func(context.Context, execution.Ref, execution.LogRequest) (execution.LogPage, error)
 	stop    func(context.Context, execution.Ref, execution.StopRequest) (execution.Ack, error)
 	inspect func(context.Context, execution.Ref) (execution.Observation, error)
 	sync    func(context.Context, execution.Ref) (execution.ControlResult, error)
+}
+
+func (f *testExecutionTransport) ResolveMessage(ctx context.Context, r execution.Ref, q execution.MessageResolution) (execution.Ack, error) {
+	if f.resolve == nil {
+		return execution.Ack{}, execution.ErrUnsupported
+	}
+	return f.resolve(ctx, r, q)
 }
 
 func (f *testExecutionTransport) Message(ctx context.Context, r execution.Ref, m execution.Envelope) (execution.Ack, error) {

@@ -479,6 +479,12 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err == nil {
 					value, err = s.Message(ctx, req.Ref, m)
 				}
+			case "resolve-message":
+				var q MessageResolution
+				err = Decode(req.Payload, &q)
+				if err == nil {
+					value, err = s.ResolveMessage(ctx, req.Ref, q)
+				}
 			default:
 				err = errors.New("unknown execution operation")
 			}

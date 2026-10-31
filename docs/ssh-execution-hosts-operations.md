@@ -1,7 +1,7 @@
 # Operating SSH execution hosts
 
-The first slice starts one managed, headless Claude Code turn on an explicitly
-selected SSH host. Each execution gets an isolated clone, an owned user service,
+Managed, headless Claude Code sessions run on an explicitly selected SSH host.
+Each execution gets an isolated clone, an owned user service,
 a conversation identifier, and one coordinator roster registration. Omitting
 `--host`, or selecting `--host local`, keeps the local launch path.
 
@@ -205,7 +205,8 @@ beekeeper agents inspect worker --json
 `agents messages` shows coordinating delivery state without message text.
 `agents inspect` shows host receipts, ordered acceptance cursor and process
 reachability. States are `pending` (coordinator only), `stored`, `uncertain`
-(a harness write was attempted), `accepted`, and `failed` (an unsent message found
+(a harness write was attempted), `accepted`, `resolved` (an operator skipped a
+blocked receipt without claiming acceptance), and `failed` (an unsent message found
 its runner already completed or ended). A failed receipt blocks later delivery
 and is not retried automatically. An unavailable or ended process
 is also visible through inspection; a transport failure never proves it ended.
@@ -214,9 +215,11 @@ reconcile the same durable identities, retry only unacknowledged envelopes, and
 never create a replacement process. A park remains until its resume is accepted.
 
 An explicit request ID binds the sender and text; conflicting reuse is refused.
-Without one, identical sender/text retries within the execution reuse their
-envelope; a resume also includes its original park identity. Supply another ID
-for a deliberate second identical message. Receipts
+Without one, each CLI wake is a distinct send, including identical text. Use an
+explicit request ID for CLI retries, or let `hosts sync` retry the persisted
+outbox. Timer fires use their timer ID and original due time, note answers use
+their note/decision identity, and resumes use their original park identity.
+Repeating timer fires and separate CLI sends therefore remain distinct. Receipts
 and the acknowledged cursor remain for the execution's lifetime; sequence gaps
 stay queued and cannot overtake an uncertain message.
 
@@ -224,8 +227,27 @@ The runner persists `uncertain` before writing to the harness and commits an
 ID-bearing acceptance evidence file before the journal receipt. Synchronization
 recovers a receipt lost after that evidence. If the harness might have consumed
 a message but no durable evidence survived, it remains uncertain for operator
-reconciliation: inspect the owned logs. No automatic replay or new process can
-resolve that ambiguity safely. This is not a claim of crash-atomic model
+reconciliation: inspect the owned logs, then explicitly resolve the oldest
+blocked receipt if its outcome has been reconciled:
+
+```sh
+beekeeper agents messages resolve worker <message-uuid> --reason "Reconciled outcome; skip without replay"
+beekeeper agents hosts sync host-a
+```
+
+This records the reason in both journals, retains the receipt, and advances the
+cursor so later messages can flow. An uncertain write may already have been
+consumed, or may still finish; resolution neither cancels it nor resends it.
+Resolution does not count as acceptance or clear a park. If a deliberate new
+resume is needed, use a new explicit request ID. Resolve retries reuse the same
+message ID and reason. A different reason is refused. Completed and terminal
+executions skip message delivery; control reconciliation and inspection continue
+despite any message failure. Resolution never restarts an exited process.
+Accepted and resolved coordinator receipts discard message text while retaining
+the digest required to reject conflicting explicit retries.
+
+No automatic replay or new process can resolve ambiguous consumption safely.
+This is not a claim of crash-atomic model
 execution. Journal admission refuses before exceeding its bounded storage.
 
 Executions created before streaming-message support retain their original

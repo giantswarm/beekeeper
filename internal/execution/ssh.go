@@ -259,6 +259,15 @@ func (t SSHTransport) Message(ctx context.Context, r Ref, m Envelope) (Ack, erro
 	err := t.Call(ctx, "message", r, m, &x)
 	return x, err
 }
+
+func (t SSHTransport) ResolveMessage(ctx context.Context, r Ref, q MessageResolution) (Ack, error) {
+	var ack Ack
+	err := t.Call(ctx, "resolve-message", r, q, &ack)
+	if err == nil && (ack.ID != q.ID || ack.Stage != Resolved) {
+		err = errors.New("message resolution acknowledgement mismatch")
+	}
+	return ack, err
+}
 func (t SSHTransport) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	var x Ack
 	err := t.Call(ctx, "stop", r, q, &x)

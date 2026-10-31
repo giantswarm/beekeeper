@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -202,6 +203,9 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	if n.By.Name == "" {
 		return ""
 	}
+	quiet := *a
+	quiet.executionRequestID = fmt.Sprintf("note/%d/%s", n.ID, execution.Digest([]byte(line)))
+	a = &quiet
 	st, err := a.store.Read()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "note #%d: telling %q failed (%v): %s\n", n.ID, n.By.Name, err, line)

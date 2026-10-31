@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,12 +20,14 @@ const (
 	Stored          = "stored"
 	Accepted        = "accepted"
 	Uncertain       = "uncertain"
+	Resolved        = "resolved"
 )
 
 type Delivery struct {
-	Envelope Envelope `json:"envelope"`
-	Digest   string   `json:"digest"`
-	Stage    string   `json:"stage"`
+	Resolution string   `json:"resolution,omitempty"`
+	Envelope   Envelope `json:"envelope"`
+	Digest     string   `json:"digest"`
+	Stage      string   `json:"stage"`
 }
 
 // MessageLedger keeps receipts for the execution's lifetime. Sequence only
@@ -108,6 +111,9 @@ func (l *MessageLedger) Attempt(m Envelope) error {
 
 func (l *MessageLedger) Accept(id string) error {
 	d, ok := l.Entries[id]
+	if ok && d.Stage == Resolved {
+		return nil
+	}
 	if ok && d.Stage == Accepted && d.Envelope.Sequence <= l.Sequence {
 		return nil
 	}
@@ -149,7 +155,7 @@ func (s *Server) Message(ctx context.Context, ref Ref, m Envelope) (ack Ack, err
 		}
 		return e
 	})
-	if err != nil || ack.Stage == Accepted || ack.Stage == Failed {
+	if err != nil || ack.Stage == Accepted || ack.Stage == Failed || ack.Stage == Resolved {
 		return ack, err
 	}
 	if err := s.reconcileMessages(ctx, ref); err != nil {
@@ -161,6 +167,57 @@ func (s *Server) Message(ctx context.Context, ref Ref, m Envelope) (ack Ack, err
 		_ = conn.Close()
 	}
 	return s.waitMessageAck(ctx, ref, m.ID)
+}
+
+type MessageResolution struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+type MessageResolver interface {
+	ResolveMessage(context.Context, Ref, MessageResolution) (Ack, error)
+}
+
+// Resolve explicitly skips a blocked receipt. It records operator intent, not
+// harness acceptance, and never retries an uncertain write.
+func (l *MessageLedger) Resolve(q MessageResolution) (Ack, error) {
+	d, ok := l.Entries[q.ID]
+	if !ok || strings.TrimSpace(q.Reason) == "" || len(q.Reason) > 1024 {
+		return Ack{}, errors.New("resolution needs an existing message and a bounded reason")
+	}
+	if d.Stage == Resolved {
+		if d.Resolution != q.Reason {
+			return Ack{}, errors.New("resolution reason conflicts with its original receipt")
+		}
+		return d.Ack(), nil
+	}
+	if d.Stage != Failed && d.Stage != Uncertain {
+		return Ack{}, errors.New("only failed or uncertain delivery can be resolved")
+	}
+	if d.Envelope.Sequence != l.Sequence+1 {
+		return Ack{}, errors.New("resolve the oldest blocked sequence first")
+	}
+	d.Stage, d.Resolution, d.Envelope.Text = Resolved, q.Reason, ""
+	l.Entries[q.ID], l.Sequence = d, d.Envelope.Sequence
+	return d.Ack(), nil
+}
+
+func (s *Server) ResolveMessage(ctx context.Context, ref Ref, q MessageResolution) (ack Ack, err error) {
+	err = s.update(ctx, ref, func(j *Journal) error {
+		var e error
+		ack, e = j.Messages.Resolve(q)
+		if e == nil && len(mustJSON(j)) > MaxWire {
+			return errors.New("resolution journal is full")
+		}
+		return e
+	})
+	if err != nil {
+		return ack, err
+	}
+	dial := net.Dialer{Timeout: 100 * time.Millisecond}
+	if conn, e := dial.DialContext(ctx, "unix", s.messageSocket(ref)); e == nil {
+		_ = conn.Close()
+	}
+	return ack, nil
 }
 
 // reconcileMessages restores only ID-bearing evidence already synced by the

@@ -197,13 +197,6 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		if st.Stop != nil && !r.Terminal() && r.StopRequest == nil {
 			if err := a.stopExecution(ctx, ref, st.Stop.Reason); err != nil {
 				failures = append(failures, err.Error())
-				continue
-			}
-		}
-		if st.Stop == nil && r.StopRequest == nil {
-			if err := a.syncExecutionMessages(ctx, ref); err != nil {
-				failures = append(failures, err.Error())
-				continue
 			}
 		}
 		syncer, ok := a.executionClient(h).(execution.ControlSyncer)
@@ -213,7 +206,6 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		if _, err := syncer.SyncControl(ctx, ref); err != nil {
 			a.executionFailure(ref, err)
 			failures = append(failures, err.Error())
-			continue
 		}
 		if r.StopRequest != nil && !r.Observation.StopAcknowledged {
 			err = a.stopExecution(ctx, ref, r.StopRequest.Reason)
@@ -222,6 +214,13 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		}
 		if err != nil {
 			failures = append(failures, err.Error())
+		}
+		// Delivery failure must never starve controls or process observations.
+		// The delivery helper re-reads the fresh terminal/completed state.
+		if st.Stop == nil && r.StopRequest == nil {
+			if err := a.syncExecutionMessages(ctx, ref); err != nil {
+				failures = append(failures, err.Error())
+			}
 		}
 	}
 	if len(failures) > 0 {

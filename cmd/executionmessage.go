@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 
 	"github.com/google/uuid"
@@ -15,8 +14,8 @@ import (
 )
 
 // enqueueExecutionWake writes the sender's outbox before any transport call.
-// A default key makes watch/note/timer retries stable. Callers wanting another
-// identical message supply a distinct --request-id.
+// CLI sends get fresh identities; scheduled events and explicit retries supply
+// their own event keys. Content equality never identifies a distinct send.
 func (a *app) enqueueExecutionWake(ctx context.Context, by state.Party, ag state.Agent, text string, resume *state.Park) error {
 	if ag.Execution == nil {
 		return refused("worker has no owned execution")
@@ -28,9 +27,9 @@ func (a *app) enqueueExecutionWake(ctx context.Context, by state.Party, ag state
 	sender := execution.Sender{Session: by.Session, Name: by.Name, Host: by.Host}
 	key := a.executionRequestID
 	if key == "" {
-		key = execution.Digest([]byte(fmt.Sprintf("%s/%s/%s/%s/%s", ref.Key(), by.Session, by.Host, by.Name, text)))
+		key = uuid.NewString()
 		if resume != nil {
-			key += "/" + resume.At.String()
+			key = "resume/" + resume.At.UTC().String()
 		}
 	}
 	var id string
@@ -49,7 +48,11 @@ func (a *app) enqueueExecutionWake(ctx context.Context, by state.Party, ag state
 			if m.Key != key {
 				continue
 			}
-			if m.Envelope.Text != text || m.Envelope.Sender != sender || (m.Resume == nil) != (resume == nil) {
+			digest := m.TextDigest
+			if digest == "" {
+				digest = execution.Digest([]byte(m.Envelope.Text))
+			}
+			if digest != execution.Digest([]byte(text)) || m.Envelope.Sender != sender || (m.Resume == nil) != (resume == nil) {
 				return nil, refused("message request ID reused with different content")
 			}
 			if resume != nil && !m.Resume.At.Equal(resume.At) {
@@ -60,7 +63,7 @@ func (a *app) enqueueExecutionWake(ctx context.Context, by state.Party, ag state
 		}
 		id = uuid.NewSHA1(uuid.NameSpaceOID, []byte(ref.Key()+key)).String()
 		m := execution.Envelope{ID: id, Sequence: uint64(len(r.Messages)) + 1, From: ref, To: ref, Sender: sender, Kind: execution.MessageWake, Text: text}
-		r.Messages = append(r.Messages, state.ExecutionMessage{Envelope: m, Key: key, Stage: executionPending, Resume: resume})
+		r.Messages = append(r.Messages, state.ExecutionMessage{Envelope: m, Key: key, TextDigest: execution.Digest([]byte(text)), Stage: executionPending, Resume: resume})
 		return []state.Event{event(by, "execution.message-stored", "%s: message %s queued at sequence %d", ag.Name, id, m.Sequence)}, nil
 	})
 	if err != nil {
@@ -78,14 +81,22 @@ func (a *app) enqueueExecutionWake(ctx context.Context, by state.Party, ag state
 			if m.Stage == execution.Accepted {
 				return nil
 			}
-			return refused("message %s is %s; use agents hosts sync to reconcile, not another start; park retained until acceptance", id, m.Stage)
+			if m.Stage == executionPending || m.Stage == execution.Stored || m.Stage == execution.Uncertain {
+				return &executionDeliveryPending{err: refused("message %s queued; delivery %s; use agents hosts sync to reconcile", id, m.Stage)}
+			}
+			return refused("message %s is %s without acceptance; use a new request ID for a deliberate new send", id, m.Stage)
 		}
 	}
 	return errors.New("message receipt disappeared")
 }
 
+type executionDeliveryPending struct{ err error }
+
+func (e *executionDeliveryPending) Error() string { return e.err.Error() }
+func (e *executionDeliveryPending) Unwrap() error { return e.err }
+
 func (a *app) executionMessagesCmd() *cobra.Command {
-	return &cobra.Command{Use: "messages <agent-or-execution>", Short: "Show durable SSH delivery receipts; reconcile with agents hosts sync", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "messages <agent-or-execution>", Short: "Show durable SSH delivery receipts; reconcile with agents hosts sync", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
 		ref, err := a.executionByName(args[0])
 		if err != nil {
 			return err
@@ -98,10 +109,12 @@ func (a *app) executionMessagesCmd() *cobra.Command {
 		for _, m := range r.Messages {
 			e := m.Envelope
 			e.Text = ""
-			result = append(result, execution.Delivery{Envelope: e, Stage: m.Stage})
+			result = append(result, execution.Delivery{Envelope: e, Stage: m.Stage, Resolution: m.Resolution})
 		}
 		return a.printJSON(result)
 	}}
+	c.AddCommand(a.executionResolveMessageCmd())
+	return c
 }
 
 func (a *app) syncExecutionMessages(ctx context.Context, ref execution.Ref) error {
@@ -109,8 +122,11 @@ func (a *app) syncExecutionMessages(ctx context.Context, ref execution.Ref) erro
 	if err != nil {
 		return err
 	}
+	if r.Terminal() || r.Completed {
+		return nil
+	}
 	for _, m := range r.Messages {
-		if m.Stage == execution.Accepted {
+		if m.Stage == execution.Accepted || m.Stage == execution.Resolved {
 			continue
 		}
 		if m.Stage == execution.Failed {
@@ -121,7 +137,7 @@ func (a *app) syncExecutionMessages(ctx context.Context, ref execution.Ref) erro
 			a.executionFailure(ref, err)
 			return err
 		}
-		if ack.ID != m.Envelope.ID || ack.Sequence != m.Envelope.Sequence || !slices.Contains([]string{execution.Stored, execution.Uncertain, execution.Accepted, execution.Failed}, ack.Stage) {
+		if ack.ID != m.Envelope.ID || ack.Sequence != m.Envelope.Sequence || !slices.Contains([]string{execution.Stored, execution.Uncertain, execution.Accepted, execution.Failed, execution.Resolved}, ack.Stage) {
 			return refused("message acknowledgement identity or stage mismatch")
 		}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -133,13 +149,19 @@ func (a *app) syncExecutionMessages(ctx context.Context, ref execution.Ref) erro
 				if r.Messages[i].Envelope.ID != ack.ID {
 					continue
 				}
-				if r.Messages[i].Stage == execution.Accepted {
+				if r.Messages[i].Stage == execution.Accepted || r.Messages[i].Stage == execution.Resolved {
 					return nil, nil
 				}
 				if r.Messages[i].Stage == execution.Uncertain && ack.Stage == execution.Stored {
 					return nil, nil
 				}
 				r.Messages[i].Stage = ack.Stage
+				if ack.Stage == execution.Accepted || ack.Stage == execution.Resolved {
+					if r.Messages[i].TextDigest == "" {
+						r.Messages[i].TextDigest = execution.Digest([]byte(r.Messages[i].Envelope.Text))
+					}
+					r.Messages[i].Envelope.Text = ""
+				}
 				if ack.Stage != execution.Accepted {
 					return nil, nil
 				}
@@ -158,7 +180,7 @@ func (a *app) syncExecutionMessages(ctx context.Context, ref execution.Ref) erro
 		}); err != nil {
 			return err
 		}
-		if ack.Stage != execution.Accepted {
+		if ack.Stage != execution.Accepted && ack.Stage != execution.Resolved {
 			if ack.Stage == execution.Failed {
 				return refused("message %s failed; inspect the owned process before recovery", ack.ID)
 			}
