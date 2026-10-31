@@ -201,6 +201,9 @@ its key first in the detail):
 
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
+  tidy      every board.tidyEvery (1h) while a board is configured and the
+            GitHub budget is above its floor: board tidy, its lines printed
+            as SUPERVISOR BOARD <line>
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, or after the last round's findings were forwarded

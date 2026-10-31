@@ -387,7 +387,16 @@ type Board struct {
 	Order []BoardStep `yaml:"order"`
 	// Epics is the epic gate, whatever the order says.
 	Epics EpicGate `yaml:"epics"`
+	// ArchiveAfter is how long a closed item stays on the board before
+	// board tidy archives it (default 336h, two weeks; negative: never,
+	// closed items are still moved to Done). TidyEvery is how often the
+	// supervisor loop runs board tidy (default 1h; negative: never).
+	ArchiveAfter Duration `yaml:"archiveAfter"`
+	TidyEvery    Duration `yaml:"tidyEvery"`
 }
+
+// DefaultBoardArchiveAfter is board.archiveAfter when unset: two weeks.
+const DefaultBoardArchiveAfter = 14 * 24 * time.Hour
 
 // EpicGate is the epic gate: an epic in a Planning status is in planning,
 // neither it nor any issue under it offered; moving it to Go is the go,
@@ -3035,6 +3044,8 @@ func (c *Config) defaults() error {
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
+	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
+	setDur(&c.Board.TidyEvery, time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)

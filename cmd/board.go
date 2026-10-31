@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -44,9 +45,11 @@ sets an item's Status by the board's canonical names; rank sets an item's
 position on the board, which is the order next reads the items of each step
 in, under the person's priority list (beekeeper priority); block and
 unblock record and remove a hold on an item, a GitHub blocked-by
-dependency on another issue, which next reads.`,
+dependency on another issue, which next reads; tidy moves closed items to
+Done and archives them after board.archiveAfter, which the supervisor loop
+runs every board.tidyEvery.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false))
+	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd())
 	return c
 }
 
@@ -1280,4 +1283,80 @@ func rankPlace(rk *board.Ranked) string {
 	default:
 		return "before " + rk.Below
 	}
+}
+
+func (a *app) boardTidyCmd() *cobra.Command {
+	var dry bool
+	c := &cobra.Command{
+		Use:   "tidy [--dry-run]",
+		Short: "Move the board's closed items to Done and archive those closed for board.archiveAfter",
+		Long: `Keeps the board free of finished work, so no person has to set up its
+housekeeping by hand: every closed issue or pull request among the team's
+items (board.team; every item without one) whose Status is not Done is
+moved to Done, so the board never shows a closed issue as In Progress, and
+one closed for board.archiveAfter (default 336h, two weeks) or longer is
+archived (archiveProjectV2Item) after that move. A negative archiveAfter
+archives nothing; the moves to Done still happen. A board without a Done
+status has its closed items archived as they are.
+
+An archived item is not deleted: it stays searchable on the board
+(is:archived) and is restored with gh project item-archive <number> --owner
+<owner> --id <item> --undo, the item's id printed here. board next reads
+only open issues, so what it picks is unchanged.
+
+At most 100 writes per run; what is left is counted and tidied by the next
+run. The supervisor loop runs tidy every board.tidyEvery (default 1h;
+negative: never). Silent when nothing is to be done; --dry-run prints what
+would be done and writes nothing.
+
+GitHub's own project workflows cannot be enabled through its API, so this
+needs none of them. A person may still enable, in the board's Workflows
+settings, "Item closed" (Status to Done at once) and "Auto-archive items"
+(GitHub's own archiving, by its own filter); tidy then finds less to do.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			me, _ := a.caller()
+			t, err := a.boardClient().Tidy(cmd.Context(), a.now, dry)
+			if t != nil && !dry {
+				for _, it := range t.Items {
+					_ = a.store.Log(event(me, "board.tidy", "%s", tidyLine(t, it, a.cfg.Board)))
+				}
+			}
+			if err != nil {
+				return err
+			}
+			if a.json {
+				return a.printJSON(t)
+			}
+			for _, it := range t.Items {
+				line := tidyLine(t, it, a.cfg.Board)
+				if dry {
+					line = "would: " + line
+				}
+				if _, err := fmt.Fprintln(a.out, line); err != nil {
+					return err
+				}
+			}
+			if t.Left > 0 {
+				if _, err := fmt.Fprintf(a.out, "%d more closed items wait for the next tidy\n", t.Left); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&dry, "dry-run", false, "print what would be done, write nothing")
+	return c
+}
+
+// tidyLine says what tidy did to one item.
+func tidyLine(t *board.Tidy, it board.Tidied, b config.Board) string {
+	var did []string
+	if it.Done {
+		did = append(did, fmt.Sprintf("%s → %s", cmp.Or(it.From, "no Status"), t.Done))
+	}
+	if it.Archived {
+		did = append(did, fmt.Sprintf("archived (restore: gh project item-archive %d --owner %s --id %s --undo)", b.Project, b.Owner, it.Item))
+	}
+	return fmt.Sprintf("%s closed %s: %s", it.URL, it.Closed.UTC().Format(time.DateOnly), strings.Join(did, ", "))
 }
