@@ -74,6 +74,10 @@ func TestLoopAlertWakesParkedWorkerOnce(t *testing.T) {
 	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil || !strings.Contains(c[3], f.Instance()) {
 		t.Fatalf("wake: %v", c)
 	}
+	afterWake, _ := r.a.store.Read()
+	if afterWake.Agents[0].Park != nil {
+		t.Fatal("successful wake left worker counted parked")
+	}
 	r.pass(t)
 	if r.called(agentsName, agentWakeName) != nil {
 		t.Fatal("duplicate wake after restart")
@@ -195,6 +199,9 @@ func TestLoopAlertInterruptedWakeAndReplacementAreNotRepeated(t *testing.T) {
 			r.park(t, alertParkPrefix+f.Alertname, time.Now())
 			r.failRecord = func(e state.Event) bool { return e.Verb == loopAlertVerb }
 			r.pass(t)
+			if r.failRecord != nil {
+				t.Fatal("interruption was not injected")
+			}
 			r.pass(t)
 			if r.called(agentsName, agentWakeName) != nil || r.called(agentsName, agentStartName) != nil || r.called(agentsName, loopRemove) != nil {
 				t.Fatalf("repeated interrupted side effect: %v", r.calls)

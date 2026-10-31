@@ -131,6 +131,12 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 		}
 	}
 	for _, f := range firing {
+		// A preceding event may have resumed or replaced a parked worker.
+		// Use its current roster entry before routing the next instance.
+		st, err = a.store.Read()
+		if err != nil {
+			return err
+		}
 		owned := slices.ContainsFunc(st.AlertOwners, func(o state.AlertOwner) bool {
 			if o.Alert != f.Key || !o.Ended.IsZero() {
 				return false
@@ -262,10 +268,7 @@ func (l *supervisorLoop) wakeAlertWorker(ctx context.Context, st *state.State, a
 	if c, ok := claims[key]; ok && slices.ContainsFunc(evs, func(e state.Event) bool {
 		return e.Verb == "agents.wake" && !e.At.Before(c.at) && strings.HasPrefix(e.Detail, ag.Name+":")
 	}) {
-		if err := l.record(act, "wake delivered before interruption"); err != nil {
-			return err
-		}
-		return nil
+		return l.settleAlertWake(act, ag)
 	}
 	if !loopResumable(a, st, ag) {
 		// Write the complete replacement brief before retiring the old
@@ -297,9 +300,28 @@ func (l *supervisorLoop) wakeAlertWorker(ctx context.Context, st *state.State, a
 		if err := l.wake(ctx, act); err != nil {
 			return err
 		}
-		if err := l.record(act, "woke "+ag.Name+" for "+f.Instance()); err != nil {
-			return err
-		}
+		return l.settleAlertWake(act, ag)
 	}
 	return nil
+}
+
+// End exactly the park whose wake was delivered, and record completion in
+// the same save. A fast worker may already have parked on a new event.
+func (l *supervisorLoop) settleAlertWake(act superloop.Action, ag state.Agent) error {
+	err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		var evs []state.Event
+		for i := range st.Agents {
+			current := &st.Agents[i]
+			if current.Is(ag.Party) && current.Park != nil && current.Park.On == ag.Park.On && current.Park.At.Equal(ag.Park.At) {
+				current.Park = nil
+				evs = append(evs, event(loopParty, resumedEvent, "%s: alert event fired", ag.Name))
+			}
+		}
+		return append(evs, event(loopParty, loopAlertVerb, "%s", superloop.Detail(act, "alert wake delivered to "+ag.Name))), nil
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(l.a.out, "SUPERVISOR ALERT woke", ag.Name)
+	return err
 }

@@ -90,6 +90,17 @@ func (s rigStore) Record(events ...state.Event) error {
 	return s.Store.Record(events...)
 }
 
+func (s rigStore) Update(fn func(*state.State) ([]state.Event, error)) error {
+	return s.Store.Update(func(st *state.State) ([]state.Event, error) {
+		evs, err := fn(st)
+		if err == nil && s.r.failRecord != nil && slices.ContainsFunc(evs, s.r.failRecord) {
+			s.r.failRecord = nil
+			return nil, errors.New("disk full")
+		}
+		return evs, err
+	})
+}
+
 // logs is the line the real command logs as the loop for args, which a
 // claim's reconciliation reads.
 func logs(args []string) (state.Event, bool) {
