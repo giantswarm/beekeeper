@@ -50,7 +50,9 @@ Single `go build`, `go test`, `go vet`, `cargo build`, `cargo test`, `cargo chec
 single literal invocation inside `sh -c` or `bash -lc`. Shell operators,
 assignments, substitutions, output redirects, absolute path arguments,
 `--fix`, Cargo configuration/path overrides and Go execution helpers stay local.
-Other tools and arbitrary scripts stay local. Tests that need host services,
+Other tools and arbitrary scripts stay local. Explicit `--max`, `--swap` or
+`--wait` also select the local slot so those overrides keep their existing
+resource and queue semantics. Tests that need host services,
 local credentials or worktree edits should run with `beekeeper run --local -- ...`.
 Formatters that write stay local automatically. Benchmark/lab classes, sandboxed
 runs and managed executions with a coordinator stop unit also remain local.

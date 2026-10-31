@@ -215,7 +215,9 @@ machine's files stay untouched.`,
 				}
 				o.Class = guard.DefaultClass(args)
 			}
-			if !localFlag && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
+			// Per-run local resource/wait overrides retain their existing semantics.
+			// Remote pods use the desk-configured resources and placement bound.
+			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
 				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr}
 				if handled, rc := runner.Try(cmd.Context(), args); handled {
 					if rc != 0 {
