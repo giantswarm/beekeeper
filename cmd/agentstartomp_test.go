@@ -482,17 +482,17 @@ func TestOmpBareModelFromPick(t *testing.T) {
 // choice's own provider even with two self-hosted providers, and the start
 // gate keeps the choice for the qualified model.
 func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
-	const id, recorded = "flash-id", "vllm/flash-id"
+	const id, recorded, rackB = "flash-id", "vllm/flash-id", "rack-b"
 	k := config.Capacity{
 		Providers: map[string]config.Provider{
 			claudeComm: {Floor: 1, Ceiling: 1},
 			"rack-a":   {Kind: config.KindSelfHosted, Ceiling: 2},
-			"rack-b":   {Kind: config.KindSelfHosted, Ceiling: 2},
+			rackB:      {Kind: config.KindSelfHosted, Ceiling: 2},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: testModelOpus47},
 			{Harness: omp.Harness, Model: "other-id", Provider: "rack-a"},
-			{Harness: omp.Harness, Model: id, Provider: "rack-b"},
+			{Harness: omp.Harness, Model: id, Provider: rackB},
 		},
 	}
 	if !selfHostedModel(k, recorded) {
@@ -501,8 +501,8 @@ func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
 	if selfHostedModel(k, "vllm/unlisted-id") || selfHostedModel(k, "vllm/x"+id) {
 		t.Error("selfHostedModel matched a model no choice names")
 	}
-	if p, _ := resolveAgentProviderBucket(k, omp.Harness, recorded); p != "rack-b" {
-		t.Errorf("resolveAgentProviderBucket(omp, %q) = %q, want rack-b", recorded, p)
+	if p, _ := resolveAgentProviderBucket(k, omp.Harness, recorded); p != rackB {
+		t.Errorf("resolveAgentProviderBucket(omp, %q) = %q, want %s", recorded, p, rackB)
 	}
 	if !choicesHaveModel(k.Choices, recorded) {
 		t.Errorf("choicesHaveModel(%q) = false", recorded)
@@ -511,7 +511,7 @@ func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
 		t.Errorf("filterChoiceModel(%q) = %+v, want the %q choice", recorded, f.Choices, id)
 	}
 	// a subscription choice is never matched by an id after a slash
-	if ompChoiceModel(config.Choice{Harness: claudeComm, Model: "opus"}, "x/opus") {
-		t.Error("a claude choice matched x/opus")
+	if ompChoiceModel(config.Choice{Harness: claudeComm, Model: bgModel}, "x/"+bgModel) {
+		t.Error("a claude choice matched its id after a slash")
 	}
 }
