@@ -35,6 +35,12 @@ func (a *app) agentWakeCmd() *cobra.Command {
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
 
+An SSH execution receives a durable ordered envelope. Success requires a
+harness acceptance event containing its message ID. A pending or uncertain
+delivery exits nonzero; agents messages shows its receipt and agents hosts
+sync reconciles it without creating another process. Reuse --request-id for
+an identical retry; use a new ID for another identical message.
+
 An omp agent (agents start --harness omp) or an agy agent (agents start
 --harness agy) gets the message in its inbox, at its next tool round / model
 call or as its next turn; one whose process ended is refused: nothing resumes
@@ -110,8 +116,7 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	}
 	ag := st.Agents[i]
 	if ag.Execution != nil {
-		h := sshHarness{Harness: claudeHarness{}, ref: ag.Execution}
-		return h.Wake(a, by, ag, ag.Session, msg)
+		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
 	}
 	if st.Supervisor != nil && st.Supervisor.Is(by) {
 		// The supervisor's `yours <resource>` is the grant, as in a

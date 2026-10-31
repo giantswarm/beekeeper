@@ -32,7 +32,7 @@ func TestExecutionReservationNeedsTerminationEvidence(t *testing.T) {
 
 func TestExecutionJournalPreservesUnknownFields(t *testing.T) {
 	var start Start
-	raw := `{"session":"fixture","mode":"acceptEdits","futureStart":"keep-start","execution":{"phase":"pending","futureExecution":{"preserve":true}}}`
+	raw := `{"session":"fixture","mode":"acceptEdits","futureStart":"keep-start","execution":{"phase":"pending","futureExecution":{"preserve":true},"messages":[{"key":"fixture","stage":"stored","futureDelivery":{"retain":true}}]}}`
 	if err := json.Unmarshal([]byte(raw), &start); err != nil {
 		t.Fatal(err)
 	}
@@ -42,5 +42,8 @@ func TestExecutionJournalPreservesUnknownFields(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"futureStart":"keep-start"`) || !strings.Contains(string(b), `"futureExecution":{"preserve":true}`) {
 		t.Fatal("execution journal lost fields from a newer writer")
+	}
+	if !strings.Contains(string(b), `"futureDelivery":{"retain":true}`) {
+		t.Fatal("execution outbox lost a newer writer's receipt metadata")
 	}
 }

@@ -288,15 +288,15 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		if st.Agents[i].Park == nil {
 			return refused("%q is not parked: agents wake messages it", st.Agents[i].Name)
 		}
-		if st.Agents[i].Execution != nil {
-			return refused("remote resume is unavailable: https://github.com/giantswarm/beekeeper/issues/1714")
-		}
 		cp := st.Agents[i]
 		target = &cp
 	}
 	block := a.usageHighBlockForAgent(ctx, st, nil, target)
 	if block != "" && !force {
 		return refused("no resume: %s (--force resumes anyway)", block)
+	}
+	if target != nil && target.Execution != nil {
+		return a.enqueueExecutionWake(ctx, by, *target, parkMessage(target.Park, by.Name), target.Park)
 	}
 	var ag state.Agent
 	var p *state.Park

@@ -787,6 +787,7 @@ type Start struct {
 // Request includes the private component callback credential and must never
 // be returned by an operator status or logs command.
 type ExecutionRecord struct {
+	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
 	Handle          execution.Handle                   `json:"handle"`
 	Request         execution.StartRequest             `json:"request"`
 	RequestDigest   string                             `json:"requestDigest"`
@@ -800,6 +801,14 @@ type ExecutionRecord struct {
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
 	rest            rest
+}
+
+type ExecutionMessage struct {
+	Envelope execution.Envelope `json:"envelope"`
+	Key      string             `json:"key"`
+	Stage    string             `json:"stage"`
+	Resume   *Park              `json:"resume,omitempty"`
+	rest     rest
 }
 
 func (r *ExecutionRecord) Terminal() bool {

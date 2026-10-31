@@ -32,7 +32,7 @@ func sshStartTestApp(t *testing.T) (*app, string) {
 	}
 	a.cfg.StateDir = root
 	plat.Machine = roomyMachine{Machine: plat.Machine}
-	a.cfg.Identity.Host = "coordinator"
+	a.cfg.Identity.Host = sshTestCoordinator
 	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{claudeComm: {Ceiling: 1}}, Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}}}
 	a.cfg.Agents.Hosts = map[string]config.ExecutionHost{}
 	for _, selector := range []string{sshTestSelector, sshTestOtherSelector} {

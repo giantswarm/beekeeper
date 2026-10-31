@@ -19,17 +19,19 @@ import (
 )
 
 type Journal struct {
-	ActivationAttempted bool         `json:"activationAttempted"`
-	RunnerPID           int          `json:"runnerPID,omitempty"`
-	RunnerStarted       time.Time    `json:"runnerStarted,omitempty"`
-	Request             StartRequest `json:"request"`
-	Digest              string       `json:"digest"`
-	Handle              Handle       `json:"handle"`
-	Phase               string       `json:"phase"`
-	Ready               bool         `json:"ready"`
-	StopRequest         *StopRequest `json:"stopRequest,omitempty"`
-	StopAcknowledged    bool         `json:"stopAcknowledged"`
-	LastError           string       `json:"lastError,omitempty"`
+	Completed           bool          `json:"completed,omitempty"`
+	Messages            MessageLedger `json:"messages,omitempty"`
+	ActivationAttempted bool          `json:"activationAttempted"`
+	RunnerPID           int           `json:"runnerPID,omitempty"`
+	RunnerStarted       time.Time     `json:"runnerStarted,omitempty"`
+	Request             StartRequest  `json:"request"`
+	Digest              string        `json:"digest"`
+	Handle              Handle        `json:"handle"`
+	Phase               string        `json:"phase"`
+	Ready               bool          `json:"ready"`
+	StopRequest         *StopRequest  `json:"stopRequest,omitempty"`
+	StopAcknowledged    bool          `json:"stopAcknowledged"`
+	LastError           string        `json:"lastError,omitempty"`
 }
 
 // Server operates only on journals it created. It never discovers or adopts
@@ -310,6 +312,7 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 		return Observation{}, err
 	}
 	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	o.Messages, o.MessageSequence = j.Messages.Status(), j.Messages.Sequence
 	if j.StopAcknowledged {
 		o.ProcessState = Exited
 		return o, nil
@@ -471,12 +474,18 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 					value, err = s.Logs(ctx, req.Ref, q)
 				}
 			case "message":
-				err = ErrUnsupported
-				reply.Code = "unsupported"
+				var m Envelope
+				err = Decode(req.Payload, &m)
+				if err == nil {
+					value, err = s.Message(ctx, req.Ref, m)
+				}
 			default:
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
+				if errors.Is(err, ErrUnsupported) {
+					reply.Code = "unsupported"
+				}
 				reply.Error = err.Error()
 			} else {
 				reply.Payload, err = json.Marshal(value)

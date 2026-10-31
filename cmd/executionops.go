@@ -200,6 +200,12 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 				continue
 			}
 		}
+		if st.Stop == nil && r.StopRequest == nil {
+			if err := a.syncExecutionMessages(ctx, ref); err != nil {
+				failures = append(failures, err.Error())
+				continue
+			}
+		}
 		syncer, ok := a.executionClient(h).(execution.ControlSyncer)
 		if !ok {
 			return refused("execution transport cannot reconcile its control outbox")

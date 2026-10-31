@@ -16,11 +16,16 @@ const sshTestInspect = "inspect"
 
 type testExecutionTransport struct {
 	execution.Transport
+	message func(context.Context, execution.Ref, execution.Envelope) (execution.Ack, error)
 	start   func(context.Context, execution.StartRequest) (execution.Handle, error)
 	logs    func(context.Context, execution.Ref, execution.LogRequest) (execution.LogPage, error)
 	stop    func(context.Context, execution.Ref, execution.StopRequest) (execution.Ack, error)
 	inspect func(context.Context, execution.Ref) (execution.Observation, error)
 	sync    func(context.Context, execution.Ref) (execution.ControlResult, error)
+}
+
+func (f *testExecutionTransport) Message(ctx context.Context, r execution.Ref, m execution.Envelope) (execution.Ack, error) {
+	return f.message(ctx, r, m)
 }
 
 func TestExecutionWatchReconcilesWithBoundedDeadlineAndThrottle(t *testing.T) {

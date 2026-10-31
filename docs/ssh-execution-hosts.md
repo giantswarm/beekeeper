@@ -465,17 +465,18 @@ every acceptance line is met. Before requesting its review, file a follow-up
 for each deferred line below and link it from PR 2. The parent remains open.
 
 The implementation's [operator guide](ssh-execution-hosts-operations.md) gives
-the concrete configuration and commands. Deferred capabilities are tracked in
-https://github.com/giantswarm/beekeeper/issues/1714 (wake acceptance),
+the concrete configuration and commands. The messaging follow-up in
+https://github.com/giantswarm/beekeeper/issues/1714 adds an ordered durable outbox,
+host inbox, streaming runner and UUID-bearing harness acceptance. Deferred capabilities remain in
 https://github.com/giantswarm/beekeeper/issues/1715 (coordinator lease), and
 https://github.com/giantswarm/beekeeper/issues/1716 (merge authorization).
 
 | Acceptance line | First slice | Required follow-up if deferred |
 | --- | --- | --- |
-| Selector and five-operation transport; identity/version/rules validation; local behavior | Selector and lifecycle methods; `Message` returns a typed unsupported result until acknowledged harness delivery exists | Complete remote `wake` through the message contract |
+| Selector and five-operation transport; identity/version/rules validation; local behavior | Selector, lifecycle methods and durable `Message` delivery; local dispatch unchanged | None |
 | Per-host checkouts and workspaces; preserve dirty work; isolated Git metadata | Complete for the Claude adapter | None |
 | User supervisor; stable handle; one registration; interrupted startup recovery | Complete, including before-activation receipt and recovery command | None |
-| Durable ordered acknowledged messaging; identity; notes/reports/parks/resumes; no duplicate process | Control mutations have durable receipts; worker identity is tested; unsolicited message delivery and automatic resumes remain explicitly unavailable | Durable envelopes and harness acceptance, note answers/timers/resumes, reconnect tests |
+| Durable ordered acknowledged messaging; identity; notes/reports/parks/resumes; no duplicate process | Durable controls and wake envelopes; ID-bearing harness acceptance, ordered cursors, retained parks and explicit uncertain delivery | None; crash-atomic model execution remains a harness limitation |
 | Shared capacity and holds; reachability; stop acknowledgement/unreachable state | Shared provider counts and reservations, host guards, explicit placement and acknowledged stop | Expiring coordinator lease and automatic recovery after a disconnected global stop |
 | Matching host rules/hooks and bound revocable audited merge authorization | Validate installed bundle; enforce host guards; deny all remote merges | Supervisor authorization service, grant consumption and host merge guard |
 | Separate authentication and ownership restrictions | Complete; no copying credentials or adopting personal sessions | None |

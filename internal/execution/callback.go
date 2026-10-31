@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,9 @@ func (s *Server) SendControl(ctx context.Context, j Journal, op string, data any
 	if q.Pending != nil {
 		var old ControlResult
 		if err := readJSON(receiptPath(q.Pending.ID), &old); err == nil && old.ID == q.Pending.ID && old.Sequence == q.Pending.Sequence && old.Digest == q.Pending.ContentDigest() {
+			if err := s.finishControl(ctx, j.Handle.Ref, *q.Pending, old); err != nil {
+				return result, err
+			}
 			q.Pending = nil
 			if err := atomicFile(p, mustJSON(q)); err != nil {
 				return result, err
@@ -185,6 +189,9 @@ func (s *Server) SendControl(ctx context.Context, j Journal, op string, data any
 		if err := readJSON(receiptPath(id), &old); err == nil {
 			if old.ID != id || old.Digest != want.ContentDigest() {
 				return result, errors.New("control idempotency key reused with different content")
+			}
+			if err := s.finishControl(ctx, j.Handle.Ref, want, old); err != nil {
+				return result, err
 			}
 			return old, controlError(old)
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -220,11 +227,37 @@ func (s *Server) SendControl(ctx context.Context, j Journal, op string, data any
 	if err := atomicFile(receiptPath(want.ID), mustJSON(result)); err != nil {
 		return ControlResult{}, err
 	}
+	if err := s.finishControl(ctx, j.Handle.Ref, want, result); err != nil {
+		return ControlResult{}, err
+	}
 	q.Pending = nil
 	if err := atomicFile(p, mustJSON(q)); err != nil {
 		return ControlResult{}, err
 	}
 	return result, controlError(result)
+}
+
+// A completed report closes the input stream after its durable coordinator
+// acknowledgement. The current turn can finish, then its owned unit exits;
+// completion must not leave a permanently reserved idle streaming process.
+func (s *Server) finishControl(ctx context.Context, ref Ref, want ControlRequest, result ControlResult) error {
+	if want.Operation != ControlReport || result.Error != "" {
+		return nil
+	}
+	var report struct {
+		Finished bool `json:"finished"`
+	}
+	if json.Unmarshal(want.Data, &report) != nil || !report.Finished {
+		return nil
+	}
+	if err := s.update(ctx, ref, func(j *Journal) error { j.Completed = true; return nil }); err != nil {
+		return err
+	}
+	dial := net.Dialer{Timeout: 100 * time.Millisecond}
+	if conn, err := dial.DialContext(ctx, "unix", s.messageSocket(ref)); err == nil {
+		_ = conn.Close()
+	}
+	return nil
 }
 
 func controlError(r ControlResult) error {
