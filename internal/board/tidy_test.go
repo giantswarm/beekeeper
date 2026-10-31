@@ -11,8 +11,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+const (
+	doneValue = "Done ✅"
+	jsonNull  = "null"
+)
+
 const tidyMetaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[
-{"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog 📦"},{"id":"s3","name":"In Progress ⛏️"},{"id":"s9","name":"Done ✅"}]}]}}}}}`
+{"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog 📦"},{"id":"s3","name":"In Progress ⛏️"},{"id":"s9","name":doneValue}]}]}}}}}`
 
 // tidyGH answers Tidy's requests: the fields, the closed items in pages,
 // and records every write.
@@ -57,9 +62,9 @@ func (f *tidyGH) run(_ context.Context, args ...string) ([]byte, error) {
 func closedNode(id string, n int, status string, closed time.Time, archived bool) string {
 	state, at := "CLOSED", fmt.Sprintf("%q", closed.Format(time.RFC3339))
 	if closed.IsZero() {
-		state, at = "OPEN", "null"
+		state, at = "OPEN", jsonNull
 	}
-	st := "null"
+	st := jsonNull
 	if status != "" {
 		st = fmt.Sprintf(`{"name":%q}`, status)
 	}
@@ -83,13 +88,13 @@ func TestTidyMovesClosedItemsToDoneAndArchivesThemAfterTheGrace(t *testing.T) {
 			// Closed three weeks ago, In Progress: to Done, then archived.
 			closedNode("I2", 2, inProgress, days(21), false),
 			// Closed three weeks ago and Done: archived only.
-			closedNode("I3", 3, "Done ✅", days(21), false),
+			closedNode("I3", 3, doneValue, days(21), false),
 			// A draft: no content URL.
 			`{"id":"D","isArchived":false,"status":null,"content":{}}`,
 		),
 		tidyPage(false,
 			// Done, closed yesterday: nothing to do.
-			closedNode("I4", 4, "Done ✅", days(1), false),
+			closedNode("I4", 4, doneValue, days(1), false),
 			// Archived already: left alone.
 			closedNode("I5", 5, inProgress, days(60), true),
 			// Open after all (the filter is checked again): left alone.
@@ -110,10 +115,10 @@ func TestTidyMovesClosedItemsToDoneAndArchivesThemAfterTheGrace(t *testing.T) {
 	if !slices.Equal(f.writes, want) {
 		t.Errorf("writes = %v, want %v", f.writes, want)
 	}
-	if td.Done != "Done ✅" || len(td.Items) != 4 || td.Left != 0 {
+	if td.Done != doneValue || len(td.Items) != 4 || td.Left != 0 {
 		t.Fatalf("tidy = %+v", td)
 	}
-	if it := td.Items[1]; it.Ref != "o/r#2" || !it.Done || !it.Archived || it.From != inProgress || it.Item != "I2" {
+	if it := td.Items[1]; it.Ref != ref2 || !it.Done || !it.Archived || it.From != inProgress || it.Item != "I2" {
 		t.Errorf("item 2 = %+v", it)
 	}
 	if it := td.Items[0]; !it.Done || it.Archived {
@@ -134,7 +139,7 @@ func TestTidyDryRunWritesNothing(t *testing.T) {
 }
 
 func TestTidyNeverArchivesWithANegativeGraceAndWithoutTeamReadsEveryItem(t *testing.T) {
-	f := &tidyGH{t: t, meta: tidyMetaJSON, pages: []string{tidyPage(false, closedNode("I2", 2, inProgress, days(400), false), closedNode("I3", 3, "Done ✅", days(400), false))}}
+	f := &tidyGH{t: t, meta: tidyMetaJSON, pages: []string{tidyPage(false, closedNode("I2", 2, inProgress, days(400), false), closedNode("I3", 3, doneValue, days(400), false))}}
 	b := tidyBoard()
 	b.Team, b.ArchiveAfter.Duration = "", -1
 	c := &Client{GH: f.run, Board: b}
