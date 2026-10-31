@@ -31,6 +31,10 @@ type Desk struct {
 	// OwnerWait is how long a worker waits for the owning team's review
 	// before the person is asked to override it.
 	OwnerWait time.Duration
+	// TeamsUnknown says the team files could not be read: only Review and
+	// the person's overrides say what is the desk's, and nothing else is
+	// acted on until they are read.
+	TeamsUnknown bool
 }
 
 // The reasons the loop leaves a pull request alone, in its leave's key.
@@ -54,6 +58,9 @@ const (
 	theirs
 	// nobody's is none the desk acts on at all.
 	nobodys
+	// unknown is one whose owner the desk cannot tell yet: the team files
+	// are unread. It waits, quietly; the loop says why once.
+	unknown
 )
 
 // Outside reports whether ref's owner is outside the desk's organisations.
@@ -105,7 +112,13 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 	if len(d.Authors) > 0 && !slices.ContainsFunc(d.Authors, func(a string) bool { return strings.EqualFold(a, p.Author) }) {
 		return nobodys, leftAuthor, fmt.Sprintf("opened by %s, not by the desk (%s): it is not the desk's to review", p.Author, strings.Join(d.Authors, ", "))
 	}
-	if overridden || d.Team == "" || matchesAny(d.Review, repo) || strings.EqualFold(p.Team, d.Team) {
+	if overridden || d.Team == "" || matchesAny(d.Review, repo) {
+		return ours, "", ""
+	}
+	if d.TeamsUnknown {
+		return unknown, "", ""
+	}
+	if strings.EqualFold(p.Team, d.Team) {
 		return ours, "", ""
 	}
 	return theirs, leftTeam, fmt.Sprintf("%s: its review is theirs; the loop starts no reviewer and gives no go", ownedBy(p.Team, repo))
@@ -132,6 +145,13 @@ func teamName(team string) string {
 func (d Desk) namedNever(p Pull) string {
 	texts := append([]string{p.Title, p.Branch}, p.Files...)
 	for _, n := range d.Never {
+		// A pattern whose name is all wildcard (org/*) names no repository
+		// in a text: it would match every title. unread covers its
+		// repositories.
+		_, name, _ := strings.Cut(n, "/")
+		if strings.Trim(name, "*?") == "" {
+			continue
+		}
 		re := nameWord(n)
 		if slices.ContainsFunc(texts, re.MatchString) {
 			return n

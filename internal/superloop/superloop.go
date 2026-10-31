@@ -397,7 +397,7 @@ func IsPull(on string) bool { return prRef.MatchString(on) }
 
 // Tracked are the pull requests a pass reads: every one an agent is parked
 // on, every one the loop started a review of that it has not seen merged
-// or closed, nor escalated or asked about without the person's answer, and
+// or closed, nor escalated without the person's answer, and
 // every ended one whose worker waits for its retirement. None outside the
 // desk's organisations or in its never list is read, nor one whose park
 // is from before the loop's first start.
@@ -423,9 +423,10 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 		if reason, _ := desk.unread(ref); reason != "" {
 			continue
 		}
+		// An open question about its ownership keeps it read: the owning
+		// team's reviews still reach its worker meanwhile.
 		e, escalated := l.escalated[ref]
-		q, asked := l.asked[ref]
-		waits := escalated && e.open() || asked && q.open()
+		waits := escalated && e.open()
 		if !l.ended[ref] && !waits || l.ended[ref] && l.workerDue(ref, workers) {
 			out = append(out, ref)
 		}
@@ -515,9 +516,6 @@ func Plan(in Input) []Action {
 			continue
 		}
 		ask, asked := l.asked[ref]
-		if asked && ask.open() {
-			continue
-		}
 		if p.State == Merged || p.State == Closed {
 			if len(l.rounds[ref]) > 0 {
 				add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: strings.ToLower(p.State)})
@@ -543,6 +541,8 @@ func Plan(in Input) []Action {
 		case theirs:
 			leave(ref, p.URL, agent, reason, why)
 			planTheirs(in, l, p, w, isParked, base, ask, asked, add)
+			continue
+		case unknown:
 			continue
 		}
 		rs := l.rounds[ref]

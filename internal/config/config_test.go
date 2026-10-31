@@ -188,6 +188,7 @@ func TestLoadRejects(t *testing.T) {
 		"bad review pattern":          "supervisor: {ownership: {review: [\"o/[\"]}}",
 		"review without an owner":     "supervisor: {ownership: {review: [shared-configs]}}",
 		"never without an owner":      "supervisor: {ownership: {never: [tool]}}",
+		"never without a name":        "supervisor: {ownership: {never: [o/]}}",
 		"negative relayAt":            "supervisor: {relayAt: -1}",
 		"bad store glob":              "outbound: {storeDeny: [{vault: \"[\"}]}",
 		"bad outbound path":           "outbound: {paths: [\"[\"]}",

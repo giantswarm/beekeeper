@@ -112,6 +112,32 @@ func TestANeverRepositoryIsLeftAloneWhateverElseSays(t *testing.T) {
 	only(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0}), KindReview)
 }
 
+func TestAWildcardNeverRepositoryNamesNothing(t *testing.T) {
+	d := desk()
+	d.Orgs = append(d.Orgs, "x")
+	d.Never = []string{"x/*", "x/?"}
+	only(t, Plan(Input{Workers: parked(t0), Pulls: owned(ourTeam), Rounds: 1, Desk: d, Now: t0}), KindReview)
+	w := []Worker{{Name: worker, ParkedOn: "x/anything#2", ParkedAt: t0}}
+	left(t, Plan(Input{Workers: w, Rounds: 1, Desk: d, Now: t0}), leftNever)
+}
+
+func TestUnreadTeamFilesLeaveOnlyTheReviewListAndOverrides(t *testing.T) {
+	d := desk()
+	d.TeamsUnknown = true
+	// The desk's own team's pull request waits, quietly: no leave that
+	// would retire a running round's reviewer.
+	if got := Plan(Input{Workers: parked(t0), Pulls: owned(ourTeam), Rounds: 1, Desk: d, Now: t0}); len(got) != 0 {
+		t.Errorf("an unknown owner's pull request got %+v", got)
+	}
+	tk := taken(t, t0, Action{Key: overrideKey(pr), Kind: KindOverride, Ref: pr})
+	only(t, Plan(Input{Workers: parked(t0), Pulls: owned(teamB), Rounds: 1, Desk: d, Now: t0, Taken: tk}), KindReview)
+	const shared = "o/x-configs#3"
+	p := owned(ourTeam)[pr]
+	p.Ref = shared
+	w := []Worker{{Name: worker, ParkedOn: shared, ParkedAt: t0}}
+	only(t, Plan(Input{Workers: w, Pulls: map[string]Pull{shared: p}, Rounds: 1, Desk: d, Now: t0}), KindReview)
+}
+
 func TestAParkFromBeforeTheLoopsFirstStartIsLeftAlone(t *testing.T) {
 	d := desk()
 	d.Since = t0
@@ -236,13 +262,18 @@ func TestABlockingOwnerReviewGoesToThePersonOnce(t *testing.T) {
 	if a.Agent != worker || a.Question != OwnershipQuestion(prURL, teamB) || !strings.HasPrefix(a.Question, "Override team-b's ownership of "+prURL) {
 		t.Errorf("ownership = %+v", a)
 	}
-	// While the person has not answered, the pull request is not read.
 	in.Taken = append(in.Taken, taken(t, in.Now, a)...)
-	if got := Tracked(in.Workers, in.Taken, nil, in.Desk); len(got) != 0 {
-		t.Errorf("tracked = %v", got)
-	}
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("asked twice: %+v", got)
+	}
+	// While the person has not answered, or once the note defaulted to the
+	// wait, the owning team's reviews still reach the worker.
+	if got := Tracked(in.Workers, in.Taken, nil, in.Desk); len(got) != 1 {
+		t.Errorf("an asked-about pull request is not read: %v", got)
+	}
+	in.Pulls = owned(teamB, Review{ID: "R9", Author: bob, Member: true, Head: head1, Verdict: ChangesRequested, Body: "late", At: in.Now.Add(time.Hour)})
+	if r := only(t, Plan(in), KindRelay); !strings.Contains(r.Message, "late") {
+		t.Errorf("relay = %+v", r)
 	}
 	// An owning team that approved does not block; somebody else's
 	// approval is none of theirs.

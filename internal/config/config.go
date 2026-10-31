@@ -2102,7 +2102,7 @@ func (o Ownership) validate() error {
 	}
 	for field, patterns := range map[string][]string{"review": o.Review, "never": o.Never} {
 		for _, p := range patterns {
-			if _, err := path.Match(p, ""); err != nil || !strings.Contains(p, "/") {
+			if _, err := path.Match(p, ""); err != nil || !strings.Contains(p, "/") || strings.HasSuffix(p, "/") {
 				return fmt.Errorf("%s: %q is no owner/name pattern", field, p)
 			}
 		}

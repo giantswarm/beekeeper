@@ -352,8 +352,9 @@ review, go, forward or escalation:
     reviews; relay and ownership above
   - no supervisor.ownership.team: every repository of the allowed orgs is
     the desk's
-A pass reads no pull request while it cannot tell the desk's login or has
-never read the team files.
+A pass reads no pull request while it cannot tell the desk's login; while
+it has never read the team files it acts only on review-list and
+overridden pull requests.
 
 The briefs are Go templates over .URL, .Repo, .Number, .Head, .Round and
 .Worker. A pull request is read (one gh pr view) only while an agent is
@@ -595,7 +596,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Release = v
 		}
 	}
-	if in.Release == "" && a.now.Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
+	if in.Release == "" && !l.dryRun && a.now.Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
 		l.releaseAt = a.now
 		in.Release = l.newerRelease(ctx)
 	}
@@ -644,8 +645,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 // ownership readies the desk's policy for a pass's reads: the logins the
 // desk opens its pull requests as and, once supervisor.ownership.team is
 // set, the team files, read again every teamsEvery. False, said once, while
-// either is unknown: the pass reads no pull request, so nothing is reviewed
-// on a guess. Team files that cannot be read again keep the last ones read.
+// the login is unknown: the pass reads no pull request, so nothing is
+// reviewed on a guess. Team files never read leave the desk's own team's
+// pull requests waiting (Desk.TeamsUnknown); ones that cannot be read
+// again keep the last ones read.
 func (l *supervisorLoop) ownership(ctx context.Context, d *superloop.Desk) bool {
 	if len(d.Authors) == 0 {
 		if l.login == "" {
@@ -667,8 +670,8 @@ func (l *supervisorLoop) ownership(ctx context.Context, d *superloop.Desk) bool 
 	case err == nil:
 		l.teams, l.teamsAt = teams, l.a.now
 	case l.teams == nil:
-		l.sayOnce("teams", "SUPERVISOR LOOP cannot read the team files %s (%v): it reads no pull request until it can", own.TeamFiles, err)
-		return false
+		l.sayOnce("teams", "SUPERVISOR LOOP cannot read the team files %s (%v): until it can, it acts only on supervisor.ownership.review and overridden pull requests", own.TeamFiles, err)
+		d.TeamsUnknown = true
 	default:
 		l.sayOnce("teams "+l.teamsAt.Format(time.RFC3339), "SUPERVISOR LOOP cannot read the team files %s again (%v): the ones read at %s stand",
 			own.TeamFiles, err, l.teamsAt.Format(time.RFC3339))

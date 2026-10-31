@@ -1210,7 +1210,7 @@ func TestLoopRelaysTheOwningTeamsReview(t *testing.T) {
 	}
 }
 
-func TestLoopReadsNothingWithoutTheTeamFiles(t *testing.T) {
+func TestLoopActsOnlyOnTheReviewListWithoutTheTeamFiles(t *testing.T) {
 	r := newLoopRig(t)
 	r.ownedBy("team-a")
 	r.teams, r.teamsErr = nil, errors.New("HTTP 502")
@@ -1218,6 +1218,9 @@ func TestLoopReadsNothingWithoutTheTeamFiles(t *testing.T) {
 	r.pass(t)
 	if c := r.called(agentsName); c != nil || !strings.Contains(r.out.String(), "cannot read the team files o/github/repositories") {
 		t.Errorf("without the team files: %v\n%s", c, r.out)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 0 {
+		t.Errorf("an unknown owner was logged as left: %+v", evs)
 	}
 	r.teams, r.teamsErr = map[string]string{scratchRepo: "team-a"}, nil
 	r.pass(t)
