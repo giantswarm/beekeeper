@@ -787,6 +787,7 @@ type Start struct {
 // Request includes the private component callback credential and must never
 // be returned by an operator status or logs command.
 type ExecutionRecord struct {
+	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
 	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
 	Handle          execution.Handle                   `json:"handle"`

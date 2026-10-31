@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -106,6 +107,50 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				return nil, errors.New("live coordinator activation refused")
 			}
 			value = execution.ActivationDecision{Allowed: true}
+		case "renew-lease":
+			if !r.Request.LeaseRequired || r.StopRequest != nil || r.Terminal() || st.Stop != nil || r.Request.Coordinator != a.cfg.Identity.Host {
+				return nil, errors.New("coordinator lease renewal revoked")
+			}
+			var request execution.LeaseRequest
+			if execution.Decode(req.Payload, &request) != nil {
+				return nil, errors.New("invalid lease request")
+			}
+			key, keyErr := execution.SigningKey(filepath.Join(a.cfg.StateDir, "execution-coordinator"))
+			if keyErr != nil {
+				return nil, keyErr
+			}
+			grant, grantErr := execution.IssueLease(req.Ref, r.Request.Coordinator, r.Lease, request, key, time.Now())
+			if grantErr != nil {
+				return nil, grantErr
+			}
+			r.Lease = &grant
+			value = grant
+		case runMerge:
+			var use execution.MergeUse
+			if execution.Decode(req.Payload, &use) != nil || use.Ref != req.Ref {
+				return nil, errors.New("invalid merge execution identity")
+			}
+			mergeCtx, stopMerge := context.WithTimeout(ctx, 20*time.Second)
+			defer stopMerge()
+			var result execution.MergeResult
+			var mergeErr error
+			previous, readErr := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID)
+			if readErr == nil && previous.Consumed {
+				result, mergeErr = a.reconcileExecutionMerge(mergeCtx, use)
+			} else {
+				result, mergeErr = execution.UseMerge(mergeCtx, a.mergeAuthorityRoot(), use, time.Now(), func(ctx context.Context) error { return a.executionMergeLive(ctx, st, use) }, func(ctx context.Context) error { return runExecutionMerge(ctx, use) })
+			}
+			if grant, readErr := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID); readErr == nil && grant.Consumed && grant.Ref == use.Ref && grant.Repository == use.Repository && grant.PR == use.PR && grant.Head == use.Head {
+				a.recordExecutionMergeLane(st, use, result.Outcome, st.Starts[i].Party)
+			}
+			if mergeErr != nil {
+				// Keep denial auditing committed even for a refused request.
+				reply.Error = mergeErr.Error()
+				events = append(events, event(st.Starts[i].Party, "execution.merge-denied", "%s", use.ID))
+			} else {
+				events = append(events, event(st.Starts[i].Party, "execution.merge-result", "%s: %s", use.ID, result.Outcome))
+			}
+			value = result
 		case "guard":
 			authority := executionAuthority{Stopped: st.Stop != nil || r.StopRequest != nil || r.Terminal()}
 			for _, hold := range st.Holds {

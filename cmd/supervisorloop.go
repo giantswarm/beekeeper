@@ -637,6 +637,20 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindReview:
 		return l.startReviewer(ctx, act)
 	case superloop.KindGo:
+		for _, worker := range st.Agents {
+			if worker.Name != act.Agent || worker.Execution == nil {
+				continue
+			}
+			ref, ok := parseRef(act.Ref)
+			if !ok {
+				return "", errors.New("invalid remote merge pull request")
+			}
+			grant, err := a.issueExecutionMerge(ctx, *worker.Execution, ref.Repo, ref.N, act.Head, loopParty)
+			if err != nil {
+				return "", err
+			}
+			act.Message = fmt.Sprintf("Merge %s at reviewed head %s using: beekeeper agents merge %s %d --head %s --authorization %s. The grant expires at %s; if it expires, park for a new supervisor go.", act.URL, act.Head, ref.Repo, ref.N, act.Head, grant.ID, grant.ExpiresAt.Format(time.RFC3339))
+		}
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
 		}

@@ -67,6 +67,20 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		})
 		runErr = errors.Join(runErr, err)
 	}()
+	leaseStarted := time.Now()
+	var lease *LeaseGrant
+	if j.Request.LeaseRequired {
+		lease, err = s.renewLease(ctx, ref)
+		if err != nil {
+			return err
+		}
+	}
+	if lease != nil {
+		leaseCtx, stopLease := context.WithCancel(ctx)
+		leaseDone := make(chan struct{})
+		go func() { defer close(leaseDone); s.maintainLease(leaseCtx, ref, leaseStarted, lease) }()
+		defer func() { stopLease(); <-leaseDone }()
+	}
 	h := s.Config.Harnesses[j.Request.Harness]
 	env := append(cleanEnvironment(h.ConfigDir), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
 	tools := "Bash,Read,Write,Edit,Grep,Glob"
