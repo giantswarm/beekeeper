@@ -47,7 +47,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if err != nil {
 		return err
 	}
-	model, err := ompModel(sp.model, a.cfg.Omp.Model, func() ([]string, error) { return ompModels(ctx, bin) })
+	model, err := ompModel(sp.model, a.cfg.Omp.Model, func() ([]string, error) { return a.ompListed(ctx) })
 	if err != nil {
 		return err
 	}
@@ -174,6 +174,17 @@ func (a *app) ompStartBrokered(model string) bool {
 func (a *app) ompNeedsVault(model string) bool {
 	if model == "" {
 		model = a.cfg.Omp.Model
+	}
+	if model != "" && !strings.Contains(model, "/") {
+		// a bare id, as capacity pick returns an omp choice: its provider is
+		// the one omp lists it under
+		ctx, cancel := context.WithTimeout(context.Background(), inboxWait)
+		defer cancel()
+		if models, err := a.ompListed(ctx); err == nil {
+			if m, err := ompSelector(model, models); err == nil {
+				model = m
+			}
+		}
 	}
 	_, ok := a.cfg.Omp.Providers[ompProvider(model)]
 	return ok
@@ -380,10 +391,46 @@ func ompModel(flag, configured string, listed func() ([]string, error)) (string,
 	if err != nil {
 		return "", fmt.Errorf("listing omp's models: %w", err)
 	}
-	if !slices.Contains(models, model) {
-		return "", usageErr("omp lists no model %q: name one as provider/id, as omp models lists it", model)
+	return ompSelector(model, models)
+}
+
+// ompSelector is model as omp lists it: model itself when omp lists it, or,
+// for a bare id (capacity.choices names an omp model by its id, as capacity
+// pick returns it), the one provider/id omp lists for that id. An id two
+// providers serve is refused with both: the start names one.
+func ompSelector(model string, models []string) (string, error) {
+	if slices.Contains(models, model) {
+		return model, nil
 	}
-	return model, nil
+	if !strings.Contains(model, "/") {
+		var matches []string
+		for _, m := range models {
+			if _, id, ok := strings.Cut(m, "/"); ok && id == model {
+				matches = append(matches, m)
+			}
+		}
+		switch len(matches) {
+		case 1:
+			return matches[0], nil
+		case 0:
+		default:
+			return "", usageErr("omp lists %q under more than one provider (%s): name one as provider/id", model, strings.Join(matches, ", "))
+		}
+	}
+	return "", usageErr("omp lists no model %q: name one as provider/id, as omp models lists it", model)
+}
+
+// ompListed are the selectors omp lists: a.ompModelList when set (tests),
+// else omp models from PATH.
+func (a *app) ompListed(ctx context.Context) ([]string, error) {
+	if a.ompModelList != nil {
+		return a.ompModelList(ctx)
+	}
+	bin, err := exec.LookPath(omp.Comm)
+	if err != nil {
+		return nil, err
+	}
+	return ompModels(ctx, bin)
 }
 
 // ompModels are the selectors (provider/id) of the chat models omp lists.

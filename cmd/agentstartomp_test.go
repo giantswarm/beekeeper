@@ -424,3 +424,54 @@ func TestAutoStartNeedsVaultZeroNowPace(t *testing.T) {
 		t.Fatalf("brokeredVault with zero a.now and locked vault: r=%+v, err=%v, called=%v", r, err, called)
 	}
 }
+
+// capacity pick returns an omp choice by its bare model id, as
+// capacity.choices names it: the start takes it as the one provider/id omp
+// lists for that id, so the start's model check and its vault and broker
+// decision follow that provider; an id two providers list is refused with
+// both, and an id omp does not list at all still is.
+func TestOmpBareModelFromPick(t *testing.T) {
+	const bare = "m"
+	listed := []string{sparkModel, "ollama/qwen3.5:9b"}
+	for _, tc := range []struct {
+		model  string
+		models []string
+		want   string
+		err    string
+	}{
+		{model: bare, models: listed, want: sparkModel},
+		{model: sparkModel, models: listed, want: sparkModel},
+		{model: "qwen3.5:9b", models: listed, want: "ollama/qwen3.5:9b"},
+		{model: bare, models: append(listed, "ollama/m"), err: "under more than one provider (spark/m, ollama/m)"},
+		{model: "other", models: listed, err: `lists no model "other"`},
+		{model: "ollama/m", models: listed, err: `lists no model "ollama/m"`},
+	} {
+		got, err := ompModel(tc.model, "", func() ([]string, error) { return tc.models, nil })
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("ompModel(%q) = %q, %v; want the error %q", tc.model, got, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("ompModel(%q) = %q, %v; want %q", tc.model, got, err, tc.want)
+		}
+	}
+
+	a := vaultApp(t, 20*time.Millisecond)
+	a.cfg.Omp = config.Omp{Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
+	a.ompModelList = func(context.Context) ([]string, error) { return listed, nil }
+	if !a.ompNeedsVault(bare) || !a.ompStartBrokered(bare) {
+		t.Errorf("a bare id omp lists under %s does not read the vault through the broker", sparkProvider)
+	}
+	if !a.ompStartNeedsVault([]string{agentStartName, "--harness=omp", "--model=" + bare, "--", "w", briefMD}) {
+		t.Error("the broker does not open the vault for a start on the pick's bare id")
+	}
+	if a.ompNeedsVault("qwen3.5:9b") {
+		t.Error("a bare id on a provider outside omp.providers reads the vault")
+	}
+	a.ompModelList = func(context.Context) ([]string, error) { return nil, errors.New("omp failed") }
+	if a.ompNeedsVault(bare) {
+		t.Error("an unlisted bare id reads the vault")
+	}
+}

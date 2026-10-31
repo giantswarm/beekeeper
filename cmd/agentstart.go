@@ -230,7 +230,9 @@ agents handover start in the mode agents.mode names.
 
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
 in yolo approval mode on --model (default: omp.model; with neither, or a
-model omp does not list as provider/id, the start is refused), in
+model omp does not list as provider/id, the start is refused; a bare id,
+as capacity pick returns an omp choice, is the one provider/id omp lists
+for it, and an id two providers list is refused), in
 a transient user unit beekeeper-omp-<id>, with its stdin on a FIFO inbox
 in beekeeper's state folder and the brief as its first message. It is
 registered on the roster as omp_<id> under <name> and shows in sessions
@@ -547,11 +549,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		bin, err := exec.LookPath(omp.Comm)
-		if err != nil {
-			return err
-		}
-		m, err := ompModel(model, a.cfg.Omp.Model, func() ([]string, error) { return ompModels(ctx, bin) })
+		m, err := ompModel(model, a.cfg.Omp.Model, func() ([]string, error) { return a.ompListed(ctx) })
 		if err != nil {
 			return err
 		}
