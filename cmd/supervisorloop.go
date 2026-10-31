@@ -819,13 +819,14 @@ func repoName(repo string) string {
 }
 
 // selfHostedModel reports whether model is a choice of a self-hosted
-// provider.
+// provider; an omp agent's recorded provider/id is the choice that names
+// its bare id.
 func selfHostedModel(k config.Capacity, model string) bool {
 	if model == "" {
 		return false
 	}
 	for _, c := range k.Choices {
-		if c.Model == model || c.Harness+"/"+c.Model == model {
+		if c.Model == model || c.Harness+"/"+c.Model == model || ompChoiceModel(c, model) {
 			if p, ok := k.Providers[c.EffectiveProvider()]; ok && p.SelfHosted() {
 				return true
 			}
