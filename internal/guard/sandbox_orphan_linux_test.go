@@ -3,8 +3,8 @@
 package guard
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,9 +39,10 @@ func TestSandboxRunReleasesEmptyScope(t *testing.T) {
 	oldPoll, oldStart := scopePoll, scopeStartWait
 	scopePoll, scopeStartWait = time.Millisecond, 10*time.Millisecond
 	t.Cleanup(func() { scopePoll, scopeStartWait = oldPoll, oldStart })
-	o := Options{Max: "1M", SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard, Sandbox: sandbox.Capper{Dir: dir, Exe: exe}}
+	var log bytes.Buffer
+	o := Options{Max: "1M", SlotDir: t.TempDir(), Slots: 1, Stderr: &log, Sandbox: sandboxTestCapper{sandbox.Capper{Dir: dir, Exe: exe}}}
 	if rc := Run(o, []string{"ignored"}); rc != 1 {
-		t.Fatalf("sandboxed empty scope exit %d, want watchdog failure", rc)
+		t.Fatalf("sandboxed empty scope exit %d, want watchdog failure: %s", rc, log.String())
 	}
 	lock, _, _ := acquire(o)
 	if lock == nil {
@@ -49,3 +50,9 @@ func TestSandboxRunReleasesEmptyScope(t *testing.T) {
 	}
 	_ = lock.Unlock()
 }
+
+// The test itself is already capped by beekeeper run. Override only that
+// nesting check so Run exercises the actual broker capper and watchdog.
+type sandboxTestCapper struct{ sandbox.Capper }
+
+func (sandboxTestCapper) Capped() bool { return false }
