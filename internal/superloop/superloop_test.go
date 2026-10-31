@@ -14,6 +14,8 @@ const (
 	head2   = "2222222222222222222222222222222222222222"
 	worker  = "worker one"
 	release = "v1.2.0"
+	// guidePerson is the guide's person.
+	guidePerson = "pat"
 )
 
 var (
@@ -391,7 +393,7 @@ func TestWhatTheRulesCannotPlaceIsClassified(t *testing.T) {
 
 func TestAWorkersQuestionForSomeoneElseGoesToTheGuide(t *testing.T) {
 	// Asked whenever: the open note decides, no event needed.
-	in := Input{Person: "pat", Workers: []Worker{{Name: worker}}, Notes: []Note{{ID: 4, For: "supervisor", By: worker, Text: "which lab?"}}}
+	in := Input{Person: guidePerson, Workers: []Worker{{Name: worker}}, Notes: []Note{{ID: 4, For: "supervisor", By: worker, Text: "which lab?"}}}
 	a := only(t, Plan(in), KindQuestion)
 	if a.Note != 4 {
 		t.Errorf("question = %+v", a)
@@ -498,7 +500,7 @@ func TestAParkOnATimerOrANoteIsNoDecision(t *testing.T) {
 	for name, in := range map[string]Input{
 		"a timer wakes it":     {Workers: []Worker{{Name: worker, ParkedAt: t0, Waking: true}}},
 		"its wait names #12":   {Workers: []Worker{{Name: worker, ParkedAt: t0}}, Events: []Event{{At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: the answer of #12"}}},
-		"it asked a note":      {Workers: []Worker{{Name: worker, ParkedAt: t0}}, Notes: []Note{{ID: 3, For: "pat", By: worker}}, Person: "pat"},
+		"it asked a note":      {Workers: []Worker{{Name: worker, ParkedAt: t0}}, Notes: []Note{{ID: 3, For: guidePerson, By: worker}}, Person: guidePerson},
 		"it is parked no more": {Workers: []Worker{{Name: worker}}},
 		"it left the roster":   {},
 	} {
