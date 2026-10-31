@@ -36,11 +36,25 @@ const (
 	KindFile = "file"
 	// KindEnd ends the tracking of a pull request that merged or closed.
 	KindEnd = "end"
+	// KindLeave says once why the loop leaves a parked pull request alone:
+	// outside the desk's organisations, in supervisor.ownership.never,
+	// parked before the loop's first start, opened by somebody else, or
+	// another team's.
+	KindLeave = "leave"
+	// KindRelay tells the worker parked on another team's pull request
+	// that team's review, word for word.
+	KindRelay = "relay"
+	// KindOwnership asks the guide's person whether the desk takes over a
+	// pull request whose owning team's review blocks its worker;
+	// KindOverride records the person's answer that it does.
+	KindOwnership = "ownership"
+	KindOverride  = "override"
 )
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
-	return []string{KindReview, KindGo, KindForward, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd}
+	return []string{KindReview, KindGo, KindForward, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
+		KindLeave, KindRelay, KindOwnership, KindOverride}
 }
 
 // The verbs of the events the rules act on.
@@ -75,11 +89,25 @@ type Pull struct {
 	// green: they have not reported yet).
 	Green   bool
 	Reviews []Review // oldest first
+	// Author is the login that opened it; Title, Branch (its head branch)
+	// and Files (the paths it changes, ChangedFiles of them in all, which
+	// gh may list only in part) are what may name a repository the desk
+	// does no work on.
+	Author, Title, Branch string
+	Files                 []string
+	ChangedFiles          int
+	// Team is the team the team files say owns its repository, "" when
+	// none does.
+	Team string
 }
 
 // Review is one review of a pull request with a verdict.
 type Review struct {
-	ID      string
+	ID     string
+	Author string
+	// Member is a review by a member or collaborator of the repository's
+	// owner: only such a review is the owning team's.
+	Member  bool
 	Head    string
 	Verdict string
 	Body    string
@@ -173,6 +201,9 @@ type Input struct {
 	Person string
 	// Answers are the answers to the notes the loop filed, oldest first.
 	Answers []Answer
+	// Desk is whose pull requests the loop acts on; Now is the pass's time.
+	Desk Desk
+	Now  time.Time
 }
 
 // Action is one transition to take.
@@ -188,8 +219,10 @@ type Action struct {
 	SelfHosted bool
 	// Message is what the worker or the guide is told.
 	Message string
-	// Question is an escalation's question for the guide's person.
+	// Question is an escalation's or an ownership decision's question for
+	// the guide's person; Options an ownership decision's choices.
 	Question string
+	Options  []string
 	// Event is the event a done, next or classify action acts on.
 	Event *Event
 	// Note is the note a question re-addresses.
@@ -258,14 +291,18 @@ type ledger struct {
 	// escalation or end), oldest first.
 	goAgent map[string]string
 	acts    map[string][]time.Time
+	// asked are the pull requests whose ownership the person was asked
+	// about, overridden the ones they let the desk take over.
+	asked      map[string]escalation
+	overridden map[string]bool
 }
 
 func newLedger(taken []Taken, answers []Answer) ledger {
 	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]escalation{}, ended: map[string]bool{}, reviewer: map[string]string{},
-		goAgent: map[string]string{}, acts: map[string][]time.Time{}}
+		goAgent: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}}
 	for _, t := range taken {
 		l.keys[t.Key] = t
-		if slices.Contains([]string{KindReview, KindGo, KindForward, KindEscalate, KindAnswer, KindEnd}, t.Kind) {
+		if slices.Contains([]string{KindReview, KindGo, KindForward, KindEscalate, KindAnswer, KindEnd, KindLeave}, t.Kind) {
 			l.acts[t.Ref] = append(l.acts[t.Ref], t.At)
 		}
 		switch t.Kind {
@@ -278,6 +315,10 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			l.escalated[t.Ref] = escalation{head: head, at: t.At}
 		case KindEnd:
 			l.ended[t.Ref] = true
+		case KindOwnership:
+			l.asked[t.Ref] = escalation{at: t.At}
+		case KindOverride:
+			l.overridden[t.Ref] = true
 		case KindGo, KindForward:
 			if t.Agent != "" {
 				l.reviewer[t.Ref] = t.Agent
@@ -289,11 +330,14 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 	}
 	// The person's answer to an escalation is the last one recorded after
 	// it to the loop's question about that pull request.
+	// So is the answer to a question about its ownership.
 	for _, an := range answers {
-		e, ok := l.escalated[an.Ref]
-		if ok && an.At.After(e.at) && strings.HasPrefix(an.Question, escalationPrefix) {
-			e.answer = &an
-			l.escalated[an.Ref] = e
+		for prefix, asked := range map[string]map[string]escalation{escalationPrefix: l.escalated, ownershipPrefix: l.asked} {
+			e, ok := asked[an.Ref]
+			if ok && an.At.After(e.at) && strings.HasPrefix(an.Question, prefix) {
+				e.answer = &an
+				asked[an.Ref] = e
+			}
 		}
 	}
 	return l
@@ -353,28 +397,59 @@ func IsPull(on string) bool { return prRef.MatchString(on) }
 
 // Tracked are the pull requests a pass reads: every one an agent is parked
 // on, every one the loop started a review of that it has not seen merged
-// or closed, nor escalated without the person's answer, and every ended
-// one whose worker waits for its retirement.
-func Tracked(workers []Worker, taken []Taken, answers []Answer) []string {
+// or closed, nor escalated without the person's answer, and
+// every ended one whose worker waits for its retirement. None outside the
+// desk's organisations or in its never list is read, nor one whose park
+// is from before the loop's first start.
+func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []string {
 	l := newLedger(taken, answers)
 	set := map[string]bool{}
-	for _, w := range workers {
-		if IsPull(w.ParkedOn) {
-			set[w.ParkedOn] = true
-		}
-	}
 	for ref := range l.rounds {
 		set[ref] = true
 	}
+	// A pull request every park on is from before the loop's first start
+	// is left alone; one parked on since is read.
+	fresh, stale := parks(workers, desk)
+	for ref := range fresh {
+		set[ref] = true
+	}
+	for ref := range stale {
+		if !fresh[ref] {
+			delete(set, ref)
+		}
+	}
 	var out []string
 	for ref := range set {
+		if reason, _ := desk.unread(ref); reason != "" {
+			continue
+		}
+		// An open question about its ownership keeps it read: the owning
+		// team's reviews still reach its worker meanwhile.
 		e, escalated := l.escalated[ref]
-		if !l.ended[ref] && (!escalated || !e.open()) || l.ended[ref] && l.workerDue(ref, workers) {
+		waits := escalated && e.open()
+		if !l.ended[ref] && !waits || l.ended[ref] && l.workerDue(ref, workers) {
 			out = append(out, ref)
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// parks are the pull requests workers are parked on: fresh those parked
+// on since the desk's loop first started, stale those parked on before.
+func parks(workers []Worker, desk Desk) (fresh, stale map[string]bool) {
+	fresh, stale = map[string]bool{}, map[string]bool{}
+	for _, w := range workers {
+		if !IsPull(w.ParkedOn) {
+			continue
+		}
+		if early, _ := desk.early(w.ParkedAt); early {
+			stale[w.ParkedOn] = true
+		} else {
+			fresh[w.ParkedOn] = true
+		}
+	}
+	return fresh, stale
 }
 
 // Plan is the pass: the actions in, in a stable order, none whose key was
@@ -391,7 +466,9 @@ func Plan(in Input) []Action {
 	parked := map[string]Worker{}
 	started := map[string]bool{}
 	for _, w := range in.Workers {
-		if IsPull(w.ParkedOn) {
+		// Of two workers parked on one pull request, the later park is its
+		// request.
+		if cur, ok := parked[w.ParkedOn]; IsPull(w.ParkedOn) && (!ok || !w.ParkedAt.Before(cur.ParkedAt)) {
 			parked[w.ParkedOn] = w
 		}
 		started[w.Name] = w.Started
@@ -403,6 +480,22 @@ func Plan(in Input) []Action {
 		reported := slices.ContainsFunc(in.Events, func(e Event) bool { return e.Verb == VerbDone && e.Agent == agent })
 		if started[agent] && !reported {
 			add(Action{Key: retireKey(ref, who), Kind: KindDone, Ref: ref, Agent: agent, Message: why})
+		}
+	}
+	// leave says once why the loop leaves ref alone.
+	leave := func(ref, url, agent, reason, why string) {
+		add(Action{Key: leaveKey(ref, reason), Kind: KindLeave, Ref: ref, URL: url, Agent: agent, Message: why})
+	}
+	// A park the loop leaves alone without reading its pull request.
+	fresh, _ := parks(in.Workers, in.Desk)
+	for _, w := range in.Workers {
+		if !IsPull(w.ParkedOn) {
+			continue
+		}
+		if reason, why := in.Desk.unread(w.ParkedOn); reason != "" {
+			leave(w.ParkedOn, "", w.Name, reason, why)
+		} else if early, why := in.Desk.early(w.ParkedAt); early && !fresh[w.ParkedOn] {
+			leave(w.ParkedOn, "", w.Name, leftBefore, why)
 		}
 	}
 	refs := make([]string, 0, len(in.Pulls))
@@ -422,6 +515,7 @@ func Plan(in Input) []Action {
 		if escalated && esc.open() {
 			continue
 		}
+		ask, asked := l.asked[ref]
 		if p.State == Merged || p.State == Closed {
 			if len(l.rounds[ref]) > 0 {
 				add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: strings.ToLower(p.State)})
@@ -429,6 +523,9 @@ func Plan(in Input) []Action {
 			continue
 		}
 		w, isParked := parked[ref]
+		if early, _ := in.Desk.early(w.ParkedAt); isParked && early {
+			continue
+		}
 		agent := w.Name
 		if agent == "" {
 			agent = l.reviewer[ref]
@@ -437,6 +534,17 @@ func Plan(in Input) []Action {
 			continue
 		}
 		base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
+		switch o, reason, why := in.Desk.owner(p, l.overridden[ref]); o {
+		case nobodys:
+			leave(ref, p.URL, agent, reason, why)
+			continue
+		case theirs:
+			leave(ref, p.URL, agent, reason, why)
+			planTheirs(in, l, p, w, isParked, base, ask, asked, add)
+			continue
+		case unknown:
+			continue
+		}
 		rs := l.rounds[ref]
 		// An escalation logged before its key named a head was on the
 		// head of the last round, whose findings stood unfixed.
@@ -689,6 +797,48 @@ func Plan(in Input) []Action {
 		add(Action{Key: "release " + in.Release, Kind: KindRelease, Version: in.Release})
 	}
 	return out
+}
+
+// planTheirs plans another team's pull request p: the person's answer about
+// its ownership, the owning team's reviews told to the worker parked on it,
+// and, once that team let the worker wait OwnerWait without a review, the
+// person asked whether the desk takes it over.
+func planTheirs(in Input, l ledger, p Pull, w Worker, isParked bool, base Action, ask escalation, asked bool, add func(Action)) {
+	if asked && ask.answer != nil {
+		an := *ask.answer
+		a := base
+		if Overrides(an.Text) {
+			a.Key, a.Kind = overrideKey(p.Ref), KindOverride
+			a.Message = fmt.Sprintf("%s overrode %s's ownership of %s, answering note #%d: %s; the desk reviews it from here",
+				an.By, teamName(p.Team), p.URL, an.Note, oneLine(an.Text))
+			add(a)
+			return
+		}
+		if ak := answerKey(p.Ref, an.Note); !l.has(ak) {
+			a.Key, a.Kind = ak, KindAnswer
+			a.Message = ownershipAnswerMessage(p, an)
+			add(a)
+		}
+	}
+	if !isParked {
+		return
+	}
+	reviews := ownerReviews(p, w.ParkedAt)
+	for _, r := range reviews {
+		a := base
+		a.Key, a.Kind, a.Agent = relayKey(p.Ref, r.ID), KindRelay, w.Name
+		a.Message = relayMessage(p, r, p.Team)
+		add(a)
+	}
+	if asked || len(reviews) > 0 || ownerApproved(p) || in.Now.Sub(w.ParkedAt) < in.Desk.OwnerWait {
+		return
+	}
+	a := base
+	a.Key, a.Kind, a.Agent = ownershipKey(p.Ref), KindOwnership, w.Name
+	a.Question, a.Options = OwnershipQuestion(p.URL, p.Team), OwnershipOptions(p.Team)
+	a.Message = fmt.Sprintf("%s parked on %s at %s for %s's review, and none came in %s",
+		w.Name, p.URL, w.ParkedAt.UTC().Format(time.RFC3339), teamName(p.Team), in.Desk.OwnerWait)
+	add(a)
 }
 
 // issueURL is an issue's URL: a problem naming one is filed.

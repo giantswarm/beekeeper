@@ -142,6 +142,9 @@ type app struct {
 	// origin reads a requester's working directory and the keys' variables
 	// of its environment; nil is sandbox.Origin on /proc.
 	origin func(pid int, keys []string) (string, []string, error)
+	// ompModelList lists omp's model selectors (provider/id) in tests; nil:
+	// omp models.
+	ompModelList func(ctx context.Context) ([]string, error)
 	// readUsage runs capacity.usage.command; nil is runUsageCommand.
 	readUsage func(ctx context.Context, command []string, timeout time.Duration) (usageReading, error)
 	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs

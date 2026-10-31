@@ -424,3 +424,94 @@ func TestAutoStartNeedsVaultZeroNowPace(t *testing.T) {
 		t.Fatalf("brokeredVault with zero a.now and locked vault: r=%+v, err=%v, called=%v", r, err, called)
 	}
 }
+
+// capacity pick returns an omp choice by its bare model id, as
+// capacity.choices names it: the start takes it as the one provider/id omp
+// lists for that id, so the start's model check and its vault and broker
+// decision follow that provider; an id two providers list is refused with
+// both, and an id omp does not list at all still is.
+func TestOmpBareModelFromPick(t *testing.T) {
+	const bare = "m"
+	listed := []string{sparkModel, "ollama/qwen3.5:9b"}
+	for _, tc := range []struct {
+		model  string
+		models []string
+		want   string
+		err    string
+	}{
+		{model: bare, models: listed, want: sparkModel},
+		{model: sparkModel, models: listed, want: sparkModel},
+		{model: "qwen3.5:9b", models: listed, want: "ollama/qwen3.5:9b"},
+		{model: bare, models: append(listed, "ollama/m"), err: "under more than one provider (spark/m, ollama/m)"},
+		{model: "unlisted", models: listed, err: `lists no model "unlisted"`},
+		{model: "ollama/m", models: listed, err: `lists no model "ollama/m"`},
+	} {
+		got, err := ompModel(tc.model, "", func() ([]string, error) { return tc.models, nil })
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("ompModel(%q) = %q, %v; want the error %q", tc.model, got, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("ompModel(%q) = %q, %v; want %q", tc.model, got, err, tc.want)
+		}
+	}
+
+	a := vaultApp(t, 20*time.Millisecond)
+	a.cfg.Omp = config.Omp{Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
+	a.ompModelList = func(context.Context) ([]string, error) { return listed, nil }
+	if !a.ompNeedsVault(bare) || !a.ompStartBrokered(bare) {
+		t.Errorf("a bare id omp lists under %s does not read the vault through the broker", sparkProvider)
+	}
+	if !a.ompStartNeedsVault([]string{agentStartName, "--harness=omp", "--model=" + bare, "--", "w", briefMD}) {
+		t.Error("the broker does not open the vault for a start on the pick's bare id")
+	}
+	if a.ompNeedsVault("qwen3.5:9b") {
+		t.Error("a bare id on a provider outside omp.providers reads the vault")
+	}
+	a.ompModelList = func(context.Context) ([]string, error) { return nil, errors.New("omp failed") }
+	if a.ompNeedsVault(bare) {
+		t.Error("an unlisted bare id reads the vault")
+	}
+}
+
+// A worker started on the pick's bare id records the provider/id omp lists
+// for it: the loop still takes it for a self-hosted model's worker (so its
+// review carries --review-of-self-hosted), capacity counts it under the
+// choice's own provider even with two self-hosted providers, and the start
+// gate keeps the choice for the qualified model.
+func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
+	const id, recorded, rackB = "flash-id", "vllm/flash-id", "rack-b"
+	k := config.Capacity{
+		Providers: map[string]config.Provider{
+			claudeComm: {Floor: 1, Ceiling: 1},
+			"rack-a":   {Kind: config.KindSelfHosted, Ceiling: 2},
+			rackB:      {Kind: config.KindSelfHosted, Ceiling: 2},
+		},
+		Choices: []config.Choice{
+			{Harness: claudeComm, Model: testModelOpus47},
+			{Harness: omp.Harness, Model: "other-id", Provider: "rack-a"},
+			{Harness: omp.Harness, Model: id, Provider: rackB},
+		},
+	}
+	if !selfHostedModel(k, recorded) {
+		t.Errorf("selfHostedModel(%q) with the self-hosted choice %q = false", recorded, id)
+	}
+	if selfHostedModel(k, "vllm/unlisted-id") || selfHostedModel(k, "vllm/x"+id) {
+		t.Error("selfHostedModel matched a model no choice names")
+	}
+	if p, _ := resolveAgentProviderBucket(k, omp.Harness, recorded); p != rackB {
+		t.Errorf("resolveAgentProviderBucket(omp, %q) = %q, want %s", recorded, p, rackB)
+	}
+	if !choicesHaveModel(k.Choices, recorded) {
+		t.Errorf("choicesHaveModel(%q) = false", recorded)
+	}
+	if f := filterChoiceModel(k, recorded); len(f.Choices) != 1 || f.Choices[0].Model != id {
+		t.Errorf("filterChoiceModel(%q) = %+v, want the %q choice", recorded, f.Choices, id)
+	}
+	// a subscription choice is never matched by an id after a slash
+	if ompChoiceModel(config.Choice{Harness: claudeComm, Model: bgModel}, "x/"+bgModel) {
+		t.Error("a claude choice matched its id after a slash")
+	}
+}
