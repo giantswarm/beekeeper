@@ -286,3 +286,24 @@ func TestLoopAlertMissingTranscriptRestaffsOriginalTask(t *testing.T) {
 		t.Fatal("missing transcript stranded the parked task")
 	}
 }
+
+func TestLoopAlertFailedWakeDoesNotHideAnotherPage(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Alerts.PageSeverity = "critical"
+	f := loopFiring()
+	other := f
+	other.Key, other.Alertname = "another-fingerprint", "AnotherWorkloadDown"
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f, other}, nil }
+	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentWakeName {
+			return "no capacity", ExitRefused
+		}
+		return "", 0
+	}
+	r.pass(t)
+	st, _ := r.a.store.Read()
+	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, other.Instance()) {
+		t.Fatalf("failed wake hid unrelated alert: %+v", st.Notes)
+	}
+}

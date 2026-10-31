@@ -79,6 +79,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 	done := map[string]bool{}
 	claims := map[string]loopClaim{}
 	var pending []alertReplacement
+	pendingKeys := map[string]bool{}
 	for _, e := range evs {
 		key, rest, ok := keyed(e.Detail)
 		if e.Verb == loopAlertVerb && ok {
@@ -93,6 +94,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 				return err
 			}
 			pending = append(pending, r)
+			pendingKeys[r.Key] = true
 		}
 	}
 	for _, r := range pending {
@@ -100,7 +102,8 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			continue
 		}
 		if err := l.replaceAlertWorker(ctx, r, evs); err != nil {
-			return err
+			l.sayOnce("replace "+r.Key, "SUPERVISOR ALERT REPLACEMENT FAILED %s: %v", r.Name, err)
+			continue
 		}
 		if !l.startsHeld {
 			done[r.Key] = true
@@ -146,52 +149,15 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			}
 			waiting = true
 			key := "alert wake " + f.Installation + "/" + f.Key + " " + ag.Name + " " + ag.Park.At.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
-			if done[key] || l.startsHeld {
+			if done[key] || pendingKeys[key] || l.startsHeld {
 				continue
 			}
-			act := superloop.Action{Kind: loopAlertKind, Key: key, Agent: ag.Name, Message: "Your parked event fired: " + f.Instance() + " " + f.Where + ". Re-query the live state of your task and continue it."}
-			if c, ok := claims[key]; ok && slices.ContainsFunc(evs, func(e state.Event) bool {
-				return e.Verb == "agents.wake" && !e.At.Before(c.at) && strings.HasPrefix(e.Detail, ag.Name+":")
-			}) {
-				if err := l.record(act, "wake delivered before interruption"); err != nil {
-					return err
-				}
+			err := l.wakeAlertWorker(ctx, st, ag, f, key, claims, evs)
+			if err != nil {
+				l.sayOnce(key, "SUPERVISOR ALERT WAKE FAILED %s: %v", ag.Name, err)
 				continue
 			}
-			if !loopResumable(a, st, ag) {
-				// Write the complete replacement brief before retiring the old
-				// roster entry: a restart can finish staffing exactly this task.
-				task := ag.Task
-				if ref := agentRef(st, ag.Name); ref != "" {
-					task += "\nWork the original item " + ref + "; read its acceptance criteria and finish it in full."
-				}
-				data := briefData{Task: task + "\n\n" + act.Message, Worker: ag.Name}
-				if ref, ok := parseRef(agentRef(st, ag.Name)); ok {
-					data.Repo, data.Number, data.URL = ref.Repo, ref.N, fmt.Sprintf("https://github.com/%s/issues/%d", ref.Repo, ref.N)
-				}
-				brief, err := l.brief(a.cfg.Supervisor.WorkerBrief, "{{.Task}}", key, data)
-				if err != nil {
-					return err
-				}
-				r := alertReplacement{Key: key, Name: ag.Name, Brief: brief, Original: ag.Party}
-				raw, err := json.Marshal(r)
-				if err != nil {
-					return err
-				}
-				if err := a.store.Record(event(loopParty, loopAlertIntent, "%s", raw)); err != nil {
-					return err
-				}
-				if err := l.replaceAlertWorker(ctx, r, evs); err != nil {
-					return err
-				}
-			} else {
-				if err := l.wake(ctx, act); err != nil {
-					return err
-				}
-				if err := l.record(act, "woke "+ag.Name+" for "+f.Instance()); err != nil {
-					return err
-				}
-			}
+			delete(l.said, key)
 			done[key] = true
 		}
 		// Existing firing pages are included: taking over from a watch must
@@ -288,4 +254,52 @@ func replacementKey(detail string) string {
 	var r alertReplacement
 	_ = json.Unmarshal([]byte(detail), &r)
 	return r.Key
+}
+
+func (l *supervisorLoop) wakeAlertWorker(ctx context.Context, st *state.State, ag state.Agent, f alerts.Firing, key string, claims map[string]loopClaim, evs []state.Event) error {
+	a := l.a
+	act := superloop.Action{Kind: loopAlertKind, Key: key, Agent: ag.Name, Message: "Your parked event fired: " + f.Instance() + " " + f.Where + ". Re-query the live state of your task and continue it."}
+	if c, ok := claims[key]; ok && slices.ContainsFunc(evs, func(e state.Event) bool {
+		return e.Verb == "agents.wake" && !e.At.Before(c.at) && strings.HasPrefix(e.Detail, ag.Name+":")
+	}) {
+		if err := l.record(act, "wake delivered before interruption"); err != nil {
+			return err
+		}
+		return nil
+	}
+	if !loopResumable(a, st, ag) {
+		// Write the complete replacement brief before retiring the old
+		// roster entry: a restart can finish staffing exactly this task.
+		task := ag.Task
+		if ref := agentRef(st, ag.Name); ref != "" {
+			task += "\nWork the original item " + ref + "; read its acceptance criteria and finish it in full."
+		}
+		data := briefData{Task: task + "\n\n" + act.Message, Worker: ag.Name}
+		if ref, ok := parseRef(agentRef(st, ag.Name)); ok {
+			data.Repo, data.Number, data.URL = ref.Repo, ref.N, fmt.Sprintf("https://github.com/%s/issues/%d", ref.Repo, ref.N)
+		}
+		brief, err := l.brief(a.cfg.Supervisor.WorkerBrief, "{{.Task}}", key, data)
+		if err != nil {
+			return err
+		}
+		r := alertReplacement{Key: key, Name: ag.Name, Brief: brief, Original: ag.Party}
+		raw, err := json.Marshal(r)
+		if err != nil {
+			return err
+		}
+		if err := a.store.Record(event(loopParty, loopAlertIntent, "%s", raw)); err != nil {
+			return err
+		}
+		if err := l.replaceAlertWorker(ctx, r, evs); err != nil {
+			return err
+		}
+	} else {
+		if err := l.wake(ctx, act); err != nil {
+			return err
+		}
+		if err := l.record(act, "woke "+ag.Name+" for "+f.Instance()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
