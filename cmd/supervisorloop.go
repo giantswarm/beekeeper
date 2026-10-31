@@ -283,6 +283,8 @@ type supervisorLoop struct {
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
 	releaseAt time.Time
+	// tidyAt is when the loop last ran board tidy.
+	tidyAt time.Time
 	// stages are the release stages finished, by key.
 	stages map[string]bool
 	// timerActs are timer side effects; shutdown and re-exec await them.
@@ -377,6 +379,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err := l.fireTimers(ctx, st); err != nil {
 		return err
 	}
+	l.tidy(ctx, st)
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
@@ -593,6 +596,32 @@ func (l *supervisorLoop) newerRelease(ctx context.Context) string {
 	}
 	return ""
 }
+
+// tidy runs board tidy every board.tidyEvery while a board is configured
+// and the GitHub budget is above its floor, and says what it did.
+func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
+	a := l.a
+	b := a.cfg.Board
+	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.now.Sub(l.tidyAt) < b.TidyEvery.Duration ||
+		lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		return
+	}
+	l.tidyAt = a.now
+	out, err := l.run(ctx, loopBoard, boardTidyName)
+	if err != nil {
+		l.sayOnce("board tidy", "SUPERVISOR BOARD TIDY FAILED: %v", err)
+		return
+	}
+	delete(l.said, "board tidy")
+	for line := range strings.Lines(out) {
+		if line = strings.TrimSpace(line); line != "" {
+			_, _ = fmt.Fprintln(a.out, "SUPERVISOR BOARD "+line)
+		}
+	}
+}
+
+// boardTidyName is the board tidy subcommand.
+const boardTidyName = "tidy"
 
 // selfUpdateCheck is the look for a newer release.
 var selfUpdateCheck = []string{selfUpdateCmdName, "--check"}
