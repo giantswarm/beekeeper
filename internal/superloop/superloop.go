@@ -28,13 +28,16 @@ const (
 	KindRelease  = "release"
 	KindClassify = "classify"
 	KindQuestion = "question"
+	// KindFile hands the problems a done report found and filed nowhere
+	// to the guide's queue, to file in their owning repository.
+	KindFile = "file"
 	// KindEnd ends the tracking of a pull request that merged or closed.
 	KindEnd = "end"
 )
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
-	return []string{KindReview, KindGo, KindForward, KindEscalate, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindEnd}
+	return []string{KindReview, KindGo, KindForward, KindEscalate, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd}
 }
 
 // The verbs of the events the rules act on.
@@ -486,20 +489,22 @@ func Plan(in Input) []Action {
 		return slices.ContainsFunc(in.Events, func(e Event) bool { return e.Verb == VerbDone && near(e, r) })
 	}
 	// forwarded is a problem of the reviewer of one of the loop's rounds
-	// whose changes request the loop forwarded (or forwards in this pass):
-	// the worker has it word for word.
+	// that matches the changes request of its round the loop forwarded
+	// (or forwards in this pass): the worker has it in the review, word for
+	// word.
 	forwarded := func(e Event) bool {
 		for ref, rs := range l.rounds {
+			p, tracked := in.Pulls[ref]
 			for i, rd := range rs {
-				if ReviewerName(ref, i+1) != e.Agent {
+				if ReviewerName(ref, i+1) != e.Agent || !tracked {
 					continue
 				}
-				for _, t := range l.keys {
-					if t.Kind == KindForward && t.Ref == ref && !t.At.Before(rd.at) {
-						return true
-					}
+				v := p.verdict(rd)
+				if v == nil || v.Verdict != ChangesRequested {
+					continue
 				}
-				if slices.ContainsFunc(out, func(a Action) bool { return a.Kind == KindForward && a.Ref == ref }) {
+				fk := forwardKey(ref, v.ID)
+				if (l.has(fk) || slices.ContainsFunc(out, func(a Action) bool { return a.Key == fk })) && matches(problemText(e), v.Body) {
 					return true
 				}
 			}
@@ -536,16 +541,34 @@ func Plan(in Input) []Action {
 			dk := eventKey(KindDone, e)
 			ev := e
 			if !l.has(dk) {
-				a := Action{Key: dk, Kind: KindDone, Agent: e.Agent, Event: &ev}
-				var found []string
+				// The report's problems: one naming its issue is filed;
+				// the others go to the guide's queue to file, before the
+				// agent leaves the roster.
+				var filed, unfiled []string
 				for _, p := range in.Events {
-					if p.Verb == VerbProblem && near(p, e) {
-						found = append(found, strings.TrimPrefix(p.Detail, p.Agent+": "))
+					if p.Verb != VerbProblem || !near(p, e) || forwarded(p) {
+						continue
+					}
+					if Filed(p.Detail) {
+						filed = append(filed, problemText(p))
+					} else {
+						unfiled = append(unfiled, problemText(p))
 					}
 				}
-				if len(found) > 0 {
-					a.Message = fmt.Sprintf("its report names %d problem(s) found, the worker's to file in the owning repository: %s", len(found), strings.Join(found, "; "))
+				fk := eventKey(KindFile, e)
+				if len(unfiled) > 0 && !l.has(fk) {
+					add(Action{Key: fk, Kind: KindFile, Agent: e.Agent, Event: &ev, Message: strings.Join(unfiled, "\n")})
+					continue
 				}
+				a := Action{Key: dk, Kind: KindDone, Agent: e.Agent, Event: &ev}
+				var says []string
+				if len(filed) > 0 {
+					says = append(says, fmt.Sprintf("its report names %d problem(s) filed: %s", len(filed), strings.Join(filed, "; ")))
+				}
+				if len(unfiled) > 0 {
+					says = append(says, fmt.Sprintf("%d problem(s) filed nowhere are in the guide's queue to file", len(unfiled)))
+				}
+				a.Message = strings.Join(says, "; ")
 				add(a)
 				continue
 			}
@@ -557,8 +580,9 @@ func Plan(in Input) []Action {
 				classify(e)
 			}
 		case VerbProblem:
-			// A problem of a done report rides with its done; a
-			// reviewer's with the changes request the loop forwarded.
+			// A problem of a done report rides with its done, which
+			// files it; a reviewer's that matches the changes request
+			// the loop forwarded is the forward's.
 			if !paired(e) && !forwarded(e) {
 				classify(e)
 			}
@@ -579,6 +603,49 @@ func Plan(in Input) []Action {
 	}
 	if in.Release != "" {
 		add(Action{Key: "release " + in.Release, Kind: KindRelease, Version: in.Release})
+	}
+	return out
+}
+
+// issueURL is an issue's URL: a problem naming one is filed.
+var issueURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/issues/\d+`)
+
+// Filed reports whether a problem found names its issue's URL: it is
+// filed.
+func Filed(problem string) bool { return issueURL.MatchString(problem) }
+
+// problemText is an agents.problem's finding, without its agent's name.
+func problemText(e Event) string { return strings.TrimPrefix(e.Detail, e.Agent+": ") }
+
+// matches reports whether a problem says what a review's body says: most
+// of its words (four letters or more) are the body's.
+func matches(problem, body string) bool {
+	in := map[string]bool{}
+	for _, w := range words(body) {
+		in[w] = true
+	}
+	ws := words(problem)
+	if len(ws) == 0 {
+		return false
+	}
+	n := 0
+	for _, w := range ws {
+		if in[w] {
+			n++
+		}
+	}
+	return n*10 >= len(ws)*6
+}
+
+// words are s's words of four letters or more, lower case.
+func words(s string) []string {
+	var out []string
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+	}) {
+		if len(w) >= 4 {
+			out = append(out, w)
+		}
 	}
 	return out
 }

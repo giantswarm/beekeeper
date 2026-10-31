@@ -459,27 +459,45 @@ func TestEventAgent(t *testing.T) {
 	}
 }
 
-// A problem of a done report rides with the done; its log line names it.
-func TestAProblemOfADoneReportIsTheDones(t *testing.T) {
+// A problem of a done report reaches whoever files it: one naming its
+// issue is filed and rides with the done; one filed nowhere goes to the
+// guide's queue to file first, and the done follows.
+func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 	done := Event{At: t0, Verb: VerbDone, Agent: worker, Detail: worker + " done: fix it"}
-	problem := Event{At: t0.Add(20 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": CI flakes in o/r, filed as an issue"}
-	a := only(t, Plan(Input{Events: []Event{done, problem}}), KindDone)
-	if !strings.Contains(a.Message, "1 problem(s) found") || !strings.Contains(a.Message, "CI flakes in o/r") {
+	filed := Event{At: t0.Add(20 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": CI flakes in o/r, filed as https://github.com/o/r/issues/9"}
+	a := only(t, Plan(Input{Events: []Event{done, filed}}), KindDone)
+	if !strings.Contains(a.Message, "1 problem(s) filed") || !strings.Contains(a.Message, "issues/9") {
 		t.Errorf("done message = %q", a.Message)
+	}
+	unfiled := Event{At: t0.Add(30 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab's gate refuses a green head, o/r"}
+	in := Input{Events: []Event{done, filed, unfiled}}
+	f := only(t, Plan(in), KindFile)
+	if f.Message != "the lab's gate refuses a green head, o/r" || f.Event == nil || f.Event.Verb != VerbDone {
+		t.Errorf("file = %+v", f)
+	}
+	in.Taken = taken(t, t1, f)
+	a = only(t, Plan(in), KindDone)
+	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's queue") {
+		t.Errorf("done message after the file = %q", a.Message)
 	}
 	late := Event{At: t0.Add(time.Hour), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab is gone"}
 	if acts := Plan(Input{Events: []Event{done, late}}); len(acts) != 2 || acts[1].Kind != KindClassify {
 		t.Errorf("a problem logged later = %+v", acts)
 	}
+	if !Filed("see https://github.com/o/r/issues/9") || Filed("see https://github.com/o/r/pull/9") || Filed("o/r#9") {
+		t.Error("Filed takes only an issue's URL")
+	}
 }
 
-// A reviewer's problem matching the changes request the loop forwards is
-// the forward's, in the pass that forwards it and after.
+// A reviewer's problem that matches the changes request of its round the
+// loop forwards is the forward's, in the pass that forwards it and after;
+// one that does not match is the rules' to place.
 func TestAReviewersForwardedFindingIsNoNote(t *testing.T) {
 	reviewer := ReviewerName(pr, 1)
 	rv := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
-	ask := Review{ID: "r1", Head: head1, Verdict: ChangesRequested, Body: "fix the nil check", At: t1}
-	problem := Event{At: t1, Verb: VerbProblem, Agent: reviewer, Detail: reviewer + ": the nil check is missing"}
+	ask := Review{ID: "r1", Head: head1, Verdict: ChangesRequested, Body: "1. The nil check of the parser is missing in Parse.", At: t1}
+	problem := Event{At: t1, Verb: VerbProblem, Agent: reviewer, Detail: reviewer + ": the parser's nil check is missing in Parse"}
+	other := Event{At: t1, Verb: VerbProblem, Agent: reviewer, Detail: reviewer + ": the build slot queue timed out twice locally"}
 	in := Input{Workers: parked(t0), Pulls: pull(head1, true, ask), Taken: rv, Events: []Event{problem}}
 	only(t, Plan(in), KindForward)
 	in.Taken = append(rv, taken(t, t1.Add(time.Minute), Action{Key: forwardKey(pr, "r1"), Kind: KindForward, Ref: pr, Agent: worker})...)
@@ -487,6 +505,21 @@ func TestAReviewersForwardedFindingIsNoNote(t *testing.T) {
 		if a.Kind == KindClassify {
 			t.Errorf("a forwarded finding is classified: %+v", a)
 		}
+	}
+	in.Events = []Event{other}
+	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindClassify }) {
+		t.Error("a reviewer's problem the review does not name is dropped")
+	}
+	// With its done, the matching one is the forward's, the other is to
+	// file.
+	done := Event{At: t1, Verb: VerbDone, Agent: reviewer, Detail: reviewer + " done: review"}
+	in.Events = []Event{done, problem}
+	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindDone && a.Agent == reviewer }) {
+		t.Errorf("a reviewer's done with a forwarded finding = %+v", Plan(in))
+	}
+	in.Events = []Event{done, problem, other}
+	if !slices.ContainsFunc(Plan(in), func(a Action) bool { return a.Kind == KindFile && a.Message == problemText(other) }) {
+		t.Errorf("a reviewer's done with its own problem = %+v", Plan(in))
 	}
 	// Without a forward (no changes request) the reviewer's problem is
 	// still the rules' to place.

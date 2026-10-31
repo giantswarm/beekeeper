@@ -496,6 +496,37 @@ func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 	}
 }
 
+// A done report's problem filed nowhere reaches the guide's queue to file,
+// and the done follows; it is no decision.
+func TestLoopFilesADoneReportsProblemThroughTheGuidesQueue(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	done := event(state.Party{Name: loopWorker}, "agents.done", "%s done: fix %s", loopWorker, loopURL)
+	problem := event(state.Party{Name: loopWorker}, "agents.problem", "%s: the gate refuses a green head, o/r", loopWorker)
+	problem.At = done.At.Add(10 * time.Microsecond)
+	if err := r.a.store.Record(done, problem); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	note := r.called("note", loopAdd)
+	if note == nil || !strings.Contains(note[len(note)-1], "File in its owning repository what "+loopWorker+" found (1 problem(s), no decision)") ||
+		!strings.Contains(strings.Join(note, " "), "the gate refuses a green head") {
+		t.Fatalf("the note = %v\n%s", note, r.out)
+	}
+	if strings.Contains(strings.Join(note, " "), "Decide what") {
+		t.Errorf("filed as a decision: %v", note)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+		t.Errorf("off the roster before its problem reached the guide's queue: %v", c)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("not taken off the roster after the file: %v\n%s", r.calls, r.out)
+	}
+}
+
 func TestLoopPutsAWorkersQuestionInTheGuidesQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, "", time.Now())
