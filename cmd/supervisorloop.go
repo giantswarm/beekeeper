@@ -507,6 +507,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
+		if err := a.syncClaims(ctx); err != nil {
+			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
+		}
 	}
 	own := a.cfg.Supervisor.Ownership
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now,

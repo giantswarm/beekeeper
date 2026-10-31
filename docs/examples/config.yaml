@@ -398,6 +398,11 @@ board:                      # the project board `beekeeper board next` picks wor
     kind: [epic]            # an epic
     planning: [up next]     # in planning: neither it nor its sub-issues offered, board next shows its plan
     go: in progress         # the go: its open sub-issues offered in their order; board move records the plan head
+  claims:                   # the desk's session records as marker comments on their issues, for other desks on the same repositories (defaults but desk)
+    off: false              # true: publish no claim and read none
+    desk: platform-desk     # the neutral name the desk's claims carry, seen on (possibly public) issues; unset: no claim published, the other desks' still honoured
+    refresh: 6h             # how often a claim that still holds is refreshed
+    staleAfter: 24h         # another desk's claim unrefreshed for longer is shown, not honoured
 
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links

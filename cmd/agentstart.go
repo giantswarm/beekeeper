@@ -121,7 +121,11 @@ open task of a stopped session's entry under that name, which it takes
 over), so the roster shows it at work from its start. A brief naming an
 issue or pull request by URL makes the first one named the session's serve
 record (as sessions serve records it), so board next never offers that
-item again while the worker runs.
+item again while the worker runs. That record is the desk's claim of the
+issue on GitHub too (board.claims): while another desk's live claim holds
+the issue, start refuses with that claim's desk, session and time, exit 3;
+--force starts anyway and the event log records the claim overridden
+(agents.start). A stale claim is said, never honoured.
 
 The start is judged first, as beekeeper capacity judges one: the busy
 agents against capacity.ceiling, MemAvailable, disk swap's growth, the
@@ -345,6 +349,11 @@ work, which takes no choice on a self-hosted provider.`,
 			if err != nil {
 				return err
 			}
+			// another desk's claim of the brief's issue refuses the start,
+			// --force aside, before anything is judged or recorded
+			if err := a.claimGate(cmd.Context(), name, briefIssue(brief), force, dryRun); err != nil {
+				return err
+			}
 			// an omp agent whose provider's key is in the vault starts where
 			// the vault session is: the host's broker
 			if !dryRun && harness == omp.Harness && model != "" {
@@ -472,6 +481,7 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
 			h, _ := harnessByName(harness)
+			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			return h.Start(cmd.Context(), a, sp)
 		},
 	}
@@ -489,7 +499,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
-	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
+	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start, or another desk claims the brief's issue; the event log records what it overrode")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")

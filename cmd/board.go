@@ -158,6 +158,19 @@ second claim while the session still serves an open item is refused with
 its record, which stays as it was; --replace takes the next item and
 replaces the record. Exit 3 when no item is free or the claim is refused.
 
+Claims of other desks: every session record is the desk's claim of its
+issue on GitHub as well (board.claims), one marker comment per issue and
+desk signed with board.claims.desk, refreshed every board.claims.refresh
+and released when the record ends (agents idle --done, sessions unserve,
+the session's end); the supervisor loop and the watch keep them in line.
+next reads the claims of each pick in turn and skips an item another desk
+claims ("claimed by desk <name> (session <id>) since <time>"), up to the
+first item no other desk claims; a claim unrefreshed for
+board.claims.staleAfter is shown on the pick and not honoured. --claim
+publishes its claim at once and, should another desk's claim on the item
+be older, gives it back and exits 3 naming it. Without board.claims.desk
+the desk publishes none and still honours the other desks'.
+
 --limit <n> lists at most n items of each list: the skipped lines above the
 pick and the free items behind it, and --json's skipped and after_pick,
 each followed by how many it left out ("… 12 more skipped above the pick",
@@ -219,6 +232,9 @@ the whole walk.`,
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
+			if err := a.skipClaimed(cmd.Context(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick }); err != nil {
+				return err
+			}
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }
@@ -228,6 +244,9 @@ the whole walk.`,
 					}
 				}
 				res, err = claimNext(a.store, cands, sc, waits, open)
+				if err == nil && res.Claimed {
+					err = a.publishClaimed(cmd.Context(), cmd.ErrOrStderr(), me, res.Pick.Ref)
+				}
 			} else {
 				res = nextFree(st, cands, sc)
 				ranks := snap.Priorities.Ranks()

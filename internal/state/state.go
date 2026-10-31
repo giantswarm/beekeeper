@@ -632,6 +632,19 @@ type Record struct {
 	rest rest
 }
 
+// Claim is a record published on its issue as a marker comment other desks
+// read: the comment, the session it names, since when and when this desk
+// last refreshed it.
+type Claim struct {
+	Issue   string    `json:"issue"`
+	Comment int64     `json:"comment"`
+	Session Party     `json:"session"`
+	At      time.Time `json:"at"`
+	Seen    time.Time `json:"seen"`
+
+	rest rest
+}
+
 // AlertOwner is the session that owns a firing alert (alerts own), until the
 // session ends or the alert resolves. A party without a session id is a
 // person, who owns it until it resolves.
@@ -1000,6 +1013,9 @@ type State struct {
 	NextTimer int     `json:"nextTimer,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
+	// Claims are the records this desk published on GitHub as claims
+	// other desks read (board.claims).
+	Claims []Claim `json:"claims,omitempty"`
 	// Starts are the sessions beekeeper started, what the permission hook
 	// answers for.
 	Starts []Start `json:"starts,omitempty"`

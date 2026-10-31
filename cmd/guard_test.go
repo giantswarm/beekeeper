@@ -14,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/claim/claimtest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/gocache"
@@ -34,6 +35,9 @@ func TestMain(m *testing.M) {
 	// Nor does an answer reach GitHub: every thread but unknownThread is a
 	// private one to it; a test that reads the comments stubs its own.
 	boardGH = (&answerGH{}).run
+	// Nor does a claim: every issue's thread is an empty one of its own; a
+	// test of the claims keeps its own.
+	claimGH = claimtest.New().GH
 	// Nor does a browse move a window of the desktop's compositor; a test
 	// that places one stubs its own hyprctl.
 	hyprRunning = func() bool { return false }
