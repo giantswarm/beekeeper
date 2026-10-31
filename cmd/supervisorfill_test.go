@@ -39,6 +39,7 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 		case agentsName:
 			if args[1] == agentStartName {
 				busy++
+				r.started(t, args[2], "fill-"+args[2])
 			}
 		}
 		return "", 0
@@ -64,14 +65,24 @@ func TestLoopFillOnStartupAndAfterRosterLoss(t *testing.T) {
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
 		if args[0] == loopBoard {
-			return `{"pick":{"ref":"o/r#20","url":"https://github.com/o/r/issues/20"}}`, 0
+			return `{"pick":{"ref":"o/r#10","url":"https://github.com/o/r/issues/10"}}`, 0
 		}
 		return original(args)
 	}
 	*busy = 2 // a crash or removal without agents.done
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = slices.DeleteFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == "r 10" })
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	r.pass(t)
 	if *busy != 3 {
 		t.Fatalf("did not refill roster loss: %s", r.out)
+	}
+	evs := r.logged(t, "supervisor.next")
+	if !strings.Contains(evs[len(evs)-1].Detail, "o/r#10 attempt 2") {
+		t.Fatalf("did not retry the freed item: %+v", evs)
 	}
 }
 

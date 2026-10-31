@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -21,10 +22,14 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	if l.dryRun || l.a.cfg.Supervisor.WorkerBrief == "" {
 		return nil
 	}
-	finished := map[string]bool{}
+	attempts := map[string]int{}
 	for _, t := range taken {
-		finished[t.Key] = true
+		if ref, ok := strings.CutPrefix(t.Key, loopFillKey); ok {
+			ref, _, _ = strings.Cut(ref, " ")
+			attempts[ref]++
+		}
 	}
+	startedHere := map[string]bool{}
 	for key, c := range claims {
 		if !strings.HasPrefix(key, loopFillKey) {
 			continue
@@ -38,7 +43,9 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			if err := l.record(act, what); err != nil {
 				return err
 			}
-			finished[key] = true
+			ref, _, _ := strings.Cut(strings.TrimPrefix(key, loopFillKey), " ")
+			attempts[ref]++
+			startedHere[ref] = true
 		}
 	}
 	// A non-positive limit means the first fresh capacity read sets it.
@@ -71,10 +78,19 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		if next == nil {
 			return nil
 		}
-		act := superloop.Action{Kind: superloop.KindNext, Key: loopFillKey + next.Ref}
-		if finished[act.Key] {
+		if startedHere[next.Ref] {
 			return nil // a stale board answer must not dispatch the same item twice
 		}
+		live, err := l.a.store.Read()
+		if err != nil {
+			return err
+		}
+		r, _ := parseRef(next.Ref)
+		name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
+		if slices.ContainsFunc(live.Agents, func(ag state.Agent) bool { return ag.Name == name }) {
+			return nil // the board may lag the worker's registration
+		}
+		act := superloop.Action{Kind: superloop.KindNext, Key: fmt.Sprintf("%s%s attempt %d", loopFillKey, next.Ref, attempts[next.Ref]+1)}
 		what, err := l.startItem(ctx, act, *next)
 		if err != nil {
 			if !errors.Is(err, errLoopLater) {
@@ -85,6 +101,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		if err := l.record(act, what); err != nil {
 			return fmt.Errorf("recording capacity refill: %w", err)
 		}
-		finished[act.Key] = true
+		attempts[next.Ref]++
+		startedHere[next.Ref] = true
 	}
 }
