@@ -432,6 +432,11 @@ func Plan(in Input) []Action {
 		}
 		base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
 		rs := l.rounds[ref]
+		// An escalation logged before its key named a head was on the
+		// head of the last round, whose findings stood unfixed.
+		if escalated && esc.head == "" && len(rs) > 0 {
+			esc.head = rs[len(rs)-1].head
+		}
 		if escalated {
 			// The person answered: a release is the merge go for the head
 			// the escalation named; any other answer goes to the worker,
@@ -469,6 +474,11 @@ func Plan(in Input) []Action {
 			}
 		}
 		escalate := func(question, why string) {
+			// A head escalated already is the person's answered: no
+			// second note on it.
+			if escalated && sameHead(esc.head, p.Head) {
+				return
+			}
 			a := base
 			a.Key, a.Kind = escalateKey(ref, p.Head), KindEscalate
 			a.Question = question
@@ -646,25 +656,28 @@ func EscalationOptions(head string) []string {
 	}
 }
 
-// releaseWords match an answer that lets the pull request merge,
-// refuseWords one that says otherwise.
-var (
-	releaseWords = regexp.MustCompile(`(?i)\b(merge|merging|ship|approved?|lgtm|go ahead|release[ds]?)\b`)
-	refuseWords  = regexp.MustCompile(`(?i)\b(not|no|never|don'?t|do not|wait|hold|rework|stop)\b|n't\b`)
-)
+// releases are the whole answers, in their own words, that release an
+// escalation: a bare go to merge and nothing else.
+var releases = []string{"merge", "merge it", "you can merge", "you can merge it", "go ahead and merge", "ok merge", "ok merge it",
+	"yes merge", "yes merge it", "lgtm", "ship it", "approved"}
 
 // Releases reports whether the person's answer to an escalation releases
-// the pull request: its first option's label ("Merge"), or words that say
-// to merge and nothing that refuses it.
+// the pull request. It fails closed: only the first option's label
+// ("Merge", its words after it or not) or a bare go to merge (releases)
+// does; any other words, which may ask for fixes first, do not, and go to
+// the worker word for word.
 func Releases(answer string) bool {
-	text := strings.TrimSpace(answer)
-	switch label, _, _ := strings.Cut(text, " — "); strings.ToLower(strings.TrimSpace(label)) {
-	case "merge":
+	label, _, _ := strings.Cut(strings.TrimSpace(answer), " — ")
+	if strings.EqualFold(strings.TrimSpace(label), "merge") {
 		return true
-	case "rework":
-		return false
 	}
-	return releaseWords.MatchString(text) && !refuseWords.MatchString(text)
+	words := strings.Fields(strings.ToLower(strings.Map(func(r rune) rune {
+		if strings.ContainsRune(".,!:;", r) {
+			return ' '
+		}
+		return r
+	}, answer)))
+	return slices.Contains(releases, strings.Join(words, " "))
 }
 
 // answerMessage tells the worker of p the person's answer an to the

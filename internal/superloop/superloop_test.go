@@ -499,7 +499,7 @@ func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
 	if got := Plan(escalated(t, "")); len(got) != 0 {
 		t.Errorf("an unanswered escalation got %+v", got)
 	}
-	for _, words := range []string{"Merge", "Merge — the findings are cosmetic", "you can merge", "ok, ship it"} {
+	for _, words := range []string{"Merge", "Merge — the findings are cosmetic", "you can merge", "OK, merge it."} {
 		in := escalated(t, words)
 		if got := Tracked(in.Workers, in.Taken, in.Answers); len(got) != 1 || got[0] != pr {
 			t.Errorf("%q: an answered escalation is not tracked: %v", words, got)
@@ -553,9 +553,30 @@ func TestReleases(t *testing.T) {
 		"Merge": true, "merge — fine": true, "you can merge": true, "LGTM": true, "approved": true,
 		"Rework": false, "Rework — merge after the fix": false, "don't merge": false, "do not merge": false,
 		"not yet": false, "wait for x, then merge": false, "": false, "why?": false, "can't merge this": false,
+		"You can merge.": true, "ship it!": true, "Merge it": true,
+		"fix the findings first, then merge": false, "merge main into the branch and fix the findings": false,
+		"ship it after fixing finding 2": false, "yes": false, "merge after the fix": false,
 	} {
 		if got := Releases(words); got != want {
 			t.Errorf("Releases(%q) = %v, want %v", words, got, want)
 		}
+	}
+}
+
+// An escalation logged before its key named a head is on the last
+// round's head: its release is the go, and no second note follows.
+func TestAnEscalationWithoutAHeadIsOnTheLastRoundsHead(t *testing.T) {
+	in := escalated(t, "Merge")
+	in.Taken[len(in.Taken)-1].Key = "escalate " + pr
+	if a := only(t, Plan(in), KindGo); a.Head != head1 {
+		t.Errorf("go = %+v", a)
+	}
+	in = escalated(t, "Rework")
+	in.Taken[len(in.Taken)-1].Key = "escalate " + pr
+	a := only(t, Plan(in), KindAnswer)
+	in.Taken = append(in.Taken, taken(t, t0.Add(4*time.Hour), a)...)
+	in.Workers = parked(t0.Add(5 * time.Hour))
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("the same head after the answer got %+v", got)
 	}
 }
