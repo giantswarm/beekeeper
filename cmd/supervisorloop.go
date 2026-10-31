@@ -138,12 +138,40 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
 	return parseLoopPull(ref, out)
 }
+
+// readDeskLogin is the login gh acts as: the one the desk's agents open
+// their pull requests as, unless supervisor.ownership.authors names them.
+var readDeskLogin = func(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	out, err := github.RunGH(ctx, "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", err
+	}
+	login := strings.TrimSpace(string(out))
+	if login == "" {
+		return "", errors.New("gh api user answers no login")
+	}
+	return login, nil
+}
+
+// readTeams reads supervisor.ownership.teamFiles: the team that owns each
+// repository (owner/name, lower-cased).
+var readTeams = func(ctx context.Context, own config.Ownership) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	repo, dir := own.TeamFilesRepo()
+	return github.Teams(ctx, github.RunGH, repo, dir)
+}
+
+// teamsEvery is how often the loop reads the team files again.
+const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
@@ -155,15 +183,29 @@ type loopPullJSON struct {
 		Conclusion string `json:"conclusion"`
 		State      string `json:"state"`
 	} `json:"statusCheckRollup"`
-	Reviews []struct {
-		ID     string    `json:"id"`
-		Body   string    `json:"body"`
-		State  string    `json:"state"`
-		At     time.Time `json:"submittedAt"`
-		Commit struct {
+	Author loopLogin `json:"author"`
+	Title  string    `json:"title"`
+	Branch string    `json:"headRefName"`
+	Files  []struct {
+		Path string `json:"path"`
+	} `json:"files"`
+	ChangedFiles int `json:"changedFiles"`
+	Reviews      []struct {
+		ID          string    `json:"id"`
+		Author      loopLogin `json:"author"`
+		Association string    `json:"authorAssociation"`
+		Body        string    `json:"body"`
+		State       string    `json:"state"`
+		At          time.Time `json:"submittedAt"`
+		Commit      struct {
 			OID string `json:"oid"`
 		} `json:"commit"`
 	} `json:"reviews"`
+}
+
+// loopLogin is a GitHub account as gh pr view names it.
+type loopLogin struct {
+	Login string `json:"login"`
 }
 
 // parseLoopPull reads gh pr view's JSON of ref.
@@ -172,7 +214,10 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0}
+	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	for _, f := range j.Files {
+		p.Files = append(p.Files, f.Path)
+	}
 	for _, c := range j.Rollup {
 		// A check run reports a status and a conclusion, a commit status
 		// a state.
@@ -182,16 +227,17 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		}
 	}
 	for _, r := range j.Reviews {
-		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
+		member := slices.Contains([]string{"MEMBER", "OWNER", "COLLABORATOR"}, r.Association)
+		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
 	}
 	slices.SortStableFunc(p.Reviews, func(x, y superloop.Review) int { return x.At.Compare(y.At) })
 	return p, nil
 }
 
 func (a *app) supervisorLoopCmd() *cobra.Command {
-	var once bool
+	var once, dryRun bool
 	c := &cobra.Command{
-		Use:   "loop [--once]",
+		Use:   "loop [--once] [--dry-run]",
 		Short: "Run the supervisor's fixed procedure as a deterministic loop over beekeeper's events: no supervisor session needed",
 		Long: `loop takes the supervisor's routine transitions without a supervisor session,
 every supervisor.loopInterval (30s; --once: one pass), as the party
@@ -201,6 +247,9 @@ its key first in the detail):
 
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
+  leave     a park the desk's ownership leaves alone (below), said once with
+            its reason: no reviewer, no go, no forward, no escalation, and
+            a reviewer the loop started on it earlier retires
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, for every new head the worker parked on after an
@@ -234,6 +283,17 @@ its key first in the detail):
             merge that refuse nothing) is the merge go for the head the
             escalation named, once its checks are green; any other answer
             goes to the worker word for word, and the rounds go on
+  relay     another team's pull request: each review its owning team
+            posted after the worker parked, told to it word for word
+  ownership another team's pull request whose worker waited
+            supervisor.ownership.ownerWait (24h) since its park with no
+            review of the owning team and no approval of theirs: a decision
+            for guide.person (note add, options Override and Wait); the loop
+            leaves it alone until the person answers
+  override  the person's answer Override (the option, or a bare override):
+            that one pull request is the desk's from then on, reviewed and
+            given the go as its own team's; any other answer goes to the
+            worker word for word
   end       a reviewed pull request merged or closed: its tracking ends
   done      agents.done: the agent leaves the roster (agents remove);
             the loop retires a session beekeeper started the same way,
@@ -274,6 +334,28 @@ its key first in the detail):
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
 
+Ownership decides what the loop does with a parked pull request, before any
+review, go, forward or escalation:
+
+  - outside github.allowedOrgs: nothing at all, not even a read
+  - in supervisor.ownership.never, or its title, head branch or a changed
+    path names a repository there: nothing, whatever else says
+  - parked before the loop's first start: nothing; a park from before is
+    no request for its review
+  - opened by a login outside supervisor.ownership.authors (default: the
+    login gh acts as): nothing
+  - the desk's team's repository (supervisor.ownership.team, as the team
+    files of supervisor.ownership.teamFiles name it, read every hour), one
+    supervisor.ownership.review names, or one the person overrode: review
+    and go as above
+  - another team's repository, or one no team file declares: that team
+    reviews; relay and ownership above
+  - no supervisor.ownership.team: every repository of the allowed orgs is
+    the desk's
+A pass reads no pull request while it cannot tell the desk's login; while
+it has never read the team files it acts only on review-list and
+overridden pull requests.
+
 The briefs are Go templates over .URL, .Repo, .Number, .Head, .Round and
 .Worker. A pull request is read (one gh pr view) only while an agent is
 parked on it or the loop reviews it. Every transition happens once: a
@@ -283,11 +365,20 @@ with a side effect is claimed in the log first (supervisor.claim): one
 claimed and not logged taken, after an interruption, is taken only when
 the log shows no line of its command (agents start, agents wake, agents
 remove, note add) since the claim. One loop runs per state: a second is
-refused. The loop acts on the events logged since its first start.`,
+refused. The loop acts on the events logged since its first start.
+--dry-run is one pass that prints each transition it would take as
+SUPERVISOR WOULD <KIND> and takes none: it runs no command, logs nothing,
+fires no timer and takes no lock, so it can run beside the loop.`,
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return a.runSupervisorLoop(cmd.Context(), once) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if dryRun {
+				return a.dryRunSupervisorLoop(cmd.Context())
+			}
+			return a.runSupervisorLoop(cmd.Context(), once)
+		},
 	}
 	c.Flags().BoolVar(&once, "once", false, "one pass, then exit")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: no command, no log line, no timer")
 	return c
 }
 
@@ -303,6 +394,13 @@ type supervisorLoop struct {
 	stages map[string]bool
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
+	// login is the login gh acts as, once read; teams the team files'
+	// owners, read at teamsAt.
+	login   string
+	teams   map[string]string
+	teamsAt time.Time
+	// dryRun prints a pass's transitions and takes none.
+	dryRun bool
 }
 
 // loopOutput serializes loop transitions with asynchronous timer output.
@@ -331,7 +429,7 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
-	l, err := a.newSupervisorLoop()
+	l, err := a.newSupervisorLoop(false)
 	if err != nil {
 		return err
 	}
@@ -355,16 +453,31 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 // loopLockFile is the lock one running loop holds, beside the state.
 const loopLockFile = "supervisor-loop.lock"
 
-// newSupervisorLoop logs the loop's start and bounds its events by its
-// first.
-func (a *app) newSupervisorLoop() (*supervisorLoop, error) {
+// dryRunSupervisorLoop is one pass that says what it would take: it runs
+// no command, logs nothing, fires no timer and takes no lock, so it can run
+// beside the loop.
+func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
+	l, err := a.newSupervisorLoop(true)
+	if err != nil {
+		return err
+	}
+	a.now = time.Now()
+	return l.pass(ctx)
+}
+
+// newSupervisorLoop logs the loop's start, unless it is a dry run, and
+// bounds its events by its first.
+func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	starts, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loopStartVerb })
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}}
+	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, dryRun: dryRun}
 	if len(starts) > 0 {
 		l.since = starts[0].At
+	}
+	if dryRun {
+		return l, nil
 	}
 	if err := a.store.Record(event(loopParty, loopStartVerb, "started; acting on the events since %s", l.since.Format(time.RFC3339))); err != nil {
 		return nil, err
@@ -377,7 +490,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	a := l.a
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
-	if b := loopBinary(); b != nil && b.Replaced() {
+	if b := loopBinary(); b != nil && !l.dryRun && b.Replaced() {
 		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 			return err
 		}
@@ -390,10 +503,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := l.fireTimers(ctx, st); err != nil {
-		return err
+	if !l.dryRun {
+		if err := l.fireTimers(ctx, st); err != nil {
+			return err
+		}
 	}
-	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person}
+	own := a.cfg.Supervisor.Ownership
+	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now,
+		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
+			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration}}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
@@ -456,11 +574,18 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	in.Pulls = map[string]superloop.Pull{}
-	for _, ref := range superloop.Tracked(in.Workers, in.Taken, in.Answers) {
+	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
+	if len(tracked) > 0 && !l.ownership(ctx, &in.Desk) {
+		tracked = nil
+	}
+	for _, ref := range tracked {
 		p, err := readLoopPull(ctx, ref)
 		if err != nil {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
+		}
+		if r, ok := parseRef(ref); ok {
+			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
 		in.Pulls[ref] = p
 	}
@@ -471,11 +596,17 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Release = v
 		}
 	}
-	if in.Release == "" && a.now.Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
+	if in.Release == "" && !l.dryRun && a.now.Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
 		l.releaseAt = a.now
 		in.Release = l.newerRelease(ctx)
 	}
 	for _, act := range superloop.Plan(in) {
+		if l.dryRun {
+			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
+				return err
+			}
+			continue
+		}
 		if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
 			// Claimed before an interruption: what the log shows of its
 			// side effect decides, never a second one.
@@ -509,6 +640,64 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ownership readies the desk's policy for a pass's reads: the logins the
+// desk opens its pull requests as and, once supervisor.ownership.team is
+// set, the team files, read again every teamsEvery. False, said once, while
+// the login is unknown: the pass reads no pull request, so nothing is
+// reviewed on a guess. Team files never read leave the desk's own team's
+// pull requests waiting (Desk.TeamsUnknown); ones that cannot be read
+// again keep the last ones read.
+func (l *supervisorLoop) ownership(ctx context.Context, d *superloop.Desk) bool {
+	if len(d.Authors) == 0 {
+		if l.login == "" {
+			login, err := readDeskLogin(ctx)
+			if err != nil {
+				l.sayOnce("login", "SUPERVISOR LOOP cannot tell the login the desk opens pull requests as (%v): it reads none until it can", err)
+				return false
+			}
+			l.login = login
+		}
+		d.Authors = []string{l.login}
+	}
+	own := l.a.cfg.Supervisor.Ownership
+	if own.Team == "" || l.teams != nil && l.a.now.Sub(l.teamsAt) < teamsEvery {
+		return true
+	}
+	teams, err := readTeams(ctx, own)
+	switch {
+	case err == nil:
+		l.teams, l.teamsAt = teams, l.a.now
+	case l.teams == nil:
+		l.sayOnce("teams", "SUPERVISOR LOOP cannot read the team files %s (%v): until it can, it acts only on supervisor.ownership.review and overridden pull requests", own.TeamFiles, err)
+		d.TeamsUnknown = true
+	default:
+		l.sayOnce("teams "+l.teamsAt.Format(time.RFC3339), "SUPERVISOR LOOP cannot read the team files %s again (%v): the ones read at %s stand",
+			own.TeamFiles, err, l.teamsAt.Format(time.RFC3339))
+	}
+	return true
+}
+
+// would says what a dry run's act would do.
+func would(act superloop.Action) string {
+	switch act.Kind {
+	case superloop.KindReview:
+		return fmt.Sprintf("start reviewer %q for %s at %s, round %d", superloop.ReviewerName(act.Ref, act.Round), act.URL, act.Head, act.Round)
+	case superloop.KindEscalate, superloop.KindOwnership:
+		return "ask the guide's person: " + act.Question
+	case superloop.KindDone:
+		return "take off the roster " + act.Message
+	case superloop.KindNext:
+		return "start the next board item"
+	case superloop.KindRelease:
+		return "install " + act.Version
+	case superloop.KindClassify:
+		return fmt.Sprintf("send its %s to the guide", act.Event.Verb)
+	case superloop.KindGo, superloop.KindForward, superloop.KindAnswer, superloop.KindRelay:
+		return "tell: " + truncate(oneLine(act.Message), 300)
+	}
+	return truncate(oneLine(act.Message), 300)
 }
 
 // record logs act taken, which no pass takes again, and says it.
@@ -562,12 +751,12 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
 		done = logged("agents.start", opens)
-	case superloop.KindGo, superloop.KindForward, superloop.KindAnswer:
+	case superloop.KindGo, superloop.KindForward, superloop.KindAnswer, superloop.KindRelay:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
-	case superloop.KindEscalate, superloop.KindClassify, superloop.KindFile:
+	case superloop.KindEscalate, superloop.KindClassify, superloop.KindFile, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	}
 	if !done {
@@ -689,7 +878,21 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("the person's answer to the escalation of %s told", act.URL), nil
+		return fmt.Sprintf("the person's answer about %s told", act.URL), nil
+	case superloop.KindRelay:
+		if err := l.wake(ctx, act); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("the owning team's review of %s told", act.URL), nil
+	case superloop.KindOwnership:
+		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
+			"its owning team's review blocks the desk's work, and only a person overrides the ownership of a pull request; the loop reviews it and gives the merge go as for the desk's own on an answer that overrides it",
+			fmt.Sprintf("leave %s to its owning team's review; its worker stays parked", act.URL), act.Options...); err != nil {
+			return "", err
+		}
+		return "to the guide: " + act.Message, nil
+	case superloop.KindLeave, superloop.KindOverride:
+		return act.Message, nil
 	case superloop.KindEnd:
 		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
 	case superloop.KindDone:
