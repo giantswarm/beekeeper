@@ -580,6 +580,20 @@ script's link destinations against its protected home. Globs, reassignment, bran
 additional helper commands and nested shell code get no link exemption. A command or script that
 also reads or copies the credential file is refused, including a read through the new link.
 
+Static checks such as `bash -n scripts/install.sh`, `sh -n scripts/install.sh` and
+`shellcheck scripts/install.sh` inspect script text without executing its credential operations.
+The guard still checks command substitutions and refuses a credential file supplied directly
+as the check's input. Shell no-execution options must precede the script operand.
+
+For an installer that also updates a checkout, keep credential linking in a separate,
+link-only setup script and invoke that script as `bash <script>` before running the update.
+Create the consumer's private destination directory separately, then use the symbolic-link
+operation described above. Do not add update flags such as `--pull` to the setup invocation:
+the narrow allowance is intentional. An installer that needs to copy a value instead uses
+`beekeeper secret copy <ref> <file#path>`; see `beekeeper secret copy --help` for supported
+sources and destinations. Neither route prints the credential. Running a general installer
+is still checked as executable code.
+
 Refused unless their output ends in an allowed form:
 
 - `kubectl get` of Secrets (by kind, `secret/<name>`, in a list such as `cm,secret`, by `--raw` path)
