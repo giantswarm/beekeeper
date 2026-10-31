@@ -550,11 +550,8 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 }
 
 // labIssue7 is an issue of a personal account's repository, outside the
-// board's owner o; foreignRefusal refuses it when it has no item on the board.
-const (
-	labIssue7      = "teemow/lab#7"
-	foreignRefusal = "teemow/lab#7 is not on the board o/7 and is never added to it: its repository is outside o; an issue of teemow goes on a project of teemow's own"
-)
+// board's owner o.
+const labIssue7 = "teemow/lab#7"
 
 // homeItem is an item of the issue on project number of owner, whose
 // Status field FU has the options u1 Backlog and u2 In Progress.
@@ -673,7 +670,6 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 		{Place{Before: "o/r#3"}, issue5, "o/r#3 is not on the board o/7"},
 		{Place{After: "https://github.com/o/r/issues/5"}, issue5, "o/r#5 cannot be placed against itself"},
 		{Place{Top: true}, "o/r#4", "o/r#4 is no issue: Could not resolve to an Issue with the number of 4."},
-		{Place{After: issue9}, labIssue7, foreignRefusal},
 	} {
 		f.mutations = nil
 		f.byIssue = map[string]string{"3": notOnBoard, "7": notOnBoard, "9": item9, "4": `{"data":{"repository":{"issue":null}},"errors":[{"message":"Could not resolve to an Issue with the number of 4."}]}`}
@@ -686,6 +682,36 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 		if _, err := c.Rank(ctx, issue5, at); err == nil || !strings.Contains(err.Error(), "one of top, before and after") {
 			t.Errorf("Rank(%+v) = %v", at, err)
 		}
+	}
+}
+
+func TestRankAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
+	// An organisation's issue on a personal account's board, and the reverse:
+	// both are added as Move adds them, GitHub deciding whether they may be.
+	for _, tc := range []struct{ owner, ref, repo string }{
+		{"personal", "org/engine#7", "org/engine"},
+		{"o", labIssue7, labRepo},
+	} {
+		t.Run(tc.owner, func(t *testing.T) {
+			f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`, byIssue: map[string]string{"9": item9},
+				added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
+			c := &Client{GH: f.run, Board: config.Board{Owner: tc.owner, Project: 7, Team: "X"}}
+			rk, err := c.Rank(context.Background(), tc.ref, Place{After: issue9})
+			if err != nil || *rk != (Ranked{Ref: tc.ref, Above: issue9, Added: true, Team: teamX}) ||
+				!slices.Equal(f.mutations, []string{"add I7 to P", "I3=t1", `I3 after "I9"`}) {
+				t.Fatalf("Rank = %+v, %v; mutations %v", rk, err, f.mutations)
+			}
+			if f.repos[0] != tc.repo {
+				t.Errorf("acting on %q, want %s first", f.repos, tc.repo)
+			}
+		})
+	}
+	// GitHub refusing the add is the refusal, nothing else written.
+	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`, byIssue: map[string]string{"9": item9},
+		added: `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Resource not accessible by integration"}]}`}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "personal", Project: 7, Team: "X"}}
+	if _, err := c.Rank(context.Background(), "org/engine#7", Place{Top: true}); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{"add I7 to P"}) {
+		t.Errorf("Rank whose add GitHub refuses = %v; mutations %v", err, f.mutations)
 	}
 }
 
