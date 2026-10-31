@@ -13,7 +13,11 @@ func TestExecutionHostReleaseCompatibility(t *testing.T) {
 		t.Run(version, func(t *testing.T) {
 			a, _ := sshStartTestApp(t)
 			h := a.cfg.Agents.Hosts[sshTestSelector]
-			caps := execution.Capabilities{Identity: h.Identity, Protocol: execution.Protocol, Version: version, PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{claudeComm: "2.1.290"}, Resources: execution.Resources{ObservedAt: time.Now()}}
+			caps, err := a.executionProbe(context.Background(), h)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caps.Version = version
 			a.executionProbe = func(context.Context, execution.Host) (execution.Capabilities, error) { return caps, nil }
 			if got, err := a.probeExecution(context.Background(), h); err != nil || got.Version != version {
 				t.Fatalf("compatible host release: version=%q err=%v", got.Version, err)
