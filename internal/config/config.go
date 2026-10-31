@@ -2014,6 +2014,8 @@ type Guide struct {
 // Supervisor configures the supervisor: its role and the scope it
 // supervises.
 type Supervisor struct {
+	// Loop installs the persistent supervisor loop user service (opt-in).
+	Loop bool `yaml:"loop"`
 	Role `yaml:",inline"`
 	// Scope says what the supervisor watches, in a sentence or two; empty,
 	// the prompt names the resources, lanes and installations configured.

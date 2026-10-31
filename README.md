@@ -22,6 +22,14 @@ deferred remote wake, coordinator lease and merge authorization capabilities.
 
 ## Install
 
+Set `supervisor.loop: true` and run `beekeeper install` to install the
+supervisor loop as a persistent user service (systemd on Linux, launchd on
+macOS). It runs the installed binary with the same configuration, starts
+at login and restarts on failure. Later installs update its definition;
+a replaced binary is re-executed at the loop's next quiet pass, after
+pending timer actions finish. `beekeeper uninstall` removes the service
+recorded in `install.json`. The service is off by default.
+
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
 

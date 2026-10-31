@@ -33,6 +33,9 @@ binary it runs from (or --binary):
   - the standby service (beekeeper watch --standby, with --notify when
     watch.notify is true; off by default): a systemd user unit on Linux, a
     launch agent on macOS, enabled and started;
+  - with supervisor.loop: true, the persistent supervisor loop user service
+    (beekeeper supervisor loop), enabled and started; it re-executes a
+    replaced binary at its next quiet pass, after timer actions finish;
   - with systemd, the agent sandbox's broker (beekeeper sandbox broker):
     beekeeper-sandbox.service, enabled and started;
   - with systemd and teleport.proxy set, the Teleport login's keeper:
@@ -169,6 +172,10 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	}
 	if a.cfg.Teleport.Enabled() {
 		e.Spec.TeleportEvery = a.cfg.Teleport.Every.Duration
+	}
+	e.Spec.SupervisorLoop = a.cfg.Supervisor.Loop
+	if e.Spec.ConfigPath, err = filepath.Abs(e.Config); err != nil {
+		return err
 	}
 	e.Spec.Notify = a.cfg.Watch.Notify
 	e.Setup = plat.Setup
