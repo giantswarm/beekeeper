@@ -34,6 +34,11 @@ const (
 	loopQwen        = "qwen"
 	loopPostInstall = "restart-things"
 	loopClassifier  = "classify"
+	// loopDesk is the login the desk opens its pull requests as, loopTeamB
+	// another team, loopReviewer the reviewer of the rig's first round.
+	loopDesk     = "desk"
+	loopTeamB    = "team-b"
+	loopReviewer = "Review r 7 r1"
 )
 
 // loopRig is a loop's app over a scratch store, with the beekeeper commands
@@ -62,6 +67,12 @@ type loopRig struct {
 	failRecord func(state.Event) bool
 	// inTurn says a session runs a turn.
 	inTurn func(state.Party) bool
+	// pulls are further pull requests by ref; teams the team files'
+	// answer, teamReads how often they were read.
+	pulls     map[string]superloop.Pull
+	teams     map[string]string
+	teamsErr  error
+	teamReads int
 }
 
 // loopFakeBinary is the loop's binary as the rig says it.
@@ -123,15 +134,28 @@ func newLoopRig(t *testing.T) *loopRig {
 	cfg.Supervisor.NoteDue.Duration = 24 * time.Hour
 	r := &loopRig{out: &out}
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
+	// The loop first started a minute ago: the rig's parks are requests
+	// for its review, not parks from before it.
+	first := event(loopParty, loopStartVerb, "started")
+	first.At = first.At.Add(-time.Minute)
+	if err := store.Record(first); err != nil {
+		t.Fatal(err)
+	}
 	r.answer = func([]string) (string, int) { return "", 0 }
 	r.command = func([]string) (string, int) { return "", 0 }
-	r.pull = superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Green: true}
+	r.pull = superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	r.pulls = map[string]superloop.Pull{}
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
-	run, read, command, binary, broker, turn := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn
+	run, read, command, binary, broker, turn, login, teams := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn = run, read, command, binary, broker, turn
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams = run, read, command, binary, broker, turn, login, teams
 	})
+	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
+	readTeams = func(context.Context, config.Ownership) (map[string]string, error) {
+		r.teamReads++
+		return r.teams, r.teamsErr
+	}
 	loopInTurn = func(_ *app, p state.Party) bool { return r.inTurn(p) }
 	loopBinary = func() replaceable { return loopFakeBinary{r} }
 	loopBroker = func(context.Context) (string, error) { return r.broker() }
@@ -149,6 +173,9 @@ func newLoopRig(t *testing.T) *loopRig {
 		return o, code, nil
 	}
 	readLoopPull = func(_ context.Context, ref string) (superloop.Pull, error) {
+		if p, ok := r.pulls[ref]; ok {
+			return p, nil
+		}
 		if ref != loopPR {
 			t.Fatalf("read %s", ref)
 		}
@@ -222,7 +249,7 @@ func TestLoopTakesAParkedPullRequestFromReviewToTheMergeGo(t *testing.T) {
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	start := r.called(agentsName, agentStartName)
-	if start == nil || start[2] != "Review r 7 r1" || !slices.Contains(start, "--review") {
+	if start == nil || start[2] != loopReviewer || !slices.Contains(start, "--review") {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
 	brief, err := os.ReadFile(start[3])
@@ -986,5 +1013,214 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 				t.Fatalf("watch lost timer line or notification: %s; %+v", out, desktop.sent)
 			}
 		})
+	}
+}
+
+// ownedBy configures the rig's desk as team-a's, with the review and never
+// lists, and the team files saying team owns o/r.
+func (r *loopRig) ownedBy(team string) {
+	r.a.cfg.GitHub.AllowedOrgs = []string{"o"}
+	r.a.cfg.Supervisor.Ownership = config.Ownership{Team: "team-a", TeamFiles: "o/github/repositories",
+		Review: []string{"o/*-configs"}, Never: []string{"o/tool"}, OwnerWait: config.Duration{Duration: 24 * time.Hour}}
+	r.teams = map[string]string{scratchRepo: team, "o/x-configs": loopTeamB, "o/tool": loopTeamB}
+}
+
+func TestLoopLeavesAParkOutsideTheDesksOrgsUnread(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy("team-a")
+	r.park(t, "up/stream#1", time.Now())
+	r.pass(t) // the rig fails on a read of up/stream#1
+	if c := r.called(agentsName); c != nil {
+		t.Errorf("an upstream park ran %v", c)
+	}
+	evs := r.logged(t, "supervisor.leave")
+	if len(evs) != 1 || evs[0].Subject != "up/stream#1" || !strings.Contains(evs[0].Detail, "outside github.allowedOrgs") {
+		t.Fatalf("leave logged as %+v\n%s", evs, r.out)
+	}
+	r.out.Reset()
+	r.pass(t)
+	if r.out.Len() != 0 || len(r.logged(t, "supervisor.leave")) != 1 {
+		t.Errorf("a restarted loop said it again: %s", r.out)
+	}
+}
+
+func TestLoopReviewsTheDesksTeamsAndTheSharedRepositories(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy("team-a")
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != loopReviewer {
+		t.Fatalf("the desk's own repository got no reviewer: %v\n%s", r.calls, r.out)
+	}
+	if r.teamReads != 1 {
+		t.Errorf("the team files were read %d times", r.teamReads)
+	}
+	// Another team's repository the review list names.
+	r = newLoopRig(t)
+	r.ownedBy(loopTeamB)
+	const shared = "o/x-configs#3"
+	r.pulls[shared] = superloop.Pull{Ref: shared, URL: "https://github.com/o/x-configs/pull/3", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	r.park(t, shared, time.Now())
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != "Review x-configs 3 r1" {
+		t.Fatalf("a shared repository got no reviewer: %v\n%s", r.calls, r.out)
+	}
+}
+
+func TestLoopLeavesANeverRepositoryAloneWhateverTheListSays(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy("team-a")
+	r.a.cfg.Supervisor.Ownership.Review = append(r.a.cfg.Supervisor.Ownership.Review, "o/*")
+	r.pull.Title, r.pull.Branch, r.pull.Files = "chore(repositories): update tool (team-b)", "reposetup/update-tool", []string{"repositories/team-b.yaml"}
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	if c := r.called(agentsName); c != nil {
+		t.Errorf("a pull request naming a never repository ran %v", c)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "[leave o/r#7 never]") {
+		t.Errorf("leave logged as %+v", evs)
+	}
+}
+
+func TestLoopLeavesAPullRequestSomebodyElseOpened(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy("team-a")
+	r.pull.Author = "colleague"
+	r.pull.Reviews = []superloop.Review{{ID: "R1", Author: "colleague", Head: loopHead, Verdict: superloop.Approved, At: time.Now()}}
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName); c != nil {
+		t.Errorf("somebody else's pull request ran %v", c)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "opened by colleague, not by the desk (desk)") {
+		t.Errorf("leave logged as %+v", evs)
+	}
+}
+
+func TestLoopLeavesAParkFromBeforeItsFirstStart(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now().Add(-48*time.Hour))
+	r.pass(t) // no read either: the rig's pull is the only one it answers, and none is needed
+	if c := r.called(agentsName); c != nil {
+		t.Errorf("an early park ran %v", c)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before the loop's first start") {
+		t.Errorf("leave logged as %+v", evs)
+	}
+}
+
+func TestLoopLeavesAnotherTeamsPullRequestToThatTeamUntilThePersonOverrides(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy(loopTeamB)
+	r.a.cfg.Supervisor.Ownership.OwnerWait.Duration = time.Nanosecond
+	parkedAt := time.Now()
+	r.park(t, loopPR, parkedAt)
+	// The team reviewed it before the park: no block, no relay of it.
+	r.pull.Reviews = []superloop.Review{{ID: "R0", Author: "bob", Head: loopHead, Verdict: superloop.ChangesRequested, Body: "earlier findings", At: parkedAt.Add(-time.Minute)}}
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("another team's pull request got a reviewer: %v", c)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "team-b owns o/r") {
+		t.Fatalf("leave logged as %+v\n%s", evs, r.out)
+	}
+	// No review of theirs since the park, ownerWait past: one decision.
+	note := r.called("note", loopAdd)
+	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.OwnershipQuestion(loopURL, loopTeamB) ||
+		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Override: ") }) {
+		t.Fatalf("no ownership decision: %v\n%s", r.calls, r.out)
+	}
+	r.pass(t)
+	if c := r.called("note", loopAdd); c != nil {
+		t.Errorf("asked twice: %v", c)
+	}
+	// The person overrides it: the loop reviews it as the desk's own.
+	n := &state.Note{ID: 1, By: loopParty, Text: note[len(note)-1]}
+	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "Override", Note: 1}, n)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if evs := r.logged(t, "supervisor.override"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "pat overrode team-b's ownership") {
+		t.Fatalf("override logged as %+v\n%s", evs, r.out)
+	}
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != loopReviewer {
+		t.Fatalf("an overridden pull request got no reviewer: %v\n%s", r.calls, r.out)
+	}
+}
+
+func TestLoopRelaysTheOwningTeamsReview(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy(loopTeamB)
+	parkedAt := time.Now()
+	r.park(t, loopPR, parkedAt)
+	r.pass(t)
+	r.pull.Reviews = []superloop.Review{
+		{ID: "R1", Author: loopDesk, Head: loopHead, Body: "Review: approved", At: parkedAt.Add(time.Second)},
+		{ID: "R2", Author: "bob", Head: loopHead, Verdict: superloop.Approved, Body: "LGTM, thanks", At: parkedAt.Add(time.Second)},
+	}
+	r.pass(t)
+	wake := r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], "bob reviewed "+loopURL) || !strings.Contains(wake[3], "LGTM, thanks") || strings.Contains(wake[3], "--match-head-commit") {
+		t.Fatalf("the team's review was not relayed: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.relay"); len(evs) != 1 {
+		t.Errorf("relay logged as %+v", evs)
+	}
+	r.pass(t)
+	if c := r.called(agentsName); c != nil {
+		t.Errorf("relayed twice: %v", c)
+	}
+}
+
+func TestLoopReadsNothingWithoutTheTeamFiles(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy("team-a")
+	r.teams, r.teamsErr = nil, errors.New("HTTP 502")
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	if c := r.called(agentsName); c != nil || !strings.Contains(r.out.String(), "cannot read the team files o/github/repositories") {
+		t.Errorf("without the team files: %v\n%s", c, r.out)
+	}
+	r.teams, r.teamsErr = map[string]string{scratchRepo: "team-a"}, nil
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c == nil {
+		t.Errorf("no reviewer once the team files read: %v\n%s", r.calls, r.out)
+	}
+}
+
+func TestLoopDryRunTakesNothing(t *testing.T) {
+	r := newLoopRig(t)
+	r.ownedBy("team-a")
+	r.park(t, loopPR, time.Now())
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker two"}, Task: "upstream",
+			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge"}})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := r.a.store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.dryRunSupervisorLoop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := r.a.store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) || slices.ContainsFunc(r.calls, func(c []string) bool { return c[0] == agentsName }) {
+		t.Errorf("a dry run logged %d events and ran %v", len(after)-len(before), r.calls)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("SUPERVISOR WOULD REVIEW [review o/r#7@%s] worker one: start reviewer %q", loopHead, loopReviewer),
+		"SUPERVISOR WOULD LEAVE [leave up/stream#1 outside] worker two: up/stream is outside github.allowedOrgs",
+	} {
+		if !strings.Contains(r.out.String(), want) {
+			t.Errorf("the dry run did not say %q:\n%s", want, r.out)
+		}
 	}
 }

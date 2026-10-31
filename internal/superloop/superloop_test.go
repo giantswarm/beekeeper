@@ -251,7 +251,7 @@ func TestOpenFindingsPastTheLastRoundGoToTheGuide(t *testing.T) {
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("an escalated pull request got %+v", got)
 	}
-	if got := Tracked(in.Workers, in.Taken, nil); len(got) != 0 {
+	if got := Tracked(in.Workers, in.Taken, nil, Desk{}); len(got) != 0 {
 		t.Errorf("an escalated pull request is still tracked: %v", got)
 	}
 }
@@ -259,13 +259,13 @@ func TestOpenFindingsPastTheLastRoundGoToTheGuide(t *testing.T) {
 func TestAMergedPullRequestEndsItsTracking(t *testing.T) {
 	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
 	tk := taken(t, t0, started)
-	if got := Tracked(nil, tk, nil); len(got) != 1 || got[0] != pr {
+	if got := Tracked(nil, tk, nil, Desk{}); len(got) != 1 || got[0] != pr {
 		t.Fatalf("tracked = %v", got)
 	}
 	p := pull(head1, true)
 	p[pr] = Pull{Ref: pr, URL: prURL, State: Merged, Head: head1}
 	end := only(t, Plan(Input{Pulls: p, Rounds: 1, Taken: tk}), KindEnd)
-	if got := Tracked(nil, append(tk, taken(t, t0, end)...), nil); len(got) != 0 {
+	if got := Tracked(nil, append(tk, taken(t, t0, end)...), nil, Desk{}); len(got) != 0 {
 		t.Errorf("tracked after the end = %v", got)
 	}
 }
@@ -339,12 +339,12 @@ func TestAMergedWorkerLeavesWhetherItReportedOrNot(t *testing.T) {
 	// Its turn ran on past the end: the merged pull request stays read
 	// until the worker left.
 	in.Taken = append(in.Taken, taken(t, t1, acts[1-i])...)
-	if got := Tracked(w, in.Taken, nil); len(got) != 1 || got[0] != pr {
+	if got := Tracked(w, in.Taken, nil, Desk{}); len(got) != 1 || got[0] != pr {
 		t.Fatalf("tracked after the end = %v", got)
 	}
 	d := only(t, Plan(in), KindDone)
 	in.Taken = append(in.Taken, taken(t, t1, d)...)
-	if got := Tracked(w, in.Taken, nil); len(got) != 0 {
+	if got := Tracked(w, in.Taken, nil, Desk{}); len(got) != 0 {
 		t.Errorf("tracked after the worker left = %v", got)
 	}
 	// A worker its person started stays; one that reported done leaves by
@@ -364,7 +364,7 @@ func TestAMergedWorkerLeavesWhetherItReportedOrNot(t *testing.T) {
 	if got := Plan(Input{Workers: busy, Pulls: merged, Rounds: 1, Taken: tk}); len(got) != 1 || got[0].Kind != KindEnd {
 		t.Errorf("a worker parked on its release: %+v", got)
 	}
-	if got := Tracked(busy, append(tk, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr})...), nil); len(got) != 0 {
+	if got := Tracked(busy, append(tk, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr})...), nil, Desk{}); len(got) != 0 {
 		t.Errorf("tracked for a worker parked on its release = %v", got)
 	}
 	free := parked(t0)
@@ -501,7 +501,7 @@ func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
 	}
 	for _, words := range []string{"Merge", "Merge — the findings are cosmetic", "you can merge", "OK, merge it."} {
 		in := escalated(t, words)
-		if got := Tracked(in.Workers, in.Taken, in.Answers); len(got) != 1 || got[0] != pr {
+		if got := Tracked(in.Workers, in.Taken, in.Answers, Desk{}); len(got) != 1 || got[0] != pr {
 			t.Errorf("%q: an answered escalation is not tracked: %v", words, got)
 		}
 		a := only(t, Plan(in), KindGo)

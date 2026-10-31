@@ -2047,6 +2047,67 @@ type Supervisor struct {
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
 	NoteDue      Duration `yaml:"noteDue"`
+	// Ownership is whose pull requests the loop reviews and gives the
+	// merge go for.
+	Ownership Ownership `yaml:"ownership"`
+}
+
+// DefaultTeamFiles is supervisor.ownership.teamFiles unless the
+// configuration sets it: the team files of giantswarm/github.
+const DefaultTeamFiles = "giantswarm/github/repositories"
+
+// Ownership is a desk's team ownership: which pull requests its supervisor
+// loop reviews and gives the merge go for. Outside github.allowedOrgs it
+// never acts, whatever this says.
+type Ownership struct {
+	// Team is the desk's team as the team files name it (team-bumblebee);
+	// empty, every repository of github.allowedOrgs is the desk's.
+	Team string `yaml:"team"`
+	// TeamFiles is where the organisation declares which team owns a
+	// repository, <owner>/<repo>/<dir> (default DefaultTeamFiles, once Team
+	// is set): every <team>.yaml directly in <dir> lists that team's
+	// repositories of <owner> as `- name: <repo>` entries.
+	TeamFiles string `yaml:"teamFiles"`
+	// Review are the repositories (owner/name, path.Match patterns such as
+	// giantswarm/*-configs) the desk reviews and merges whoever owns them.
+	Review []string `yaml:"review"`
+	// Never are the repositories (patterns as Review's) the desk does no
+	// work on, whatever Review or a person's override says: a pull request
+	// in one, or whose title, head branch or a changed path names one, is
+	// left alone.
+	Never []string `yaml:"never"`
+	// Authors are the logins the desk opens its pull requests as (default:
+	// the login gh acts as): one anybody else opened is left alone.
+	Authors []string `yaml:"authors"`
+	// OwnerWait is how long a worker parked on another team's pull request
+	// waits for that team's review before the loop asks guide.person to
+	// override the ownership of that one pull request (24h).
+	OwnerWait Duration `yaml:"ownerWait"`
+}
+
+// TeamFilesRepo is TeamFiles' repository (owner/repo) and directory.
+func (o Ownership) TeamFilesRepo() (repo, dir string) {
+	owner, rest, _ := strings.Cut(o.TeamFiles, "/")
+	name, dir, _ := strings.Cut(rest, "/")
+	return owner + "/" + name, dir
+}
+
+// validate refuses a team-files place without a directory and a pattern
+// path.Match cannot read.
+func (o Ownership) validate() error {
+	if o.TeamFiles != "" {
+		if repo, dir := o.TeamFilesRepo(); dir == "" || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
+			return fmt.Errorf("teamFiles: %q is not <owner>/<repo>/<dir>", o.TeamFiles)
+		}
+	}
+	for field, patterns := range map[string][]string{"review": o.Review, "never": o.Never} {
+		for _, p := range patterns {
+			if _, err := path.Match(p, ""); err != nil || !strings.Contains(p, "/") {
+				return fmt.Errorf("%s: %q is no owner/name pattern", field, p)
+			}
+		}
+	}
+	return nil
 }
 
 // Role configures a relayed role, the supervisor's or the guide's: the
@@ -2964,6 +3025,10 @@ func (c *Config) defaults() error {
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
+	if c.Supervisor.Ownership.Team != "" {
+		setStr(&c.Supervisor.Ownership.TeamFiles, DefaultTeamFiles)
+	}
+	setDur(&c.Supervisor.Ownership.OwnerWait, 24*time.Hour)
 	c.Supervisor.ReviewBrief = homePath(home, c.Supervisor.ReviewBrief)
 	c.Supervisor.WorkerBrief = homePath(home, c.Supervisor.WorkerBrief)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
@@ -3502,6 +3567,9 @@ func (c *Config) validate() error {
 	}
 	if k := c.Supervisor.ClassifierConfidence; k < 0 || k > 1 {
 		return fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k)
+	}
+	if err := c.Supervisor.Ownership.validate(); err != nil {
+		return fmt.Errorf("supervisor.ownership.%w", err)
 	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {
