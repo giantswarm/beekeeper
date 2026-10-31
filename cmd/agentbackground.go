@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
@@ -432,6 +434,66 @@ func (a *app) bgStop(ctx context.Context, id string) error {
 	return nil
 }
 
+// parkStopDir holds a lock file per background session beekeeper started:
+// the watch's stop of a parked session and every wake of it hold it, so a
+// wake never lands in a CLI the stop ends. Beside it, the mtime of
+// <session>.woke is the last wake's.
+const parkStopDir = "parkstop"
+
+// wokeStamp is the file whose mtime is the last wake of session id.
+func (a *app) wokeStamp(id string) string {
+	return filepath.Join(a.cfg.StateDir, parkStopDir, filepath.Base(id)+".woke")
+}
+
+// parkStopLock is session id's lock (parkStopDir).
+func (a *app) parkStopLock(id string) (*flock.Flock, error) {
+	dir := filepath.Join(a.cfg.StateDir, parkStopDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return flock.New(filepath.Join(dir, filepath.Base(id)+".lock")), nil
+}
+
+// bgExitWait bounds the look for a stopped session's CLI to exit, and
+// bgExitPoll paces it; tests shorten them.
+var (
+	bgExitWait = 15 * time.Second
+	bgExitPoll = 100 * time.Millisecond
+)
+
+// parkWakeWait bounds a wake's wait for a stop of its session in flight:
+// claude stop's own bound and its CLI's exit, with a margin.
+var parkWakeWait = bgWait + bgExitWait + 15*time.Second
+
+// lockForWake takes p's lock (parkStopLock) for a wake of p, a background
+// session beekeeper started, waiting for a stop in flight to end, and
+// returns its release, which marks the wake's time; a no-op for any other
+// session.
+func (a *app) lockForWake(ctx context.Context, st *state.State, p state.Party) (func(), error) {
+	if i := st.StartIndex(p); i < 0 || !st.Starts[i].Background || p.Session == "" {
+		return func() {}, nil
+	}
+	l, err := a.parkStopLock(p.Session)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, parkWakeWait)
+	defer cancel()
+	if ok, err := l.TryLockContext(ctx, 50*time.Millisecond); err != nil || !ok {
+		return nil, fmt.Errorf("waking %s: the stop of its parked background session holds %s: %w", p.Name, l.Path(), errors.Join(err, ctx.Err()))
+	}
+	return func() {
+		stamp, now := a.wokeStamp(p.Session), time.Now()
+		_ = os.WriteFile(stamp, nil, 0o600)
+		_ = os.Chtimes(stamp, now, now)
+		_ = l.Unlock()
+	}, nil
+}
+
+// freshSessions reads the running sessions and the process table again for
+// a stop's last look; tests replace it.
+var freshSessions = (*app).sessions
+
 // stopParked stops the background sessions of parkedResident, each once
 // its turn ended, so a parked session costs the machine no memory; its wake
 // (agents wake, agents resume, the watch's resume or a timer's) resumes it
@@ -447,12 +509,94 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 	for _, p := range parkedResident(st, sessions, t, w.now) {
 		key := "park-stop-" + p.Session
 		short := p.Session[:min(8, len(p.Session))]
-		if err := w.bgStop(ctx, p.Session); err != nil {
+		stopped, err := w.stopParkedSession(ctx, st, p)
+		if err != nil {
 			w.fail(key, "PARKED SESSION STAYS %q: its background session %s keeps its memory: %v", p.Name, short, err)
 			continue
 		}
 		w.clear(key)
+		if !stopped {
+			continue
+		}
 		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
 		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
+	}
+}
+
+// stopParkedSession stops p's background session under its lock
+// (parkStopLock), which every wake of p takes too: a wake in flight keeps
+// it running this poll, one that comes meanwhile waits for the stop and
+// then resumes the stopped session. Under the lock it looks again: p still
+// parked on the park seen in seen, not woken within stewardQuiet, and,
+// read anew, still running with its turn ended; false when it stays. The
+// lock holds until the stopped CLI exits, so the next wake finds it gone.
+func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.Party) (bool, error) {
+	l, err := a.parkStopLock(p.Session)
+	if err != nil {
+		return false, err
+	}
+	if ok, err := l.TryLock(); err != nil || !ok {
+		return false, err // a wake holds it: the next poll looks again
+	}
+	defer func() { _ = l.Unlock() }()
+	if fi, err := os.Stat(a.wokeStamp(p.Session)); err == nil && a.now.Sub(fi.ModTime()) < stewardQuiet {
+		return false, nil // woken just now: its CLI may not have written the message yet
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return false, err
+	}
+	if !samePark(seen, st, p) {
+		return false, nil
+	}
+	sessions, t, err := freshSessions(a)
+	if err != nil {
+		return false, err
+	}
+	if !slices.ContainsFunc(parkedResident(st, sessions, t, a.now), p.Is) {
+		return false, nil
+	}
+	if err := a.bgStop(ctx, p.Session); err != nil {
+		return false, err
+	}
+	var pids []int
+	for _, s := range sessions {
+		if s.ID == p.Session && s.PID > 0 {
+			pids = append(pids, s.PID)
+		}
+	}
+	return true, waitExit(ctx, pids)
+}
+
+// samePark says whether p is parked in st on the same park it was in seen.
+func samePark(seen, st *state.State, p state.Party) bool {
+	park := func(st *state.State) *state.Park {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			return st.Agents[i].Park
+		}
+		return nil
+	}
+	was, now := park(seen), park(st)
+	return was != nil && now != nil && now.At.Equal(was.At) && now.On == was.On && now.Waits == was.Waits && now.Resumable.IsZero()
+}
+
+// waitExit waits up to bgExitWait for the processes pids to exit.
+func waitExit(ctx context.Context, pids []int) error {
+	ctx, cancel := context.WithTimeout(ctx, bgExitWait)
+	defer cancel()
+	for {
+		t, err := plat.Machine.Processes()
+		if err != nil {
+			return err
+		}
+		pids = slices.DeleteFunc(pids, func(pid int) bool { return t.ByPID[pid] == nil })
+		if len(pids) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("claude stop returned, but its CLI %v still runs after %s", pids, dur(bgExitWait))
+		case <-time.After(bgExitPoll):
+		}
 	}
 }

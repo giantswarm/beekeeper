@@ -2154,7 +2154,10 @@ beekeeper started (`agents.mode: background`) costs no memory: once its turn end
 no headless turn, its transcript and its subagents' quiet for 30 seconds), the watch stops it
 (`claude stop`, which keeps its conversation; `PARKED SESSION STOPPED` and an `agents.parkstop`
 event), and the wake or resume that ends the park continues it from its transcript (`claude --bg
---resume`); a stop that fails says `PARKED SESSION STAYS` and is tried again the next poll. The
+--resume`). The stop and every wake of the session hold one lock per session: under it the
+stop looks again (the same park, still quiet, not woken in the last 30 seconds) and holds the lock
+until the CLI exited, so a wake that comes meanwhile waits and then resumes the stopped session. A
+stop that fails says `PARKED SESSION STAYS` and is tried again the next poll. The
 supervisor's and the guide's sessions, a park already resumable and an agent on an execution
 host stay. An archive
 that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed, and
