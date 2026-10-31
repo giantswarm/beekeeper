@@ -298,8 +298,8 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			}
 		}
 		sessions, _, _ := target.sessions()
-		c := countAgents(st, sessions, target.now)
-		pa := countProviderAgents(st, sessions, k, target.now)
+		c := countAgents(st, sessions, target.now, target.cfg)
+		pa := countProviderAgents(st, sessions, k, target.now, target.cfg)
 		readings := make(map[string]providerReadingResult, len(k.Providers))
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]

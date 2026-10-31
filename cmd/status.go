@@ -113,7 +113,7 @@ func (a *app) status() (*statusView, error) {
 	if err != nil && !missing {
 		return nil, err
 	}
-	v.Busy = len(countAgents(st, sessions, a.now).Busy)
+	v.Busy = len(countAgents(st, sessions, a.now, a.cfg).Busy)
 	v.Serving = a.serveModeStatusLine()
 	if st.Supervisor != nil {
 		v.Supervisor = st.Supervisor.Name

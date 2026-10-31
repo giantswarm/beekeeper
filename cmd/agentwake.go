@@ -115,6 +115,34 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	ag := st.Agents[i]
+	// Reserve the local entry before delivering a wake so retirement cannot
+	// race a turn's startup. A failed delivery restores the previous age.
+	if ag.Execution == nil {
+		err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			for i := range st.Agents {
+				if st.Agents[i].Is(ag.Party) {
+					st.Agents[i].ActivityAt = a.now.UTC()
+					return nil, nil
+				}
+			}
+			return nil, refused("%s left the roster before its wake", ag.Name)
+		})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+					for i := range st.Agents {
+						if st.Agents[i].Is(ag.Party) && st.Agents[i].ActivityAt.Equal(a.now) {
+							st.Agents[i].ActivityAt = ag.ActivityAt
+						}
+					}
+					return nil, nil
+				})
+			}
+		}()
+	}
 	if ag.Execution != nil {
 		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
 	}

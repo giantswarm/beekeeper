@@ -91,6 +91,7 @@ same way until the timer is done, without a marker.`,
 						return nil, refused("%q carries no keep marker", ag.Name)
 					}
 					ag.Keep = nil
+					ag.ActivityAt = a.now.UTC()
 					line = fmt.Sprintf("%s: keep lifted, back under agents.staleAfter", ag.Name)
 					if why := keptBy(st, *ag, a.now); why != "" {
 						line = fmt.Sprintf("%s: keep lifted; the doctor still leaves it while %s", ag.Name, why)

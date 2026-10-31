@@ -144,6 +144,11 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 				if err != nil {
 					return nil, err
 				}
+				for i := range st.Agents {
+					if st.Agents[i].Is(me) {
+						st.Agents[i].ActivityAt = a.now.UTC()
+					}
+				}
 				if os.Getenv(sandbox.Runtime) == "" {
 					// outside the sandbox, this shell's PATH is the agent's own
 					_ = recordGH(st, me, guard.Resolve("gh", os.Getenv("PATH")), a.now.UTC())
@@ -590,6 +595,9 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 			if turn := headlessTurn(t, s.ID); turn != "" {
 				v.Reachable, v.HeadlessTurn = "live, "+turn+" running", true
 			}
+		}
+		if last, gone := goneAgent(a.cfg, st, sessions, ag, a.cfg.Agents.StaleAfter.Duration, a.now); gone {
+			v.Reachable = goneActivityPrefix + last.UTC().Format(time.RFC3339)
 		}
 		if desktop && desktopStarted(st, ag.Party) && !a.hasRow(ag.Session) {
 			v.NoRow = true

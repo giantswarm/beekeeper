@@ -247,7 +247,7 @@ func (a *app) busyOnProvider(name string) ([]string, error) {
 		return nil, err
 	}
 	k := a.liveCapacity()
-	pa := countProviderAgents(st, sessions, k, a.nowOrNow())
+	pa := countProviderAgents(st, sessions, k, a.nowOrNow(), a.cfg)
 	return pa[name].Busy, nil
 }
 
@@ -607,7 +607,7 @@ func (a *app) callerRunsOnProvider(name string) bool {
 	if err != nil {
 		sessions = nil
 	}
-	pa := countProviderAgents(st, sessions, k, a.nowOrNow())
+	pa := countProviderAgents(st, sessions, k, a.nowOrNow(), a.cfg)
 	return slices.Contains(pa[name].Busy, me.Name)
 }
 

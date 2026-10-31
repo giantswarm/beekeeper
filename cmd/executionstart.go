@@ -181,10 +181,10 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
-	counts := countAgents(st, sessions, a.now)
+	counts := countAgents(st, sessions, a.now, a.cfg)
 	var v *capacityView
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
-		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now), k, readings, h, false, exclude, kind, a.now)
+		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), k, readings, h, false, exclude, kind, a.now)
 	} else {
 		v = newCapacity(counts, k, h, false).withUsage(legacy, a.now)
 	}

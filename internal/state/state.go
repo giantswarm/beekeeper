@@ -367,10 +367,12 @@ type Agent struct {
 	// Its reachability and lifecycle are stored on the matching Start.
 	Execution  *execution.Ref `json:"execution,omitempty"`
 	Registered time.Time      `json:"registered"`
-	Task       string         `json:"task,omitempty"`
-	AssignedAt time.Time      `json:"assignedAt,omitzero"`
-	IdleSince  time.Time      `json:"idleSince,omitzero"`
-	LastTask   string         `json:"lastTask,omitempty"`
+	// ActivityAt is the latest explicit roster activity (note, wake or resume).
+	ActivityAt time.Time `json:"activityAt,omitzero"`
+	Task       string    `json:"task,omitempty"`
+	AssignedAt time.Time `json:"assignedAt,omitzero"`
+	IdleSince  time.Time `json:"idleSince,omitzero"`
+	LastTask   string    `json:"lastTask,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`

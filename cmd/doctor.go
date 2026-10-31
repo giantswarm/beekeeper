@@ -61,6 +61,8 @@ type chore struct {
 	// stale says the agent is removed for staleness, which a keep marker
 	// set since the plan stops.
 	stale bool
+	// gone distinguishes an abandoned task from an idle or relieved entry.
+	gone bool
 	// stays says why a dry run would leave the desktop session.
 	stays string
 }
@@ -86,17 +88,22 @@ func (c chore) String() string {
 // planChores finds the doctor's roster and desktop chores. An agent is
 // taken off the roster once it reported its work done and its CLI is idle
 // (busy: a turn or a gated merge of its own runs), once it was relieved of
-// a role, or once it stayed idle staleAfter (0: never) with no CLI running,
+// a role, or once it stayed idle or gone staleAfter (0: never) with no CLI running,
 // unless a keep marker or a timer that wakes it keeps it (a keep chore).
 // A started session the roster keeps whose desktop record shows another
 // title than its roster name is retitled while its CLI runs no turn.
 // record reads a desktop session's record.
 func planChores(st *state.State, sessions []*claude.Session, record func(host string) (*claude.Record, bool),
-	busy func(state.Party) bool, staleAfter time.Duration, now time.Time,
+	busy func(state.Party) bool, staleAfter time.Duration, now time.Time, configs ...*config.Config,
 ) []chore {
+	cfg, _ := rosterConfig(configs)
 	var out []chore
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
+			continue
+		}
+		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone && !busy(ag.Party) {
+			out = append(out, chore{kind: choreRemove, agent: ag, archive: true, stale: true, gone: true, why: goneActivityPrefix + last.UTC().Format(time.RFC3339)})
 			continue
 		}
 		if ag.Task != "" || holdsRole(st, ag.Party) {
@@ -307,7 +314,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		_, turn := turnRunning(sessions, t, p, a.now)
 		return turn || inFlight(p)
 	}
-	chores := planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now)
+	chores := planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg)
 	fix := func(f config.Fault) bool { return !r.dryRun && (f.Unattended || slices.Contains(r.attended, f.Name)) }
 	run := r.run
 	if run == nil {
@@ -473,13 +480,44 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 	if !slices.ContainsFunc(chores, func(c chore) bool { return c.kind == choreRemove }) {
 		return nil, nil
 	}
+	var sessions []*claude.Session
+	if slices.ContainsFunc(chores, func(c chore) bool { return c.kind == choreRemove && c.gone }) {
+		var err error
+		sessions, _, err = a.sessions()
+		if err != nil {
+			return nil, err
+		}
+	}
+	notes := map[string]string{}
+	for _, c := range chores {
+		if c.gone {
+			note, _, err := a.lastNote(c.agent.Party, time.Time{})
+			if err != nil {
+				return nil, err
+			}
+			notes[c.agent.Session] = note
+		}
+	}
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		removed = nil
 		var evs []state.Event
 		for _, c := range chores {
-			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Task == "" && x.Is(c.agent.Party) })
+			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool {
+				return (x.Task == "" || c.gone || relieved(st, x.Party)) && x.Is(c.agent.Party) && x.Task == c.agent.Task && x.ActivityAt.Equal(c.agent.ActivityAt) && x.AssignedAt.Equal(c.agent.AssignedAt)
+			})
 			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
 				continue
+			}
+			if c.gone {
+				if _, gone := goneAgent(a.cfg, st, sessions, st.Agents[i], a.cfg.Agents.StaleAfter.Duration, a.now); !gone {
+					continue
+				}
+				for j := range st.Records {
+					if st.Records[j].Session.Is(c.agent.Party) {
+						st.Records[j].Ended, st.Records[j].Waits = a.now.UTC(), ""
+					}
+				}
+				evs = append(evs, event(by, "agents.gone", "%s: %s; task: %s; hand-over: %s", c.agent.Name, c.why, c.agent.Task, notes[c.agent.Session]))
 			}
 			removeAgent(st, i)
 			removed = append(removed, c)
@@ -503,7 +541,9 @@ line:
   --done) and its CLI runs no turn, a turn that only sleeps in tool shells
   it left behind (a background wait loop) stopped first, once it was relieved of the
   supervisor's or the guide's role, or once it stayed idle
-  agents.staleAfter (24h) with no CLI running; the desktop sessions
+  agents.staleAfter (24h) with no CLI running, including a task holder
+  with no transcript or roster activity for that age (gone); its task and
+  latest hand-over note are logged and its serve record ends. The desktop sessions
   beekeeper started for the finished and the stale ones are archived in
   one steward's turn (the desktop's Archived list brings one back); a
   stale entry kept on purpose (agents keep, or an open timer that wakes it

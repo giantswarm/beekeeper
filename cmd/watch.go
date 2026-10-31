@@ -2046,6 +2046,10 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 			continue // parked on purpose: a person or its timer brings it back
 		}
 		k := cmp.Or(ag.Session, ag.Name)
+		last, gone := goneAgent(w.cfg, st, sessions, ag, w.cfg.Agents.StaleAfter.Duration, w.now)
+		if gone {
+			k += "/gone"
+		}
 		stopped[k] = true
 		if !w.stopped[k] {
 			hint := resumeHint(ag)
@@ -2058,6 +2062,9 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 				hint = fmt.Sprintf("parked on a person: %s; their answer resumes it", on)
 			case resumedForTask(ag):
 				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", clock(w.now, ag.ResumedWait), ag.ResumedOn, hint)
+			}
+			if gone {
+				hint = goneActivityPrefix + last.UTC().Format(time.RFC3339) + "; doctor retires it; " + hint
 			}
 			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, hint))
 		}

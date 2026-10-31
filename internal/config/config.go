@@ -792,8 +792,9 @@ type Agents struct {
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
-	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
-	// the roster before the doctor takes it off (24h).
+	// StaleAfter bounds inactivity without a running CLI (24h). An idle or
+	// unkept task holder is retired after this age; gone task holders free
+	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
 	// ArchiveAgreement says where the person agreed that the desktop
 	// sessions of finished workers beekeeper started are archived without

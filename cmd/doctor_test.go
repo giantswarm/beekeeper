@@ -35,6 +35,7 @@ func TestPlanChores(t *testing.T) {
 	done.Done, doneBusy.Done = true, true
 	task, doneTask := agent("task", 48*time.Hour), agent("done-task", time.Minute)
 	task.Task, doneTask.Task, doneTask.Done = "a task", "a new task", true
+	task.AssignedAt = now
 	st := &state.State{
 		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
 			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0), doneTask},
