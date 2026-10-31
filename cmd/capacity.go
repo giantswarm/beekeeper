@@ -466,6 +466,19 @@ func agentHarnessModel(st *state.State, sessions []*claude.Session, ag state.Age
 	return harness, model
 }
 
+// ompChoiceModel reports whether model, as an omp agent's start records it
+// (the provider/id omp lists), is ch's omp model named by its bare id, as
+// capacity.choices names it and capacity pick returns it. The models file's
+// provider need not carry the capacity provider's name, so only the id
+// after it is compared.
+func ompChoiceModel(ch config.Choice, model string) bool {
+	id := strings.ToLower(strings.TrimSpace(ch.Model))
+	if !strings.EqualFold(strings.TrimSpace(ch.Harness), omp.Harness) || id == "" {
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "/"+id)
+}
+
 func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov, bucket string) {
 	h := cmp.Or(strings.TrimSpace(harness), claudeComm)
 	m := strings.TrimSpace(model)
@@ -473,7 +486,7 @@ func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov,
 		if !strings.EqualFold(ch.Harness, h) {
 			continue
 		}
-		if m != "" && (strings.EqualFold(ch.Model, m) || strings.HasPrefix(strings.ToLower(m), strings.ToLower(ch.Model))) {
+		if m != "" && (strings.EqualFold(ch.Model, m) || strings.HasPrefix(strings.ToLower(m), strings.ToLower(ch.Model)) || ompChoiceModel(ch, m)) {
 			p := ch.EffectiveProvider()
 			return p, ch.EffectiveBucket(k.Providers[p])
 		}
@@ -2062,7 +2075,7 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 func choicesHaveModel(choices []config.Choice, model string) bool {
 	m := strings.TrimSpace(model)
 	return slices.ContainsFunc(choices, func(ch config.Choice) bool {
-		return strings.EqualFold(strings.TrimSpace(ch.Model), m)
+		return strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m)
 	})
 }
 
@@ -2073,7 +2086,7 @@ func filterChoiceModel(k config.Capacity, model string) config.Capacity {
 	}
 	var filtered []config.Choice
 	for _, ch := range k.Choices {
-		if strings.EqualFold(strings.TrimSpace(ch.Model), m) {
+		if strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m) {
 			filtered = append(filtered, ch)
 		}
 	}
