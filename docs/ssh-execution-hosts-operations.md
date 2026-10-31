@@ -287,12 +287,16 @@ an acknowledged explicit stop; recovery does not silently upgrade their contract
 Only the coordinating supervisor issues or revokes authorizations. A green exact
 head and an authenticated independent desk review result are prerequisites. The
 component records the exact reviewer session when the supervisor starts the round.
-That session must complete with the exact public review URL in its report. The
+That session must complete with the same `Review: approved` or
+`Review: changes requested` verdict on the first report line, followed by the
+exact public review URL. The reported verdict must match the public review.
+An identical completion retry retains the original captured result; a later
+shared-account edit cannot rebind that retry to another verdict. The
 coordinator persists the GitHub review ID, author, head and body digest before
 report delivery can prune the report. A shared GitHub login or a worker-authored
 approval comment alone grants nothing; `--as` cannot submit the reviewer's result.
-Issuance and live use require that same persisted result, and grants pin both the
-round and review IDs. Edited reviews and new rounds invalidate old grants. Older
+Issuance and live use require that same persisted result, and grants pin the
+round ID, review ID and authenticated body digest. Edited reviews and new rounds invalidate old grants. Older
 rounds without component-recorded reviewer provenance need a fresh review. The supervisor loop issues a two-minute grant when it gives a
 remote worker merge go; a supervisor can also issue or revoke it explicitly:
 

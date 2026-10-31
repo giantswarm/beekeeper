@@ -165,7 +165,7 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 		return *review, nil
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		return nil, a.captureExecutionReviewReport(context.Background(), st, round.Reviewer, "Review result: "+review.URL, time.Now(), true)
+		return nil, a.captureExecutionReviewReport(context.Background(), st, round.Reviewer, "Review: "+review.Verdict+"\n"+review.URL, time.Now(), true)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -336,4 +336,43 @@ func stWorkerName(t *testing.T, a *app) string {
 		t.Fatal(err)
 	}
 	return st.Starts[0].Name
+}
+
+func TestExecutionReviewCompletionVerdictAndRetryAreAuthenticated(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	rejected := superloop.Review{ID: "reviewer-rejection", Verdict: superloop.ChangesRequested}
+	round := completeMergeReview(t, a, use, &rejected)
+	text := "Review: " + superloop.ChangesRequested + "\n" + rejected.URL
+	// Simulate a shared-account edit after the independent rejection was stored.
+	rejected.Verdict = superloop.Approved
+	rejected.Body = "Review: approved\nHead reviewed: `" + use.Head + "`"
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		return nil, a.captureExecutionReviewReport(context.Background(), st, round.Reviewer, text, time.Now(), true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executionReviewRound(st, use).Result.Verdict != superloop.ChangesRequested {
+		t.Fatal("identical retry recaptured a shared-account edit")
+	}
+	pull.Reviews = append(pull.Reviews, rejected)
+	if err := a.executionMergeLive(context.Background(), st, use); err == nil {
+		t.Fatal("edited rejection authorized use")
+	}
+	// The first completion must also agree with the authenticated decision text.
+	assignMergeReview(t, a, use, 2)
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := executionReviewRound(st, use)
+	if err := a.captureExecutionReviewReport(context.Background(), st, next.Reviewer, text, time.Now(), true); err == nil {
+		t.Fatal("public approval replaced an authenticated rejection")
+	}
+	if next.Result != nil {
+		t.Fatal("conflicting verdict persisted")
+	}
 }

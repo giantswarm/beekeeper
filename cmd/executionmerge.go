@@ -117,7 +117,7 @@ func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, reposi
 			return nil, err
 		}
 		round := executionReviewRound(st, use)
-		grant.DeskReviewID, grant.ReviewID = round.ID, round.Result.ID
+		grant.DeskReviewID, grant.ReviewID, grant.ReviewDigest = round.ID, round.Result.ID, round.Result.BodyDigest
 		if err := execution.WriteMergeAuthorization(a.mergeAuthorityRoot(), grant, "issued", time.Now()); err != nil {
 			return nil, err
 		}

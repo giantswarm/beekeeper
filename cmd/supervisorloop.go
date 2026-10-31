@@ -734,7 +734,7 @@ type briefData struct {
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
 const defaultReviewBrief = `Review {{.URL}} at head {{.Head}}, review round {{.Round}}, the work of {{.Worker}}.
 
-Read the pull request, the issue it closes and the diff. Judge whether it does what the issue asks, and find its bugs. Post one review on the pull request (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>): its first line "Review: approved" or "Review: changes requested", its second "Head reviewed: ` + "`{{.Head}}`" + `", then every blocking finding with its file and line. Then report: beekeeper agents idle --done --report "<the verdict and the review's URL>" --problem none (or --problem "<finding, evidence, owning repo>" for each problem the review met).
+Read the pull request, the issue it closes and the diff. Judge whether it does what the issue asks, and find its bugs. Post one review on the pull request (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>): its first line "Review: approved" or "Review: changes requested", its second "Head reviewed: ` + "`{{.Head}}`" + `", then every blocking finding with its file and line. Then report: beekeeper agents idle --done --report "<the same Review: verdict line, a newline, and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>" for each problem the review met).
 `
 
 // brief renders the template in file (def when file is empty) with d into

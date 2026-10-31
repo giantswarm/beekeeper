@@ -34,7 +34,7 @@ func TestExecutionMergeCoordinatorConsumesOnceAndAudits(t *testing.T) {
 		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{approved}}, nil
 	}
 	use := execution.MergeUse{ID: "grant-test", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
-	grant := execution.MergeAuthorization{DeskReviewID: round.ID, ReviewID: round.Result.ID, ID: use.ID, Ref: use.Ref, Repository: use.Repository, PR: use.PR, Head: head, Issuer: supervisorName, IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
+	grant := execution.MergeAuthorization{DeskReviewID: round.ID, ReviewID: round.Result.ID, ReviewDigest: round.Result.BodyDigest, ID: use.ID, Ref: use.Ref, Repository: use.Repository, PR: use.PR, Head: head, Issuer: supervisorName, IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
 	if err := execution.WriteMergeAuthorization(a.mergeAuthorityRoot(), grant, "issued", now); err != nil {
 		t.Fatal(err)
 	}

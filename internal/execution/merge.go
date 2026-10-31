@@ -15,6 +15,7 @@ var mergeHeadPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // MergeAuthorization is coordinator-owned. It is never a bearer credential:
 // every use also authenticates the exact owned execution with the live service.
 type MergeAuthorization struct {
+	ReviewDigest string       `json:"reviewDigest"`
 	DeskReviewID string       `json:"deskReviewID"`
 	ReviewID     string       `json:"reviewID"`
 	ID           string       `json:"id"`

@@ -112,7 +112,7 @@ func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUs
 		return refused("authenticated independent review changed; new supervisor approval required")
 	}
 	grant, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID)
-	if err == nil && (grant.DeskReviewID != round.ID || grant.ReviewID != result.ID) {
+	if err == nil && (grant.DeskReviewID != round.ID || grant.ReviewID != result.ID || grant.ReviewDigest != result.BodyDigest) {
 		return refused("merge authorization belongs to a different independent review result")
 	}
 	if err != nil && !os.IsNotExist(err) {
@@ -133,6 +133,14 @@ func (a *app) captureExecutionReviewReport(ctx context.Context, st *state.State,
 		if !sameReviewSession(round.Reviewer, by) || at.Before(round.AssignedAt) {
 			continue
 		}
+		reportDigest := execution.Digest([]byte(text))
+		if round.Result != nil && round.Result.ReportDigest == reportDigest && sameReviewSession(round.Result.By, by) {
+			return nil
+		}
+		verdict := superloop.Verdict("COMMENTED", text)
+		if verdict == "" {
+			return refused("review completion report must begin with the exact Review: verdict line")
+		}
 		ref, ok := parseRef(round.Ref)
 		if !ok {
 			return refused("invalid assigned review reference")
@@ -148,10 +156,10 @@ func (a *app) captureExecutionReviewReport(ctx context.Context, st *state.State,
 		if err != nil {
 			return err
 		}
-		if review.ID == "" || review.Author == "" || review.URL != links[0][0] || review.Head != round.Head || review.Commit != round.Head || review.At.Before(round.AssignedAt.Add(-30*time.Second)) || review.Verdict == "" {
+		if review.ID == "" || review.Author == "" || review.URL != links[0][0] || review.Head != round.Head || review.Commit != round.Head || review.At.Before(round.AssignedAt.Add(-30*time.Second)) || review.Verdict != verdict {
 			return refused("reported desk review does not match its assigned head and round")
 		}
-		round.Result = &state.DeskReviewResult{ID: review.ID, URL: review.URL, Author: review.Author, Verdict: review.Verdict, BodyDigest: execution.Digest([]byte(review.Body)), ReportDigest: execution.Digest([]byte(text)), ReportedAt: at, By: by}
+		round.Result = &state.DeskReviewResult{ID: review.ID, URL: review.URL, Author: review.Author, Verdict: review.Verdict, BodyDigest: execution.Digest([]byte(review.Body)), ReportDigest: reportDigest, ReportedAt: at, By: by}
 		return nil
 	}
 	return nil
