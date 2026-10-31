@@ -8,20 +8,23 @@ import (
 	"testing"
 )
 
+// eightCores is a quota of eight cores.
+const eightCores = "800%"
+
 func TestSlotCores(t *testing.T) {
 	for _, c := range []struct {
 		quota string
 		slots int
 		want  int
 	}{
-		{"800%", 2, 4},
+		{eightCores, 2, 4},
 		{"1200%", 2, 6},
 		{"400%", 3, 1},
 		{"50%", 2, 1},
 		{"1250%", 2, 6},
 		{"", 2, 0},
 		{"max", 2, 0},
-		{"800%", 0, 0},
+		{eightCores, 0, 0},
 		{"x%", 2, 0},
 		{"0%", 2, 0},
 	} {
@@ -42,7 +45,7 @@ func TestRunBoundsTheCommandsParallelismToItsSlotsCores(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "fresh")
 	t.Setenv("GOMAXPROCS", "")
 	t.Setenv("CARGO_BUILD_JOBS", "3")
-	o := Options{Max: "1M", Swap: "0", SlotDir: slots, Slots: 2, CPUQuota: "800%", Stderr: io.Discard}
+	o := Options{Max: "1M", Swap: "0", SlotDir: slots, Slots: 2, CPUQuota: eightCores, Stderr: io.Discard}
 	script := `printf '%s %s\n' "$GOMAXPROCS" "$CARGO_BUILD_JOBS" > "$1"`
 	if rc := Run(o, []string{"sh", "-c", script, "sh", out}); rc != 0 {
 		t.Fatalf("exit %d, want 0", rc)
