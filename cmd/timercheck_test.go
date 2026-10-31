@@ -88,6 +88,7 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 	} {
 		t.Run(version, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
+			w.chores = true // a running watch, not --once
 			obj := stages[0]
 			fakeRead(t, func(cmd string) ([]byte, error) {
 				if !strings.Contains(cmd, "get kubeadmcontrolplanes.controlplane.cluster.x-k8s.io wc1") {
@@ -136,6 +137,7 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 // when the reason changes; the timer keeps waiting and fires once it holds.
 func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.chores = true // a running watch, not --once
 	answer := func() ([]byte, error) {
 		return nil, errors.New(`exit status 1: error: context "admin@mc" does not exist`)
 	}
