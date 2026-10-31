@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const fillCapacityCommand = "capacity"
+
 // Only external commands are replaced; capacity changes after each start.
 func fillRig(t *testing.T) (*loopRig, *int) {
 	t.Helper()
@@ -26,8 +28,8 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 	busy := 0
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {
-		case "capacity":
-			out, err := json.Marshal(map[string]any{"floor": 3, "ceiling": 5, "room": 5 - busy, "busy": make([]string, busy)})
+		case fillCapacityCommand:
+			out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: 5 - busy, agentCount: agentCount{Busy: make([]string, busy)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,7 +81,7 @@ func TestLoopFillStopsAtGatesAndEmptyBoard(t *testing.T) {
 			r, busy := fillRig(t)
 			original := r.answer
 			r.answer = func(args []string) (string, int) {
-				if args[0] == "capacity" {
+				if args[0] == fillCapacityCommand {
 					switch name {
 					case "capacity refused":
 						return "pace or host pressure", ExitRefused
@@ -125,7 +127,7 @@ func TestLoopFillRechecksCapacityBetweenStarts(t *testing.T) {
 	r, busy := fillRig(t)
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == "capacity" && *busy > 0 {
+		if args[0] == fillCapacityCommand && *busy > 0 {
 			return `{"floor":3,"room":0}`, 0
 		}
 		return original(args)
@@ -159,7 +161,7 @@ func TestLoopFillBoundsStaleCapacity(t *testing.T) {
 	r, busy := fillRig(t)
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
-		if args[0] == "capacity" {
+		if args[0] == fillCapacityCommand {
 			return `{"floor":3,"room":2}`, 0
 		}
 		return original(args)
