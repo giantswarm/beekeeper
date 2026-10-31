@@ -138,7 +138,7 @@ func (s *Server) Message(ctx context.Context, ref Ref, m Envelope) (ack Ack, err
 		}
 		var e error
 		ack, e = j.Messages.Store(ref, m)
-		if e == nil && !known && (j.Phase == Exited || j.Phase == Failed || j.Completed) {
+		if e == nil && ack.Stage == Stored && (j.Phase == Exited || j.Phase == Failed || j.Completed) {
 			d := j.Messages.Entries[m.ID]
 			d.Stage = Failed
 			j.Messages.Entries[m.ID] = d

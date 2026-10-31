@@ -291,3 +291,27 @@ func TestSSHMessageAuthorityLossKeepsTheExistingProcessAndStoredEnvelope(t *test
 		t.Fatal("authority loss sent a message or changed a process")
 	}
 }
+
+func TestSSHStoredMessageFailsOnlyOnConfirmedRunnerExit(t *testing.T) {
+	f := testFixture(t)
+	f.r.Messaging = true
+	ctx := context.Background()
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	m := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "continue"}
+	ack, err := f.s.Message(ctx, f.r.Ref, m)
+	if err != nil || ack.Stage != Stored {
+		t.Fatalf("pre-launch message not stored: %+v %v", ack, err)
+	}
+	if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error { j.Phase = Exited; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ack, err = f.s.Message(ctx, f.r.Ref, m)
+	if err != nil || ack.Stage != Failed {
+		t.Fatalf("unsent message remained pending after confirmed exit: %+v %v", ack, err)
+	}
+	if len(f.launcher.starts) != 0 {
+		t.Fatal("delivery failure recovery started another process")
+	}
+}
