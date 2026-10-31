@@ -113,7 +113,14 @@ agents:
       operationTimeout: 30s
 ```
 
-Changing the binary, rules, settings, or protected host configuration invalidates
+Coordinator and host releases may differ while they use the same execution
+protocol. A coordinator self-update does not require reinstalling or re-preparing
+the hosts. `hosts check` reports each host's release for diagnostics, and still
+requires the expected identity, protocol, pinned policy, harness and fresh resource
+observation. A different protocol is refused; upgrade the host to a release with
+the coordinator's protocol before starting new work.
+
+Changing the host binary, rules, settings, or protected host configuration invalidates
 the policy. Prepare and pin a matching bundle again before starting new work.
 Do not weaken a required guard to make a check pass.
 
