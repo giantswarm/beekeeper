@@ -299,9 +299,66 @@ func TestLoopForwardsChangesThenEscalatesUnfixedFindings(t *testing.T) {
 	if evs := r.logged(t, "supervisor.escalate"); len(evs) != 1 {
 		t.Errorf("escalate logged as %+v", evs)
 	}
+	q := note[len(note)-1]
+	if q != superloop.EscalationQuestion(loopURL, loopHead) || strings.Contains(q, "blocking findings open") {
+		t.Errorf("the escalation asks %q", q)
+	}
+	if !slices.Contains(note, "--option") || !slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
+		t.Errorf("the escalation offers no Merge option: %v", note)
+	}
 	r.pass(t)
 	if len(r.calls) > 0 && r.called("note", loopAdd) != nil {
 		t.Errorf("escalated twice: %v", r.calls)
+	}
+	// The person releases it: the loop's merge go for the head it named.
+	n := &state.Note{ID: 1, By: loopParty, Text: q}
+	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "you can merge", Note: 1}, n)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	wake = r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopHead) || !strings.Contains(wake[3], "you can merge") {
+		t.Fatalf("the answer gave no merge go: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.go"); len(evs) != 1 {
+		t.Errorf("go logged as %+v", evs)
+	}
+}
+
+// An answer to a note the loop filed is the loop's to read from the log:
+// no session is woken for it.
+func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
+	r := newLoopRig(t)
+	got := r.a.tellFiler(context.Background(), state.Party{Name: loopPerson}, &state.Note{ID: 3, By: loopParty}, "NOTE ANSWERED #3 by pat: Merge")
+	if !strings.Contains(got, "the supervisor loop acts on the answer") || strings.Contains(got, "failed") {
+		t.Errorf("tellFiler = %q", got)
+	}
+}
+
+// A new head after an approval gets its own review round, whatever
+// supervisor.reviewRounds says: no escalation, no note.
+func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("no merge go for the approved head: %v", r.calls)
+	}
+	// The worker pushes one more commit and parks again.
+	r.pull.Head = loopFixed
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	r.pass(t)
+	if note := r.called("note", loopAdd); note != nil {
+		t.Fatalf("a new head after an approval escalated: %v", note)
+	}
+	start := r.called(agentsName, agentStartName)
+	if start == nil || start[2] != "Review r 7 r2" {
+		t.Fatalf("no review of the new head: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
+		t.Errorf("review logged as %+v", evs)
 	}
 }
 

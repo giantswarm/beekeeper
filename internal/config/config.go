@@ -2020,10 +2020,11 @@ type Supervisor struct {
 	// Scope says what the supervisor watches, in a sentence or two; empty,
 	// the prompt names the resources, lanes and installations configured.
 	Scope string `yaml:"scope"`
-	// ReviewRounds is how many review rounds `supervisor loop` starts for
-	// a pull request (default 1): after the last round's request for
-	// changes the worker fixes them and merges on the loop's go without
-	// another review.
+	// ReviewRounds is how many review rounds asking for changes `supervisor
+	// loop` runs for a pull request (default 1): after the last one's
+	// request for changes the worker fixes them and merges on the loop's go
+	// without another review. An approved round is none of them: every new
+	// head after an approval gets its own review.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
