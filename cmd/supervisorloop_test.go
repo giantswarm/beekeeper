@@ -530,8 +530,8 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 	r := newLoopRig(t)
 	r.pass(t)
 	r.pass(t)
-	// The release look is the one call an idle pass makes.
-	if r.out.Len() != 0 || len(r.calls) != 1 || !slices.Equal(r.calls[0], selfUpdateCheck) {
+	// An idle pass probes the budget and looks for a release, silently.
+	if r.out.Len() != 0 || len(r.calls) != 2 || r.called("budget", "--gate") == nil || r.called(selfUpdateCheck...) == nil {
 		t.Errorf("an idle loop said %q and ran %v", r.out, r.calls)
 	}
 }
