@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in `run.remote` builder Jobs for Go and Cargo commands, worktree snapshots, reconnectable output and local-slot fallback; `run --local` keeps worktree writes local ([https://github.com/giantswarm/beekeeper/issues/1781](https://github.com/giantswarm/beekeeper/issues/1781)).
+
 - `supervisor.ownership`: the desk's team ownership, which decides where `supervisor loop` reviews and gives the merge go. Those are the desk's own team's repositories (`team`, as the team files in `teamFiles` name it, default `giantswarm/github/repositories`, read every hour with `gh api`), the repositories `review` names (patterns such as `giantswarm/*-configs`), and single pull requests the person overrode.
   - Another team's pull request, or one in a repository no team file declares, gets no reviewer and no go. The owning team's reviews after the park reach the worker word for word (`supervisor.relay`). After `ownerWait` (24h) without one, the guide's person gets an Override/Wait decision (`supervisor.ownership`), and Override makes that one pull request the desk's (`supervisor.override`).
   - A repository in `never`, or a pull request whose title, branch or changed paths name one, gets nothing, whatever `review` or an override says.
