@@ -443,7 +443,7 @@ func TestOmpBareModelFromPick(t *testing.T) {
 		{model: sparkModel, models: listed, want: sparkModel},
 		{model: "qwen3.5:9b", models: listed, want: "ollama/qwen3.5:9b"},
 		{model: bare, models: append(listed, "ollama/m"), err: "under more than one provider (spark/m, ollama/m)"},
-		{model: "other", models: listed, err: `lists no model "other"`},
+		{model: "unlisted", models: listed, err: `lists no model "unlisted"`},
 		{model: "ollama/m", models: listed, err: `lists no model "ollama/m"`},
 	} {
 		got, err := ompModel(tc.model, "", func() ([]string, error) { return tc.models, nil })
