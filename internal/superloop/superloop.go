@@ -725,7 +725,7 @@ func matches(problem, body string) bool {
 func words(s string) []string {
 	var out []string
 	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '-'
 	}) {
 		if len(w) >= 4 {
 			out = append(out, w)
