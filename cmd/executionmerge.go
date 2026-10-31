@@ -52,34 +52,43 @@ func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execu
 	if !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
 		return refused("merge repository is outside the coordinator allowlist")
 	}
-	for _, hold := range st.Holds {
-		// Fail closed for any active merge lane hold. A grant never overrides one.
-		if hold.Active(time.Now()) {
-			return refused("merge held; authorization cannot override a hold")
-		}
-	}
 	lane := a.cfg.LaneOf(use.Repository)
-	queue := merge.Queue(st, lane.Name)
-	for _, entry := range st.Merges {
-		if entry.Lane == lane.Name && (entry.Repo != use.Repository || entry.PR != use.PR || entry.Phase != state.Waiting) {
-			return refused("merge lane is occupied; retain the grant and retry after the lane clears")
+	now := time.Now()
+	_, workerIndex := executionRecord(st, use.Ref)
+	worker := st.Starts[workerIndex].Party
+	if _, held := merge.BlockingFor(st, now, worker.Name, use.Repository, use.PR, lane); held {
+		return refused("merge held by repository, lane or installation policy")
+	}
+	queued := *st
+	queued.Merges = append([]state.Merge(nil), st.Merges...)
+	if !slices.ContainsFunc(queued.Merges, func(entry state.Merge) bool { return entry.Repo == use.Repository && entry.PR == use.PR }) {
+		queued.Merges = append(queued.Merges, state.Merge{Repo: use.Repository, PR: use.PR, Lane: lane.Name, By: worker, Phase: state.Waiting, Joined: now})
+	}
+	queue := merge.Queue(&queued, lane.Name)
+	if queue.Running != nil {
+		return refused("merge lane is running another merge")
+	}
+	if _, ahead := queue.Ahead(use.Repository, use.PR, merge.Unheld(st, now, lane, func(state.Merge) bool { return true })); ahead {
+		return refused("another unheld merge precedes this request")
+	}
+	_, fixWindow := merge.FixWindow(st, now, use.Repository, use.PR, lane)
+	if lane.Installation == "" || !fixWindow {
+		var releases []merge.HelmRelease
+		if lane.Installation != "" {
+			var err error
+			releases, err = readHelmReleases(ctx, lane)
+			if err != nil {
+				return refused("merge lane readiness unavailable")
+			}
 		}
-	}
-	var releases []merge.HelmRelease
-	if lane.Installation != "" {
-		var err error
-		releases, err = readHelmReleases(ctx, lane)
-		if err != nil {
-			return refused("merge lane readiness unavailable")
+		settling := queue.AllSettling
+		if len(settling) == 0 {
+			settling = []*state.Merge{nil}
 		}
-	}
-	settling := queue.AllSettling
-	if len(settling) == 0 {
-		settling = []*state.Merge{nil}
-	}
-	for _, entry := range settling {
-		if ready, _ := merge.Ready(lane, releases, entry, time.Now(), a.cfg.Merge.Settle.Duration); !ready {
-			return refused("merge lane has not settled")
+		for _, entry := range settling {
+			if ready, _ := merge.Ready(lane, releases, entry, now, a.cfg.Merge.Settle.Duration); !ready {
+				return refused("merge lane has not settled")
+			}
 		}
 	}
 	pull, err := readLoopPull(ctx, fmt.Sprintf("%s#%d", use.Repository, use.PR))
@@ -89,17 +98,7 @@ func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execu
 	if pull.State != superloop.Open || pull.Head != use.Head || !pull.Green {
 		return refused("merge head moved or current CI is not green")
 	}
-	var latest *superloop.Review
-	for i := range pull.Reviews {
-		review := &pull.Reviews[i]
-		if review.Head == use.Head && review.Verdict != "" {
-			latest = review
-		}
-	}
-	if latest == nil || latest.Verdict != superloop.Approved {
-		return refused("current head lacks an approved independent desk review")
-	}
-	return nil
+	return a.authenticateExecutionReview(st, use, pull)
 }
 
 func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, repository string, pr int, head string, issuer state.Party) (execution.MergeAuthorization, error) {
@@ -109,37 +108,7 @@ func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, reposi
 	if err := grant.Admits(use, time.Now()); err != nil {
 		return grant, err
 	}
-	// The loop's independently started review round must precede the approval;
-	// a worker's self-posted approval without a desk round grants nothing.
-	events, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == "supervisor.review" && e.Subject == fmt.Sprintf("%s#%d", repository, pr) && e.By.Name == loopParty.Name
-	})
-	if err != nil {
-		return grant, err
-	}
-	var roundAt time.Time
-	for _, e := range events {
-		if strings.Contains(e.Detail, "@"+head+"]") && e.At.After(roundAt) {
-			roundAt = e.At
-		}
-	}
-	if roundAt.IsZero() {
-		return grant, refused("no independent desk review round for this head")
-	}
-	reviewed, readErr := readLoopPull(ctx, fmt.Sprintf("%s#%d", repository, pr))
-	if readErr != nil {
-		return grant, readErr
-	}
-	approvedAfterRound := false
-	for _, review := range reviewed.Reviews {
-		if review.Head == head && review.Verdict != "" {
-			approvedAfterRound = review.Verdict == superloop.Approved && !review.At.Before(roundAt.Add(-30*time.Second))
-		}
-	}
-	if !approvedAfterRound {
-		return grant, refused("approval predates the independent desk review round")
-	}
-	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		supervisor := st.SupervisorRole().Holder
 		if (supervisor == nil || !supervisor.Is(issuer)) && issuer != loopParty {
 			return nil, refused("only the coordinating supervisor can issue merge authority")
@@ -147,6 +116,8 @@ func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, reposi
 		if err := a.executionMergeLive(ctx, st, use); err != nil {
 			return nil, err
 		}
+		round := executionReviewRound(st, use)
+		grant.DeskReviewID, grant.ReviewID = round.ID, round.Result.ID
 		if err := execution.WriteMergeAuthorization(a.mergeAuthorityRoot(), grant, "issued", time.Now()); err != nil {
 			return nil, err
 		}

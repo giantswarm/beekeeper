@@ -73,6 +73,9 @@ type Pull struct {
 
 // Review is one review of a pull request with a verdict.
 type Review struct {
+	Author  string
+	URL     string
+	Commit  string
 	ID      string
 	Head    string
 	Verdict string

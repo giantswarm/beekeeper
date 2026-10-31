@@ -285,8 +285,15 @@ an acknowledged explicit stop; recovery does not silently upgrade their contract
 ## Live merge authorizations
 
 Only the coordinating supervisor issues or revokes authorizations. A green exact
-head and a recorded independent desk review round with a subsequent approved verdict
-are prerequisites. The supervisor loop issues a two-minute grant when it gives a
+head and an authenticated independent desk review result are prerequisites. The
+component records the exact reviewer session when the supervisor starts the round.
+That session must complete with the exact public review URL in its report. The
+coordinator persists the GitHub review ID, author, head and body digest before
+report delivery can prune the report. A shared GitHub login or a worker-authored
+approval comment alone grants nothing; `--as` cannot submit the reviewer's result.
+Issuance and live use require that same persisted result, and grants pin both the
+round and review IDs. Edited reviews and new rounds invalidate old grants. Older
+rounds without component-recorded reviewer provenance need a fresh review. The supervisor loop issues a two-minute grant when it gives a
 remote worker merge go; a supervisor can also issue or revoke it explicitly:
 
 ```sh
@@ -310,8 +317,9 @@ This narrow component path is the only supported remote merge surface; unsupport
 harnesses and older executions remain denied.
 
 The service checks the exact tuple, unexpired and unrevoked grant, current head,
-CI, review, execution lease, stop state and active holds immediately before the
-attempt. It retains the coordinating state lock through a bounded synchronous
+CI, authenticated review, execution lease and stop state immediately before the
+attempt. Holds use the same repository, lane and installation scope, PR/session
+exceptions and explicit repair-window readiness waiver as the existing merge gate. It retains the coordinating state lock through a bounded synchronous
 attempt (at most 20 seconds, also bounded by grant expiry), serializing stop,
 hold changes and revocation against use. Those operations may report a busy state
 lock during that interval and must be retried; they are never reported committed

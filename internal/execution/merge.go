@@ -15,18 +15,20 @@ var mergeHeadPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // MergeAuthorization is coordinator-owned. It is never a bearer credential:
 // every use also authenticates the exact owned execution with the live service.
 type MergeAuthorization struct {
-	ID         string       `json:"id"`
-	Ref        Ref          `json:"ref"`
-	Repository string       `json:"repository"`
-	PR         int          `json:"pr"`
-	Head       string       `json:"head"`
-	Issuer     string       `json:"issuer"`
-	IssuedAt   time.Time    `json:"issuedAt"`
-	ExpiresAt  time.Time    `json:"expiresAt"`
-	Revoked    bool         `json:"revoked"`
-	Consumed   bool         `json:"consumed"`
-	Outcome    string       `json:"outcome,omitempty"`
-	Audit      []MergeAudit `json:"audit"`
+	DeskReviewID string       `json:"deskReviewID"`
+	ReviewID     string       `json:"reviewID"`
+	ID           string       `json:"id"`
+	Ref          Ref          `json:"ref"`
+	Repository   string       `json:"repository"`
+	PR           int          `json:"pr"`
+	Head         string       `json:"head"`
+	Issuer       string       `json:"issuer"`
+	IssuedAt     time.Time    `json:"issuedAt"`
+	ExpiresAt    time.Time    `json:"expiresAt"`
+	Revoked      bool         `json:"revoked"`
+	Consumed     bool         `json:"consumed"`
+	Outcome      string       `json:"outcome,omitempty"`
+	Audit        []MergeAudit `json:"audit"`
 }
 
 type MergeAudit struct {

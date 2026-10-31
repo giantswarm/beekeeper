@@ -156,7 +156,10 @@ type loopPullJSON struct {
 		State      string `json:"state"`
 	} `json:"statusCheckRollup"`
 	Reviews []struct {
-		ID     string    `json:"id"`
+		ID     string `json:"id"`
+		Author struct {
+			Login string `json:"login"`
+		} `json:"author"`
 		Body   string    `json:"body"`
 		State  string    `json:"state"`
 		At     time.Time `json:"submittedAt"`
@@ -182,7 +185,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		}
 	}
 	for _, r := range j.Reviews {
-		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
+		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Commit: r.Commit.OID, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
 	}
 	slices.SortStableFunc(p.Reviews, func(x, y superloop.Review) int { return x.At.Compare(y.At) })
 	return p, nil
@@ -448,7 +451,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
 			// Claimed before an interruption: what the log shows of its
 			// side effect decides, never a second one.
-			what, done, err := l.reconcile(st, act, c)
+			what, done, err := l.reconcile(ctx, st, act, c)
 			if err != nil {
 				return err
 			}
@@ -518,7 +521,7 @@ func (l *supervisorLoop) claim(act superloop.Action, target string) error {
 // reconcile decides a claimed action from the log since its claim: done
 // when the command it ran left its line (agents start, agents wake, agents
 // remove, note add, all logged as the loop), else not, and it runs.
-func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
+func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
 	evs, err := l.a.store.Events(0, func(e state.Event) bool { return e.By.Name == loopParty.Name && !e.At.Before(c.at) })
 	if err != nil {
 		return "", false, err
@@ -541,6 +544,11 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	}
 	if !done {
 		return "", false, nil
+	}
+	if act.Kind == superloop.KindReview {
+		if err := l.a.assignExecutionReview(ctx, act); err != nil {
+			return "", false, err
+		}
 	}
 	return fmt.Sprintf("taken before an interruption: %s, as the log shows", c.target), true, nil
 }
@@ -784,6 +792,9 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet (%v)", act.URL, err)
 			return "", errLoopLater
 		}
+		return "", err
+	}
+	if err := l.a.assignExecutionReview(ctx, act); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("reviewer %q started for %s at %s, round %d", name, act.URL, act.Head, act.Round), nil

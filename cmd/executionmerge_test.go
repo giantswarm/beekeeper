@@ -27,11 +27,14 @@ func TestExecutionMergeCoordinatorConsumesOnceAndAudits(t *testing.T) {
 	}
 	oldRead, oldMerge := readLoopPull, runExecutionMerge
 	t.Cleanup(func() { readLoopPull, runExecutionMerge = oldRead, oldMerge })
+	approved := superloop.Review{Verdict: superloop.Approved, At: now}
+	useForReview := execution.MergeUse{Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
+	round := completeMergeReview(t, a, useForReview, &approved)
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
-		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{Head: head, Verdict: superloop.Approved, At: now}}}, nil
+		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{approved}}, nil
 	}
 	use := execution.MergeUse{ID: "grant-test", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
-	grant := execution.MergeAuthorization{ID: use.ID, Ref: use.Ref, Repository: use.Repository, PR: use.PR, Head: head, Issuer: supervisorName, IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
+	grant := execution.MergeAuthorization{DeskReviewID: round.ID, ReviewID: round.Result.ID, ID: use.ID, Ref: use.Ref, Repository: use.Repository, PR: use.PR, Head: head, Issuer: supervisorName, IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
 	if err := execution.WriteMergeAuthorization(a.mergeAuthorityRoot(), grant, "issued", now); err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +85,13 @@ func TestExecutionMergeLiveDeniesStopHoldMovedHeadAndMissingLease(t *testing.T) 
 	old := readLoopPull
 	t.Cleanup(func() { readLoopPull = old })
 	pull := superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{Head: head, Verdict: superloop.Approved}}}
+	completeMergeReview(t, a, use, &pull.Reviews[0])
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Starts[0].Execution.Request = r
+	st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Minute)}
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return pull, nil }
 	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
 		t.Fatal(err)
@@ -134,8 +144,10 @@ func TestExecutionMergeGrantRequiresSupervisorAndReviewRound(t *testing.T) {
 	}
 	old := readLoopPull
 	t.Cleanup(func() { readLoopPull = old })
+	approved := superloop.Review{Verdict: superloop.Approved}
+	completeMergeReview(t, a, execution.MergeUse{Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}, &approved)
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
-		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{Head: head, Verdict: superloop.Approved, At: time.Now().Add(time.Second)}}}, nil
+		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{approved}}, nil
 	}
 	if _, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, state.Party{Name: r.Name}); err == nil {
 		t.Fatal("worker impersonated supervisor")

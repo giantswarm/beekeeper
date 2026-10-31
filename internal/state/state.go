@@ -1055,6 +1055,7 @@ type State struct {
 	// WorkerReports are the reports workers finished with (agents idle
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
+	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
@@ -1180,6 +1181,7 @@ func (s *State) PairOf(key string) int {
 // follow-ups). The supervisor's watch prints it once and drops it; the event
 // log keeps it (agents.report, agents.problem).
 type WorkerReport struct {
+	Finished bool      `json:"finished,omitempty"`
 	By       Party     `json:"by"`
 	At       time.Time `json:"at"`
 	Task     string    `json:"task,omitempty"`

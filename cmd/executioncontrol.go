@@ -186,7 +186,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			ledger := execution.ControlLedger{Sequence: r.ControlSequence, Results: r.ControlResults}
 			result, applyErr := ledger.Apply(req.Ref, control, func() (string, error) {
-				text, evs, err := a.applyExecutionControl(st, st.Starts[i].Party, control)
+				text, evs, err := a.applyExecutionControl(ctx, st, st.Starts[i].Party, control)
 				if err == nil {
 					events = evs
 				}
@@ -209,7 +209,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 	return json.NewEncoder(output).Encode(reply)
 }
 
-func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution.ControlRequest) (string, []state.Event, error) {
+func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me state.Party, c execution.ControlRequest) (string, []state.Event, error) {
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
 	if i < 0 {
 		return "", nil, refused("worker registration is missing")
@@ -304,6 +304,9 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 		if m := post.Unlinked(strings.Join(append([]string{v.Text}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
 			return "", nil, refused("report refused: %s", strings.Join(m, "; "))
 		}
+		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {
+			return "", nil, err
+		}
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished
@@ -318,7 +321,7 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 			clearRecords(st, me)
 		}
 		events := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
-		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems})
+		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: v.Finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems})
 		if v.Text != "" {
 			events = append(events, event(me, "agents.report", "%s: %s", ag.Name, v.Text))
 		}

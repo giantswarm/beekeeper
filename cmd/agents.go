@@ -268,6 +268,12 @@ file; the log keeps them (agents.report, agents.problem).`,
 				if m := post.Unlinked(strings.Join(append([]string{report}, found...), "\n"), agentHere(st, ag)); len(m) > 0 {
 					return nil, refused("report refused, it lacks: %s", strings.Join(m, "; "))
 				}
+				if slices.ContainsFunc(st.DeskReviews, func(round state.DeskReview) bool { return sameReviewSession(round.Reviewer, ag.Party) }) && !sameReviewSession(me, ag.Party) {
+					return nil, refused("independent review completion requires its assigned session, not --as")
+				}
+				if err := a.captureExecutionReviewReport(cmd.Context(), st, me, report, a.now, finished); err != nil {
+					return nil, err
+				}
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
@@ -282,7 +288,7 @@ file; the log keeps them (agents.report, agents.problem).`,
 					}
 				}
 				if report != "" || len(found) > 0 {
-					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
+					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
 				}
 				if report != "" {
 					evs = append(evs, event(me, "agents.report", "%s: %s", ag.Name, report))
