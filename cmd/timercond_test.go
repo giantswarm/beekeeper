@@ -19,6 +19,7 @@ const (
 	probeHolds = "true"
 	probeFails = "false"
 	prMerged7  = "pr-merged o/r#7"
+	bk228      = "BK 228"
 )
 
 func TestTimerConditionsProbeTheirReference(t *testing.T) {
@@ -91,8 +92,8 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	}
 	t.Cleanup(func() { wakeOwner = wasWake })
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: "BK 228"}}}
-		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: "BK 228", What: "rebase on it"}}
+		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
+		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: bk228, What: "rebase on it"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -136,14 +137,14 @@ func TestWatchOnceFiresNoTimer(t *testing.T) {
 	ran := filepath.Join(t.TempDir(), "ran")
 	past := relayNow.Add(-time.Minute)
 	timers := []state.Timer{
-		{ID: 1, Due: past, When: prMerged7, Wake: "BK 228", What: "rebase on it"},
-		{ID: 2, Due: past, Wake: "BK 228", What: "look again"},
+		{ID: 1, Due: past, When: prMerged7, Wake: bk228, What: "rebase on it"},
+		{ID: 2, Due: past, Wake: bk228, What: "check again"},
 		{ID: 3, Due: past, Run: "touch " + ran, What: "resume"},
-		{ID: 4, Due: past, Wake: "BK 228", Repeat: "daily", What: "standup"},
-		{ID: 5, Due: past, Probe: probeFails, Until: relayNow, Expire: true, What: "moot"},
+		{ID: 4, Due: past, Wake: bk228, Repeat: "daily", What: "standup"},
+		{ID: 5, Due: past, Probe: probeFails, Checked: relayNow, Every: time.Hour, Until: relayNow, Expire: true, What: "moot"},
 	}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: "BK 228"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
 		st.Timers = timers
 		return nil, nil
 	}); err != nil {
@@ -162,7 +163,7 @@ func TestWatchOnceFiresNoTimer(t *testing.T) {
 		t.Fatalf("--once settled timers: %+v", st.Timers)
 	}
 	for i, x := range st.Timers {
-		if !x.Due.Equal(timers[i].Due) || !x.Checked.IsZero() {
+		if !x.Due.Equal(timers[i].Due) || !x.Checked.Equal(timers[i].Checked) {
 			t.Errorf("--once changed timer #%d: %+v", x.ID, x)
 		}
 	}
