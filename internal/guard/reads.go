@@ -43,6 +43,7 @@ const (
 	contentKey      = "content"
 	outputModeKey   = "output_mode"
 	claudeMD        = "CLAUDE.md"
+	agentsMD        = "AGENTS.md"
 )
 
 // importDepth is how deep @path imports are followed, as Claude Code does.
@@ -257,18 +258,24 @@ func MandatoryReads(repo string, budget int) string {
 
 // gather shares the safe instruction and import discovery between a first
 // write in another repository and a non-Claude worker's first prompt.
-func (r *reader) gather(repo string) {
-	for _, name := range []string{claudeMD, "AGENTS.md", filepath.Join(".claude", claudeMD)} {
-		r.add(filepath.Join(repo, name), importDepth)
+func (r *reader) gather(repo string) bool {
+	hasClaude := false
+	for _, name := range []string{claudeMD, agentsMD, filepath.Join(".claude", claudeMD)} {
+		if r.add(filepath.Join(repo, name), importDepth) && name != agentsMD {
+			hasClaude = true
+		}
 	}
 	rules := filepath.Join(repo, ".claude", "rules")
 	_ = filepath.WalkDir(rules, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
-			r.add(p, importDepth)
+			if r.add(p, importDepth) {
+				hasClaude = true
+			}
 		}
 		return nil
 	})
 	if s := settingsDigest(r.safe(filepath.Join(repo, ".claude", "settings.json"))); s != "" {
+		hasClaude = true
 		rel, _ := filepath.Rel(r.repo, filepath.Join(repo, ".claude", "settings.json"))
 		r.files = append(r.files, read{rel: rel, note: " (hooks and permissions; they do not run in your session)", body: s})
 	}
@@ -277,6 +284,7 @@ func (r *reader) gather(repo string) {
 			r.add(p, 0)
 		}
 	}
+	return hasClaude
 }
 
 type read struct {
@@ -291,16 +299,19 @@ type reader struct {
 }
 
 // add reads p, then the files its @imports name, depth levels deep.
-func (r *reader) add(p string, depth int) {
+func (r *reader) add(p string, depth int) bool {
 	real := r.safe(p)
-	if real == "" || r.seen[real] {
-		return
+	if real == "" {
+		return false
 	}
-	r.seen[real] = true
+	if r.seen[real] {
+		return true
+	}
 	raw, err := os.ReadFile(real) //nolint:gosec // inside the repository, checked by safe
 	if err != nil || bytes.IndexByte(raw, 0) >= 0 || !utf8.Valid(raw) {
-		return
+		return false
 	}
+	r.seen[real] = true
 	rel, _ := filepath.Rel(r.repo, real)
 	f := read{rel: rel, body: string(raw)}
 	var imports []string
@@ -318,6 +329,7 @@ func (r *reader) add(p string, depth int) {
 			r.add(p, depth-1)
 		}
 	}
+	return true
 }
 
 // named are the existing files a line links or quotes, relative to dir or

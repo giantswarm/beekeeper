@@ -122,8 +122,8 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	if id == "" {
 		id = uuid.NewString()
 	}
-	sp.brief = projectPrompt(dir, sp.brief)
 	sp.brief = fillScratchpad(sp.brief, dir, id)
+	sp.brief = projectPrompt(dir, sp.brief)
 	inbox := codex.InboxPath(a.cfg.StateDir, id)
 	logPath := codex.LogPath(a.cfg.StateDir, id)
 

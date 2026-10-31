@@ -3,7 +3,6 @@ package guard
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 )
 
 // ProjectInstructions supplies Claude project files to a harness that does not
@@ -34,15 +33,9 @@ func ProjectInstructions(dir string, budget int) string {
 			break
 		}
 	}
-	for i := len(dirs) - 1; i >= 0; i-- {
-		r.gather(dirs[i])
-	}
 	claudeFiles := false
-	for _, f := range r.files {
-		if filepath.Base(f.rel) == claudeMD || strings.HasPrefix(f.rel, ".claude"+string(filepath.Separator)) || strings.Contains(f.rel, string(filepath.Separator)+".claude"+string(filepath.Separator)) {
-			claudeFiles = true
-			break
-		}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		claudeFiles = r.gather(dirs[i]) || claudeFiles
 	}
 	if !claudeFiles {
 		return ""

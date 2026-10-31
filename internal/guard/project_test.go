@@ -11,7 +11,7 @@ import (
 func TestProjectInstructions(t *testing.T) {
 	root := repoWith(t, t.TempDir(), map[string]string{
 		claudeMD:                        "Claude rule\n@docs/import.md\nMust read `docs/required.md`\n@../outside.md\n@docs/credential.txt\n",
-		"AGENTS.md":                     "Agent rule overrides Claude rule",
+		agentsMD:                        "Agent rule overrides Claude rule",
 		"docs/import.md":                "Imported rule\n@cycle.md",
 		"docs/cycle.md":                 "@import.md",
 		"docs/required.md":              "Required rule",
@@ -37,13 +37,13 @@ func TestProjectInstructions(t *testing.T) {
 }
 
 func TestProjectInstructionsNativeAgentsUnchanged(t *testing.T) {
-	for _, files := range []map[string]string{nil, {"AGENTS.md": "native rules"}} {
+	for _, files := range []map[string]string{nil, {agentsMD: "native rules"}} {
 		root := repoWith(t, t.TempDir(), files)
 		if got := ProjectInstructions(root, 1<<20); got != "" {
 			t.Fatalf("native instructions changed: %s", got)
 		}
 	}
-	root := repoWith(t, t.TempDir(), map[string]string{"AGENTS.md": "native rules", ".claude/rules/a.md": "additional rule"})
+	root := repoWith(t, t.TempDir(), map[string]string{agentsMD: "native rules", ".claude/rules/a.md": "additional rule"})
 	if got := ProjectInstructions(root, 1<<20); !strings.Contains(got, "native rules") || !strings.Contains(got, "additional rule") {
 		t.Fatal(got)
 	}
@@ -74,5 +74,15 @@ func TestProjectInstructionsBudget(t *testing.T) {
 		if budget >= 1500 && (!strings.Contains(got, "truncated") || !strings.Contains(got, "extra.md")) {
 			t.Fatalf("budget %d: truncation must be visible: %s", budget, got)
 		}
+	}
+}
+
+func TestProjectInstructionsSymlink(t *testing.T) {
+	root := repoWith(t, t.TempDir(), map[string]string{"docs/project.md": "linked Claude rule"})
+	if err := os.Symlink(filepath.Join(root, "docs", "project.md"), filepath.Join(root, claudeMD)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if got := ProjectInstructions(root, 1<<20); !strings.Contains(got, "linked Claude rule") {
+		t.Fatal(got)
 	}
 }

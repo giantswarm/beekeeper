@@ -26,7 +26,7 @@ func TestNonClaudeDryRunProjectInstructions(t *testing.T) {
 		t.Run(h.Name(), func(t *testing.T) {
 			var out bytes.Buffer
 			a := &app{cfg: &config.Config{}, out: &out}
-			sp := agentStart{dir: dir, name: "worker", brief: "TASK ONLY", model: "test-model"}
+			sp := agentStart{dir: dir, name: "instruction-proof-worker", brief: "TASK ONLY", model: "test-model"}
 			if err := h.DryRun(context.Background(), a, sp, nil); err != nil {
 				t.Fatal(err)
 			}
@@ -48,7 +48,7 @@ func TestProjectPromptNativeAgentsUnchanged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("native rules"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := projectPrompt(dir, "task"); got != "task" {
+	if got := projectPrompt(dir, paramTask); got != paramTask {
 		t.Fatal(got)
 	}
 }
