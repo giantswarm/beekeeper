@@ -433,6 +433,7 @@ func Run(o Options, argv []string) int {
 	}
 	env, cleanup := runTmp(o.TmpDir, logf)
 	defer cleanup()
+	env = append(env, cpuEnv(o)...)
 	if o.GoCache != "" {
 		release, ok := holdGoCache(o, logf)
 		if !ok {
