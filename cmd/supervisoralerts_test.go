@@ -263,3 +263,26 @@ func TestLoopAlertDeliveredWakeDoesNotPageAfterParkClears(t *testing.T) {
 		t.Fatal("already staffed alert paged after wake cleared its park")
 	}
 }
+
+func TestLoopAlertMissingTranscriptRestaffsOriginalTask(t *testing.T) {
+	resumable := loopResumable
+	r := newLoopRig(t)
+	loopResumable = resumable
+	r.a.cfg.Claude.ProjectsDir = t.TempDir()
+	f := loopFiring()
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
+	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Session = "missing-transcript-session"
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if r.called(agentsName, agentWakeName) != nil {
+		t.Fatal("woke a session without a transcript")
+	}
+	if r.called(agentsName, loopRemove, loopWorker) == nil || r.called(agentsName, agentStartName, loopWorker) == nil {
+		t.Fatal("missing transcript stranded the parked task")
+	}
+}
