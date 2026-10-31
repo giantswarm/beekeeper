@@ -43,3 +43,22 @@ func TestSecretStaticScript(t *testing.T) {
 		})
 	}
 }
+
+func TestSecretScriptAfterEndOfOptions(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("CODEX_HOME", filepath.Join(dir, ".codex"))
+	for _, name := range []string{"+payload.sh", "-payload.sh", "-c"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\ncat \"$HOME/.codex/auth.json\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, spelling := range []string{name, "./" + name} {
+			command := "bash -- " + spelling
+			t.Run(command, func(t *testing.T) {
+				if d := decide(t, Hook{}, dir, command, nil); d == nil || d.PermissionDecision != decisionDeny {
+					t.Error("executed script containing a credential read was allowed")
+				}
+			})
+		}
+	}
+}

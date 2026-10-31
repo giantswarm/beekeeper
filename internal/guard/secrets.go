@@ -517,11 +517,16 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 		}
 		// Every argument is scanned as a command line of its own: a -c
 		// string, ssh's remote command, watch's; one word (zsh -ic f) too.
-		script := name != "ssh" && name != watchCmd && name != evalCmd && !slices.ContainsFunc(words[k+1:], isCFlag)
+		script := name != "ssh" && name != watchCmd && name != evalCmd
+		options := true
 		args := words[k+1:]
 		for j := 0; j < len(args); j++ {
 			arg := args[j]
-			if strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "+") {
+			if options && arg == "--" {
+				options = false
+				continue
+			}
+			if options && (strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "+")) {
 				if isCFlag(arg) {
 					script = false
 				}
@@ -533,6 +538,7 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			if bareRedirect.MatchString(arg) || redirection.MatchString(arg) {
 				continue
 			}
+			options = false
 			if l := g.scan(arg, depth+1); l != nil {
 				return l
 			}
