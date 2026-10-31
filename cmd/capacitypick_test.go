@@ -374,19 +374,19 @@ func TestCapacityPickPaceTieKeepsConfiguredOrder(t *testing.T) {
 
 func TestCapacityPickUsesChoicesBucketPace(t *testing.T) {
 	pace := 50.0
-	k := config.Capacity{Providers: map[string]config.Provider{"claude": {}, "codex": {}}, Choices: []config.Choice{
-		{Harness: "claude", Model: pickOpus},
-		{Harness: "codex", Model: pickGPT, Bucket: "model"},
+	k := config.Capacity{Providers: map[string]config.Provider{claudeComm: {}, codex.Harness: {}}, Choices: []config.Choice{
+		{Harness: claudeComm, Model: pickOpus},
+		{Harness: codex.Harness, Model: pickGPT, Bucket: "model"},
 	}}
 	providers := map[string]*providerView{
-		"claude": {Room: 1, SevenDay: &usageWindow{UsedPercent: 40, Pace: &pace}},
-		"codex": {Room: 1, SevenDay: &usageWindow{UsedPercent: 49, Pace: &pace}, Buckets: map[string]*bucketView{
-			"model": {Room: 1, SevenDay: &usageWindow{UsedPercent: 20, Pace: &pace}},
-			"other": {Room: 1, SevenDay: &usageWindow{UsedPercent: 50, Pace: &pace}},
+		claudeComm: {Room: 1, SevenDay: &usageWindow{UsedPercent: 40, Pace: &pace}},
+		codex.Harness: {Room: 1, SevenDay: &usageWindow{UsedPercent: 49, Pace: &pace}, Buckets: map[string]*bucketView{
+			"model":         {Room: 1, SevenDay: &usageWindow{UsedPercent: 20, Pace: &pace}},
+			"unused-bucket": {Room: 1, SevenDay: &usageWindow{UsedPercent: 50, Pace: &pace}},
 		}},
 	}
 	got := evaluateChoices(k, providers, nil, "", nil, forWorker, time.Now())
-	if got.Provider != "codex" {
+	if got.Provider != codex.Harness {
 		t.Fatalf("bucket pick = %+v; candidates = %+v", got, got.Candidates)
 	}
 }
