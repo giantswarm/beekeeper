@@ -648,6 +648,37 @@ func TestLoopFilesADoneReportsProblemThroughTheGuidesQueue(t *testing.T) {
 	}
 }
 
+// A mid-task problem of an agent whose task, park and serve record name no
+// issue or pull request still reaches the guide's queue to file: a note
+// without --ref, never a failed transition.
+func TestLoopFilesAProblemOfAnAgentWithoutAThread(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, "", time.Now())
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Task, st.Agents[0].Park = "keep the desk's machine tidy", nil
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: the build slot queue gave up, owning repository o/r", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	note := r.called("note", loopAdd)
+	if note == nil || slices.Contains(note, "--ref") || !strings.Contains(note[len(note)-1], "File in its owning repository what "+loopWorker+" found") ||
+		!strings.Contains(strings.Join(note, " "), "owning repository o/r") {
+		t.Fatalf("the note = %v\n%s", note, r.out)
+	}
+	if strings.Contains(r.out.String(), "FAILED") {
+		t.Errorf("the file failed:\n%s", r.out)
+	}
+	if evs := r.logged(t, "supervisor.file"); len(evs) != 1 {
+		t.Errorf("file logged as %+v", evs)
+	}
+}
+
 func TestLoopPutsAWorkersQuestionInTheGuidesQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, "", time.Now())

@@ -331,8 +331,10 @@ its key first in the detail):
             before the done. One citing its issue is filed: a done report's
             rides with the done's log line, as does a reviewer's that
             matches the changes request the loop forwarded, and one logged
-            mid-task needs nothing. The agent keeps its task: a problem is
-            a finding, never a decision for the person
+            mid-task needs nothing. The note links the issue or pull
+            request the agent works, or none when it works none. The agent
+            keeps its task: a problem is a finding, never a decision for
+            the person
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -1204,16 +1206,13 @@ func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superl
 		if ref == "" {
 			ref = refURL.FindString(act.Message)
 		}
-		if ref == "" {
-			return "", fmt.Errorf("%s's problem names no issue or pull request to file the guide's note on", e.Agent)
-		}
 		q := fmt.Sprintf("File in its owning repository what %s found (1 problem, no decision)", e.Agent)
 		if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s logged at %s, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), act.Message),
 			"the supervisor files a worker's problems found (worker-rules), and the problem names no issue; the agent keeps its task",
 			"the guide files it in its owning repository and closes this note"); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%s's problem to the guide's queue to file, on %s", e.Agent, ref), nil
+		return fmt.Sprintf("%s's problem to the guide's queue to file%s", e.Agent, onRef(ref)), nil
 	}
 	ref := agentRef(st, e.Agent)
 	if ref == "" {
@@ -1221,16 +1220,21 @@ func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superl
 			ref = m
 		}
 	}
-	if ref == "" {
-		return "", fmt.Errorf("%s's done report names no issue or pull request to file the guide's note on", e.Agent)
-	}
 	q := fmt.Sprintf("File in its owning repository what %s found (%d problem(s), no decision)", e.Agent, len(found))
 	if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s's done report at %s names, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), strings.Join(found, "; ")),
 		"the supervisor files a worker's problems found (worker-rules), and the report names no issue for these",
 		"the guide files each in its owning repository and closes this note"); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file, on %s", len(found), e.Agent, ref), nil
+	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file%s", len(found), e.Agent, onRef(ref)), nil
+}
+
+// onRef names the issue or pull request a note was filed on, if any.
+func onRef(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	return ", on " + ref
 }
 
 // agentRef is the issue or pull request the agent works: what it is
@@ -1257,7 +1261,9 @@ func agentRef(st *state.State, name string) string {
 	return ""
 }
 
-// toGuide files a decision for the guide's person on ref (note add).
+// toGuide files a decision for the guide's person on ref (note add). A
+// finding to file needs no thread of its own: with ref "" the note links
+// none, and the guide closes it once it is filed.
 func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string, options ...string) error {
 	person := l.a.cfg.Guide.Person
 	if person == "" {
@@ -1267,10 +1273,13 @@ func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref,
 	if err := l.claim(act, question); err != nil {
 		return err
 	}
-	args := []string{loopNote, loopAdd, "--for", person, "--ref", ref,
-		"--due", l.a.cfg.Supervisor.NoteDue.String(),
+	args := []string{loopNote, loopAdd, "--for", person}
+	if ref != "" {
+		args = append(args, "--ref", ref)
+	}
+	args = append(args, "--due", l.a.cfg.Supervisor.NoteDue.String(),
 		"--status-quo", truncate(statusQuo, 2900), "--why", why, "--default", dflt,
-		"--checked", "beekeeper supervisor loop: gh pr view and the event log"}
+		"--checked", "beekeeper supervisor loop: gh pr view and the event log")
 	for _, o := range options {
 		args = append(args, "--option", o)
 	}
