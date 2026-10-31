@@ -205,7 +205,7 @@ beekeeper agents inspect worker --json
 `agents messages` shows coordinating delivery state without message text.
 `agents inspect` shows host receipts, ordered acceptance cursor and process
 reachability. States are `pending` (coordinator only), `stored`, `uncertain`
-(a harness write was attempted), `accepted`, and `failed` (a new message found
+(a harness write was attempted), `accepted`, and `failed` (an unsent message found
 its runner already completed or ended). A failed receipt blocks later delivery
 and is not retried automatically. An unavailable or ended process
 is also visible through inspection; a transport failure never proves it ended.
