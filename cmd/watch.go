@@ -32,6 +32,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/sink"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -2265,7 +2266,11 @@ func reportLines(r state.WorkerReport) []string {
 		lines = append(lines, l+": "+truncate(r.Text, 2000))
 	}
 	for _, p := range r.Problems {
-		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; file it and hand it to a worker", r.By.Name, truncate(p, 400)))
+		next := "file it and hand it to a worker"
+		if superloop.Filed(p) {
+			next = "filed; hand it to a worker"
+		}
+		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; %s", r.By.Name, truncate(p, 400), next))
 	}
 	return lines
 }

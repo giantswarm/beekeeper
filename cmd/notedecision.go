@@ -203,6 +203,11 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	if n.By.Name == "" {
 		return ""
 	}
+	// The supervisor loop is no session: it reads the answer from the log
+	// at its next pass.
+	if n.By.Name == loopParty.Name && n.By.Session == "" {
+		return fmt.Sprintf("note #%d: the supervisor loop acts on the answer at its next pass", n.ID)
+	}
 	quiet := *a
 	quiet.executionRequestID = fmt.Sprintf("note/%d/%s", n.ID, execution.Digest([]byte(line)))
 	a = &quiet
