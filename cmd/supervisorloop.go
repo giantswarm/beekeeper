@@ -622,6 +622,7 @@ const (
 	loopRemove = "remove"
 	loopBoard  = "board"
 	loopAdd    = "add"
+	loopNote   = "note"
 )
 
 // asFlag is the global flag that names the party a command acts as.
@@ -1007,7 +1008,7 @@ func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref,
 	if err := l.claim(act, question); err != nil {
 		return err
 	}
-	args := []string{"note", loopAdd, "--for", person, "--ref", ref,
+	args := []string{loopNote, loopAdd, "--for", person, "--ref", ref,
 		"--due", l.a.cfg.Supervisor.NoteDue.String(),
 		"--status-quo", truncate(statusQuo, 2900), "--why", why, "--default", dflt,
 		"--checked", "beekeeper supervisor loop: gh pr view and the event log"}
