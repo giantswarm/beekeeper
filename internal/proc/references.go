@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // References reads a process's files, mappings and temporary/build directory
@@ -32,7 +33,7 @@ func referencesAt(root string, pid int) ([]string, error) {
 func referencesWith(root string, pid int, protected bool, files referenceIO) ([]string, error) {
 	dir := filepath.Join(root, strconv.Itoa(pid))
 	ignored := func(err error) bool {
-		return errors.Is(err, os.ErrNotExist) || protected && errors.Is(err, os.ErrPermission)
+		return referenceGone(err) || protected && errors.Is(err, os.ErrPermission)
 	}
 	var paths []string
 	links := []string{filepath.Join(dir, "cwd"), filepath.Join(dir, "exe")}
@@ -102,7 +103,7 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		}
 		dir := filepath.Join(root, e.Name())
 		raw, err := files.readFile(filepath.Join(dir, "status"))
-		if errors.Is(err, os.ErrNotExist) {
+		if referenceGone(err) {
 			continue
 		}
 		if err != nil {
@@ -121,7 +122,7 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		gone := false
 		for _, path := range []string{dir, filepath.Join(dir, "environ")} {
 			info, err := files.stat(path)
-			if errors.Is(err, os.ErrNotExist) {
+			if referenceGone(err) {
 				gone = true
 				break
 			}
@@ -138,7 +139,7 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 			return nil, nil, err
 		}
 		comm, err := files.readFile(filepath.Join(dir, "comm"))
-		if errors.Is(err, os.ErrNotExist) {
+		if referenceGone(err) {
 			continue
 		}
 		if err != nil {
@@ -200,4 +201,10 @@ func referenceIDs(value string) (int, bool, error) {
 		}
 	}
 	return realID, mixed, nil
+}
+
+// Linux may return ESRCH while a process exits, including when reading a
+// zombie's environ. Like ENOENT, it cannot hide a live process's references.
+func referenceGone(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
 }

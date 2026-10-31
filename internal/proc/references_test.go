@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -150,8 +152,8 @@ func TestUserReferencesFailsClosedWithoutProcessRootOrOwnership(t *testing.T) {
 	}
 }
 
-// Every normal package test run exercises the host's process permissions;
-// synthetic status files alone cannot model proc inode ownership changes.
+// Exercise real proc entries, including zombies when present, without
+// depending on the readability of unrelated live processes.
 func TestUserReferencesAgainstLiveProc(t *testing.T) {
 	if _, err := os.Stat("/proc/self/status"); errors.Is(err, os.ErrNotExist) {
 		t.Skip("Linux proc is unavailable")
@@ -163,7 +165,38 @@ func TestUserReferencesAgainstLiveProc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = held.Close() }()
-	refs, commands, err := UserReferences(os.Getuid())
+	// Only this process and existing zombies belong to this live probe.
+	// Other live processes may be ptrace-restricted by their namespace;
+	// fixture tests above prove those errors still fail closed in production.
+	files := referenceFiles()
+	files.readDir = func(path string) ([]os.DirEntry, error) {
+		entries, err := os.ReadDir(path)
+		if path != procRoot || err != nil {
+			return entries, err
+		}
+		var selected []os.DirEntry
+		for _, entry := range entries {
+			if entry.Name() == strconv.Itoa(os.Getpid()) {
+				selected = append(selected, entry)
+				continue
+			}
+			if _, err := strconv.Atoi(entry.Name()); err != nil {
+				continue
+			}
+			status, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "status"))
+			if err != nil {
+				continue
+			} // A process can exit after ReadDir.
+			for line := range strings.Lines(string(status)) {
+				if strings.HasPrefix(line, "State:") && strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(line, "State:")), "Z") {
+					selected = append(selected, entry)
+					break
+				}
+			}
+		}
+		return selected, nil
+	}
+	refs, commands, err := userReferencesAt(procRoot, os.Getuid(), files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +209,64 @@ func TestReferenceOwnerRejectsMalformedProtectionMetadata(t *testing.T) {
 	for _, status := range []string{"Uid: 1 1 1\n", "Uid: 1 1 1 -1\n", "Uid: 1 1 1 1\nGid: 1 1\n", "Uid: 1 1 1 1\nCapPrm: invalid\n", "Uid: 1 1 1 1\nCapEff: invalid\n"} {
 		if _, _, err := referenceOwner([]byte(status)); err == nil {
 			t.Fatal("malformed credentials looked readable")
+		}
+	}
+}
+
+// Exiting and zombie processes can yield ESRCH at any point in a scan;
+// an actual I/O failure must still stop pruning.
+func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
+	for _, target := range []string{"status", "stat", "environ", "maps", "fd", "cwd", "exe", "comm"} {
+		for _, gone := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/gone=%v", target, gone), func(t *testing.T) {
+				root := t.TempDir()
+				dir := filepath.Join(root, "42")
+				if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				uid := os.Getuid()
+				for name, data := range map[string]string{"status": fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid), "environ": "", "maps": "", "comm": "fixture"} {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				failure := error(syscall.EIO)
+				if gone {
+					failure = syscall.ESRCH
+				}
+				files := referenceFiles()
+				files.readFile = func(path string) ([]byte, error) {
+					if filepath.Base(path) == target {
+						return nil, &os.PathError{Op: "read", Path: path, Err: failure}
+					}
+					return os.ReadFile(filepath.Clean(path))
+				}
+				files.readDir = func(path string) ([]os.DirEntry, error) {
+					if filepath.Base(path) == target {
+						return nil, failure
+					}
+					return os.ReadDir(path)
+				}
+				files.readlink = func(path string) (string, error) {
+					if filepath.Base(path) == target {
+						return "", failure
+					}
+					return "/scratch/held", nil
+				}
+				files.stat = func(path string) (os.FileInfo, error) {
+					if target == "stat" {
+						return nil, failure
+					}
+					return os.Stat(path)
+				}
+				_, _, err := userReferencesAt(root, uid, files)
+				if gone && err != nil {
+					t.Fatalf("exiting process blocked scan: %v", err)
+				}
+				if !gone && !errors.Is(err, syscall.EIO) {
+					t.Fatalf("I/O error lost: %v", err)
+				}
+			})
 		}
 	}
 }
