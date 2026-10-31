@@ -475,3 +475,43 @@ func TestOmpBareModelFromPick(t *testing.T) {
 		t.Error("an unlisted bare id reads the vault")
 	}
 }
+
+// A worker started on the pick's bare id records the provider/id omp lists
+// for it: the loop still takes it for a self-hosted model's worker (so its
+// review carries --review-of-self-hosted), capacity counts it under the
+// choice's own provider even with two self-hosted providers, and the start
+// gate keeps the choice for the qualified model.
+func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
+	const id, recorded = "flash-id", "vllm/flash-id"
+	k := config.Capacity{
+		Providers: map[string]config.Provider{
+			claudeComm: {Floor: 1, Ceiling: 1},
+			"rack-a":   {Kind: config.KindSelfHosted, Ceiling: 2},
+			"rack-b":   {Kind: config.KindSelfHosted, Ceiling: 2},
+		},
+		Choices: []config.Choice{
+			{Harness: claudeComm, Model: testModelOpus47},
+			{Harness: omp.Harness, Model: "other-id", Provider: "rack-a"},
+			{Harness: omp.Harness, Model: id, Provider: "rack-b"},
+		},
+	}
+	if !selfHostedModel(k, recorded) {
+		t.Errorf("selfHostedModel(%q) with the self-hosted choice %q = false", recorded, id)
+	}
+	if selfHostedModel(k, "vllm/unlisted-id") || selfHostedModel(k, "vllm/x"+id) {
+		t.Error("selfHostedModel matched a model no choice names")
+	}
+	if p, _ := resolveAgentProviderBucket(k, omp.Harness, recorded); p != "rack-b" {
+		t.Errorf("resolveAgentProviderBucket(omp, %q) = %q, want rack-b", recorded, p)
+	}
+	if !choicesHaveModel(k.Choices, recorded) {
+		t.Errorf("choicesHaveModel(%q) = false", recorded)
+	}
+	if f := filterChoiceModel(k, recorded); len(f.Choices) != 1 || f.Choices[0].Model != id {
+		t.Errorf("filterChoiceModel(%q) = %+v, want the %q choice", recorded, f.Choices, id)
+	}
+	// a subscription choice is never matched by an id after a slash
+	if ompChoiceModel(config.Choice{Harness: claudeComm, Model: "opus"}, "x/opus") {
+		t.Error("a claude choice matched x/opus")
+	}
+}

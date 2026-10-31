@@ -175,18 +175,7 @@ func (a *app) ompNeedsVault(model string) bool {
 	if model == "" {
 		model = a.cfg.Omp.Model
 	}
-	if model != "" && !strings.Contains(model, "/") {
-		// a bare id, as capacity pick returns an omp choice: its provider is
-		// the one omp lists it under
-		ctx, cancel := context.WithTimeout(context.Background(), inboxWait)
-		defer cancel()
-		if models, err := a.ompListed(ctx); err == nil {
-			if m, err := ompSelector(model, models); err == nil {
-				model = m
-			}
-		}
-	}
-	_, ok := a.cfg.Omp.Providers[ompProvider(model)]
+	_, ok := a.cfg.Omp.Providers[ompProvider(a.ompQualified(model))]
 	return ok
 }
 
@@ -418,6 +407,26 @@ func ompSelector(model string, models []string) (string, error) {
 		}
 	}
 	return "", usageErr("omp lists no model %q: name one as provider/id, as omp models lists it", model)
+}
+
+// ompQualified is model as omp lists it: a bare id, as capacity pick returns
+// an omp choice, is the one provider/id omp lists for it; any other model,
+// or one omp cannot resolve, stays as it is (the start's own model check
+// refuses it).
+func (a *app) ompQualified(model string) string {
+	if model == "" || strings.Contains(model, "/") {
+		return model
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), inboxWait)
+	defer cancel()
+	models, err := a.ompListed(ctx)
+	if err != nil {
+		return model
+	}
+	if m, err := ompSelector(model, models); err == nil {
+		return m
+	}
+	return model
 }
 
 // ompListed are the selectors omp lists: a.ompModelList when set (tests),

@@ -347,6 +347,16 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			// an omp agent whose provider's key is in the vault starts where
 			// the vault session is: the host's broker
+			if !dryRun && harness == omp.Harness && model != "" {
+				// a bare id resolves once here; the broker and the start get
+				// the selector omp lists
+				if q := a.ompQualified(model); q != model {
+					if err := cmd.Flags().Set("model", q); err != nil {
+						return err
+					}
+					model = q
+				}
+			}
 			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
 				if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
 					return err
@@ -415,6 +425,11 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 				if err := validateStartHarness(ch.Harness, mode); err != nil {
 					return err
+				}
+				if ch.Harness == omp.Harness {
+					// the pick names an omp model by its bare id: the
+					// broker and the start get the selector omp lists
+					ch.Model = a.ompQualified(ch.Model)
 				}
 				if err := a.preflightStartTarget(cmd.Context(), ch.Harness, ch.Model, dir); err != nil {
 					return err
