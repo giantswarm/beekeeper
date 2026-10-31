@@ -502,8 +502,8 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 	a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
 
 	doneWorker := state.Party{Session: "aaaaaaaa-0000-4000-8000-000000000001", Name: loopWorker}
-	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: "Guide run 1"}
-	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: "Guide run 2"}
+	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: guideRole.runName(1)}
+	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: guideRole.runName(2)}
 	personSession := state.Party{Session: "dddddddd-0000-4000-8000-000000000004", Name: "person own"}
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -514,7 +514,7 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 		// from st.Agents by its relay when activeGuide took over.
 		st.Agents = []state.Agent{
 			{Party: doneWorker, Done: true, IdleSince: now.Add(-10 * time.Minute)},
-			{Party: activeGuide, Task: "the guide's role as Guide run 2"},
+			{Party: activeGuide, Task: activeGuide.Name},
 			{Party: personSession, Done: true, IdleSince: now.Add(-10 * time.Minute)},
 		}
 		st.SetGuideRole(state.Role{

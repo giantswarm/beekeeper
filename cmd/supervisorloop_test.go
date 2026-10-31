@@ -1359,9 +1359,9 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 
 	doneWorker := state.Party{Session: "11111111-0000-4000-8000-000000000001", Name: loopWorker}
 	reviewer := state.Party{Session: "22222222-0000-4000-8000-000000000002", Name: loopReviewer}
-	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: "Guide run 8"}
-	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: "Guide run 9"}
-	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: "Guide run 10"}
+	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: guideRole.runName(3)}
+	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: guideRole.runName(4)}
+	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: guideRole.runName(5)}
 	staleIdle := state.Party{Session: "66666666-0000-4000-8000-000000000006", Name: "stale worker"}
 	personOwn := state.Party{Session: "77777777-0000-4000-8000-000000000007", Name: "person session"}
 
@@ -1372,14 +1372,14 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 		st.Agents = []state.Agent{
 			{Party: doneWorker, Done: true, IdleSince: now.Add(-time.Hour)},
 			// guide3 is still on the roster with its role task although relieved.
-			{Party: guide3, Task: "the guide's role as Guide run 8"},
-			{Party: guide5, Task: "the guide's role as Guide run 10"},
+			{Party: guide3, Task: guide3.Name},
+			{Party: guide5, Task: guide5.Name},
 			{Party: staleIdle, IdleSince: now.Add(-48 * time.Hour)},
 			{Party: personOwn, IdleSince: now.Add(-48 * time.Hour)},
 		}
 		st.SetGuideRole(state.Role{
 			Holder: &state.Supervisor{Party: guide5, Since: now.Add(-time.Hour)},
-			Run:    10,
+			Run:    5,
 			Relieved: []state.Relief{
 				{Party: guide3, By: guide4, At: now.Add(-2 * time.Hour), Taken: now.Add(-2 * time.Hour)},
 				{Party: guide4, By: guide5, At: now.Add(-time.Hour), Taken: now.Add(-time.Hour)},
