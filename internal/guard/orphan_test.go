@@ -61,7 +61,7 @@ func TestRunReleasesOrphanedScope(t *testing.T) {
 func TestScopeWatchdogPreservesLiveAndUnreadableCommands(t *testing.T) {
 	for _, mode := range []string{"live", "unreadable", "starting"} {
 		t.Run(mode, func(t *testing.T) {
-			f := &orphanCapper{argv: []string{testShell, "-c", "sleep 0.03; exit 23"}, populated: func() (bool, error) {
+			f := &orphanCapper{argv: []string{"sh", "-c", "sleep 0.03; exit 23"}, populated: func() (bool, error) {
 				if mode == "unreadable" {
 					return false, fmt.Errorf("cannot read scope")
 				}
