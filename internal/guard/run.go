@@ -823,7 +823,7 @@ wait:
 			}
 			logf("%s.scope has no live processes (slot %d); stopping its launcher and releasing the slot", unit, slot)
 			_ = c.Process.Kill()
-			_ = <-done
+			<-done
 			return 1
 		}
 	}
