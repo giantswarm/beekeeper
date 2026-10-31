@@ -1017,14 +1017,11 @@ type Capacity struct {
 	// `agents start --harness auto` and `beekeeper capacity` evaluate:
 	// a start takes the first non-excluded choice whose provider has room,
 	// its 5-hour window below its threshold and its 7-day use within the
-	// weekly cap and pace margin.
+	// weekly cap and not ahead of the even pace.
 	Choices []Choice `yaml:"choices"`
-	// ReviewSkipPace lets a review (`capacity --review`,
-	// `agents start --review`) skip a choice's weekly pace check and
-	// per-choice weekly worker cap while still respecting the provider's
-	// ceiling and 5-hour / 7-day stops (default true).
-	ReviewSkipPace    bool `yaml:"reviewSkipPace"`
-	reviewSkipPaceSet bool
+	// ReviewSkipPace is read and ignored: a review is decided exactly like
+	// a worker's start, with no pace exception.
+	ReviewSkipPace bool `yaml:"reviewSkipPace"`
 }
 
 // Provider configures one provider (such as claude, agy or codex): its own
@@ -1180,19 +1177,17 @@ type Choice struct {
 	// the choice requires fiveHour.usedPercent < FiveHourMax.
 	FiveHourMax    float64 `yaml:"fiveHourMax,omitempty" json:"fiveHourMax,omitempty"`
 	fiveHourMaxSet bool
-	// SevenDayMax is the weekly usedPercent cap for workers on this choice:
-	// a normal start requires sevenDay.usedPercent < SevenDayMax, while
-	// --review (when Capacity.ReviewSkipPace is true) may use the budget
-	// above it up to Provider.SevenDayMax.
+	// SevenDayMax is the weekly usedPercent cap of every start on this
+	// choice: a start requires sevenDay.usedPercent < SevenDayMax.
 	SevenDayMax    float64 `yaml:"sevenDayMax,omitempty" json:"sevenDayMax,omitempty"`
 	sevenDayMaxSet bool
-	// PaceMargin is how many percentage points sevenDay.usedPercent may
-	// exceed the 7-day window's elapsed share (pace) and still allow this
-	// choice (default: Provider.PaceMargin, else 0).
+	// PaceMargin is how many percentage points sevenDay.usedPercent must
+	// stay under the 7-day window's elapsed share (pace) to allow this
+	// choice, as a negative number (default: Provider.PaceMargin, else 0);
+	// a positive margin counts as 0: no start runs ahead of the pace.
 	PaceMargin    float64 `yaml:"paceMargin,omitempty" json:"paceMargin,omitempty"`
 	paceMarginSet bool
-	// SkipPace skips the weekly pace check for this choice on every start,
-	// workers and reviews alike.
+	// SkipPace is read and ignored: no start runs ahead of the pace.
 	SkipPace bool `yaml:"skipPace,omitempty" json:"skipPace,omitempty"`
 }
 
@@ -1295,7 +1290,8 @@ type Usage struct {
 	SevenDayMax    float64 `yaml:"sevenDayMax"`
 	sevenDayMaxSet bool
 	// PaceMargin is the default percentage-point margin by which 7-day
-	// usedPercent may exceed the even weekly pace (default 0).
+	// usedPercent must stay under the even weekly pace, as a negative number
+	// (default 0); a positive margin counts as 0.
 	PaceMargin    float64 `yaml:"paceMargin"`
 	paceMarginSet bool
 	// FiveHour and SevenDay map a window's usedPercent to a (floor, ceiling)
@@ -1713,15 +1709,6 @@ func matchBand(used float64, bands []UsageBand) (floor, ceiling int) {
 	return 0, 0
 }
 
-// EffectiveReviewSkipPace reports whether --review skips a choice's weekly
-// pace check and worker weekly cap (default true).
-func (k Capacity) EffectiveReviewSkipPace() bool {
-	if k.reviewSkipPaceSet {
-		return k.ReviewSkipPace
-	}
-	return true
-}
-
 // ProviderNames returns the configured providers in their YAML declaration
 // order (or "claude" first, then sorted keys when constructed in Go).
 func (k Capacity) ProviderNames() []string {
@@ -1757,15 +1744,13 @@ func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	var set struct {
-		Floor          *int  `yaml:"floor"`
-		Ceiling        *int  `yaml:"ceiling"`
-		ReviewSkipPace *bool `yaml:"reviewSkipPace"`
+		Floor   *int `yaml:"floor"`
+		Ceiling *int `yaml:"ceiling"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
 	k.floorSet, k.ceilingSet = set.Floor != nil, set.Ceiling != nil
-	k.reviewSkipPaceSet = set.ReviewSkipPace != nil
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		if n.Content[i].Value == "providers" && n.Content[i+1].Kind == yaml.MappingNode {
 			pn := n.Content[i+1]
@@ -3163,9 +3148,6 @@ func (c *Config) defaults() error {
 	}
 	if !c.Capacity.floorSet && c.Capacity.Floor == 0 {
 		c.Capacity.Floor = max(0, min(DefaultFloor, c.Capacity.Ceiling))
-	}
-	if !c.Capacity.reviewSkipPaceSet {
-		c.Capacity.ReviewSkipPace = true
 	}
 	c.Capacity.Usage.defaults(home, c.Capacity.Floor)
 	for _, name := range slices.Sorted(maps.Keys(c.Capacity.Providers)) {

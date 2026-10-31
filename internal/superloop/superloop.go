@@ -20,6 +20,9 @@ const (
 	KindGo       = "go"
 	KindForward  = "forward"
 	KindEscalate = "escalate"
+	// KindDone takes an agent off the roster: one that reported done, or
+	// one the loop retires (a reviewer whose verdict it acted on, the
+	// worker of a pull request it gave the go for that merged).
 	KindDone     = "done"
 	KindNext     = "next"
 	KindRelease  = "release"
@@ -103,6 +106,9 @@ type Worker struct {
 	// when it is not parked; ParkedAt since when.
 	ParkedOn string
 	ParkedAt time.Time
+	// Started is a session beekeeper started: only such a one the loop
+	// retires; a session its person started stays.
+	Started bool
 }
 
 // Event is one line of the event log the loop acts on.
@@ -213,12 +219,21 @@ type ledger struct {
 	escalated map[string]bool
 	ended     map[string]bool
 	reviewer  map[string]string // a pull request's worker, from its last review
+	// goAgent is the worker the go for a pull request was given to; acts
+	// are when the loop acted on a pull request (a review, go, forward,
+	// escalation or end), oldest first.
+	goAgent map[string]string
+	acts    map[string][]time.Time
 }
 
 func newLedger(taken []Taken) ledger {
-	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]bool{}, ended: map[string]bool{}, reviewer: map[string]string{}}
+	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]bool{}, ended: map[string]bool{}, reviewer: map[string]string{},
+		goAgent: map[string]string{}, acts: map[string][]time.Time{}}
 	for _, t := range taken {
 		l.keys[t.Key] = t
+		if slices.Contains([]string{KindReview, KindGo, KindForward, KindEscalate, KindEnd}, t.Kind) {
+			l.acts[t.Ref] = append(l.acts[t.Ref], t.At)
+		}
 		switch t.Kind {
 		case KindReview:
 			_, head, _ := strings.Cut(t.Key, "@")
@@ -231,6 +246,9 @@ func newLedger(taken []Taken) ledger {
 		case KindGo, KindForward:
 			if t.Agent != "" {
 				l.reviewer[t.Ref] = t.Agent
+				if t.Kind == KindGo {
+					l.goAgent[t.Ref] = t.Agent
+				}
 			}
 		}
 	}
@@ -238,6 +256,33 @@ func newLedger(taken []Taken) ledger {
 }
 
 func (l ledger) has(key string) bool { _, ok := l.keys[key]; return ok }
+
+// actedAfter reports whether the loop acted on ref after at: a round's
+// verdict is acted on once anything follows the round's start.
+func (l ledger) actedAfter(ref string, at time.Time) bool {
+	return slices.ContainsFunc(l.acts[ref], func(t time.Time) bool { return t.After(at) })
+}
+
+// workerDue reports whether the worker the go for ref was given to waits
+// for its retirement: a beekeeper-started session on the roster, not
+// retired yet, and done with its task: not parked, or parked on ref
+// itself. One parked on anything else (a release, a timer, a note) still
+// has work to do.
+func (l ledger) workerDue(ref string, workers []Worker) bool {
+	agent := l.goAgent[ref]
+	return agent != "" && !l.has(retireKey(ref, retiredWorker)) &&
+		slices.ContainsFunc(workers, func(w Worker) bool {
+			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref)
+		})
+}
+
+// ReviewerName is the roster name of the reviewer of round rd of ref
+// (owner/repo#n): "Review <repo> <n> r<rd>".
+func ReviewerName(ref string, rd int) string {
+	repo, n, _ := strings.Cut(ref, "#")
+	_, name, _ := strings.Cut(repo, "/")
+	return fmt.Sprintf("Review %s %s r%d", name, n, rd)
+}
 
 // Key renderings.
 func reviewKey(ref, head string) string    { return fmt.Sprintf("review %s@%s", ref, head) }
@@ -249,6 +294,12 @@ func eventKey(kind string, e Event) string {
 	return fmt.Sprintf("%s %s@%s %s", kind, e.Verb, e.At.UTC().Format(time.RFC3339Nano), e.Agent)
 }
 
+// retireKey is the done of the reviewer of a round or the worker of ref.
+func retireKey(ref, who string) string { return fmt.Sprintf("done %s %s", ref, who) }
+
+// retiredWorker names the worker in its retirement's key.
+const retiredWorker = "worker"
+
 // prRef matches owner/repo#n.
 var prRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#\d+$`)
 
@@ -256,8 +307,9 @@ var prRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#\d+$`)
 func IsPull(on string) bool { return prRef.MatchString(on) }
 
 // Tracked are the pull requests a pass reads: every one an agent is parked
-// on, and every one the loop started a review of that it has not seen
-// merged or closed, nor escalated.
+// on, every one the loop started a review of that it has not seen merged
+// or closed, nor escalated, and every ended one whose worker waits for its
+// retirement.
 func Tracked(workers []Worker, taken []Taken) []string {
 	l := newLedger(taken)
 	set := map[string]bool{}
@@ -271,7 +323,7 @@ func Tracked(workers []Worker, taken []Taken) []string {
 	}
 	var out []string
 	for ref := range set {
-		if !l.ended[ref] && !l.escalated[ref] {
+		if !l.ended[ref] && !l.escalated[ref] || l.ended[ref] && l.workerDue(ref, workers) {
 			out = append(out, ref)
 		}
 	}
@@ -291,9 +343,20 @@ func Plan(in Input) []Action {
 		}
 	}
 	parked := map[string]Worker{}
+	started := map[string]bool{}
 	for _, w := range in.Workers {
 		if IsPull(w.ParkedOn) {
 			parked[w.ParkedOn] = w
+		}
+		started[w.Name] = w.Started
+	}
+	// retire takes a session the loop is done with off the roster; one
+	// its person started, one gone already, or one whose own done the
+	// loop takes, stays as it is.
+	retire := func(ref, who, agent, why string) {
+		reported := slices.ContainsFunc(in.Events, func(e Event) bool { return e.Verb == VerbDone && e.Agent == agent })
+		if started[agent] && !reported {
+			add(Action{Key: retireKey(ref, who), Kind: KindDone, Ref: ref, Agent: agent, Message: why})
 		}
 	}
 	refs := make([]string, 0, len(in.Pulls))
@@ -303,6 +366,9 @@ func Plan(in Input) []Action {
 	sort.Strings(refs)
 	for _, ref := range refs {
 		p := in.Pulls[ref]
+		if p.State == Merged && l.workerDue(ref, in.Workers) {
+			retire(ref, retiredWorker, l.goAgent[ref], fmt.Sprintf("%s merged after the merge go", p.URL))
+		}
 		if l.escalated[ref] || l.ended[ref] {
 			continue
 		}
@@ -390,6 +456,19 @@ func Plan(in Input) []Action {
 				continue
 			}
 			add(goAction(base, fmt.Sprintf("%d review round(s) used; head %s carries the fixes of the last round's findings on %s", len(rs), short(p.Head), short(last.head))))
+		}
+	}
+	// A reviewer leaves once the loop acted on its round's verdict.
+	reviewed := make([]string, 0, len(l.rounds))
+	for ref := range l.rounds {
+		reviewed = append(reviewed, ref)
+	}
+	sort.Strings(reviewed)
+	for _, ref := range reviewed {
+		for i, rd := range l.rounds[ref] {
+			if l.actedAfter(ref, rd.at) {
+				retire(ref, fmt.Sprintf("reviewer r%d", i+1), ReviewerName(ref, i+1), fmt.Sprintf("its verdict of review round %d of %s was acted on", i+1, ref))
+			}
 		}
 	}
 	// paired is a report agents idle --done logged with its done: the

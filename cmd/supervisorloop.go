@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -197,15 +199,18 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  timers    due wall-clock and conditional timers send their wakes or run
+            their commands, as in watch; line-only reminders stay with watch
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, or after the last round's findings were forwarded
             and the worker parked again on a new head while a round is
             left (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
-            built-in brief; a worker on a self-hosted provider's model gets
-            one on no self-hosted provider (--harness auto --exclude
-            <provider>)
+            built-in brief, on capacity's pick (--harness auto with
+            capacity.choices), decided like any start; a worker on a
+            self-hosted provider's model gets one on no self-hosted provider
+            (--review-of-self-hosted)
   go        every check on the head green, and either the last round's
             verdict approves that head, or no round is left, its verdict
             asked for changes, they were forwarded and the worker parked
@@ -221,7 +226,13 @@ its key first in the detail):
             the last approval: a decision for guide.person (note add); the
             loop leaves that pull request alone from then
   end       a reviewed pull request merged or closed: its tracking ends
-  done      agents.done: the agent leaves the roster (agents remove)
+  done      agents.done: the agent leaves the roster (agents remove);
+            the loop retires a session beekeeper started the same way,
+            once its turn ends: a reviewer once the loop acted on its
+            round's verdict (a go, forward, escalation, next round or
+            end), and the worker of a pull request the loop gave the go
+            for once it merged, reported or not. A session its person
+            started is never retired
   next      after a done, while capacity has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
@@ -271,6 +282,20 @@ type supervisorLoop struct {
 	releaseAt time.Time
 	// stages are the release stages finished, by key.
 	stages map[string]bool
+	// timerActs are timer side effects; shutdown and re-exec await them.
+	timerActs sync.WaitGroup
+}
+
+// loopOutput serializes loop transitions with asynchronous timer output.
+type loopOutput struct {
+	mu  sync.Mutex
+	out io.Writer
+}
+
+func (w *loopOutput) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.out.Write(p)
 }
 
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
@@ -284,10 +309,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	out := a.out
+	a.out = &loopOutput{out: out}
+	defer func() { a.out = out }()
 	l, err := a.newSupervisorLoop()
 	if err != nil {
 		return err
 	}
+	defer l.timerActs.Wait()
 	for {
 		a.now = time.Now()
 		if err := l.pass(ctx); err != nil {
@@ -333,6 +362,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 			return err
 		}
+		l.timerActs.Wait()
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
 		}
@@ -341,9 +371,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := l.fireTimers(ctx, st); err != nil {
+		return err
+	}
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person}
 	for _, ag := range st.Agents {
-		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model)}
+		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
 		}
@@ -625,14 +658,24 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindEnd:
 		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
 	case superloop.KindDone:
-		if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent })
+		if i < 0 {
 			return "already off the roster", nil
+		}
+		// A retirement waits for the session's turn to end: its last
+		// report is not cut off.
+		if act.Event == nil && loopInTurn(a, st.Agents[i].Party) {
+			l.sayOnce("turn "+act.Key, "SUPERVISOR DONE WAITS %s: its session runs a turn", act.Agent)
+			return "", errLoopLater
 		}
 		if err := l.claim(act, act.Agent); err != nil {
 			return "", err
 		}
 		if _, err := l.run(ctx, agentsName, loopRemove, act.Agent); err != nil {
 			return "", err
+		}
+		if act.Message != "" {
+			return "off the roster: " + act.Message, nil
 		}
 		return "off the roster", nil
 	case superloop.KindNext:
@@ -643,6 +686,12 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.classify(ctx, st, act)
 	}
 	return "", fmt.Errorf("no transition for %s", act.Kind)
+}
+
+// loopInTurn reports whether p's session runs a turn.
+var loopInTurn = func(a *app, p state.Party) bool {
+	_, ok := a.runningTurn(p)
+	return ok
 }
 
 // wake tells act's worker its message (agents wake), claimed first.
@@ -703,14 +752,14 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("Review %s %d r%d", repoName(r.Repo), r.N, act.Round)
+	name := superloop.ReviewerName(act.Ref, act.Round)
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
-	if k := l.a.cfg.Capacity; len(k.Choices) > 0 {
+	if len(l.a.cfg.Capacity.Choices) > 0 {
+		// The reviewer takes capacity's pick, decided as a worker's start
+		// is; a self-hosted model's work gets one on no self-hosted provider.
 		args = append(args, "--harness", harnessAuto)
 		if act.SelfHosted {
-			for _, p := range selfHostedProviders(k) {
-				args = append(args, "--exclude", p)
-			}
+			args = append(args, "--"+reviewOfSelfHostedFlag)
 		}
 	}
 	if err := l.claim(act, name); err != nil {
@@ -730,18 +779,6 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 func repoName(repo string) string {
 	_, name, _ := strings.Cut(repo, "/")
 	return name
-}
-
-// selfHostedProviders are the self-hosted providers of k, sorted.
-func selfHostedProviders(k config.Capacity) []string {
-	var out []string
-	for name, p := range k.Providers {
-		if p.SelfHosted() {
-			out = append(out, name)
-		}
-	}
-	slices.Sort(out)
-	return out
 }
 
 // selfHostedModel reports whether model is a choice of a self-hosted
@@ -963,4 +1000,45 @@ func loopEventAgent(st *state.State, e state.Event) string {
 		by = st.Agents[i].Name
 	}
 	return superloop.EventAgent(e.Verb, e.Detail, by)
+}
+
+// fireTimers takes only timers with wakes or commands; watch retains line-only
+// reminders and their desktop notifications. Checks run outside the state
+// lock; settling inside Update lets a concurrent watch take a timer first
+// without either firing it twice. Side effects follow the successful save.
+func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error {
+	a := l.a
+	var acting []state.Timer
+	for _, t := range st.Timers {
+		if timerActs(t) {
+			acting = append(acting, t)
+		}
+	}
+	found := checkTimers(ctx, acting, a.now, lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st))
+	// Avoid a write on every idle loop pass.
+	_, _, _, changed := settleTimersMatching(st, found, a.now, timerActs)
+	if !changed {
+		return nil
+	}
+	var lines []string
+	var fires []timerFire
+	if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+		var evs []state.Event
+		lines, evs, fires, _ = settleTimersMatching(current, found, a.now, timerActs)
+		return evs, nil
+	}); err != nil {
+		return err
+	}
+	// Each batch keeps its own time: later passes update a.now while these
+	// wakes and commands can still be running.
+	snapshot := *a
+	w := &watcher{app: &snapshot}
+	for _, line := range lines {
+		w.emitNow("timer", "%s", line)
+	}
+	l.timerActs.Go(func() {
+		w.actTimers(ctx, fires)
+		w.timerActs.Wait()
+	})
+	return nil
 }

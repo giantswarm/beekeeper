@@ -705,7 +705,9 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err := os.WriteFile(agyReader, []byte("#!/bin/sh\ncat \""+agyFile+"\"\n"), 0o700); err != nil { //nolint:gosec // test script
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(agyFile, []byte(tsv), 0o600); err != nil {
+	// The reader's Gemini week is 8% used, under its even pace of 10.5%: the
+	// fallback below takes it, as it would no choice ahead of the pace.
+	if err := os.WriteFile(agyFile, []byte(strings.Replace(tsv, "78%", "92%", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -732,7 +734,7 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
         - {upTo: 90, floor: 1, ceiling: 2}
   choices:
     - {harness: claude, model: claude-opus-4-7}
-    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}
+    - {harness: agy, model: gemini-3-1-pro-medium}
 `, claudeReader, agyReader)
 	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -753,7 +755,7 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}}
-	v, err := a.startCapacityWithOptions(context.Background(), false, nil, false)
+	v, err := a.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,7 +774,7 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err := os.WriteFile(claudeFile, []byte(fmt.Sprintf(`{"at":%q,"fiveHour":{"usedPercent":10},"sevenDay":{"usedPercent":20}}`, staleAt)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	v2, err := a.startCapacityWithOptions(context.Background(), false, nil, false)
+	v2, err := a.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -784,7 +786,7 @@ func TestParseAgyUsageAndStaleRead(t *testing.T) {
 	if err := os.WriteFile(claudeExit, []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	v3, err := a.startCapacityWithOptions(context.Background(), false, nil, false)
+	v3, err := a.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,9 +806,10 @@ const (
 )
 
 // TestProvidersChoicesPaceMarginExcludeAndMachineGuards exercises per-provider
-// capacity verdicts, choice order, paceMargin, worker sevenDayMax vs --review,
-// --exclude, busy agent attribution per provider/bucket, machine guards capping
-// the total, watch once-per-tick USAGE output, and agents start --harness auto.
+// capacity verdicts, choice order, the even pace no paceMargin, skipPace or
+// review loosens, --exclude, busy agent attribution per provider/bucket,
+// machine guards capping the total, watch once-per-tick USAGE output, and
+// agents start --harness auto.
 func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	dir, cfgPath := isolateUsageTestEnv(t)
 
@@ -865,7 +868,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	// 84h remaining out of 168h => pace is exactly 50.0%.
 	reset7d := t0.Add(84 * time.Hour).UTC()
 
-	claude5h, claude7d := 20.0, 54.0 // 54% <= 50% + 5% margin => OK
+	claude5h, claude7d := 20.0, 48.0 // 48% under the even pace of 50% => OK
 	agyClaude5h, agyClaude7d := 15.0, 48.0
 	agyGemini5h, agyGemini7d := 10.0, 72.0
 
@@ -908,7 +911,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		}, &out
 	}
 
-	// 1. claude 7d 54% is within pace 50% + 5% margin: first choice claude/claude-opus-4-7 wins.
+	// 1. claude 7d 48% is under the pace of 50%: first choice claude/claude-opus-4-7 wins.
 	//    Total room is capped by capacity.ceiling (3 < 2+2=4).
 	a1, out1 := newApp(t0, false)
 	if err := a1.capacityCmd().Execute(); err != nil {
@@ -938,10 +941,11 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		t.Fatalf("excluded choice = %+v", parsedEx.Choice)
 	}
 
-	// 3. claude 7d moves to 56% (> 50% + 5% margin) -> ahead of pace, so agy/claude-opus-4-6-thinking wins.
-	claude7d = 56.0
+	// 3. claude 7d moves to 54%: ahead of the pace of 50%, which its paceMargin
+	//    of 5 no longer excuses, so agy/claude-opus-4-6-thinking wins.
+	claude7d = 54.0
 	a2, _ := newApp(t0, false)
-	v2, err := a2.startCapacityWithOptions(context.Background(), false, nil, false)
+	v2, err := a2.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,38 +953,28 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		t.Fatalf("step 3 choice = %+v, want agy/claude-opus-4-6-thinking", v2.Choice)
 	}
 
-	// 4. agy Claude bucket 7d moves to 52% (> 50% + 0% margin) -> falls through to
-	//    agy/gemini-3-1-pro-medium (skipPace: true, 72% < 80% worker cap).
+	// 4. agy Claude bucket 7d moves to 52% (> 50%) -> ahead of pace too; the
+	//    Gemini bucket's 72% is ahead of the pace as well, which its skipPace
+	//    no longer waives: no choice, room 0.
 	agyClaude7d = 52.0
 	a3, _ := newApp(t0, false)
-	v3, err := a3.startCapacityWithOptions(context.Background(), false, nil, false)
+	v3, err := a3.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v3.Choice == nil || v3.Choice.Harness != harnessAgy || v3.Choice.Model != testModelGemini ||
-		v3.Choice.Bucket != config.DefaultAgyGeminiBucket {
-		t.Fatalf("step 4 choice = %+v, want agy/gemini-3-1-pro-medium", v3.Choice)
+	if v3.Room != 0 || v3.Choice == nil || v3.Choice.Harness != "" || !strings.Contains(v3.Choice.Candidates[2].Reason, "ahead of pace") {
+		t.Fatalf("step 4 = room %d, choice %+v; want room 0, no choice, gemini ahead of pace", v3.Room, v3.Choice)
 	}
 
-	// 5. agy Gemini bucket 7d reaches 82% (>= 80% worker cap, < 95% provider stop):
-	//    - worker start gets no choice and room 0;
-	//    - --review skips pace and worker cap, picking claude/claude-opus-4-7 (or agy/gemini-3-1-pro-medium when claude + opus-4-6 are excluded).
-	agyGemini7d = 82.0
-	a4, _ := newApp(t0, false)
-	vWorker, err := a4.startCapacityWithOptions(context.Background(), false, nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if vWorker.Room != 0 || vWorker.Choice == nil || vWorker.Choice.Harness != "" {
-		t.Fatalf("worker at 82%% gemini = room %d, choice %+v; want room 0 and no choice", vWorker.Room, vWorker.Choice)
-	}
+	// 5. A review is decided like a worker's start: with capacity.reviewSkipPace
+	//    configured, the same windows give it no choice either.
 	a4Rev, _ := newApp(t0, false)
-	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, []string{claudeComm, testModelOpus46}, true)
+	vReview, err := a4Rev.startCapacityWithOptions(context.Background(), false, nil, forReview)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vReview.Room == 0 || vReview.Choice == nil || vReview.Choice.Harness != harnessAgy || vReview.Choice.Model != testModelGemini || !vReview.Choice.Review {
-		t.Fatalf("review at 82%% gemini = room %d, choice %+v; want agy/gemini-3-1-pro-medium", vReview.Room, vReview.Choice)
+	if vReview.Room != 0 || vReview.Choice == nil || vReview.Choice.Harness != "" || !vReview.Choice.Review {
+		t.Fatalf("review ahead of pace = room %d, choice %+v; want room 0 and no choice", vReview.Room, vReview.Choice)
 	}
 
 	// 6. Busy agents count against their provider/bucket, and machine guards cap the total across providers.
@@ -1002,7 +996,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	// 2 busy on claude (at its ceiling of 2 -> room 0) + 1 busy on agy (ceiling 2 -> room 1),
 	// BUT total busy is 3, which is at top-level capacity.ceiling of 3 -> machineRoomCap caps agy to 0!
 	a5, _ := newApp(t0, false)
-	vCap, err := a5.startCapacityWithOptions(context.Background(), false, nil, false)
+	vCap, err := a5.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,7 +1013,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	a6, _ := newApp(t0, false)
-	vOpen, err := a6.startCapacityWithOptions(context.Background(), false, nil, false)
+	vOpen, err := a6.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1031,7 +1025,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	origMachine := plat.Machine
 	plat.Machine = tightMachine{Machine: origMachine}
 	aTight, _ := newApp(t0, false)
-	vTight, err := aTight.startCapacityWithOptions(context.Background(), false, nil, false)
+	vTight, err := aTight.startCapacityWithOptions(context.Background(), false, nil, forWorker)
 	plat.Machine = origMachine
 	if err != nil {
 		t.Fatal(err)
@@ -1079,7 +1073,8 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	// 8. When claude and agy/Claude are ahead of pace and agy/Gemini is at 82% (>= 80% worker cap):
 	//    - a worker `agents start --harness auto` is refused with ExitRefused naming the choice reasons;
 	//    - `agents start --harness auto --review --exclude claude --exclude claude-opus-4-6-thinking`
-	//      skips the pace check and worker weekly cap and starts the session through the agy harness on gemini-3-1-pro-medium.
+	//      is refused alike: a review skips no gate;
+	//    - with agy/Gemini back under its pace and cap, that review starts the session through the agy harness on gemini-3-1-pro-medium.
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = nil
 		return nil, nil
@@ -1137,11 +1132,22 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 			}()
 		},
 	}
+	reviewArgs := []string{"ReviewAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, "--" + reviewFlag, testExcludeFlag, claudeComm, testExcludeFlag, testModelOpus46}
+	aRevRefuse, outRevRefuse := newApp(t0, false)
+	revRefuseCmd := aRevRefuse.agentStartCmd()
+	revRefuseCmd.SilenceErrors = true
+	revRefuseCmd.SilenceUsage = true
+	revRefuseCmd.SetArgs(reviewArgs)
+	err = revRefuseCmd.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "7d 82% at or past worker cap 80%") || outRevRefuse.String() != "" {
+		t.Fatalf("review --harness auto at 82%% gemini: code=%d, err=%v, out=%q", Code(err), err, outRevRefuse.String())
+	}
+	agyGemini7d = 45.0
 	aRevStart, outRevStart := newApp(t0, false)
 	revCmd := aRevStart.agentStartCmd()
 	revCmd.SilenceErrors = true
 	revCmd.SilenceUsage = true
-	revCmd.SetArgs([]string{"ReviewAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, "--review", testExcludeFlag, claudeComm, testExcludeFlag, testModelOpus46})
+	revCmd.SetArgs(reviewArgs)
 	if err := revCmd.Execute(); err != nil {
 		t.Fatalf("agents start --harness auto --review: %v", err)
 	}
@@ -1153,7 +1159,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 }
 
 // TestExplicitHarnessGateAndAutoHarnessValidation verifies that:
-//   - an explicit --harness start (including default --harness claude) is gated
+//   - an explicit --harness start (--harness claude included) is gated
 //     against its resolved provider and bucket room/blocks (refusing with exit 3
 //     unless --force is given) even when another provider has room;
 //   - --harness auto refuses clearly before writing any state or printing choice/gaps
@@ -1255,26 +1261,26 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1a. claude reader fails while agy has Room > 0: default `agents start` (--harness claude) refuses with exit 3.
+	// 1a. claude reader fails while agy has Room > 0: `agents start --harness claude` refuses with exit 3.
 	claudeErr = fmt.Errorf("claude endpoint down")
 	aFail, _ := newApp()
 	cmdFail := aFail.agentStartCmd()
 	cmdFail.SilenceErrors = true
 	cmdFail.SilenceUsage = true
-	cmdFail.SetArgs([]string{"ClaudeOnFail", brief, usageDirFlag, dir, modeFlag, config.ModeBackground})
+	cmdFail.SetArgs([]string{"ClaudeOnFail", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm})
 	err = cmdFail.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: subscription usage unknown (claude endpoint down)") {
 		t.Fatalf("explicit claude start on failed read: code=%d, err=%v", Code(err), err)
 	}
 
-	// 1b. claude in USAGE HIGH (96%) while agy has Room > 0: default `agents start` refuses with exit 3.
+	// 1b. claude in USAGE HIGH (96%) while agy has Room > 0: `agents start --harness claude` refuses with exit 3.
 	claudeErr = nil
 	claude5h = 96.0
 	aHigh, _ := newApp()
 	cmdHigh := aHigh.agentStartCmd()
 	cmdHigh.SilenceErrors = true
 	cmdHigh.SilenceUsage = true
-	cmdHigh.SetArgs([]string{"ClaudeOnHigh", brief, usageDirFlag, dir, modeFlag, config.ModeBackground})
+	cmdHigh.SetArgs([]string{"ClaudeOnHigh", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm})
 	err = cmdHigh.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: usage high: 5h 96% at or past 95%") {
 		t.Fatalf("explicit claude start on USAGE HIGH: code=%d, err=%v", Code(err), err)
@@ -1295,7 +1301,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdCeil := aCeil.agentStartCmd()
 	cmdCeil.SilenceErrors = true
 	cmdCeil.SilenceUsage = true
-	cmdCeil.SetArgs([]string{"ClaudeAtCeil", brief, usageDirFlag, dir, modeFlag, config.ModeBackground})
+	cmdCeil.SetArgs([]string{"ClaudeAtCeil", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm})
 	err = cmdCeil.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: 1 busy at the ceiling of 1") {
 		t.Fatalf("explicit claude start at ceiling: code=%d, err=%v", Code(err), err)
@@ -1306,7 +1312,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdForce := aForce.agentStartCmd()
 	cmdForce.SilenceErrors = true
 	cmdForce.SilenceUsage = true
-	cmdForce.SetArgs([]string{"ClaudeForced", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, usageForceFlag})
+	cmdForce.SetArgs([]string{"ClaudeForced", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm, usageForceFlag})
 	if err := cmdForce.Execute(); err != nil {
 		t.Fatalf("explicit claude start --force: %v", err)
 	}
@@ -1325,7 +1331,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	aBucket, _ := newApp()
-	_, _, err = aBucket.startGateWithOptions(context.Background(), "AgyClaudeTry", harnessAgy, testModelOpus46, false, false, nil, false)
+	_, _, err = aBucket.startGateWithOptions(context.Background(), "AgyClaudeTry", harnessAgy, testModelOpus46, false, false, nil, forWorker)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider agy (Claude and GPT models): 1 busy at the ceiling of 1") {
 		t.Fatalf("bucket gate: code=%d, err=%v", Code(err), err)
 	}
@@ -2265,9 +2271,9 @@ capacity:
 	}
 
 	// 3. Pro plan single-window reading (`primary` window_minutes 10080, `secondary` null) in a fresher event:
-	//    succeeds even though fiveHour bands are configured, and enforces weekly pace / sevenDayMax vs --review.
+	//    succeeds even though fiveHour bands are configured, and enforces weekly pace / sevenDayMax.
 	//    At 7d 85% (above worker sevenDayMax 80 and pace 50%, below provider sevenDayMax 95):
-	//    normal choice is blocked on 7d/pace, while --review selects codex / gpt-5.4.
+	//    the choice is blocked on 7d/pace, for a --review as for any start.
 	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-c-pro.jsonl", t0,
 		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":85,"window_minutes":10080,"resets_at":%d},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null,"spend_control_reached":false}}}`,
 			t0.Add(-time.Minute).Format(time.RFC3339), reset7d.Unix()),
@@ -2284,12 +2290,12 @@ capacity:
 
 	capOut.Reset()
 	revCmd := aCap.capacityCmd()
-	revCmd.SetArgs([]string{"--review"})
+	revCmd.SetArgs([]string{"--" + reviewFlag})
 	if err := revCmd.Execute(); err != nil {
 		t.Fatalf("capacity --review on Pro single-window codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "choice: codex / gpt-5.4 (provider codex, review)") {
-		t.Fatalf("capacity --review should select codex / gpt-5.4:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "codex/gpt-5.4: 7d 85% at or past worker cap 80%") {
+		t.Fatalf("capacity --review should be blocked like any start:\n%s", capOut.String())
 	}
 
 	// 4. Lower 7d to 40% (within pace 50% and worker cap 80%), then test `agents start --harness auto`
@@ -2648,7 +2654,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	cmdClaude := aClaude.agentStartCmd()
 	cmdClaude.SilenceErrors = true
 	cmdClaude.SilenceUsage = true
-	cmdClaude.SetArgs([]string{"ClaudeWhileHeld", brief, usageDirFlag, dir})
+	cmdClaude.SetArgs([]string{"ClaudeWhileHeld", brief, usageDirFlag, dir, testHarnessFlag, claudeComm})
 	err = cmdClaude.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: ceiling 0") {
 		t.Fatalf("claude start while the subscription is held: code=%d err=%v", Code(err), err)
@@ -2758,7 +2764,7 @@ func TestSelfHostedMachineGuardRefusesBoth(t *testing.T) {
 	cmdClaude := aClaude.agentStartCmd()
 	cmdClaude.SilenceErrors = true
 	cmdClaude.SilenceUsage = true
-	cmdClaude.SetArgs([]string{"ClaudeOnTightMachine", brief, usageDirFlag, dir})
+	cmdClaude.SetArgs([]string{"ClaudeOnTightMachine", brief, usageDirFlag, dir, testHarnessFlag, claudeComm})
 	err = cmdClaude.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: MemAvailable 10.0 GiB under 20 GiB") {
 		t.Fatalf("claude start on a tight machine: code=%d err=%v", Code(err), err)
@@ -3437,7 +3443,7 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	var claudeRoom bytes.Buffer
 	aClaude := newSelfHostedApp(cfgPath, cfg5, store5, &claudeRoom, t0)
 	aClaude.json = true
-	_, v, err := aClaude.startGateWithOptions(context.Background(), "ClaudeAtFive", claudeComm, "claude-opus-4-7", false, true, nil, false)
+	_, v, err := aClaude.startGateWithOptions(context.Background(), "ClaudeAtFive", claudeComm, "claude-opus-4-7", false, true, nil, forWorker)
 	if err != nil {
 		t.Fatalf("claude gate at ceiling 5 with the self-hosted provider full: %v", err)
 	}
@@ -3454,7 +3460,7 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	}
 	aClaude2 := newSelfHostedApp(cfgPath, cfg5, store5, &claudeRoom, t0)
 	aClaude2.json = true
-	_, v2, err := aClaude2.startGateWithOptions(context.Background(), "ClaudeAtFiveBusy", claudeComm, "claude-opus-4-7", false, true, nil, false)
+	_, v2, err := aClaude2.startGateWithOptions(context.Background(), "ClaudeAtFiveBusy", claudeComm, "claude-opus-4-7", false, true, nil, forWorker)
 	if err != nil {
 		t.Fatalf("claude gate at ceiling 5 with its own session busy: %v", err)
 	}

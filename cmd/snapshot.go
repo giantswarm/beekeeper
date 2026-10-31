@@ -308,7 +308,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Quiet = a.quietSince(a.now.Add(-time.Hour))
 	capCfg := a.liveCapacity()
 	if len(capCfg.Providers) > 0 {
-		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, false)
+		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, forWorker)
 		s.Providers = cv.Providers
 		s.Choice = cv.Choice
 	} else {

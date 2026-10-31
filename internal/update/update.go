@@ -13,6 +13,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
+	"golang.org/x/mod/module"
 
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -57,7 +58,8 @@ type Result struct {
 
 // Run looks up the latest release and, unless checkOnly, installs its binary
 // for this OS and architecture over the running executable once its bundle
-// verifies. Progress goes to w. With checkOnly the error is ErrOutdated when
+// verifies. A running pre-release looks among the pre-releases too, a
+// running release only among releases. Progress goes to w. With checkOnly the error is ErrOutdated when
 // a newer release exists.
 //
 // The binary is renamed over the executable in one step, symbolic links
@@ -72,7 +74,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases or with go install %s@latest", res.Current, project.Source, project.Module)
 	}
 
-	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: newValidator()})
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: newValidator(), Prerelease: prerelease(res.Current)})
 	if err != nil {
 		return res, err
 	}
@@ -124,4 +126,20 @@ func newer(latest, current string) bool {
 		return false
 	}
 	return l.GreaterThan(c)
+}
+
+// prerelease reports whether current is a pre-release ("v0.3.0-rc.2"), or a
+// Go pseudo-version after one ("v0.3.0-rc.2.0.20260924210000-edd882d0a1b2");
+// a pseudo-version after a release ("v0.3.1-0.20260924210000-edd882d0a1b2")
+// is not.
+func prerelease(current string) bool {
+	if module.IsPseudoVersion(current) {
+		base, err := module.PseudoVersionBase(current)
+		if err != nil {
+			return false
+		}
+		current = base
+	}
+	v, err := semver.NewVersion(current)
+	return err == nil && v.Prerelease() != ""
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -58,6 +60,8 @@ type loopRig struct {
 	broker func() (string, error)
 	// failRecord fails the store's Record of the first event it accepts.
 	failRecord func(state.Event) bool
+	// inTurn says a session runs a turn.
+	inTurn func(state.Party) bool
 }
 
 // loopFakeBinary is the loop's binary as the rig says it.
@@ -123,10 +127,12 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.command = func([]string) (string, int) { return "", 0 }
 	r.pull = superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Green: true}
 	r.broker = func() (string, error) { return "no broker runs", nil }
-	run, read, command, binary, broker := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker
+	r.inTurn = func(state.Party) bool { return false }
+	run, read, command, binary, broker, turn := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker = run, read, command, binary, broker
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn = run, read, command, binary, broker, turn
 	})
+	loopInTurn = func(_ *app, p state.Party) bool { return r.inTurn(p) }
 	loopBinary = func() replaceable { return loopFakeBinary{r} }
 	loopBroker = func(context.Context) (string, error) { return r.broker() }
 	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
@@ -252,21 +258,6 @@ func TestLoopTakesAParkedPullRequestFromReviewToTheMergeGo(t *testing.T) {
 	}
 }
 
-func TestLoopReviewOfASelfHostedWorkerExcludesTheSelfHostedProviders(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Capacity = config.Capacity{
-		Providers: map[string]config.Provider{loopLocal: {Kind: config.KindSelfHosted}, config.ClaudeHarness: {}},
-		Choices:   []config.Choice{{Harness: config.OmpHarness, Model: loopQwen, Provider: loopLocal}, {Harness: config.ClaudeHarness, Model: "opus"}},
-	}
-	r.park(t, loopPR, time.Now())
-	_ = r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents[0].Model = loopQwen; return nil, nil })
-	r.pass(t)
-	start := r.called(agentsName, agentStartName)
-	if !slices.Contains(start, "--harness") || !slices.Contains(start, "--exclude") || start[len(start)-1] != loopLocal {
-		t.Errorf("the reviewer start = %v", start)
-	}
-}
-
 func TestLoopWaitsForRoomForAReviewer(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -375,6 +366,79 @@ func TestLoopTakesADoneWorkerOffTheRosterAndStartsTheNext(t *testing.T) {
 	r.pass(t)
 	if c := r.called(agentsName); c != nil {
 		t.Errorf("acted again: %v", c)
+	}
+}
+
+// started puts name on the roster as a session beekeeper started.
+func (r *loopRig) started(t *testing.T, name, session string) {
+	t.Helper()
+	p := state.Party{Name: name, Session: session}
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == name }); i >= 0 {
+			st.Agents[i].Party = p
+		} else {
+			st.Agents = append(st.Agents, state.Agent{Party: p, Task: "review " + loopURL})
+		}
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: "background", By: loopParty, At: time.Now()})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoopRetiresTheReviewerAndTheMergedWorker(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-session")
+	r.pass(t)
+	reviewer := r.called(agentsName, agentStartName)[2]
+	r.started(t, reviewer, "reviewer-session")
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
+	}
+	// The reviewer still writes its report: the retirement waits.
+	r.inTurn = func(p state.Party) bool { return p.Session == "reviewer-session" }
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove); c != nil {
+		t.Fatalf("removed in its turn: %v", c)
+	}
+	r.inTurn = func(state.Party) bool { return false }
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, reviewer); c == nil {
+		t.Fatalf("the reviewer stays: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+		t.Errorf("the worker left before its merge: %v", c)
+	}
+	// The worker merges and never reports.
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("the merged worker stays: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.done"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "merged after the merge go") {
+		t.Errorf("logged %+v", evs)
+	}
+	r.pass(t)
+	if c := r.called(agentsName); c != nil {
+		t.Errorf("acted again: %v", c)
+	}
+}
+
+func TestLoopNeverRetiresASessionItsPersonStarted(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove); c != nil || len(r.logged(t, "supervisor.done")) != 0 {
+		t.Errorf("a person's session was retired: %v", c)
 	}
 }
 
@@ -745,5 +809,125 @@ func TestLoopReadsTheClassifiersStdoutAlone(t *testing.T) {
 func TestTheDefaultReviewBriefReportsWithAProblemLine(t *testing.T) {
 	if !strings.Contains(defaultReviewBrief, "--problem none") {
 		t.Errorf("the brief's report lacks --problem: %s", defaultReviewBrief)
+	}
+}
+
+// The loop, with no supervisor session or watch, takes the same timer
+// transitions as watch and delivers the wake only after saving them.
+func TestSupervisorLoopFiresTimersWithoutSupervisor(t *testing.T) {
+	const probeTimer = "probe"
+	for _, kind := range []string{"wall-clock", probeTimer} {
+		t.Run(kind, func(t *testing.T) {
+			r := newLoopRig(t)
+			ready := false
+			checks := 0
+			fakeRead(t, func(string) ([]byte, error) {
+				checks++
+				if !ready {
+					return nil, errors.New("not ready")
+				}
+				return nil, nil
+			})
+			wakes := 0
+			was := wakeOwner
+			wakeOwner = func(_ *app, _ context.Context, _ state.Party, who, msg, _ string) error {
+				wakes++
+				st, err := r.a.store.Read()
+				if err != nil || len(st.Timers) != 0 {
+					t.Errorf("wake before timer saved: %+v, %v", st, err)
+				}
+				if who != loopWorker || !strings.Contains(msg, "timer #1") {
+					t.Errorf("wake %q: %s", who, msg)
+				}
+				return nil
+			}
+			t.Cleanup(func() { wakeOwner = was })
+			timer := state.Timer{ID: 1, Due: time.Now().Add(-time.Minute), Wake: loopWorker, What: "check result", Every: time.Nanosecond}
+			if kind == probeTimer {
+				timer.Probe = probeHolds
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Timers = []state.Timer{timer}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if kind == probeTimer {
+				r.pass(t)
+				st, _ := r.a.store.Read()
+				if checks != 1 || wakes != 0 || len(st.Timers) != 1 || st.Timers[0].Reason != "not ready" {
+					t.Fatalf("pending probe: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
+				}
+			}
+			ready = true
+			r.pass(t)
+			if wakes != 1 {
+				t.Fatalf("due %s timer: got %d wakes, want 1", kind, wakes)
+			}
+			// A new app and store reopen the persisted state after a restart.
+			reopened, err := state.Open(r.a.store.Dir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			restarted := *r.a
+			restarted.store = reopened
+			if err := restarted.runSupervisorLoop(context.Background(), true); err != nil {
+				t.Fatal(err)
+			}
+			if wakes != 1 || len(r.logged(t, "timer.fired")) != 1 {
+				t.Fatalf("timer fired again: %d wakes", wakes)
+			}
+		})
+	}
+}
+
+// Line-only timers belong to the supervisor's watch, including its desktop
+// notification. The loop must neither check nor consume them.
+func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
+	for _, conditional := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conditional=%t", conditional), func(t *testing.T) {
+			r := newLoopRig(t)
+			checks, wakes := 0, 0
+			wasWake := wakeOwner
+			wakeOwner = func(_ *app, _ context.Context, _ state.Party, _, _, _ string) error {
+				wakes++
+				return nil
+			}
+			t.Cleanup(func() { wakeOwner = wasWake })
+			fakeRead(t, func(string) ([]byte, error) { checks++; return nil, nil })
+			timer := state.Timer{ID: 1, Due: time.Now().Add(-time.Minute), What: "look at result"}
+			if conditional {
+				timer.Probe = probeHolds
+			}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Timers = []state.Timer{timer, {ID: 2, Due: timer.Due, Wake: loopWorker, What: "wake worker"}}
+				st.Supervisor = &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if checks != 0 || wakes != 1 || len(st.Timers) != 1 || !st.Timers[0].Fired.IsZero() || !st.Timers[0].Checked.IsZero() {
+				t.Fatalf("loop took watch-only timer: checks %d, wakes %d, timers %+v", checks, wakes, st.Timers)
+			}
+			if !conditional {
+				lines, evs := firePending(st, nil, r.a.now)
+				if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "timer.due" {
+					t.Fatalf("firePending lost plain timer after loop: %v, %+v", lines, evs)
+				}
+			}
+			w, desktop, out := notifyingWatch(t, r.a.store.Dir(), false)
+			w.now = r.a.now
+			live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
+			w.pending(context.Background(), live)
+			w.timerActs.Wait()
+			if !strings.Contains(out.String(), "TIMER:") || len(desktop.sent) != 1 || !strings.Contains(desktop.sent[0].Summary, fmt.Sprintf("timer #%d", timer.ID)) {
+				t.Fatalf("watch lost timer line or notification: %s; %+v", out, desktop.sent)
+			}
+		})
 	}
 }

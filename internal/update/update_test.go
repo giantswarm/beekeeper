@@ -53,13 +53,14 @@ func (a fakeAsset) GetBrowserDownloadURL() string { return "https://example.test
 
 type fakeRelease struct {
 	tag    string
+	pre    bool
 	assets []selfupdate.SourceAsset
 }
 
 func (r fakeRelease) GetID() int64                        { return 1 }
 func (r fakeRelease) GetTagName() string                  { return r.tag }
 func (r fakeRelease) GetDraft() bool                      { return false }
-func (r fakeRelease) GetPrerelease() bool                 { return false }
+func (r fakeRelease) GetPrerelease() bool                 { return r.pre }
 func (r fakeRelease) GetPublishedAt() time.Time           { return time.Date(2026, 9, 24, 23, 0, 0, 0, time.UTC) }
 func (r fakeRelease) GetReleaseNotes() string             { return "notes" }
 func (r fakeRelease) GetName() string                     { return r.tag }
@@ -92,9 +93,10 @@ func binaryName() string {
 
 // release is a release the way architect publishes beekeeper's: a binary per
 // platform next to its cosign bundle, the bundle listed first to prove the
-// binary is the one picked.
+// binary is the one picked, and a tag with a pre-release part marked a
+// pre-release, as GitHub does.
 func release(tag string) fakeRelease {
-	return fakeRelease{tag: tag, assets: []selfupdate.SourceAsset{
+	return fakeRelease{tag: tag, pre: strings.Contains(tag, "-"), assets: []selfupdate.SourceAsset{
 		fakeAsset{bundleID, binaryName() + ".bundle"},
 		fakeAsset{binaryID, binaryName()},
 	}}
@@ -187,6 +189,59 @@ func TestCheckPassesOnTheLatestRelease(t *testing.T) {
 	}
 }
 
+// The newest release candidate the fake GitHub carries.
+const newestRC = "v0.4.0-rc.12"
+
+// The release candidates GitHub lists, newest first, after the last release.
+func candidates() []selfupdate.SourceRelease {
+	return []selfupdate.SourceRelease{
+		release(newestRC), release("v0.4.0-rc.11"), release("v0.4.0-rc.10"), release("v0.4.0-rc.9"), release(latestV),
+	}
+}
+
+func TestCheckReportsANewerPrerelease(t *testing.T) {
+	for _, current := range []string{"v0.4.0-rc.9", "v0.4.0-rc.9.0.20260924230000-edd882d0a1b2"} {
+		setup(t, current, &fakeSource{releases: candidates()})
+		var out bytes.Buffer
+		res, err := Run(context.Background(), &out, true)
+		if !errors.Is(err, ErrOutdated) {
+			t.Errorf("%s: Run(check) = %v, want ErrOutdated\n%s", current, err, out.String())
+		}
+		if res.Latest != newestRC || !res.Newer || res.Updated {
+			t.Errorf("%s: result %+v", current, res)
+		}
+	}
+}
+
+func TestCheckPassesOnTheLatestPrerelease(t *testing.T) {
+	setup(t, newestRC, &fakeSource{releases: candidates()})
+	var out bytes.Buffer
+	res, err := Run(context.Background(), &out, true)
+	if err != nil || res.Newer || res.Latest != newestRC {
+		t.Errorf("Run(check) = %+v, %v", res, err)
+	}
+}
+
+// A release, or a build of main after one, is offered only releases.
+func TestCheckSkipsPrereleasesOnARelease(t *testing.T) {
+	for _, current := range []string{latestV, "v0.3.1-0.20260924230000-edd882d0a1b2"} {
+		setup(t, current, &fakeSource{releases: candidates()})
+		res, err := Run(context.Background(), io.Discard, true)
+		if err != nil || res.Newer || res.Latest != latestV {
+			t.Errorf("%s: Run(check) = %+v, %v", current, res, err)
+		}
+	}
+}
+
+// A release after the candidates is newer than each of them.
+func TestCheckReportsAReleaseAfterAPrerelease(t *testing.T) {
+	setup(t, newestRC, &fakeSource{releases: append([]selfupdate.SourceRelease{release("v0.4.0")}, candidates()...)})
+	res, err := Run(context.Background(), io.Discard, true)
+	if !errors.Is(err, ErrOutdated) || res.Latest != "v0.4.0" {
+		t.Errorf("Run(check) = %+v, %v", res, err)
+	}
+}
+
 func TestRefusesADevelopmentBuild(t *testing.T) {
 	for _, current := range []string{"dev", "e6c760a32b485c574f91cf9b89060dfa168923c9", ""} {
 		src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}}
@@ -249,6 +304,29 @@ func TestReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Dir(exe)); len(entries) != 1 {
 		t.Errorf("%s holds %d entries, want only the binary", filepath.Dir(exe), len(entries))
+	}
+}
+
+func TestInstallsANewerPrereleaseOnceTheBundleVerifies(t *testing.T) {
+	src := &fakeSource{releases: candidates(), assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte("its bundle")}}
+	setup(t, "v0.4.0-rc.9", src)
+	exe, _ := installed(t)
+	v := &acceptingValidator{}
+	newValidator = func() selfupdate.Validator { return v }
+
+	var out bytes.Buffer
+	res, err := Run(context.Background(), &out, false)
+	if err != nil {
+		t.Fatalf("Run() = %v\n%s", err, out.String())
+	}
+	if !res.Updated || res.Latest != newestRC {
+		t.Errorf("result %+v", res)
+	}
+	if got, _ := os.ReadFile(filepath.Clean(exe)); string(got) != newBinary {
+		t.Errorf("executable holds %q after the update", got)
+	}
+	if v.asset != binaryName() || string(v.bundle) != "its bundle" {
+		t.Errorf("validated %q against bundle %q", v.asset, v.bundle)
 	}
 }
 

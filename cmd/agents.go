@@ -317,11 +317,13 @@ file; the log keeps them (agents.report, agents.problem).`,
 	var keepDesktop bool
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
-		Short: "Take an agent off the roster and archive the desktop session beekeeper started for it",
+		Short: "Take an agent off the roster and archive or stop the session beekeeper started for it",
 		Long: `Takes an agent off the roster. When beekeeper started the agent's session,
 its desktop session is archived too (the desktop's Archived list brings it
 back), unless it runs a turn or holds the supervisor's or the guide's role: an idle desktop CLI of a session beekeeper started is asked to
-archive it. A session its person started is never archived.`,
+archive it. A background session beekeeper started is stopped (claude stop;
+claude attach brings it back), unless it runs a turn. A session its person
+started is never archived nor stopped.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -352,6 +354,11 @@ archive it. A session its person started is never archived.`,
 			}
 			st, err := a.store.Read()
 			if err != nil {
+				return err
+			}
+			if line, ok := a.stopBackgroundStart(cmd.Context(), st, gone); ok {
+				_ = a.store.Record(event(me, "agents.archive", "%s: %s", gone.Name, line))
+				_, err = fmt.Fprintf(a.out, "%s: %s\n", gone.Name, line)
 				return err
 			}
 			outcomes := a.archiveDesktops(cmd.Context(), st, []state.Party{gone}, "beekeeper agents remove "+gone.Name)

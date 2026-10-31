@@ -152,13 +152,13 @@ func TestExecutionAdmissionKeepsTargetGuardsAndUnknownReservations(t *testing.T)
 	a, _ := sshStartTestApp(t)
 	host := a.cfg.Agents.Hosts[sshTestSelector]
 	resources := execution.Resources{ObservedAt: time.Now(), Blocks: []string{"fixture target memory pressure"}}
-	v := a.executionCapacity(&state.State{}, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, false, claudeComm, bgModel)
+	v := a.executionCapacity(&state.State{}, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, forWorker, claudeComm, bgModel)
 	if v.Room != 0 || !strings.Contains(strings.Join(v.Blocks, ";"), "target memory pressure") {
 		t.Fatal("provider narrowing removed the target machine guard")
 	}
 	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "unconfirmed-worker"}, Execution: &execution.Ref{Host: host.Identity, Execution: "missing", Generation: 1}}}}
 	resources.Blocks = nil
-	v = a.executionCapacity(st, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, false, claudeComm, bgModel)
+	v = a.executionCapacity(st, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, forWorker, claudeComm, bgModel)
 	if v.Room != 0 || len(v.Providers[claudeComm].Busy) != 1 || executionHostBusy(st, host.Identity) != 1 {
 		t.Fatal("missing execution record became free capacity")
 	}
