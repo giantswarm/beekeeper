@@ -203,9 +203,11 @@ its key first in the detail):
             their commands, as in watch; line-only reminders stay with watch
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
-            first round, or after the last round's findings were forwarded
-            and the worker parked again on a new head while a round is
-            left (supervisor.reviewRounds, default 1): a reviewer starts
+            first round, for every new head the worker parked on after an
+            approval (one review per head), or after the last round's
+            findings were forwarded and the worker parked again on a new
+            head while a change-request round is left
+            (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), decided like any start; a worker on a
@@ -221,10 +223,17 @@ its key first in the detail):
             verdict or a round still running authorizes nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
-  escalate  no round left and the worker parked again after the forward
-            on the head the findings were about, or on a new head after
-            the last approval: a decision for guide.person (note add); the
-            loop leaves that pull request alone from then
+  escalate  no change-request round left (supervisor.reviewRounds counts
+            the rounds that asked for changes; an approved head is none)
+            and the worker parked again after the forward on the head the
+            findings were about: a decision for guide.person (note add,
+            options Merge and Rework); the loop leaves that pull request
+            alone until the person answers
+  answer    the person answered an escalation (beekeeper answer --note):
+            an answer that releases it (the Merge option, or words to
+            merge that refuse nothing) is the merge go for the head the
+            escalation named, once its checks are green; any other answer
+            goes to the worker word for word, and the rounds go on
   end       a reviewed pull request merged or closed: its tracking ends
   done      agents.done: the agent leaves the roster (agents remove);
             the loop retires a session beekeeper started the same way,
@@ -424,8 +433,19 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, e := range evs {
 		in.Events = append(in.Events, superloop.Event{At: e.At, Verb: e.Verb, Agent: loopEventAgent(st, e), Detail: e.Detail})
 	}
+	// The person's answers to the loop's own notes: an escalation's answer
+	// is the loop's to act on, no session's.
+	answers, err := a.store.Follow("supervisor-loop-answers", func(e state.Event) bool { return e.Verb == answerRecorded })
+	if err != nil {
+		return err
+	}
+	for _, e := range answers {
+		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name {
+			in.Answers = append(in.Answers, superloop.Answer{Ref: an.About, Note: an.ID, Question: an.Question, Text: an.Answer, By: an.For, At: an.At})
+		}
+	}
 	in.Pulls = map[string]superloop.Pull{}
-	for _, ref := range superloop.Tracked(in.Workers, in.Taken) {
+	for _, ref := range superloop.Tracked(in.Workers, in.Taken, in.Answers) {
 		p, err := readLoopPull(ctx, ref)
 		if err != nil {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
@@ -531,7 +551,7 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
 		done = logged("agents.start", opens)
-	case superloop.KindGo, superloop.KindForward:
+	case superloop.KindGo, superloop.KindForward, superloop.KindAnswer:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
@@ -647,14 +667,17 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
 	case superloop.KindEscalate:
-		if err := l.toGuide(ctx, act, act.URL,
-			fmt.Sprintf("Merge %s with its review's blocking findings open, or have it reworked?", act.URL),
-			act.Message,
-			fmt.Sprintf("supervisor.reviewRounds (%d) is used up and the findings stand: only a person can let it merge", k.ReviewRounds),
-			fmt.Sprintf("leave %s unmerged and its worker parked", act.URL)); err != nil {
+		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
+			fmt.Sprintf("the change-request rounds of supervisor.reviewRounds (%d) are used up and the last review's findings stand: only a person can let it merge; the loop gives the merge go for head %s on an answer that releases it", k.ReviewRounds, act.Head),
+			fmt.Sprintf("leave %s unmerged and its worker parked", act.URL), superloop.EscalationOptions(act.Head)...); err != nil {
 			return "", err
 		}
 		return "to the guide: " + act.Message, nil
+	case superloop.KindAnswer:
+		if err := l.wake(ctx, act); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("the person's answer to the escalation of %s told", act.URL), nil
 	case superloop.KindEnd:
 		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
 	case superloop.KindDone:
@@ -975,7 +998,7 @@ func agentRef(st *state.State, name string) string {
 }
 
 // toGuide files a decision for the guide's person on ref (note add).
-func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string) error {
+func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string, options ...string) error {
 	person := l.a.cfg.Guide.Person
 	if person == "" {
 		return errors.New("guide.person is unset: no guide's queue to file it in")
@@ -984,10 +1007,14 @@ func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref,
 	if err := l.claim(act, question); err != nil {
 		return err
 	}
-	_, err := l.run(ctx, "note", loopAdd, "--for", person, "--ref", ref,
+	args := []string{"note", loopAdd, "--for", person, "--ref", ref,
 		"--due", l.a.cfg.Supervisor.NoteDue.String(),
 		"--status-quo", truncate(statusQuo, 2900), "--why", why, "--default", dflt,
-		"--checked", "beekeeper supervisor loop: gh pr view and the event log", question)
+		"--checked", "beekeeper supervisor loop: gh pr view and the event log"}
+	for _, o := range options {
+		args = append(args, "--option", o)
+	}
+	_, err := l.run(ctx, append(args, question)...)
 	return err
 }
 
