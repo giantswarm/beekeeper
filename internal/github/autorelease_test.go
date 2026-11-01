@@ -110,8 +110,8 @@ func TestReadBaseRelease(t *testing.T) {
 				call := strings.Join(args, " ")
 				asked = append(asked, call)
 				switch {
-				case strings.HasPrefix(call, "pr view 7 --repo o/r"):
-					return []byte(`{"baseRefName":"` + c.base + `"}`), nil
+				case strings.HasPrefix(call, "api repos/o/r/pulls/7 --jq"):
+					return []byte(`{"base":"` + c.base + `"}`), nil
 				case strings.HasSuffix(call, PluginReleaseWorkflow+"?ref="+c.base):
 					return []byte(c.plugin), c.plErr
 				}
@@ -172,8 +172,8 @@ func TestReadBaseReleaseOfTheReleasePRFlow(t *testing.T) {
 				asks++
 				call := strings.Join(args, " ")
 				switch {
-				case strings.HasPrefix(call, "pr view 7 --repo o/r --json baseRefName,headRefName,title"):
-					return []byte(`{"baseRefName":"` + c.base + `","headRefName":"` + c.head + `","title":"` + c.title + `"}`), nil
+				case strings.HasPrefix(call, "api repos/o/r/pulls/7 --jq"):
+					return []byte(`{"base":"` + c.base + `","head":"` + c.head + `","title":"` + c.title + `"}`), nil
 				case strings.Contains(call, CreateReleaseWorkflow+"?ref="):
 					return []byte(c.create), c.createErr
 				case strings.Contains(call, CreateReleasePRWorkflow+"?ref="):

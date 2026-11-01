@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -162,6 +163,48 @@ func TestLimitSpent(t *testing.T) {
 	} {
 		if got := tc.l.Spent(now); got != tc.want {
 			t.Errorf("%s: Spent = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// gh's words for a refusal under a rate limit, REST's and GraphQL's, are
+// a rate limit; GitHub not answering is none.
+func TestRateLimited(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"GraphQL: API rate limit already exceeded for user ID 1.":         true,
+		"gh api repos/o/r/pulls/7: HTTP 403: API rate limit exceeded for": true,
+		"HTTP 403: You have exceeded a secondary rate limit.":             true,
+		"connection reset by peer":                                        false,
+		"HTTP 404: Not Found":                                             false,
+	} {
+		if got := RateLimited(errors.New(msg)); got != want {
+			t.Errorf("RateLimited(%q) = %v, want %v", msg, got, want)
+		}
+	}
+	if RateLimited(nil) {
+		t.Error("no error is a rate limit")
+	}
+}
+
+// SpentUntil is the later reset of the limits spent at now: the core
+// budget with nothing left, the GraphQL limit refused or with nothing left.
+func TestSpentUntil(t *testing.T) {
+	now := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	core, gql := now.Add(20*time.Minute), now.Add(40*time.Minute)
+	for name, c := range map[string]struct {
+		b    Budget
+		want time.Time
+	}{
+		"nothing spent":        {Budget{Limit: 5000, Remaining: 4000, Reset: core, GraphQL: &GraphQL{Limit: 5000, Remaining: 10, Reset: gql}}, time.Time{}},
+		"GraphQL refused":      {Budget{Limit: 5000, Remaining: 4000, Reset: core, GraphQL: &GraphQL{Refused: "API rate limit exceeded", Reset: gql}}, gql},
+		"GraphQL spent":        {Budget{Limit: 5000, Remaining: 4000, Reset: core, GraphQL: &GraphQL{Limit: 5000, Reset: gql}}, gql},
+		"core spent":           {Budget{Limit: 5000, Reset: core}, core},
+		"both, the later":      {Budget{Limit: 5000, Reset: core, GraphQL: &GraphQL{Refused: "x", Reset: gql}}, gql},
+		"a refusal, no reset":  {Budget{Limit: 5000, Remaining: 4000, Reset: core, GraphQL: &GraphQL{Refused: "x"}}, time.Time{}},
+		"a reset already past": {Budget{Limit: 5000, Reset: now.Add(-time.Minute)}, time.Time{}},
+	} {
+		if got := c.b.SpentUntil(now); !got.Equal(c.want) {
+			t.Errorf("%s: %s, want %s", name, got, c.want)
 		}
 	}
 }
