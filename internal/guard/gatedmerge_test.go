@@ -13,7 +13,7 @@ const gatedCommand = "devctl pr merge giantswarm/project 7 --update-branch"
 // supervisor go is recorded for every merge it is asked about.
 func gatedHook(t *testing.T) Hook {
 	h := hook()
-	h.GatedOwners = []string{"giantswarm"}
+	h.GatedOwners = []string{allowedOrg}
 	h.MergeGo = func(_, repo string, _ int, _ string) string {
 		if strings.HasPrefix(repo, "giantswarm/") {
 			t.Errorf("a gated repository's merge reached the go check: %s", repo)
@@ -147,6 +147,48 @@ func TestGatedMergeReadsPass(t *testing.T) {
 		"gh api repos/giantswarm/project/pulls/7/merge",
 		"curl -s https://api.github.com/repos/giantswarm/project/pulls/7/merge",
 		"gh pr list -R giantswarm/project --search 'is:merged'",
+	} {
+		if d := decide(t, h, "/", command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("read refused: %s: %+v", command, d)
+		}
+	}
+}
+
+func TestHTTPClientMergesFailClosed(t *testing.T) {
+	h := gatedHook(t)
+	for _, command := range []string{
+		"curl -sXPUT https://api.github.com/repos/person/project/pulls/7/merge",
+		"curl -sX PUT https://api.github.com/repos/person/project/pulls/7/merge",
+		"curl -sd '{}' https://api.github.com/repos/person/project/pulls/7/merge",
+		"curl -X PUT https://api.github.com/repos/person/project/pulls/7/%6derge",
+		"curl -X PUT https://api.github.com/repos/person/project/pulls/7/MERGE",
+		"curl -X PUT 'https://api.github.com/repos/person/project/pulls/7/{merge,x}'",
+		"curl 'https://api.github.com/repos/person/project/pulls/7/[m-m]erge' -X PUT",
+		"curl --json '{}' https://api.github.com/repos/person/project/pulls/7/merge",
+		"curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { enablePullRequestAutoMerge(input: {}) { clientMutationId } }\"}'",
+		"curl -X POST https://api.github.com/graphql -d @mutation.json",
+		"gh api graphql -f 'query=mutation { enqueuePullRequest(input: {}) { clientMutationId } }'",
+		"wget --method=PUT https://api.github.com/repos/person/project/pulls/7/merge",
+		"xh PUT https://api.github.com/repos/person/project/pulls/7/merge sha=" + mergeGoTestHead,
+		"http https://api.github.com/repos/person/project/pulls/7/merge sha=" + mergeGoTestHead,
+	} {
+		if d := decide(t, h, "/", command, nil); d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("HTTP client merge passed: %s (%+v)", command, d)
+		}
+	}
+	for _, command := range []string{
+		"xh PUT https://api.github.com/repos/giantswarm/project/pulls/7/merge",
+		"wget --method=PUT https://api.github.com/repos/giantswarm/project/pulls/7/merge",
+	} {
+		if d := decide(t, h, "/", command, nil); d == nil || !strings.Contains(d.Reason, gatedCommand) {
+			t.Errorf("gated merge named no gated command: %s (%+v)", command, d)
+		}
+	}
+	for _, command := range []string{
+		"curl -sI https://api.github.com/repos/person/project/pulls/7/merge",
+		"wget -qO- https://api.github.com/repos/person/project/pulls/7/merge",
+		"xh https://api.github.com/repos/person/project/pulls/7/merge",
+		"curl -s -X POST https://api.github.com/graphql -d '{\"query\":\"{ viewer { login } }\"}'",
 	} {
 		if d := decide(t, h, "/", command, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("read refused: %s: %+v", command, d)
