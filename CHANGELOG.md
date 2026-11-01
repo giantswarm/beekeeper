@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The disk step's caches come from config: `disk.caches` lists cache policies, each a path or glob with a mode (`entries` removes a root's direct children whole, `files` its files), `olderThan`, `maxGiB` and `regenerable` (under disk pressure, everything older than an hour). Beekeeper's own caches (`go-build`, `sccache`, `beekeeper-tmp`) are the default entries; an entry of the same name changes them, `mode: off` drops one. Nothing written within the hour, nothing a process references and nothing holding a git checkout is removed. `disk prune` (also `--dry-run`) lists each cache with what it holds and would free, `--report` the user cache directory's largest entries no policy covers, and a pressure run's `DISK PRUNE` line names the caches holding the most. Durations take whole days (`7d`) ([https://github.com/giantswarm/beekeeper/issues/1933](https://github.com/giantswarm/beekeeper/issues/1933)).
+
 ### Fixed
 
 - A lease-expiry stop of a running SSH execution is an orderly owned stop: the runner records its journal as `exited` with the recorded stop reason and exits 0 instead of exiting 1 with `execution journal is busy` and leaving a failed unit to mistake for a harness crash. The terminal journal write survives the runner's own SIGTERM and waits on the journal lock, so the stop intent and its reason stay recorded for `agents hosts sync` ([https://github.com/giantswarm/beekeeper/issues/1912](https://github.com/giantswarm/beekeeper/issues/1912)).

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,6 +32,18 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		{"disk: {buildOutputs: [{path: /scratch, worktree: /scratch/worktree}]}", false},
 		{"disk: {buildOutputs: [{path: relative, worktree: /scratch/worktree}]}", false},
 		{"disk: {buildDirs: [artifacts], buildOutputs: [{path: /scratch/output, worktree: /scratch/worktree}]}", true},
+		{"disk: {caches: [{path: ~/.cache/app, olderThan: 7d}, {path: '/cache/*-dev', maxGiB: 1.5, mode: files}]}", true},
+		{"disk: {caches: [{name: go-build, maxGiB: 5}, {name: sccache, mode: off}, {name: beekeeper-tmp, olderThan: 2h}]}", true},
+		{"disk: {caches: [{path: /cache/app}]}", false},
+		{"disk: {caches: [{path: relative, olderThan: 1h}]}", false},
+		{"disk: {caches: [{path: /, olderThan: 1h}]}", false},
+		{"disk: {caches: [{path: '/cache/[', olderThan: 1h}]}", false},
+		{"disk: {caches: [{path: /cache/app, olderThan: 1h, mode: go}]}", false},
+		{"disk: {caches: [{name: sccache, mode: go}]}", false},
+		{"disk: {caches: [{path: /cache/app, olderThan: 1h, mode: wipe}]}", false},
+		{"disk: {caches: [{path: /cache/app, maxGiB: -1}]}", false},
+		{"disk: {caches: [{name: app}]}", false},
+		{"disk: {caches: [{path: /cache/a, olderThan: 1h}, {path: /cache/a, maxGiB: 1}]}", false},
 	} {
 		if err := os.WriteFile(p, []byte(tc.raw), 0600); err != nil {
 			t.Fatal(err)
@@ -38,6 +51,11 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		got, err := Load(p)
 		if (err == nil) != tc.valid {
 			t.Errorf("config %s: %v", tc.raw, err)
+		}
+		if err == nil && strings.Contains(tc.raw, "~/.cache/app") {
+			if e := got.Disk.Caches[0]; e.Name != e.Path || !filepath.IsAbs(e.Path) || e.OlderThan.Duration != 7*24*time.Hour {
+				t.Fatalf("cache entry=%+v", e)
+			}
 		}
 		if err == nil && tc.raw == "disk: {prune: ask}" && got.Disk.Auto() {
 			t.Fatal("ask became auto")

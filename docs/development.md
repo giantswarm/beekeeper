@@ -325,6 +325,54 @@ timer from the running watches.
 
 ## Automatic disk reclamation
 
+### Cache policies
+
+`disk.caches` lists the caches the disk step trims. Beekeeper's own caches are
+its default entries: `go-build` (mode `go`, cap `doctor.goCacheMaxGiB`),
+`sccache` (mode `sccache`, cap `disk.sccacheMaxGiB`) and `beekeeper-tmp`
+(`stateDir/tmp`, mode `entries`, `olderThan: 1h`). An entry with a built-in's
+name changes the fields it sets (`maxGiB`, `olderThan`, `path`); `mode: off`
+drops it. Any other entry needs a `path` and a rule:
+
+```yaml
+disk:
+  caches:
+    - path: ~/.cache/some-app       # each direct child is removed whole
+      olderThan: 7d                 # when nothing in it was written for a week
+      regenerable: true             # under disk pressure: everything older than 1h
+    - path: ~/.cache/pkg-manager
+      mode: files                   # single files, least recently written first
+      maxGiB: 2                     # until the cache fits two GiB
+    - path: ~/.cache/*-dev          # a glob: each match is a cache root
+      maxGiB: 1
+```
+
+`path` is absolute or `~/…` and may be a glob; each match is a cache root. In
+`entries` mode (the default) a root's direct children are the units, each
+removed whole; in `files` mode its regular files, and directories a trim
+empties go with them. A unit untouched for `olderThan` (a Go duration or whole
+days, `7d`) goes; past `maxGiB` the least recently written go until the root
+fits; a `regenerable` cache drops everything older than an hour under disk
+pressure. Whatever a policy says, the step keeps:
+
+- anything written within the last hour;
+- a unit any process of the user references (cwd, open file, mapping); in
+  `files` mode one reference anywhere in the root keeps the whole root;
+- a unit holding a `.git` (a checkout, so possibly uncommitted or unpushed
+  work); in `files` mode such a root is kept whole, and a root that is itself
+  a checkout is never trimmed;
+- a root that is a symbolic link, or that holds the home, the state directory,
+  a configured checkout or a worktree root;
+- everything while some process's references are unreadable.
+
+`beekeeper disk prune` (or `--dry-run`) lists each cache root with what it
+holds and would free; `--report` adds the largest entries of the user cache
+directory no policy covers, with their last write, so the list can be
+extended. A pressure run's `DISK PRUNE` line names the caches still holding
+the most.
+
+### The disk step
+
 `disk.prune: auto` is the default. A long-running watch runs the disk step
 hourly (`disk.every`) and within five minutes of `LOW DISK` or `DISK FILLING`.
 `watch --once` reports disk pressure without deleting anything. Watches share
