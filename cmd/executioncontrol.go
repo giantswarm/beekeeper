@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -35,6 +36,11 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
+	// Head is the HEAD of the execution's workspace when it parked. The
+	// coordinator checks it against the pull request itself (a host's own
+	// branch and GitHub view are no proof); ReviewHead is an older host's.
+	Head       string `json:"head,omitempty"`
+	RefKind    string `json:"refKind,omitempty"`
 	ReviewHead string `json:"reviewHead,omitempty"`
 	On         string `json:"on"`
 	Waits      string `json:"waits"`
@@ -148,6 +154,9 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				reply.Error = publishErr.Error()
 				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s", publication.Head))
 			} else {
+				if !publication.SyncBase {
+					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
+				}
 				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
 			}
 			value = result
@@ -312,13 +321,26 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), ReviewHead: v.ReviewHead}
+		reviewHead, kind := "", v.RefKind
+		if _, isRef := parseRef(v.On); isRef && ag.Execution != nil {
+			if r, _ := executionRecord(st, *ag.Execution); r != nil {
+				head := v.Head
+				if head == "" {
+					head = v.ReviewHead
+				}
+				reviewHead = executionReviewHead(ctx, r, v.On, head)
+			}
+		}
+		if reviewHead != "" {
+			kind = github.RefPullRequest
+		}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)
 			}
 		}
-		return "park recorded on coordinator; " + parkReviewMode(v.ReviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
 	case "report":
 		var v executionReport
 		if err := execution.Decode(c.Data, &v); err != nil {
@@ -379,4 +401,39 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 	default:
 		return "", nil, refused("unsupported worker control")
 	}
+}
+
+// executionReviewGH reads the pull request a remote worker parks on.
+var executionReviewGH = github.RunGH
+
+// executionReviewHead is the review head of a remote worker's park on the
+// pull request on, as publishedParkHead is a local one's: the pull request
+// is in the execution's repository, its head is the execution's owned branch
+// (executionBranch, which only agents publish pushes) in that repository,
+// and its head commit is the one the worker's workspace parked at (head; an
+// older host sends none, and the owned branch's head stands). Anything else,
+// or a pull request GitHub does not answer for, is a plain wait.
+func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head string) string {
+	ref, ok := parseRef(on)
+	if !ok || !strings.EqualFold(ref.Repo, r.Request.Repository) || head != "" && !publicationCommit(head) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := executionReviewGH(github.ActingOn(ctx, ref.Repo), "api", fmt.Sprintf("repos/%s/pulls/%d", ref.Repo, ref.N))
+	if err != nil {
+		return ""
+	}
+	var p struct {
+		Head struct {
+			Ref, SHA string
+			Repo     struct {
+				FullName string `json:"full_name"`
+			}
+		}
+	}
+	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionBranch(r.Handle.Ref) || !strings.EqualFold(p.Head.Repo.FullName, r.Request.Repository) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
+		return ""
+	}
+	return p.Head.SHA
 }
