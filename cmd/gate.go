@@ -199,7 +199,7 @@ code) instead of polling GitHub a second time. Whichever command it is, its outc
 the session that started it: the caller sees the output and exit code as
 ever while it listens, and when it no longer does (a merge whose caller
 was killed, a headless turn that ended, its CLI gone, a queued merge) the
-run wakes its owner, a registered agent, with one line: "<command> exit N:
+run wakes its owner, its session on the roster or off it, with one line: "<command> exit N:
 <reason> (output in <file>)", logged as devctl.unheard. A wait ends with
 its caller instead: its shell stopped (TaskStop), killed or gone with an
 ended turn, its devctl is stopped within a second and nobody is woken,
@@ -216,8 +216,10 @@ desktop: its gate and merge-child gone, running or a queued merge's own run
 still waiting) is recorded as cut (merge.cut, the watch's MERGE CUT line)
 at the watch's next poll after the start, and its owner woken the same way,
 once.
-An owner no longer on the roster is woken by no run. The outcome is owed in
-the state before it is handed over: one whose merge-child was killed on the
+An owner off the roster is woken by its session id, as agents wake does; one
+whose session is gone (no transcript, no harness process) gets no wake and
+one devctl.unheard line, and the issues it served go back to the board. The
+outcome is owed in the state before it is handed over: one whose merge-child was killed on the
 way, whose pull request GitHub did not answer for or whose wake the service
 manager refused stays owed, and the watch hands it over once it can (a try
 a minute, GitHub's answer awaited 30 minutes, given up after a day).
@@ -581,9 +583,9 @@ func (g *gateRun) enqueue(why string) error {
 }
 
 // outcomeTo says where the outcome of a merge that runs on outside the call
-// goes: a wake of its owner, else the log.
+// goes: a wake of its owner's session, on the roster or off it, else the log.
 func (g *gateRun) outcomeTo() string {
-	if g.me.Session != "" {
+	if wakeID(g.me) != "" {
 		return fmt.Sprintf("its outcome wakes %q", g.me.Name)
 	}
 	return "its outcome is logged (beekeeper log --verb merged)"
