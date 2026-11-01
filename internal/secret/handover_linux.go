@@ -105,7 +105,11 @@ func notifyVault(message string, fd int) error {
 	if err != nil {
 		return errors.New("cannot confirm vault handover")
 	}
-	p := []unix.PollFd{{Fd: int32(pipe[0]), Events: unix.POLLIN | unix.POLLHUP}}
+	readFD := pipe[0]
+	if readFD < 0 || readFD > 2147483647 {
+		return errors.New("invalid handover barrier descriptor")
+	}
+	p := []unix.PollFd{{Fd: int32(readFD), Events: unix.POLLIN | unix.POLLHUP}}
 	if n, err := unix.Poll(p, 3000); err != nil || n == 0 || p[0].Revents&unix.POLLHUP == 0 {
 		return errors.New("service manager did not confirm vault handover")
 	}

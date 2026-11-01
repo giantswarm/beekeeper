@@ -21,6 +21,8 @@ import (
 // reload is the fake service manager's reload command.
 const reload = "reload"
 
+const replacementExe = "/new/bin/beekeeper"
+
 // fakeSetup is a service manager whose service is a unit file in the
 // home's unit directory and a guard file beside it.
 type fakeSetup struct {
@@ -296,7 +298,7 @@ func TestUpdatesWhatItWrote(t *testing.T) {
 	if err := Install(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
-	e.Exe, e.Spec.Exe = "/new/bin/beekeeper", "/new/bin/beekeeper"
+	e.Exe, e.Spec.Exe = replacementExe, replacementExe
 	f.ran = nil
 	out.Reset()
 	if err := Install(context.Background(), e); err != nil {
@@ -1064,7 +1066,7 @@ func TestInstallRefusesRestartBeforeHandover(t *testing.T) {
 	if err := Install(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
-	e.Exe, e.Spec.Exe = "/new/bin/beekeeper", "/new/bin/beekeeper"
+	e.Exe, e.Spec.Exe = replacementExe, replacementExe
 	f.ran = nil
 	e.BeforeRestart = func(context.Context, string) error { return errors.New("handover unavailable") }
 	e.DryRun = true

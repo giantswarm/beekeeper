@@ -37,7 +37,7 @@ func fakeHandoverManager(t *testing.T) <-chan *os.File {
 	t.Cleanup(func() { _ = c.Close() })
 	t.Setenv("NOTIFY_SOCKET", path)
 	script := filepath.Join(dir, "systemctl")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '1\\n'\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '1\\n'\n"), 0o700); err != nil { //nolint:gosec // executable fake manager in the test's private directory
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -240,7 +240,7 @@ func TestVaultHandoverInvalidatedWhenSessionChanges(t *testing.T) {
 func TestVaultHandoverManagerRefusalRevokesMemory(t *testing.T) {
 	received := fakeHandoverManager(t)
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte("#!/bin/sh\nprintf '0\\n'\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte("#!/bin/sh\nprintf '0\\n'\n"), 0o700); err != nil { //nolint:gosec // executable fake manager in the test's private directory
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
