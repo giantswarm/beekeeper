@@ -267,6 +267,47 @@ func TestCheckRefusesUnresolvableWorkerContract(t *testing.T) {
 	}
 }
 
+func TestCheckRefusesShadowedBoundExecutable(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	dir := filepath.Dir(f.s.Executable)
+	bound := filepath.Join(dir, "beekeeper-v2")
+	if err := os.Rename(f.s.Executable, bound); err != nil {
+		t.Fatal(err)
+	}
+	// An older sibling under the command name the worker contract invokes:
+	// the runner prepends this directory, so a bare `beekeeper` would reach
+	// it instead of the executable the prepared policy binds.
+	if err := os.WriteFile(filepath.Join(dir, "beekeeper"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // stale sibling fixture in the test's own temporary directory
+		t.Fatal(err)
+	}
+	f.s.Executable = bound
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+	tr := f.transport(t, nil)
+	tr.Host.PolicyDigest = digest
+	if _, err := tr.Check(ctx); err == nil || !strings.Contains(err.Error(), "does not resolve to the bound execution host executable") {
+		t.Fatalf("readiness accepted a differently named bound binary shadowed by a stale sibling: %v", err)
+	}
+	if _, err := tr.Start(ctx, f.r); err == nil || len(f.launcher.starts) != 0 {
+		t.Fatal("start launched a worker whose bare commands reach a different executable")
+	}
+	// With the bound binary installed under the worker command name, the
+	// same host is ready again.
+	if err := os.Remove(filepath.Join(dir, "beekeeper")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(bound, filepath.Join(dir, "beekeeper")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Check(ctx); err != nil {
+		t.Fatalf("host with the bound installation under the worker command name refused: %v", err)
+	}
+}
+
 func TestRunnerRechecksLiveCoordinatorBeforeProcess(t *testing.T) {
 	f := testFixture(t)
 	ctx := context.Background()

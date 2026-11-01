@@ -167,10 +167,19 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 // coordinator. A per-user installation is accepted; a system-wide one is not
 // required.
 func (s *Server) workerExecutable() error {
-	install := filepath.Join(filepath.Clean(filepath.Dir(filepath.Clean(s.Executable))), managedBinary)
-	fi, err := os.Stat(install)
+	bound := filepath.Clean(s.Executable)
+	resolved := filepath.Join(filepath.Clean(filepath.Dir(bound)), managedBinary)
+	fi, err := os.Stat(resolved)
 	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
 		return errors.New("no executable beekeeper at the bound execution host installation; install it and prepare the matching bundle")
+	}
+	// The runner prepends this directory and drops its duplicates, so the
+	// resolved command is what the bare worker commands reach: it must be
+	// the very file the prepared policy binds, not a stale sibling beside
+	// a differently named or versioned installation.
+	own, err := os.Stat(bound)
+	if err != nil || !os.SameFile(fi, own) {
+		return errors.New("the bare worker command does not resolve to the bound execution host executable; install the prepared executable as " + managedBinary + " in its directory")
 	}
 	return nil
 }
