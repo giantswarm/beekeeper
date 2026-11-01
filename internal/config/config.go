@@ -1070,6 +1070,31 @@ type Capacity struct {
 	// ReviewSkipPace is read and ignored: a review is decided exactly like
 	// a worker's start, with no pace exception.
 	ReviewSkipPace bool `yaml:"reviewSkipPace"`
+	// Local bounds the busy agents the coordinator's own machine runs,
+	// apart from Ceiling, which bounds the subscriptions across the desk
+	// and its execution hosts.
+	Local LocalCapacity `yaml:"local"`
+}
+
+// LocalCapacity is capacity.local: the coordinator machine's own cap.
+type LocalCapacity struct {
+	// Ceiling is the most busy agents this machine runs (capacity.local.
+	// ceiling): every local start, the loop's and one by hand, worker,
+	// reviewer and resume alike, is refused at it. Every busy agent whose
+	// session runs here counts, a self-hosted provider's included; an
+	// agent on an execution host counts against that host's maxBusy and
+	// never against it. Unset: no local cap, capacity.ceiling and the
+	// machine guards alone bound a local start. 0 refuses every unforced
+	// local start.
+	Ceiling *int `yaml:"ceiling"`
+}
+
+// Limit is capacity.local.ceiling and whether it is set.
+func (l LocalCapacity) Limit() (int, bool) {
+	if l.Ceiling == nil {
+		return 0, false
+	}
+	return *l.Ceiling, true
 }
 
 // Provider configures one provider (such as claude, agy or codex): its own
@@ -2087,9 +2112,13 @@ type Supervisor struct {
 	// check (capacity --host); the start is pinned to the repository's
 	// default branch. Releases and the loop itself stay on the coordinator.
 	Hosts []string `yaml:"hosts"`
-	// HostsFirst places every placed start on the first host of Hosts
-	// with room, whatever the local machine's room is; without room on
-	// any host the loop waits, as it does on a full machine.
+	// HostsFirst places a start on the first host of Hosts with room,
+	// whatever the local machine's room is, for what a host can run: a
+	// start a mapped host could run waits without room on any host, as it
+	// does on a full machine; a repository no host maps, or a choice of a
+	// harness no host has an adapter for (every harness but Claude Code),
+	// starts locally within the local room (capacity.local.ceiling among
+	// its guards).
 	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
@@ -3720,6 +3749,9 @@ func (c *Config) validate() error {
 	}
 	if c.Capacity.ReviewHeadroom < 0 {
 		return fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom)
+	}
+	if n, ok := c.Capacity.Local.Limit(); ok && n < 0 {
+		return fmt.Errorf("capacity.local.ceiling: %d is negative", n)
 	}
 	if c.Capacity.SwapPSIMax < 0 {
 		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
