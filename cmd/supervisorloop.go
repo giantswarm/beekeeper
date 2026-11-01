@@ -1587,14 +1587,15 @@ func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, erro
 		}
 		return nil, fmt.Errorf("board next --json: %w", err)
 	}
+	none := string(next.Pick) == "null"
 	if code != 0 {
 		// Only a document that says no pick settles a refusal.
-		if string(next.Pick) != "null" {
+		if !none {
 			return nil, failed()
 		}
 		return nil, nil
 	}
-	if len(next.Pick) == 0 || string(next.Pick) == "null" {
+	if none || len(next.Pick) == 0 {
 		return nil, nil
 	}
 	var pick loopBoardItem
