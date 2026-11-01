@@ -26,11 +26,11 @@ func TestSetupIsolatesIdentityAndGit(t *testing.T) {
 		}
 		dir := t.TempDir()
 		for _, args := range [][]string{{"init", "-q", dir}, {"-C", dir, "commit", "-q", "--allow-empty", "-m", "fixture"}} {
-			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil { //nolint:gosec // fixed Git fixture commands in a test-owned directory
 				t.Fatalf("fixture git: %v: %s", err, out)
 			}
 		}
-		out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%an <%ae>").Output()
+		out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%an <%ae>").Output() //nolint:gosec // read this test's fixture commit
 		if err != nil || strings.TrimSpace(string(out)) != "Test <test@example.com>" {
 			t.Fatalf("fixture identity: %v: %s", err, out)
 		}
@@ -43,7 +43,7 @@ func TestSetupIsolatesIdentityAndGit(t *testing.T) {
 	if err := os.WriteFile(global, []byte("[commit]\n gpgsign = true\n[gpg]\n program = missing-test-signer\n[test]\n hostile = true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := exec.Command(os.Args[0], "-test.run=^TestSetupIsolatesIdentityAndGit$")
+	c := exec.Command(os.Args[0], "-test.run=^TestSetupIsolatesIdentityAndGit$") //nolint:gosec // reexecute this test binary with a fixed test selector
 	c.Env = append(os.Environ(), child+"=1", "BEEKEEPER_TEST_HELPER=fixture", "GIT_CONFIG_GLOBAL="+global, "BEEKEEPER_TEST_DATABASE_URL=test-database", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=user.name", "GIT_CONFIG_VALUE_0=Hostile")
 	for _, key := range keys {
 		c.Env = append(c.Env, key+"=caller")

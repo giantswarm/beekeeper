@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	fixtureCommand     = "comm"
+	fixtureCWD         = "cwd"
 	fixtureStatus      = "status"
 	fixtureEnvironment = "environ"
 	fixtureMappings    = "maps"
@@ -25,7 +27,7 @@ func TestReferencesReadsOpenFilesMappingsAndBuildDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := []string{filepath.Join(root, "work"), filepath.Join(root, "output"), filepath.Join(root, "mapped"), filepath.Join(root, "tmp")}
-	if err := os.Symlink(paths[0], filepath.Join(dir, "cwd")); err != nil {
+	if err := os.Symlink(paths[0], filepath.Join(dir, fixtureCWD)); err != nil {
 		t.Skip(err)
 	}
 	if err := os.Symlink(paths[1]+" (deleted)", filepath.Join(dir, "fd", "3")); err != nil {
@@ -70,13 +72,13 @@ func TestUserReferencesDistinguishesProtectedHelpersFromUnreadableProcesses(t *t
 		{"credential-changing helper", "setuid", fixtureMappings, false},
 		{"kernel-owned helper", "kernel-owned", fixtureEnvironment, false},
 		{"permitted capabilities", "CapPrm: 0000000000000001\n", fixtureEnvironment, false},
-		{"effective capabilities", "CapEff: 0000000000000001\n", "cwd", false},
+		{"effective capabilities", "CapEff: 0000000000000001\n", fixtureCWD, false},
 		{"mixed groups", "Gid: 1 2 1 1\n", fixtureMappings, false},
 		{"ordinary credentials", "Gid: 1 1 1 1\nCapPrm: 0000000000000000\nCapEff: 0000000000000000\n", fixtureEnvironment, true},
 		{"dumpable environment", "", fixtureEnvironment, true},
 		{"dumpable mappings", "", fixtureMappings, true},
 		{"dumpable descriptors", "", "fd", true},
-		{"dumpable cwd", "", "cwd", true},
+		{"dumpable cwd", "", fixtureCWD, true},
 		{"dumpable descriptor target", "", "3", true},
 		{"unknown ownership", "", fixtureStatus, true},
 	} {
@@ -94,7 +96,7 @@ func TestUserReferencesDistinguishesProtectedHelpersFromUnreadableProcesses(t *t
 			if tc.status == "setuid" {
 				status = fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid+1, uid, uid)
 			}
-			for name, data := range map[string]string{fixtureStatus: status, "comm": "go", fixtureEnvironment: "", fixtureMappings: "", "fd/3": ""} {
+			for name, data := range map[string]string{fixtureStatus: status, fixtureCommand: "go", fixtureEnvironment: "", fixtureMappings: "", "fd/3": ""} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -216,7 +218,7 @@ func TestReferenceOwnerRejectsMalformedProtectionMetadata(t *testing.T) {
 // Exiting and zombie processes can yield ESRCH at any point in a scan;
 // an actual I/O failure must still stop pruning.
 func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
-	for _, target := range []string{"status", "stat", "environ", "maps", "fd", "cwd", "exe", "comm"} {
+	for _, target := range []string{"status", "stat", "environ", "maps", "fd", fixtureCWD, "exe", fixtureCommand} {
 		for _, gone := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/gone=%v", target, gone), func(t *testing.T) {
 				root := t.TempDir()
@@ -225,7 +227,7 @@ func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 					t.Fatal(err)
 				}
 				uid := os.Getuid()
-				for name, data := range map[string]string{"status": fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid), "environ": "", "maps": "", "comm": "fixture"} {
+				for name, data := range map[string]string{"status": fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid), "environ": "", "maps": "", fixtureCommand: "fixture"} {
 					if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 						t.Fatal(err)
 					}
