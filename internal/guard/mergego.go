@@ -3,6 +3,7 @@ package guard
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -10,6 +11,29 @@ import (
 var mergeHead = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 var mergeEndpoint = regexp.MustCompile(`^(?:https://api\.github\.com/)?/?repos/([\w.-]+/[\w.-]+)/pulls/([0-9]+)/merge$`)
 var mergePullURL = regexp.MustCompile(`^https://github\.com/([\w.-]+/[\w.-]+)/pull/([0-9]+)$`)
+
+// gatedMerge refuses any merge of a repository whose merges belong to the
+// gate: its lane, protection check and release wait run only through
+// devctl pr merge, whatever go a raw merge carries.
+func (h Hook) gatedMerge(repo, number string) string {
+	owner, _, _ := strings.Cut(repo, "/")
+	if !slices.ContainsFunc(h.GatedOwners, func(o string) bool { return strings.EqualFold(o, owner) }) {
+		return ""
+	}
+	if number == "" {
+		number = "<n>"
+	}
+	return fmt.Sprintf("Refused: %s's merges belong to the gate (its lane, protection check and release wait); a raw merge bypasses it. Run `devctl pr merge %s %s --update-branch` on the loop's go; the hook puts the gate in front of it.", repo, repo, number)
+}
+
+// gatedHint names the gated command for a merge whose repository the guard
+// cannot read (GraphQL, a script).
+func (h Hook) gatedHint() string {
+	if len(h.GatedOwners) == 0 {
+		return ""
+	}
+	return " On a repository of " + strings.Join(h.GatedOwners, ", ") + " the merge is `devctl pr merge <owner/repo> <n> --update-branch` through the gate."
+}
 
 // Only a component-recorded go is authority. The head must also be enforced
 // by GitHub atomically; a preflight read alone leaves a race with a push.
@@ -42,6 +66,9 @@ func (h Hook) ghMergeGo(args, pos []string, repo, cwd string, known bool) string
 		if repo == "" {
 			repo = h.Upstream.baseRepo(cwd, "", known)
 		}
+		if why := h.gatedMerge(repo, number); why != "" {
+			return why
+		}
 		head := ""
 		for i, arg := range args {
 			if arg == "--auto" || strings.HasPrefix(arg, "--auto=") {
@@ -66,7 +93,7 @@ func (h Hook) ghMergeGo(args, pos []string, repo, cwd string, known bool) string
 	}
 	if endpoint == executionGraphQL {
 		if strings.Contains(strings.Join(args, " ")+ghAPIBodies(words, cwd), "mergePullRequest") {
-			return "Refused: use gh pr merge with --match-head-commit so the supervisor go can be checked by repository, pull request and head."
+			return "Refused: use gh pr merge with --match-head-commit so the supervisor go can be checked by repository, pull request and head." + h.gatedHint()
 		}
 		return ""
 	}
@@ -76,9 +103,12 @@ func (h Hook) ghMergeGo(args, pos []string, repo, cwd string, known bool) string
 	m := mergeEndpoint.FindStringSubmatch(endpoint)
 	if m == nil {
 		if strings.Contains(endpoint, "/merge") {
-			return "Refused: the guard cannot resolve this merge endpoint; use gh pr merge with --repo and --match-head-commit."
+			return "Refused: the guard cannot resolve this merge endpoint; use gh pr merge with --repo and --match-head-commit." + h.gatedHint()
 		}
 		return ""
+	}
+	if why := h.gatedMerge(m[1], m[2]); why != "" {
+		return why
 	}
 	head := ""
 	for i, arg := range args {
@@ -111,6 +141,14 @@ func (h Hook) ghMergeGo(args, pos []string, repo, cwd string, known bool) string
 // script could change its target after the hook checked its contents.
 var looseDeskMerge = regexp.MustCompile(`\bgh` + sep + `(?:pr` + sep + `merge\b|api[^\n]*?/merge\b)`)
 
+// apiDeskMerge is a merge through GitHub's API from a program's string
+// literal: the REST merge endpoint or GraphQL's mergePullRequest.
+var apiDeskMerge = regexp.MustCompile(`(?i:api\.github\.com)/repos/[^\s"'/]+/[^\s"'/]+/pulls/[^\s"'/]+/merge\b|\bmergePullRequest\b`)
+
+// splitMergePath is a literal that ends a URL built in pieces on the merge
+// endpoint ("/merge"), in a program that names GitHub's API.
+var splitMergePath = regexp.MustCompile(`/merge$`)
+
 func (h Hook) hiddenDeskMerge(text, where string, kind textKind) string {
 	if kind == textShell {
 		// Use the same shell parser as direct commands, including leading API
@@ -133,11 +171,79 @@ func (h Hook) hiddenDeskMerge(text, where string, kind textKind) string {
 				}
 			}
 		}
+		for _, match := range apiDeskMerge.FindAllStringIndex(text, -1) {
+			for _, literal := range literals {
+				if literal[0] <= match[0] && match[0] < literal[1] {
+					found = true
+				}
+			}
+		}
+		if strings.Contains(strings.ToLower(text), "api.github.com") {
+			for _, literal := range literals {
+				if splitMergePath.MatchString(text[literal[0]:literal[1]]) {
+					found = true
+				}
+			}
+		}
 		if !found {
 			return ""
 		}
-	} else if !looseDeskMerge.MatchString(text) {
+	} else if !looseDeskMerge.MatchString(text) && !apiDeskMerge.MatchString(text) {
 		return ""
 	}
-	return "Refused: a GitHub merge in " + where + " runs outside the supervisor go check; run the merge as its own command with --match-head-commit."
+	return "Refused: a GitHub merge in " + where + " runs outside the supervisor go check; run the merge as its own command with --match-head-commit." + h.gatedHint()
+}
+
+// curlMerge refuses a pull request merge or a GraphQL merge sent with curl:
+// the supervisor go is checked on gh pr merge alone, and a gated repository's
+// merge is the gate's. A read of a merge endpoint passes.
+func (h Hook) curlMerge(args []string) string {
+	args = stripRedirects(args)
+	method, body := "", false
+	var targets []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case (a == "-X" || a == "--request") && i+1 < len(args):
+			method = strings.ToUpper(args[i+1])
+			i++
+		case strings.HasPrefix(a, "-X") && len(a) > 2:
+			method = strings.ToUpper(a[2:])
+		case strings.HasPrefix(a, "--request="):
+			method = strings.ToUpper(strings.TrimPrefix(a, "--request="))
+		case curlData[strings.SplitN(a, "=", 2)[0]]:
+			body = true
+		case strings.Contains(strings.ToLower(a), "api.github.com"):
+			targets = append(targets, strings.TrimPrefix(a, "--url="))
+		}
+	}
+	if method == "" && body {
+		method = methodPost
+	}
+	if !writeMethods[method] {
+		return ""
+	}
+	for _, target := range targets {
+		if graphqlURL.MatchString(target) {
+			if strings.Contains(strings.Join(args, " "), "mergePullRequest") {
+				return "Refused: a GraphQL merge through curl runs outside the supervisor go check; use gh pr merge with --match-head-commit." + h.gatedHint()
+			}
+			continue
+		}
+		path, _, _ := strings.Cut(target, "?")
+		if !strings.Contains(path, "/merge") {
+			continue
+		}
+		if m := mergeEndpoint.FindStringSubmatch(path); m != nil {
+			if why := h.gatedMerge(m[1], m[2]); why != "" {
+				return why
+			}
+		} else if m := githubAPI.FindStringSubmatch(path); m != nil && m[3] == "" {
+			if why := h.gatedMerge(m[1]+"/"+m[2], ""); why != "" {
+				return why
+			}
+		}
+		return "Refused: a merge through curl runs outside the supervisor go check; use gh pr merge with --repo and --match-head-commit." + h.gatedHint()
+	}
+	return ""
 }

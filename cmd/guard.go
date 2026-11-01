@@ -318,9 +318,11 @@ the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
 machine kubeconfig. A configuration that does not load refuses every Bash
 call, naming the error.
-Every gh pr merge and gh api PUT of a pull request merge requires the
-supervisor loop's durable go for this worker and exact head, current green CI
-and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
+A merge of a merge.devctlOwners repository is the gate's devctl pr merge
+alone: gh pr merge, gh api, GraphQL and curl merges there are refused,
+naming the gated command. Elsewhere every gh pr merge and gh api PUT of a
+pull request merge requires the supervisor loop's durable go for this worker
+and exact head, current green CI and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
 so GitHub enforces the checked head atomically. GraphQL merges and deferred
 auto-merges are refused; expose script merges as their own tool command.
 Successful preflight checks leave a merge.authorized event (not proof that
@@ -543,7 +545,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				Apps:    a.allowedApps, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
-				h.MergeGo = a.hookMergeGo
+				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)

@@ -105,7 +105,10 @@ const (
 // Hook decides one PreToolUse event.
 type Hook struct {
 	// MergeGo checks the durable supervisor go for this session and exact head.
-	MergeGo      func(session, repo string, pr int, head string) string
+	MergeGo func(session, repo string, pr int, head string) string
+	// GatedOwners are merge.devctlOwners: a merge of their repositories is
+	// the gate's devctl pr merge, never gh pr merge, gh api or curl.
+	GatedOwners  []string
 	mergeSession string
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string

@@ -170,6 +170,10 @@ func (h Hook) scanPush(cmd, cwd string, forceUnknown, noInitialCWD bool, depth i
 				if r := h.checkGHCommand(exp, c, st.dir, known); r != "" {
 					return r
 				}
+			case executionCurl:
+				if r := h.curlMerge(exp[c+1:]); r != "" {
+					return r
+				}
 			}
 		}
 	}
