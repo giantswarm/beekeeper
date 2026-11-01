@@ -41,7 +41,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	if err := a.refuseStopped(st, "starting "+sp.name); err != nil {
 		return err
 	}
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 
 // dryRunAgyStart prints how startAgyAgent would start sp and starts nothing.
 func (a *app) dryRunAgyStart(sp agentStart, gaps []string) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
