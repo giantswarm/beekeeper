@@ -374,6 +374,7 @@ func (a *app) notifyAgyRemoteDaemon(ctx context.Context, startID, convID string)
 // endAgy stops the unit of the agy agent started under id, which left the
 // roster, and removes its inbox and state files, and says what it did.
 func (a *app) endAgy(ctx context.Context, id string) string {
+	defer a.recordStoppedGates(ctx)
 	var done []string
 	if unit := agyUnit(id); plat.Launcher.State(ctx, unit) == holdActive {
 		if err := plat.Launcher.Stop(ctx, unit); err != nil {

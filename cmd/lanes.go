@@ -581,6 +581,12 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 // (cutOwed), which the watch hands over from GitHub's answer. It returns
 // what it recorded, the cut runs and the lost merges.
 func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []state.Merge) {
+	return a.recordGateExits(ctx, false)
+}
+
+// recordGateExits also settles unreadable exits immediately when a worker
+// has just been stopped. Ordinary watch recovery retains its lost-run event.
+func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded, cut []string, lost []state.Merge) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, nil, nil
@@ -600,7 +606,8 @@ func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []st
 		r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), m.HandCut)}
 		var ok bool
 		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
-			if r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1); r.unanswered != nil {
+			r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1)
+			if r.unanswered != nil && !workerStopped {
 				continue
 			}
 		}
@@ -810,4 +817,14 @@ func (a *app) pullText(p github.Pull) string {
 		return "closed without a merge"
 	}
 	return "merged at " + clock(a.now, p.MergedAt)
+}
+
+// recordStoppedGates reconciles exits before a worker stop returns, rather
+// than leaving a dead run in Running until the watch's hung-run threshold.
+// Independently running gate runners remain owned by the gate and are not
+// signalled. An unreadable outcome enters Settling under the usual rules.
+func (a *app) recordStoppedGates(ctx context.Context) {
+	if a.store != nil {
+		a.recordGateExits(ctx, true)
+	}
 }

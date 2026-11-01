@@ -52,6 +52,7 @@ const (
 // A leak names the command that would expose secret values and the safe forms.
 type leak struct {
 	what, safe string
+	transcript bool
 	// at is the command of the line that exposes them.
 	at string
 	// never: no sink makes the command safe (sops, op, a hash of a secret file).
@@ -80,6 +81,9 @@ const secretOps = "Equality, the one comparison an agent runs: `beekeeper secret
 	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."
 
 func (l leak) reason() string {
+	if l.transcript {
+		return transcriptRefusal
+	}
 	at := strings.Join(strings.Fields(l.at), " ")
 	if len(at) > 200 {
 		at = at[:200] + "…"
@@ -181,7 +185,8 @@ type secretGuard struct {
 	// cwd is the session's working directory; empty, no script is read.
 	cwd string
 	// files are the files known to hold secret values (secretfiles.go).
-	files secretFiles
+	files       secretFiles
+	transcripts transcriptAccess
 	// metadata holds helpers whose complete bodies have been checked. An empty
 	// entry shadows a utility and must not inherit its metadata exemption.
 	metadata         map[string]string
@@ -236,6 +241,18 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		return nil
 	}
 	sc := scanShell(cmd)
+	if len(g.transcripts.roots) > 0 {
+		for _, doc := range sc.heredocs {
+			if doc.quoted {
+				continue
+			}
+			for _, sub := range heredocSubstitutions(cmd[doc.start:doc.end]) {
+				if l := g.scan(sub, depth+1); l != nil && l.transcript {
+					return l
+				}
+			}
+		}
+	}
 	segs := sc.segments()
 	aliases := map[string]bool{kubectlCmd: true}
 	for _, re := range []*regexp.Regexp{kubectlFunc, kubectlVar} {
@@ -767,6 +784,9 @@ func pipelineBefore(cmd string, segs []segment, i int) string {
 
 // sourceLeak returns the leak when the simple command exposes secret values.
 func (g secretGuard) sourceLeak(words []string, before string, aliases map[string]bool, dirs []string, copied map[string]string) *leak {
+	if l := g.transcripts.fileLeak(words, dirs, g.metadata); l != nil {
+		return l
+	}
 	if l := procFileLeak(words); l != nil {
 		return l
 	}

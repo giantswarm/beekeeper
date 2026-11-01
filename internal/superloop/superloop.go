@@ -94,7 +94,8 @@ type Pull struct {
 	State string
 	Head  string
 	// Base is the branch it merges into.
-	Base string
+	Base        string
+	MergeCommit string
 	// Green is every check on Head concluded successfully (none is not
 	// green: they have not reported yet).
 	Green   bool
@@ -160,6 +161,8 @@ type Worker struct {
 	// Waking is an open timer that wakes the agent by name (timer add
 	// --wake): a park on nothing waits for it.
 	Waking bool
+	// LastActive is the latest observed session activity.
+	LastActive time.Time
 }
 
 // Event is one line of the event log the loop acts on.
@@ -216,8 +219,9 @@ type Input struct {
 	// Answers are the answers to the notes the loop filed, oldest first.
 	Answers []Answer
 	// Desk is whose pull requests the loop acts on; Now is the pass's time.
-	Desk Desk
-	Now  time.Time
+	Desk            Desk
+	Now             time.Time
+	PostMergeWindow time.Duration
 	// DevctlOwners is merge.devctlOwners: a go on their repositories names
 	// the gate's devctl pr merge --update-branch, on any other gh pr merge
 	// --match-head-commit.
@@ -391,15 +395,14 @@ func (l ledger) actedAfter(ref string, at time.Time) bool {
 }
 
 // workerDue reports whether the worker the go for ref was given to waits
-// for its retirement: a beekeeper-started session on the roster, not
-// retired yet, and done with its task: not parked, or parked on ref
-// itself. One parked on anything else (a release, a timer, a note) still
-// has work to do.
+// for its post-merge report: a beekeeper-started session still on the
+// roster and not retired yet. A park on a release, timer or note keeps
+// the worker reachable too.
 func (l ledger) workerDue(ref string, workers []Worker) bool {
 	agent := l.goAgent[ref]
 	return agent != "" && !l.has(retireKey(ref, retiredWorker)) &&
 		slices.ContainsFunc(workers, func(w Worker) bool {
-			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref && w.ReviewRequested)
+			return w.Name == agent && w.Started
 		})
 }
 
@@ -547,7 +550,28 @@ func Plan(in Input) []Action {
 	for _, ref := range refs {
 		p := in.Pulls[ref]
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
-			retire(ref, retiredWorker, l.goAgent[ref], fmt.Sprintf("%s merged after the merge go", p.URL))
+			// The end action durably marks when the merge was observed. A
+			// quiet worker retains its inbox while waiting for its release.
+			if end, ok := l.keys[endKey(ref)]; ok {
+				last := end.At
+				for _, w := range in.Workers {
+					if w.Name == l.goAgent[ref] {
+						if w.LastActive.After(last) {
+							last = w.LastActive
+						}
+						if w.ParkedAt.After(last) {
+							last = w.ParkedAt
+						}
+					}
+				}
+				window := in.PostMergeWindow
+				if window <= 0 {
+					window = 2 * time.Hour
+				}
+				if !in.Now.Before(last.Add(window)) {
+					retire(ref, retiredWorker, l.goAgent[ref], fmt.Sprintf("%s: no report after merge; no activity for %s", p.URL, window))
+				}
+			}
 		}
 		if l.ended[ref] {
 			continue
@@ -854,6 +878,16 @@ func Plan(in Input) []Action {
 	if in.Release != "" {
 		add(Action{Key: "release " + in.Release, Kind: KindRelease, Version: in.Release})
 	}
+	// Drain pending reviews before refilling worker capacity.
+	slices.SortStableFunc(out, func(a, b Action) int {
+		if a.Kind == KindNext && b.Kind != KindNext {
+			return 1
+		}
+		if b.Kind == KindNext && a.Kind != KindNext {
+			return -1
+		}
+		return 0
+	})
 	return out
 }
 
@@ -1122,4 +1156,23 @@ func sameHead(a, b string) bool {
 		return a == b && a != ""
 	}
 	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+// ReleaseWorkers returns the retained workers whose merged pull requests may
+// be carried by an installed release. Containment is checked by the caller.
+func ReleaseWorkers(in Input) []Action {
+	l := newLedger(in.Taken, in.Answers)
+	var out []Action
+	for ref, p := range in.Pulls {
+		if p.State != Merged || !l.workerDue(ref, in.Workers) {
+			continue
+		}
+		agent := l.goAgent[ref]
+		if slices.ContainsFunc(in.Events, func(e Event) bool { return e.Agent == agent && e.Verb == VerbDone }) {
+			continue
+		}
+		out = append(out, Action{Ref: ref, Agent: agent, URL: p.URL, Head: p.MergeCommit})
+	}
+	slices.SortFunc(out, func(a, b Action) int { return strings.Compare(a.Ref, b.Ref) })
+	return out
 }

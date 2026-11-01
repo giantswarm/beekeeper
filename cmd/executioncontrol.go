@@ -35,6 +35,7 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
+	RefKind    string `json:"refKind,omitempty"`
 	ReviewHead string `json:"reviewHead,omitempty"`
 	On         string `json:"on"`
 	Waits      string `json:"waits"`
@@ -312,7 +313,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), ReviewHead: v.ReviewHead}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: v.RefKind, ReviewHead: v.ReviewHead}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)

@@ -401,9 +401,14 @@ inspected. `disk.trashDirs` adds other trash places; its default also
 includes the XDG state root's `trash` directory.
 Recent descendants, open files, working directories, executable mappings
 and build/temp environment references keep entries alive. Symbolic links
-and directories containing checkout metadata are kept. Unreadable
-dumpable user-process references, unknown process ownership or an unreadable
-process root stop the disk step. Expected kernel permission denials on
+and directories containing checkout metadata are kept. An unreadable
+process root stops the disk step. A process with unreadable dumpable
+references or unknown ownership does not: the step it gates (caches, tmp,
+one worktree, trash) keeps its candidates as `process references unknown`,
+the `DISK PRUNE` line names the process, and the next step reads the
+processes again. An exited zombie holds no references and is skipped; a
+zombie thread-group leader is read through its live threads
+(`/proc/<pid>/task/<tid>`). Expected kernel permission denials on
 non-dumpable helpers or helpers with different credentials or capabilities
 do not stop pruning; their readable references still protect data. Ownership
 of ptrace-gated child entries detects changes in dumpability even when the

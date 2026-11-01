@@ -15,7 +15,7 @@ func TestRefStates(t *testing.T) {
 	var query string
 	run := func(_ context.Context, args ...string) ([]byte, error) {
 		query = args[len(args)-1]
-		return []byte(`{"data":{"r0":{"issueOrPullRequest":{"state":"CLOSED","timelineItems":{"nodes":[{"closer":null}]}}},"r1":{"issueOrPullRequest":{"state":"MERGED"}},"r2":{"issueOrPullRequest":null},` +
+		return []byte(`{"data":{"r0":{"issueOrPullRequest":{"__typename":"Issue","state":"CLOSED","timelineItems":{"nodes":[{"closer":null}]}}},"r1":{"issueOrPullRequest":{"__typename":"PullRequest","state":"MERGED"}},"r2":{"issueOrPullRequest":null},` +
 			// Closed by a pull request's closing keyword at its squash merge: the closer is the merge commit.
 			`"r3":{"issueOrPullRequest":{"state":"CLOSED","timelineItems":{"nodes":[{"closer":{"__typename":"Commit","abbreviatedOid":"f880a16","associatedPullRequests":{"nodes":[{"number":9,"repository":{"nameWithOwner":"example/notes"}}]}}}]}}},` +
 			// Closed by a pull request directly, by a bare commit, and reopened after a keyword close.
@@ -30,8 +30,8 @@ func TestRefStates(t *testing.T) {
 		t.Fatalf("RefStates = %v, %v", states, err)
 	}
 	for i, want := range map[int]RefState{
-		0: {State: Closed},
-		1: {State: Merged},
+		0: {Kind: RefIssue, State: Closed},
+		1: {Kind: RefPullRequest, State: Merged},
 		3: {State: Closed, Closer: "example/notes#9"},
 		4: {State: Closed, Closer: "example/other#10"},
 		5: {State: Closed, Closer: "commit abc1234"},
@@ -44,7 +44,7 @@ func TestRefStates(t *testing.T) {
 	if _, ok := states[refs[2]]; ok {
 		t.Errorf("an unanswered reference has a state: %v", states)
 	}
-	if !strings.Contains(query, `r0:repository(owner:"example",name:"notes"){issueOrPullRequest(number:1){...on Issue{state timelineItems(last:1,itemTypes:[CLOSED_EVENT])`) {
+	if !strings.Contains(query, `r0:repository(owner:"example",name:"notes"){issueOrPullRequest(number:1){__typename ...on Issue{state timelineItems(last:1,itemTypes:[CLOSED_EVENT])`) {
 		t.Errorf("query %s", query)
 	}
 	if _, err := RefStates(context.Background(), func(context.Context, ...string) ([]byte, error) { return nil, errors.New("offline") }, refs); err == nil {
