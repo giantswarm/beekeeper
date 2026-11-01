@@ -1448,6 +1448,22 @@ Claimed by beekeeper desk platform-desk for session "0b5c1d2e-…" since 2026-11
 - Reads go through REST with each thread's ETag cached in the state folder: an unchanged thread costs no
   rate limit.
 
+## Work from repositories of different owners
+
+One configured project can hold native issue items from accessible repositories of
+several owners. Add an issue with `beekeeper board move <issue-url> "Up Next"`,
+then place it with `beekeeper board rank <issue-url> --top` (or `--before` /
+`--after`). GitHub's project permissions decide whether it can be added; a
+refused add returns the permission error without setting fields or ranking it.
+No second project or draft tracking item is needed.
+
+`board next` reads those native items together. Status order comes first, then
+position within each status, regardless of repository owner. The priority list
+still records and annotates epic ranks across owners; it does not override that
+status order. An unstaffed foreign epic in In Progress offers its open sub-issues
+through the same epic gate as any other epic. The supervisor loop starts the
+selected issue using the existing capacity verdict and harness choice.
+
 ## The priority list
 
 The desk's priorities are an ordered list of epics, and only the person orders it. The list lives
