@@ -68,6 +68,12 @@ desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the 
 the build under test, and each test starts its command in a scope of its own: on a guarded machine
 `go test` itself runs in a capped scope, where `run` takes no slot.
 
+`TestWatchStopsSandboxOrphan` additionally needs bubblewrap. It starts a real PID namespace,
+enters a scratch scope through the broker, and leaves a background child adopted by the sandbox
+init. Sandboxed `Capper.Reap` leaves cleanup to the host watch: the test proves a reporting-only
+watch preserves the child and an active watch stops its scope after the orphan grace period.
+Its scope and sandbox are stopped at test cleanup; no installed configuration is changed.
+
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
@@ -329,9 +335,14 @@ and the reasons for keeping it. `beekeeper disk prune` previews the step;
 
 On healthy scheduled runs, the step trims only caches over their caps:
 `doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
-to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) clears sccache
-when exceeded. A negative cap disables its scheduled cleanup. Under
-`LOW DISK` or `DISK FILLING`, both unused caches are reclaimed immediately.
+to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) trims sccache's
+local cache (`SCCACHE_DIR`, else `sccache` in the user's cache directory) the
+same way, least recently used entries first. A negative cap disables its
+scheduled cleanup. Under `LOW DISK` or `DISK FILLING`, both unused caches are
+reclaimed immediately. An idle sccache server is stopped first, through its
+own executable and server address (`sccache --stop-server`), so it counts
+the trimmed cache afresh when a build starts it again; a server that does not
+stop keeps the cache, and one that starts during the trim ends it.
 No cache is reclaimed while builds use it. New
 `beekeeper run` commands share a build-cache lock, including Rust builds and
 runs with `GOCACHE=off`; Go's existing cache-use lock also protects older

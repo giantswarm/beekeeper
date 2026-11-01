@@ -395,6 +395,29 @@ type Board struct {
 	// supervisor loop runs board tidy (default 1h; negative: never).
 	ArchiveAfter Duration `yaml:"archiveAfter"`
 	TidyEvery    Duration `yaml:"tidyEvery"`
+	// Claims publishes the desk's session records on their issues, for
+	// the other desks working the same repositories.
+	Claims BoardClaims `yaml:"claims"`
+}
+
+// BoardClaims is a desk's claims on GitHub: each issue a session record
+// serves carries one marker comment of the desk (Desk), which board
+// next and agents start on every other desk honour, and which the desk
+// releases when the record ends.
+type BoardClaims struct {
+	// Off publishes no claim and reads none.
+	Off bool `yaml:"off"`
+	// Desk is the name the desk signs its claims with, which other desks
+	// see on the issues: a neutral name, never a machine's (the issues may
+	// be public). Unset, the desk publishes no claim and still honours the
+	// other desks'.
+	Desk string `yaml:"desk"`
+	// Refresh is how often the desk refreshes a claim that still holds
+	// (default 6h).
+	Refresh Duration `yaml:"refresh"`
+	// StaleAfter is how long another desk's claim holds unrefreshed
+	// (default 24h): older, it is shown and not honoured.
+	StaleAfter Duration `yaml:"staleAfter"`
 }
 
 // DefaultBoardArchiveAfter is board.archiveAfter when unset: two weeks.
@@ -677,7 +700,8 @@ const (
 type Disk struct {
 	Prune string   `yaml:"prune"`
 	Every Duration `yaml:"every"`
-	// SccacheMaxGiB caps scheduled sccache cleanup; negative disables the cap.
+	// SccacheMaxGiB caps sccache's local cache: a scheduled run trims it least
+	// recently used first to three quarters of the cap; negative disables the cap.
 	SccacheMaxGiB int `yaml:"sccacheMaxGiB"`
 	// Checkouts locates main checkouts whose harness worktrees are inspected.
 	Checkouts []string `yaml:"checkouts"`
@@ -3127,6 +3151,8 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
 	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
+	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)

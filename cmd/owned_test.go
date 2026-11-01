@@ -131,9 +131,50 @@ func TestAnUnheardRunWakesItsOwner(t *testing.T) {
 
 	a, r, woke = tellOwnerRun(t, state.Party{Session: "s9", Name: "a person's session"})
 	a.tellOwner(context.Background(), r)
-	evs, _ = a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard })
-	if len(*woke) != 0 || len(evs) != 1 || !strings.Contains(evs[0].Detail, "is no registered agent, nobody is woken") {
-		t.Errorf("an owner off the roster: woke %q, events %+v", *woke, evs)
+	want = `beekeeper gate → s9: devctl pr wait o/r 7 exit 0: green: every check passed (output in /k/pr-wait.log)`
+	if len(*woke) != 1 || (*woke)[0] != want {
+		t.Errorf("a CI wait of an owner off the roster: woke %q, want %q", *woke, want)
+	}
+}
+
+// A queued merge (the gate's exit 76) of an owner off the roster wakes it by
+// its session id when its turn came and devctl ran, as a roster agent's.
+func TestAQueuedMergeWakesItsOwnerOffTheRoster(t *testing.T) {
+	a, r, woke := tellOwnerRun(t, state.Party{HostSession: holderHost, Name: "a desktop session"})
+	r.spec.Argv = strings.Fields("/usr/bin/devctl pr merge o/r 7 --update-branch")
+	r.doc, r.kept = []byte(mergedDoc), ""
+	a.tellOwner(context.Background(), r)
+	if len(*woke) != 1 || !strings.HasPrefix((*woke)[0], "beekeeper gate → "+holderHost+": devctl pr merge o/r 7 --update-branch exit 0: merged, release v1.2.4") {
+		t.Errorf("woke %q", *woke)
+	}
+	if st, _ := a.store.Read(); len(st.Owed) != 0 {
+		t.Errorf("still owed: %+v", st.Owed)
+	}
+}
+
+// An owner whose session is gone by then gets no wake and one line, the
+// outcome is no longer owed, and an owner off the roster gives the issues it
+// served back to the board.
+func TestAGoneOwnerGetsOneLine(t *testing.T) {
+	gonner := state.Party{Session: "s9", Name: "a gone session"}
+	a, r, _ := tellOwnerRun(t, gonner)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Records = []state.Record{{Session: gonner, Issue: "o/r#15"}, {Session: state.Party{Session: "s1"}, Issue: "o/r#1818"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
+		return goneRefusal("s9: session s9 has no transcript under /p to resume")
+	}
+	a.tellOwner(context.Background(), r)
+	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard && strings.Contains(e.Detail, "is not woken") })
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, `"a gone session" is not woken: s9: session s9 has no transcript under /p to resume; back to the board: o/r#15`) {
+		t.Errorf("events %+v", evs)
+	}
+	st, _ := a.store.Read()
+	if len(st.Owed) != 0 || len(st.Records) != 1 || st.Records[0].Issue != "o/r#1818" {
+		t.Errorf("owed %+v records %+v", st.Owed, st.Records)
 	}
 }
 
@@ -222,8 +263,8 @@ func TestAStoppedWaiterNamesTheStop(t *testing.T) {
 }
 
 // A waiter whose owner left the roster while it waited, stopped or not,
-// exits without a wake.
-func TestAWaiterWhoseOwnerLeftWakesNoOne(t *testing.T) {
+// still wakes it, by its session id.
+func TestAWaiterWhoseOwnerLeftTheRosterIsWokenBySession(t *testing.T) {
 	for _, stop := range []syscall.Signal{0, syscall.SIGTERM} {
 		a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -235,7 +276,7 @@ func TestAWaiterWhoseOwnerLeftWakesNoOne(t *testing.T) {
 		r.stop = stop
 		a.tellOwner(context.Background(), r)
 		evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard })
-		if len(*woke) != 0 || len(evs) != 1 || !strings.Contains(evs[0].Detail, "is no registered agent, nobody is woken") {
+		if len(*woke) != 1 || !strings.HasPrefix((*woke)[0], "beekeeper gate → s1: devctl pr wait o/r 7 ") || len(evs) != 1 {
 			t.Errorf("stop %v: woke %q, events %+v", stop, *woke, evs)
 		}
 	}

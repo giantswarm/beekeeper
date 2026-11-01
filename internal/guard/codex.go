@@ -1016,11 +1016,33 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	}
 	name := path.Base(words[c])
 	args := words[c+1:]
+	sf := newSecretFiles(h.SecretFiles)
 	link := linkArgs(name, args, metadata)
-	isSymbolic := linksAllowed && newSecretFiles(h.SecretFiles).symbolicMetadata(link, []string{dir})
+	isSymbolic := linksAllowed && sf.symbolicMetadata(link, []string{dir})
 	isMeta := metaCmds[name] || isSymbolic
-	if _, helper := metadata[name]; helper {
+	_, helper := metadata[name]
+	if helper {
 		isMeta = isSymbolic
+	}
+	if (name == "ln" || helper) && !isSymbolic {
+		if file := sf.linkSource(args, []string{dir}); file != "" {
+			return leak{what: "a link that exposes " + file + ", a file that holds secret values", safe: fileReadSafe(file)}.reason(), ""
+		}
+	}
+	if name == findCmd {
+		if file := sf.findSource(args, []string{dir}, false); file != "" {
+			return leak{what: "a find that runs a reader on " + file + ", a file that holds secret values", safe: fileReadSafe(file)}.reason(), ""
+		}
+		isMeta = isMeta && !findReads(args)
+	}
+	// A function defined on the command line has an unchecked body: what it
+	// is handed may be written, so a guarded Codex home path is refused.
+	if helper && !isSymbolic {
+		for _, a := range args {
+			if a = strings.TrimPrefix(strings.TrimPrefix(a, "if="), "of="); !strings.HasPrefix(a, "-") && (isGuardedCodexHomePath(a, dir) || containsGuardedCodexHomeRef(a)) {
+				return codexHomeRefusalMsg, ""
+			}
+		}
 	}
 
 	// Check command word itself against guarded codex homes.
