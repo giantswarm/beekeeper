@@ -753,7 +753,7 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged("agents.start", opens)
+		done = logged(verbStart, opens)
 	case superloop.KindGo, superloop.KindForward, superloop.KindAnswer, superloop.KindRelay:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:

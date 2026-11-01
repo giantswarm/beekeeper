@@ -465,7 +465,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if err != nil {
 					return err
 				}
-				if err := a.store.Record(event(by, "agents.start", "%s: started over %s (--force)", name, over)); err != nil {
+				if err := a.store.Record(event(by, verbStart, "%s: started over %s (--force)", name, over)); err != nil {
 					return err
 				}
 				if _, err := fmt.Fprintf(a.out, "started over %s (--force)\n", over); err != nil {
@@ -788,7 +788,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		if sp.desktop {
 			st.Agents[len(st.Agents)-1].DesktopTurn = s.At
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -830,7 +830,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	d.urgent = a.asksDesktop(id)
 	if profile != "" {
 		sa.turn = profiledTurn(profile)
-		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		// its row shows from its first turn, as a desktop turn's does
 		d.urgent = func() bool { return true }
 	}
@@ -853,7 +853,7 @@ func (a *app) undelivered(by, p state.Party, why error) error {
 		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
 			st.Agents[i].Undelivered = why.Error()
 		}
-		return []state.Event{event(by, "agents.start", "%s: task not delivered: %v", p.Name, why)}, nil
+		return []state.Event{event(by, verbStart, "%s: task not delivered: %v", p.Name, why)}, nil
 	})
 	if strings.HasPrefix(p.HostSession, agy.HostPrefix) {
 		return fmt.Errorf("%s: task not delivered: %w (start it again with agents start --harness agy, or beekeeper agents remove %q takes it off the roster)",
@@ -917,21 +917,21 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		// runs headless, whose reopen imports it later.
 		if err := a.importVisible(ctx, d, id, sp.name, follow, &sa); err != nil {
 			sa.deferred = err
-			_ = a.store.Record(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
+			_ = a.store.Record(event(by, verbStart, "%s: the desktop did not import it (%v)", sp.name, err))
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
 	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
-		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		return sa, nil
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
 		sa.turn += " on " + w.model
 	}
-	_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+	_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
 		return sa, err
 	}
@@ -1795,6 +1795,9 @@ func (a *app) explicitConfig() string {
 	}
 	return p
 }
+
+// verbStart logs a start and what it overrode.
+const verbStart = "agents.start"
 
 func resumeURL(id string) string { return "claude://resume?session=" + id }
 

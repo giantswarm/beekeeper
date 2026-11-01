@@ -12,6 +12,9 @@ import (
 	"sync"
 )
 
+// comments is the comments segment of a path.
+const comments = "comments"
+
 // GitHub keeps the comments of issues in memory and answers the gh api
 // calls claim.Client makes: a listing with an ETag (an If-None-Match that
 // still matches is gh's "HTTP 304"), a post and an edit (an unknown comment
@@ -95,7 +98,7 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 	}
 	repo := parts[1] + "/" + parts[2]
 	switch {
-	case method == "" && parts[5] == "comments":
+	case method == "" && parts[5] == comments:
 		issue := repo + "#" + parts[4]
 		raw, _ := json.Marshal(append([]Comment{}, g.comments[issue]...))
 		tag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(raw))
@@ -105,13 +108,13 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 		}
 		g.Calls["list"]++
 		return []byte("HTTP/2.0 200 OK\r\nEtag: " + tag + "\r\n\r\n" + string(raw)), nil
-	case method == "POST" && parts[5] == "comments":
+	case method == "POST" && parts[5] == comments:
 		g.Calls["post"]++
 		g.next++
 		issue := repo + "#" + parts[4]
 		g.comments[issue] = append(g.comments[issue], Comment{ID: g.next, Body: body})
 		return []byte(`{"id":` + strconv.FormatInt(g.next, 10) + `}`), nil
-	case method == "PATCH" && parts[4] == "comments":
+	case method == "PATCH" && parts[4] == comments:
 		g.Calls["edit"]++
 		id, _ := strconv.ParseInt(parts[5], 10, 64)
 		for k, cs := range g.comments {

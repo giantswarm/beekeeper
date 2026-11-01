@@ -155,7 +155,7 @@ func TestSyncClaimsRepostsAGoneCommentAndSkipsIdleRecords(t *testing.T) {
 	idle := serveClaim(t, one, "Idle one", claimIssue2)
 	if err := one.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: idle})
-		st.Records = append(st.Records, state.Record{Session: state.Party{Session: "gone", Name: "Gone"}, Issue: "o/r#9", Ended: time.Now()})
+		st.Records = append(st.Records, state.Record{Session: state.Party{Session: "ended-session", Name: "Ended"}, Issue: "p/q#9", Ended: time.Now()})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestSyncClaimsRepostsAGoneCommentAndSkipsIdleRecords(t *testing.T) {
 	if ms := markers(t, gh, claimIssue2); len(ms) != 0 {
 		t.Errorf("an idle agent's record claimed %+v", ms)
 	}
-	if ms := markers(t, gh, "o/r#9"); len(ms) != 0 {
+	if ms := markers(t, gh, "p/q#9"); len(ms) != 0 {
 		t.Errorf("an ended session's record claimed %+v", ms)
 	}
 }
@@ -215,8 +215,8 @@ func TestBoardNextSkipsAnItemAnotherDeskClaims(t *testing.T) {
 	if res.Pick == nil || res.Pick.Ref != claimIssue2 {
 		t.Fatalf("pick = %+v, want %s", res.Pick, claimIssue2)
 	}
-	if len(res.Skipped) != 1 || !strings.HasPrefix(res.Skipped[0].Skip, claimedPrefix+deskOne) {
-		t.Errorf("skipped = %+v", res.Skipped)
+	if len(res.Skipped) != 1 || !strings.HasPrefix(res.Skipped[0].Skip, claimedPrefix+deskOne) || res.SkippedBy[kindClaimed] != 1 {
+		t.Errorf("skipped = %+v, by %v", res.Skipped, res.SkippedBy)
 	}
 	if gh.Calls["list"] > 3 {
 		t.Errorf("calls = %v: only the candidates up to the pick are read", gh.Calls)
@@ -280,7 +280,7 @@ func TestClaimGateRefusesTheStartUnlessForced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 1 || evs[0].Verb != "agents.start" || !strings.Contains(evs[0].Detail, "over the claim of desk "+deskOne) {
+	if len(evs) != 1 || evs[0].Verb != verbStart || !strings.Contains(evs[0].Detail, "over the claim of desk "+deskOne) {
 		t.Errorf("events = %+v, want the one --force start", evs)
 	}
 	if err := two.claimGate(ctx, "Worker two", claimIssue2, false, false); err != nil {
@@ -327,22 +327,23 @@ func TestPublishClaimedGivesBackALostRace(t *testing.T) {
 }
 
 func TestPlanClaims(t *testing.T) {
+	const planIssue1, planIssue2 = "p/q#1", "p/q#2"
 	now := time.Now()
 	a := state.Party{Session: "a", Name: "A"}
 	b := state.Party{Session: "b", Name: "B"}
 	st := &state.State{
-		Records: []state.Record{{Session: a, Issue: "o/r#1"}, {Session: b, Issue: "o/r#2"}, {Session: a, Issue: "not an issue"}},
+		Records: []state.Record{{Session: a, Issue: planIssue1}, {Session: b, Issue: planIssue2}, {Session: a, Issue: "not an issue"}},
 		Claims: []state.Claim{
-			{Issue: "O/R#1", Session: a, Seen: now.Add(-time.Hour)},
-			{Issue: "o/r#2", Session: a, Seen: now},
-			{Issue: "o/r#3", Session: b, Seen: now},
+			{Issue: "P/Q#1", Session: a, Seen: now.Add(-time.Hour)},
+			{Issue: planIssue2, Session: a, Seen: now},
+			{Issue: "p/q#3", Session: b, Seen: now},
 		},
 	}
 	publish, release := planClaims(st, now, 6*time.Hour)
-	if len(publish) != 1 || publish[0].rec.Issue != "o/r#2" || publish[0].prev == nil {
+	if len(publish) != 1 || publish[0].rec.Issue != planIssue2 || publish[0].prev == nil {
 		t.Errorf("publish = %+v, want o/r#2's new session", publish)
 	}
-	if len(release) != 1 || release[0].Issue != "o/r#3" {
+	if len(release) != 1 || release[0].Issue != "p/q#3" {
 		t.Errorf("release = %+v", release)
 	}
 }

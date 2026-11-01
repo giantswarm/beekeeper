@@ -12,7 +12,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claim/claimtest"
 )
 
-const issue = "o/r#7"
+const (
+	issue   = "o/r#7"
+	deskOne = "one"
+	deskTwo = "two"
+)
 
 var t0 = time.Date(2026, 11, 1, 0, 12, 0, 0, time.UTC)
 
@@ -70,20 +74,20 @@ func TestParseRefusesOtherComments(t *testing.T) {
 func TestOthersSplitsLiveAndStaleOfOtherDesks(t *testing.T) {
 	now := t0.Add(30 * time.Hour)
 	cs := []claim.Comment{
-		{ID: 5, Marker: claim.Marker{Desk: "two", At: t0, Seen: now.Add(-time.Hour)}},
+		{ID: 5, Marker: claim.Marker{Desk: deskTwo, At: t0, Seen: now.Add(-time.Hour)}},
 		{ID: 3, Marker: claim.Marker{Desk: "three", At: t0, Seen: now.Add(-time.Hour)}},
 		{ID: 4, Marker: claim.Marker{Desk: "four", At: t0}}, // 30h unrefreshed
 		{ID: 6, Marker: claim.Marker{Desk: "five", At: t0, Seen: now, Released: now}},
 		{ID: 2, Marker: claim.Marker{Desk: "ONE", At: t0, Seen: now}},
 	}
-	live, stale := claim.Others(cs, "one", now, 24*time.Hour)
+	live, stale := claim.Others(cs, deskOne, now, 24*time.Hour)
 	if len(live) != 2 || live[0].ID != 3 || live[1].ID != 5 {
 		t.Errorf("live = %+v, want 3 and 5, oldest first", live)
 	}
 	if len(stale) != 1 || stale[0].ID != 4 {
 		t.Errorf("stale = %+v, want 4", stale)
 	}
-	if d := claim.Desk(cs, "one"); d == nil || d.ID != 2 {
+	if d := claim.Desk(cs, deskOne); d == nil || d.ID != 2 {
 		t.Errorf("Desk = %+v", d)
 	}
 	if !strings.HasPrefix(stale[0].Says(now, 24*time.Hour), "stale, desk four") {
@@ -96,19 +100,19 @@ func TestOthersSplitsLiveAndStaleOfOtherDesks(t *testing.T) {
 func TestReadSendsTheLastETag(t *testing.T) {
 	gh := claimtest.New()
 	gh.Add(issue, "Working on this.")
-	id := gh.Add(issue, claim.Marker{Desk: "two", Session: "s", At: t0}.Body())
+	id := gh.Add(issue, claim.Marker{Desk: deskTwo, Session: "s", At: t0}.Body())
 	cl := &claim.Client{GH: gh.GH, Cache: filepath.Join(t.TempDir(), "cache.json")}
 	ctx := context.Background()
 	for range 2 {
 		cs, err := cl.Read(ctx, issue)
-		if err != nil || len(cs) != 1 || cs[0].ID != id || cs[0].Desk != "two" {
+		if err != nil || len(cs) != 1 || cs[0].ID != id || cs[0].Desk != deskTwo {
 			t.Fatalf("Read = %+v, %v", cs, err)
 		}
 	}
 	if gh.Calls["list"] != 1 || gh.Calls["notModified"] != 1 {
 		t.Errorf("calls = %v, want one listing and one 304", gh.Calls)
 	}
-	if _, err := cl.Post(ctx, issue, claim.Marker{Desk: "one", Session: "s1", At: t0}); err != nil {
+	if _, err := cl.Post(ctx, issue, claim.Marker{Desk: deskOne, Session: "s1", At: t0}); err != nil {
 		t.Fatal(err)
 	}
 	if cs, err := cl.Read(ctx, issue); err != nil || len(cs) != 2 {
@@ -121,11 +125,11 @@ func TestEditOfAGoneCommentIsErrGone(t *testing.T) {
 	id := gh.Add(issue, "x")
 	cl := &claim.Client{GH: gh.GH}
 	ctx := context.Background()
-	m := claim.Marker{Desk: "one", Session: "s", At: t0}
+	m := claim.Marker{Desk: deskOne, Session: "s", At: t0}
 	if err := cl.Edit(ctx, issue, id, m); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := claim.Parse(gh.Comments(issue)[0].Body); got.Desk != "one" {
+	if got, _ := claim.Parse(gh.Comments(issue)[0].Body); got.Desk != deskOne {
 		t.Errorf("edited comment = %q", gh.Comments(issue)[0].Body)
 	}
 	gh.Delete(id)

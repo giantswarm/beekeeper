@@ -317,7 +317,7 @@ func (a *app) claimGate(ctx context.Context, name, issue string, force, dryRun b
 	if err != nil {
 		return err
 	}
-	if err := a.store.Record(about(event(by, "agents.start", "%s: started over the claim of %s on %s (--force)", name, says, issue), issue)); err != nil {
+	if err := a.store.Record(about(event(by, verbStart, "%s: started over the claim of %s on %s (--force)", name, says, issue), issue)); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(a.out, "started over the claim of %s on %s (--force)\n", says, issue)

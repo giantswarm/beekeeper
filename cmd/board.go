@@ -602,6 +602,7 @@ const (
 	kindBlocked  = "blocked"
 	kindStale    = "stale"
 	kindLease    = "lease"
+	kindClaimed  = "claimed"
 	kindPlanning = "planning"
 	kindUnknown  = "unknown"
 	kindOrder    = "order"
@@ -622,6 +623,8 @@ func skipKind(reason string) string {
 		return kindStale
 	case strings.HasPrefix(reason, "needs lease "):
 		return kindLease
+	case strings.HasPrefix(reason, claimedPrefix):
+		return kindClaimed
 	case strings.Contains(reason, "in planning ("):
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
