@@ -718,7 +718,9 @@ func (a *app) secretCopyToRemote(ctx context.Context, src secret.Ref, enc secret
 		err = refused("%v", err)
 	}
 	summary := fmt.Sprintf("%d bytes, mode %s", res.Bytes, res.Mode)
-	if res.Fingerprint != "" { summary += ", " + res.Fingerprint }
+	if res.Fingerprint != "" {
+		summary += ", " + res.Fingerprint
+	}
 	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(enc), f, outcome(err, summary)); err != nil {
 		return err
 	}
@@ -727,7 +729,9 @@ func (a *app) secretCopyToRemote(ctx context.Context, src secret.Ref, enc secret
 		own = ", owner " + res.Owner
 	}
 	fingerprint := ""
-	if res.Fingerprint != "" { fingerprint = ", fingerprint " + res.Fingerprint }
+	if res.Fingerprint != "" {
+		fingerprint = ", fingerprint " + res.Fingerprint
+	}
 	return a.secretPrint(res, fmt.Sprintf("wrote %s: %d bytes, mode %s%s, value %d bytes%s\n", res.File, res.Bytes, res.Mode, own, res.Length, fingerprint))
 }
 
