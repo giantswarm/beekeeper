@@ -92,11 +92,11 @@ func (snap *Snapshot) Parent(ref string) string {
 	return ""
 }
 
-// ByPriority orders cands by the rank each has (Ranks.Of, from its own
-// parent and upward through parent) first, unranked after ranked, and keeps
-// their order within a rank: the priority list over the configured order.
-// It records the rank applied on each candidate.
-func ByPriority(cands []Candidate, r Ranks, parent func(string) string) {
+// Annotate records on each candidate the rank it has (Ranks.Of, from its
+// own parent and upward through parent), for what board next says of it.
+// It never reorders or skips a candidate: the configured order alone, by
+// Status and then the board's own order, decides what is picked.
+func Annotate(cands []Candidate, r Ranks, parent func(string) string) {
 	for i := range cands {
 		c := &cands[i]
 		up := func(ref string) string {
@@ -107,17 +107,6 @@ func ByPriority(cands []Candidate, r Ranks, parent func(string) string) {
 		}
 		c.Priority, c.PriorityOf = r.Of(c.Ref, up)
 	}
-	slices.SortStableFunc(cands, func(a, b Candidate) int {
-		return cmp.Compare(rankKey(a.Priority), rankKey(b.Priority))
-	})
-}
-
-// rankKey sorts the unranked (0) after every rank.
-func rankKey(n int) int {
-	if n <= 0 {
-		return int(^uint(0) >> 1)
-	}
-	return n
 }
 
 // priorityFields is what a read of the priority list takes of an item: its

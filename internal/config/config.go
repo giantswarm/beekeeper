@@ -396,6 +396,10 @@ type Board struct {
 	// supervisor loop runs board tidy (default 1h; negative: never).
 	ArchiveAfter Duration `yaml:"archiveAfter"`
 	TidyEvery    Duration `yaml:"tidyEvery"`
+	// EscalateEvery is how long board escalate waits before it checks an
+	// escalated blocked item again and, while it stays blocked, escalates
+	// it to the person once more (default 24h; negative: never escalate).
+	EscalateEvery Duration `yaml:"escalateEvery"`
 	// Claims publishes the desk's session records on their issues, for
 	// the other desks working the same repositories.
 	Claims BoardClaims `yaml:"claims"`
@@ -463,10 +467,8 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
-	// WorkScope offers only the work scope: an issue under an epic of the
-	// priority list, an order (an item of a step without WorkScope) and an
-	// open recorded blocker of either; anything else is skipped as "not in
-	// a priority epic".
+	// WorkScope is read and ignored, so an existing configuration loads:
+	// the priority list no longer gates what a step offers.
 	WorkScope bool `yaml:"workScope"`
 }
 
@@ -3282,6 +3284,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
 	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.EscalateEvery, 24*time.Hour)
 	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
 	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 
