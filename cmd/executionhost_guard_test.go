@@ -47,10 +47,10 @@ func (f *executionGuardFixture) digest(t *testing.T, tweak func(*config.Config))
 			RulesFile:     f.rulesPath,
 			WorkspaceRoot: filepath.Join(f.root, "workspaces"),
 			Repositories:  map[string]string{sshTestRepository: filepath.Join(f.root, "source")},
-			Harnesses:     map[string]execution.HarnessConfig{claudeComm: {Executable: "/usr/local/bin/claude", Version: "2.1.290"}},
+			Harnesses:     map[string]execution.HarnessConfig{claudeComm: {Executable: "/opt/claude/bin/claude", Version: "2.1.291"}},
 			Coordinators: map[string]execution.Coordinator{sshTestCoordinator: {
 				PublicKey: execution.PublicKey(key),
-				Callback:  execution.Endpoint{SSH: "coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig},
+				Callback:  execution.Endpoint{SSH: "guard-coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig},
 			}},
 			MaxBusy: 2,
 		}},
@@ -91,8 +91,8 @@ func TestExecutionHostPolicyDigestCoversTheStartGuards(t *testing.T) {
 		{"watch.diskFillWithin", func(c *config.Config) { c.Watch.DiskFillWithin = config.Duration{Duration: 2 * time.Minute} }},
 		{"memcap.slots", func(c *config.Config) { c.Memcap.Slots = 4 }},
 		{"memcap.max", func(c *config.Config) { c.Memcap.Max = "12G" }},
-		{"memcap.cpuQuota", func(c *config.Config) { c.Memcap.CPUQuota = "1200%" }},
-		{"memcap.cpuWeight", func(c *config.Config) { c.Memcap.CPUWeight = 50 }},
+		{"memcap.cpuQuota", func(c *config.Config) { c.Memcap.CPUQuota = "900%" }},
+		{"memcap.cpuWeight", func(c *config.Config) { c.Memcap.CPUWeight = 60 }},
 		{"maxKindClusters", func(c *config.Config) { c.MaxKindClusters = 2 }},
 		// Positive control from the issue: execution.maxBusy is a HostConfig
 		// field and was already covered before the fix.
