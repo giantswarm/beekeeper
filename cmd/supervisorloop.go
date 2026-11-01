@@ -292,8 +292,9 @@ its key first in the detail):
             releases the ended task holder so board next can offer it again.
             Claude transcript resumes, live sessions, managed SSH executions and a
             stopped desk are left alone
-  review    an agent parked on its pull request (agents park --on
-            owner/repo#n) with every check on the head green, for the
+  review    an agent parked from its pull request's worktree at its
+            published HEAD (agents park --on owner/repo#n), with every
+            check on the head green, for the
             first round, for every new head the worker parked on after an
             approval (one review per head) but one that only merges the
             base into the approved head (below), or after the last round's
@@ -382,7 +383,10 @@ its key first in the detail):
             local machine keeps the start while it has room, unless
             supervisor.hostsFirst, which prefers hosts always. No host
             with room and no room locally: the start waits. Releases
-            and the loop itself stay on the coordinator
+            and the loop itself stay on the coordinator. One board read
+            answers a pass; nothing free (board next's exit 3 with no
+            pick) settles a done's start, never a failure, and no read
+            runs while the GitHub budget is under github.floor
   release   a newer release, in stages a later pass resumes until the
             last holds: self-update (verified, installed) while --check
             finds it newer, the sandbox's broker on the installed binary
@@ -433,7 +437,9 @@ overridden pull requests.
 
 The briefs are Go templates over .URL, .Repo, .Number, .Head, .Round and
 .Worker. A pull request is read (one gh pr view) only while an agent is
-parked on it or the loop reviews it. Every transition happens once: a
+parked on a verified review request or the loop reviews it. A plain wait
+starts no review and receives no go or forwarded findings; the watch
+resumes it when the pull request merges or closes. Every transition happens once: a
 restarted loop reads its own log lines back and takes no key twice; a
 failed one is tried again next pass, its failure printed once. An action
 with a side effect is claimed in the log first (supervisor.claim): one
@@ -652,6 +658,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
+			w.ReviewRequested = ag.Park.ReviewHead != ""
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -1518,10 +1525,22 @@ type loopBoardNone struct{ err error }
 // nextItem is the board's first free ranked item, or nil when none is free.
 // A walk costs a large share of the GraphQL budget: an empty or failed one
 // answers the rest of the pass.
+// No walk runs while the GitHub budget is under github.floor: the pass
+// answers errLoopLater, so a done event waits unsettled and costs nothing.
 func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	if l.boardNone != nil {
 		return nil, l.boardNone.err
 	}
+	st, err := l.a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+		l.boardNone = &loopBoardNone{err: errLoopLater}
+		l.sayOnce("board budget", "SUPERVISOR NEXT HELD: the GitHub budget is under github.floor (%d), no board walk until it recovers", l.a.cfg.GitHub.Floor)
+		return nil, errLoopLater
+	}
+	delete(l.said, "board budget")
 	next, err := l.readNextItem(ctx)
 	if next == nil {
 		l.boardNone = &loopBoardNone{err: err}
@@ -1529,23 +1548,64 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	return next, err
 }
 
+// boardBudgetLow reports whether a board walk, which costs a large share of
+// the GraphQL budget, must wait: the REST budget is under floor until its
+// reset, GraphQL refuses, or the last GraphQL reading, taken within its
+// hourly window, is under floor.
+func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
+	if lowBudget(b, floor, now) {
+		return true
+	}
+	if b == nil || b.GraphQL == nil {
+		return false
+	}
+	g := b.GraphQL
+	return g.Blocks(now) || (g.Remaining < floor && now.Sub(g.At) < time.Hour)
+}
+
+// readNextItem reads board next --json. With nothing free board next exits
+// 3 after printing its document with no pick: that is the board's answer,
+// nothing free, never a failure to retry.
 func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
-	out, err := l.run(ctx, loopBoard, "next", "--json")
+	out, code, err := beekeeperRun(ctx, l.as(loopBoard, "next", "--json")...)
 	if err != nil {
 		return nil, err
 	}
-	var next struct {
-		Pick *loopBoardItem `json:"pick"`
+	failed := func() error {
+		return &exitError{code: code, msg: fmt.Sprintf("beekeeper %s next: exit %d: %s", loopBoard, code, oneLine(out))}
 	}
-	if err := json.Unmarshal([]byte(out), &next); err != nil {
+	if code != 0 && code != ExitRefused {
+		return nil, failed()
+	}
+	// The output is stdout and then stderr: the document is its first value.
+	var next struct {
+		Pick json.RawMessage `json:"pick"`
+	}
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&next); err != nil {
+		if code != 0 {
+			return nil, failed()
+		}
 		return nil, fmt.Errorf("board next --json: %w", err)
 	}
-	if next.Pick != nil {
-		if _, ok := parseRef(next.Pick.Ref); !ok {
-			return nil, fmt.Errorf("board next: invalid item ref %q", next.Pick.Ref)
+	none := string(next.Pick) == "null"
+	if code != 0 {
+		// Only a document that says no pick settles a refusal.
+		if !none {
+			return nil, failed()
 		}
+		return nil, nil
 	}
-	return next.Pick, nil
+	if none || len(next.Pick) == 0 {
+		return nil, nil
+	}
+	var pick loopBoardItem
+	if err := json.Unmarshal(next.Pick, &pick); err != nil {
+		return nil, fmt.Errorf("board next --json: %w", err)
+	}
+	if _, ok := parseRef(pick.Ref); !ok {
+		return nil, fmt.Errorf("board next: invalid item ref %q", pick.Ref)
+	}
+	return &pick, nil
 }
 
 type loopBoardItem struct {
