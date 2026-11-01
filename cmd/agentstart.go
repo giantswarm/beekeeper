@@ -322,10 +322,11 @@ work, which takes no choice on a self-hosted provider.`,
 					return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
 				}
 			}
-			if _, err := a.startMode(mode); err != nil {
+			resolvedMode, err := a.startMode(mode)
+			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(mode) == config.ModeBackground && desktop {
+			if resolvedMode == config.ModeBackground && desktop {
 				return usageErr("--mode background and --desktop: a background session has no desktop turn")
 			}
 			if harness != harnessAuto {
