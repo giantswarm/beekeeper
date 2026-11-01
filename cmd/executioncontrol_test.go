@@ -180,6 +180,9 @@ func TestExecutionCoordinatorRefusesWrongIdentityAndLiveStop(t *testing.T) {
 	}
 }
 
+// deskReviewWait is the wait a worker parks with for its desk review.
+const deskReviewWait = "desk review"
+
 func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	a, r := executionTestApp(t)
 	const pushed = "2222222222222222222222222222222222222222"
@@ -221,42 +224,42 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 	}
 	// The workspace's HEAD is the published head of the execution's own
 	// branch: a review request, whatever the host's branch is called.
-	if got := park(executionPark{On: pr, Waits: "desk review", Head: loopHead}); got != loopHead {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != loopHead {
 		t.Fatalf("remote park at the published head recorded %q", got)
 	}
 	// An older host proves nothing itself: the owned branch's head stands.
-	if got := park(executionPark{On: pr, Waits: "desk review"}); got != loopHead {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait}); got != loopHead {
 		t.Fatalf("older host's park recorded %q", got)
 	}
 	// Unpublished commits on the workspace: a plain wait.
-	if got := park(executionPark{On: pr, Waits: "desk review", Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
 		t.Fatalf("park ahead of the published head recorded %q", got)
 	}
 	// A new push, then a re-park at it: the new head's review request.
 	prHead = pushed
-	if got := park(executionPark{On: pr, Waits: "desk review", Head: pushed}); got != pushed {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != pushed {
 		t.Fatalf("re-park after a push recorded %q", got)
 	}
 	// A host's own claim is no proof: another branch's pull request, a fork's
 	// or one in another repository is a plain wait.
 	branch = "feature"
-	if got := park(executionPark{On: pr, Waits: "desk review", Head: pushed, ReviewHead: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed, ReviewHead: pushed}); got != "" {
 		t.Fatalf("another branch's pull request recorded %q", got)
 	}
 	branch, repo = executionBranch(r.Ref), "fork/beekeeper"
-	if got := park(executionPark{On: pr, Waits: "desk review", Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
 		t.Fatalf("a fork's pull request recorded %q", got)
 	}
 	repo = sshTestRepository
 	n := reads
-	if got := park(executionPark{On: "o/other#7", Waits: "desk review", Head: pushed}); got != "" || reads != n {
+	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}); got != "" || reads != n {
 		t.Fatalf("another repository's pull request recorded %q after %d reads", got, reads-n)
 	}
-	if got := park(executionPark{Waits: "the supervisor's go"}); got != "" || reads != n {
+	if got := park(executionPark{Waits: "no target"}); got != "" || reads != n {
 		t.Fatalf("a park without a target recorded %q", got)
 	}
 	executionReviewGH = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("unreachable") }
-	if got := park(executionPark{On: pr, Waits: "desk review", Head: pushed}); got != "" {
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
 		t.Fatalf("an unread pull request recorded %q", got)
 	}
 }

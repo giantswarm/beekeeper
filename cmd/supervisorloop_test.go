@@ -2165,7 +2165,7 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	party := state.Party{Name: loopWorker, Session: "remote-session", Host: string(ref.Host)}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Execution: &ref})
-		st.Starts = append(st.Starts, state.Start{Party: party, Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Repository: "o/r", Commit: loopFixed}, Request: execution.StartRequest{Ref: ref, Repository: "o/r"}}})
+		st.Starts = append(st.Starts, state.Start{Party: party, Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Repository: scratchRepo, Commit: loopFixed}, Request: execution.StartRequest{Ref: ref, Repository: scratchRepo}}})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -2190,7 +2190,7 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	park := func(head string) {
 		t.Helper()
 		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-			_, evs, err := r.a.applyExecutionControl(context.Background(), st, party, execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: "desk review", Head: head})})
+			_, evs, err := r.a.applyExecutionControl(context.Background(), st, party, execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: deskReviewWait, Head: head})})
 			return evs, err
 		}); err != nil {
 			t.Fatal(err)
@@ -2215,7 +2215,7 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	park(loopFixed)
 	r.pass(t)
 	start = r.called(agentsName, agentStartName)
-	if start == nil || start[2] != "Review r 7 r2" {
+	if start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
 		t.Fatalf("no review of the remote worker's new head: %v\n%s", r.calls, r.out)
 	}
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
