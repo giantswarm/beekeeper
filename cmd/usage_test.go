@@ -393,7 +393,7 @@ capacity:
 	parkedManual.Park = &state.Park{By: parkedManual.Party, At: t0.UTC(), Waits: "manual go", Told: t0.UTC()}
 	waitingWorker := tasked("Waiter")
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup.Party, Since: t0.UTC()}}
 		st.Agents = []state.Agent{sup, tasked(busyOne), tasked(busyTwo), parkedAuto, parkedManual, waitingWorker}
 		st.Notes = []state.Note{{ID: 1, At: t0.UTC(), Text: "ship it?", Due: t0.Add(time.Hour).UTC()}}
 		return nil, nil
@@ -1899,7 +1899,7 @@ capacity:
 	parkedAgyGemini.Park = &state.Park{By: parkedAgyGemini.Party, At: t0.UTC(), On: "#3", Waits: "note 3", Told: t0.UTC(), Resumable: t0.UTC(), Answer: "go"}
 
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup.Party, Since: t0.UTC()}}
 		st.Agents = []state.Agent{sup, busyClaude, busyAgyClaude, busyAgyGemini, parkedClaude, parkedAgyClaude, parkedAgyGemini}
 		return nil, nil
 	}); err != nil {
@@ -2149,7 +2149,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	busyGemini := tasked("BusyGemini")
 	busyGemini.Harness, busyGemini.Model = harnessAgy, testModelGemini
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup.Party, Since: t0.UTC()}}
 		st.Agents = []state.Agent{sup, busyGemini}
 		return nil, nil
 	}); err != nil {

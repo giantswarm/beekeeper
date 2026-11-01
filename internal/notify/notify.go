@@ -27,8 +27,8 @@ const (
 	Budget = "budget"
 	// StaleLease is a lease whose holder's session is gone.
 	StaleLease = "stale-lease"
-	// NoSupervisor is a supervisor whose CLI stayed gone past the restart
-	// grace with no successor: claims wait for one.
+	// NoSupervisor is the supervisor loop down past its grace: the standby
+	// watch restarts its service meanwhile.
 	NoSupervisor = "no-supervisor"
 	// PageUnowned is a page no session has owned for alerts.ownerGrace.
 	PageUnowned = "page-unowned"
@@ -42,7 +42,7 @@ var Kinds = []string{Due, Budget, StaleLease, NoSupervisor, PageUnowned}
 var lasting = map[string]bool{Budget: true}
 
 // repeating are the kinds that notify again after Repeat while they last:
-// the lasting ones, and a supervisor gone, per supervisor term.
+// the lasting ones, and the supervisor loop down, per gap.
 var repeating = map[string]bool{Budget: true, NoSupervisor: true}
 
 // Message is one desktop notification.

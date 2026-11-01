@@ -209,7 +209,7 @@ func (a *app) callerRole() string {
 	return rosterRole(st, me)
 }
 
-// rosterRole is the roster role of the session me: the supervisor or the guide
+// rosterRole is the roster role of the session me: the guide
 // it holds, a worker for an agent on the roster; "" for none.
 func rosterRole(st *state.State, me state.Party) string {
 	for _, rl := range roles {

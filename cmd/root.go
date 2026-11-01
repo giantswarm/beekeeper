@@ -190,11 +190,12 @@ machine's memory, swap, disk and OOM kills, reads the GitHub budget all
 sessions draw from, and holds the shared resources one session at a time:
 kind labs, installations, the browser, merges into a repository.
 
-Its state (the supervisor, grants, holds, registered agents, notes, timers,
-session records) lives on disk and survives restarts: a supervisor's
-successor starts from beekeeper handover --prompt instead of a prose brief.
+Its state (the guide, grants, holds, registered agents, notes, timers,
+session records) lives on disk and survives restarts: beekeeper handover
+shows it, and a guide's successor starts from beekeeper guide handover
+--prompt instead of a prose brief. The supervisor is the supervisor loop.
 
-Exit codes: 0 done, 1 error, 2 usage, 3 refused, 4 relieved (supervisor
+Exit codes: 0 done, 1 error, 2 usage, 3 refused, 4 relieved (guide
 status after a relay), 69 the central instance unreachable (a central verb,
 with central configured), 125 a newer release (self-update --check).`,
 		SilenceUsage:  true,
@@ -225,7 +226,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	root.AddGroup(
 		&cobra.Group{ID: "watching", Title: "Watching:"},
 		&cobra.Group{ID: "sharing", Title: "Sharing:"},
-		&cobra.Group{ID: supervisorRole.ing, Title: "Supervising:"},
+		&cobra.Group{ID: supervisorGroup, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
 	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {

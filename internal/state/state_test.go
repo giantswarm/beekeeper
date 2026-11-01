@@ -397,7 +397,6 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	}{
 		{[]any{"writer", "version"}, "v9.0.0"},
 		{[]any{"writer", "build"}, "b1"},
-		{[]any{keySupervisor, "term"}, 9.0},
 		{[]any{"guide", "mood"}, "calm"},
 		{[]any{"grants", 0, "ttl"}, "2h"},
 		{[]any{"holds", 0, "scope"}, "merge"},
@@ -420,6 +419,50 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	}
 	if n := len(at(keyAgents, 2).(map[string]any)); n != 3 {
 		t.Errorf("a new entry carries members of another: %v", at(keyAgents, 2))
+	}
+	if v, ok := got[keySupervisor]; ok {
+		t.Errorf("the retired supervisor session's record is written back: %v", v)
+	}
+}
+
+// The supervisor session's role is gone: an older binary's record of it
+// (its holder, relay, reliefs, CLI, run and relay due) is dropped at the
+// read, and the next save leaves it out, while every other member it does
+// not know is kept.
+func TestRetiredSupervisorKeysAreDropped(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"supervisor":{"session":"s0","name":"Supervisor run 28","since":"2026-11-01T10:00:00Z"},` +
+		`"relay":{"from":{"session":"s0"},"to":{"session":"s1","name":"Supervisor run 29"},"at":"2026-11-01T10:00:00Z","expires":"2026-11-01T10:15:00Z"},` +
+		`"relieved":[{"session":"s9"}],"supervisorCLI":{"pid":7},"supervisorRun":28,"relayDue":{"contextTokens":1},` +
+		`"nextNote":4,"rota":{"next":"x"}}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(st *State) ([]Event, error) {
+		st.NextNote++
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{keySupervisor, "relay", "relieved", "supervisorCLI", "supervisorRun", "relayDue"} {
+		if v, ok := got[k]; ok {
+			t.Errorf("%s is written back: %v", k, v)
+		}
+	}
+	if got["nextNote"] != 5.0 || got["rota"] == nil {
+		t.Errorf("the rest of the state is not kept: %s", raw)
 	}
 }
 

@@ -17,7 +17,7 @@ import (
 
 const (
 	pat       = "Pat"
-	supRun3   = "Supervisor run 3"
+	supRun3   = "Guide run 3"
 	agentFive = "Agent five"
 	agentSix  = "Agent six"
 )
@@ -40,7 +40,7 @@ func TestSplitNotesLeavesTheGuidesNotesToALine(t *testing.T) {
 		{ID: 2, Kind: noteDecision, For: guideRole.title, Text: "archive the test sessions"},
 		{ID: 3, Kind: noteDecision, For: "Guide run 2: Pat's open decisions", Text: "relay"},
 		{ID: 4, Kind: noteDecision, Text: "[for Pat] an older note"},
-		{ID: 5, Kind: noteDecision, For: supervisorRole.title, Text: "check the lane"},
+		{ID: 5, Kind: noteDecision, For: claimSupervisor, Text: "check the lane"},
 		{ID: 6, Kind: noteDecision, For: samName, Text: "pick a lab?"},
 	})
 	if len(s.Own) != 2 || s.Own[0].ID != 5 || s.Own[1].ID != 6 || s.guided() != 4 {
@@ -68,7 +68,7 @@ func TestLiveRecordsDropsSessionsEndedOverAnHourAgo(t *testing.T) {
 	}
 }
 
-func TestAnswersSinceTheLastRelayAndWithin72h(t *testing.T) {
+func TestAnswersOfTheLastDayAndWithin72h(t *testing.T) {
 	a, out := noteApp(t)
 	a.now = time.Now()
 	sup := state.Party{Session: "s1", Name: supRun3}
@@ -78,13 +78,10 @@ func TestAnswersSinceTheLastRelayAndWithin72h(t *testing.T) {
 		}
 	}
 	log(80*time.Hour, answerRecorded, "o/r#1 answered by \"Pat\" via cli, recorded at https://c/1, note #1 asked by \"A\": \"approve x\": too old")
-	log(5*time.Hour, answerRecorded, "o/r#7 answered by \"Pat\" via cli, recorded at https://c/2, note #2 asked by \"Agent two\": \"approve "+prURL+" Status quo: green.\": Yes, ship it")
-	log(3*time.Hour, "supervisor.start", "run 2")
+	log(30*time.Hour, answerRecorded, "o/r#7 answered by \"Pat\" via cli, recorded at https://c/2, note #2 asked by \"Agent two\": \"approve "+prURL+" Status quo: green.\": Yes, ship it")
 	log(2*time.Hour, answerRecorded, "o/r#8 answered by \"Pat\" via slack, recorded at https://c/3, note #3 asked by \"B\": \"merge y\": No")
 	log(90*time.Minute, answerRecorded, "o/r#9 answered by \"Pat\" via cli, recorded at https://c/4: the draft stays")
-	log(time.Hour, "supervisor.start", "run 3")
-	st := &state.State{Supervisor: &state.Supervisor{Party: sup, Since: a.now.Add(-time.Hour)}}
-	ans, err := a.handoverAnswers(st)
+	ans, err := a.handoverAnswers()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,18 +127,9 @@ func TestNoteAnsweredDetailParsesBack(t *testing.T) {
 // standingText is a standing.md the person wrote, spacing and all.
 const standingText = "report every merge with its release, o/r#7\n\nthe lab runs at most two kind clusters.\nAsk before a third:   memory is shared."
 
-// handoverPrompts prints the supervisor's and the guide's prompts.
-func handoverPrompts(t *testing.T, a *app, out *bytes.Buffer) (sup, guide string) {
+// handoverPrompt prints the guide's prompt.
+func handoverPrompt(t *testing.T, a *app, out *bytes.Buffer) string {
 	t.Helper()
-	st, err := a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	out.Reset()
-	if err := a.printPrompt(context.Background(), &view{st: st}, &leaseList{}, &alertsView{}, answers{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	sup = out.String()
 	s, err := a.readStanding()
 	if err != nil {
 		t.Fatal(err)
@@ -150,27 +138,22 @@ func handoverPrompts(t *testing.T, a *app, out *bytes.Buffer) (sup, guide string
 	if err := a.printGuidePrompt(state.Role{}, nil, s, nil); err != nil {
 		t.Fatal(err)
 	}
-	return sup, out.String()
+	return out.String()
 }
 
-// standing.md reaches both hand-overs verbatim, and a desk without one
-// prints no section for it.
-func TestStandingInstructionsReachBothHandovers(t *testing.T) {
+// standing.md reaches the guide's hand-over verbatim, and a desk without
+// one prints no section for it.
+func TestStandingInstructionsReachTheHandover(t *testing.T) {
 	a, out := noteApp(t)
-	a.cfg.Supervisor.Skill, a.cfg.Guide.Skill, a.cfg.StateDir = "supervise", "guide", t.TempDir()
-	for _, p := range func() []string { s, g := handoverPrompts(t, a, out); return []string{s, g} }() {
-		if strings.Contains(p, "Standing instructions") {
-			t.Errorf("a desk without standing.md prints the section:\n%s", p)
-		}
+	a.cfg.Guide.Skill, a.cfg.StateDir = "guide", t.TempDir()
+	if p := handoverPrompt(t, a, out); strings.Contains(p, "Standing instructions") {
+		t.Errorf("a desk without standing.md prints the section:\n%s", p)
 	}
 	if err := os.WriteFile(a.standingPath(), []byte(standingText+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sup, guide := handoverPrompts(t, a, out)
-	for _, p := range []string{sup, guide} {
-		if !strings.Contains(p, "### Standing instructions") || !strings.Contains(p, standingText) {
-			t.Errorf("the standing instructions are not carried verbatim:\n%s", p)
-		}
+	if p := handoverPrompt(t, a, out); !strings.Contains(p, "### Standing instructions") || !strings.Contains(p, standingText) {
+		t.Errorf("the standing instructions are not carried verbatim:\n%s", p)
 	}
 }
 
@@ -197,25 +180,6 @@ func TestBroadcastReachesEveryRunningAgentOnce(t *testing.T) {
 	})
 	if fmt.Sprint(told) != "[Agent four Agent five]" || len(missed) != 1 || !strings.HasPrefix(missed[0], "Agent six: unreachable") || len(sent) != 3 {
 		t.Fatalf("told %v, missed %v, sent %v", told, missed, sent)
-	}
-}
-
-func TestStartSummaryFitsInFiveKB(t *testing.T) {
-	a, out := noteApp(t)
-	st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Session: "s0", Name: supRun3}, Since: relayNow}}
-	for i := range 300 {
-		st.Notes = append(st.Notes, state.Note{ID: i, Kind: noteDecision, For: pat, Text: strings.Repeat("a long question ", 30)})
-	}
-	for i := range 30 {
-		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Session: fmt.Sprint("s", i), Name: fmt.Sprintf("Board pull %d with a long title", i)}, Task: strings.Repeat("giantswarm/beekeeper#237 ", 10)})
-		st.Records = append(st.Records, state.Record{Session: state.Party{Name: fmt.Sprint("r", i)}, Issue: issue, Ended: relayNow.Add(-48 * time.Hour)})
-	}
-	if err := a.startSummary(st, nil, &leaseList{Free: []string{graveler}}); err != nil {
-		t.Fatal(err)
-	}
-	got := out.String()
-	if len(got) >= 5*1024 || !strings.Contains(got, "300 the guide serves") || !strings.Contains(got, "(its CLI is not running)") || !strings.Contains(got, "--section <name>") {
-		t.Errorf("%d bytes:\n%s", len(got), got)
 	}
 }
 
