@@ -457,7 +457,11 @@ func TestAgyPushAndMergeDirectoryResolution(t *testing.T) {
 		"if true; then cd " + featRepo + "; fi; gh pr create -R giantswarm/beekeeper --title t --body b",
 		"cd " + featRepo + " && gh pr merge 42 --squash",
 	} {
-		if d := decideAgyCmd(t, h, featRepo, cmd); d.Decision != decisionAsk {
+		want := decisionAsk
+		if strings.Contains(cmd, "pr merge") {
+			want = decisionDeny
+		}
+		if d := decideAgyCmd(t, h, featRepo, cmd); d.Decision != want {
 			t.Errorf("gh write with known repo %q: got %+v, want ask", cmd, d)
 		}
 	}
