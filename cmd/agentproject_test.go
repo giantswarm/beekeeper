@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
@@ -38,6 +39,9 @@ func TestNonClaudeDryRunProjectInstructions(t *testing.T) {
 			}
 			if strings.Index(got, "squash every merge") > strings.Index(got, sp.brief) {
 				t.Fatal("instructions must precede task")
+			}
+			if h.Name() == agy.Harness && !strings.Contains(got, "Working directory: "+dir+"\n\n"+projectPrompt(dir, sp.brief)) {
+				t.Fatal("agy dry run must put the working directory before project instructions")
 			}
 		})
 	}
