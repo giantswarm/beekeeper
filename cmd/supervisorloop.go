@@ -272,17 +272,19 @@ its key first in the detail):
             verdict or a round still running authorizes nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
-  escalate  no change-request round left (supervisor.reviewRounds counts
+  rework    no change-request round left (supervisor.reviewRounds counts
             the rounds that asked for changes; an approved head is none)
             and the worker parked again after the forward on the head the
-            findings were about: a decision for guide.person (note add,
-            options Merge and Rework); the loop leaves that pull request
-            alone until the person answers
-  answer    the person answered an escalation (beekeeper answer --note):
-            an answer that releases it (the Merge option, or words to
-            merge that refuse nothing) is the merge go for the head the
-            escalation named, once its checks are green; any other answer
-            goes to the worker word for word, and the rounds go on
+            findings were about: the worker is told to fix them and push
+            (agents wake), once for each such park; its new green head
+            gets the merge go. Review and rework stay in the loop: no
+            merge question goes to guide.person
+  answer    the person answered an escalation an earlier loop filed
+            (beekeeper answer --note): an answer that releases it (the
+            Merge option, or words to merge that refuse nothing) is the
+            merge go for the head the escalation named, once its checks
+            are green; any other answer goes to the worker word for word,
+            and the rounds go on. One nobody answered holds nothing
   relay     another team's pull request: each review its owning team
             posted after the worker parked, told to it word for word
   ownership another team's pull request whose worker waited
@@ -314,9 +316,7 @@ its key first in the detail):
             find it the latest. A loop whose binary was replaced
             re-executes the installed one at its next pass
   classify  a report or park the rules cannot place: agents.report without
-            agents.done; agents.problem neither logged with an agents.done
-            nor of a reviewer matching its round's changes request the loop
-            forwarded; a park on nothing of an agent still parked
+            agents.done; a park on nothing of an agent still parked
             on nothing, with no timer that wakes it (timer add --wake), no
             note its wait names (#12) and no open note of its own. The
             supervisor.classifier command, given the event as JSON on
@@ -324,12 +324,17 @@ its key first in the detail):
             "confidence":0.9}; the event goes to the guide (note add for
             guide.person) with its class, or unclassified below
             supervisor.classifierConfidence (0.8) or without a classifier
-  file      the problems a done report names that cite no issue URL
-            (https://github.com/<owner>/<repo>/issues/<n>): one note for
-            guide.person, into the guide's queue, to file them in their
-            owning repository, before the done; one citing its issue is
-            filed and rides with the done's log line, as does a
-            reviewer's that matches the changes request the loop forwarded
+  file      a problem found (agents.problem) that cites no issue URL
+            (https://github.com/<owner>/<repo>/issues/<n>): a note for
+            guide.person, into the guide's queue, to file it in its owning
+            repository, no decision; a done report's together in one note,
+            before the done. One citing its issue is filed: a done report's
+            rides with the done's log line, as does a reviewer's that
+            matches the changes request the loop forwarded, and one logged
+            mid-task needs nothing. The note links the issue or pull
+            request the agent works, or none when it works none. The agent
+            keeps its task: a problem is a finding, never a decision for
+            the person
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -687,7 +692,7 @@ func would(act superloop.Action) string {
 	switch act.Kind {
 	case superloop.KindReview:
 		return fmt.Sprintf("start reviewer %q for %s at %s, round %d", superloop.ReviewerName(act.Ref, act.Round), act.URL, act.Head, act.Round)
-	case superloop.KindEscalate, superloop.KindOwnership:
+	case superloop.KindOwnership:
 		return "ask the guide's person: " + act.Question
 	case superloop.KindDone:
 		return "take off the roster " + act.Message
@@ -697,7 +702,7 @@ func would(act superloop.Action) string {
 		return "install " + act.Version
 	case superloop.KindClassify:
 		return fmt.Sprintf("send its %s to the guide", act.Event.Verb)
-	case superloop.KindGo, superloop.KindForward, superloop.KindAnswer, superloop.KindRelay:
+	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
 	return truncate(oneLine(act.Message), 300)
@@ -754,7 +759,7 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
 		done = logged(verbStart, opens)
-	case superloop.KindGo, superloop.KindForward, superloop.KindAnswer, superloop.KindRelay:
+	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
@@ -856,7 +861,6 @@ func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error
 // act takes one transition and says what it did.
 func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	a := l.a
-	k := a.cfg.Supervisor
 	switch act.Kind {
 	case superloop.KindReview:
 		return l.startReviewer(ctx, act)
@@ -870,13 +874,11 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 			return "", err
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
-	case superloop.KindEscalate:
-		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
-			fmt.Sprintf("the change-request rounds of supervisor.reviewRounds (%d) are used up and the last review's findings stand: only a person can let it merge; the loop gives the merge go for head %s on an answer that releases it", k.ReviewRounds, act.Head),
-			fmt.Sprintf("leave %s unmerged and its worker parked", act.URL), superloop.EscalationOptions(act.Head)...); err != nil {
+	case superloop.KindRework:
+		if err := l.wake(ctx, act); err != nil {
 			return "", err
 		}
-		return "to the guide: " + act.Message, nil
+		return fmt.Sprintf("%s at %s: the review's findings stand with no round left, rework told", act.URL, act.Head), nil
 	case superloop.KindAnswer:
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
@@ -1194,21 +1196,32 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 	return fmt.Sprintf("%s to the guide (%s) on %s", e.Verb, label, ref), nil
 }
 
-// toFile puts the problems a done report found and filed nowhere in the
-// guide's queue: the supervisor files a worker's problems found, and no
+// toFile puts the problems found and filed nowhere in the guide's queue,
+// no decision: the supervisor files a worker's problems found, and no
 // supervisor session reads the watch's PROBLEM FOUND lines beside the loop.
-// The agent's done waits for it.
+// A done report's wait for it in its done; one logged mid-task leaves the
+// agent at its task.
 func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	e := *act.Event
 	found := strings.Split(act.Message, "\n")
+	if e.Verb == superloop.VerbProblem {
+		ref := agentRef(st, e.Agent)
+		if ref == "" {
+			ref = refURL.FindString(act.Message)
+		}
+		q := fmt.Sprintf("File in its owning repository what %s found (1 problem, no decision)", e.Agent)
+		if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s logged at %s, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), act.Message),
+			"the supervisor files a worker's problems found (worker-rules), and the problem names no issue; the agent keeps its task",
+			"the guide files it in its owning repository and closes this note"); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s's problem to the guide's queue to file%s", e.Agent, onRef(ref)), nil
+	}
 	ref := agentRef(st, e.Agent)
 	if ref == "" {
 		if m := refURL.FindString(e.Detail + " " + act.Message); m != "" {
 			ref = m
 		}
-	}
-	if ref == "" {
-		return "", fmt.Errorf("%s's done report names no issue or pull request to file the guide's note on", e.Agent)
 	}
 	q := fmt.Sprintf("File in its owning repository what %s found (%d problem(s), no decision)", e.Agent, len(found))
 	if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s's done report at %s names, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), strings.Join(found, "; ")),
@@ -1216,7 +1229,15 @@ func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superl
 		"the guide files each in its owning repository and closes this note"); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file, on %s", len(found), e.Agent, ref), nil
+	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file%s", len(found), e.Agent, onRef(ref)), nil
+}
+
+// onRef names the issue or pull request a note was filed on, if any.
+func onRef(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	return ", on " + ref
 }
 
 // agentRef is the issue or pull request the agent works: what it is
@@ -1243,7 +1264,9 @@ func agentRef(st *state.State, name string) string {
 	return ""
 }
 
-// toGuide files a decision for the guide's person on ref (note add).
+// toGuide files a decision for the guide's person on ref (note add). A
+// finding to file needs no thread of its own: with ref "" the note links
+// none, and the guide closes it once it is filed.
 func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string, options ...string) error {
 	person := l.a.cfg.Guide.Person
 	if person == "" {
@@ -1253,10 +1276,13 @@ func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref,
 	if err := l.claim(act, question); err != nil {
 		return err
 	}
-	args := []string{loopNote, loopAdd, "--for", person, "--ref", ref,
-		"--due", l.a.cfg.Supervisor.NoteDue.String(),
+	args := []string{loopNote, loopAdd, "--for", person}
+	if ref != "" {
+		args = append(args, "--ref", ref)
+	}
+	args = append(args, "--due", l.a.cfg.Supervisor.NoteDue.String(),
 		"--status-quo", truncate(statusQuo, 2900), "--why", why, "--default", dflt,
-		"--checked", "beekeeper supervisor loop: gh pr view and the event log"}
+		"--checked", "beekeeper supervisor loop: gh pr view and the event log")
 	for _, o := range options {
 		args = append(args, "--option", o)
 	}
