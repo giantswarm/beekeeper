@@ -129,7 +129,7 @@ func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
 
 func TestStaleUpgradeHoldIsMarked(t *testing.T) {
 	st := &state.State{Holds: []state.Hold{
-		{Target: "upgrade:dingo/poc-cluster", Reason: "upgrade dingo/poc-cluster ? → 35.1.1", At: relayNow.Add(-25 * time.Hour)},
+		{Target: "upgrade:test/stalled", Reason: "upgrade test/stalled ? → 35.1.1", At: relayNow.Add(-25 * time.Hour)},
 		{Target: "upgrade:gazelle/cicddev", Reason: "upgrade gazelle/cicddev 35.0.0 → 36.0.0", At: relayNow.Add(-time.Hour)},
 	}}
 	var out bytes.Buffer
@@ -137,7 +137,7 @@ func TestStaleUpgradeHoldIsMarked(t *testing.T) {
 	a.printHolds(a.activeHolds(st))
 	lines := strings.Split(out.String(), "\n")
 	if len(lines) < 3 ||
-		!regexp.MustCompile(`upgrade:dingo/poc-cluster +active, stale +the upgrade ends `).MatchString(lines[1]) ||
+		!regexp.MustCompile(`upgrade:test/stalled +active, stale +the upgrade ends `).MatchString(lines[1]) ||
 		!regexp.MustCompile(`upgrade:gazelle/cicddev +active +the upgrade ends `).MatchString(lines[2]) {
 		t.Errorf("hold list:\n%s", out.String())
 	}
