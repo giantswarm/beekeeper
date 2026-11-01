@@ -68,6 +68,12 @@ desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the 
 the build under test, and each test starts its command in a scope of its own: on a guarded machine
 `go test` itself runs in a capped scope, where `run` takes no slot.
 
+`TestWatchStopsSandboxOrphan` additionally needs bubblewrap. It starts a real PID namespace,
+enters a scratch scope through the broker, and leaves a background child adopted by the sandbox
+init. Sandboxed `Capper.Reap` leaves cleanup to the host watch: the test proves a reporting-only
+watch preserves the child and an active watch stops its scope after the orphan grace period.
+Its scope and sandbox are stopped at test cleanup; no installed configuration is changed.
+
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
