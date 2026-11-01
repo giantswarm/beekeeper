@@ -12,6 +12,10 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+// noteClosureRetention bounds audit history well beyond Event TTL and the
+// 24-hour late-answer window. The periodic default update collects expired history.
+const noteClosureRetention = 30 * 24 * time.Hour
+
 const (
 	noteClosed         = "closed"
 	noteAnswered       = "answered"
@@ -50,7 +54,9 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 			}
 		}
 		if closing == nil && old.Status.State == noteDefaulted && n == nil {
-			// Expiry ends the late-answer window; it does not erase the default.
+			// Only closeDefaulted removes defaulted notes without an event,
+			// after the 24-hour late-answer window. This branch relies on that
+			// caller contract: expiry keeps the default as history.
 			n = old.DeepCopy()
 			n.Status.State = noteClosed
 			if n.Status.Closure == nil {
@@ -103,4 +109,31 @@ func (s *Store) NoteClosure(id int) (*state.Event, error) {
 		}
 	}
 	return nil, nil
+}
+
+// pruneClosed collects expired history on note-only updates, including a
+// no-op default tick. Unrelated object updates keep history until that tick:
+// collecting it alongside them would violate the store's multi-object rule.
+func (snap *snapshot) pruneClosed(want *snapshot, now time.Time) bool {
+	if !allNotes(snap.diff(want)) {
+		return false
+	}
+	pruned := false
+	for k, old := range snap.notes {
+		if old.Status.State != noteClosed && old.Status.State != noteAnswered {
+			continue
+		}
+		at := old.Status.At.Time
+		if old.Status.Closure != nil {
+			at = old.Status.Closure.At.Time
+		}
+		if at.IsZero() {
+			at = old.CreationTimestamp.Time
+		}
+		if !at.IsZero() && now.Sub(at) > noteClosureRetention {
+			delete(want.notes, k)
+			pruned = true
+		}
+	}
+	return pruned
 }

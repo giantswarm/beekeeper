@@ -385,7 +385,7 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s := stateOf(1); s != noteClosed {
-		t.Errorf("an answered default's Note: %q", s)
+		t.Errorf("an expired default's retained Note: %q", s)
 	}
 }
 

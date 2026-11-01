@@ -189,8 +189,11 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		if err := homeless(st, want.state()); err != nil {
 			return false, err
 		}
+		pruned := snap.pruneClosed(want, time.Now())
 		changes := snap.diff(want)
-		issue := want.issued > snap.next()
+		// Persist a legacy snapshot's high-water mark before GC removes its
+		// highest Note, even if its counter and Events have disappeared.
+		issue := want.issued > snap.next() || (pruned && snap.counter == nil)
 		switch {
 		case len(changes) == 0 && len(events) > 0:
 			return false, fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
@@ -218,7 +221,7 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		var written []client.Object
 		for _, c := range changes {
 			obj, err := s.write(ctx, c)
-			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) || (c.delete && apierrors.IsNotFound(err)) {
 				break
 			}
 			if err != nil {
@@ -520,6 +523,11 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 		return nil, err
 	}
 	var out []state.Event
+	type eventKey struct {
+		verb, detail string
+		second       int64
+	}
+	seen := map[eventKey]bool{}
 	for _, ev := range list.Items {
 		e := state.Event{At: ev.EventTime.Time, Verb: ev.Reason, Detail: eventDetail(&ev)}
 		if raw := ev.Annotations[byAnnotation]; raw != "" {
@@ -530,6 +538,7 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 		}
 		if keep == nil || keep(e) {
 			out = append(out, e)
+			seen[eventKey{e.Verb, e.Detail, e.At.Unix()}] = true
 		}
 	}
 	// Closed Notes retain their audit line after Event TTL, including when
@@ -541,11 +550,10 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 	for _, n := range notes.Items {
 		if c := n.Status.Closure; c != nil {
 			e := state.Event{At: c.At.Time, By: party(c.By), Verb: c.Verb, Detail: c.Detail}
-			duplicate := slices.ContainsFunc(out, func(o state.Event) bool {
-				return o.Verb == e.Verb && o.Detail == e.Detail && o.At.Unix() == e.At.Unix()
-			})
-			if !duplicate && (keep == nil || keep(e)) {
+			k := eventKey{e.Verb, e.Detail, e.At.Unix()}
+			if !seen[k] && (keep == nil || keep(e)) {
 				out = append(out, e)
+				seen[k] = true
 			}
 		}
 	}
@@ -582,6 +590,7 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 		return nil, err
 	}
 	out := []feed.Event{}
+	seen := map[string]bool{}
 	for i := range list.Items {
 		ev := &list.Items[i]
 		if strings.HasPrefix(ev.Reason, "serve.") {
@@ -592,6 +601,7 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 			return nil, err
 		}
 		out = append(out, fe)
+		seen[fe.ID] = true
 	}
 	notes := &v1alpha1.NoteList{}
 	if err := s.c.List(ctx, notes); err != nil {
@@ -599,9 +609,10 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 	}
 	for _, n := range notes.Items {
 		if c := n.Status.Closure; c != nil {
-			if slices.ContainsFunc(out, func(e feed.Event) bool { return e.ID == c.ID }) {
+			if seen[c.ID] {
 				continue
 			}
+			seen[c.ID] = true
 			by := c.By
 			actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
 			out = append(out, feed.Event{ID: c.ID, Kind: c.Verb, Subject: "Note/" + n.Name, Actor: actor, Time: c.At.UTC(), Line: feed.Line(c.Verb, actor, c.Detail)})

@@ -409,7 +409,10 @@ in both modes.
 A central Note closes only with a recognised close event (`answer.recorded`,
 `note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
 line atomically with the outcome. Closed Notes remain as history, outside the
-open notes and the 24-hour default-answer window; unrelated updates retain them.
+open notes and the 24-hour default-answer window, for 30 days after closure.
+Note-only updates, including the periodic default tick, collect older closed
+records; unrelated object updates leave collection to that tick. Cleanup first
+preserves the note counter, so expired numbers are never issued again.
 `beekeeper log` includes the retained line even after Kubernetes Events expire
 or an Event write fails. An answer after the default-answer window explicitly
 reports that the note was closed by its default. Folding a new question into an

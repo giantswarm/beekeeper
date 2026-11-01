@@ -437,9 +437,7 @@ naming both. --post is the machine's notes' only.`,
 				return a.answerCentral(cmd.Context(), ids[0].ID, choice, via, strings.Join(args[1:], " "), post)
 			}
 			if n == nil {
-				if history, ok := a.store.(interface {
-					NoteClosure(int) (*state.Event, error)
-				}); ok {
+				if history, ok := a.store.(state.NoteHistory); ok {
 					closed, err := history.NoteClosure(ids[0].ID)
 					if err != nil {
 						return err
