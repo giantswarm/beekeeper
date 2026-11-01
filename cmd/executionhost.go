@@ -68,13 +68,43 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		rules.WriteString("\n\n" + plugin.Skill(topic))
 	}
 	rules.WriteString("\n\nExecution host rules:\n" + string(custom))
+	// The start guards ride with the security sections: every threshold that
+	// gates a remote start on this host (the memory floor, the swap guard
+	// with its measuring window, the load and disk limits, the build slots,
+	// the kind lab cap) and every bound a capped run consumes under (memcap's
+	// memory, CPU quota and desktop weight) belong in the pinned digest. A
+	// guard weakened below the reviewed bundle must show up as a digest
+	// mismatch in `agents hosts check`, not as a host that quietly starts on
+	// weaker guards. What stays host-local of capacity, watch and memcap —
+	// the supervisor's pace, watch's alert thresholds and cadence, the slot
+	// location and hold bound — shapes this machine's watch and its own desk,
+	// never what a pinned remote worker may run or consume.
 	security, err := json.Marshal(struct {
-		GitHub   any
-		Hooks    any
-		Secret   any
-		Outbound any
-		Sandbox  any
-	}{a.cfg.GitHub, a.cfg.Hooks, a.cfg.Secret, a.cfg.Outbound, a.cfg.Sandbox})
+		GitHub          any
+		Hooks           any
+		Secret          any
+		Outbound        any
+		Sandbox         any
+		MaxKindClusters int
+		AvailMinMiB     int
+		SwapGrowthMax   int
+		SwapPSIMax      float64
+		SwapWindow      string
+		LoadMax         float64
+		LoadPerCoreMax  float64
+		DiskMinMiB      int
+		DiskFillWithin  string
+		MemcapSlots     int
+		MemcapMax       string
+		MemcapCPUQuota  string
+		MemcapCPUWeight int
+	}{
+		GitHub: a.cfg.GitHub, Hooks: a.cfg.Hooks, Secret: a.cfg.Secret, Outbound: a.cfg.Outbound, Sandbox: a.cfg.Sandbox,
+		MaxKindClusters: a.cfg.MaxKindClusters,
+		AvailMinMiB:     a.cfg.Capacity.AvailMinMiB, SwapGrowthMax: a.cfg.Capacity.SwapGrowthMaxMiB, SwapPSIMax: a.cfg.Capacity.SwapPSIMax, SwapWindow: a.cfg.Watch.SwapWindow.String(),
+		LoadMax: a.cfg.Watch.LoadMax, LoadPerCoreMax: a.cfg.Watch.LoadPerCoreMax, DiskMinMiB: a.cfg.Watch.DiskMinMiB, DiskFillWithin: a.cfg.Watch.DiskFillWithin.String(),
+		MemcapSlots: a.cfg.Memcap.Slots, MemcapMax: a.cfg.Memcap.Max, MemcapCPUQuota: a.cfg.Memcap.CPUQuota, MemcapCPUWeight: a.cfg.Memcap.CPUWeight,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +261,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents publish", "agents merge", "run", "run stats", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents publish", "agents merge", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {

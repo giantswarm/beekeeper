@@ -121,6 +121,9 @@ memcap:                     # beekeeper run's build slots and cap
   cpuWeight: 50             # memcap.slice's CPUWeight against the desktop's slices (100 each); the default
   holdBound: 30m            # watch says SLOT HELD LONG for a run holding a slot longer; the default
 
+run:                        # beekeeper run beyond the slots
+  tail: 256K                # the failed run's output tail beekeeper keeps and prints (see `beekeeper run tail`); the default, off keeps nothing
+
 ollama:                     # the host's ollama, whose loaded models sit in the iGPU's GTT; unset url, none
   url: http://localhost:11434   # GET /api/ps
   unit: ollama              # the systemd unit whose journal names the client that loaded a model

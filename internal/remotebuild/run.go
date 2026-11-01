@@ -34,11 +34,6 @@ type Command func(context.Context, io.Reader, io.Writer, ...string) error
 // not fail or block the run.
 type Record func(verb, detail string)
 
-// TailBytes bounds the tail of a failed remote run kept in its record, so
-// the failure reads from beekeeper log and nobody reruns the command to see
-// it (issue #796, kept for remote runs by issue #1937).
-const TailBytes = 1200
-
 type Runner struct {
 	Config         Config
 	StateDir       string
@@ -49,12 +44,30 @@ type Runner struct {
 	// Name is the command the run's records name (guard.CommandHead of the
 	// caller's argv); Repo and Head what it builds.
 	Name, Repo, Head string
+	// Tail keeps the remote run's streamed output for the failure record,
+	// exactly as the local scope's stream does; nil keeps nothing.
+	Tail io.Writer
+	// KeepFailure keeps the failed run's tail in the run record and
+	// prints it, named by the run's id, and answers the path it kept
+	// ("" when nothing was): the end record names it, as the local run's
+	// does. It is the caller's: the tail's size, masking and directory
+	// belong to `beekeeper run`, not to the transport.
+	KeepFailure func(runID string, exit int) string
 }
 
 func (r Runner) record(verb, detail string) {
 	if r.Record != nil {
 		r.Record(verb, detail)
 	}
+}
+
+// keepFailure hands the failed run's streamed tail to the caller's keeper
+// and answers what it kept ("" when nothing was kept).
+func (r Runner) keepFailure(id string, rc int) string {
+	if r.KeepFailure == nil {
+		return ""
+	}
+	return r.KeepFailure(id, rc)
 }
 
 func (r Runner) kubectl(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
@@ -197,6 +210,9 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 		_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: reconnecting to remote run journal")
 	}
 	count := &countWriter{w: r.Stdout}
+	if r.Tail != nil {
+		count.w = io.MultiWriter(r.Stdout, r.Tail)
+	}
 	for range 4 {
 		err = r.exec(ctx, pod, nil, count, shellBash, "-c", follow, "--", id, strconv.FormatInt(count.n, 10))
 		if ctx.Err() != nil {
@@ -210,8 +226,8 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 				if e == nil && rc >= 0 && rc <= 255 {
 					extra := ""
 					if rc != 0 {
-						if t := r.tailOf(pod, id); t != "" {
-							extra = "failed: " + t
+						if at := r.keepFailure(id, rc); at != "" {
+							extra = "tail " + at
 						}
 					}
 					_ = cleanup(finish)
@@ -225,22 +241,6 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	end(125, "remote journal lost: the command was not retried locally")
 	_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: remote journal unavailable; command was not retried locally")
 	return true, 125
-}
-
-// tailOf reads the last bytes of the run's log while its pod still stands:
-// the failure's tail goes into the record, so nobody reruns the command to
-// read it (issue #796, kept for remote runs by issue #1937). A pod already
-// gone (or a log the watchdog reclaimed) costs the tail, not the run.
-func (r Runner) tailOf(pod, id string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	var b bytes.Buffer
-	if err := r.exec(ctx, pod, nil, &b, shellBash, "-c", tail, "--", id, strconv.Itoa(TailBytes)); err != nil {
-		return ""
-	}
-	// ": " belongs to the record's command, not to its tail: a colon-space
-	// in output would move the command out of RunCommand's reading.
-	return strings.ReplaceAll(runrecord.OneLine(b.String()), ": ", "; ")
 }
 
 func (r Runner) exec(ctx context.Context, pod string, in io.Reader, out io.Writer, args ...string) error {

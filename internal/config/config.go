@@ -2998,7 +2998,19 @@ type Desktop struct {
 // RunConfig chooses where build commands execute.
 type RunConfig struct {
 	Remote remotebuild.Config `yaml:"remote"`
+	// Tail sizes the tail of a failed run's output beekeeper keeps in its
+	// record and prints once, so the failing test's name survives the
+	// truncation: a systemd size ("256K", "1M"; default
+	// DefaultRunTail, capped at one MiB), or "off" to keep nothing.
+	Tail string `yaml:"tail"`
 }
+
+// DefaultRunTail is how much of a failed run's output beekeeper keeps
+// by default: enough for a test suite's failure block and its panic.
+const DefaultRunTail = "256K"
+
+// runTailRe is a run.tail size: a number with an optional systemd suffix.
+var runTailRe = regexp.MustCompile(`^(\d+)([KkMmGgTt]?)$`)
 
 // Memcap locates the build slots of the memcap wrapper and caps the
 // commands `beekeeper run` runs.
@@ -3387,6 +3399,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
 	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
+	setStr(&c.Run.Tail, DefaultRunTail)
 	setDur(&c.Memcap.HoldBound, 30*time.Minute)
 	if !c.Capacity.reviewHeadroomSet {
 		c.Capacity.ReviewHeadroom = 2
@@ -3631,6 +3644,9 @@ func (r *Reporter) defaults(home, person string) {
 func (c *Config) validate() error {
 	if err := c.Run.Remote.Validate(); err != nil {
 		return err
+	}
+	if c.Run.Tail != "" && c.Run.Tail != "off" && !runTailRe.MatchString(c.Run.Tail) {
+		return fmt.Errorf("run.tail: want a size with an optional K, M, G or T suffix (256K) or off")
 	}
 	if c.Disk.Prune != "" && c.Disk.Prune != DiskPruneAuto && c.Disk.Prune != DiskPruneAsk {
 		return fmt.Errorf("disk.prune: want auto or ask")

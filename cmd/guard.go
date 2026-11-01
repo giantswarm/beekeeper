@@ -155,6 +155,14 @@ later (snapshot, watch) names them after the run has ended. Logging never
 fails or delays the run: an event the log cannot take within a second is
 dropped.
 
+A run whose command fails keeps the tail of its output — the "--- FAIL"
+lines a truncated screen lost — masked like every output leaving the run,
+in <stateDir>/run-tails/<scope>.log (a remote run's: remote-<id>.log), and
+prints it again at the end of the run: the failing test can be named
+without rerunning the suite. run.tail sizes the kept tail (default 256K,
+capped at 1M, off keeps nothing); beekeeper run tail lists the kept tails
+and prints one.
+
 The runs share memcap.slice's CPU budget: its CPUQuota (memcap.cpuQuota,
 default half the cores) bounds the cores they use together, its CPUWeight
 (memcap.cpuWeight, default 50 against the desktop's slices' 100) their
@@ -188,7 +196,8 @@ machine's files stay untouched.`,
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
 				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1",
-				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache")}
+				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache"),
+				Tail: a.runTail(), TailDir: a.runTailsDir(), Redact: a.redactOutput}
 			var err error
 			if err := a.executionRunOptions(cmd.Context(), &o); err != nil {
 				return err
@@ -226,13 +235,15 @@ machine's files stay untouched.`,
 				}
 				o.Class = guard.DefaultClass(args)
 			}
-			repo, head := a.worktreeIdentity(cmd.Context())
-			o.Repo, o.Head = repo, head
+			repo, commit := a.worktreeIdentity(cmd.Context())
+			o.Repo, o.Head = repo, commit
 			// Per-run local resource/wait overrides retain their existing semantics.
 			// Remote pods use the desk-configured resources and placement bound.
 			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
+				head := guard.CommandHead(args)
 				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr,
-					Record: a.runRecorder(), Name: guard.CommandHead(args), Repo: repo, Head: head}
+					Record: a.runRecorder(), Name: head, Repo: repo, Head: commit,
+					Tail: o.Tail, KeepFailure: func(runID string, exit int) string { return o.KeepFailureTail("remote-"+runID, head, exit) }}
 				if handled, rc := runner.Try(cmd.Context(), args); handled {
 					if rc != 0 {
 						return &exitError{code: rc}
@@ -256,6 +267,7 @@ machine's files stay untouched.`,
 	// `run stats` is a reader, not a run: a command literally named stats
 	// still runs with `run -- stats …`.
 	c.AddCommand(a.runStatsCmd())
+	c.AddCommand(a.runTailCmd())
 	return c
 }
 

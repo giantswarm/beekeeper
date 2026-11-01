@@ -65,7 +65,9 @@ connection attempts, and the command's exact exit code is relayed. An
 unrecoverable connection returns 125. Interrupts stop the remote process group
 and return 130; inability to confirm cancellation is reported. The watchdog
 reclaims abandoned uploads and stops orphaned process groups. Remote stdout and
-stderr form one ordered stream on the caller's stdout.
+stderr form one ordered stream on the caller's stdout. A failed remote command
+keeps the tail of that stream in the caller's run record as the local slot
+keeps its scope's (`beekeeper run tail`, `remote-<id>.log`).
 
 ## The record of a run
 
@@ -77,10 +79,11 @@ cache (the numbers the shared cache, issue #1782, is measured against). A
 remote run's records name the builder pod, its namespace and whether its pod
 was warm (its build caches hold earlier runs) or cold; both name the
 repository and HEAD built, the command, the duration and the exit code. The
-end of a failed remote run keeps the tail of its output read back from the
-pod before cleanup, so the failure reads from the record and nobody reruns
-the suite to see it (issue #796). The host's event log outlives the pod: the
-records stand after the builder Job and its 60 s TTL are gone.
+end of a failed remote run names the masked tail the caller kept from its
+streamed output (`beekeeper run tail`, `remote-<id>.log`), so the failure
+reads from the record and nobody reruns the suite to see it (issue #796).
+The host's event log and the tails directory outlive the pod: the records
+stand after the builder Job and its 60 s TTL are gone.
 
 ## Builder image contract
 
