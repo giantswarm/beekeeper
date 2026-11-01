@@ -324,7 +324,7 @@ func (f *fakeLoopService) service() *loopService {
 func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 	dir := t.TempDir()
 	w, d, out := notifyingWatch(t, dir, true)
-	svc := &fakeLoopService{state: "inactive"}
+	svc := &fakeLoopService{state: "dead"}
 	w.stand.loopUnit = svc.service()
 	successors := 0
 	w.stand.succeed = func(context.Context, role, state.Party) (state.Party, error) {
@@ -359,7 +359,7 @@ func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
 	if svc.starts != 1 {
 		t.Fatalf("restarted a starting service: %d", svc.starts)
 	}
-	svc.state = "failed"
+	svc.state = "dead"
 	poll(2*time.Minute + time.Second)
 	poll(3 * time.Minute)
 	if svc.starts != 2 || strings.Count(out.String(), "SUPERVISOR LOOP DOWN") != 1 || downs() != 1 {

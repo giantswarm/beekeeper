@@ -40,7 +40,7 @@ func TestSplitNotesLeavesTheGuidesNotesToALine(t *testing.T) {
 		{ID: 2, Kind: noteDecision, For: guideRole.title, Text: "archive the test sessions"},
 		{ID: 3, Kind: noteDecision, For: "Guide run 2: Pat's open decisions", Text: "relay"},
 		{ID: 4, Kind: noteDecision, Text: "[for Pat] an older note"},
-		{ID: 5, Kind: noteDecision, For: "Supervisor", Text: "check the lane"},
+		{ID: 5, Kind: noteDecision, For: claimSupervisor, Text: "check the lane"},
 		{ID: 6, Kind: noteDecision, For: samName, Text: "pick a lab?"},
 	})
 	if len(s.Own) != 2 || s.Own[0].ID != 5 || s.Own[1].ID != 6 || s.guided() != 4 {

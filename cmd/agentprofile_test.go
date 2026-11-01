@@ -17,7 +17,7 @@ import (
 
 func TestProfileName(t *testing.T) {
 	cfg := &config.Config{Agents: config.Agents{Profile: "minimal"}, Guide: config.Guide{Role: config.Role{Profile: "lean"}}}
-	for role, want := range map[string]string{workerRole: "minimal", guideRole.name: "lean", "supervisor": "", "": ""} {
+	for role, want := range map[string]string{workerRole: "minimal", guideRole.name: "lean", "steward": "", "": ""} {
 		if got := profileName(cfg, role); got != want {
 			t.Errorf("profileName(%q) = %q, want %q", role, got, want)
 		}

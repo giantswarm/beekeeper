@@ -832,15 +832,6 @@ func (a *app) printLeases(l *leaseList) {
 	a.printLabs(l.labs)
 }
 
-// purposeText is a lease's purpose, with the upgrade unblock that admitted
-// its claim.
-func purposeText(h lease.Holder) string {
-	if h.UpgradeUnblock == "" {
-		return h.Purpose
-	}
-	return h.Purpose + " (upgrade unblock: " + h.UpgradeUnblock + ")"
-}
-
 // grantee is the session a grant goes to: a running one, else an agent on
 // the roster whose CLI does not run (its headless turn ended, its import
 // waits), whose grant waits for its next turn, with what says so.
