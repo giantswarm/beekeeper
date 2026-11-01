@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // References reads a process's files, mappings and temporary/build directory
@@ -33,7 +32,7 @@ func referencesAt(root string, pid int) ([]string, error) {
 func referencesWith(root string, pid int, protected bool, files referenceIO) ([]string, error) {
 	dir := filepath.Join(root, strconv.Itoa(pid))
 	ignored := func(err error) bool {
-		return referenceGone(err) || protected && errors.Is(err, os.ErrPermission)
+		return errors.Is(err, os.ErrNotExist) || protected && errors.Is(err, os.ErrPermission)
 	}
 	var paths []string
 	links := []string{filepath.Join(dir, "cwd"), filepath.Join(dir, "exe")}
@@ -103,16 +102,11 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		}
 		dir := filepath.Join(root, e.Name())
 		raw, err := files.readFile(filepath.Join(dir, "status"))
-		if referenceGone(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, nil, err
-		}
-		// A confirmed zombie has exited and cannot hold references, even
-		// while its parent keeps the process entry around until wait(2).
-		if referenceZombie(raw) {
-			continue
 		}
 		owner, protected, err := referenceOwner(raw)
 		if err != nil {
@@ -121,13 +115,20 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		if owner != uid {
 			continue
 		}
+		exited, err := referenceZombie(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		if exited {
+			continue
+		}
 		// A cached directory inode may retain its original owner after a
 		// process becomes non-dumpable. Ptrace-gated children reflect the
 		// current protection, including when status omits Dumpable.
 		gone := false
 		for _, path := range []string{dir, filepath.Join(dir, "environ")} {
 			info, err := files.stat(path)
-			if referenceGone(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				gone = true
 				break
 			}
@@ -144,7 +145,7 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 			return nil, nil, err
 		}
 		comm, err := files.readFile(filepath.Join(dir, "comm"))
-		if referenceGone(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
@@ -156,15 +157,31 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 	return refs, commands, nil
 }
 
-func referenceZombie(status []byte) bool {
+// A zombie leader can still have live threads holding references. Only a
+// zombie with a known thread count of zero or one is confirmed exited.
+func referenceZombie(status []byte) (bool, error) {
+	zombie := false
+	threads := -1
 	for line := range strings.Lines(string(status)) {
 		key, value, _ := strings.Cut(line, ":")
-		if key == "State" {
+		switch key {
+		case "State":
 			fields := strings.Fields(value)
-			return len(fields) > 0 && fields[0] == "Z"
+			zombie = len(fields) > 0 && fields[0] == "Z"
+		case "Threads":
+			n, err := strconv.Atoi(strings.TrimSpace(value))
+			if err == nil {
+				threads = n
+			}
 		}
 	}
-	return false
+	if !zombie {
+		return false, nil
+	}
+	if threads < 0 || threads > 1 {
+		return false, errors.New("zombie leader may have live threads: references unavailable")
+	}
+	return true, nil
 }
 
 func referenceOwner(status []byte) (int, bool, error) {
@@ -217,10 +234,4 @@ func referenceIDs(value string) (int, bool, error) {
 		}
 	}
 	return realID, mixed, nil
-}
-
-// Linux may return ESRCH while a process exits, including when reading a
-// zombie's environ. Like ENOENT, it cannot hide a live process's references.
-func referenceGone(err error) bool {
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
 }

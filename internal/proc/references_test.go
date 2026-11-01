@@ -19,6 +19,8 @@ const (
 	fixtureEnvironment = "environ"
 	fixtureMappings    = "maps"
 	fixtureStat        = "stat"
+	fixtureZombieState = "Z (zombie)"
+	fixtureLiveStatus  = "State: S\nThreads: 1\n"
 )
 
 func TestReferencesReadsOpenFilesMappingsAndBuildDirectories(t *testing.T) {
@@ -156,15 +158,31 @@ func TestUserReferencesFailsClosedWithoutProcessRootOrOwnership(t *testing.T) {
 }
 
 func TestUserReferencesSkipsOnlyConfirmedZombies(t *testing.T) {
-	for _, state := range []string{"Z (zombie)", "S (sleeping)", "Zebra", ""} {
-		t.Run(state, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, threads string
+		exited, inspect      bool
+	}{
+		{"single-thread zombie", fixtureZombieState, "1", true, false},
+		{"zero-thread zombie", fixtureZombieState, "0", true, false},
+		{"zombie leader with live threads", fixtureZombieState, "2", false, false},
+		{"unknown zombie threads", fixtureZombieState, "", false, false},
+		{"invalid zombie threads", fixtureZombieState, "invalid", false, false},
+		{"negative zombie threads", fixtureZombieState, "-1", false, false},
+		{"sleeping", "S (sleeping)", "1", false, true},
+		{"malformed state", "Zebra", "1", false, true},
+		{"missing state", "", "1", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "42")
 			if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
 				t.Fatal(err)
 			}
 			uid := os.Getuid()
-			status := fmt.Sprintf("State:\t%s\nUid:\t%d %d %d %d\n", state, uid, uid, uid, uid)
+			status := fmt.Sprintf("State:\t%s\nUid:\t%d %d %d %d\n", tc.state, uid, uid, uid, uid)
+			if tc.threads != "" {
+				status += "Threads:\t" + tc.threads + "\n"
+			}
 			if err := os.WriteFile(filepath.Join(dir, fixtureStatus), []byte(status), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -181,12 +199,14 @@ func TestUserReferencesSkipsOnlyConfirmedZombies(t *testing.T) {
 				return os.ReadFile(filepath.Clean(path))
 			}
 			refs, commands, err := userReferencesAt(root, uid, files)
-			if state == "Z (zombie)" {
+			if tc.exited {
 				if err != nil || inspected || len(refs) != 0 || len(commands) != 0 {
 					t.Fatalf("zombie did not count as exited: refs=%v commands=%v inspected=%v err=%v", refs, commands, inspected, err)
 				}
-			} else if !inspected || !errors.Is(err, os.ErrPermission) {
+			} else if err == nil || inspected != tc.inspect {
 				t.Fatalf("unconfirmed zombie did not fail closed: inspected=%v err=%v", inspected, err)
+			} else if tc.inspect && !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("live process lost permission error: %v", err)
 			}
 		})
 	}
@@ -205,7 +225,7 @@ func TestUserReferencesAgainstLiveProc(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = held.Close() }()
-	// Only this process and existing zombies belong to this live probe.
+	// Only this process and confirmed exited zombies belong to this live probe.
 	// Other live processes may be ptrace-restricted by their namespace;
 	// fixture tests above prove those errors still fail closed in production.
 	files := referenceFiles()
@@ -227,11 +247,8 @@ func TestUserReferencesAgainstLiveProc(t *testing.T) {
 			if err != nil {
 				continue
 			} // A process can exit after ReadDir.
-			for line := range strings.Lines(string(status)) {
-				if strings.HasPrefix(line, "State:") && strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(line, "State:")), "Z") {
-					selected = append(selected, entry)
-					break
-				}
+			if exited, err := referenceZombie(status); err == nil && exited {
+				selected = append(selected, entry)
 			}
 		}
 		return selected, nil
@@ -253,27 +270,34 @@ func TestReferenceOwnerRejectsMalformedProtectionMetadata(t *testing.T) {
 	}
 }
 
-// Exiting and zombie processes can yield ESRCH at any point in a scan;
-// an actual I/O failure must still stop pruning.
+// Missing entries are exit races. ESRCH alone cannot confirm exit: a
+// zombie leader may have live threads, and unknown live errors fail closed.
 func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 	for _, target := range []string{"status", fixtureStat, "environ", "maps", "fd", fixtureCWD, "exe", fixtureCommand} {
-		for _, gone := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/gone=%v", target, gone), func(t *testing.T) {
+		for _, tc := range []struct {
+			name, status string
+			failure      error
+			gone, leader bool
+		}{
+			{"vanished", fixtureLiveStatus, os.ErrNotExist, true, false},
+			{"live ESRCH", fixtureLiveStatus, syscall.ESRCH, false, false},
+			{"live I/O error", fixtureLiveStatus, syscall.EIO, false, false},
+			{"zombie leader ESRCH", "State: Z\nThreads: 2\n", syscall.ESRCH, false, true},
+			{"exited zombie ESRCH", "State: Z\nThreads: 1\n", syscall.ESRCH, true, false},
+		} {
+			t.Run(target+"/"+tc.name, func(t *testing.T) {
 				root := t.TempDir()
 				dir := filepath.Join(root, "42")
 				if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
 					t.Fatal(err)
 				}
 				uid := os.Getuid()
-				for name, data := range map[string]string{"status": fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid), "environ": "", "maps": "", fixtureCommand: "fixture"} {
+				for name, data := range map[string]string{"status": fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid) + tc.status, "environ": "", "maps": "", fixtureCommand: "fixture"} {
 					if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
-				failure := error(syscall.EIO)
-				if gone {
-					failure = syscall.ESRCH
-				}
+				failure := tc.failure
 				files := referenceFiles()
 				files.readFile = func(path string) ([]byte, error) {
 					if filepath.Base(path) == target {
@@ -300,11 +324,15 @@ func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 					return os.Stat(path)
 				}
 				_, _, err := userReferencesAt(root, uid, files)
-				if gone && err != nil {
-					t.Fatalf("exiting process blocked scan: %v", err)
-				}
-				if !gone && !errors.Is(err, syscall.EIO) {
-					t.Fatalf("I/O error lost: %v", err)
+				wantGone := tc.gone && (target != fixtureStatus || errors.Is(failure, os.ErrNotExist))
+				if wantGone {
+					if err != nil {
+						t.Fatalf("exited process blocked scan: %v", err)
+					}
+				} else if err == nil {
+					t.Fatal("unconfirmed exit did not fail closed")
+				} else if !tc.leader && !errors.Is(err, failure) {
+					t.Fatalf("unexpected process error lost: %v", err)
 				}
 			})
 		}
