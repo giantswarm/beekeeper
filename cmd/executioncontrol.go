@@ -34,8 +34,9 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
-	On    string `json:"on"`
-	Waits string `json:"waits"`
+	RefKind string `json:"refKind,omitempty"`
+	On      string `json:"on"`
+	Waits   string `json:"waits"`
 }
 type executionReport struct {
 	Finished bool     `json:"finished"`
@@ -236,7 +237,7 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits)}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: v.RefKind}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)

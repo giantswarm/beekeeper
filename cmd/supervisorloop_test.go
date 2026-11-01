@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -132,6 +133,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	cfg.Supervisor.LoopInterval.Duration = time.Second
 	cfg.Supervisor.ReleaseEvery.Duration = time.Hour
 	cfg.Supervisor.NoteDue.Duration = 24 * time.Hour
+	previousRefs := refStates
+	t.Cleanup(func() { refStates = previousRefs })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, ref := range refs {
+			out[ref] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+		}
+		return out, nil
+	}
 	r := &loopRig{out: &out}
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
 	// The loop first started a minute ago: the rig's parks are requests

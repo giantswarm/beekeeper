@@ -11,11 +11,18 @@ import (
 	"time"
 )
 
+// RefIssue and RefPullRequest are GitHub's immutable issueOrPullRequest types.
+const (
+	RefIssue       = "Issue"
+	RefPullRequest = "PullRequest"
+)
+
 // RefState is the state of an issue or pull request as GitHub answered:
 // OPEN, CLOSED or MERGED, and for an issue a closing keyword closed, what
 // closed it (Closer): the pull request whose merge did, as owner/repo#n,
 // or a bare commit as "commit <sha>". Empty for a close by hand.
 type RefState struct {
+	Kind   string
 	State  string
 	Closer string
 }
@@ -126,7 +133,7 @@ func refStates(ctx context.Context, run GH, refs []PR, states map[PR]RefState) e
 		if !ok {
 			return fmt.Errorf("%s is not owner/repo", r.Repo)
 		}
-		fmt.Fprintf(&q, "r%d:repository(owner:%s,name:%s){issueOrPullRequest(number:%d){...on Issue{state %s}...on PullRequest{state}}}", i, quote(owner), quote(name), r.N, closedBy)
+		fmt.Fprintf(&q, "r%d:repository(owner:%s,name:%s){issueOrPullRequest(number:%d){__typename ...on Issue{state %s}...on PullRequest{state}}}", i, quote(owner), quote(name), r.N, closedBy)
 	}
 	q.WriteString("}")
 	// A reference GitHub does not answer fails the request but keeps the
@@ -141,6 +148,7 @@ func refStates(ctx context.Context, run GH, refs []PR, states map[PR]RefState) e
 	for i, r := range refs {
 		var v struct {
 			Item *struct {
+				Kind     string `json:"__typename"`
 				State    string `json:"state"`
 				Timeline struct {
 					Nodes []struct {
@@ -153,7 +161,7 @@ func refStates(ctx context.Context, run GH, refs []PR, states map[PR]RefState) e
 		if !ok || json.Unmarshal(raw, &v) != nil || v.Item == nil || v.Item.State == "" {
 			continue
 		}
-		s := RefState{State: v.Item.State}
+		s := RefState{Kind: v.Item.Kind, State: v.Item.State}
 		// A reopened issue's past close no longer closes it.
 		if s.State == Closed && len(v.Item.Timeline.Nodes) > 0 {
 			s.Closer = v.Item.Timeline.Nodes[0].Closer.ref()

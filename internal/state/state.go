@@ -345,10 +345,14 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
-	By    Party     `json:"by"`
-	At    time.Time `json:"at"`
-	On    string    `json:"on,omitempty"`
-	Waits string    `json:"waits"`
+	// RefKind caches GitHub's Issue or PullRequest type for this park.
+	RefKind string `json:"refKind,omitempty"`
+	// RefChecked is the last issue-state read; issue waits are read every five minutes.
+	RefChecked time.Time `json:"refChecked,omitzero"`
+	By         Party     `json:"by"`
+	At         time.Time `json:"at"`
+	On         string    `json:"on,omitempty"`
+	Waits      string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`

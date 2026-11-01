@@ -80,8 +80,10 @@ the wake that ends the park resumes it from its transcript (claude --bg
 instance <context>#12 is its note, and a bare number the machine has no
 note of is the central instance's), an issue or pull request
 (owner/repo#n) or a hold (hold:<target>, the one a gate's exit 77 names);
-lease claim --park parks on a lease. Once the note is closed (answered,
-defaulted, done or overtaken), the pull request merged or closed, the hold
+lease claim --park parks on a lease. GitHub targets are resolved before the park
+is recorded; an unknown target is refused. Issues are plain waits checked every
+five minutes and never enter pull request review. Once the note is closed (answered,
+defaulted, done or overtaken), the issue closed, the pull request merged or closed, the hold
 lifted or ended, or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
@@ -120,7 +122,11 @@ agents wake: its task is that message's first line.`,
 				}
 			}
 			if a.managedExecutionID() != "" {
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits})
+				kind, err := resolveParkRef(cmd.Context(), on)
+				if err != nil {
+					return err
+				}
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind})
 			}
 			line, err := a.park(me, on, waits)
 			if err != nil {
@@ -148,8 +154,12 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		}
 		id, isNote = parkNote(on)
 	}
+	kind, err := resolveParkRef(context.Background(), on)
+	if err != nil {
+		return "", err
+	}
 	var line string
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
 		if i < 0 {
 			return nil, refused("%s is no registered agent: beekeeper agents register first", me.Name)
@@ -167,7 +177,7 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		if target, ok := parkHold(on); ok && !holdStands(st, target, a.now) {
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind}
 		for j := range st.Records {
 			if st.Records[j].Session.Is(me) {
 				st.Records[j].Waits = waits
@@ -187,6 +197,11 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		}
 		return []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
 	})
+	if err == nil && kind == github.RefIssue {
+		if suggestion := a.parkSuggestion(me, on); suggestion != "" {
+			line += " This is an issue wait. For desk review, park on your open pull request: " + suggestion
+		}
+	}
 	return line, err
 }
 
@@ -387,6 +402,9 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			}
 		} else if r, ok := parseRef(p.On); ok {
 			parked = append(parked, ag)
+			if p.RefKind == github.RefIssue && !p.RefChecked.IsZero() && w.now.Sub(p.RefChecked) < 5*time.Minute {
+				continue
+			}
 			if !slices.Contains(refs, r) {
 				refs = append(refs, r)
 			}
@@ -398,7 +416,20 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	}
 	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
-		// A failed batch leaves its agents parked; the others settle.
+		// Back off issue reads even when GitHub fails. A failed batch leaves
+		// its agents parked; the others settle.
+		attempts := map[github.PR]github.RefState{}
+		for _, ag := range parked {
+			if ag.Park != nil && ag.Park.RefKind == github.RefIssue {
+				r, ok := parseRef(ag.Park.On)
+				if ok && slices.Contains(refs, r) {
+					attempts[r] = github.RefState{Kind: github.RefIssue}
+				}
+			}
+		}
+		if len(attempts) > 0 {
+			w.cacheParkRefs(parked, attempts)
+		}
 		s, err := refStates(ctx, refs)
 		if err != nil {
 			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
@@ -406,6 +437,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			w.clear("park-refs")
 		}
 		states = s
+		w.cacheParkRefs(parked, s)
 	}
 	var closes map[int]string
 	if len(closed) > 0 {

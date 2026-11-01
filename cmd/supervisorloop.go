@@ -597,6 +597,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		tracked = nil
 	}
 	for _, ref := range tracked {
+		if !a.parkIsPull(ctx, st, ref) {
+			continue
+		}
 		p, err := readLoopPull(ctx, ref)
 		if err != nil {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
