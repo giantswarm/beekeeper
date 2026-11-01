@@ -88,7 +88,8 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 	} {
 		t.Run(version, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
-			w.chores = true // a running watch, not --once
+			defer w.bg.Wait() // pending also starts the doctor; finish it before TempDir cleanup.
+			w.chores = true   // a running watch, not --once
 			obj := stages[0]
 			fakeRead(t, func(cmd string) ([]byte, error) {
 				if !strings.Contains(cmd, "get kubeadmcontrolplanes.controlplane.cluster.x-k8s.io wc1") {
