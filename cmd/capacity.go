@@ -1672,6 +1672,12 @@ subagents' transcripts have been quiet for 5 minutes is waiting, listed
 apart with what it waits on; one
 without a task, or done, is idle. Only busy agents hold a slot: parked and
 waiting agents do no work, spend next to no budget and never block a start.
+There is no separate cap on live sessions (busy plus waiting): memory, swap,
+load and lab headroom bound new starts instead. A fixed session cap would let
+waiters exclude useful work despite available headroom. These guards judge
+starts, not simultaneous wakes: waiters that wake together can push busy over
+its ceiling; existing agents finish, and new starts wait for room. Re-read
+capacity before starting replacement work.
 The supervisor, the guide and a role's successor are not counted.
 
 The headroom bounds a start: MemAvailable against capacity.availMinMiB,

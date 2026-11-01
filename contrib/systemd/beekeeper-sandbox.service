@@ -11,6 +11,8 @@ Documentation=https://github.com/giantswarm/beekeeper#the-agent-sandbox
 
 [Service]
 ExecStart=%h/.local/bin/beekeeper sandbox broker
+NotifyAccess=main
+FileDescriptorStoreMax=1
 Restart=on-failure
 RestartSec=5s
 MemoryMax=128M

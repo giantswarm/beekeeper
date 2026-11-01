@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/secret"
 )
 
 func (a *app) installCmd() *cobra.Command {
@@ -65,7 +66,8 @@ this path restart on the installed one once, each at its next quiet
 moment: a watch after its current poll, once every run it started ended,
 a reopen during its wait for the person. Each is named (restart). The
 broker that runs the binary replaced at this path is restarted onto it,
-its vault session dropped, unless it serves calls: then the restart still
+its vault session preserved in memory with its original expiry. An unavailable
+handover refuses the restart. If it serves calls, the restart still
 due is named (due), as self-update does. What it wrote is
 recorded in install.json in the state directory, for uninstall.
 Without a service manager (Linux without systemd) it writes the hooks and
@@ -86,7 +88,7 @@ the config and says the service is not available.`,
 					return err
 				}
 				if fi, err := os.Stat(e.Exe); err == nil {
-					restartBrokerOn(cmd.Context(), e.Out, e.Exe, fi.ModTime(), t, e.DryRun)
+					restartBrokerOn(cmd.Context(), e.Out, e.Exe, fi.ModTime(), t, e.DryRun, a.cfg.Secret.Session)
 				}
 			}
 			if binary == "" && !e.DryRun {
@@ -181,6 +183,20 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	e.Spec.Notify = a.cfg.Watch.Notify
 	e.Setup = plat.Setup
 	e.Run = runCommand
+	e.BeforeRestart = func(ctx context.Context, unit string) error {
+		if unit == secret.BrokerUnit && a.cfg.Secret.Session {
+			if err := prepareBrokerHandover(ctx); err != nil {
+				return brokerHandoverRefusal(err)
+			}
+		}
+		return nil
+	}
+	e.RestartFailed = func(ctx context.Context, unit string) error {
+		if unit == secret.BrokerUnit && a.cfg.Secret.Session {
+			return revokeBrokerHandover(ctx)
+		}
+		return nil
+	}
 	e.Out = a.out
 	return nil
 }
