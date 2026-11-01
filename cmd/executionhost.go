@@ -112,7 +112,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 }
 
 func (a *app) executionHook() guard.Hook {
-	return guard.Hook{Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
+	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
 
 func mustSelf() string { s, _ := os.Executable(); return s }

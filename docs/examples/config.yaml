@@ -344,6 +344,7 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepDepth: 5
 
 hooks:
+  transcriptGrants: {}      # supervisor-granted exact own-transcript files or fixture directories, by receiving session ID; no globs
   scope:                    # where the Claude Code hooks act; unset, in every session
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
   personFolders: [~, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off

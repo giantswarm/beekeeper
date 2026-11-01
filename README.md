@@ -100,6 +100,26 @@ working directory or project lies under one of `hooks.scope.dirs` (a linked git 
 projects outside these gets nothing from them: no refusal, rewrite, redaction, prelude or permission
 answer (`--format agy` answers `{"decision":"ask"}` on pass because `agy` 1.4.7 denies empty stdout or `{}`). Unset, every session is in scope.
 
+In-scope sessions cannot read another conversation's private stores: Claude Code projects
+and history, Codex sessions, archived sessions and history (including `CODEX_HOME` and
+managed worker homes), agy/Gemini conversations and brain logs, and omp sessions. The
+configured store locations are protected alongside the defaults. File tools and shell
+reads, including filters, counts, copies, redirects and symlink aliases, share the rule.
+For parser development use synthetic test fixtures. A supervisor can grant an exact file
+(the receiving session's own transcript) or an explicit fixture directory through
+`hooks.transcriptGrants`, keyed by that session's exact ID. No grant is inferred from
+`transcript_path`, a missing ID or another session's grant; wildcard grants are ignored.
+A link inside a granted fixture directory cannot reach outside it. Grants should be
+removed when their session ends. This is a hook policy for recognized paths and shell
+scripts, alongside the agent sandbox's filesystem boundary.
+
+```yaml
+hooks:
+  transcriptGrants:
+    receiving-session-id:
+      - /path/to/synthetic-fixtures
+```
+
 ```yaml
 hooks:
   scope:

@@ -589,6 +589,9 @@ func (h Hook) checkCodexApplyPatch(ev event, patch, cwd string) (reason, context
 			filePathKey: fullPath,
 			contentKey:  addedContent,
 		}
+		if r := h.transcriptFileRefusal(writeEv); r != "" {
+			return r, ""
+		}
 		if r := h.folderRefusal(writeEv); r != "" {
 			return r, ""
 		}
