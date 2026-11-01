@@ -138,7 +138,7 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.doctoring.Store(true) // only timers are under test; no concurrent doctor output
-	w.chores = true // a running watch, not --once
+	w.chores = true         // a running watch, not --once
 	answer := func() ([]byte, error) {
 		return nil, errors.New(`exit status 1: error: context "admin@mc" does not exist`)
 	}
