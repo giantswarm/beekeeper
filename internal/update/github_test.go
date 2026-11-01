@@ -200,3 +200,108 @@ func TestGitHubLookupCancellation(t *testing.T) {
 		t.Fatalf("err=%v calls=%d", err, *calls)
 	}
 }
+
+func refsWithSHAJSON(tagSHAs [][2]string) string {
+	refs := make([]map[string]any, 0, len(tagSHAs))
+	for _, ts := range tagSHAs {
+		refs = append(refs, map[string]any{
+			"ref":    "refs/tags/" + ts[0],
+			"object": map[string]string{"sha": ts[1]},
+		})
+	}
+	data, _ := json.Marshal(refs)
+	return string(data)
+}
+
+// A stable release cut at an older release candidate's commit (for example
+// v0.171.0 at v0.171.0-rc.110 after v0.171.0-rc.120 is out) is skipped so
+// neither pre-release nor stable installs downgrade onto it; a stable release
+// promoted from the newest candidate updates normally.
+func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
+	const (
+		staleStable  = "v0.171.0"
+		latestRC     = "v0.171.0-rc.120"
+		latestRCSHA  = "0dbeb8f"
+		staleRCSHA   = "3cccbe5"
+		nextPromoted = "v0.172.0"
+	)
+	refs := refsWithSHAJSON([][2]string{
+		{githubStable, "1111111"},
+		{"v0.171.0-rc.110", staleRCSHA},
+		{latestRC, latestRCSHA},
+		{staleStable, staleRCSHA},
+	})
+	for _, tc := range []struct {
+		current    string
+		wantLatest string
+	}{
+		{latestRC, latestRC},
+		{githubStable, githubStable},
+	} {
+		t.Run(tc.current, func(t *testing.T) {
+			stubGitHub(t, tc.current, func(r *http.Request) (int, string, http.Header) {
+				if strings.Contains(r.URL.Path, matchingRefsPath) {
+					return 200, refs, nil
+				}
+				tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
+				if tag == staleStable {
+					t.Errorf("requested stale stable release %s", tag)
+				}
+				return 200, releaseJSON(tag, true, true), nil
+			})
+			res, err := Run(context.Background(), io.Discard, true)
+			if err != nil || res.Newer || res.Latest != tc.wantLatest {
+				t.Fatalf("result=%+v err=%v; want Latest=%s Newer=false", res, err, tc.wantLatest)
+			}
+		})
+	}
+
+	promotedRefs := refsWithSHAJSON([][2]string{
+		{"v0.172.0-rc.1", "8a2daed"},
+		{"v0.172.0-rc.2", "89f004f"},
+		{nextPromoted, "89f004f"},
+	})
+	stubGitHub(t, "v0.172.0-rc.2", func(r *http.Request) (int, string, http.Header) {
+		if strings.Contains(r.URL.Path, matchingRefsPath) {
+			return 200, promotedRefs, nil
+		}
+		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
+		return 200, releaseJSON(tag, true, true), nil
+	})
+	res, err := Run(context.Background(), io.Discard, true)
+	if !errors.Is(err, ErrOutdated) || !res.Newer || res.Latest != nextPromoted {
+		t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, nextPromoted)
+	}
+}
+
+// A release whose commit is an ancestor of the running binary's commit (as
+// reported by GitHub's compare endpoint) is skipped so self-update never
+// downgrades to an older commit.
+func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
+	const (
+		runningTag = "v0.171.0-rc.120"
+		runningSHA = "0dbeb8f"
+	)
+	oldCommit := currentCommit
+	t.Cleanup(func() { currentCommit = oldCommit })
+	currentCommit = func() string { return runningSHA }
+
+	refs := refsWithSHAJSON([][2]string{
+		{runningTag, runningSHA},
+		{"v0.171.0", "deadbeef"},
+	})
+	stubGitHub(t, runningTag, func(r *http.Request) (int, string, http.Header) {
+		if strings.Contains(r.URL.Path, matchingRefsPath) {
+			return 200, refs, nil
+		}
+		if strings.Contains(r.URL.Path, "/compare/"+runningSHA+"...deadbeef") {
+			return 200, `{"status":"behind"}`, nil
+		}
+		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
+		return 200, releaseJSON(tag, true, true), nil
+	})
+	res, err := Run(context.Background(), io.Discard, true)
+	if err != nil || res.Newer || res.Latest != runningTag {
+		t.Fatalf("result=%+v err=%v; want Latest=%s Newer=false", res, err, runningTag)
+	}
+}
