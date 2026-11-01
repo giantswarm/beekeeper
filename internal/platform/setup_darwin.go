@@ -68,9 +68,9 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 	files := []File{{Path: path, Content: plist, Service: true}}
 	// The supervisor is the supervisor loop: its service is always installed.
 	const label = "com.giantswarm.beekeeper.supervisor-loop"
-	args := ""
+	loopArgs := ""
 	if s.ConfigPath != "" {
-		args = "<string>--config</string><string>" + escapeXML(s.ConfigPath) + "</string>"
+		loopArgs = "<string>--config</string><string>" + escapeXML(s.ConfigPath) + "</string>"
 	}
 	log := escapeXML(filepath.Join(s.Home, "Library", "Logs", "beekeeper-supervisor-loop.log"))
 	loop := fmt.Appendf(nil, `<?xml version="1.0" encoding="UTF-8"?>
@@ -85,9 +85,8 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 <key>StandardOutPath</key><string>%s</string>
 <key>StandardErrorPath</key><string>%s</string>
 </dict></plist>
-`, label, escapeXML(s.Exe), args, escapeXML(s.toolPath()), log, log)
+`, label, escapeXML(s.Exe), loopArgs, escapeXML(s.toolPath()), log, log)
 	files = append(files, File{Path: filepath.Join(s.Home, "Library", "LaunchAgents", label+".plist"), Content: loop, Service: true})
-
 	return files, skipped
 }
 
