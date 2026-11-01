@@ -10,7 +10,7 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
 - **One merge command per PR, through the gate**: `devctl pr merge <owner/repo> <n> --update-branch`
   (a rebase line: `--rebase --update-branch`) for `merge.devctlOwners`, `devctl release promote
   <owner/repo> --version <proven RC>` likewise. Act on its exit code, never around it: 76 queued,
-  its outcome wakes the worker (park on the PR, never run it again); 77 refused, its line to the
+  its outcome wakes the worker (park on the PR from its published worktree: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "merge outcome"`, never run the merge again); 77 refused, its line to the
   supervisor, no second merge; 74 unread: the same merge once GitHub answers; 3 still "behind":
   as below, then the same merge again.
 - **Protection** is read with `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
@@ -23,3 +23,5 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
 - **Behind**: a behind branch merges its base and pushes, never on a rebase line: the gate
   rebases it at its turn. There, a conflict or merge commit (77) takes a PR from a fresh
   branch of the base.
+
+- **Desk review**: after pushing and green CI, run `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` in one shell call. A park outside that published worktree is a plain wait and requests no review.

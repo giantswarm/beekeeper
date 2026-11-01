@@ -93,8 +93,8 @@ by hand, also for a park without --on.
 A park from the pull request's own worktree at its published HEAD records
 an independent review request. Every other park (including one whose
 publication cannot be verified) records a plain wait: no reviewer, merge
-go or findings forwarded. The command says which it recorded. Re-run from
-the published worktree to request review. A new task or agents idle ends the
+go or findings forwarded. The command says which it recorded. Request review in one shell call:
+cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
 park. An agent without a task is refused: it has nothing to wait for. One
 that reported its task idle (agents idle, --done included) has a task
 again once the supervisor's next message re-tasks it, by SendMessage or
@@ -620,5 +620,5 @@ func parkReviewMode(head string) string {
 	if head != "" {
 		return "review request recorded for pushed HEAD " + head
 	}
-	return "plain wait recorded; no review, go or findings forwarded"
+	return "plain wait recorded; no review, go or findings forwarded; to request review, re-run from the published worktree: cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\""
 }

@@ -751,3 +751,27 @@ func TestPlainWaiterCannotTakeAnotherWorkersReview(t *testing.T) {
 		t.Fatalf("go routed to %+v", a)
 	}
 }
+
+// A plain waiter on another worker's PR cannot hold up a review already
+// started for that owner, even while the owner is no longer parked.
+func TestPlainWaiterDoesNotBlockAnUnparkedOwnersRound(t *testing.T) {
+	workers := []Worker{{Name: worker, Started: true}, {Name: "waiter", ParkedOn: pr, ParkedAt: t1}}
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	for _, tc := range []struct{ verdict, kind string }{{Approved, KindGo}, {ChangesRequested, KindForward}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			in := Input{Workers: workers, Pulls: pull(head1, true, Review{ID: "R1", Head: head1, Verdict: tc.verdict, At: t1}), Rounds: 1, Taken: taken(t, t0, started)}
+			if a := only(t, Plan(in), tc.kind); a.Agent != worker {
+				t.Fatalf("action routed to %+v, want the round's owner", a)
+			}
+		})
+	}
+	for _, tc := range []struct{ answer, kind string }{{"Rework", KindAnswer}, {"Merge", KindGo}} {
+		t.Run("answer/"+tc.answer, func(t *testing.T) {
+			in := escalated(t, tc.answer)
+			in.Workers = workers
+			if a := only(t, Plan(in), tc.kind); a.Agent != worker {
+				t.Fatalf("answer routed to %+v, want the round's owner", a)
+			}
+		})
+	}
+}

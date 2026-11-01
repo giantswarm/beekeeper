@@ -535,7 +535,7 @@ func Plan(in Input) []Action {
 			continue
 		}
 		w, isParked := parked[ref]
-		if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.ParkedOn == ref && !w.ReviewRequested }) {
+		if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.Name == l.reviewer[ref] && w.ParkedOn == ref && !w.ReviewRequested }) {
 			continue
 		}
 		if early, _ := in.Desk.early(w.ParkedAt); isParked && early {
@@ -967,13 +967,13 @@ func Releases(answer string) bool {
 // answerMessage tells the worker of p the person's answer an to the
 // escalation of head.
 func answerMessage(p Pull, head string, an Answer) string {
-	return fmt.Sprintf("%s answered the escalation of %s at head %s (note #%d), word for word: %s\n\nThe loop does not read it as releasing the merge: rework as it says, push, and park on the pull request again once CI is green on the new head.", an.By, p.URL, short(head), an.Note, an.Text)
+	return fmt.Sprintf("%s answered the escalation of %s at head %s (note #%d), word for word: %s\n\nThe loop does not read it as releasing the merge: rework as it says, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree.", an.By, p.URL, short(head), an.Note, an.Text)
 }
 
 // reworkMessage tells the worker of p, parked again on the head its last
 // review asked changes on with no change-request round left, to fix them.
 func reworkMessage(p Pull, cycles, rounds int) string {
-	return fmt.Sprintf("You parked on %s again at head %s, the head its last review asked for changes on: those findings stand unfixed, and %d of %d change-request round(s) are used, so no further review runs and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and park on the pull request again once CI is green on the new head: the merge go for the new head follows.",
+	return fmt.Sprintf("You parked on %s again at head %s, the head its last review asked for changes on: those findings stand unfixed, and %d of %d change-request round(s) are used, so no further review runs and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: the merge go for the new head follows.",
 		p.URL, short(p.Head), cycles, rounds)
 }
 
@@ -982,9 +982,9 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // forwardMessage forwards review r of p word for word.
 func forwardMessage(p Pull, r Review, again bool) string {
-	next := "Fix every finding, push, and park on the pull request again once CI is green on the new head: the next review round starts then."
+	next := "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: the next review round starts then."
 	if !again {
-		next = "Fix every finding, push, and park on the pull request again once CI is green on the new head: no further review runs, the merge go for the new head follows."
+		next = "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: no further review runs, the merge go for the new head follows."
 	}
 	return fmt.Sprintf("The review of %s asks for changes on head %s. %s The review, word for word:\n\n%s", p.URL, r.Head, next, r.Body)
 }

@@ -300,6 +300,9 @@ func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
 		if !strings.Contains(w.out.(*bytes.Buffer).String(), parkReviewMode(head)) {
 			t.Fatalf("output %s", w.out)
 		}
+		if head == "" && !strings.Contains(w.out.(*bytes.Buffer).String(), `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`) {
+			t.Fatalf("plain wait must explain how to request review: %s", w.out)
+		}
 	}
 }
 

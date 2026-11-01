@@ -10,6 +10,7 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
   "<what>"`. The resume (the supervisor's `beekeeper agents wake`, or the watch's, delivered through
   the inbox) carries what settled the wait. A merge the gate refused on a hold (exit 77) parks on that hold,
   `--on hold:<target>` as the refusal names it, and runs the same merge once the resume says it lifted.
+- **Requesting desk review** requires the published worktree in the same shell call: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`. The command verifies that worktree's branch and HEAD against the PR. Running from a desk checkout or an unpushed head records a plain wait, with no reviewer, go or findings forwarded; re-run from the published worktree to request review.
 - **A wait on an external state** (a rollout, a registry, a CI outside `devctl`) is a timer
   that wakes the worker, then the park: `beekeeper timer add <time> "<what>" --when "<condition>"`
   or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`. A rollout is
