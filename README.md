@@ -41,7 +41,10 @@ restart or roster loss without a done report. Each start rechecks capacity
 and stops when its gates refuse, the floor is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
 An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
-default) before retrying, unless the roster or capacity changes first.
+default) before retrying, unless capacity (floor, ceiling, room, the busy
+count) changes or an agent is done or leaves the roster first; a park, a
+resume or a new task does not end the wait. An empty or failed read answers
+the rest of its pass, the done-triggered starts included.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
