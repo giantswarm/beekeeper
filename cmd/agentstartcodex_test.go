@@ -509,7 +509,10 @@ wait "$child"
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- runner.Wait() }()
 	select {
-	case <-waitDone:
+	case err := <-waitDone:
+		// The exit status is immaterial here; the runner must terminate
+		// and reap its child after SIGTERM.
+		t.Logf("runner exit after SIGTERM: %v", err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("runner did not exit within 3s after SIGTERM")
 	}
