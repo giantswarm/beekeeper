@@ -40,7 +40,7 @@ const (
 	KindClassify = "classify"
 	KindQuestion = "question"
 	// KindFile hands the problems a done report found and filed nowhere
-	// to the guide's queue, to file in their owning repository.
+	// to the guide's feed, to file in their owning repository.
 	KindFile = "file"
 	// KindEnd ends the tracking of a pull request that merged or closed.
 	KindEnd = "end"
@@ -739,7 +739,7 @@ func Plan(in Input) []Action {
 			ev := e
 			if !l.has(dk) {
 				// The report's problems: one naming its issue is filed;
-				// the others go to the guide's queue to file, before the
+				// the others go to the guide's feed to file, before the
 				// agent leaves the roster.
 				var filed, unfiled []string
 				for _, p := range in.Events {
@@ -763,7 +763,7 @@ func Plan(in Input) []Action {
 					says = append(says, fmt.Sprintf("its report names %d problem(s) filed: %s", len(filed), strings.Join(filed, "; ")))
 				}
 				if len(unfiled) > 0 {
-					says = append(says, fmt.Sprintf("%d problem(s) filed nowhere are in the guide's queue to file", len(unfiled)))
+					says = append(says, fmt.Sprintf("%d problem(s) filed nowhere are in the guide's feed to file", len(unfiled)))
 				}
 				a.Message = strings.Join(says, "; ")
 				add(a)
@@ -781,7 +781,7 @@ func Plan(in Input) []Action {
 			// files it; a reviewer's that matches the changes request
 			// the loop forwarded is the forward's. Any other is a
 			// finding, never a decision: one naming its issue is filed,
-			// one naming none goes to the guide's queue to file in its
+			// one naming none goes to the guide's feed to file in its
 			// owning repository, and the agent keeps its task.
 			if !paired(e) && !forwarded(e) && !Filed(e.Detail) {
 				ev := e

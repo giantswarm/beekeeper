@@ -596,7 +596,8 @@ func (a *app) guideWatchCmd() *cobra.Command {
 		Long: `One line, once, for each open note newly filed for the guide's person
 (the notes ` + "`beekeeper guide queue`" + ` lists), each session the desktop newly
 files as waiting on its person (read from its session record, never from a
-transcript), each note of the queue answered or closed, and the guide's
+transcript), each note of the queue answered or closed, each unfiled problem the supervisor
+settled (GUIDE PROBLEM, the full report to file in its owning repository), and the guide's
 relay: GUIDE RELAY DUE at guide.relayAt, taken or
 expired, and a restart of its CLI. Silent otherwise. What it said is kept
 in the state, so a restarted feed says nothing again; only a standing
@@ -656,6 +657,10 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	// Outside the lock: the transcript's context and the log's answers.
 	c := roleContext(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
 	q := quietness{checked: c > 0, context: c, relayAt: a.cfg.Guide.RelayAt}
+	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == "supervisor.file" })
+	if err != nil {
+		return nil, err
+	}
 	closed, err := a.closedNotes(st)
 	if err != nil {
 		return nil, err
@@ -672,7 +677,10 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
 		dl, de := guideRole.fireRelayDue(st, q, a.guideDues, a.now)
+		pl, pf := guideProblemLines(st, problems)
 		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
+		lines = append(lines, pl...)
+		fed = fed || pf
 		lines = append(append(append(lines, rl...), dl...), fl...)
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
@@ -729,6 +737,11 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event, orphans []overtake) (lines []string, changed bool) {
 	guideRole.update(st, func(r *state.Role) {
 		var cur []string
+		for _, k := range r.Fed {
+			if strings.HasPrefix(k, "problem:") {
+				cur = append(cur, k)
+			}
+		}
 		// A session that only aged out of the queue is no news.
 		q, _ := a.guideQueue(st, sessions)
 		for _, it := range q {
@@ -776,6 +789,23 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 		slices.Sort(cur)
 		changed = !slices.Equal(cur, r.Fed)
 		r.Fed = cur
+	})
+	return lines, changed
+}
+
+// guideProblemLines delivers settled file transitions intact and remembers
+// their keys with the feed, in the same save as its other deliveries.
+func guideProblemLines(st *state.State, events []state.Event) (lines []string, changed bool) {
+	guideRole.update(st, func(r *state.Role) {
+		for _, e := range events {
+			key, text, ok := keyed(e.Detail)
+			if !ok || slices.Contains(r.Fed, "problem:"+key) {
+				continue
+			}
+			r.Fed = append(r.Fed, "problem:"+key)
+			lines = append(lines, "GUIDE PROBLEM: "+text)
+			changed = true
+		}
 	})
 	return lines, changed
 }

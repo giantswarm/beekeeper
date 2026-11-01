@@ -42,6 +42,7 @@ const (
 	loopClaimVerb    = "supervisor.claim"
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
+	loopFailureVerb  = "supervisor.failure"
 )
 
 // loopEventVerbs are the events the loop's rules act on.
@@ -329,17 +330,12 @@ its key first in the detail):
             "confidence":0.9}; the event goes to the guide (note add for
             guide.person) with its class, or unclassified below
             supervisor.classifierConfidence (0.8) or without a classifier
-  file      a problem found (agents.problem) that cites no issue URL
-            (https://github.com/<owner>/<repo>/issues/<n>): a note for
-            guide.person, into the guide's queue, to file it in its owning
-            repository, no decision; a done report's together in one note,
-            before the done. One citing its issue is filed: a done report's
-            rides with the done's log line, as does a reviewer's that
-            matches the changes request the loop forwarded, and one logged
-            mid-task needs nothing. The note links the issue or pull
-            request the agent works, or none when it works none. The agent
-            keeps its task: a problem is a finding, never a decision for
-            the person
+  file      a problem found (agents.problem) that cites no issue URL:
+            the full report is logged in supervisor.file and delivered once
+            by guide watch as GUIDE PROBLEM, to file in its owning repository.
+            A done report's problems arrive together before the done settles.
+            No decision note or thread reference is needed. A problem naming
+            its issue is already filed; the agent keeps its task
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -550,6 +546,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	claims, stages := map[string]loopClaim{}, map[string]bool{}
+	failures := map[string]loopFailure{}
 	for _, e := range taken {
 		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
 			in.Taken = append(in.Taken, t)
@@ -564,6 +561,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			delete(claims, key)
 		case e.Verb == loopStageVerb:
 			stages[key] = true
+		case e.Verb == loopFailureVerb:
+			var f loopFailure
+			if json.Unmarshal([]byte(rest), &f) == nil {
+				failures[key] = f
+			}
 		}
 	}
 	for _, t := range in.Taken {
@@ -625,6 +627,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			continue
 		}
+		if a.now.Before(failures[act.Key].RetryAt) {
+			continue
+		}
 		if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
 			// Claimed before an interruption: what the log shows of its
 			// side effect decides, never a second one.
@@ -641,7 +646,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		if act.Kind == superloop.KindQuestion {
 			if err := l.readdress(act); err != nil {
-				l.sayOnce(act.Key, "SUPERVISOR QUESTION FAILED %s: %v", act.Key, err)
+				if err := l.failed(act, failures[act.Key], err); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -650,7 +657,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case errors.Is(err, errLoopLater):
 			continue
 		case err != nil:
-			l.sayOnce(act.Key, "SUPERVISOR %s FAILED %s: %v", strings.ToUpper(act.Kind), act.Key, err)
+			if err := l.failed(act, failures[act.Key], err); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := l.record(act, what); err != nil {
@@ -745,7 +754,7 @@ func keyed(detail string) (key, rest string, ok bool) {
 }
 
 // keyedLine is a loop line's detail.
-var keyedLine = regexp.MustCompile(`^\[([^\]]+)\] (.*)$`)
+var keyedLine = regexp.MustCompile(`(?s)^\[([^\]]+)\] (.*)$`)
 
 // claim logs act's side effect about to happen on target, before it does:
 // a restart finds it and reconciles instead of acting twice.
@@ -774,7 +783,7 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
-	case superloop.KindEscalate, superloop.KindClassify, superloop.KindFile, superloop.KindOwnership:
+	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	}
 	if !done {
@@ -800,6 +809,40 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 		return err
 	}
 	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), detail)
+	return err
+}
+
+// loopFailure persists identical failures across passes and restarts. Two
+// consecutive failures defer the action for five minutes, keeping it pending.
+type loopFailure struct {
+	Message string    `json:"message"`
+	Count   int       `json:"count"`
+	RetryAt time.Time `json:"retryAt"`
+}
+
+const loopFailureBackoff = 5 * time.Minute
+
+func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
+	f := loopFailure{Message: cause.Error(), Count: 1}
+	if f.Message == previous.Message {
+		f.Count = previous.Count + 1
+	}
+	if f.Count >= 2 {
+		f.RetryAt = l.a.now.Add(loopFailureBackoff)
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	if err := l.a.store.Record(about(event(loopParty, loopFailureVerb, "[%s] %s", act.Key, b), act.Ref)); err != nil {
+		return err
+	}
+	switch f.Count {
+	case 1:
+		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s FAILED %s: %v\n", strings.ToUpper(act.Kind), act.Key, cause)
+	case 2:
+		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR BACKOFF %s: identical failures; retry after %s\n", act.Key, f.RetryAt.UTC().Format(time.RFC3339))
+	}
 	return err
 }
 
@@ -1260,48 +1303,11 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 	return fmt.Sprintf("%s to the guide (%s) on %s", e.Verb, label, ref), nil
 }
 
-// toFile puts the problems found and filed nowhere in the guide's queue,
-// no decision: the supervisor files a worker's problems found, and no
-// supervisor session reads the watch's PROBLEM FOUND lines beside the loop.
-// A done report's wait for it in its done; one logged mid-task leaves the
-// agent at its task.
-func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+// toFile leaves the full finding in the settled transition's event. The
+// guide's feed reads that event once; no decision or thread is needed.
+func (l *supervisorLoop) toFile(_ context.Context, _ *state.State, act superloop.Action) (string, error) {
 	e := *act.Event
-	found := strings.Split(act.Message, "\n")
-	if e.Verb == superloop.VerbProblem {
-		ref := agentRef(st, e.Agent)
-		if ref == "" {
-			ref = refURL.FindString(act.Message)
-		}
-		q := fmt.Sprintf("File in its owning repository what %s found (1 problem, no decision)", e.Agent)
-		if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s logged at %s, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), act.Message),
-			"the supervisor files a worker's problems found (worker-rules), and the problem names no issue; the agent keeps its task",
-			"the guide files it in its owning repository and closes this note"); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("%s's problem to the guide's queue to file%s", e.Agent, onRef(ref)), nil
-	}
-	ref := agentRef(st, e.Agent)
-	if ref == "" {
-		if m := refURL.FindString(e.Detail + " " + act.Message); m != "" {
-			ref = m
-		}
-	}
-	q := fmt.Sprintf("File in its owning repository what %s found (%d problem(s), no decision)", e.Agent, len(found))
-	if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s's done report at %s names, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), strings.Join(found, "; ")),
-		"the supervisor files a worker's problems found (worker-rules), and the report names no issue for these",
-		"the guide files each in its owning repository and closes this note"); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file%s", len(found), e.Agent, onRef(ref)), nil
-}
-
-// onRef names the issue or pull request a note was filed on, if any.
-func onRef(ref string) string {
-	if ref == "" {
-		return ""
-	}
-	return ", on " + ref
+	return fmt.Sprintf("%s reported at %s; file in the owning repositories:\n%s", e.Agent, e.At.UTC().Format(time.RFC3339), act.Message), nil
 }
 
 // agentRef is the issue or pull request the agent works: what it is
@@ -1328,9 +1334,7 @@ func agentRef(st *state.State, name string) string {
 	return ""
 }
 
-// toGuide files a decision for the guide's person on ref (note add). A
-// finding to file needs no thread of its own: with ref "" the note links
-// none, and the guide closes it once it is filed.
+// toGuide files a decision for the guide's person on ref (note add).
 func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string, options ...string) error {
 	person := l.a.cfg.Guide.Person
 	if person == "" {
