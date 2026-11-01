@@ -374,6 +374,7 @@ func (h handover) summary() string {
 
 // handOver runs the hand-over's steps, one line each.
 func (a *app) handOver(ctx context.Context, h handover) error {
+	defer a.recordStoppedGates(ctx)
 	began := time.Now()
 	me, err := a.caller()
 	if err != nil {

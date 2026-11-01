@@ -2106,7 +2106,9 @@ type Supervisor struct {
 	// files for the guide's person (24h).
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
-	NoteDue      Duration `yaml:"noteDue"`
+	// PostMergeWindow bounds inactivity while awaiting a post-merge report (2h).
+	PostMergeWindow Duration `yaml:"postMergeWindow"`
+	NoteDue         Duration `yaml:"noteDue"`
 	// FillRetryEvery bounds repeated empty or failed board reads while
 	// capacity's floor and ceiling stay unchanged and no agent is done or
 	// removed (5m).
@@ -3100,6 +3102,7 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.PostMergeWindow, 2*time.Hour)
 	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
 	if c.Supervisor.Ownership.Team != "" {

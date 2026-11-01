@@ -560,6 +560,7 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 // read anew, still running with its turn ended; false when it stays. The
 // lock holds until the stopped CLI exits, so the next wake finds it gone.
 func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.Party) (bool, error) {
+	defer a.recordStoppedGates(ctx)
 	l, err := a.parkStopLock(p.Session)
 	if err != nil {
 		return false, err
