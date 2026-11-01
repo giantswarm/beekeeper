@@ -605,6 +605,10 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 			out[i].line = h.Stop(ctx, a, id)
 			continue
 		}
+		if line, ok := a.stopBackgroundStart(ctx, st, ag); ok {
+			out[i].line = line
+			continue
+		}
 		host, why := a.archivable(st, ag)
 		if why != "" {
 			out[i].line, out[i].host = why, host
