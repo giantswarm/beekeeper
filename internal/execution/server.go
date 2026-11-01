@@ -365,7 +365,10 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 		o.InTurn = j.InTurn
 	case unitInactive, Failed:
 		if j.StopRequest != nil {
-			if err := s.update(ctx, r, func(current *Journal) error { current.StopAcknowledged, current.Phase, current.InTurn = true, Exited, false; return nil }); err != nil {
+			if err := s.update(ctx, r, func(current *Journal) error {
+				current.StopAcknowledged, current.Phase, current.InTurn = true, Exited, false
+				return nil
+			}); err != nil {
 				return Observation{}, err
 			}
 			o.StopAcknowledged, o.ProcessState = true, Exited
