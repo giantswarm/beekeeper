@@ -112,12 +112,12 @@ func TestPersonalRepositoryMergeStaysWithTheGo(t *testing.T) {
 	calls := 0
 	h.MergeGo = func(_, repo string, pr int, head string) string {
 		calls++
-		if repo != "teemow/project" || pr != 7 || head != mergeGoTestHead {
+		if repo != "person/project" || pr != 7 || head != mergeGoTestHead {
 			t.Errorf("wrong merge tuple: %s %d %s", repo, pr, head)
 		}
 		return ""
 	}
-	command := "gh pr merge 7 --repo teemow/project --squash --match-head-commit " + mergeGoTestHead
+	command := "gh pr merge 7 --repo person/project --squash --match-head-commit " + mergeGoTestHead
 	if d := decide(t, h, "/", command, nil); d != nil && d.PermissionDecision == decisionDeny {
 		t.Errorf("Claude refused a personal repository's merge on its go: %+v", d)
 	}
@@ -131,8 +131,8 @@ func TestPersonalRepositoryMergeStaysWithTheGo(t *testing.T) {
 		t.Errorf("go checked %d times, want 3", calls)
 	}
 	for _, command := range []string{
-		"curl -X PUT https://api.github.com/repos/teemow/project/pulls/7/merge",
-		"gh pr merge 7 --repo teemow/project --squash",
+		"curl -X PUT https://api.github.com/repos/person/project/pulls/7/merge",
+		"gh pr merge 7 --repo person/project --squash",
 	} {
 		if d := decide(t, h, "/", command, nil); d == nil || d.PermissionDecision != decisionDeny {
 			t.Errorf("unpinned or curl merge passed: %s", command)
