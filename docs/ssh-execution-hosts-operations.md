@@ -202,7 +202,7 @@ reservation, workspace, or process. Remote starts require `--repo` and `--ref`;
 coordinator's existing provider and bucket pool across hosts and the selected
 host's physical guards. A host does not create another subscription budget.
 
-`supervisor loop` places its worker and reviewer starts the same way. With
+`supervisor loop` places its worker starts on execution hosts. With
 `supervisor.hosts` naming execution hosts (in order of preference), a start
 whose repository a host maps, and for which `capacity --host <selector>` has
 room, runs there pinned to the repository's default branch — while the
@@ -212,7 +212,9 @@ hosts only for what a host can run: without room on any host a Claude start
 waits, while a repository no host maps, or a choice of a harness no host has
 an adapter for (agy, omp, codex), starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs. A desk
-without `capacity.choices` never places remotely.
+without `capacity.choices` never places remotely. Reviewers stay on the
+coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
+read-and-review path. A review waits when coordinator review capacity is full.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots

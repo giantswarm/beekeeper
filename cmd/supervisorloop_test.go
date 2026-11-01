@@ -801,42 +801,62 @@ func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
 	}
 }
 
-// TestLoopReviewersFollowTheHostPreference covers the review half: with no
-// room on the coordinator's machine, the reviewer starts on the host that
-// maps the pull request's repository.
-func TestLoopReviewersFollowTheHostPreference(t *testing.T) {
-	r := newLoopRig(t)
-	r.sshLoopHost(t, true)
-	pr := sshTestRepository + "#7"
-	r.park(t, pr, time.Now())
-	r.pulls[pr] = superloop.Pull{Ref: pr, URL: "https://github.com/" + sshTestRepository + "/pull/7", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
-	run, branch := beekeeperRun, ghDefaultBranch
-	t.Cleanup(func() { beekeeperRun, ghDefaultBranch = run, branch })
-	ghDefaultBranch = func(context.Context, string) (string, error) { return "trunk", nil }
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
-		args = splitAs(args)
-		r.calls = append(r.calls, args)
-		if args[0] == loopCapacity {
-			if slices.Contains(args, loopHostFlag) {
-				return loopRoomJSON, 0, nil
+// Reviews need the coordinator's GitHub read and public review path, even
+// when hostsFirst prefers a host and the host has room.
+func TestLoopReviewersStayOnCoordinator(t *testing.T) {
+	for _, first := range []bool{false, true} {
+		for _, room := range []bool{false, true} {
+			for _, selfHosted := range []bool{false, true} {
+				t.Run(fmt.Sprintf("first=%t/room=%t/selfHosted=%t", first, room, selfHosted), func(t *testing.T) {
+					r := newLoopRig(t)
+					r.sshLoopHost(t, true)
+					r.a.cfg.Supervisor.HostsFirst = first
+					r.answer = func(args []string) (string, int) {
+						if args[0] == loopCapacity {
+							if slices.Contains(args, loopHostFlag) {
+								t.Fatal("review placement probed an execution host")
+							}
+							if !slices.Contains(args, "--review") {
+								t.Fatal("review capacity lost its start kind")
+							}
+							if slices.Contains(args, "--"+reviewOfSelfHostedFlag) != selfHosted {
+								t.Fatal("review capacity lost self-hosted provenance")
+							}
+							if room {
+								return loopRoomJSON, 0
+							}
+							return loopNoRoomJSON, 0
+						}
+						return "", 0
+					}
+					act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "local-review", SelfHosted: selfHosted}
+					_, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act)
+					if !room {
+						if !errors.Is(err, errLoopLater) {
+							t.Fatalf("full coordinator: %v", err)
+						}
+						if start := r.called(agentsName, agentStartName); start != nil {
+							t.Fatalf("full coordinator started %v", start)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					start := r.called(agentsName, agentStartName)
+					if start == nil {
+						t.Fatal("no local reviewer started")
+					}
+					for _, flag := range []string{loopHostFlag, loopRepoFlag, loopRefFlag, "--" + excludeFlag} {
+						if slices.Contains(start, flag) {
+							t.Errorf("local review has placement flag %s: %v", flag, start)
+						}
+					}
+					if !slices.Contains(start, "--review") || !slices.Contains(start, harnessAuto) || slices.Contains(start, "--"+reviewOfSelfHostedFlag) != selfHosted {
+						t.Fatalf("review start lost capacity flags: %v", start)
+					}
+				})
 			}
-			return loopNoRoomJSON, 0, nil
-		}
-		if e, ok := logs(args); ok {
-			if err := r.a.store.Record(e); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return "", 0, nil
-	}
-	r.pass(t)
-	start := r.called(agentsName, agentStartName)
-	if start == nil {
-		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
-	}
-	for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, "trunk", "--review"} {
-		if !slices.Contains(start, want) {
-			t.Errorf("the remote reviewer names no %q: %v", want, start)
 		}
 	}
 }
@@ -2455,9 +2475,9 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 	}
 }
 
-// The reviewer of a mixed queue under hostsFirst: no host room, the codex
-// reviewer starts locally with the Claude choice left to the hosts.
-func TestLoopHostsFirstReviewerStartsLocalOnlyKindsLocally(t *testing.T) {
+// Reviewers of a mixed queue retain every eligible local choice; hostsFirst
+// must not reserve the host-supported choices for remote reviews.
+func TestLoopHostsFirstReviewerKeepsAllLocalChoices(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.HostsFirst = true
 	r.sshLoopHost(t, true)
@@ -2484,8 +2504,8 @@ func TestLoopHostsFirstReviewerStartsLocalOnlyKindsLocally(t *testing.T) {
 	if start == nil {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) || !slices.Contains(start, claudeComm+"/"+bgModel) {
-		t.Errorf("the reviewer start = %v, want local with the Claude choice excluded", start)
+	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("the reviewer start = %v, want local without exclusions", start)
 	}
 }
 
