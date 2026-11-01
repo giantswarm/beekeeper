@@ -315,14 +315,17 @@ func TestScratchStartInTheSandboxAsksTheHostBroker(t *testing.T) {
 	}
 }
 
-// Store sources use the broker even outside the sandbox and with no vault.
-func TestStoreSourceAlwaysUsesBroker(t *testing.T) {
-	for _, session := range []bool{false, true} {
-		t.Run(fmt.Sprint(session), func(t *testing.T) {
+// Store sources use the broker in the sandbox or with a vault session.
+func TestStoreSourceUsesBrokerWhenRequired(t *testing.T) {
+	for _, tc := range []struct{ session, sandbox bool }{{true, false}, {false, true}, {true, true}} {
+		t.Run(fmt.Sprint(tc), func(t *testing.T) {
 			a, _, _ := secretApp(t)
-			a.cfg.Secret.Session = session
+			a.cfg.Secret.Session = tc.session
 			a.cfg.Secret.Vault = ""
 			t.Setenv(sandbox.Env, "")
+			if tc.sandbox {
+				t.Setenv(sandbox.Env, "1")
+			}
 			t.Setenv(sandbox.Brokered, "")
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
@@ -339,9 +342,16 @@ func TestStoreSourceAlwaysUsesBroker(t *testing.T) {
 				})
 			}()
 			t.Cleanup(func() { cancel(); <-done })
-			out, err := runSecret(a, fingerprintOp, "store://service#username")
+			out, err := runSecret(a, fingerprintOp, noBrokerStoreRef)
 			if err != nil || out != "brokered store\n" {
 				t.Fatalf("store did not reach broker: %q, %v", out, err)
+			}
+			if tc.session && !tc.sandbox {
+				a.out = &bytes.Buffer{}
+				out, err = runSecret(a, fingerprintOp, "--", noBrokerStoreRef)
+				if err != nil || out != "brokered store\n" {
+					t.Fatalf("flag separator lost store routing: %q, %v", out, err)
+				}
 			}
 		})
 	}

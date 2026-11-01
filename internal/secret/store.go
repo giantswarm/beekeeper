@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	storeFieldTemplate = "{field}"
+	storeAttributeFlag = "--attributes"
+)
+
 // parseStoreRef reads one entry and optional attribute of the person's store.
 func parseStoreRef(s string) (Ref, error) {
 	entry, field, hasField := strings.Cut(strings.TrimPrefix(s, StoreRef), "#")
@@ -24,7 +29,8 @@ func storeFieldSuffix(field string) string {
 }
 
 // NeedsStore reports a store source before the consumer separator, including
-// the sources of a multi-value copy. Store reads always belong to the broker.
+// the sources of a multi-value copy. Callers must preserve the separator or
+// pass only arguments before it.
 func NeedsStore(args []string) bool {
 	for _, arg := range args {
 		if arg == "--" {
@@ -51,30 +57,66 @@ func (o *Ops) readStore(ctx context.Context, r Ref) (string, error) {
 	}
 	template := false
 	for i := 1; i < len(argv); i++ {
-		if strings.Contains(argv[i], "{field}") {
-			argv[i] = strings.ReplaceAll(argv[i], "{field}", field)
+		if strings.Contains(argv[i], storeFieldTemplate) {
+			argv[i] = strings.ReplaceAll(argv[i], storeFieldTemplate, field)
 			template = true
 		}
 	}
 	if r.Path != "" && !template {
-		// KeePassXC permits repeated attributes and prints every one. Replace
-		// a configured selector so the default password is not copied as well.
-		args := []string{argv[0]}
-		for i := 1; i < len(argv); i++ {
-			if argv[i] == "-a" || argv[i] == "--attributes" {
-				i++
-				continue
-			}
-			if strings.HasPrefix(argv[i], "--attributes=") || strings.HasPrefix(argv[i], "-a=") {
-				continue
-			}
-			args = append(args, argv[i])
-		}
-		argv = append(args, "--attributes", field)
+		argv = storeAttributes(argv, field)
 	}
 	raw, err := o.storeRun(ctx, argv, r.Store)
 	if err != nil {
 		return "", fmt.Errorf("%s: credential store read failed (entry or field missing, store locked, command failed or timed out)", r)
 	}
 	return strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r"), nil
+}
+
+// storeAttributes replaces KeePassXC selectors, including attached short
+// values and combined flags, so a copy never reads the default field as well.
+func storeAttributes(argv []string, field string) []string {
+	out := []string{argv[0]}
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" {
+			out = append(out, storeAttributeFlag, field)
+			return append(out, argv[i:]...)
+		}
+		if arg == storeAttributeFlag {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--attributes=") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+			for j := 1; j < len(arg); j++ {
+				switch arg[j] {
+				case 'a':
+					if j+1 == len(arg) {
+						i++
+					}
+					// The remaining characters, if any, are the attribute's value.
+					arg = arg[:j]
+					if arg == "-" {
+						arg = ""
+					}
+				case 'k', 'y':
+					// Key-file and YubiKey options take a value, not more short flags.
+					if j+1 == len(arg) && i+1 < len(argv) {
+						out = append(out, arg, argv[i+1])
+						i++
+						arg = ""
+					}
+				default:
+					continue
+				}
+				break
+			}
+		}
+		if arg != "" {
+			out = append(out, arg)
+		}
+	}
+	return append(out, storeAttributeFlag, field)
 }

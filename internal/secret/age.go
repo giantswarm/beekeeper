@@ -282,9 +282,6 @@ func (o *Ops) storeRun(ctx context.Context, argv []string, arg string) ([]byte, 
 	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
 	defer cancel()
 	args := slices.Clone(argv[1:])
-	for i := range args {
-		args[i] = strings.ReplaceAll(args[i], "{field}", "password")
-	}
 	return o.Run(ctx, "", nil, nil, argv[0], append(args, arg)...)
 }
 

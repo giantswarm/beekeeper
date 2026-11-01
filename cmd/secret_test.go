@@ -26,26 +26,28 @@ import (
 )
 
 const (
-	secretValue   = "planted-Secret-Value-9d41b7"
-	dbRef         = "op://Shared/db/password"
-	jsonFlag      = "--json"
-	copyOp        = "copy"
-	dockerFlag    = "--dockerconfigjson"
-	usernameFlag  = "--username"
-	copyVerb      = "secret.copy"
-	testRegistry  = "registry.example.io"
-	compareOp     = "compare"
-	fingerprintOp = "fingerprint"
-	sopsA         = "a.sops.yaml"
-	sopsB         = "b.sops.yaml"
-	generateFlag  = "--generate"
-	literalFlag   = "--literal"
-	vaultFlag     = "--vault"
-	newKey        = "stringData.x"
-	ghSecret      = "secret"
-	setOp         = "set"
-	nameFlag      = "--name"
-	namespaceFlag = "--namespace"
+	storeReadCommand = "read-entry"
+	noBrokerStoreRef = "store://service#username"
+	secretValue      = "planted-Secret-Value-9d41b7"
+	dbRef            = "op://Shared/db/password"
+	jsonFlag         = "--json"
+	copyOp           = "copy"
+	dockerFlag       = "--dockerconfigjson"
+	usernameFlag     = "--username"
+	copyVerb         = "secret.copy"
+	testRegistry     = "registry.example.io"
+	compareOp        = "compare"
+	fingerprintOp    = "fingerprint"
+	sopsA            = "a.sops.yaml"
+	sopsB            = "b.sops.yaml"
+	generateFlag     = "--generate"
+	literalFlag      = "--literal"
+	vaultFlag        = "--vault"
+	newKey           = "stringData.x"
+	ghSecret         = "secret"
+	setOp            = "set"
+	nameFlag         = "--name"
+	namespaceFlag    = "--namespace"
 )
 
 // secretApp is an app over a scratch repository with one encrypted Secret
@@ -933,9 +935,9 @@ func TestSecretCopyToARemoteFile(t *testing.T) {
 func TestStoreSourceCopyAnswersAndLogsNoValue(t *testing.T) {
 	a, tools, repo := secretApp(t)
 	a.cfg.Secret.Vault, a.cfg.Secret.TokenFile = "", ""
-	a.cfg.Secret.Store.Read = []string{"read-entry"}
+	a.cfg.Secret.Store.Read = []string{storeReadCommand}
 	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
-		if name == "read-entry" {
+		if name == storeReadCommand {
 			if args[len(args)-1] == "absent-store-entry" {
 				return []byte(secretValue), fmt.Errorf("diagnostic: %s", secretValue)
 			}
@@ -962,4 +964,57 @@ func TestStoreSourceCopyAnswersAndLogsNoValue(t *testing.T) {
 		t.Fatalf("copy events: %d, %v", len(evs), err)
 	}
 	noSecret(t, "store copy logs", fmt.Sprint(evs))
+}
+
+// No broker serves this scratch state, as on a host without systemd.
+func TestStoreSourceWorksWithoutBroker(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	t.Setenv(sandbox.Env, "")
+	t.Setenv(sandbox.Brokered, "")
+	a.cfg.Secret.Session = false
+	a.cfg.Secret.Vault, a.cfg.Secret.TokenFile = "", ""
+	a.cfg.Secret.Store.Read = []string{storeReadCommand}
+	reads := 0
+	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name == storeReadCommand {
+			reads++
+			return []byte(secretValue + "\n"), nil
+		}
+		return tools.Run(ctx, dir, env, in, name, args...)
+	}
+	for _, args := range [][]string{
+		{fingerprintOp, noBrokerStoreRef},
+		{compareOp, noBrokerStoreRef, noBrokerStoreRef},
+		{copyOp, noBrokerStoreRef, filepath.Join(repo, "db.sops.yaml") + "#data.password"},
+	} {
+		a.out = &bytes.Buffer{}
+		out, err := runSecret(a, args...)
+		if err != nil {
+			t.Fatalf("no-broker %s: %v", args[0], err)
+		}
+		noSecret(t, "no-broker response", out)
+	}
+	if reads != 4 {
+		t.Fatalf("read count %d, want 4", reads)
+	}
+	a.cfg.Secret.Store.Read = nil
+	a.out = &bytes.Buffer{}
+	out, err := runSecret(a, fingerprintOp, noBrokerStoreRef)
+	if err == nil || !strings.Contains(err.Error(), "secret.store.read") {
+		t.Fatalf("unconfigured source: %v", err)
+	}
+	noSecret(t, "unconfigured response", fmt.Sprint(out, err))
+}
+
+func TestStoreSourceConsumerArgumentDoesNotRequireBroker(t *testing.T) {
+	a, _, repo := secretApp(t)
+	t.Setenv(sandbox.Env, "")
+	t.Setenv(sandbox.Brokered, "")
+	a.cfg.Secret.Session = true
+	a.cfg.Secret.Vault, a.cfg.Secret.TokenFile = "", ""
+	out, err := runSecret(a, copyOp, filepath.Join(repo, "db.sops.yaml")+"#data.password", "--", "sh", "-c", "cat >&2", "--secret=route-test=-", "store://consumer-argument")
+	if err != nil {
+		t.Fatalf("consumer argument wrongly required a broker: %v", err)
+	}
+	noSecret(t, "consumer response", out)
 }

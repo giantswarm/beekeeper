@@ -13,8 +13,10 @@ import (
 )
 
 const (
+	storeAttachedPassword  = "-apassword"
 	storeUsernameAttribute = "username"
 	storeAttributeOption   = "--attributes"
+	storeProtectedOption   = "-s"
 	storeDatabase          = "database"
 	storeEntry             = "applications/service"
 	credentialStoreRef     = "store://" + storeEntry //nolint:gosec // a reference, no credential
@@ -50,6 +52,13 @@ func TestStoreSourcesCopyCompareFingerprint(t *testing.T) {
 		{storeUsernameAttribute, []string{storeReader, storeDatabase}, []string{storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
 		{storeUsernameAttribute, []string{storeReader, "-a", storePasswordAttribute, storeDatabase}, []string{storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
 		{storeUsernameAttribute, []string{storeReader, "--attributes=password", storeDatabase}, []string{storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, storeAttachedPassword, storeDatabase}, []string{storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, "-sa", storePasswordAttribute, storeDatabase}, []string{storeProtectedOption, storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, "-sapassword", storeDatabase}, []string{storeProtectedOption, storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, "-sk/path-containing-a", storeDatabase}, []string{"-sk/path-containing-a", storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, "-k", storeAttachedPassword, storeDatabase}, []string{"-k", storeAttachedPassword, storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, "--", storeDatabase}, []string{storeAttributeOption, storeUsernameAttribute, "--", storeDatabase, storeEntry}},
+
 		{"custom attribute", []string{storeReader, "-a", "{field}", storeDatabase}, []string{"-a", "custom attribute", storeDatabase, storeEntry}},
 		{"", []string{storeReader, "-a", "{field}"}, []string{"-a", storePasswordAttribute, storeEntry}},
 	} {

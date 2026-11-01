@@ -822,12 +822,15 @@ output stays in the broker; an error names the entry or the recipient, never a v
 For credential sources, `store://<entry>[#<field>]` works alongside `op://`, `k8s://`
 and `file://` in `secret copy` (SOPS paths, multi-value copies, consumers after `--`,
 `ssh://` destinations and `--to-secret`), `secret compare` and `secret fingerprint`.
-These reads always run in the broker, even without `secret.session` or a shared
-vault. The default field is the store's secret/password. An explicit field adds
+These reads run in the broker in the agent sandbox or with `secret.session`;
+otherwise beekeeper reads in its own process, including on macOS and hosts without
+a broker. No shared vault is required. The default field is the store's secret/password. An explicit field adds
 `--attributes <field>` before the entry, replacing a configured `-a`/`--attributes`
 selector so KeePassXC returns only the requested attribute. For other adapters,
 put `{field}` in an argument of `secret.store.read`: it is replaced with the
 requested field, or `password` when omitted, and no attribute option is added.
+This substitution applies only to credential sources: age-identity reads and
+`secret.store.search` receive their configured arguments unchanged.
 The entry remains the final argument; no shell evaluates it. Store-command errors
 name the reference and suppress command output, which might contain credentials.
 Store copies return no automatic fingerprint, including SSH delivery; request one
