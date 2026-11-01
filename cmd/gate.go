@@ -137,10 +137,16 @@ refused (77) before it touches the lane, its line naming both releases:
 the installed beekeeper gates the same command again; one whose devctl already ran leaves
 the run's document and exit code for the watch, which records the outcome
 at its next poll. A merge into a base branch no Auto-release
-run tags (the Auto-release workflow on the branch, read once per merge,
-names no push to it; its tags are cut by hand) runs devctl with
---no-release-wait: its lane frees the moment devctl reports it merged and
-no release is awaited; GitHub not answering for the base refuses (77). A
+run tags (the Auto-release workflow on the branch names no push to it; its
+tags are cut by hand) runs devctl with --no-release-wait: its lane frees
+the moment devctl reports it merged and no release is awaited. The pull
+request's base branch is read once per merge (REST), how the branch
+releases once per repository and branch while a place queued before that
+read is still in the gate, at most an hour. GitHub refusing that read
+under a spent rate limit is a wait for the limit's reset in the merge's
+place, as under the floor, and a read again then; GitHub not answering for
+the base otherwise refuses (77), the merge's place kept for merge.seedTTL
+so the same command rejoins its lane where it was. A
 base branch on the release-PR flow (zz_generated.create_release.yaml tags
 the merge of the bot's <base>#release#<level> pull request) runs devctl
 with --no-release-wait too: the release pull request's merge holds its lane
@@ -326,6 +332,9 @@ type gateRun struct {
 	// release is how the pull request's base branch releases, read once
 	// before devctl's turn.
 	release *github.BaseRelease
+	// releaseReset is the reset of the GitHub limit that refused the read
+	// of release: until then the merge waits in its place, read no more.
+	releaseReset time.Time
 	// bin is the executable this call runs, re-executed once replaced.
 	bin binary
 	// output is the file this call's stdout writes to (gateOutput), the
@@ -795,8 +804,8 @@ func (g *gateRun) step() (string, error) {
 			return "", g.enqueue(why)
 		}
 	}
-	if err := g.readRelease(); err != nil {
-		return "", err
+	if why, err = g.readRelease(); err != nil || why != "" {
+		return why, err
 	}
 	why, err = g.start(q.SettlingKeys(), hrs)
 	if why == "" {
@@ -893,24 +902,131 @@ func (g *gateRun) checkOutside() string {
 }
 
 // readRelease reads, once per merge, whether a merge into the pull
-// request's base branch is tagged by its Auto-release workflow. Only a
-// devctl merge waits for a release; GitHub not answering refuses.
-func (g *gateRun) readRelease() error {
+// request's base branch is tagged by its Auto-release workflow: the pull
+// request's base branch, and how that branch releases once per repository
+// and branch for the lane's pass (branchReleaseOf). Only a devctl merge
+// waits for a release. GitHub refusing a read under a spent limit is a wait
+// for its reset in the merge's place (spentWait); GitHub not answering
+// otherwise refuses, the place kept (refuseKeeping).
+func (g *gateRun) readRelease() (string, error) {
 	if g.release != nil || g.pr == 0 || !g.runsDevctl() {
-		return nil
+		return "", nil
 	}
-	var r github.BaseRelease
-	err := g.readRetrying("whether "+g.key()+"'s base branch has auto-release", func() (err error) {
+	what := "whether " + g.key() + "'s base branch has auto-release"
+	if g.now.Before(g.releaseReset) {
+		return g.spentWhy(what, g.releaseReset), nil
+	}
+	var p github.PullBase
+	err := g.readRetrying(what, func() (err error) {
 		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
 		defer cancel()
-		r, err = baseRelease(ctx, g.repo, g.pr)
+		p, err = pullBase(ctx, g.repo, g.pr)
+		return err
+	})
+	var r github.BaseRelease
+	if err == nil {
+		r, err = g.branchReleaseOf(what, p.Base)
+	}
+	switch {
+	case github.RateLimited(err):
+		return g.spentWait(what, err)
+	case err != nil:
+		return "", g.refuseKeeping("%s cannot be read (%v): run the same command again", what, err)
+	}
+	r = p.Of(r)
+	g.release = &r
+	return "", nil
+}
+
+// branchReleaseFresh bounds how long the gate reuses a base branch's
+// release read: a merge in the pass may change its workflows.
+const branchReleaseFresh = time.Hour
+
+// branchReleaseOf is how the repository's branch base releases: the read
+// the lane's pass made (cachedRelease), else a fresh one, kept for the
+// merges after it.
+func (g *gateRun) branchReleaseOf(what, base string) (github.BaseRelease, error) {
+	if st, err := g.store.Read(); err == nil {
+		if r, ok := cachedRelease(st, g.repo, base, g.now); ok {
+			return r, nil
+		}
+	}
+	var r github.BaseRelease
+	err := g.readRetrying(what, func() (err error) {
+		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+		defer cancel()
+		r, err = branchRelease(ctx, g.repo, base)
 		return err
 	})
 	if err != nil {
-		return g.refuse("whether %s's base branch has auto-release cannot be read (%v): run the same command again", g.key(), err)
+		return r, err
 	}
-	g.release = &r
-	return nil
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.BranchReleases = slices.DeleteFunc(st.BranchReleases, func(c state.BranchRelease) bool {
+			return c.Repo == g.repo && c.Base == base || !passes(st, c, g.now)
+		})
+		st.BranchReleases = append(st.BranchReleases, state.BranchRelease{Repo: g.repo, Base: base, Auto: r.Auto, Plugins: r.Plugins,
+			ReleasePR: r.ReleasePR, At: g.now.UTC()})
+		return nil, nil
+	})
+	return r, nil
+}
+
+// cachedRelease is the release read of repo's branch base the lane's pass
+// made, if it still holds at now (passes).
+func cachedRelease(st *state.State, repo, base string, now time.Time) (github.BaseRelease, bool) {
+	for _, c := range st.BranchReleases {
+		if c.Repo == repo && c.Base == base && passes(st, c, now) {
+			return github.BaseRelease{Base: base, Auto: c.Auto, Plugins: c.Plugins, ReleasePR: c.ReleasePR}, true
+		}
+	}
+	return github.BaseRelease{}, false
+}
+
+// passes says the lane's pass that read c goes on at now: c is younger
+// than branchReleaseFresh and a place of its repository that was in the
+// gate when it was read still is. A repository whose places all left
+// starts a new pass, and its next merge reads again.
+func passes(st *state.State, c state.BranchRelease, now time.Time) bool {
+	if now.Sub(c.At) > branchReleaseFresh {
+		return false
+	}
+	return slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Repo == c.Repo && !m.Joined.After(c.At) })
+}
+
+// spentWait is the wait of a merge whose read GitHub refused under a spent
+// limit: it reads the budget afresh and waits in its place for the reset,
+// as a merge under the floor does (awaitReset), and reads again then. A
+// limit whose reset is unknown refuses, the place kept.
+func (g *gateRun) spentWait(what string, err error) (string, error) {
+	var b github.Budget
+	rerr := g.readRetrying("the GitHub budget", func() (rerr error) {
+		ctx, cancel := context.WithTimeout(g.ctx, 30*time.Second)
+		defer cancel()
+		b, rerr = readBudget(g.app, ctx)
+		return rerr
+	})
+	var reset time.Time
+	if rerr == nil {
+		reset = b.SpentUntil(g.now)
+	}
+	if reset.IsZero() {
+		return "", g.refuseKeeping("%s cannot be read, GitHub refusing it under a rate limit whose reset is unknown (%v): run the same command again", what, err)
+	}
+	g.releaseReset = reset
+	g.awaitReset(reset)
+	why := g.spentWhy(what, reset)
+	_ = g.store.Log(event(g.me, "merge.spent", "%s: %v", why, err))
+	if g.queued {
+		return why, nil
+	}
+	return "", g.enqueue(why)
+}
+
+// spentWhy is what a merge waits for whose read the spent limit refused.
+func (g *gateRun) spentWhy(what string, reset time.Time) string {
+	return fmt.Sprintf("%s cannot be read until the GitHub budget's reset at %s, GitHub refusing it under a spent rate limit; %s keeps its place in lane %s and reads it again then",
+		what, clock(g.now, reset), g.key(), g.lane.Name)
 }
 
 // rebaseReads is how often the gate reads a pull request whose rebase GitHub
@@ -1248,6 +1364,19 @@ func (g *gateRun) drop(st *state.State) {
 	default:
 		st.Merges = slices.Delete(st.Merges, i, i+1)
 	}
+}
+
+// refuseKeeping refuses the merge and keeps its place for merge.seedTTL,
+// as a seeded place: the same command, run again, rejoins its lane where it
+// was.
+func (g *gateRun) refuseKeeping(format string, args ...any) error {
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := g.mine(st, state.Waiting); i >= 0 {
+			st.Merges[i].Seeded, st.Merges[i].Seen = true, g.now.UTC()
+		}
+		return nil, nil
+	})
+	return g.refuse(format+"; its place in lane %s is kept for %s", append(args, g.lane.Name, g.cfg.Merge.SeedTTL.Duration)...)
 }
 
 // refuse removes the merge from its queue, logs the refusal and refuses it.

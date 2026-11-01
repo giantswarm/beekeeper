@@ -91,44 +91,45 @@ func jsonKeys(t reflect.Type) map[string]bool {
 // Party has no rest of its own: its fields are flattened into the types that
 // embed it, whose rest keeps them.
 type (
-	plainState        State
-	plainSupervisor   Supervisor
-	plainRelay        Relay
-	plainRelief       Relief
-	plainCLI          CLI
-	plainRelayDue     RelayDue
-	plainRole         Role
-	plainGrant        Grant
-	plainHold         Hold
-	plainKeep         Keep
-	plainPark         Park
-	plainAgent        Agent
-	plainImportWait   ImportWait
-	plainNote         Note
-	plainTimer        Timer
-	plainRecord       Record
-	plainClaim        Claim
-	plainAlertOwner   AlertOwner
-	plainStart        Start
-	plainApp          App
-	plainAppRun       AppRun
-	plainAppCreated   AppCreated
-	plainArchive      Archive
-	plainDecline      Decline
-	plainReport       Report
-	plainReportPause  ReportPause
-	plainReportThread ReportThread
-	plainBudget       Budget
-	plainGraphQL      GraphQL
-	plainMerge        Merge
-	plainFailed       Failed
-	plainOwed         Owed
-	plainWriter       Writer
-	plainWorkerReport WorkerReport
-	plainUrgent       Urgent
-	plainRoleLine     RoleLine
-	plainPair         Pair
-	plainStop         Stop
+	plainState         State
+	plainSupervisor    Supervisor
+	plainRelay         Relay
+	plainRelief        Relief
+	plainCLI           CLI
+	plainRelayDue      RelayDue
+	plainRole          Role
+	plainGrant         Grant
+	plainHold          Hold
+	plainKeep          Keep
+	plainPark          Park
+	plainAgent         Agent
+	plainImportWait    ImportWait
+	plainNote          Note
+	plainTimer         Timer
+	plainRecord        Record
+	plainClaim         Claim
+	plainAlertOwner    AlertOwner
+	plainStart         Start
+	plainApp           App
+	plainAppRun        AppRun
+	plainAppCreated    AppCreated
+	plainArchive       Archive
+	plainDecline       Decline
+	plainReport        Report
+	plainReportPause   ReportPause
+	plainReportThread  ReportThread
+	plainBudget        Budget
+	plainBranchRelease BranchRelease
+	plainGraphQL       GraphQL
+	plainMerge         Merge
+	plainFailed        Failed
+	plainOwed          Owed
+	plainWriter        Writer
+	plainWorkerReport  WorkerReport
+	plainUrgent        Urgent
+	plainRoleLine      RoleLine
+	plainPair          Pair
+	plainStop          Stop
 )
 
 func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
@@ -221,12 +222,18 @@ func (v *ReportPause) UnmarshalJSON(b []byte) error {
 func (v ReportPause) MarshalJSON() ([]byte, error) { return encodeKeeping(plainReportPause(v), v.rest) }
 func (v *Budget) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainBudget)(v), &v.rest) }
 func (v Budget) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainBudget(v), v.rest) }
-func (v *GraphQL) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainGraphQL)(v), &v.rest) }
-func (v GraphQL) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainGraphQL(v), v.rest) }
-func (v *Merge) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*plainMerge)(v), &v.rest) }
-func (v Merge) MarshalJSON() ([]byte, error)       { return encodeKeeping(plainMerge(v), v.rest) }
-func (v *Writer) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainWriter)(v), &v.rest) }
-func (v Writer) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainWriter(v), v.rest) }
+func (v *BranchRelease) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainBranchRelease)(v), &v.rest)
+}
+func (v BranchRelease) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainBranchRelease(v), v.rest)
+}
+func (v *GraphQL) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainGraphQL)(v), &v.rest) }
+func (v GraphQL) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainGraphQL(v), v.rest) }
+func (v *Merge) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainMerge)(v), &v.rest) }
+func (v Merge) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainMerge(v), v.rest) }
+func (v *Writer) UnmarshalJSON(b []byte) error  { return decodeKeeping(b, (*plainWriter)(v), &v.rest) }
+func (v Writer) MarshalJSON() ([]byte, error)   { return encodeKeeping(plainWriter(v), v.rest) }
 func (v *WorkerReport) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainWorkerReport)(v), &v.rest)
 }

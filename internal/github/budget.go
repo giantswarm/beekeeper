@@ -92,6 +92,33 @@ func (g *GraphQL) Blocks(now time.Time) bool {
 	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
 }
 
+// RateLimited says err is GitHub refusing a request under a rate limit, in
+// gh's words: the hourly limit spent (REST's "API rate limit exceeded",
+// GraphQL's "API rate limit already exceeded") or a secondary limit.
+func RateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	words := strings.ToLower(err.Error())
+	return strings.Contains(words, "api rate limit") || strings.Contains(words, "secondary rate limit") ||
+		strings.Contains(words, "rate_limited")
+}
+
+// SpentUntil is when the limit b reports spent at now resets: the later of
+// the core budget's reset, nothing of it remaining, and the end of the
+// GraphQL limit's refusal or of its spent hour. Zero when neither is spent
+// or GitHub named no time.
+func (b Budget) SpentUntil(now time.Time) time.Time {
+	var until time.Time
+	if b.Limit > 0 && b.Remaining == 0 && now.Before(b.Reset) {
+		until = b.Reset
+	}
+	if g := b.GraphQL; g != nil && now.Before(g.Reset) && (g.Refused != "" || g.Limit > 0 && g.Remaining == 0) && g.Reset.After(until) {
+		until = g.Reset
+	}
+	return until
+}
+
 // Token returns the token of the gh CLI's login.
 func Token(ctx context.Context) (string, error) {
 	out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()

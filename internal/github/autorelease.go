@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -73,25 +72,61 @@ type BaseRelease struct {
 	Version string
 }
 
-// ReadBaseRelease reads repo#n's base branch and the Auto-release workflow
-// on it, two requests; on a branch without it the PluginReleaseWorkflow, a
-// third; on a branch without either the release-PR flow's two workflows,
-// up to two more. A branch without any has no auto-release; an error is
-// GitHub not answering.
+// PullBase is a pull request's base branch, and the head branch and title
+// that make it a release pull request (ReleaseVersion).
+type PullBase struct {
+	Base  string `json:"base"`
+	Head  string `json:"head"`
+	Title string `json:"title"`
+}
+
+// ReadPullBase reads repo#n's base branch, head branch and title, one REST
+// request: the core budget the merge gate checks, not GraphQL's.
+func ReadPullBase(ctx context.Context, run GH, repo string, n int) (PullBase, error) {
+	out, err := run(ctx, "api", fmt.Sprintf("repos/%s/pulls/%d", repo, n),
+		"--jq", "{base: .base.ref, head: .head.ref, title: .title}")
+	if err != nil {
+		return PullBase{}, err
+	}
+	var p PullBase
+	if err := json.Unmarshal(out, &p); err != nil || p.Base == "" {
+		return PullBase{}, fmt.Errorf("gh api repos/%s/pulls/%d: no base branch in its answer", repo, n)
+	}
+	return p, nil
+}
+
+// Of is how the pull request p merges into its base branch, which releases
+// as b: the release pull request of a ReleasePR branch cuts its Version.
+func (p PullBase) Of(b BaseRelease) BaseRelease {
+	b.Version = ""
+	if b.ReleasePR {
+		b.Version = ReleaseVersion(p.Head, p.Title)
+	}
+	return b
+}
+
+// ReadBaseRelease reads repo#n's base branch (ReadPullBase) and how it
+// releases (ReadBranchRelease). An error is GitHub not answering.
 func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelease, error) {
-	out, err := run(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "baseRefName,headRefName,title")
+	p, err := ReadPullBase(ctx, run, repo, n)
 	if err != nil {
 		return BaseRelease{}, err
 	}
-	var p struct {
-		BaseRefName string `json:"baseRefName"`
-		HeadRefName string `json:"headRefName"`
-		Title       string `json:"title"`
+	r, err := ReadBranchRelease(ctx, run, repo, p.Base)
+	if err != nil {
+		return BaseRelease{}, err
 	}
-	if err := json.Unmarshal(out, &p); err != nil || p.BaseRefName == "" {
-		return BaseRelease{}, fmt.Errorf("gh pr view %d --repo %s: no base branch in its answer", n, repo)
-	}
-	r := BaseRelease{Base: p.BaseRefName}
+	return p.Of(r), nil
+}
+
+// ReadBranchRelease reads how repo's branch base releases: the
+// Auto-release workflow on it, one request; on a branch without it the
+// PluginReleaseWorkflow, a second; on a branch without either the
+// release-PR flow's two workflows, up to two more. A branch without any has
+// no auto-release; an error is GitHub not answering. Version is left to the
+// pull request (PullBase.Of).
+func ReadBranchRelease(ctx context.Context, run GH, repo, base string) (BaseRelease, error) {
+	r := BaseRelease{Base: base}
 	raw, err := rawFile(ctx, run, repo, AutoReleaseWorkflow, r.Base)
 	switch {
 	case notFound(err):
@@ -118,9 +153,6 @@ func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelea
 	}
 	if r.ReleasePR, err = releasesByPR(ctx, run, repo, r.Base); err != nil {
 		return BaseRelease{}, err
-	}
-	if r.ReleasePR {
-		r.Version = ReleaseVersion(p.HeadRefName, p.Title)
 	}
 	return r, nil
 }
