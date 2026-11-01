@@ -246,6 +246,8 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start (0: never)
   reviewHeadroom: 2         # extra subscription sessions reserved for reviews; 0 disables
   ceiling: 10               # CAPACITY FULL at this many; no start past it (0: no unforced start, suppresses CAPACITY LOW / FULL; unset: 5 and 10)
+  local:
+    ceiling: 5              # optional: the busy agents this machine runs (self-hosted ones included; execution hosts' count against their maxBusy); unset: no local cap, 0: no unforced local start
   availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
   swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
   swapPSIMax: 0             # the default; memory pressure (full avg60 of /proc/pressure/memory, %) up to which that growth is only a warning while MemAvailable is over availMinMiB

@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -2272,6 +2273,190 @@ func TestLoopParkOnKeepsExplicitAndAmbiguousWaits(t *testing.T) {
 		if got := loopParkOn(&state.Park{On: tc.on, Waits: tc.waits}); got != tc.want {
 			t.Errorf("%+v: got %q", tc, got)
 		}
+	}
+}
+
+// hostsFirstRig is a loop under supervisor.hostsFirst whose next item, on
+// the host's mapped repository, is due: choices are capacity.choices, and
+// answer the capacity verdicts, local (with the --exclude flags it names)
+// and the host's.
+func hostsFirstRig(t *testing.T, choices []config.Choice, answer func(host bool, exclude []string) string) *loopRig {
+	t.Helper()
+	r := newLoopRig(t)
+	nextBrief(t, r)
+	r.a.cfg.Supervisor.HostsFirst = true
+	r.sshLoopHost(t, true)
+	r.a.cfg.Capacity.Choices = choices
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	loopNextDone(t, r)
+	branch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	r.answer = func(args []string) (string, int) {
+		switch args[0] {
+		case loopCapacity:
+			var exclude []string
+			for i, a := range args {
+				if a == "--"+excludeFlag && i+1 < len(args) {
+					exclude = append(exclude, args[i+1])
+				}
+			}
+			return answer(slices.Contains(args, loopHostFlag), exclude), 0
+		case loopBoard:
+			return loopNextPickJSON, 0
+		}
+		return "", 0
+	}
+	return r
+}
+
+// mixedChoices is a desk with a Claude choice a host runs and a codex one
+// no host has an adapter for.
+var mixedChoices = []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: "gpt-fixture"}}
+
+// The mixed queue under hostsFirst: no host has room, so the Claude choice
+// waits for one, but the codex choice no host can run starts locally, the
+// host-run choice excluded from the local start.
+func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
+	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
+		if host {
+			return loopNoRoomJSON
+		}
+		return loopRoomJSON
+	})
+	r.pass(t)
+	r.pass(t)
+	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	if start == nil {
+		t.Fatalf("the codex-eligible start waited for a Claude-only host: %v\n%s", r.calls, r.out)
+	}
+	if slices.Contains(start, loopHostFlag) {
+		t.Errorf("a full host took the start: %v", start)
+	}
+	if i := slices.Index(start, "--"+excludeFlag); i < 0 || i+1 >= len(start) || start[i+1] != claudeComm+"/"+bgModel {
+		t.Errorf("the local start does not leave the Claude choice to the hosts: %v", start)
+	}
+	if !slices.Contains(start, harnessAuto) {
+		t.Errorf("the local start loses capacity's pick: %v", start)
+	}
+}
+
+// The same mixed queue with a host that has room: the start goes there, as
+// hostsFirst prefers, and names no exclusion.
+func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
+	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string { return loopRoomJSON })
+	r.pass(t)
+	r.pass(t)
+	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	if start == nil || !slices.Contains(start, loopHostFlag) {
+		t.Fatalf("a host with room did not take the start: %v\n%s", start, r.out)
+	}
+	if slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("a remote start excludes choices: %v", start)
+	}
+}
+
+// With the local machine full for the local-only kinds (capacity.local.
+// ceiling, or no eligible codex choice), the mixed queue waits like a
+// Claude-only one.
+func TestLoopHostsFirstWaitsWithoutLocalRoomForLocalOnlyKinds(t *testing.T) {
+	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
+		if host || len(exclude) > 0 {
+			return loopNoRoomJSON
+		}
+		return loopRoomJSON
+	})
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("a start with no local room for codex and no host room started %v", c)
+	}
+}
+
+// A desk whose every choice a host runs keeps hostsFirst as it was: no
+// host room, the start waits even with local room.
+func TestLoopHostsFirstWaitsForAHostWhenEveryKindRunsThere(t *testing.T) {
+	r := hostsFirstRig(t, []config.Choice{{Harness: claudeComm, Model: bgModel}}, func(host bool, exclude []string) string {
+		if host {
+			return loopNoRoomJSON
+		}
+		return loopRoomJSON
+	})
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("hostsFirst started %v locally while a host could run it", c)
+	}
+}
+
+// A repository no host maps: no host can run it, so hostsFirst starts it
+// locally within the local room, a Claude choice included, and waits
+// only while the local machine has none.
+func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
+	for _, room := range []bool{true, false} {
+		r := hostsFirstRig(t, []config.Choice{{Harness: claudeComm, Model: bgModel}}, func(host bool, exclude []string) string {
+			if host {
+				return loopRoomJSON
+			}
+			if room {
+				return loopRoomJSON
+			}
+			return loopNoRoomJSON
+		})
+		h := r.a.cfg.Agents.Hosts[sshTestSelector]
+		h.Repositories = map[string]string{"example/elsewhere": "/srv/elsewhere"}
+		r.a.cfg.Agents.Hosts[sshTestSelector] = h
+		r.pass(t)
+		r.pass(t)
+		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+		if !room {
+			if start != nil {
+				t.Errorf("no local room: started %v", start)
+			}
+			continue
+		}
+		if start == nil {
+			t.Fatalf("the unmapped repository waited for a host: %v\n%s", r.calls, r.out)
+		}
+		if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+			t.Errorf("the unmapped repository's start = %v, want a plain local start", start)
+		}
+	}
+}
+
+// The reviewer of a mixed queue under hostsFirst: no host room, the codex
+// reviewer starts locally with the Claude choice left to the hosts.
+func TestLoopHostsFirstReviewerStartsLocalOnlyKindsLocally(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.HostsFirst = true
+	r.sshLoopHost(t, true)
+	r.a.cfg.Capacity.Choices = mixedChoices
+	pr := sshTestRepository + "#7"
+	r.park(t, pr, time.Now())
+	r.pulls[pr] = superloop.Pull{Ref: pr, URL: "https://github.com/" + sshTestRepository + "/pull/7", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity && slices.Contains(args, loopHostFlag) {
+			return loopNoRoomJSON, 0
+		}
+		if args[0] == loopCapacity {
+			return loopRoomJSON, 0
+		}
+		return "", 0
+	}
+	r.pass(t)
+	var start []string
+	for _, c := range r.calls {
+		if len(c) > 2 && c[0] == agentsName && c[1] == agentStartName && slices.Contains(c, "--"+reviewFlag) {
+			start = c
+		}
+	}
+	if start == nil {
+		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
+	}
+	if slices.Contains(start, loopHostFlag) || !slices.Contains(start, claudeComm+"/"+bgModel) {
+		t.Errorf("the reviewer start = %v, want local with the Claude choice excluded", start)
 	}
 }
 

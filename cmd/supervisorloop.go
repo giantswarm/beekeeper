@@ -357,8 +357,9 @@ its key first in the detail):
             host whose own check (capacity --host) has room for its kind
             and that maps the repository, pinned to its default branch;
             the local machine keeps starts while it has room, unless
-            supervisor.hostsFirst, which prefers hosts always. No host
-            with room and no room locally: the start waits. A desk with
+            supervisor.hostsFirst, which prefers hosts for what a host
+            can run, as for a worker. No host with room and no room
+            locally: the start waits. A desk with
             no capacity.choices never places remotely
   red       an agent parked from its pull request's worktree at its
             published HEAD (a review request, local or on an execution
@@ -443,8 +444,12 @@ its key first in the detail):
             check (agents hosts check, capacity --host) has room and that
             maps the item's repository, pinned to its default branch; the
             local machine keeps the start while it has room, unless
-            supervisor.hostsFirst, which prefers hosts always. No host
-            with room and no room locally: the start waits. Releases
+            supervisor.hostsFirst, which prefers hosts for what a host
+            can run: with no host room a Claude start waits, while a
+            repository no host maps, or a choice no host has an adapter
+            for (every harness but Claude), starts locally within the
+            local room (capacity.local.ceiling among its guards). No
+            host with room and no room locally: the start waits. Releases
             and the loop itself stay on the coordinator. One board read
             answers a pass; nothing free (board next's exit 3 with no
             pick) settles a done's start, never a failure, and no read
@@ -1437,6 +1442,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		}
 	}
 	args = append(args, place.remoteStartFlags()...)
+	args = append(args, place.excludeFlags()...)
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
@@ -1495,6 +1501,38 @@ type startHost struct {
 	Selector string
 	Repo     string
 	Ref      string
+	// Exclude are the choices a local start leaves to the hosts
+	// (supervisor.hostsFirst): those a mapped host can run, which wait for
+	// a host with room rather than start here.
+	Exclude []string
+}
+
+// excludeFlags are what a local start placed past the hosts' choices
+// names on its agents start line.
+func (h startHost) excludeFlags() []string {
+	var args []string
+	for _, e := range h.Exclude {
+		args = append(args, "--"+excludeFlag, e)
+	}
+	return args
+}
+
+// hostChoices are the choices of k an execution host can run, each as
+// harness/model, the form --exclude matches exactly; mixed says whether
+// k also has a choice no host can run, which only the local machine
+// starts.
+func hostChoices(k config.Capacity) (choices []string, mixed bool) {
+	for _, ch := range k.Choices {
+		if !hostRunsHarness(ch.Harness) {
+			mixed = true
+			continue
+		}
+		c := cmp.Or(strings.TrimSpace(ch.Harness), claudeComm) + "/" + strings.TrimSpace(ch.Model)
+		if !slices.Contains(choices, c) {
+			choices = append(choices, c)
+		}
+	}
+	return choices, mixed
 }
 
 // remote reports whether the start runs on an execution host.
@@ -1553,10 +1591,14 @@ func (l *supervisorLoop) placesRemotely() bool {
 // --host, which probes the host first) has room and that maps the
 // repository takes it, pinned to the repository's default branch; a host
 // that cannot be read, maps no repository or has no room is said once (or
-// passed quietly) and skipped. With supervisor.hostsFirst and no host with
-// room the start waits, as it does on a full machine; without the
-// preference the local machine attempts it, whose own start gate makes it
-// wait when it has none either.
+// passed quietly) and skipped; a host's check weighs only the choices it
+// can run (Claude Code). With supervisor.hostsFirst and no host with room
+// a start a host could run waits, as it does on a full machine; a start no
+// host can run starts locally within the local room (capacity.local.
+// ceiling among its guards): one whose repository no host maps, or the
+// choices no host has an adapter for, the host-run choices excluded (see
+// hostsFirstLocal). Without the preference the local machine attempts it,
+// whose own start gate makes it wait when it has none either.
 func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
 	k := l.a.cfg.Supervisor
 	if !l.placesRemotely() {
@@ -1573,16 +1615,18 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 	if roomOpen(out) && !k.HostsFirst {
 		return startHost{}, nil
 	}
+	mapped := false
 	for _, selector := range k.Hosts {
 		h, err := l.a.executionHost(selector)
 		if err != nil {
 			l.sayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
 			continue
 		}
-		if _, mapped := h.Repositories[repo]; !mapped {
+		if _, ok := h.Repositories[repo]; !ok {
 			l.sayOnce("host "+selector+" "+repo, "SUPERVISOR HOST WAITS: %s maps no %s", selector, repo)
 			continue
 		}
+		mapped = true
 		if !l.capacityRoom(ctx, append([]string{"--host", selector}, flags...)...) {
 			continue
 		}
@@ -1594,9 +1638,34 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
 	}
 	if k.HostsFirst {
-		return startHost{}, errLoopLater
+		return l.hostsFirstLocal(ctx, flags, roomOpen(out), mapped)
 	}
 	return startHost{}, nil
+}
+
+// hostsFirstLocal is supervisor.hostsFirst's answer when no host took a
+// start: hosts are preferred only for what a host can run. A repository
+// no host maps, or a desk whose choices no host can run, starts locally
+// while the local verdict (localRoom) has room. With a mapped repository
+// the choices a host can run wait for one; the others start locally, the
+// host-run choices excluded from the start, while the local verdict
+// without them has room. Everything else waits.
+func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, localRoom, mapped bool) (startHost, error) {
+	hosted, mixed := hostChoices(l.a.cfg.Capacity)
+	if !mapped || len(hosted) == 0 {
+		if !localRoom {
+			return startHost{}, errLoopLater
+		}
+		return startHost{}, nil
+	}
+	if !mixed {
+		return startHost{}, errLoopLater
+	}
+	place := startHost{Exclude: hosted}
+	if !l.capacityRoom(ctx, append(slices.Clone(flags), place.excludeFlags()...)...) {
+		return startHost{}, errLoopLater
+	}
+	return place, nil
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:
@@ -1794,6 +1863,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		// comes from that host's decision.
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
+	args = append(args, place.excludeFlags()...)
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
