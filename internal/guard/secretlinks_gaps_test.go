@@ -113,6 +113,11 @@ func TestSecretFileGapReads(t *testing.T) {
 		"readlink_assigned":      `x=$(readlink -f "$HOME/existing-link.json"); cat "$x"`,
 		"realpath_xargs":         `realpath "$HOME/existing-link.json" | xargs -I{} cat {}`,
 		"find_print_xargs":       `find "$HOME/.tool" -name auth.json -print0 | xargs -0 cat`,
+		"find_iname_xargs":       `find "$HOME" -iname 'AUTH*' | xargs cat`,
+		"find_or_xargs":          `find "$HOME" -name x -o -name y | xargs cat`,
+		"stat_name_xargs":        `stat -c %n "$HOME/existing-link.json" | xargs cat`,
+		"ls_substitution":        `cat "$(ls "$HOME/.tool/auth.json")"`,
+		"readlink_process":       `while read -r f; do cat "$f"; done < <(readlink -f "$HOME/existing-link.json")`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			secretGapDecisions(t, h, work, cmd, both, true)
@@ -153,6 +158,19 @@ func TestSecretFileGapMetadata(t *testing.T) {
 		"helper_mkdir":      `f() { mkdir -p "$1"; }; f "$WORK/sub/deeper"`,
 		"echo_substitution": `echo "$(date)"`,
 		"pipe_unguarded":    `readlink -f "$WORK/sub" | xargs ls`,
+		// Checks whose output is consumed but names no path a reader opens.
+		"test_substitution":    `x=$(test -f "$HOME/.tool/auth.json" && echo yes); echo "$x"`,
+		"ls_in_test":           `if [ -n "$(ls "$HOME/.tool/auth.json" 2>/dev/null)" ]; then echo y; fi`,
+		"stat_mode_echo":       `echo "mode $(stat -c %a "$HOME/.tool/auth.json")"`,
+		"stat_size_pipe":       `stat -c %s "$HOME/.tool/auth.json" | awk '{print $1}'`,
+		"basename_echo":        `[ -e "$HOME/.tool/auth.json" ] && echo "$(basename "$HOME/.tool/auth.json") present"`,
+		"readlink_count":       `readlink -f "$HOME/existing-link.json" | wc -l`,
+		"find_count":           `find "$HOME/.tool" -name auth.json | wc -l`,
+		"find_home_count":      `find "$HOME" -name auth.json | wc -l`,
+		"ls_discard":           `ls "$HOME/.tool/auth.json" >/dev/null 2>&1 | true`,
+		"find_root_filtered":   `find / -maxdepth 1 -name etc 2>/dev/null | head -5`,
+		"find_exec_echo":       `find "$HOME" -maxdepth 1 -name x -exec echo {} \;`,
+		"find_glob_count_work": `find . -name '*.json' | wc -l`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			secretGapDecisions(t, h, work, cmd, both, false)

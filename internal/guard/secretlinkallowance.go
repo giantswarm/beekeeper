@@ -66,7 +66,7 @@ func simpleLinkAllowance(cmd string, helpers map[string]string) linkAllowance {
 				if links > 1 {
 					return out
 				}
-			case name == "readlink" || name == statCommand || name == testCommand || name == "[":
+			case name == readlinkCmd || name == statCommand || name == testCommand || name == "[":
 			default:
 				return out
 			}

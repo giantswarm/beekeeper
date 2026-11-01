@@ -594,12 +594,15 @@ The same holds for a link to a directory that holds a credential file (the home 
 included), and for a relative link source, resolved from the link's own directory as well as the
 working directory. Outside that one-link exemption, `ln` or a helper defined on the command line
 that links such a directory is refused like a link to the file itself. A `find` whose `-exec`,
-`-execdir`, `-ok` or `-okdir` runs anything but a metadata command (or `shred`, `unlink`, `rmdir`)
-on a start path holding a credential file is a read of it. A metadata command naming a credential
-file, or a `find` below one, whose output is piped on or substituted (`readlink -f link | xargs cat`,
-`cat "$(readlink -f link)"`) is a read too; on its own it stays metadata. Under Codex, a helper
-defined on the command line that is handed a path in its protected home is refused, since its
-body (parameter operators, `$*`, `printf -v`, `mkdir`) may write it.
+`-execdir`, `-ok` or `-okdir` runs anything but a metadata command (or `shred`, `unlink`, `rmdir`,
+`echo`, `printf`) on a start path holding a credential file its `-name`/`-iname` tests accept is a
+read of it. A command that prints a credential file's path (`readlink`, `realpath`, `find`, `ls`,
+`stat` with its path in the format, …) is a read too when its output is piped into a stage that may
+open it or substituted into a command other than `echo`, `printf`, `test`, `[`, `basename` or
+`dirname` (`readlink -f link | xargs cat`, `cat "$(readlink -f link)"`); `| wc -l`, `>/dev/null`,
+`[ -n "$(ls …)" ]` and `stat -c %s` stay metadata. Codex refuses these in the same way, and in
+addition refuses a helper defined on the command line that is handed a path in its protected home,
+since its body (parameter operators, `$*`, `printf -v`, `mkdir`) may write it.
 
 Static checks such as `bash -n scripts/install.sh`, `sh -n scripts/install.sh` and
 `shellcheck scripts/install.sh` inspect script text without executing its credential operations.

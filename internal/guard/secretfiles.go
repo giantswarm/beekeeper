@@ -23,6 +23,10 @@ const (
 	statCommand   = "stat"
 	testCommand   = "test"
 	ompCommand    = "omp"
+	fileCommand   = "file"
+	dirnameCmd    = "dirname"
+	readlinkCmd   = "readlink"
+	formatFlag    = "--format"
 	falseWord     = "false"
 )
 
@@ -57,8 +61,8 @@ var (
 	plainKey = regexp.MustCompile(`^[A-Za-z_]\w*$`)
 	// metaCmds print a file's metadata or move it, never its content.
 	metaCmds = map[string]bool{
-		"ls": true, statCommand: true, "file": true, "wc": true, "du": true, testCommand: true, "[": true, "[[": true,
-		"realpath": true, "readlink": true, "dirname": true, "basename": true, "touch": true, "chmod": true,
+		"ls": true, statCommand: true, fileCommand: true, "wc": true, "du": true, testCommand: true, "[": true, "[[": true,
+		"realpath": true, readlinkCmd: true, dirnameCmd: true, "basename": true, "touch": true, "chmod": true,
 		"chown": true, findCmd: true, "lsof": true, "fuser": true, "namei": true, "getfacl": true, "mv": true,
 		"rm": true, "trash": true, "trash-put": true, ompCommand: true, selfCmd: true,
 	}
@@ -203,7 +207,7 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 		}
 		isMeta = isMeta && !findReads(args)
 	}
-	if g.feeds && printsPaths(name) {
+	if g.feeds && printsPaths(name, args) {
 		isMeta = false // a printed path the consuming command reads
 	}
 	isGrep := grepCmds[name]

@@ -933,23 +933,17 @@ var (
 // paths, inline apply_patch commands, unquoted heredoc command substitutions,
 // and option/redirection abuse on exempted beekeeper text commands.
 func (h Hook) codexBashRefusal(ev event, cmd, cwd string) (reason, context string) {
-	return h.codexFedBashRefusal(ev, cmd, cwd, false)
-}
-
-// codexFedBashRefusal is codexBashRefusal of a command whose output another
-// command consumes when fed: the body of a command or process substitution.
-func (h Hook) codexFedBashRefusal(ev event, cmd, cwd string, fed bool) (reason, context string) {
 	if script := standaloneLinkScript(cmd); script != "" {
 		if raw, state := readScript(wordPath(script, cwd)); state == scriptRead {
-			if r, ctx := h.codexBashTextRefusal(ev, string(raw), cwd, fed); r != "" {
+			if r, ctx := h.codexBashTextRefusal(ev, string(raw), cwd); r != "" {
 				return r, ctx
 			}
 		}
 	}
-	return h.codexBashTextRefusal(ev, cmd, cwd, fed)
+	return h.codexBashTextRefusal(ev, cmd, cwd)
 }
 
-func (h Hook) codexBashTextRefusal(ev event, cmd, cwd string, fed bool) (reason, context string) {
+func (h Hook) codexBashTextRefusal(ev event, cmd, cwd string) (reason, context string) {
 	rawSc := scanShell(cmd)
 	for _, hd := range rawSc.heredocs {
 		if !hd.quoted && hd.start <= hd.end && hd.end <= len(cmd) {
@@ -970,7 +964,7 @@ func (h Hook) codexBashTextRefusal(ev event, cmd, cwd string, fed bool) (reason,
 	states := walkSegments(sc, cwd, h.Upstream.Git != nil)
 
 	for _, in := range inners {
-		r, ctx := h.codexFedBashRefusal(ev, in, cwd, true)
+		r, ctx := h.codexBashRefusal(ev, in, cwd)
 		if r != "" {
 			return r, ""
 		}
@@ -1003,8 +997,7 @@ func (h Hook) codexBashTextRefusal(ev event, cmd, cwd string, fed bool) (reason,
 		}
 		for _, words := range expandWordsList(rawWords, vars) {
 			words = allowance.resolve(words)
-			feeds := fed || feedsOutput(segs, i)
-			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known, metadata, allowance.allowed, feeds)
+			r, ctx := h.codexSegmentRefusal(ev, cmd, sc, segs, i, words, st.dir, st.known, metadata, allowance.allowed)
 			if r != "" {
 				return r, ""
 			}
@@ -1016,7 +1009,7 @@ func (h Hook) codexBashTextRefusal(ev event, cmd, cwd string, fed bool) (reason,
 	return "", context
 }
 
-func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool, metadata map[string]string, linksAllowed, feeds bool) (reason, context string) {
+func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []segment, segIdx int, words []string, dir string, known bool, metadata map[string]string, linksAllowed bool) (reason, context string) {
 	c := commandAt(words)
 	if c >= len(words) {
 		return "", ""
@@ -1037,13 +1030,10 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 		}
 	}
 	if name == findCmd {
-		if file := sf.findSource(args, []string{dir}, feeds); file != "" {
+		if file := sf.findSource(args, []string{dir}, false); file != "" {
 			return leak{what: "a find that runs a reader on " + file + ", a file that holds secret values", safe: fileReadSafe(file)}.reason(), ""
 		}
 		isMeta = isMeta && !findReads(args)
-	}
-	if feeds && printsPaths(name) {
-		isMeta = false // a printed path the consuming command reads
 	}
 	// A function defined on the command line has an unchecked body: what it
 	// is handed may be written, so a guarded Codex home path is refused.

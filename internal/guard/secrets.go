@@ -238,7 +238,7 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 			if l := g.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
 				return l
 			}
-			g.feeds = feedsOutput(segs, i)
+			g.feeds = feedsOutput(sc, segs, i)
 			l := g.sourceLeak(exp, pipelineBefore(sc.plain, segs, i), aliases, dirs, copied)
 			if l == nil || flowsSafely(sc, segs, i, l) {
 				continue
