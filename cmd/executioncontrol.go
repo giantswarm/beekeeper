@@ -350,11 +350,6 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if reviewHead != "" {
 			kind = github.RefPullRequest
 		}
-		if ag.Execution != nil {
-			if r, _ := executionRecord(st, *ag.Execution); r != nil {
-				r.Observation.InTurn = false
-			}
-		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
@@ -384,12 +379,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished
-		if ag.Execution != nil {
+		if ag.Execution != nil && v.Finished {
 			if r, _ := executionRecord(st, *ag.Execution); r != nil {
-				r.Observation.InTurn = false
-				if v.Finished {
-					r.Completed = true
-				}
+				r.Completed = true
 			}
 		}
 		verb := "agents.idle"

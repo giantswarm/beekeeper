@@ -171,6 +171,7 @@ func (a *app) syncExecutionMessages(ctx context.Context, ref execution.Ref) erro
 					now = time.Now().UTC()
 				}
 				r.LastActive = now
+				r.Observation.InTurn = true
 				if now.After(r.Observation.LastActive) {
 					r.Observation.LastActive = now
 				}

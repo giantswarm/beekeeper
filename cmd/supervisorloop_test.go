@@ -2770,10 +2770,42 @@ func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T)
 	r.pass(t)
 	assertRetained("recent coordinator callback activity within stewardQuiet")
 
-	// 6. The remote turn ends and activity is older than stewardQuiet: the
-	// loop stops the execution and removes the worker from the roster.
+	// 6. While in a turn (Observation.InTurn=true), the remote worker calls
+	// agents idle --done --report through the coordinator. A supervisor pass
+	// before the next host resync retains the worker while the harness
+	// finishes its final response.
+	r.out.Reset()
+	reportData, err := json.Marshal(executionReport{
+		Finished: true,
+		Text:     "https://github.com/o/r/pull/7 merged; Problems found: none",
+		Problems: []string{"none"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+		rec, _ := executionRecord(st, ref)
+		rec.Observation.InTurn = true
+		_, evs, err := r.a.applyExecutionControl(context.Background(), st, st.Agents[i].Party, execution.ControlRequest{
+			Operation: "report",
+			Data:      reportData,
+		})
+		return evs, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("in-turn remote worker after reporting done before host resync")
+	if !strings.Contains(r.out.String(), "SUPERVISOR DONE WAITS "+loopWorker+": its session runs a turn") {
+		t.Fatalf("missing in-turn wait message after report:\n%s", r.out)
+	}
+
+	// 7. A subsequent idle/terminal host observation clears InTurn: the loop
+	// stops the execution and removes the worker from the roster.
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		rec, _ := executionRecord(st, ref)
+		rec.Observation.InTurn = false
 		rec.LastActive = old
 		return nil, nil
 	}); err != nil {
