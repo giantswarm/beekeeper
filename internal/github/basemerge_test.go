@@ -77,13 +77,21 @@ func TestApprovalCovers(t *testing.T) {
 	// main moved a.go's context and line numbers: the change is the same.
 	moved := approvedChange()
 	moved[0].SHA, moved[0].Patch = "a2", "@@ -10,3 +10,3 @@\n other ctx\n-old\n+new\n ctx"
-	// resolved is a.go after a conflict with main's change to it.
+	// main changed a.go's first line to "newer" and line 50 from x to y;
+	// resolved is a.go after the conflict on its first line, the approved
+	// "new" kept against main's "newer".
+	mainChangedA := []compareFile{{Name: "a.go", Status: modified, SHA: "a9", Patch: "@@ -1,3 +1,3 @@\n ctx\n-old\n+newer\n ctx\n@@ -50,3 +50,3 @@\n ctx\n-x\n+y\n ctx"}}
 	resolved := func() []compareFile {
 		f := approvedChange()
-		f[0].SHA, f[0].Patch = "a3", "@@ -1,3 +1,3 @@\n ctx\n-old\n+newer\n ctx"
+		f[0].SHA, f[0].Patch = "a3", "@@ -1,3 +1,3 @@\n ctx\n-newer\n+new\n ctx"
 		return f
 	}
-	mainChangedA := []compareFile{{Name: "a.go", Status: modified, SHA: "a9", Patch: "@@ -50,3 +50,3 @@\n ctx\n-x\n+y\n ctx"}}
+	// unreviewed is a.go with a line of neither side, added by the merge.
+	unreviewed := func() []compareFile {
+		f := approvedChange()
+		f[0].SHA, f[0].Patch = "a5", "@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n ctx\n@@ -200,0 +200,1 @@\n+func unreviewed() { os.RemoveAll(\"/\") }"
+		return f
+	}
 	for name, c := range map[string]struct {
 		added map[string]any
 		now   []compareFile
@@ -139,17 +147,38 @@ func TestApprovalCovers(t *testing.T) {
 				f[0].SHA, f[0].Patch = "a4", "@@ -1,2 +1,1 @@\n ctx\n-old\n@@ -40,2 +39,3 @@\n ctx\n+new\n ctx"
 				return f
 			}(),
-			why: otherLines + ", and main did not change it",
+			why: otherLines + ", and the base did not change it",
 		},
 		"a commit of its own": {
 			added: commitsOf(compareAhead, 2, commitOf(bmMain, bmApproved), commitOf(bmHead, bmMain, bmMain)),
 			now:   moved, why: "which is no merge",
 		},
-		"a rebase onto main":                      {added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: moved, want: true, why: "rebases the approved head"},
-		"a rebase with another change":            {added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: resolved(), base: mainChangedA, why: "with another change"},
+		"a rebase onto main": {added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: moved, want: true, why: "rebases the approved head"},
+		"a rebase resolving a conflict with main's change": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: resolved(), base: mainChangedA,
+			want: true, why: "rebases the approved head aaaaaaa onto main, resolving its conflicts in a.go",
+		},
+		"a rebase with another change": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: unreviewed(), base: mainChangedA,
+			why: "a line neither the approved head nor the base changed",
+		},
+		"a merge adding a line of neither side to a file main changed": {
+			added: merge, now: unreviewed(), base: mainChangedA, holds: true,
+			why: `a.go adds or removes "+func unreviewed() { os.RemoveAll(\"/\") }", a line neither`,
+		},
+		"a binary changed by a merge with main's change to it": {
+			added: merge,
+			now: func() []compareFile {
+				f := approvedChange()
+				f[2].SHA = "c2"
+				return f
+			}(),
+			base: []compareFile{{Name: png, Status: modified, SHA: "c9"}}, holds: true,
+			why: "c.png has no patch to compare, and the base changed it",
+		},
 		"a head behind the approved one":          {added: commitsOf("behind", 0), now: moved, why: "behind"},
 		"more commits than listed":                {added: commitsOf(compareAhead, 2, commitOf(bmHead, bmApproved, bmMain)), now: moved, why: "more than the comparison lists"},
-		"a conflict resolved in a file main kept": {added: merge, now: resolved(), why: otherLines},
+		"a conflict resolved in a file main kept": {added: merge, now: resolved(), why: otherLines + ", and the base did not change it"},
 		"a change the merge carries":              {added: merge, now: append(approvedChange(), compareFile{Name: "d.go", Status: "added", SHA: "d1", Patch: "+d"}), why: "4 changed files, not 3"},
 		"a binary the merge changed": {
 			added: merge,

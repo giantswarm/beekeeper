@@ -331,10 +331,12 @@ its key first in the detail):
             head is its ancestor, every commit it adds is a merge, and its
             change against its merge base with the base branch is the
             approved head's, file by file, hunk by hunk, line by line
-            (compare API), but in files the base changed since, whose
-            conflicts the merges resolve (each merge then merges a commit
-            of the base branch); or it rebases the approved head onto the
-            base with the approved change. A file without a patch counts
+            (compare API), or differs only where the merges resolve a
+            conflict: in a file the base changed since, every line it adds
+            or removes beyond the approved change is one the approved or
+            the base's change adds or removes (each merge then merges a
+            commit of the base branch); or it rebases the approved head
+            onto the base under the same rule. A file without a patch counts
             only with the approved blob and no change of the base's to it
             since. Anything else, or a comparison GitHub cuts short, is a
             new head with a new review. Only the verdict of the loop's own
