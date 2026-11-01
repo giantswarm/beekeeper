@@ -192,7 +192,7 @@ upgrades:
 
 supervisor:                 # the supervisor loop, which beekeeper install always installs as a user service (systemd or launchd); no session holds the role
   postMergeWindow: 2h       # retain merged workers until done or this long without activity
-  hosts: []                # execution host selectors (agents.hosts) the loop's worker and reviewer starts may run on, in order; with no room locally, or always with hostsFirst: true; a host must map the item's repository and pass its check (capacity --host); empty: the coordinator's own machine
+  hosts: []                # execution host selectors (agents.hosts) worker starts may run on, in order; with no room locally, or always with hostsFirst: true; a host must map the item's repository and pass its check (capacity --host); reviewers stay on the coordinator
   hostsFirst: false        # prefer the first host with room over the coordinator's own machine, whatever its room is
   # The loop owns a watch beside it, reading alerts every alerts.every;
   # unowned pages become guide.person notes. A worker can wait on a named
@@ -245,7 +245,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   usage:                    # optional: derive floor and ceiling from subscription usage windows; unset command: off
     command: [~/.local/bin/read-usage]   # prints JSON {"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}
     every: 5m               # how long a cached reading in usage.json stays fresh (re-read at once once resetsAt passes)
-    timeout: 15s            # bounds one run of command
+    timeout: 90s            # bounds one run of command
     reportEvery: 30m        # watch prints one USAGE line this often (negative: never, watch --once aside)
     highPercent: 95         # 5-hour usedPercent from which USAGE HIGH holds until fiveHour.resetsAt: starts, resumes and auto-resume wait, and busy workers are told once to finish their step and park
     fiveHour:               # first band with usedPercent < upTo applies; at or past the last upTo yields floor 0, ceiling 0
@@ -260,7 +260,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
       floor: 1
       ceiling: 4
       command: [claude, -p, /usage, --output-format, json] # default for claude, even with claude: {}; no model turn, no status line or credential reader
-      staleAfter: 15m       # a reading older than staleAfter or a failed read yields ceiling 0, room 0 for this provider
+      staleAfter: 15m       # failed reads use the last good reading until this age; older or missing readings yield ceiling 0
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
