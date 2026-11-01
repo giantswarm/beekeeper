@@ -97,6 +97,9 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 	var out []chore
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
+			if why := stoppedExecutionWhy(st, ag); why != "" {
+				out = append(out, chore{kind: choreRemove, agent: ag, why: why})
+			}
 			continue
 		}
 		if ag.Task != "" && !relieved(st, ag.Party) || holdsRole(st, ag.Party) || openRelayTo(st, ag.Party, now) {
@@ -107,7 +110,7 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 		switch {
 		case ag.Done:
 			if !busy(ag.Party) {
-				out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: "it reported its work done"})
+				out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: whyReportedDone})
 			}
 			continue
 		case keepsRole(st, ag.Party):
@@ -543,6 +546,25 @@ func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*clau
 	return lines, unagreed, nil
 }
 
+const whyReportedDone = "it reported its work done"
+
+// stoppedExecutionWhy is why the doctor takes a managed SSH execution
+// off the roster, "" while its reservation or run continues. An
+// execution has no local desktop session to archive or retitle.
+func stoppedExecutionWhy(st *state.State, ag state.Agent) string {
+	if ag.Execution == nil || holdsRole(st, ag.Party) {
+		return ""
+	}
+	r, _ := executionRecord(st, *ag.Execution)
+	switch {
+	case ag.Done && !executionReserved(st, ag):
+		return whyReportedDone
+	case r != nil && r.Observation.StopAcknowledged:
+		return "its SSH execution was stopped"
+	}
+	return ""
+}
+
 // removeAgents takes the agents of the remove chores off the roster, those
 // still idle, and returns the chores it did.
 func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
@@ -554,8 +576,13 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 		removed = nil
 		var evs []state.Event
 		for _, c := range chores {
-			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return (x.Task == "" || relieved(st, x.Party)) && x.Is(c.agent.Party) })
+			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool {
+				return (x.Task == "" || relieved(st, x.Party) || stoppedExecutionWhy(st, x) != "") && x.Is(c.agent.Party)
+			})
 			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
+				continue
+			}
+			if st.Agents[i].Execution != nil && executionReserved(st, st.Agents[i]) {
 				continue
 			}
 			removeAgent(st, i)

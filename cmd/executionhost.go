@@ -198,7 +198,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "run", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents merge", "run", "agents idle", "agents park", "agents note", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -288,7 +288,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return []*cobra.Command{hostRPC, guardCmd, run, a.executionCoordinatorCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
+	return []*cobra.Command{hostRPC, guardCmd, run, a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -372,8 +372,11 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if err != nil {
 		return c, err
 	}
-	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Version != project.Version() || c.Harnesses[claudeComm] == "" {
-		return c, refused("execution host identity, protocol, binary, harness or policy does not match")
+	// Protocol is the wire compatibility boundary. The pinned host policy
+	// still binds its own binary and rules; a coordinator-only release must
+	// not invalidate that independently prepared policy.
+	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Harnesses[claudeComm] == "" {
+		return c, refused("execution host identity, protocol, harness or policy does not match")
 	}
 	if err := c.Resources.Validate(time.Now()); err != nil {
 		return c, refused("%v", err)

@@ -6,15 +6,24 @@ a conversation identifier, and one coordinator roster registration. Omitting
 `--host`, or selecting `--host local`, keeps the local launch path.
 
 Read the [design](ssh-execution-hosts.md) for the ownership and failure contract.
-Remote wake and resume use durable message receipts as described below. The expiring coordinator lease
-is tracked in https://github.com/giantswarm/beekeeper/issues/1715, and live remote merge
-authorization to https://github.com/giantswarm/beekeeper/issues/1716. Every remote
-merge is refused in this slice, including when a local approval exists.
+Remote wake and resume use durable message receipts as described below. New
+executions require expiring coordinator leases and live supervisor merge grants.
+The component command below is the supported remote merge path; local approvals
+and raw merge commands do not authorize an SSH execution.
 
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
-host needs Linux with a working user service manager, Git, and a pinned Claude Code version
+host installation may sit at any absolute path, including a per-user one; the
+pinned configuration and prepared policy bind that exact executable. A managed
+worker calls its component by bare `beekeeper`, and the runner places the
+bound installation's directory first on the harness PATH, so a system-wide
+installation is not required. Install the prepared executable under the name
+`beekeeper`: `agents hosts check` refuses a host where the bare command does
+not resolve to the very executable the prepared policy binds (missing, not
+executable, or shadowed by a stale sibling), because that worker could not
+report or park. The host needs Linux with a working user service manager,
+Git, and a pinned Claude Code version
 in the supported family (`>= 2.1.268, < 3.0.0`). Provision its subscription login
 there independently. `agents hosts check` reads version and authentication
 metadata; it makes no model request. Starting a session never copies a provider
@@ -113,7 +122,14 @@ agents:
       operationTimeout: 30s
 ```
 
-Changing the binary, rules, settings, or protected host configuration invalidates
+Coordinator and host releases may differ while they use the same execution
+protocol. A coordinator self-update does not require reinstalling or re-preparing
+the hosts. `hosts check` reports each host's release for diagnostics, and still
+requires the expected identity, protocol, pinned policy, harness and fresh resource
+observation. A different protocol is refused; upgrade the host to a release with
+the coordinator's protocol before starting new work.
+
+Changing the host binary, rules, settings, or protected host configuration invalidates
 the policy. Prepare and pin a matching bundle again before starting new work.
 Do not weaken a required guard to make a check pass.
 
@@ -134,6 +150,14 @@ reservation, workspace, or process. Remote starts require `--repo` and `--ref`;
 `--dir`, desktop, and background modes are refused. Capacity uses the
 coordinator's existing provider and bucket pool across hosts and the selected
 host's physical guards. A host does not create another subscription budget.
+
+`supervisor loop` places its worker and reviewer starts the same way. With
+`supervisor.hosts` naming execution hosts (in order of preference), a start
+whose repository a host maps, and for which `capacity --host <selector>` has
+room, runs there pinned to the repository's default branch — while the
+coordinator is out of room, or always with `supervisor.hostsFirst`. A desk
+without `capacity.choices` never places remotely. A retired remote worker is
+stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable
 execution reference and handle, then signs a short-lived registration receipt.
@@ -182,8 +206,7 @@ The component does not adopt or archive personal sessions. Interactive remote
 tools and remote transcript reads through coordinator-local paths are unavailable. Use owned execution
 logs for output. Hooks inspect the supported tool surface and deny unavailable
 authority; arbitrary code and account-owner changes require OS isolation for a
-stronger boundary. A disconnected stop has no automatic lease expiry until its
-linked follow-up ships.
+stronger boundary. New executions stop on coordinator lease expiry as described below.
 
 ## Deliver and reconcile messages
 
@@ -253,3 +276,95 @@ execution. Journal admission refuses before exceeding its bounded storage.
 Executions created before streaming-message support retain their original
 single-turn behavior and explicitly refuse remote wakes. Recovery does not
 upgrade or restart them.
+
+## Coordinator leases and disconnected stops
+
+New starts require a signed 90-second coordinator lease, renewed every 20 seconds.
+The grant names the coordinator, execution host, execution ID and process generation.
+The coordinator stores its sequence before replying; a lost reply retries the same
+nonce and receives the original deadline. Stop intent and global stop revoke renewal
+in the same coordinating state transaction. An unreachable stop keeps its capacity
+reservation and unfinished task until termination is observed.
+
+The runner measures its deadline from before sending the renewal using elapsed
+monotonic time. A retry retains that original start time, so a delayed or repeated
+reply cannot extend authority. Host/coordinator wall-clock offset does not extend
+runtime. The signed issue/expiry times shown by inspection use coordinator UTC.
+The runner checks expiry once per second, records stop intent, and asks the user
+service manager to stop only its owned service and dependent build scopes. With a
+responsive service manager, the disconnected bound is 90 seconds plus the one-second
+check interval and the service's 60-second termination timeout. Service-manager
+failure remains explicitly unconfirmed; it is not a termination acknowledgement.
+Host suspension pauses monotonic elapsed time on platforms where the OS does so;
+this bound assumes a running host and functioning user service manager.
+
+A runner restart cannot reuse runtime authority: the recorded phase refuses another
+runner, and systemd ends the original service's child processes when it exits.
+Coordinator restarts retain the signed sequence and stop intent. Reconnection uses
+`agents hosts sync <host>` and `agents recover <worker>` to inspect the same execution;
+it does not replace an uncertain process. Inspection exposes the last grant, expiry,
+reachability and stop acknowledgement. Older executions remain unchanged and require
+an acknowledged explicit stop; recovery does not silently upgrade their contract.
+
+## Live merge authorizations
+
+Only the coordinating supervisor issues or revokes authorizations. A green exact
+head and an authenticated independent desk review result are prerequisites. The
+component records the exact reviewer session when the supervisor starts the round.
+That session must complete with the same `Review: approved` or
+`Review: changes requested` verdict on the first report line, followed by the
+exact public review URL. The reported verdict must match the public review.
+An identical completion retry retains the original captured result; a later
+shared-account edit cannot rebind that retry to another verdict. The
+coordinator persists the GitHub review ID, author, head and body digest before
+report delivery can prune the report. A shared GitHub login or a worker-authored
+approval comment alone grants nothing; `--as` cannot submit the reviewer's result.
+Issuance and live use require that same persisted result, and grants pin the
+round ID, review ID and authenticated body digest. Edited reviews and new rounds invalidate old grants. Older
+rounds without component-recorded reviewer provenance need a fresh review. The supervisor loop issues a two-minute grant when it gives a
+remote worker merge go; a supervisor can also issue or revoke it explicitly:
+
+```sh
+beekeeper agents authorizations grant worker example/repository 42 --head <reviewed-head>
+beekeeper agents authorizations inspect <authorization-id>
+beekeeper agents authorizations revoke <authorization-id>
+```
+
+The remote worker uses the component command supplied with its go:
+
+```sh
+beekeeper agents merge example/repository 42 --head <reviewed-head> --authorization <authorization-id>
+```
+
+The command verifies owned process and repository identity on the execution host,
+then authenticates its exact execution and generation to the live coordinating
+service. It uses the coordinator's independently provisioned GitHub login: no host
+credential is copied or forwarded. The actual merge runs synchronously at the
+coordinator. Host hooks continue to deny raw `gh`/`devctl` merges and API mutations.
+This narrow component path is the only supported remote merge surface; unsupported
+harnesses and older executions remain denied.
+
+The service checks the exact tuple, unexpired and unrevoked grant, current head,
+CI, authenticated review, execution lease and stop state immediately before the
+attempt. Holds use the same repository, lane and installation scope, PR/session
+exceptions and explicit repair-window readiness waiver as the existing merge gate. It retains the coordinating state lock through a bounded synchronous
+attempt (at most 20 seconds, also bounded by grant expiry), serializing stop,
+hold changes and revocation against use. Those operations may report a busy state
+lock during that interval and must be retried; they are never reported committed
+early. The service consumes the grant durably before calling GitHub once and
+never retries a merge mutation. A moved head needs a fresh review and go. A cached
+grant provides no authority without this live service. Both host and coordinator
+retain the authorization ID in their audit evidence.
+
+A lost reply is an uncertain outcome, not permission to retry a merge. The supervisor
+queries the result and retains the consumed authorization:
+
+```sh
+beekeeper agents authorizations reconcile <authorization-id>
+```
+
+Reconciliation never issues another merge. If GitHub cannot confirm the exact merged
+head, the outcome remains unconfirmed and needs operator investigation. A failed or
+consumed grant does not become reusable. Hooks cannot constrain arbitrary unhooked
+programs or an account owner changing binaries, configuration or state. Dedicated
+accounts or OS isolation are required for a stronger same-account boundary.

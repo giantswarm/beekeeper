@@ -9,7 +9,11 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   merge's turn at the gate) and whose transcript and its subagents' transcripts have been quiet
   for five minutes. Such an agent does no work and spends next to no budget, so it never holds a
   slot: `beekeeper capacity` lists it under `waiting` and counts only the busy against the
-  ceiling. The supervisor reads that verdict and never counts sessions by hand. Waiters that
+  ceiling. There is no separate cap on live sessions (busy plus waiting): memory, swap, load
+  and lab headroom bound new starts instead. A fixed session cap would let waiters exclude useful
+  work even with headroom available. These guards judge starts, not simultaneous wakes; read
+  capacity again before starting replacement work. The supervisor reads that verdict and never
+  counts sessions by hand. Waiters that
   wake can push busy over the ceiling. No agent is stopped or parked for that: each one finishes
   its work. `capacity` says `no start: <n> busy at the ceiling of <m>` and, when `capacity.ceiling`
   is positive, the watch says `CAPACITY FULL` until busy drops under `capacity.ceiling`; while
@@ -48,8 +52,14 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   first as `EPIC UNSTAFFED priority <n> <epic URL> …` (`--json`: `unstaffed`). At every tick,
   each such epic gets a worker on its next item before any other slot is filled, highest rank
   first, within the capacity verdict. When the verdict leaves no room, waiting and parked agents
-  do not hold the slots: only busy agents do. A busy agent on unranked work gives way first,
-  finishing its current step and parking. If an unstaffed epic still has no worker after that,
+  do not hold the slots: only busy agents do. A busy agent on unranked work gives way first
+  only when the intended start's capacity verdict is blocked solely by the busy count and one
+  fewer busy agent would leave room: the applicable ceiling is positive and busy equals that
+  ceiling. Check the intended provider and bucket as well when choices are configured; yielding
+  on a different provider cannot free its slot. Re-read capacity after the current step, before
+  parking, and start the replacement only within the resulting verdict. With ceiling zero, busy
+  above the ceiling, or any other block (headroom, usage, a stopped desk or a build slot), nobody
+  parks to make room. If an unstaffed epic still has no worker,
   the guide gets one line `EPIC UNSTAFFED <epic URL>: <why no worker>`, and the person hears it
   through the guide. A ranked epic is never left without a worker because its slots are taken by
   sessions that only wait.
