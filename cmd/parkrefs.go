@@ -13,7 +13,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// cacheParkRefs saves a successful type/state read only to the park it read.
+// parkRefRetry bounds retries for issues and references not yet classified.
+const parkRefRetry = 5 * time.Minute
+
+// cacheParkRefs saves an attempt time and any resolved type to the park it read.
 // A concurrent resume or new park must not inherit the old park's metadata.
 func (a *app) cacheParkRefs(agents []state.Agent, refs map[github.PR]github.RefState) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -26,7 +29,7 @@ func (a *app) cacheParkRefs(agents []state.Agent, refs map[github.PR]github.RefS
 				continue
 			}
 			read, ok := refs[r]
-			if !ok || (read.Kind != github.RefIssue && read.Kind != github.RefPullRequest) {
+			if !ok || (read.Kind != "" && read.Kind != github.RefIssue && read.Kind != github.RefPullRequest) {
 				continue
 			}
 			for _, current := range parkedAgents(st) {
@@ -34,7 +37,10 @@ func (a *app) cacheParkRefs(agents []state.Agent, refs map[github.PR]github.RefS
 				if !current.Is(old.Party) || p == nil || p.On != old.Park.On || !p.At.Equal(old.Park.At) {
 					continue
 				}
-				p.RefKind, p.RefChecked = read.Kind, a.now.UTC()
+				if read.Kind != "" {
+					p.RefKind = read.Kind
+				}
+				p.RefChecked = a.now.UTC()
 			}
 		}
 		return nil, nil
@@ -64,6 +70,14 @@ func (a *app) parkIsPull(ctx context.Context, st *state.State, ref string) bool 
 	if !ok {
 		return false
 	}
+	for _, ag := range parked {
+		if !ag.Park.RefChecked.IsZero() && a.now.Sub(ag.Park.RefChecked) < parkRefRetry {
+			return false
+		}
+	}
+	// Record the attempt before GitHub: errors and missing references back
+	// off across loop restarts, just as known issue parks do.
+	a.cacheParkRefs(parked, map[github.PR]github.RefState{r: {}})
 	reads, err := refStates(ctx, []github.PR{r})
 	if err != nil {
 		return false
@@ -115,7 +129,7 @@ func (a *app) parkSuggestion(me state.Party, on string) string {
 	})
 	if !serves {
 		serves = slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Is(me) && (strings.Contains(ag.Task, "https://github.com/"+r.Repo+"/issues/"+strconv.Itoa(r.N)) || strings.Contains(ag.Task, on))
+			return ag.Is(me) && slices.Contains(namedRefs(ag.Task, ""), strings.ToLower(refName(r)))
 		})
 	}
 	if !serves {
@@ -125,7 +139,8 @@ func (a *app) parkSuggestion(me state.Party, on string) string {
 	return suggestion
 }
 
-// resolveParkRef validates a GitHub target before recording a new park.
+// resolveParkRef refuses a target only when GitHub answers that it is missing.
+// A failed read leaves the type empty for lazy classification after the park.
 func resolveParkRef(ctx context.Context, on string) (string, error) {
 	r, ok := parseRef(on)
 	if !ok {
@@ -133,7 +148,7 @@ func resolveParkRef(ctx context.Context, on string) (string, error) {
 	}
 	reads, err := refStates(ctx, []github.PR{r})
 	if err != nil {
-		return "", fmt.Errorf("resolve park %s: %w", on, err)
+		return "", nil
 	}
 	kind := reads[r].Kind
 	if kind != github.RefIssue && kind != github.RefPullRequest {

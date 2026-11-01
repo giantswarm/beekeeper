@@ -81,7 +81,8 @@ instance <context>#12 is its note, and a bare number the machine has no
 note of is the central instance's), an issue or pull request
 (owner/repo#n) or a hold (hold:<target>, the one a gate's exit 77 names);
 lease claim --park parks on a lease. GitHub targets are resolved before the park
-is recorded; an unknown target is refused. Issues are plain waits checked every
+is recorded; a confirmed unknown target is refused. If GitHub cannot be read, the
+park is recorded and its type resolved later. Issues are plain waits checked every
 five minutes and never enter pull request review. Once the note is closed (answered,
 defaulted, done or overtaken), the issue closed, the pull request merged or closed
 or given a review or comment by anyone but its author since the park (a review
@@ -487,7 +488,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			}
 		} else if r, ok := parseRef(p.On); ok {
 			parked = append(parked, ag)
-			if p.RefKind == github.RefIssue && !p.RefChecked.IsZero() && w.now.Sub(p.RefChecked) < 5*time.Minute {
+			if p.RefKind != github.RefPullRequest && !p.RefChecked.IsZero() && w.now.Sub(p.RefChecked) < parkRefRetry {
 				continue
 			}
 			if !slices.Contains(refs, r) {
@@ -501,14 +502,14 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	}
 	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
-		// Back off issue reads even when GitHub fails. A failed batch leaves
+		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
 		attempts := map[github.PR]github.RefState{}
 		for _, ag := range parked {
-			if ag.Park != nil && ag.Park.RefKind == github.RefIssue {
+			if ag.Park != nil && ag.Park.RefKind != github.RefPullRequest {
 				r, ok := parseRef(ag.Park.On)
 				if ok && slices.Contains(refs, r) {
-					attempts[r] = github.RefState{Kind: github.RefIssue}
+					attempts[r] = github.RefState{Kind: ag.Park.RefKind}
 				}
 			}
 		}

@@ -2167,7 +2167,9 @@ that holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|<c
 "<what it waits for>"` (`<context>#note` a central instance's note) keeps its task, shows it parked in `agents` (KEPT) and `capacity`, not busy,
 and it ends its turn; an agent without a task is refused. `lease claim <resource> --park` parks it
 on the lease its queued claim waits for. A GitHub target is resolved once when parking;
-a missing or unreadable reference is refused. A pull request enters the usual review flow.
+a confirmed missing reference is refused. A failed read still records the park with
+an unresolved type, classified later with retries at most every five minutes.
+A pull request enters the usual review flow.
 An issue is a plain wait, checked at most every five minutes, and never read as a pull
 request by the supervisor; existing parks are classified on their first read and keep that
 type across restarts. When a worker parks on an issue it serves, an open pull request linked

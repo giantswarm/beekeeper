@@ -347,7 +347,7 @@ func (k *Keep) Holds(now time.Time) bool {
 type Park struct {
 	// RefKind caches GitHub's Issue or PullRequest type for this park.
 	RefKind string `json:"refKind,omitempty"`
-	// RefChecked is the last issue-state read; issue waits are read every five minutes.
+	// RefChecked is the last lookup attempt; issues and unresolved references retry every five minutes.
 	RefChecked time.Time `json:"refChecked,omitzero"`
 	By         Party     `json:"by"`
 	At         time.Time `json:"at"`
