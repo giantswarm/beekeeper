@@ -309,7 +309,7 @@ func TestSecretFileRoots(t *testing.T) {
 	for name, raw := range map[string]string{
 		"relative": "secret: {fileRoots: [creds]}",
 		"the root": "secret: {fileRoots: [/]}",
-		"empty":    "secret: {fileRoots: [\"\"]}",
+		emptyCase:  "secret: {fileRoots: [\"\"]}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "c.yaml")
@@ -339,6 +339,9 @@ func TestParseTokens(t *testing.T) {
 const (
 	backstage = "giantswarm/backstage"
 	portal    = "portal-tools"
+	// Test case names shared by the config tests.
+	emptyCase = "empty"
+	unsetCase = "unset"
 )
 
 func TestLanes(t *testing.T) {
@@ -1114,7 +1117,7 @@ func TestSupervisorFillRetryEvery(t *testing.T) {
 // An explicit environment path must never select the default state when absent.
 func TestMissingEnvironmentConfig(t *testing.T) {
 	const missingCase = "missing"
-	for _, value := range []string{missingCase, "empty", "unset"} {
+	for _, value := range []string{missingCase, emptyCase, unsetCase} {
 		t.Run(value, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOME", root)
@@ -1126,7 +1129,7 @@ func TestMissingEnvironmentConfig(t *testing.T) {
 			switch value {
 			case missingCase:
 				t.Setenv("BEEKEEPER_CONFIG", missing)
-			case "unset":
+			case unsetCase:
 				if err := os.Unsetenv("BEEKEEPER_CONFIG"); err != nil {
 					t.Fatal(err)
 				}
