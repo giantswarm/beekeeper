@@ -4,8 +4,9 @@
 //
 // The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
 // $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
-// defaults. The defaults are neutral: memory thresholds are fractions of the
-// machine's RAM, swap or filesystem, and every organisation or desk choice
+// defaults unless explicitly named by $BEEKEEPER_CONFIG. The defaults are
+// neutral: memory thresholds are fractions of the machine's RAM, swap or
+// filesystem, and every organisation or desk choice
 // (the production installation, the installations, the lanes, the role
 // names) is unset until configured. docs/examples/config.yaml is a complete
 // desk's configuration.
@@ -395,6 +396,29 @@ type Board struct {
 	// supervisor loop runs board tidy (default 1h; negative: never).
 	ArchiveAfter Duration `yaml:"archiveAfter"`
 	TidyEvery    Duration `yaml:"tidyEvery"`
+	// Claims publishes the desk's session records on their issues, for
+	// the other desks working the same repositories.
+	Claims BoardClaims `yaml:"claims"`
+}
+
+// BoardClaims is a desk's claims on GitHub: each issue a session record
+// serves carries one marker comment of the desk (Desk), which board
+// next and agents start on every other desk honour, and which the desk
+// releases when the record ends.
+type BoardClaims struct {
+	// Off publishes no claim and reads none.
+	Off bool `yaml:"off"`
+	// Desk is the name the desk signs its claims with, which other desks
+	// see on the issues: a neutral name, never a machine's (the issues may
+	// be public). Unset, the desk publishes no claim and still honours the
+	// other desks'.
+	Desk string `yaml:"desk"`
+	// Refresh is how often the desk refreshes a claim that still holds
+	// (default 6h).
+	Refresh Duration `yaml:"refresh"`
+	// StaleAfter is how long another desk's claim holds unrefreshed
+	// (default 24h): older, it is shown and not honoured.
+	StaleAfter Duration `yaml:"staleAfter"`
 }
 
 // DefaultBoardArchiveAfter is board.archiveAfter when unset: two weeks.
@@ -677,7 +701,8 @@ const (
 type Disk struct {
 	Prune string   `yaml:"prune"`
 	Every Duration `yaml:"every"`
-	// SccacheMaxGiB caps scheduled sccache cleanup; negative disables the cap.
+	// SccacheMaxGiB caps sccache's local cache: a scheduled run trims it least
+	// recently used first to three quarters of the cap; negative disables the cap.
 	SccacheMaxGiB int `yaml:"sccacheMaxGiB"`
 	// Checkouts locates main checkouts whose harness worktrees are inspected.
 	Checkouts []string `yaml:"checkouts"`
@@ -934,7 +959,8 @@ const (
 // DefaultClaudeUsageCommand reads plan windows without a model turn.
 var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--output-format", "json"}
 
-// DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
+// DefaultAgyUsageCommand is capacity.providers.agy.command when unset, even
+// with agy: {}: agy's local usage report, read without a model turn.
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
 // DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
@@ -2051,6 +2077,17 @@ type Supervisor struct {
 	// a built-in review brief, and no worker start.
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
+	// Hosts are execution host selectors (agents.hosts) the loop's worker
+	// and reviewer starts may be placed on, in order of preference: when
+	// the local machine leaves no room for the start, or always with
+	// HostsFirst. A host must map the item's repository and pass its own
+	// check (capacity --host); the start is pinned to the repository's
+	// default branch. Releases and the loop itself stay on the coordinator.
+	Hosts []string `yaml:"hosts"`
+	// HostsFirst places every placed start on the first host of Hosts
+	// with room, whatever the local machine's room is; without room on
+	// any host the loop waits, as it does on a full machine.
+	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
 	PostInstall []string `yaml:"postInstall"`
@@ -2955,6 +2992,9 @@ func Path(flag string) (string, error) {
 		return flag, nil
 	}
 	if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" {
+		if _, err := os.Stat(filepath.Clean(env)); err != nil { //nolint:gosec // the configuration file explicitly selected by the caller
+			return "", err
+		}
 		return env, nil
 	}
 	dir, err := os.UserConfigDir()
@@ -2965,11 +3005,15 @@ func Path(flag string) (string, error) {
 }
 
 // Load reads the file at path and applies the defaults. A configuration
-// that is only incomplete loads: Incomplete names what is missing.
+// that is only incomplete loads: Incomplete names what is missing. A missing
+// file explicitly named by BEEKEEPER_CONFIG is an error, never defaults.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Clean(path))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" && filepath.Clean(env) == filepath.Clean(path) {
+			return nil, err
+		}
 		raw = nil
 	case err != nil:
 		return nil, err
@@ -3131,6 +3175,8 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
 	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
+	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)
@@ -3282,7 +3328,7 @@ func (c *Config) defaults() error {
 		if name == ClaudeHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultClaudeUsageCommand)
 		}
-		if name == AgyHarness && len(p.Command) == 0 && p.hasFields() {
+		if name == AgyHarness && len(p.Command) == 0 && !p.SelfHosted() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
 		if name == CodexHarness && len(p.Command) == 0 && p.hasFields() {
@@ -3609,6 +3655,14 @@ func (c *Config) validate() error {
 	}
 	if err := c.Supervisor.Ownership.validate(); err != nil {
 		return fmt.Errorf("supervisor.ownership.%w", err)
+	}
+	for _, selector := range c.Supervisor.Hosts {
+		if selector == "" || selector == "local" {
+			return fmt.Errorf("supervisor.hosts: %q names no SSH execution host", selector)
+		}
+		if _, ok := c.Agents.Hosts[selector]; !ok {
+			return fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector)
+		}
 	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {

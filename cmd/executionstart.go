@@ -106,7 +106,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
-	r := execution.StartRequest{Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	r := execution.StartRequest{LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
@@ -146,7 +146,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		current.Agents[len(current.Agents)-1].Execution = &ref
 		events := []state.Event{event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider)}
 		if over != "" {
-			events = append(events, event(by, "agents.start", "%s: started over %s (--force)", name, over))
+			events = append(events, event(by, verbStart, "%s: started over %s (--force)", name, over))
 		}
 		return events, nil
 	})
@@ -368,7 +368,7 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		return refused("remote observation identity mismatch")
 	}
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		r, _ := executionRecord(st, ref)
+		r, i := executionRecord(st, ref)
 		if r == nil {
 			return nil, refused("execution is not registered")
 		}
@@ -397,12 +397,21 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		}
 		o.Reachability, o.ReachabilityAt = execution.Reachable, time.Now().UTC()
 		r.Observation = o
-		if o.Ready {
-			r.Phase = execution.Running
+		var evs []state.Event
+		switch r.Phase {
+		case executionPending, execution.Preparing, execution.Prepared, execution.Activating:
+			if o.Ready {
+				// The line every other harness's start leaves: the supervisor
+				// loop reads a claimed next start back from it and takes no
+				// second one after a restart. Logged once, on the first
+				// observation that confirms the run, start or recovery alike.
+				evs = append(evs, event(st.Starts[i].By, "agents.start", "%s: SSH execution %s on %s, workspace %s, %s", st.Starts[i].Name, ref.Execution, ref.Host, o.Handle.Workspace, o.ProcessState))
+				r.Phase = execution.Running
+			}
 		}
 		if o.ProcessState == execution.Exited || o.ProcessState == execution.Failed {
 			r.Phase = o.ProcessState
 		}
-		return nil, nil
+		return evs, nil
 	})
 }

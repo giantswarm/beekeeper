@@ -571,9 +571,11 @@ func (c agentCount) line(k config.Capacity) string {
 // the 1-minute load against the watch's limit, the kind labs against their
 // cap, and for a start that builds the free build slots.
 type headroom struct {
-	AvailableMiB int    `json:"availableMiB"`
-	AvailMinMiB  int    `json:"availMinMiB"`
-	MemErr       string `json:"memError,omitempty"`
+	// Disk is the watch's latest reading, sharing its thresholds and source.
+	Disk         *watchDiskReading `json:"disk,omitempty"`
+	AvailableMiB int               `json:"availableMiB"`
+	AvailMinMiB  int               `json:"availMinMiB"`
+	MemErr       string            `json:"memError,omitempty"`
 	// PSI is memory pressure now ("full avg60" of /proc/pressure/memory,
 	// in percent), PSIMax the most under which disk swap's growth is a
 	// warning rather than a block (capacity.swapPSIMax).
@@ -636,6 +638,9 @@ const (
 // start that does not build has no use for it.
 func (h *headroom) blocks(builds bool) []string {
 	var out []string
+	if h.Disk != nil && h.Disk.Low {
+		out = append(out, "disk pressure: "+h.diskFigure())
+	}
 	switch {
 	case h.MemErr != "":
 		out = append(out, "MemAvailable unknown ("+h.MemErr+")")
@@ -708,6 +713,10 @@ func pct(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) + "%" }
 // slotBusy reports whether no build slot is free.
 func (h *headroom) slotBusy() bool { return h.Slots > 0 && h.SlotsFree == 0 }
 
+func (h *headroom) diskFigure() string {
+	return fmt.Sprintf("free disk / %d MiB (floor %d MiB)", h.Disk.FreeMiB, h.Disk.MinMiB)
+}
+
 // line says the headroom in one line.
 func (h *headroom) line() string {
 	mem := "MemAvailable unknown"
@@ -715,6 +724,9 @@ func (h *headroom) line() string {
 		mem = fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
 	}
 	mem += ", " + h.psiFigure()
+	if h.Disk != nil {
+		mem += ", " + h.diskFigure()
+	}
 	swap := "swap growth not measured (no watch reading)"
 	if s := h.Swap; s != nil {
 		swap = fmt.Sprintf("disk swap %d MiB, zswap %d MiB, growth not yet measured", s.DiskMiB, s.ZswapMiB)
@@ -1621,6 +1633,7 @@ func (a *app) liveCapacity() config.Capacity {
 func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapReading) *headroom {
 	slotDir, slots := a.slotView()
 	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
+	h.Disk = a.watchDisk()
 	m, err := plat.Machine.Mem()
 	if err != nil {
 		h.MemErr = err.Error()
@@ -1723,7 +1736,8 @@ its ceiling; existing agents finish, and new starts wait for room. Re-read
 capacity before starting replacement work.
 The supervisor, the guide and a role's successor are not counted.
 
-The headroom bounds a start: MemAvailable against capacity.availMinMiB,
+The headroom bounds a start: the watch's free disk reading against
+watch.diskMinMiB, MemAvailable against capacity.availMinMiB,
 disk swap's growth over the watch's readings of watch.swapWindow against
 capacity.swapGrowthMaxMiB (never the swap in use, never zswap's share,
 which sits in RAM, and never zswap's writeback), the 1-minute load against the watch's HIGH LOAD limit

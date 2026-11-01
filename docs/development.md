@@ -335,9 +335,14 @@ and the reasons for keeping it. `beekeeper disk prune` previews the step;
 
 On healthy scheduled runs, the step trims only caches over their caps:
 `doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
-to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) clears sccache
-when exceeded. A negative cap disables its scheduled cleanup. Under
-`LOW DISK` or `DISK FILLING`, both unused caches are reclaimed immediately.
+to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) trims sccache's
+local cache (`SCCACHE_DIR`, else `sccache` in the user's cache directory) the
+same way, least recently used entries first. A negative cap disables its
+scheduled cleanup. Under `LOW DISK` or `DISK FILLING`, both unused caches are
+reclaimed immediately. An idle sccache server is stopped first, through its
+own executable and server address (`sccache --stop-server`), so it counts
+the trimmed cache afresh when a build starts it again; a server that does not
+stop keeps the cache, and one that starts during the trim ends it.
 No cache is reclaimed while builds use it. New
 `beekeeper run` commands share a build-cache lock, including Rust builds and
 runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
