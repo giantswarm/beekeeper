@@ -250,7 +250,7 @@ func TestLabSymlinkClaimRestoreReclaim(t *testing.T) {
 				if err != nil || err2 != nil || !os.SameFile(same, canonical) {
 					t.Fatalf("lab and canonical configs differ: %v, %v", err, err2)
 				}
-				if raw, err := os.ReadFile(target); err != nil || string(raw) != labYAML {
+				if raw, err := os.ReadFile(target); err != nil || string(raw) != labYAML { //nolint:gosec // the test's canonical lab config
 					t.Fatalf("canonical config = %q, %v", raw, err)
 				}
 			}
@@ -263,7 +263,7 @@ func TestLabSymlinkClaimRestoreReclaim(t *testing.T) {
 				t.Fatalf("restore: %q, %v", out, err)
 			}
 			check()
-			if raw, err := os.ReadFile(path + ".released"); err != nil || !strings.Contains(string(raw), "overlay-857-freshdb.yaml") {
+			if raw, err := os.ReadFile(path + ".released"); err != nil || !strings.Contains(string(raw), "overlay-857-freshdb.yaml") { //nolint:gosec // the test's released lab config
 				t.Fatalf("released config = %q, %v", raw, err)
 			}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
