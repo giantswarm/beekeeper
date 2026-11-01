@@ -100,7 +100,10 @@ does: by name to a running CLI, else headless. agents resume does the same
 by hand, also for a park without --on.
 
 A park from the pull request's own worktree at its published HEAD records
-an independent review request. Every other park (including one whose
+an independent review request. A worker on an SSH execution host parks from
+its workspace: the coordinator checks the pull request against the
+execution's own published branch and the workspace's HEAD, and a park after
+a new publication asks for that head's review. Every other park (including one whose
 publication cannot be verified) records a plain wait: no reviewer, merge
 go or findings forwarded. The command says which it recorded. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
@@ -152,7 +155,10 @@ agents wake: its task is that message's first line.`,
 				if err != nil {
 					return err
 				}
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, ReviewHead: parkReviewHead(on)})
+				// The coordinator proves the review head against the
+				// execution's owned branch: the workspace's own branch
+				// never is the published one, nor does the host read GitHub.
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on)})
 			}
 			line, err := a.park(me, on, waits)
 			if err != nil {
@@ -783,6 +789,23 @@ func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, g
 		}
 	}
 	if json.Unmarshal(out, &p) != nil || p.Head.Ref != branch || p.Head.SHA != head || !strings.EqualFold(p.Head.Repo.FullName, repo) {
+		return ""
+	}
+	return head
+}
+
+// executionWorkspaceHead is the HEAD of the calling execution's workspace
+// for a park on a pull request, or "" when it has none to read.
+func (a *app) executionWorkspaceHead(ctx context.Context, on string) string {
+	if _, ok := parseRef(on); !ok {
+		return ""
+	}
+	_, j, err := a.executionCaller()
+	if err != nil || j.Handle.Workspace == "" {
+		return ""
+	}
+	head, err := publishGit(ctx, j.Handle.Workspace, "rev-parse", "HEAD")
+	if err != nil || !publicationCommit(head) {
 		return ""
 	}
 	return head

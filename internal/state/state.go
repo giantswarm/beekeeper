@@ -822,7 +822,19 @@ type ExecutionRecord struct {
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
-	rest            rest
+	// Published is the execution's last publication (agents publish): its
+	// owned branch, the head it pushed and its pull request. Handle.Commit
+	// stays the commit the execution started from.
+	Published *ExecutionPublication `json:"published,omitempty"`
+	rest      rest
+}
+
+// ExecutionPublication is one publication of an SSH execution's branch.
+type ExecutionPublication struct {
+	At     time.Time `json:"at"`
+	Branch string    `json:"branch"`
+	Head   string    `json:"head"`
+	URL    string    `json:"url,omitempty"`
 }
 
 type ExecutionMessage struct {
