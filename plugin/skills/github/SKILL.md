@@ -1,32 +1,30 @@
 ---
 name: github
-description: GitHub reads, builds, browser steps and waits on a beekeeper desk: the budget gate, scans, beekeeper run, headless turns, browse. Load before them.
+description: GitHub reads, scans, builds, browser steps and waits on a beekeeper desk. Load before them.
 ---
 
 # github — GitHub, builds, the browser and waits
 
-- **Budget.** GitHub work stops while `beekeeper budget --gate` refuses, until the reset; code
-  search adds `--bucket code_search`.
-- **Membership** is `beekeeper person <login>`, never a members endpoint of `gh api`, which
-  misreads a private member.
-- **Security scans.** Read Dependabot state with `beekeeper security alert <owner/repo> <number>`
-  before and after remediation. An unreadable alert is an open check, never fixed; a dismissal
-  is distinct from a fix. The App needs Dependabot alerts: read, accepted on its installation;
-  never add scopes to a person's login or bypass a failed security scan.
-- **Scans list each repository** (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr
-  list` likewise), never one `gh search` over several, which drops a private repository. One
-  the listing cannot read is a problem found, never "no match".
-- **A code scan** (govulncheck, trivy) runs in a fresh worktree of `origin/main`, never a shared
-  clone; a finding names the commit and module versions.
-- **A headless turn** (a first or `wake` turn) never ends on a background wait, which never wakes
-  it: it waits in the foreground (`devctl pr wait`, a bounded Bash) and ends done or
-  parked (`beekeeper:park`).
-- **No @-mention** in a post (the hook refuses one): a ping goes via `note add` to the supervisor.
-- **Builds**, tests and lints run through `beekeeper run` (the hook does it): exit 75 is no slot,
-  rerun in the background, never in a loop; exit 137 is the cap, bound the parallelism. No heavy
-  work while `beekeeper watch` reports load or memory pressure.
-- **The browser never waits on a site approval.** A headless turn has the CLI's Claude in Chrome
-  tools; a desktop turn, whose browser tools are refused, runs its steps through `beekeeper browse
-  "<steps>"`. Our own App's grant is recorded first (`beekeeper app allow`); a refusal is a
-  barrier, never the person's.
-- **Subagents** only when the brief allows them, each told the force-push and secret rules.
+- **Budget.** Stop while `beekeeper budget --gate` refuses, until reset; code search adds
+  `--bucket code_search`.
+- **Membership:** `beekeeper person <login>`, never `gh api` members endpoints, which misread
+  private members.
+- **Security scans.** Read Dependabot state before and after remediation:
+  `beekeeper security alert <owner/repo> <number>`. Unreadable is not fixed; dismissal is not a
+  fix. The App needs Dependabot alerts: read, accepted on its installation. Never add personal
+  token scopes or bypass a failed security scan.
+- **Scans:** list each repo (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr list`
+  likewise), never multi-repo `gh search`, which drops private repos. An unreadable listing is
+  a problem, never "no match".
+- **Code scans** (govulncheck, trivy): fresh `origin/main` worktree, never a shared clone;
+  findings name commit and module versions.
+- **Headless turns:** wait in the foreground (`devctl pr wait`, bounded Bash); a background
+  wait never wakes the turn. End done or parked (`beekeeper:park`).
+- **No @-mention** in posts: pings go via `note add` to the supervisor.
+- **Builds, tests, lints:** `beekeeper run`. Exit 75: no slot, rerun in background, never a
+  loop. Exit 137: cap reached, bound parallelism. No heavy work under `beekeeper watch` load
+  or memory pressure.
+- **Browser:** headless turns use CLI Claude in Chrome tools; desktop turns use
+  `beekeeper browse "<steps>"`. Never wait on site approval. Record own App grants first
+  (`beekeeper app allow`); refusals are barriers, never the person's.
+- **Subagents:** only if the brief allows, each told force-push and secret rules.
