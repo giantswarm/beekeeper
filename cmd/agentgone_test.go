@@ -314,6 +314,7 @@ func TestGoneLoopRetiresOnlyInactiveTask(t *testing.T) {
 	a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
 	a.cfg.Claude.ProjectsDir = t.TempDir()
 	a.cfg.Claude.DesktopDir = t.TempDir()
+	a.cfg.Claude.SessionsDir = t.TempDir()
 	runLive(t, a, nil)
 	stubBackground(t, "")
 	old := a.now.Add(-48 * time.Hour)
