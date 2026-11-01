@@ -1910,8 +1910,9 @@ func TestLoopWaitsForAnIdleTurnBeforeRemovingADoneAgent(t *testing.T) {
 	}
 }
 
-// toFile passes note add's question check and finds the pull request ref
-// from the worker's report after agents idle --done cleared its task and park.
+// agentRef finds the pull request ref from the worker's report after agents
+// idle --done cleared its task and park, and KindFile settles without
+// blocking KindDone on the following pass.
 func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 	const task = "fix the gate"
 	r := newLoopRig(t)
@@ -1924,6 +1925,9 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Task, st.Agents[0].LastTask, st.Agents[0].Park, st.Agents[0].Done = "", task, nil, true
 		st.WorkerReports = []state.WorkerReport{{By: st.Agents[0].Party, At: time.Now(), Task: task, Text: "merged " + loopURL}}
+		if got := agentRef(st, loopWorker); got != loopURL {
+			t.Fatalf("agentRef = %q, want %q", got, loopURL)
+		}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

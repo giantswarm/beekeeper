@@ -76,7 +76,7 @@ func (d noteDraft) text() string {
 
 // asking is a question that asks the person for something: a request
 // opened by one of these verbs.
-var asking = regexp.MustCompile(`(?i)^(please\s+)?(approve|decide|choose|pick|confirm|answer|review|merge|close|allow|grant|enable|disable|switch|sign|run|restart|delete|remove|rotate|reply|say|tell|give|set|add|accept|reject|unblock|check|file)\b`)
+var asking = regexp.MustCompile(`(?i)^(please\s+)?(approve|decide|choose|pick|confirm|answer|review|merge|close|allow|grant|enable|disable|switch|sign|run|restart|delete|remove|rotate|reply|say|tell|give|set|add|accept|reject|unblock|check)\b`)
 
 // asks reports whether d asks its person something: a question mark, an
 // --option to choose, or a request verb opening it. Status text asks
