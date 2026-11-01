@@ -117,10 +117,10 @@ The Go image must include a cacheprog-compatible helper; tested with
 [`github.com/platacard/cacheprog/cmd/cacheprog@v1.3.1`](https://github.com/platacard/cacheprog/tree/v1.3.1/cmd/cacheprog).
 The Rust image must include [sccache](https://github.com/mozilla/sccache).
 Helpers are installed when building the image, never downloaded during a run.
-Missing Secret keys or helpers, or a failed five-second startup probe, select
+Missing Secret keys or helpers, or a failed 15-second startup probe, select
 the ordinary pod-local Go cache or the native Rust compiler before the command
-starts. The command is not retried. Go remote calls have two-second bounds and
-stop using the remote store after an error; sccache uses
+starts. The command is not retried. Go remote calls have five-second bounds and
+stop using the remote store after three consecutive errors; sccache uses
 `SCCACHE_IGNORE_SERVER_IO_ERROR=1` to retain compiler fallback.
 
 Each Go helper gets a disk directory beneath the run journal, passed explicitly
@@ -147,8 +147,8 @@ export CACHEPROG_REMOTE_STORAGE_TYPE=s3
 export CACHEPROG_S3_FORCE_PATH_STYLE=true
 export CACHEPROG_S3_PREFIX=go/v1/
 export CACHEPROG_DISABLE_PUT=true  # read-only CI identity
-export CACHEPROG_REMOTE_GET_TIMEOUT=2s CACHEPROG_REMOTE_PUT_TIMEOUT=2s
-export CACHEPROG_REMOTE_STORAGE_MAX_CONSECUTIVE_ERRORS=1
+export CACHEPROG_REMOTE_GET_TIMEOUT=5s CACHEPROG_REMOTE_PUT_TIMEOUT=5s
+export CACHEPROG_REMOTE_STORAGE_MAX_CONSECUTIVE_ERRORS=3
 export CACHEPROG_REMOTE_STORAGE_RETRY_AFTER=0s
 export CACHEPROG_MAX_BACKGROUND_WAIT=2s
 export CACHEPROG_MAX_CONCURRENT_REMOTE_GETS=4
@@ -161,7 +161,7 @@ cat > "$RUNNER_TEMP/cacheprog-safe" <<'SH'
 exec cacheprog direct --root-directory "$CACHEPROG_ROOT_DIRECTORY/$$" 2>/dev/null
 SH
 chmod 700 "$RUNNER_TEMP/cacheprog-safe"
-if timeout --foreground -k 1s 5s cacheprog direct \
+if timeout --foreground -k 1s 15s cacheprog direct \
     --root-directory "$CACHEPROG_ROOT_DIRECTORY" </dev/null >/dev/null 2>&1; then
   export GOCACHEPROG="$RUNNER_TEMP/cacheprog-safe"
 else

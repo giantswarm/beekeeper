@@ -127,6 +127,7 @@ func TestCacheFiltersDiagnosticsAndCleansDisk(t *testing.T) {
 			helper := `#!/bin/bash
 mkdir -p "$CACHEPROG_ROOT_DIRECTORY"
 echo PROVIDER_DIAGNOSTIC_MUST_NOT_APPEAR >&2
+echo 'Remote storage has been disabled because of too many consecutive errors PROVIDER_DIAGNOSTIC_MUST_NOT_APPEAR' >&2
 echo 'cacheprog statistics get_calls=9 get_hits=7 put_calls=2' >&2
 echo CACHE_PROTOCOL_OK
 `
@@ -145,7 +146,7 @@ esac
 			hits := "Go cache hits 7"
 			if tool == "cargo" {
 				command = `[ "$RUSTC_WRAPPER" = sccache ] || exit 3; printf BUILD_COMPLETED; exit 37`
-				hits = "Rust Cache hits 5"
+				hits = "Rust cache hits 5"
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
