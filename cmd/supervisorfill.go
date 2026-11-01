@@ -105,7 +105,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			continue
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: key}
-		what, done, err := l.reconcile(st, act, c)
+		what, done, err := l.reconcile(ctx, st, act, c)
 		if err != nil {
 			return err
 		}

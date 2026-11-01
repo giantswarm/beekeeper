@@ -211,6 +211,23 @@ prompt that starts with its bare slash command, as the person types it. A succes
 `handover --prompt` (`guide handover --prompt`) start with it (`/beekeeper:supervise you take over …`),
 and a desk's own copy of a role skill carries the flag too.
 
+Non-Claude workers (`codex`, `agy` and `omp`) receive the working directory's Claude
+project instructions at the head of their first message, before the worker rules and task.
+The composition follows `CLAUDE.md`, its `@`imports, `.claude/rules/**/*.md`, and the
+same safe mandatory-reading discovery as the repository context hook, from the repository
+root down to the working directory. Outside Git, the working directory is the boundary.
+Secret-named files and imports outside that boundary are excluded. `agents start --dry-run`
+prints the composed instructions exactly as they enter the first message.
+
+An existing `AGENTS.md` is included and takes precedence over conflicting `CLAUDE.md`
+instructions, whether Git tracks it or not; rules nearer the working directory take
+precedence over their ancestors. A repository with only `AGENTS.md` keeps its native
+loading behavior. Stale local instruction files must be corrected at their source:
+beekeeper does not guess their intent from Git tracking status. The composition fits
+Codex's worker `project_doc_max_bytes` (262144 bytes); truncated and omitted files are
+named for the worker to read. It stays in the session's message history, never in a
+shared home file that another project's worker could overwrite.
+
 For `agy` (Antigravity CLI), `beekeeper install` writes the embedded skills to `<stateDir>/skills`
 (`~/.local/state/beekeeper/skills`) and registers `{"path": "<stateDir>/skills"}` under `"entries"`
 in `~/.gemini/config/skills.json` without touching other entries or `inherits` (`beekeeper doctor`
@@ -613,6 +630,20 @@ The invocation must contain no other command, assignment or redirection. Codex a
 script's link destinations against its protected home. Globs, reassignment, branches, loops,
 additional helper commands and nested shell code get no link exemption. A command or script that
 also reads or copies the credential file is refused, including a read through the new link.
+
+The same holds for a link to a directory that holds a credential file (the home directory and `/`
+included), and for a relative link source, resolved from the link's own directory as well as the
+working directory. Outside that one-link exemption, `ln` or a helper defined on the command line
+that links such a directory is refused like a link to the file itself. A `find` whose `-exec`,
+`-execdir`, `-ok` or `-okdir` runs anything but a metadata command (or `shred`, `unlink`, `rmdir`,
+`echo`, `printf`) on a start path holding a credential file its `-name`/`-iname` tests accept is a
+read of it. A command that prints a credential file's path (`readlink`, `realpath`, `find`, `ls`,
+`stat` with its path in the format, …) is a read too when its output is piped into a stage that may
+open it or substituted into a command other than `echo`, `printf`, `test`, `[`, `basename` or
+`dirname` (`readlink -f link | xargs cat`, `cat "$(readlink -f link)"`); `| wc -l`, `>/dev/null`,
+`[ -n "$(ls …)" ]` and `stat -c %s` stay metadata. Codex refuses these in the same way, and in
+addition refuses a helper defined on the command line that is handed a path in its protected home,
+since its body (parameter operators, `$*`, `printf -v`, `mkdir`) may write it.
 
 Static checks such as `bash -n scripts/install.sh`, `sh -n scripts/install.sh` and
 `shellcheck scripts/install.sh` inspect script text without executing its credential operations.
