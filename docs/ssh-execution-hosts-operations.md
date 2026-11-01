@@ -134,6 +134,27 @@ Changing the host binary, rules, settings, or protected host configuration inval
 the policy. Prepare and pin a matching bundle again before starting new work.
 Do not weaken a required guard to make a check pass.
 
+The pinned digest covers every host setting that changes what a worker may start
+under or how much it may consume: the security sections, the execution host
+configuration (`execution.maxBusy` included), and the start guards — the memory
+floor (`capacity.availMinMiB`), the swap guard (`capacity.swapGrowthMaxMiB` and
+`capacity.swapPSIMax` over `watch.swapWindow`), the load and disk limits
+(`watch.loadMax`, `watch.loadPerCoreMax`, `watch.diskMinMiB`, `watch.diskFillWithin`),
+the build slots and their caps (`memcap.slots`, `memcap.max`, `memcap.cpuQuota`,
+`memcap.cpuWeight`) and the kind lab cap (`maxKindClusters`). Weakening one of
+them on the host is a digest mismatch in `agents hosts check` until a matching
+bundle is prepared and pinned again. What stays host-local on purpose is the
+machine's own watch and desk pacing, which never bounds a pinned remote worker:
+the supervisor's target and pace (`capacity.floor`, `capacity.ceiling` and the
+rest of `capacity` beyond the guards above), watch's alert thresholds and
+cadence (its `interval`, `repeat`, `availMinMiB`, `swapMaxMiB`, `oomdHeadroomMinMiB`,
+`scopeAnonMaxMiB`, `gttMaxMiB`, `psiMax`, `cpuPSIMax`, `forkRateMax`, `stackMax`,
+`toolProcsMax`, `tmpMaxMiB`, `diskCriticalMiB` and quiet/notify settings), and
+memcap's slot location and hold bound (`slotDir`, `holdBound`). `hosts check`
+reports the host's live resource observation (available memory, load, disk, slot
+and lab pressure), so a coordinator can compare what the host runs with against
+its own view of the machine.
+
 ## Codex on an execution host
 
 A host may run Codex workers next to or instead of Claude. Install a pinned
