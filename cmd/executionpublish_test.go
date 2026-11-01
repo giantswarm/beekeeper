@@ -29,7 +29,10 @@ type publicationRig struct {
 func newPublicationRig(t *testing.T) *publicationRig {
 	t.Helper()
 	a, r := executionTestApp(t)
-	root := t.TempDir()
+	root, rootErr := filepath.EvalSymlinks(t.TempDir())
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
 	rig := &publicationRig{a: a, request: r, workspace: filepath.Join(root, "worker"), remote: filepath.Join(root, "upstream.git")}
 	git := func(dir string, args ...string) string {
 		out, err := executionPublishGit(context.Background(), dir, args...)
@@ -355,7 +358,10 @@ func TestExecutionPublicationCheckRejectsOlderHost(t *testing.T) {
 func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	rig := newPublicationRig(t)
 	rig.commit(t, "change.txt", "host command\n")
-	root := t.TempDir()
+	root, rootErr := filepath.EvalSymlinks(t.TempDir())
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
 	key, err := execution.SigningKey(filepath.Join(root, "key"))
 	if err != nil {
 		t.Fatal(err)
