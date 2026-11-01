@@ -62,14 +62,25 @@ var opClasses = []opClass{
 	},
 }
 
+// reserved marks a decision that needs the person's own authority, whatever
+// operation it concerns: spending or cost, a purchase, contract or licence,
+// consent, an account or credential, or something made public or touching
+// production. Such a question is never an operational ask.
+var reserved = regexp.MustCompile(`(?i)\b(spend(s|ing)?|spent|costs?|costly|pay(s|ing)?|paid|prices?|pricing|budgets?|purchase[sd]?|buy(ing)?|invoices?|billing|eur|usd|euros?|dollars?|per (month|year)|monthly|yearly|annual|licen[cs]es?|contracts?|consent(s|ing)?|legal|accounts?|credentials?|secrets?|publish(es|ing)?|public(ly)?|production|customers?)\b|[$€£]\s?\d`)
+
 // operational is the class of d's question when it is an operational ask
 // (opClasses), and whether it is one. A note that links a plans
-// repository's pull request is the person's plan review, never one.
+// repository's pull request is the person's plan review, and a reserved
+// question (spending, consent, accounts, anything public or in production)
+// the person's own decision: neither is one.
 func operational(d noteDraft, plans config.Plans) (opClass, bool) {
 	for _, m := range pullURL.FindAllStringSubmatch(d.text(), -1) {
 		if plans.Covers(m[1]) {
 			return opClass{}, false
 		}
+	}
+	if reserved.MatchString(d.Question) {
+		return opClass{}, false
 	}
 	for _, c := range opClasses {
 		if c.match.MatchString(d.Question) {

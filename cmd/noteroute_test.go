@@ -160,3 +160,60 @@ func TestPlanReviewIsNoOperationalAsk(t *testing.T) {
 		t.Errorf("a code review ask: %+v %v", c, ok)
 	}
 }
+
+// A decision that needs the person's own authority stays theirs even when
+// it concerns CI, disk, capacity or a review: spending, consent, accounts,
+// anything public.
+func TestReservedDecisionOnAnOperationalSubjectReachesThePerson(t *testing.T) {
+	a := workerNoteApp(t, openThread, nil)
+	for _, q := range []string{
+		"Approve spending EUR 500 per month on additional CI runners?",
+		"Buy a larger disk for the build machine at $120?",
+		"Raise the capacity by adding another paid subscription?",
+		"Consent to a third-party reviewer reading the private code?",
+		"Make the CI logs public on " + prURL + "?",
+	} {
+		if err := addNote(a, append(slices.Clone(decisionArgs), q)...); err != nil {
+			t.Errorf("%s: %v", q, err)
+		}
+	}
+	if evs := redirected(t, a); len(evs) != 0 {
+		t.Errorf("redirected: %+v", evs)
+	}
+}
+
+// A fold puts the ask before the open note's person as surely as a note
+// of its own: an operational or superseded ask is refused before it folds,
+// and the open note is left as it was.
+func TestWorkerAskIsClassifiedBeforeItFolds(t *testing.T) {
+	for name, c := range map[string]struct {
+		threads  map[string]github.Thread
+		question string
+		want     string
+	}{
+		"operational": {openThread, "Please arrange desk review when the PR is parked?", "a review ask is operational"},
+		"superseded":  {map[string]github.Thread{decisionRef: {State: github.Closed}}, "Approve the deployment of " + prURL + "?", "superseded (" + decisionRef + " is closed)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := workerNoteApp(t, c.threads, nil)
+			const open = "Pick the release day?"
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.NextNote = 1
+				st.Notes = append(st.Notes, state.Note{ID: 1, Kind: noteDecision, For: notePerson, Text: open, Question: open, Refs: []string{decisionRef}})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, fold := range [][]string{{flagFoldInto, "1"}, nil} {
+				err := addNote(a, append(append(slices.Clone(decisionArgs), fold...), c.question)...)
+				if Code(err) != ExitRefused || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("fold %v: %v", fold, err)
+				}
+			}
+			st, _ := a.store.Read()
+			if len(st.Notes) != 1 || st.Notes[0].Text != open {
+				t.Errorf("folded: %+v", st.Notes)
+			}
+		})
+	}
+}

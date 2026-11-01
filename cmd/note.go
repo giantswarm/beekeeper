@@ -131,7 +131,10 @@ desk's machinery owns, is refused naming where it goes: a review (the loop
 starts the desk review on agents park --on <pr>), CI, runners or builds,
 disk, capacity or rate limits, rolling a merged change out to a checkout or
 machine, and starting or stopping sessions. A note on a plans repository's
-pull request is the person's plan review, never one. A decision whose --ref
+pull request is the person's plan review, and a question of spending, cost,
+consent, accounts or credentials, or anything public or in production the
+person's own decision: neither is one. The classification runs before
+--fold-into and any fold, local or central. A decision whose --ref
 is closed or merged, or whose issue's parent epic is closed, is refused as
 superseded; a thread GitHub does not answer is filed with a warning. Each
 refusal logs note.redirected; only what is the person's to decide (live,
@@ -193,7 +196,9 @@ public, costly or reserved for them) reaches them.`,
 					return refused("--holds with --fold-into: the open note's hold stands; file the hold on a note of its own")
 				}
 			}
-			if n.Kind == noteDecision && foldInto == 0 {
+			// Classified before any fold: a fold puts the ask before the
+			// open note's person as surely as a note of its own.
+			if n.Kind == noteDecision {
 				worker, err := a.isWorker(me)
 				if err != nil {
 					return err
