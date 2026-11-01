@@ -129,7 +129,12 @@ func (f secretFiles) linkSource(args, dirs []string) string {
 	return ""
 }
 
-const findExecFlag = "-exec"
+const (
+	findExecFlag    = "-exec"
+	findExecDirFlag = "-execdir"
+	findOKFlag      = "-ok"
+	findOKDirFlag   = "-okdir"
+)
 
 // findRuns returns find's start paths ("." when it names none) and the
 // commands its -exec, -execdir, -ok and -okdir actions run.
@@ -159,7 +164,7 @@ func findRuns(args []string) (starts, runs []string) {
 	}
 	for ; i < len(args); i++ {
 		switch args[i] {
-		case findExecFlag, "-execdir", "-ok", "-okdir":
+		case findExecFlag, findExecDirFlag, findOKFlag, findOKDirFlag:
 			if i+1 < len(args) {
 				runs = append(runs, path.Base(args[i+1]))
 				i++
@@ -291,7 +296,7 @@ func findMaxDepth(args []string) int {
 	depth := -1
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
-		case findExecFlag, "-execdir", "-ok", "-okdir":
+		case findExecFlag, findExecDirFlag, findOKFlag, findOKDirFlag:
 			return depth // later words belong to the action's command
 		}
 		if args[i] == "-maxdepth" {
