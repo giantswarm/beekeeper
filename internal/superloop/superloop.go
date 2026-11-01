@@ -57,12 +57,16 @@ const (
 	// KindOverride records the person's answer that it does.
 	KindOwnership = "ownership"
 	KindOverride  = "override"
+	// KindRed wakes the worker parked on a pull request whose parked head
+	// has a check that concluded red (failed, cancelled, timed out), with
+	// each such check's name and URL: once for each head, check and park.
+	KindRed = "red"
 )
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
 	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
-		KindLeave, KindRelay, KindOwnership, KindOverride}
+		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed}
 }
 
 // The verbs of the events the rules act on.
@@ -94,10 +98,15 @@ type Pull struct {
 	State string
 	Head  string
 	// Base is the branch it merges into.
-	Base string
+	Base        string
+	MergeCommit string
 	// Green is every check on Head concluded successfully (none is not
 	// green: they have not reported yet).
-	Green   bool
+	Green bool
+	// Red are the checks on Head that concluded red (failure, cancelled,
+	// timed out, startup failure, action required; a commit status's
+	// failure or error), by name.
+	Red     []Check
 	Reviews []Review // oldest first
 	// Author is the login that opened it; Title, Branch (its head branch)
 	// and Files (the paths it changes, ChangedFiles of them in all, which
@@ -109,6 +118,12 @@ type Pull struct {
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
+}
+
+// Check is one check on a pull request's head: its name and the URL of its
+// run.
+type Check struct {
+	Name, URL string
 }
 
 // Review is one review of a pull request with a verdict.
@@ -159,12 +174,17 @@ type Worker struct {
 	// when it is not parked; ParkedAt since when.
 	ParkedOn string
 	ParkedAt time.Time
+	// ParkedHead is the published head a review request proved (the
+	// park's review head), "" for a plain wait.
+	ParkedHead string
 	// Started is a session beekeeper started: only such a one the loop
 	// retires; a session its person started stays.
 	Started bool
 	// Waking is an open timer that wakes the agent by name (timer add
 	// --wake): a park on nothing waits for it.
 	Waking bool
+	// LastActive is the latest observed session activity.
+	LastActive time.Time
 }
 
 // Event is one line of the event log the loop acts on.
@@ -221,8 +241,9 @@ type Input struct {
 	// Answers are the answers to the notes the loop filed, oldest first.
 	Answers []Answer
 	// Desk is whose pull requests the loop acts on; Now is the pass's time.
-	Desk Desk
-	Now  time.Time
+	Desk            Desk
+	Now             time.Time
+	PostMergeWindow time.Duration
 	// DevctlOwners is merge.devctlOwners: a go on their repositories names
 	// the gate's devctl pr merge --update-branch, on any other gh pr merge
 	// --match-head-commit.
@@ -340,11 +361,13 @@ type ledger struct {
 	// about, overridden the ones they let the desk take over.
 	asked      map[string]escalation
 	overridden map[string]bool
+	// red are the checks the loop woke a worker for, by redKey.
+	red map[string]bool
 }
 
 func newLedger(taken []Taken, answers []Answer) ledger {
 	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]escalation{}, ended: map[string]bool{}, reviewer: map[string]string{},
-		goAgent: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}}
+		goAgent: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
 	for _, t := range taken {
 		l.keys[t.Key] = t
 		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave}, t.Kind) {
@@ -364,6 +387,13 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			l.asked[t.Ref] = escalation{at: t.At}
 		case KindOverride:
 			l.overridden[t.Ref] = true
+		case KindRed:
+			// "red <ref>@<head> <parked>: <check>; <check>…"
+			if prefix, checks, ok := strings.Cut(t.Key, ": "); ok {
+				for name := range strings.SplitSeq(checks, redSep) {
+					l.red[prefix+": "+name] = true
+				}
+			}
 		case KindGo, KindForward:
 			if t.Agent != "" {
 				l.reviewer[t.Ref] = t.Agent
@@ -397,15 +427,14 @@ func (l ledger) actedAfter(ref string, at time.Time) bool {
 }
 
 // workerDue reports whether the worker the go for ref was given to waits
-// for its retirement: a beekeeper-started session on the roster, not
-// retired yet, and done with its task: not parked, or parked on ref
-// itself. One parked on anything else (a release, a timer, a note) still
-// has work to do.
+// for its post-merge report: a beekeeper-started session still on the
+// roster and not retired yet. A park on a release, timer or note keeps
+// the worker reachable too.
 func (l ledger) workerDue(ref string, workers []Worker) bool {
 	agent := l.goAgent[ref]
 	return agent != "" && !l.has(retireKey(ref, retiredWorker)) &&
 		slices.ContainsFunc(workers, func(w Worker) bool {
-			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref && w.ReviewRequested)
+			return w.Name == agent && w.Started
 		})
 }
 
@@ -427,6 +456,23 @@ func reworkKey(ref, head string, parked time.Time) string {
 func escalateKey(ref, head string) string   { return fmt.Sprintf("escalate %s@%s", ref, head) }
 func answerKey(ref string, note int) string { return fmt.Sprintf("answer %s #%d", ref, note) }
 func endKey(ref string) string              { return "end " + ref }
+
+// redKey is the key of the wake that tells the red checks names of ref's
+// head to the park of parked; a single check's redKey is its own mark.
+func redKey(ref, head string, parked time.Time, names ...string) string {
+	return fmt.Sprintf("red %s@%s %s: %s", ref, head, parked.UTC().Format(time.RFC3339Nano), strings.Join(names, redSep))
+}
+
+// redSep separates the checks of one red wake's key.
+const redSep = "; "
+
+// redName is a check's name as a key holds it: on one line, without the
+// brackets that end a key or the separator of its checks.
+func redName(name string) string {
+	name = strings.NewReplacer("[", "(", "]", ")", ";", ",").Replace(name)
+	return strings.Join(strings.Fields(name), " ")
+}
+
 func eventKey(kind string, e Event) string {
 	return fmt.Sprintf("%s %s@%s %s", kind, e.Verb, e.At.UTC().Format(time.RFC3339Nano), e.Agent)
 }
@@ -553,7 +599,28 @@ func Plan(in Input) []Action {
 	for _, ref := range refs {
 		p := in.Pulls[ref]
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
-			retire(ref, retiredWorker, l.goAgent[ref], fmt.Sprintf("%s merged after the merge go", p.URL))
+			// The end action durably marks when the merge was observed. A
+			// quiet worker retains its inbox while waiting for its release.
+			if end, ok := l.keys[endKey(ref)]; ok {
+				last := end.At
+				for _, w := range in.Workers {
+					if w.Name == l.goAgent[ref] {
+						if w.LastActive.After(last) {
+							last = w.LastActive
+						}
+						if w.ParkedAt.After(last) {
+							last = w.ParkedAt
+						}
+					}
+				}
+				window := in.PostMergeWindow
+				if window <= 0 {
+					window = 2 * time.Hour
+				}
+				if !in.Now.Before(last.Add(window)) {
+					retire(ref, retiredWorker, l.goAgent[ref], fmt.Sprintf("%s: no report after merge; no activity for %s", p.URL, window))
+				}
+			}
 		}
 		if l.ended[ref] {
 			continue
@@ -590,11 +657,13 @@ func Plan(in Input) []Action {
 			continue
 		case theirs:
 			leave(ref, p.URL, agent, reason, why)
+			planRed(l, p, w, isParked, add)
 			planTheirs(in, l, p, w, isParked, base, ask, asked, add)
 			continue
 		case unknown:
 			continue
 		}
+		planRed(l, p, w, isParked, add)
 		rs := l.rounds[ref]
 		// An escalation logged before its key named a head was on the
 		// head of the last round, whose findings stood unfixed.
@@ -890,6 +959,44 @@ func Plan(in Input) []Action {
 	return out
 }
 
+// planRed wakes worker w, parked on p, when a check on the head it parked
+// on concluded red: the loop reviews no head that is not green, so the
+// worker would wait for nothing. One wake names every check red now that
+// no earlier wake of this park named; a check is told once for each head
+// and park (a check run again that fails again on the same head is told
+// once the worker parked again), and none after the head's merge go.
+func planRed(l ledger, p Pull, w Worker, isParked bool, add func(Action)) {
+	if !isParked || p.State != Open || p.Head == "" || !sameHead(w.ParkedHead, p.Head) || l.has(goKey(p.Ref, p.Head)) {
+		return
+	}
+	var names, lines []string
+	for _, c := range p.Red {
+		name := redName(c.Name)
+		if name == "" || slices.Contains(names, name) || l.red[redKey(p.Ref, p.Head, w.ParkedAt, name)] {
+			continue
+		}
+		names = append(names, name)
+		line := name
+		if c.URL != "" {
+			line += " " + c.URL
+		}
+		lines = append(lines, line)
+	}
+	if len(names) == 0 {
+		return
+	}
+	add(Action{Key: redKey(p.Ref, p.Head, w.ParkedAt, names...), Kind: KindRed, Ref: p.Ref, URL: p.URL, Agent: w.Name, Head: p.Head,
+		Message: redMessage(p, lines)})
+}
+
+// redMessage tells the worker parked on p which checks on its head
+// concluded red.
+func redMessage(p Pull, lines []string) string {
+	return fmt.Sprintf("CI is red on %s at head %s, the head you parked on; no review starts until every check is green. Red: %s. "+
+		"Read the failure, fix it and push (or rerun a check that failed for no reason of the change), then park again from the worktree: beekeeper agents park --on %s \"desk review\".",
+		p.URL, short(p.Head), strings.Join(lines, "; "), p.Ref)
+}
+
 // planTheirs plans another team's pull request p: the person's answer about
 // its ownership, the owning team's reviews told to the worker parked on it,
 // and, once that team let the worker wait OwnerWait without a review, the
@@ -1164,4 +1271,23 @@ func sameHead(a, b string) bool {
 		return a == b && a != ""
 	}
 	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+// ReleaseWorkers returns the retained workers whose merged pull requests may
+// be carried by an installed release. Containment is checked by the caller.
+func ReleaseWorkers(in Input) []Action {
+	l := newLedger(in.Taken, in.Answers)
+	var out []Action
+	for ref, p := range in.Pulls {
+		if p.State != Merged || !l.workerDue(ref, in.Workers) {
+			continue
+		}
+		agent := l.goAgent[ref]
+		if slices.ContainsFunc(in.Events, func(e Event) bool { return e.Agent == agent && e.Verb == VerbDone }) {
+			continue
+		}
+		out = append(out, Action{Ref: ref, Agent: agent, URL: p.URL, Head: p.MergeCommit})
+	}
+	slices.SortFunc(out, func(a, b Action) int { return strings.Compare(a.Ref, b.Ref) })
+	return out
 }

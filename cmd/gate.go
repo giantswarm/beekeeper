@@ -313,8 +313,7 @@ type gateRun struct {
 	// call read it (a fresh promote), else it is its place's.
 	candidate     string
 	candidateRead bool
-	// pinned says the promotion names its candidate (--version): devctl
-	// promotes that one whatever is newest when its turn comes.
+	// pinned says the promotion names its candidate (--version).
 	pinned bool
 	// central says the merge's lane queues in the central instance: joined
 	// once the merge has its place there, centralWhy what it waits for
@@ -805,10 +804,11 @@ func (g *gateRun) step() (string, error) {
 	return why, err
 }
 
-// checkCandidate refuses an unpinned promotion whose turn came, its place
-// running, when the newest release candidate is not the one it was queued for: it
-// would promote another worker's candidate. Its place leaves the lane and
-// its owner decides again.
+// checkCandidate refuses a promotion whose turn came, its place running,
+// when the newest release candidate is not the one it was queued or pinned
+// for: an unpinned promotion would promote another worker's candidate, and a
+// pinned one would cut a stable release older than the release candidates
+// already out. Its place leaves the lane and its owner decides again.
 func (g *gateRun) checkCandidate() error {
 	var now string
 	err := g.readRetrying("the release candidate of "+g.repo, func() (err error) {
@@ -1410,7 +1410,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		return why, nil
 	}
 	g.leaveCentral(g.ctx, settled, "rolled, HelmReleases of "+g.lane.Installation+" Ready")
-	if g.pr == 0 && !g.pinned {
+	if g.pr == 0 {
 		if err := g.checkCandidate(); err != nil {
 			return "", err
 		}
