@@ -16,8 +16,8 @@ description: GitHub reads, scans, builds, browser steps and waits on a beekeeper
 - **Scans:** list each repo (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr list`
   likewise), never multi-repo `gh search`, which drops private repos. An unreadable listing is
   a problem, never "no match".
-- **Code scans** (govulncheck, trivy): fresh `origin/main` worktree, never a shared clone;
-  findings name commit and module versions.
+- **Code scans** (govulncheck, trivy): fresh worktree of `origin/main`, never a shared clone;
+  a finding names the commit and module versions.
 - **Headless turns:** wait in the foreground (`devctl pr wait`, bounded Bash); a background
   wait never wakes the turn. End done or parked (`beekeeper:park`).
 - **No @-mention** in posts: pings go via `note add` to the supervisor.
