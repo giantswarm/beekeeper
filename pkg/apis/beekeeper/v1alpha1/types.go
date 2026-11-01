@@ -299,6 +299,12 @@ type NoteSpec struct {
 	// ID is the note's number, unique on the installation.
 	// +kubebuilder:validation:Minimum=1
 	ID int `json:"id"`
+	// Filer and FiledAt survive a failed initial status write. Status remains
+	// authoritative once initialized; these fields travel with the create.
+	// +optional
+	Filer *Party `json:"filer,omitempty"`
+	// +optional
+	FiledAt *metav1.Time `json:"filedAt,omitempty"`
 	// For is the person or team the note asks.
 	// +optional
 	For  string `json:"for,omitempty"`
