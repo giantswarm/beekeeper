@@ -78,16 +78,16 @@ func TestRunStats(t *testing.T) {
 	evs := []state.Event{
 		// a warm-cache remote build that failed: its tail is output text,
 		// not a repository, and must not move the command.
-		{At: now.Add(-3 * time.Hour), Verb: runrecord.Start, Detail: "remote:pod-a.3f2a9c1b giantswarm/beekeeper@16a89d96 ns desk-build cache warm: go test ./..."},
+		{At: now.Add(-3 * time.Hour), Verb: runrecord.Start, Detail: "remote:pod-a.3f2a9c1b giantswarm/beekeeper@16a89d96 ns build-workers cache warm: go test ./..."},
 		{At: now.Add(-3*time.Hour + 120*time.Second), Verb: runrecord.End, Detail: "remote:pod-a.3f2a9c1b exit 1 after 2m0s, failed: --- FAIL; TestFoo x/y@deadbeef leaked: go test ./..."},
 		// a remote attempt that fell back, and the local run then made
-		{At: now.Add(-2 * time.Hour), Verb: runrecord.Fallback, Detail: "local teemow/desk@abcdef01 fell back (cluster unreachable): make lint"},
-		{At: now.Add(-2 * time.Hour), Verb: runrecord.Start, Detail: "memcap-9-1.scope teemow/desk@abcdef01 slot 1 max 12G: make lint"},
+		{At: now.Add(-2 * time.Hour), Verb: runrecord.Fallback, Detail: "local other/repo@abcdef01 fell back (cluster unreachable): make lint"},
+		{At: now.Add(-2 * time.Hour), Verb: runrecord.Start, Detail: "memcap-9-1.scope other/repo@abcdef01 slot 1 max 12G: make lint"},
 		{At: now.Add(-2*time.Hour + 60*time.Second), Verb: runrecord.End, Detail: "memcap-9-1.scope exit 0 after 1m0s: make lint"},
 		// an old release's record: no repository, counts under "-"
 		{At: now.Add(-time.Hour), Verb: runrecord.End, Detail: "memcap-7-3.scope exit 0 after 30s: go build ./..."},
 		// before the window: only the whole log's run counts it
-		{At: now.Add(-48 * time.Hour), Verb: runrecord.Start, Detail: "remote:pod-b.11111111 giantswarm/beekeeper@16a89d96 ns desk-build cache cold: go vet ./..."},
+		{At: now.Add(-48 * time.Hour), Verb: runrecord.Start, Detail: "remote:pod-b.11111111 giantswarm/beekeeper@16a89d96 ns build-workers cache cold: go vet ./..."},
 		{At: now.Add(-48*time.Hour + time.Second), Verb: runrecord.End, Detail: "remote:pod-b.11111111 exit 1 after 1s: go vet ./..."},
 	}
 	if err := store.Record(evs...); err != nil {
@@ -122,7 +122,7 @@ func TestRunStats(t *testing.T) {
 	if bk.Repo != "giantswarm/beekeeper" || bk.Remote != 1 || bk.WarmCache != 1 || bk.Failed != 1 || bk.Minutes != 2 {
 		t.Fatalf("beekeeper row %+v", bk)
 	}
-	if desk.Repo != "teemow/desk" || desk.Local != 1 || desk.Fallback != 1 || desk.Failed != 0 || desk.Minutes != 1 {
+	if desk.Repo != "other/repo" || desk.Local != 1 || desk.Fallback != 1 || desk.Failed != 0 || desk.Minutes != 1 {
 		t.Fatalf("desk row %+v", desk)
 	}
 	if none.Repo != "" || none.Local != 1 {
