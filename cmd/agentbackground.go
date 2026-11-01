@@ -278,7 +278,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		if reg, err = recordStart(st, s, sp.task, sp.serves, live); err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {

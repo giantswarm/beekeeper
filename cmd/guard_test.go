@@ -14,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/claim/claimtest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/gocache"
@@ -22,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/testenv"
 )
 
 // The test binary doubles as beekeeper (BEEKEEPER_TEST_MAIN=1), so the hook's
@@ -37,6 +39,9 @@ func TestMain(m *testing.M) {
 	// Nor does an answer read where it runs: the person types it at
 	// their terminal; a test that wants a session stubs its own.
 	answerSeat = func(*app) (string, bool) { return "", true }
+	// Nor does a claim: every issue's thread is an empty one of its own; a
+	// test of the claims keeps its own.
+	claimGH = claimtest.New().GH
 	// Nor does a browse move a window of the desktop's compositor; a test
 	// that places one stubs its own hyprctl.
 	hyprRunning = func() bool { return false }
@@ -115,6 +120,7 @@ func TestMain(m *testing.M) {
 	// No test asks the machine's Claude Code for its plugins; one that
 	// wants a list sets it.
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
+	testenv.Setup()
 	os.Exit(runIsolated(m))
 }
 
