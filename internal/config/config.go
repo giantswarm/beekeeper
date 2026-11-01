@@ -959,7 +959,8 @@ const (
 // DefaultClaudeUsageCommand reads plan windows without a model turn.
 var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--output-format", "json"}
 
-// DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
+// DefaultAgyUsageCommand is capacity.providers.agy.command when unset, even
+// with agy: {}: agy's local usage report, read without a model turn.
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
 // DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
@@ -2098,7 +2099,8 @@ type Supervisor struct {
 	ReleaseEvery Duration `yaml:"releaseEvery"`
 	NoteDue      Duration `yaml:"noteDue"`
 	// FillRetryEvery bounds repeated empty or failed board reads while
-	// capacity and the roster stay unchanged (5m).
+	// capacity's floor and ceiling stay unchanged and no agent is done or
+	// removed (5m).
 	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
@@ -3319,7 +3321,7 @@ func (c *Config) defaults() error {
 		if name == ClaudeHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultClaudeUsageCommand)
 		}
-		if name == AgyHarness && len(p.Command) == 0 && p.hasFields() {
+		if name == AgyHarness && len(p.Command) == 0 && !p.SelfHosted() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
 		if name == CodexHarness && len(p.Command) == 0 && p.hasFields() {

@@ -104,6 +104,9 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// MergeGo checks the durable supervisor go for this session and exact head.
+	MergeGo      func(session, repo string, pr int, head string) string
+	mergeSession string
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
 	// UnlockCommands are the person's own vault unlock helpers
@@ -280,6 +283,7 @@ func (h Hook) Decide(input []byte) []byte {
 }
 
 func (h Hook) decide(ev event) []byte {
+	h.mergeSession = ev.Session
 	if r := h.guideRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}

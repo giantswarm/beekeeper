@@ -153,7 +153,7 @@ func TestSkillsSuggestNoLongLeaseWait(t *testing.T) {
 // one-commit PR's commit message otherwise.
 func TestMergeSkillNamesTheSquashSubject(t *testing.T) {
 	merge := strings.Join(strings.Fields(Skill("merge")), " ")
-	if !strings.Contains(merge, `--squash --subject "<PR title> (#<n>)"`) {
+	if !strings.Contains(merge, `--squash --match-head-commit <reviewed-head-sha> --subject "<PR title> (#<n>)"`) {
 		t.Error("the merge skill does not name --subject for a personal account's merge")
 	}
 }
