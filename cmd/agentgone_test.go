@@ -201,28 +201,38 @@ func TestGoneRetirementRechecksActivity(t *testing.T) {
 	}
 }
 
-func TestGoneWakeRestoresCapacity(t *testing.T) {
-	const id = "gone-wake-proof"
-	a, launcher, _ := wakeTwinSetup(t, id, false)
-	ag := state.Agent{Party: state.Party{Session: id, Name: "test: wake gone"}, Registered: a.now.Add(-48 * time.Hour), Task: "unfinished task"}
-	dir := t.TempDir()
-	path := filepath.Join(a.cfg.Claude.ProjectsDir, "wake-proof", id+".jsonl")
-	writeFile(t, path, `{"type":"user","cwd":"`+filepath.ToSlash(dir)+`"}`+"\n")
-	old := a.now.Add(-48 * time.Hour)
-	if err := os.Chtimes(path, old, old); err != nil {
-		t.Fatal(err)
-	}
-	seed(t, a, func(st *state.State) { st.Supervisor = nil; st.Agents = []state.Agent{ag} })
-	st, _ := a.store.Read()
-	if len(countAgents(st, nil, a.now, a.cfg).Gone) != 1 {
-		t.Fatal("precondition: not gone")
-	}
-	if err := a.wakeAgent(t.Context(), waker, ag.Name, "continue", ""); err != nil {
-		t.Fatal(err)
-	}
-	st, _ = a.store.Read()
-	if len(launcher.units) != 1 || len(countAgents(st, nil, a.now, a.cfg).Busy) != 1 {
-		t.Fatalf("wake did not restore slot: %+v", st.Agents)
+func TestGoneWakeAndResumeRestoreCapacity(t *testing.T) {
+	for _, action := range []string{agentWakeName, agentResumeName} {
+		t.Run(action, func(t *testing.T) {
+			const id = "gone-wake-proof"
+			a, launcher, _ := wakeTwinSetup(t, id, false)
+			ag := state.Agent{Party: state.Party{Session: id, Name: "test: wake gone"}, Registered: a.now.Add(-48 * time.Hour), Task: "unfinished task"}
+			dir := t.TempDir()
+			path := filepath.Join(a.cfg.Claude.ProjectsDir, "wake-proof", id+".jsonl")
+			writeFile(t, path, `{"type":"user","cwd":"`+filepath.ToSlash(dir)+`"}`+"\n")
+			old := a.now.Add(-48 * time.Hour)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+			seed(t, a, func(st *state.State) { st.Supervisor = nil; st.Agents = []state.Agent{ag} })
+			st, _ := a.store.Read()
+			if len(countAgents(st, nil, a.now, a.cfg).Gone) != 1 {
+				t.Fatal("precondition: not gone")
+			}
+			var err error
+			if action == agentResumeName {
+				err = a.resumeParkedOpts(t.Context(), waker, ag.Name, false)
+			} else {
+				err = a.wakeAgent(t.Context(), waker, ag.Name, "continue", "")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, _ = a.store.Read()
+			if len(launcher.units) != 1 || len(countAgents(st, nil, a.now, a.cfg).Busy) != 1 {
+				t.Fatalf("%s did not restore slot: %+v", action, st.Agents)
+			}
+		})
 	}
 }
 

@@ -2143,7 +2143,7 @@ timer, and remote executions are protected. `capacity` releases its busy and
 provider slots; `agents` and the watch show its last activity. The doctor retires
 it through the usual archive path, ends its serve record so the board can offer
 its item again, and logs its unfinished task and latest hand-over note as an
-`agents.gone` event without asking for a decision. Before retirement, a wake or
+`agents.gone` event without asking for a decision. Before retirement, a wake, resume or
 new activity restores its slot. Setting `agents.staleAfter` negative disables
 stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
