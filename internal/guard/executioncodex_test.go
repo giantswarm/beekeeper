@@ -83,6 +83,7 @@ func TestExecutionCodexGuard(t *testing.T) {
 		"component park":     executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "beekeeper agents park --on giantswarm/beekeeper#1 'desk review'"}, executionThread, workspace),
 		"workspace patch":    executionCodexEvent(codexApplyPatchTool, map[string]any{codexInputKey: patch("new-file.txt")}, executionThread, workspace),
 		"poll a command":     executionCodexEvent(codexWriteStdinTool, map[string]any{codexCharsKey: "", sessionKey: 1}, executionThread, workspace),
+		"web search":         executionCodexEvent("webrun", map[string]any{"search_query": []any{map[string]any{"q": "example"}}}, executionThread, workspace),
 		"update plan":        executionCodexEvent(codexUpdatePlanTool, map[string]any{"steps": []any{}}, executionThread, workspace),
 		"image in workspace": executionCodexEvent(codexViewImageTool, map[string]any{pathKey: "a.png"}, executionThread, workspace),
 	}
