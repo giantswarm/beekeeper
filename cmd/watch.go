@@ -1323,7 +1323,7 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 // pollSessions does what the process table and the sessions in it tell.
 func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Table) {
 	w.table = t
-	sessions := claude.Discover(w.cfg, t, w.now)
+	sessions := discover(w.cfg, t, w.now)
 	owners := make(map[int]string, len(sessions))
 	for _, s := range sessions {
 		owners[s.PID] = s.Name

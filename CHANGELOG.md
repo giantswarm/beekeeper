@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - PR parks request desk review only when made from the PR's published worktree, with matching branch and HEAD. Other parks remain plain waits and resume on merge or close. After upgrading, reissue existing PR review parks from their published worktrees: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` ([https://github.com/giantswarm/beekeeper/issues/1824](https://github.com/giantswarm/beekeeper/issues/1824)).
 
+- `watch` discovers codex, omp and agy runners as well as Claude Code sessions, so a running worker no longer produces false `AGENTS STOPPED` and `SESSION ENDED` alerts. Stopped workers of those harnesses get an `agents wake` command instead of a Claude desktop link ([https://github.com/giantswarm/beekeeper/issues/1965](https://github.com/giantswarm/beekeeper/issues/1965)).
+
 ### Changed
 
 - `supervisor.hostsFirst` prefers execution hosts only for what a host can run. Without room on any host a start a mapped host could run still waits; a repository no host maps, or a choice of a harness no host has an adapter for (agy, omp, codex), now starts locally within the local room instead of waiting, the local start excluding the choices a host runs. `capacity --host` weighs only the choices the host can run, so a non-Claude choice no longer shows as a host's room that its remote start then refuses ([https://github.com/giantswarm/beekeeper/issues/1944](https://github.com/giantswarm/beekeeper/issues/1944)).
