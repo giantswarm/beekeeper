@@ -16,8 +16,9 @@ type DependabotAlert struct {
 	URL    string `json:"html_url"`
 }
 
-// ReadDependabotAlert uses the caller's gh identity, including an agent's App
-// identity. It never falls back to a person's login or changes token scopes.
+// ReadDependabotAlert uses whichever identity gh resolves for the repository.
+// This may be the App or a person's login; the reader does not change
+// authentication or token scopes.
 func ReadDependabotAlert(ctx context.Context, run GH, repo string, number int) (DependabotAlert, error) {
 	if !alertRepository.MatchString(repo) || number <= 0 {
 		return DependabotAlert{}, fmt.Errorf("expected owner/repo and a positive alert number")

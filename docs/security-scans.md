@@ -9,8 +9,11 @@ beekeeper --json security alert giantswarm/example 8
 
 The command makes one REST GET through the worker's `gh` identity, with the
 usual bounded retries for transient read failures. A sandbox's egress proxy
-supplies the devctl App's token. The command never changes scopes, reads a
-token itself, or falls back to a person's login. JSON contains `number`,
+supplies the devctl App's token. Outside a sandbox, `gh` may resolve a person's
+login: devctl's agent link selects the App for owners it is installed on and
+the person's login for other owners. A successful read alone does not identify
+the caller as the App. The command uses whichever identity `gh` resolves; it
+does not change authentication or scopes or read a token itself. JSON contains `number`,
 `state` and `html_url`; plain output contains the state and the alert URL.
 States are `open`, `dismissed`, `fixed` and `auto_dismissed`.
 

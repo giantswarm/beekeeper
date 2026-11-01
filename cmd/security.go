@@ -25,9 +25,11 @@ func (a *app) securityAlertCmd(run github.GH) *cobra.Command {
 		Use: "alert <owner/repo> <number>", Short: "Read a Dependabot alert's state through the GitHub REST API",
 		Long: `Read one Dependabot alert through gh's current identity, using REST.
 In a worker sandbox this is the devctl App through the egress proxy.
+Outside a sandbox gh may use a person's login; the agent link selects the
+App for installed owners and the person's login for other owners.
 The App needs repository permission Dependabot alerts: read
 (vulnerability_alerts), accepted on its installation. No personal token
-scope is added and no alternate identity is tried. Permission errors and
+scope is added and this command does not change authentication. Permission errors and
 unavailable alerts fail rather than count as fixed. --json prints number,
 state and html_url. See docs/security-scans.md for setup and the scan rule.`,
 		Args: cobra.ExactArgs(2),
