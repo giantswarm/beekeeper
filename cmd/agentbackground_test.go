@@ -48,11 +48,22 @@ func stubBackground(t *testing.T, out string, rows ...bgSession) *[]bgCall {
 	var calls []bgCall
 	origRun, origList, origPoll := bgRun, bgList, bgPoll
 	t.Cleanup(func() { bgRun, bgList, bgPoll = origRun, origList, origPoll })
+	stopped := map[string]bool{}
 	bgRun = func(_ context.Context, dir string, env, argv []string) (string, error) {
 		calls = append(calls, bgCall{dir: dir, env: env, argv: argv})
+		if len(argv) == 3 && argv[1] == bgStopCmd {
+			stopped[argv[2]] = true
+		}
 		return out, nil
 	}
-	bgList = func(context.Context, string, []string, bool) ([]bgSession, error) { return rows, nil }
+	bgList = func(_ context.Context, _ string, _ []string, all bool) ([]bgSession, error) {
+		if all || len(stopped) == 0 {
+			return rows, nil
+		}
+		return slices.DeleteFunc(slices.Clone(rows), func(r bgSession) bool {
+			return stopped[r.ID] || (len(r.SessionID) >= 8 && stopped[r.SessionID[:8]])
+		}), nil
+	}
 	bgPoll = time.Millisecond
 	return &calls
 }
