@@ -2775,20 +2775,17 @@ func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T)
 	// before the next host resync retains the worker while the harness
 	// finishes its final response.
 	r.out.Reset()
-	reportData, err := json.Marshal(executionReport{
+	reportData := mustExecutionJSON(t, executionReport{
 		Finished: true,
 		Text:     "https://github.com/o/r/pull/7 merged; Problems found: none",
-		Problems: []string{"none"},
+		Problems: []string{ghNone},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
 		rec, _ := executionRecord(st, ref)
 		rec.Observation.InTurn = true
 		_, evs, err := r.a.applyExecutionControl(context.Background(), st, st.Agents[i].Party, execution.ControlRequest{
-			Operation: "report",
+			Operation: execution.ControlReport,
 			Data:      reportData,
 		})
 		return evs, err
