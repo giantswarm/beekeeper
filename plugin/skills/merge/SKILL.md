@@ -1,6 +1,6 @@
 ---
 name: merge
-description: Load before merges, promotions or tags: the gate, exits, protection, holds and rebase lines.
+description: Load before merges/promotions/tags: the gate, exits, protection, holds and rebase lines.
 ---
 
 # merge — one merge through the gate
