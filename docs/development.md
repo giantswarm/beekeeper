@@ -414,3 +414,45 @@ process directory still has its original owner.
 on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
 freeing (`doctor.freeEvery`) and Docker reclamation remain independent
 in both modes.
+
+### State holders
+
+The state home (`disk.holders.root`, default `~/.local/state`) collects
+holders no disk step owns: a task's `GOCACHE` or `CARGO_TARGET_DIR`, its
+scratch named after its issue, saved release-candidate binaries, worktrees
+moved aside. `beekeeper disk holders` lists each entry of the root, and
+each entry of its aside directories (`disk.holders.asideDirs`, default
+`aside` and `moved-aside`), largest first, with its size, when anything in
+it was last written, its owner and whether it is eligible for removal.
+`--json` has every holder; `--min-mib` (100) hides the small ones.
+
+The owner is read from the name: a task number of three digits or more
+(`ao1011`, `go-build-153`) names the roster agent or session record whose
+task or issue is that issue or pull request number, open tasks first; a name without one is its
+program's (`~/.local/state/<program>`), and a number nobody mentions is
+`unowned`. A holder is eligible once nothing in it was written for
+`disk.holders.staleAfter` (72h; an aside entry: its retention window
+`disk.holders.asideRetention`, 168h), no running process uses it, its task
+is not open, it holds no git checkout outside an aside directory, and it
+is neither beekeeper's own state nor named in `disk.holders.keep` (model
+weights, say).
+
+Nothing is removed: the listing tells a person or a worker what to
+reclaim. Every `disk.holders.every` (6h) one watch lists the holders and
+says `STATE HOLDERS` with the largest eligible ones while the eligible
+holders take `disk.holders.warnGiB` (10) or more; one that holds a
+checkout is only counted there, its work to be checked first. While a
+process cannot be read, no holder is judged eligible and the watch says
+`STATE HOLDERS unknown` with the reason. A negative `warnGiB` turns the
+look off; a negative duration is refused. "Unused" means not written: a
+reader that never writes (a model server reading its weights) does not
+count, so such data goes into `disk.holders.keep`.
+
+```yaml
+disk:
+  holders:
+    keep: [hf-cache]
+    staleAfter: 72h
+    asideRetention: 168h
+    warnGiB: 10
+```

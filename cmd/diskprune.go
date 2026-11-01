@@ -343,6 +343,6 @@ func (a *app) diskCmd() *cobra.Command {
 		return errors.Join(err, errors.Join(r.Errors...))
 	}}
 	p.Flags().BoolVar(&apply, "apply", false, "reclaim disposable data after checking live processes and work")
-	c.AddCommand(p)
+	c.AddCommand(p, a.diskHoldersCmd())
 	return c
 }

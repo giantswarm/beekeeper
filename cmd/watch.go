@@ -491,6 +491,11 @@ type watcher struct {
 	diskPruneOn   bool
 	diskPruning   atomic.Bool
 	diskPruneNext time.Time
+	// holdersOn lists the state home's holders (not for --once);
+	// holdering orders access to holdersNext across background looks.
+	holdersOn   bool
+	holdering   atomic.Bool
+	holdersNext time.Time
 	// worktreesOn trims finished workers' worktrees for the legacy ask mode.
 	worktreesOn       bool
 	worktreesTrimming atomic.Bool
@@ -597,6 +602,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	w.diskPruneOn = !w.loopOwned
 	w.goCacheOn = true
+	w.holdersOn = true
 	w.dockerOn = true
 	w.freeOn = true
 	w.worktreesOn = true
@@ -1177,6 +1183,7 @@ func (w *watcher) sample(ctx context.Context) {
 	w.autoFree(now)
 	w.worktrees(now)
 	w.diskPrune(now, false)
+	w.stateHolders(now)
 	w.slotOrphans(now, table)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)
