@@ -590,6 +590,17 @@ script's link destinations against its protected home. Globs, reassignment, bran
 additional helper commands and nested shell code get no link exemption. A command or script that
 also reads or copies the credential file is refused, including a read through the new link.
 
+The same holds for a link to a directory that holds a credential file (the home directory and `/`
+included), and for a relative link source, resolved from the link's own directory as well as the
+working directory. Outside that one-link exemption, `ln` or a helper defined on the command line
+that links such a directory is refused like a link to the file itself. A `find` whose `-exec`,
+`-execdir`, `-ok` or `-okdir` runs anything but a metadata command (or `shred`, `unlink`, `rmdir`)
+on a start path holding a credential file is a read of it. A metadata command naming a credential
+file, or a `find` below one, whose output is piped on or substituted (`readlink -f link | xargs cat`,
+`cat "$(readlink -f link)"`) is a read too; on its own it stays metadata. Under Codex, a helper
+defined on the command line that is handed a path in its protected home is refused, since its
+body (parameter operators, `$*`, `printf -v`, `mkdir`) may write it.
+
 Static checks such as `bash -n scripts/install.sh`, `sh -n scripts/install.sh` and
 `shellcheck scripts/install.sh` inspect script text without executing its credential operations.
 The guard still checks command substitutions and refuses a credential file supplied directly
