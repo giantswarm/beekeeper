@@ -931,6 +931,9 @@ const (
 	DefaultUsageHighPercent = 95.0
 )
 
+// DefaultClaudeUsageCommand reads plan windows without a model turn.
+var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--output-format", "json"}
+
 // DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
@@ -3275,6 +3278,9 @@ func (c *Config) defaults() error {
 			if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
 				p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
 			}
+		}
+		if name == ClaudeHarness && len(p.Command) == 0 {
+			p.Command = slices.Clone(DefaultClaudeUsageCommand)
 		}
 		if name == AgyHarness && len(p.Command) == 0 && p.hasFields() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)

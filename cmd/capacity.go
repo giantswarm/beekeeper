@@ -111,6 +111,9 @@ type providerView struct {
 	// it stands, the provider's ceiling is that mode's and no session
 	// starts on the model.
 	DrainTo string `json:"drainTo,omitempty"`
+
+	NoPlanWindows       bool `json:"noPlanWindows,omitempty"`
+	supplementalBuckets bool
 }
 
 func (p *providerView) findBucket(name string) *bucketView {
@@ -142,11 +145,17 @@ func (p *providerView) windowsSummary(now time.Time) string {
 		}
 		return ""
 	}
+	if p.NoPlanWindows {
+		return claudeNoPlanWindows
+	}
 	if p.Error != "" {
 		return "usage unknown (" + truncate(p.Error, 120) + ")"
 	}
 	if len(p.Buckets) > 0 {
 		var parts []string
+		if p.supplementalBuckets {
+			parts = append(parts, "usage "+windowsPairLine(p.FiveHour, p.SevenDay, now))
+		}
 		for _, bName := range p.bucketOrder {
 			if bv := p.Buckets[bName]; bv != nil {
 				parts = append(parts, bName+" "+bv.windowsLine(now))
@@ -832,7 +841,13 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		}
 		r := res.reading
 		pv.At = r.At
-		if len(r.Buckets) > 0 {
+		if r.NoPlanWindows {
+			pv.NoPlanWindows = true
+			pv.Blocks = []string{claudeNoPlanWindows}
+			pv.Verdict = providerVerdict(0, pv.Blocks)
+			return pv
+		}
+		if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
 			pv.Buckets = make(map[string]*bucketView, len(r.Buckets))
 			pv.bucketOrder = bucketNames(r)
 			maxBucketCeiling := 0
@@ -939,6 +954,16 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
 	default:
 		pv.Room = pv.Ceiling - len(pv.Busy)
+	}
+	// Model weeks supplement, rather than replace, the aggregate plan windows.
+	if res.ok && len(res.reading.Buckets) > 0 && (res.reading.FiveHour != nil || res.reading.SevenDay != nil) {
+		pv.supplementalBuckets = true
+		pv.Buckets = make(map[string]*bucketView)
+		pv.bucketOrder = bucketNames(res.reading)
+		for _, name := range pv.bucketOrder {
+			b := res.reading.Buckets[name]
+			pv.Buckets[name] = &bucketView{Name: name, SevenDay: effectiveSevenDayWindow(b.SevenDay, now)}
+		}
 	}
 	pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
 	return pv
@@ -1258,7 +1283,7 @@ func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, 
 		if pv == nil {
 			continue
 		}
-		if cand.Bucket != "" && len(pv.Buckets) > 0 {
+		if cand.Bucket != "" && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			if bv := pv.findBucket(cand.Bucket); bv != nil {
 				key := cand.Provider + "/" + bv.Name
 				if !seenBucket[key] {
@@ -1354,7 +1379,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		pCfg := k.Providers[provName]
 		pv := providers[provName]
 		bucketName := ""
-		if pv != nil && len(pv.Buckets) > 0 {
+		if pv != nil && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			bucketName = ch.EffectiveBucket(pCfg)
 		}
 		cand := choiceCandidate{
@@ -1370,7 +1395,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			behind := 0.0
 			if subscription {
 				sd := pv.SevenDay
-				if len(pv.Buckets) > 0 {
+				if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 					sd = pv.findBucket(bucketName).SevenDay
 				}
 				if sd != nil && sd.Pace != nil {
@@ -1418,7 +1443,7 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 	}
 
 	var fh, sd *usageWindow
-	if len(pv.Buckets) > 0 {
+	if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 		bv := pv.findBucket(bucketName)
 		if bv == nil {
 			return fmt.Sprintf("bucket %q not in %s usage output", bucketName, pv.Name)
@@ -1980,7 +2005,7 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 		}
 		return v
 	}
-	if bucket != "" && len(pv.Buckets) > 0 {
+	if bucket != "" && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 		if bv := pv.findBucket(bucket); bv != nil {
 			if bv.Room == 0 {
 				v.Room = 0
