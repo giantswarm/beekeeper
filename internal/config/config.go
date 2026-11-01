@@ -32,6 +32,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/notify"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
 // Browser is the resource every machine has: the one Chrome the Claude in
@@ -74,18 +75,19 @@ type Config struct {
 	// through, and its keeper.
 	Teleport Teleport `yaml:"teleport"`
 
-	GitHub   GitHub   `yaml:"github"`
-	Watch    Watch    `yaml:"watch"`
-	Disk     Disk     `yaml:"disk"`
-	Overlaps Overlaps `yaml:"overlaps"`
-	Claude   Claude   `yaml:"claude"`
-	Omp      Omp      `yaml:"omp"`
-	Agy      Agy      `yaml:"agy"`
-	Codex    Codex    `yaml:"codex"`
-	Desktop  Desktop  `yaml:"desktop"`
-	Memcap   Memcap   `yaml:"memcap"`
-	Lanes    []Lane   `yaml:"lanes"`
-	Merge    Merge    `yaml:"merge"`
+	GitHub   GitHub    `yaml:"github"`
+	Watch    Watch     `yaml:"watch"`
+	Disk     Disk      `yaml:"disk"`
+	Overlaps Overlaps  `yaml:"overlaps"`
+	Claude   Claude    `yaml:"claude"`
+	Omp      Omp       `yaml:"omp"`
+	Agy      Agy       `yaml:"agy"`
+	Codex    Codex     `yaml:"codex"`
+	Desktop  Desktop   `yaml:"desktop"`
+	Memcap   Memcap    `yaml:"memcap"`
+	Run      RunConfig `yaml:"run"`
+	Lanes    []Lane    `yaml:"lanes"`
+	Merge    Merge     `yaml:"merge"`
 	// Units configures the transient user services beekeeper starts.
 	Units  Units  `yaml:"units"`
 	Alerts Alerts `yaml:"alerts"`
@@ -387,7 +389,16 @@ type Board struct {
 	Order []BoardStep `yaml:"order"`
 	// Epics is the epic gate, whatever the order says.
 	Epics EpicGate `yaml:"epics"`
+	// ArchiveAfter is how long a closed item stays on the board before
+	// board tidy archives it (default 336h, two weeks; negative: never,
+	// closed items are still moved to Done). TidyEvery is how often the
+	// supervisor loop runs board tidy (default 1h; negative: never).
+	ArchiveAfter Duration `yaml:"archiveAfter"`
+	TidyEvery    Duration `yaml:"tidyEvery"`
 }
+
+// DefaultBoardArchiveAfter is board.archiveAfter when unset: two weeks.
+const DefaultBoardArchiveAfter = 14 * 24 * time.Hour
 
 // EpicGate is the epic gate: an epic in a Planning status is in planning,
 // neither it nor any issue under it offered; moving it to Go is the go,
@@ -2047,6 +2058,9 @@ type Supervisor struct {
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
 	NoteDue      Duration `yaml:"noteDue"`
+	// FillRetryEvery bounds repeated empty or failed board reads while
+	// capacity and the roster stay unchanged (5m).
+	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
 	Ownership Ownership `yaml:"ownership"`
@@ -2849,6 +2863,11 @@ type Desktop struct {
 	TypingQuiet Duration `yaml:"typingQuiet"`
 }
 
+// RunConfig chooses where build commands execute.
+type RunConfig struct {
+	Remote remotebuild.Config `yaml:"remote"`
+}
+
 // Memcap locates the build slots of the memcap wrapper and caps the
 // commands `beekeeper run` runs.
 type Memcap struct {
@@ -3024,6 +3043,7 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
 	if c.Supervisor.Ownership.Team != "" {
 		setStr(&c.Supervisor.Ownership.TeamFiles, DefaultTeamFiles)
@@ -3101,6 +3121,8 @@ func (c *Config) defaults() error {
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
+	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
+	setDur(&c.Board.TidyEvery, time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)
@@ -3396,6 +3418,9 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	if err := c.Run.Remote.Validate(); err != nil {
+		return err
+	}
 	if c.Disk.Prune != "" && c.Disk.Prune != DiskPruneAuto && c.Disk.Prune != DiskPruneAsk {
 		return fmt.Errorf("disk.prune: want auto or ask")
 	}

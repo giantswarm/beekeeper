@@ -305,7 +305,10 @@ func TestLoopWaitsForRoomForAReviewer(t *testing.T) {
 	}
 }
 
-func TestLoopForwardsChangesThenEscalatesUnfixedFindings(t *testing.T) {
+// https://github.com/giantswarm/beekeeper/issues/1795: findings that stand
+// with no review round left go back to the worker; the person gets no merge
+// question.
+func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -316,39 +319,33 @@ func TestLoopForwardsChangesThenEscalatesUnfixedFindings(t *testing.T) {
 	if wake == nil || !strings.HasSuffix(wake[3], body) {
 		t.Fatalf("the findings were not forwarded word for word: %v", r.calls)
 	}
-	// The worker parks again without a new head: the guide decides.
+	// The worker parks again without a new head: back to it to rework.
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	note := r.called("note", loopAdd)
-	if note == nil || !slices.Contains(note, loopPerson) || !slices.Contains(note, loopURL) {
-		t.Fatalf("no note for the guide's person: %v\n%s", r.calls, r.out)
+	if note := r.called("note", loopAdd); note != nil {
+		t.Fatalf("used-up review rounds reached the guide's person: %v", note)
 	}
-	if evs := r.logged(t, "supervisor.escalate"); len(evs) != 1 {
-		t.Errorf("escalate logged as %+v", evs)
+	wake = r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], "fix every finding") || !strings.Contains(wake[3], loopURL) {
+		t.Fatalf("no rework told: %v\n%s", r.calls, r.out)
 	}
-	q := note[len(note)-1]
-	if q != superloop.EscalationQuestion(loopURL, loopHead) || strings.Contains(q, "blocking findings open") {
-		t.Errorf("the escalation asks %q", q)
+	if evs := r.logged(t, "supervisor.rework"); len(evs) != 1 {
+		t.Errorf("rework logged as %+v", evs)
 	}
-	if !slices.Contains(note, "--option") || !slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
-		t.Errorf("the escalation offers no Merge option: %v", note)
+	if evs := r.logged(t, "supervisor.escalate"); len(evs) != 0 {
+		t.Errorf("escalated: %+v", evs)
 	}
 	r.pass(t)
-	if len(r.calls) > 0 && r.called("note", loopAdd) != nil {
-		t.Errorf("escalated twice: %v", r.calls)
+	if evs := r.logged(t, "supervisor.rework"); len(evs) != 1 {
+		t.Errorf("reworked twice for one park: %+v", evs)
 	}
-	// The person releases it: the loop's merge go for the head it named.
-	n := &state.Note{ID: 1, By: loopParty, Text: q}
-	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "you can merge", Note: 1}, n)); err != nil {
-		t.Fatal(err)
-	}
+	// The fixes pushed and parked on: the merge go for the new head.
+	r.pull.Head = loopFixed
+	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
 	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopHead) || !strings.Contains(wake[3], "you can merge") {
-		t.Fatalf("the answer gave no merge go: %v\n%s", r.calls, r.out)
-	}
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 1 {
-		t.Errorf("go logged as %+v", evs)
+	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopFixed) {
+		t.Fatalf("no merge go for the fixed head: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -565,7 +562,7 @@ func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 			r.park(t, "", time.Now())
 			r.pull.State = superloop.Merged
 			r.pass(t)
-			if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: CI is broken on main", loopWorker)); err != nil {
+			if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.report", "%s: CI is broken on main", loopWorker)); err != nil {
 				t.Fatal(err)
 			}
 			r.pass(t)
@@ -577,6 +574,46 @@ func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 				t.Errorf("the classifier got %q", r.stdin)
 			}
 		})
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1795: a problem logged
+// mid-task is a finding, never a decision: filed nowhere it goes to the
+// guide's queue to file, naming its issue it needs nothing; the classifier
+// never sees it.
+func TestLoopFilesAMidTaskProblemAsNoDecision(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.Classifier = []string{loopClassifier}
+	r.command = func([]string) (string, int) { return `{"class":"needs-person","confidence":0.99}`, 0 }
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: the build slot queue gave up, o/r", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	note := r.called("note", loopAdd)
+	if note == nil || !strings.Contains(note[len(note)-1], "File in its owning repository what "+loopWorker+" found (1 problem, no decision)") ||
+		!strings.Contains(strings.Join(note, " "), "the build slot queue gave up") {
+		t.Fatalf("the note = %v\n%s", note, r.out)
+	}
+	if strings.Contains(strings.Join(note, " "), "Decide what") || len(r.stdin) != 0 {
+		t.Errorf("filed as a decision or classified: %v %q", note, r.stdin)
+	}
+	if evs := r.logged(t, "supervisor.file"); len(evs) != 1 {
+		t.Errorf("file logged as %+v", evs)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+		t.Errorf("a mid-task problem took its worker off the roster: %v", c)
+	}
+	// One naming its issue is filed: nothing more.
+	r.calls = nil
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: the lab flakes, https://github.com/o/r/issues/9", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if note := r.called("note", loopAdd); note != nil {
+		t.Errorf("a filed problem got a note: %v", note)
 	}
 }
 
@@ -608,6 +645,37 @@ func TestLoopFilesADoneReportsProblemThroughTheGuidesQueue(t *testing.T) {
 	r.pass(t)
 	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
 		t.Fatalf("not taken off the roster after the file: %v\n%s", r.calls, r.out)
+	}
+}
+
+// A mid-task problem of an agent whose task, park and serve record name no
+// issue or pull request still reaches the guide's queue to file: a note
+// without --ref, never a failed transition.
+func TestLoopFilesAProblemOfAnAgentWithoutAThread(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, "", time.Now())
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Task, st.Agents[0].Park = "keep the desk's machine tidy", nil
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: the build slot queue gave up, owning repository o/r", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	note := r.called("note", loopAdd)
+	if note == nil || slices.Contains(note, "--ref") || !strings.Contains(note[len(note)-1], "File in its owning repository what "+loopWorker+" found") ||
+		!strings.Contains(strings.Join(note, " "), "owning repository o/r") {
+		t.Fatalf("the note = %v\n%s", note, r.out)
+	}
+	if strings.Contains(r.out.String(), "FAILED") {
+		t.Errorf("the file failed:\n%s", r.out)
+	}
+	if evs := r.logged(t, "supervisor.file"); len(evs) != 1 {
+		t.Errorf("file logged as %+v", evs)
 	}
 }
 
@@ -917,7 +985,7 @@ func TestLoopReadsTheClassifiersStdoutAlone(t *testing.T) {
 	r.stderr = "model loaded in 2s\n"
 	r.park(t, "", time.Now())
 	r.pass(t)
-	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbProblem, "%s: the lab is gone", loopWorker)); err != nil {
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbReport, "%s: the lab is gone", loopWorker)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
@@ -1049,6 +1117,49 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 				t.Fatalf("watch lost timer line or notification: %s; %+v", out, desktop.sent)
 			}
 		})
+	}
+}
+
+func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board = config.Board{Owner: "o", Project: 7, TidyEvery: config.Duration{Duration: time.Hour}}
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, []string{loopBoard, boardTidyName}) {
+			return "https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done\n", 0
+		}
+		return "", 0
+	}
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	st := &state.State{}
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 1 || !strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") {
+		t.Fatalf("calls %v, out %q", r.calls, r.out)
+	}
+	// Within tidyEvery: no second run.
+	r.a.now = r.a.now.Add(30 * time.Minute)
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 1 {
+		t.Fatalf("tidied again within tidyEvery: %v", r.calls)
+	}
+	// The GitHub budget under its floor: none.
+	r.a.now = r.a.now.Add(time.Hour)
+	r.a.cfg.GitHub.Floor = 100
+	l.tidy(context.Background(), &state.State{Budget: &state.Budget{Remaining: 10, Reset: r.a.now.Add(time.Hour)}})
+	if len(r.calls) != 1 {
+		t.Fatalf("tidied on a low budget: %v", r.calls)
+	}
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 2 {
+		t.Fatalf("no tidy past tidyEvery: %v", r.calls)
+	}
+	// A negative tidyEvery, or no board: never.
+	r.a.now = r.a.now.Add(2 * time.Hour)
+	r.a.cfg.Board.TidyEvery.Duration = -1
+	l.tidy(context.Background(), st)
+	r.a.cfg.Board = config.Board{TidyEvery: config.Duration{Duration: time.Hour}}
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 2 {
+		t.Fatalf("tidied without a board or with tidying off: %v", r.calls)
 	}
 }
 
