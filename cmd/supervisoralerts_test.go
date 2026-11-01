@@ -334,14 +334,15 @@ func blockLoopAlert(t *testing.T, r *loopRig, f alerts.Firing) {
 }
 
 func TestLoopAlertRequiresExplicitBlockedWork(t *testing.T) {
+	wait := alertParkPrefix + loopFiring().Alertname
 	for _, tc := range []struct {
 		name, issue, waits string
 		ended              bool
 	}{
 		{name: "unrelated work", issue: loopURL, waits: "CI"},
 		{name: "another installation", issue: loopURL, waits: "alert:another/WorkloadDown"},
-		{name: "no owning item", waits: "alert:WorkloadDown"},
-		{name: "ended work", issue: loopURL, waits: "alert:WorkloadDown", ended: true},
+		{name: "no owning item", waits: wait},
+		{name: "ended work", issue: loopURL, waits: wait, ended: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLoopRig(t)
