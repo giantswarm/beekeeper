@@ -207,6 +207,9 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	}
 
 	var gotBrief string
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("Working directory: /wrong-project-directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	origLauncher, origMachine := plat.Launcher, plat.Machine
 	t.Cleanup(func() { plat.Launcher, plat.Machine = origLauncher, origMachine })
 	plat.Machine = tableMachine{plat.Machine}
@@ -253,6 +256,9 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	}
 	if !strings.Contains(gotBrief, "Read the issue and ship it.") {
 		t.Fatalf("FIFO brief = %q, want brief text", gotBrief)
+	}
+	if !strings.HasPrefix(gotBrief, "Working directory: "+dir+"\n") || !strings.Contains(gotBrief, "Working directory: /wrong-project-directory") {
+		t.Fatalf("actual working directory must precede project instructions: %q", gotBrief)
 	}
 	if len(l.started) != 1 {
 		t.Fatalf("started units = %d, want 1", len(l.started))

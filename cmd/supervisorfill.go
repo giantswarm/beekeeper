@@ -56,7 +56,14 @@ func (l *supervisorLoop) fillCapacity(ctx context.Context) *capacityView {
 
 func (l *supervisorLoop) previewFill(ctx context.Context) error {
 	cap := l.fillCapacity(ctx)
-	if cap == nil || cap.Room <= 0 || cap.Floor <= len(cap.Busy) {
+	if cap == nil || cap.Floor <= len(cap.Busy) {
+		return nil
+	}
+	room := cap.Floor - len(cap.Busy)
+	if !l.placesRemotely() {
+		room = min(room, cap.Room)
+	}
+	if room <= 0 {
 		return nil
 	}
 	next, err := l.nextItem(ctx)
@@ -65,7 +72,7 @@ func (l *supervisorLoop) previewFill(ctx context.Context) error {
 	}
 	count, first := 0, "the board offers nothing"
 	if next != nil {
-		count, first = min(cap.Room, cap.Floor-len(cap.Busy)), next.URL
+		count, first = room, next.URL
 	}
 	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR WOULD NEXT fill %d to capacity.floor (first: %s)\n", count, first)
 	return err
@@ -73,7 +80,10 @@ func (l *supervisorLoop) previewFill(ctx context.Context) error {
 
 // fill repairs a shortfall without waiting for a done event. Each start
 // checks live capacity again; the first shortfall also bounds this pass
-// if a capacity read has not yet caught up with a start. Claims are per
+// if a capacity read has not yet caught up with a start. The local room
+// bounds the pass only when no start can be placed on an execution host:
+// with supervisor.hosts each start's placement judges the local machine
+// and every host itself, so a full coordinator still fills onto hosts. Claims are per
 // board item, so an interrupted start is reconciled before another start.
 func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[string]loopClaim, taken []superloop.Taken) error {
 	if l.a.cfg.Supervisor.WorkerBrief == "" {
@@ -95,7 +105,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			continue
 		}
 		act := superloop.Action{Kind: superloop.KindNext, Key: key}
-		what, done, err := l.reconcile(st, act, c)
+		what, done, err := l.reconcile(ctx, st, act, c)
 		if err != nil {
 			return err
 		}
@@ -124,11 +134,15 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			l.fillPause = fillPause{}
 		}
 		shortfall := cap.Floor - len(cap.Busy)
-		if cap.Room <= 0 || shortfall <= 0 {
+		room := shortfall
+		if !l.placesRemotely() {
+			room = min(room, cap.Room)
+		}
+		if room <= 0 {
 			return nil
 		}
 		if started == 0 {
-			limit = min(shortfall, cap.Room)
+			limit = room
 		}
 		if started >= limit {
 			return nil

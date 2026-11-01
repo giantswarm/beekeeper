@@ -252,7 +252,7 @@ func executionShell(command, workspace string, protected []string, depth int) er
 					refusal = errors.New("managed execution identity and configuration cannot be removed")
 				}
 			}
-		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", "omp":
+		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", ompCommand:
 			refusal = errors.New("harness and service lifecycle belongs to the coordinating component")
 		case "gh", "devctl":
 			args := executionVerb(words[1:])

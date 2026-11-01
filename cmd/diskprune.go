@@ -33,6 +33,10 @@ type diskMachine struct {
 	tmp, trash     []string
 	trees          worktreeMachine
 	refresh        func() ([]string, bool, error)
+	// sccacheServers lists the user's sccache processes; stopSccache stops
+	// them before a trim. Nil, no server runs.
+	sccacheServers func() []int
+	stopSccache    func([]int) error
 }
 
 var liveDisk = (*app).diskMachine
@@ -54,7 +58,7 @@ func diskReferences() ([]string, bool, error) {
 }
 
 func (a *app) diskMachine() (diskMachine, error) {
-	m := diskMachine{refresh: diskReferences, cache: goCacheDir(), tmp: []string{filepath.Join(a.cfg.StateDir, "tmp")}, trash: a.cfg.Disk.TrashDirs}
+	m := diskMachine{refresh: diskReferences, sccacheServers: sccacheServers, stopSccache: stopSccacheServers, cache: goCacheDir(), tmp: []string{filepath.Join(a.cfg.StateDir, "tmp")}, trash: a.cfg.Disk.TrashDirs}
 	if d, err := machine.ReadDisk(a.cfg.StateDir); err == nil {
 		m.pressure = d.FreeMiB < a.cfg.Watch.DiskMin(d.TotalMiB)
 	}
@@ -254,15 +258,7 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 			} else if target, trim := diskCacheTarget(u.Bytes, a.cfg.Doctor.GoCacheMax(), pressure); !trim {
 				r.Keep("Go cache under cap")
 			} else if r.dry {
-				left := u.Bytes
-				for _, e := range u.Entries {
-					if left <= target {
-						break
-					}
-					r.Freed += e.Size
-					r.Removed++
-					left -= e.Size
-				}
+				dryTrim(r, u, target)
 			} else {
 				n, removed, err := gocache.Trim(u, target, func() bool { return false })
 				r.Freed += n
@@ -274,19 +270,6 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 		}
 	}
 	pruneSccache(r, m, int64(max(0, a.cfg.Disk.SccacheMaxGiB))<<30, pressure)
-}
-
-func pruneSccache(r *diskRun, m diskMachine, capBytes int64, pressure bool) {
-	if m.sccache == "" {
-		return
-	}
-	if diskprune.InUse(m.sccache, m.refs) {
-		r.Keep("sccache in use")
-	} else if _, trim := diskCacheTarget(worktrees.Size(m.sccache), capBytes, pressure); !trim {
-		r.Keep("sccache under cap")
-	} else {
-		r.Add(diskprune.Children(m.sccache, time.Time{}, m.refs, r.dry))
-	}
 }
 
 // diskCacheTarget preserves warm caches on healthy scheduled runs.

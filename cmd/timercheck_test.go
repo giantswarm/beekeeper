@@ -88,7 +88,8 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 	} {
 		t.Run(version, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), false)
-			w.chores = true // a running watch, not --once
+			defer w.bg.Wait() // pending also starts the doctor; finish it before TempDir cleanup.
+			w.chores = true   // a running watch, not --once
 			obj := stages[0]
 			fakeRead(t, func(cmd string) ([]byte, error) {
 				if !strings.Contains(cmd, "get kubeadmcontrolplanes.controlplane.cluster.x-k8s.io wc1") {
@@ -112,6 +113,7 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 			}
 			live := []*claude.Session{}
 			w.pending(context.Background(), live)
+			w.bg.Wait()
 			st, _ := w.store.Read()
 			if len(woke) != 0 || len(st.Timers) != 1 || st.Timers[0].Unreadable || !strings.Contains(st.Timers[0].Reason, "of 3 replicas") {
 				t.Fatalf("rolling: woke %v, timers %+v", woke, st.Timers)
@@ -119,6 +121,7 @@ func TestControlPlaneTimerFiresOnceRolledOut(t *testing.T) {
 			obj = stages[1]
 			w.now = relayNow.Add(timerEvery)
 			w.pending(context.Background(), live)
+			w.bg.Wait()
 			w.timerActs.Wait()
 			if len(woke) != 1 || woke[0] != "BK 594: beekeeper timer #1 ("+cpWhen+" holds): upgrade the node pools" {
 				t.Fatalf("woke %q", woke)
@@ -153,6 +156,7 @@ func TestUnreadableReferenceIsOneWatchLine(t *testing.T) {
 	tick := func(n int) {
 		w.now = relayNow.Add(time.Duration(n) * timerEvery)
 		w.pending(context.Background(), live)
+		w.bg.Wait()
 	}
 	tick(0)
 	tick(1)
