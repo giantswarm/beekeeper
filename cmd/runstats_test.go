@@ -143,3 +143,48 @@ func TestRunStats(t *testing.T) {
 		t.Fatalf("TOTAL row:\n%s", text)
 	}
 }
+
+// The cache count follows the runs it measures: a warm run crossing the
+// --since boundary counts where it completed, a run still going counts
+// nowhere, and a cold run whose command merely names warm stays cold.
+func TestRunStatsWindowAndCache(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	const since = "3h" // the window opens 09:00
+	evs := []state.Event{
+		// warm run crossing the boundary: start 08:55 (before), end 09:05
+		{At: now.Add(-3*time.Hour - 5*time.Minute), Verb: runrecord.Start, Detail: "remote:pod-a.11111111 other/repo@01234567 ns build-workers cache warm: go test ./..."},
+		{At: now.Add(-3*time.Hour + 5*time.Minute), Verb: runrecord.End, Detail: "remote:pod-a.11111111 exit 0 after 10m0s: go test ./..."},
+		// warm run still going: no end, counts nowhere
+		{At: now.Add(-time.Hour), Verb: runrecord.Start, Detail: "remote:pod-b.22222222 other/repo@01234567 ns build-workers cache warm: make build"},
+		// cold run whose command names warm: output, not cache state
+		{At: now.Add(-2 * time.Hour), Verb: runrecord.Start, Detail: "remote:pod-c.33333333 other/repo@01234567 ns build-workers cache cold: go test ./... -run warm"},
+		{At: now.Add(-2*time.Hour + time.Minute), Verb: runrecord.End, Detail: "remote:pod-c.33333333 exit 0 after 1m0s: go test ./... -run warm"},
+	}
+	if err := store.Record(evs...); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a := &app{store: store, out: &out, json: true, now: now}
+	c := a.runStatsCmd()
+	c.SetArgs([]string{sinceFlag, since})
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Repositories []runStat `json:"repositories"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Repositories) != 1 {
+		t.Fatalf("rows %v", got.Repositories)
+	}
+	r := got.Repositories[0]
+	if r.Repo != "other/repo" || r.Remote != 2 || r.WarmCache != 1 || r.Minutes != 11 {
+		t.Fatalf("row %+v: want remote 2 with one warm (the crossing run), the cold -run warm one not warm, the unfinished one absent", r)
+	}
+}

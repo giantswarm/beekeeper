@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+const (
+	testScope = "memcap-1-2.scope"
+	testRepo  = "o/r"
+	testPod   = "remote:pod-abc.3f2a9c1b"
+)
+
 func TestDetails(t *testing.T) {
 	start := StartDetail(RemoteID("builder-pod", "3f2a9c1b-7e6d-4c2a-9f0e-1d2c3b4a5f6e"), Facts("giantswarm/beekeeper", "16a89d963f2a9c1b")+Cache(true, "build-workers"), "go test ./...")
 	if !strings.HasPrefix(start, "remote:builder-pod.3f2a9c1b giantswarm/beekeeper@16a89d96 ns build-workers cache warm: go test ./...") {
@@ -25,12 +31,29 @@ func TestDetails(t *testing.T) {
 	}
 }
 
+// The cache fact reads from the start's facts only: a command named warm
+// on a cold record, or a failed run's tail, is output, not cache state.
+func TestWarm(t *testing.T) {
+	for _, tc := range []struct {
+		detail string
+		warm   bool
+		ok     bool
+	}{
+		{StartDetail(testPod, Facts(testRepo, "0123456789ab")+Cache(true, "build-workers"), "go test ./..."), true, true},
+		{StartDetail(testPod, Facts(testRepo, "0123456789ab")+Cache(false, ""), "go test ./... -run warm"), false, true},
+		{testPod + " cache warm: go build ./...", true, true},
+		// the facts hold it; the tail of a failed run and the command never do
+		{testPod + " exit 1 after 2s, failed: cache warm output: go build ./...", false, false},
+		{testScope + " slot 1 max 12G: go test ./...", false, false},
+	} {
+		warm, ok := Warm(tc.detail)
+		if warm != tc.warm || ok != tc.ok {
+			t.Errorf("Warm(%q) = %v,%v, want %v,%v", tc.detail, warm, ok, tc.warm, tc.ok)
+		}
+	}
+}
+
 func TestReaders(t *testing.T) {
-	const (
-		testScope = "memcap-1-2.scope"
-		testRepo  = "o/r"
-		testPod   = "remote:pod-abc.3f2a9c1b"
-	)
 	for _, tc := range []struct {
 		detail string
 		id     string

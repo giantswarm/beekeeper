@@ -63,6 +63,22 @@ func Cache(warm bool, namespace string) string {
 	return " ns " + namespace + " cache" + state
 }
 
+// Warm is the reader of Cache: whether a run.start's facts — read before the
+// command delimiter, never from the command or a failed run's tail, which
+// hold arbitrary text — say the builder pod's build caches held earlier
+// runs. ok is false when the record names no cache: a local run's, an end's,
+// or a record of an older release.
+func Warm(detail string) (warm, ok bool) {
+	facts, _, _ := strings.Cut(detail, ": ")
+	switch {
+	case strings.Contains(facts, "cache warm"):
+		return true, true
+	case strings.Contains(facts, "cache cold"):
+		return false, true
+	}
+	return false, false
+}
+
 // StartDetail is a run.start's detail: "<id><facts>: <command>".
 func StartDetail(id, facts, command string) string {
 	return strings.TrimRight(id+facts, " ") + ": " + command

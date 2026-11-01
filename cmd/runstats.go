@@ -78,7 +78,15 @@ repository in its record and counts under "-".`,
 				return err
 			}
 			by := map[string]*runStat{}
+			// owner and cache carry a start's facts to its end: the run's
+			// repository, and whether the builder pod it ran in was warm.
+			// Both are read on the start of any age and counted when the
+			// end is: a long build crossing --since counts once, where it
+			// completed, and a run still going counts nowhere. The cache
+			// state reads from the start's facts, never the command: test
+			// names are output, not cache state.
 			owner := map[string]string{}
+			cache := map[string]bool{}
 			at := func(repo string) *runStat {
 				if by[repo] == nil {
 					by[repo] = &runStat{Repo: repo}
@@ -87,27 +95,27 @@ repository in its record and counts under "-".`,
 			}
 			for _, e := range evs {
 				repo := runrecord.Repository(e.Detail)
-				if e.Verb == runrecord.Start {
+				switch e.Verb {
+				case runrecord.Start:
+					id := runrecord.ID(e.Detail)
 					if repo != "" {
-						owner[runrecord.ID(e.Detail)] = repo
+						owner[id] = repo
 					}
+					if warm, ok := runrecord.Warm(e.Detail); ok {
+						cache[id] = warm
+					}
+				case runrecord.Fallback:
 					if !from.IsZero() && e.At.Before(from) {
 						continue
 					}
-					if runrecord.Remote(e.Detail) && strings.Contains(e.Detail, " warm") {
-						at(repo).WarmCache++
-					}
-					continue
-				}
-				if !from.IsZero() && e.At.Before(from) {
-					continue
-				}
-				switch e.Verb {
-				case runrecord.Fallback:
 					at(repo).Fallback++
 				case runrecord.End:
-					if owner[runrecord.ID(e.Detail)] != "" {
-						repo = owner[runrecord.ID(e.Detail)]
+					if !from.IsZero() && e.At.Before(from) {
+						continue
+					}
+					id := runrecord.ID(e.Detail)
+					if owner[id] != "" {
+						repo = owner[id]
 					}
 					rc, took, ok := runrecord.ParseEnd(e.Detail)
 					if !ok {
@@ -116,6 +124,9 @@ repository in its record and counts under "-".`,
 					r := at(repo)
 					if runrecord.Remote(e.Detail) {
 						r.Remote++
+						if cache[id] {
+							r.WarmCache++
+						}
 					} else {
 						r.Local++
 					}
