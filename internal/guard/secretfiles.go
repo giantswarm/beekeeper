@@ -105,7 +105,8 @@ func newSecretFiles(extra []string) secretFiles {
 }
 
 // match returns the guarded file p names, "" for none: p itself, a file a
-// glob in p expands to, or what a symlink at p points to.
+// glob in p expands to, what a symlink at p points to, or the guarded file p
+// is a hard link of.
 func (f secretFiles) match(p string) string {
 	if p == "" {
 		return ""
@@ -131,6 +132,9 @@ func (f secretFiles) match(p string) string {
 				}
 			}
 		}
+		if file := f.sameGuarded(c); file != "" {
+			return file // a hard link of a guarded file
+		}
 	}
 	return ""
 }
@@ -155,14 +159,22 @@ func (f secretFiles) under(dir string) string {
 	return ""
 }
 
+// homeRest is w past a leading $HOME or ${HOME}, ok when w has one.
+func homeRest(w string) (string, bool) {
+	for _, h := range []string{"$HOME", "${HOME}"} {
+		if rest, ok := strings.CutPrefix(w, h); ok && (rest == "" || rest[0] == '/') {
+			return rest, true
+		}
+	}
+	return w, false
+}
+
 // wordPath is the path a shell word names, relative to dir: quotes gone,
 // ~/ and $HOME expanded, a redirection's < stripped; "" for no path.
 func wordPath(w, dir string) string {
 	w = strings.TrimPrefix(w, "<")
-	for _, h := range []string{"$HOME", "${HOME}"} {
-		if rest, ok := strings.CutPrefix(w, h); ok && (rest == "" || rest[0] == '/') {
-			w = "~" + rest
-		}
+	if rest, ok := homeRest(w); ok {
+		w = "~" + rest
 	}
 	w = expandHome(w)
 	if w == "" || strings.HasPrefix(w, "-") || strings.Contains(w, "://") {
@@ -194,12 +206,19 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 	if _, shadow := g.metadata[name]; shadow {
 		isMeta = false
 	}
+	if g.inTest {
+		isMeta = true // test operands; a substitution in them is a segment of its own
+	}
+	// ln and link read none of their operands: a link made here as a source
+	// is followed by chained, as a destination it is replaced
+	_, isFn := g.metadata[name]
+	linking := (name == "ln" || name == linkCmd) && !isFn
 	if !g.noLinks && g.linkAllowance.allowed && g.files.symbolicMetadata(linkArgs(name, args, g.metadata), dirs) {
 		isMeta = true
-	} else if _, helper := g.metadata[name]; name == "ln" || helper {
-		if file := g.files.linkSource(args, dirs); file != "" {
-			return &leak{what: "a link that exposes " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
-		}
+	} else if l, checked := g.linkLeak(name, args, dirs, g.depth); l != nil {
+		return l
+	} else if checked {
+		isMeta = true // a link to a guarded file, no read of it
 	}
 	if name == findCmd {
 		if file := g.files.findSource(args, dirs, g.feeds); file != "" {
@@ -225,7 +244,12 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 			continue
 		}
 		if i <= k && !isInputRedir && !strings.Contains(w, "/") && !strings.Contains(w, "=") {
-			continue // a bare command or wrapper word, resolved on PATH
+			// a bare command or wrapper word, resolved on PATH; as the
+			// command, a link made here run or named in an interpreter's code
+			if l, ok := g.madeRead(w, wordPath(w, g.cwd), false); i == k && ok && !linking {
+				return &leak{what: "a read of " + l.name() + ", a link made on this command line to " + l.file + ", a file that holds secret values", safe: fileReadSafe(l.file)}
+			}
+			continue
 		}
 		if i > 0 && (words[i-1] == ">" || words[i-1] == ">>" || words[i-1] == ">|" || words[i-1] == "2>" || words[i-1] == "2>>" || words[i-1] == "2>|" || words[i-1] == "&>" || words[i-1] == "&>>") || strings.HasPrefix(w, ">") || strings.HasPrefix(w, "2>") || strings.HasPrefix(w, "&>") {
 			continue // a write target, no read
@@ -241,6 +265,11 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 			}
 			if file != "" {
 				break
+			}
+			if l, ok := g.madeRead(w, p, recursive); ok && !linking {
+				// no file: a key-stripping consumer does not make a read of
+				// a link made here safe
+				return &leak{what: "a read of " + l.name() + ", a link made on this command line to " + l.file + ", a file that holds secret values", safe: fileReadSafe(l.file)}
 			}
 		}
 		if file != "" {
