@@ -390,17 +390,43 @@ func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 	}
 }
 
-// .github/release-gate.custom.sh refuses cutting a stable release when a newer
-// release candidate for the same version is not an ancestor of HEAD or when
-// HEAD is an ancestor of an existing release or candidate tag, and passes when
-// promoting the newest candidate or a new patch commit.
+// .github/release-gate.custom.sh and .github/workflows/zz_generated.auto_release.yaml
+// refuse cutting a stable release when a newer release candidate for the same
+// version is not an ancestor of HEAD or when HEAD is an ancestor of an existing
+// release or candidate tag (even when the detached candidate predates
+// .github/release-gate.custom.sh), and pass when promoting the newest candidate
+// or a new patch commit.
 func TestReleaseGateCustomScriptRefusesOlderCandidate(t *testing.T) {
 	script, err := filepath.Abs(filepath.Join("..", ".github", "release-gate.custom.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	workflowPath, err := filepath.Abs(filepath.Join("..", ".github", "workflows", "zz_generated.auto_release.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowBytes, err := os.ReadFile(filepath.Clean(workflowPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(workflowBytes)
+	for _, want := range []string{
+		`if [ "$PROMOTE_VERSION" != "$rc" ]; then`,
+		`cp .github/release-gate.custom.sh "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh"`,
+		`if [ ! -f "$gate" ] && [ -f "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh" ]; then`,
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("auto_release workflow missing %q", want)
+		}
+	}
+
+	scriptBytes, err := os.ReadFile(filepath.Clean(script))
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo := t.TempDir()
-	gitRun := func(args ...string) {
+	runnerTemp := t.TempDir()
+	gitRun := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", args...) //nolint:gosec // test helper
 		cmd.Dir = repo
@@ -410,40 +436,76 @@ func TestReleaseGateCustomScriptRefusesOlderCandidate(t *testing.T) {
 			"GIT_COMMITTER_NAME=test",
 			"GIT_COMMITTER_EMAIL=test@example.com",
 		)
-		if out, err := cmd.CombinedOutput(); err != nil {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
+		return string(out)
 	}
-	runGate := func(tag string) (string, error) {
+	runWorkflowGate := func(tag string) (string, error) {
 		t.Helper()
-		cmd := exec.Command("bash", script, tag) //nolint:gosec // test script in repository
+		step := `set -euo pipefail
+gate=.github/release-gate.custom.sh
+if [ ! -f "$gate" ] && [ -f "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh" ]; then
+  gate="${RUNNER_TEMP:-/tmp}/release-gate.custom.sh"
+fi
+if [ ! -f "$gate" ]; then
+  exit 0
+fi
+bash "$gate" "$TAG"
+`
+		cmd := exec.Command("bash", "-c", step) //nolint:gosec // test helper
 		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "RUNNER_TEMP="+runnerTemp, "TAG="+tag)
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
 
 	gitRun("init")
-	gitRun("commit", "--allow-empty", "-m", "feat: first candidate")
+	gitRun("commit", "--allow-empty", "-m", "feat: first candidate before gate script existed")
 	gitRun("tag", "v0.171.0-rc.110")
-	gitRun("commit", "--allow-empty", "-m", "feat: second candidate")
+	if tree := strings.TrimSpace(gitRun("ls-tree", "v0.171.0-rc.110", ".github/release-gate.custom.sh")); tree != "" {
+		t.Fatalf("expected v0.171.0-rc.110 to predate .github/release-gate.custom.sh, got %q", tree)
+	}
+
+	if err := os.MkdirAll(filepath.Join(repo, ".github"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".github", "release-gate.custom.sh"), scriptBytes, 0o750); err != nil { //nolint:gosec // executable gate script in test repo
+		t.Fatal(err)
+	}
+	gitRun("add", ".github/release-gate.custom.sh")
+	gitRun("commit", "-m", "feat: add release gate on second candidate")
 	gitRun("tag", "v0.171.0-rc.111")
 
-	if out, err := runGate("v0.171.0"); err != nil {
+	// Preserve the dispatch branch's gate script before detaching, as
+	// Resolve the candidate to promote does.
+	if err := os.WriteFile(filepath.Join(runnerTemp, "release-gate.custom.sh"), scriptBytes, 0o750); err != nil { //nolint:gosec // executable gate script in temp dir
+		t.Fatal(err)
+	}
+
+	if out, err := runWorkflowGate("v0.171.0"); err != nil {
 		t.Fatalf("promoting newest candidate v0.171.0-rc.111 failed: %v\n%s", err, out)
 	}
 
+	// Detaching to v0.171.0-rc.110 removes .github/release-gate.custom.sh from
+	// the working tree; the preserved gate from the dispatch branch still runs
+	// and refuses the stale candidate.
 	gitRun("checkout", "--detach", "v0.171.0-rc.110")
-	if out, err := runGate("v0.171.0"); err == nil || !strings.Contains(out, "v0.171.0-rc.111") {
-		t.Fatalf("promoting older candidate v0.171.0-rc.110: err=%v out=%q; want refusal naming v0.171.0-rc.111", err, out)
+	if _, err := os.Stat(filepath.Join(repo, ".github", "release-gate.custom.sh")); !os.IsNotExist(err) {
+		t.Fatalf("expected detached v0.171.0-rc.110 checkout to lack .github/release-gate.custom.sh, stat err=%v", err)
 	}
-	if out, err := runGate("v0.170.1"); err == nil || !strings.Contains(out, "HEAD is an ancestor of existing release tag") {
+	if out, err := runWorkflowGate("v0.171.0"); err == nil || !strings.Contains(out, "v0.171.0-rc.111") {
+		t.Fatalf("promoting older candidate v0.171.0-rc.110 predating gate script: err=%v out=%q; want refusal naming v0.171.0-rc.111", err, out)
+	}
+	if out, err := runWorkflowGate("v0.170.1"); err == nil || !strings.Contains(out, "HEAD is an ancestor of existing release tag") {
 		t.Fatalf("cutting stable release at ancestor of v0.171.0-rc.111: err=%v out=%q; want ancestor refusal", err, out)
 	}
 
 	gitRun("checkout", "--detach", "v0.171.0-rc.111")
 	gitRun("tag", "v0.171.0")
 	gitRun("commit", "--allow-empty", "-m", "fix: patch after stable")
-	if out, err := runGate("v0.171.1"); err != nil {
+	if out, err := runWorkflowGate("v0.171.1"); err != nil {
 		t.Fatalf("patch release at new HEAD failed: %v\n%s", err, out)
 	}
 }

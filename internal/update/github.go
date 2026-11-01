@@ -42,6 +42,16 @@ type rcRef struct {
 	sha     string
 }
 
+type candidateSet struct {
+	candidates   []releaseCandidate
+	newestRC     map[baseKey]rcRef
+	latestRC     rcRef
+	latestStable rcRef
+	stableSHAs   map[string]bool
+	tagSHA       map[string]string
+	olderTagSHAs map[string]bool
+}
+
 func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
 	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
 	if err != nil {
@@ -88,17 +98,21 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 			break
 		}
 	}
-	candidates, newestRC, tagSHA, olderTagSHAs := s.collectCandidates(refs)
-	runningSHA := s.runningSHA(tagSHA)
-	for i, candidate := range candidates {
+	set := s.collectCandidates(refs)
+	runningSHA := s.runningSHA(set.tagSHA)
+	staleSHAs := make(map[string]bool)
+	for i, candidate := range set.candidates {
 		if i == maxReleaseCandidates {
 			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags; refusing an incomplete lookup", maxReleaseCandidates)
 		}
-		stale, err := s.isStaleCandidate(ctx, owner, repo, candidate, newestRC, runningSHA, olderTagSHAs)
+		stale, err := s.isStaleCandidate(ctx, owner, repo, candidate, set, runningSHA, staleSHAs)
 		if err != nil {
 			return nil, err
 		}
 		if stale {
+			if candidate.sha != "" {
+				staleSHAs[candidate.sha] = true
+			}
 			continue
 		}
 		release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, candidate.tag)
@@ -130,9 +144,11 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 	return nil, nil
 }
 
-func (s *githubSource) collectCandidates(refs []*github.Reference) ([]releaseCandidate, map[baseKey]rcRef, map[string]string, map[string]bool) {
+func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet {
 	newestRC := make(map[baseKey]rcRef)
 	rcSHAs := make(map[baseKey]map[string]*semver.Version)
+	allRCSHAs := make(map[string]*semver.Version)
+	var latestRC rcRef
 	tagSHA := make(map[string]string, len(refs))
 	olderTagSHAs := make(map[string]bool)
 	currentVer, _ := semver.NewVersion(s.current)
@@ -158,8 +174,14 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) ([]releaseCan
 			if prev := rcSHAs[bk][sha]; prev == nil || version.GreaterThan(prev) {
 				rcSHAs[bk][sha] = version
 			}
+			if prev := allRCSHAs[sha]; prev == nil || version.GreaterThan(prev) {
+				allRCSHAs[sha] = version
+			}
 			if cur := newestRC[bk]; cur.version == nil || version.GreaterThan(cur.version) {
 				newestRC[bk] = rcRef{version: version, sha: sha}
+			}
+			if latestRC.version == nil || version.GreaterThan(latestRC.version) {
+				latestRC = rcRef{version: version, sha: sha}
 			}
 		}
 		if !s.prereleases && version.Prerelease() != "" {
@@ -167,14 +189,39 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) ([]releaseCan
 		}
 		raw = append(raw, releaseCandidate{tag: tag, version: version, sha: sha})
 	}
-	candidates := make([]releaseCandidate, 0, len(raw))
+	stableSHAs := make(map[string]bool)
+	promotedBase := make(map[baseKey]bool)
+	var latestStable rcRef
+	validRaw := make([]releaseCandidate, 0, len(raw))
 	for _, c := range raw {
 		if c.version.Prerelease() == "" && c.sha != "" {
 			bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
-			if rc, ok := newestRC[bk]; ok && rc.sha != "" && c.sha != rc.sha {
+			if rc, ok := newestRC[bk]; ok && rc.sha != "" && !sameCommit(c.sha, rc.sha) {
 				if rcVer := rcSHAs[bk][c.sha]; rcVer != nil && rcVer.LessThan(rc.version) {
 					continue
 				}
+			}
+			if latestRC.version != nil && latestRC.sha != "" && !sameCommit(c.sha, latestRC.sha) && c.version.LessThan(latestRC.version) {
+				if rcVer := allRCSHAs[c.sha]; rcVer != nil && rcVer.LessThan(latestRC.version) {
+					continue
+				}
+			}
+			stableSHAs[c.sha] = true
+			if rc, ok := newestRC[bk]; !ok || sameCommit(c.sha, rc.sha) {
+				promotedBase[bk] = true
+			}
+			if latestStable.version == nil || c.version.GreaterThan(latestStable.version) {
+				latestStable = rcRef{version: c.version, sha: c.sha}
+			}
+		}
+		validRaw = append(validRaw, c)
+	}
+	candidates := make([]releaseCandidate, 0, len(validRaw))
+	for _, c := range validRaw {
+		if c.version.Prerelease() != "" && c.sha != "" && c.tag != s.current {
+			bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
+			if stableSHAs[c.sha] || promotedBase[bk] {
+				continue
 			}
 		}
 		candidates = append(candidates, c)
@@ -185,24 +232,43 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) ([]releaseCan
 		}
 		return candidates[i].version.GreaterThan(candidates[j].version)
 	})
-	return candidates, newestRC, tagSHA, olderTagSHAs
+	return candidateSet{
+		candidates:   candidates,
+		newestRC:     newestRC,
+		latestRC:     latestRC,
+		latestStable: latestStable,
+		stableSHAs:   stableSHAs,
+		tagSHA:       tagSHA,
+		olderTagSHAs: olderTagSHAs,
+	}
 }
 
-func (s *githubSource) isStaleCandidate(ctx context.Context, owner, repo string, c releaseCandidate, newestRC map[baseKey]rcRef, runningSHA string, olderTagSHAs map[string]bool) (bool, error) {
+func (s *githubSource) isStaleCandidate(ctx context.Context, owner, repo string, c releaseCandidate, set candidateSet, runningSHA string, staleSHAs map[string]bool) (bool, error) {
 	if c.sha == "" {
 		return false, nil
 	}
 	if c.version.Prerelease() == "" {
 		bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
-		if rc, ok := newestRC[bk]; ok && rc.sha != "" && !sameCommit(c.sha, rc.sha) {
+		if rc, ok := set.newestRC[bk]; ok && rc.sha != "" && !sameCommit(c.sha, rc.sha) {
 			behind, err := s.isBehind(ctx, owner, repo, rc.sha, c.sha)
 			if err != nil || behind {
 				return behind, err
 			}
 		}
+		if set.latestRC.sha != "" && !set.stableSHAs[set.latestRC.sha] && !sameCommit(c.sha, set.latestRC.sha) {
+			behind, err := s.isBehind(ctx, owner, repo, set.latestRC.sha, c.sha)
+			if err != nil || behind {
+				return behind, err
+			}
+		}
+	} else if set.latestStable.sha != "" && !staleSHAs[set.latestStable.sha] && !set.olderTagSHAs[set.latestStable.sha] && !sameCommit(c.sha, set.latestStable.sha) && (runningSHA == "" || !sameCommit(c.sha, runningSHA)) {
+		behind, err := s.isBehind(ctx, owner, repo, set.latestStable.sha, c.sha)
+		if err != nil || behind {
+			return behind, err
+		}
 	}
 	if runningSHA != "" && !sameCommit(c.sha, runningSHA) {
-		if olderTagSHAs[c.sha] {
+		if set.olderTagSHAs[c.sha] {
 			return true, nil
 		}
 		return s.isBehind(ctx, owner, repo, runningSHA, c.sha)

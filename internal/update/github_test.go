@@ -54,9 +54,10 @@ func TestGitHubLookupBeyondAnonymousReleaseLimit(t *testing.T) {
 func stubGitHub(t *testing.T, current string, respond func(*http.Request) (int, string, http.Header)) *int {
 	t.Helper()
 	t.Setenv("GITHUB_TOKEN", "")
-	oldTransport, oldVersion := http.DefaultTransport, currentVersion
-	t.Cleanup(func() { http.DefaultTransport, currentVersion = oldTransport, oldVersion })
+	oldTransport, oldVersion, oldCommit := http.DefaultTransport, currentVersion, currentCommit
+	t.Cleanup(func() { http.DefaultTransport, currentVersion, currentCommit = oldTransport, oldVersion, oldCommit })
 	currentVersion = func() string { return current }
+	currentCommit = func() string { return "" }
 	calls := 0
 	http.DefaultTransport = releaseTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -219,11 +220,18 @@ func refsWithSHAJSON(tagSHAs [][2]string) string {
 // promoted from the newest candidate updates normally.
 func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
 	const (
-		staleStable  = "v0.171.0"
-		latestRC     = "v0.171.0-rc.120"
-		latestRCSHA  = "0dbeb8f"
-		staleRCSHA   = "3cccbe5"
-		nextPromoted = "v0.172.0"
+		staleStable     = "v0.171.0"
+		latestRC        = "v0.171.0-rc.120"
+		latestRCSHA     = "0dbeb8f"
+		staleRCSHA      = "3cccbe5"
+		promotedRC1     = "v0.172.0-rc.1"
+		promotedRC2     = "v0.172.0-rc.2"
+		promotedRCSHA   = "89f004f"
+		nextPromoted    = "v0.172.0"
+		newestFinal     = "v0.172.2"
+		newestFinalSHA  = "0668790"
+		aheadCompare    = `{"status":"ahead"}`
+		comparePathPart = "/compare/"
 	)
 	refs := refsWithSHAJSON([][2]string{
 		{githubStable, "1111111"},
@@ -234,9 +242,12 @@ func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
 	for _, tc := range []struct {
 		current    string
 		wantLatest string
+		wantNewer  bool
+		wantErr    error
 	}{
-		{latestRC, latestRC},
-		{githubStable, githubStable},
+		{latestRC, latestRC, false, nil},
+		{"v0.171.0-rc.115", latestRC, true, ErrOutdated},
+		{githubStable, githubStable, false, nil},
 	} {
 		t.Run(tc.current, func(t *testing.T) {
 			stubGitHub(t, tc.current, func(r *http.Request) (int, string, http.Header) {
@@ -250,27 +261,74 @@ func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
 				return 200, releaseJSON(tag, true, true), nil
 			})
 			res, err := Run(context.Background(), io.Discard, true)
-			if err != nil || res.Newer || res.Latest != tc.wantLatest {
-				t.Fatalf("result=%+v err=%v; want Latest=%s Newer=false", res, err, tc.wantLatest)
+			if !errors.Is(err, tc.wantErr) || res.Newer != tc.wantNewer || res.Latest != tc.wantLatest {
+				t.Fatalf("result=%+v err=%v; want Latest=%s Newer=%v err=%v", res, err, tc.wantLatest, tc.wantNewer, tc.wantErr)
 			}
 		})
 	}
 
 	promotedRefs := refsWithSHAJSON([][2]string{
-		{"v0.172.0-rc.1", "8a2daed"},
-		{"v0.172.0-rc.2", "89f004f"},
-		{nextPromoted, "89f004f"},
+		{promotedRC1, "8a2daed"},
+		{promotedRC2, promotedRCSHA},
+		{nextPromoted, promotedRCSHA},
+		{"v0.172.1", "63a2f20"},
+		{newestFinal, newestFinalSHA},
 	})
-	stubGitHub(t, "v0.172.0-rc.2", func(r *http.Request) (int, string, http.Header) {
+	for _, tc := range []struct {
+		current    string
+		wantLatest string
+	}{
+		{promotedRC1, newestFinal},
+		{promotedRC2, newestFinal},
+	} {
+		t.Run("promoted-"+tc.current, func(t *testing.T) {
+			stubGitHub(t, tc.current, func(r *http.Request) (int, string, http.Header) {
+				if strings.Contains(r.URL.Path, matchingRefsPath) {
+					return 200, promotedRefs, nil
+				}
+				if strings.Contains(r.URL.Path, comparePathPart) {
+					return 200, aheadCompare, nil
+				}
+				tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
+				if tag == promotedRC2 {
+					t.Errorf("requested superseded pre-release %s after %s was cut on the same commit", tag, nextPromoted)
+				}
+				return 200, releaseJSON(tag, true, true), nil
+			})
+			res, err := Run(context.Background(), io.Discard, true)
+			if !errors.Is(err, ErrOutdated) || !res.Newer || res.Latest != tc.wantLatest {
+				t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, tc.wantLatest)
+			}
+		})
+	}
+
+	// A pre-release at an older commit than the newest final release is skipped
+	// so a pre-release binary takes the newest of all releases and pre-releases
+	// by commit order.
+	commitOrderRefs := refsWithSHAJSON([][2]string{
+		{promotedRC1, "8a2daed"},
+		{promotedRC2, promotedRCSHA},
+		{nextPromoted, promotedRCSHA},
+		{"v0.172.1", "63a2f20"},
+		{newestFinal, newestFinalSHA},
+		{"v0.173.0-rc.1", "7777777"},
+	})
+	stubGitHub(t, promotedRC1, func(r *http.Request) (int, string, http.Header) {
 		if strings.Contains(r.URL.Path, matchingRefsPath) {
-			return 200, promotedRefs, nil
+			return 200, commitOrderRefs, nil
+		}
+		if strings.Contains(r.URL.Path, comparePathPart+newestFinalSHA+"...7777777") {
+			return 200, `{"status":"behind"}`, nil
+		}
+		if strings.Contains(r.URL.Path, comparePathPart) {
+			return 200, aheadCompare, nil
 		}
 		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 		return 200, releaseJSON(tag, true, true), nil
 	})
 	res, err := Run(context.Background(), io.Discard, true)
-	if !errors.Is(err, ErrOutdated) || !res.Newer || res.Latest != nextPromoted {
-		t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, nextPromoted)
+	if !errors.Is(err, ErrOutdated) || !res.Newer || res.Latest != newestFinal {
+		t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, newestFinal)
 	}
 }
 
