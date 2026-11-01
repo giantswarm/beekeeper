@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
-	"golang.org/x/sys/unix"
 )
 
 const (
