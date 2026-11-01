@@ -16,6 +16,7 @@ Finish one task. Stricter desk AGENTS.md, CLAUDE.md and rules win.
 - **Apps** (`beekeeper app`): own settings, installs, consents use `beekeeper browse`, never the person; another's App needs their word.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster calls name context/kubeconfig; never write `kube.production`.
 - **Alerts.** Post-roll/proof: `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts snapshot`, never Alertmanager/Mimir.
+- **Check and push once per round.** Run focused checks, collect all fixes for the round, then push them together once, never push each fix separately. Save failing output and read it instead of rerunning a full suite to see the failure; rerun only the failing test (for Go, `-run`). Use `set -o pipefail` when piping checks. Reviewers run focused reproductions only; full checks are CI's.
 - **Git.** No force push, including `--force-with-lease`: a behind branch merges its base and pushes, never on a rebase line. Own worktree; no `git stash`: commit waiting work.
 - **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
 - **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`; an agentlab proof only waits: never under `beekeeper run`.
