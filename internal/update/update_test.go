@@ -122,7 +122,7 @@ func (v *acceptingValidator) Validate(asset string, binary, bundle []byte) error
 func setup(t *testing.T, current string, src selfupdate.Source) {
 	t.Helper()
 	prevSource, prevValidator, prevExe, prevVersion := newSource, newValidator, executable, currentVersion
-	newSource = func() selfupdate.Source { return src }
+	newSource = func(bool) (selfupdate.Source, error) { return src, nil }
 	currentVersion = func() string { return current }
 	t.Cleanup(func() {
 		newSource, newValidator, executable, currentVersion = prevSource, prevValidator, prevExe, prevVersion
@@ -405,4 +405,14 @@ func TestRefusesADownloadThatDoesNotVerify(t *testing.T) {
 		t.Errorf("a refused download reported success:\n%s", out.String())
 	}
 	assertUnchanged(t, exe, content)
+}
+
+func TestReportsSourceInitializationFailure(t *testing.T) {
+	setup(t, running, &fakeSource{})
+	failure := errors.New("source initialization failed")
+	newSource = func(bool) (selfupdate.Source, error) { return nil, failure }
+	_, err := Run(context.Background(), io.Discard, true)
+	if !errors.Is(err, failure) {
+		t.Fatalf("Run() error=%v, want initialization failure", err)
+	}
 }
