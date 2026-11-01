@@ -1,8 +1,11 @@
 package guard
 
 import (
+	"io/fs"
 	"path"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -41,7 +44,7 @@ func (f secretFiles) holdsNamed(p string, named func(string) bool) string {
 		}
 	}
 	for _, c := range cands {
-		if file := f.match(c); file != "" && keep(file) {
+		if file := f.match(c); file != "" && (keep(c) || keep(file)) {
 			return file
 		}
 		prefix := strings.TrimSuffix(c, string(filepath.Separator)) + string(filepath.Separator)
@@ -231,9 +234,71 @@ func (f secretFiles) findSource(args, dirs []string, feeds bool) string {
 			if file := f.holdsNamed(wordPath(s, d), named); file != "" {
 				return file
 			}
+			if named != nil {
+				if file := f.findAlias(wordPath(s, d), named, findMaxDepth(args), slices.Contains(args, "-L") || slices.Contains(args, "-H")); file != "" {
+					return file
+				}
+			}
 		}
 	}
 	return ""
+}
+
+// A name predicate describes the encountered name, not a symlink's target.
+// Inspect directory entries only, never file contents. Do not follow directory
+// links recursively: a link exposing a secret subtree is conservatively unsafe
+// regardless of the predicate, since that subtree can contain further aliases.
+// Bound the work and fail closed if the tree cannot be inspected completely.
+func (f secretFiles) findAlias(root string, named func(string) bool, maxDepth int, follow bool) string {
+	if root == "" || len(f.globs) == 0 {
+		return ""
+	}
+	found, visited := "", 0
+	_ = filepath.WalkDir(root, func(p string, entry fs.DirEntry, err error) error {
+		visited++
+		if err != nil || visited > 4096 {
+			found = f.globs[0]
+			return fs.SkipAll
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if file := f.holds(p); file != "" && (named(entry.Name()) || follow && isDir(p)) {
+				found = file
+				return fs.SkipAll
+			}
+		}
+		if entry.IsDir() && maxDepth >= 0 {
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				found = f.globs[0]
+				return fs.SkipAll
+			}
+			depth := 0
+			if rel != "." {
+				depth = strings.Count(rel, string(filepath.Separator)) + 1
+			}
+			if depth >= maxDepth {
+				return fs.SkipDir
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+func findMaxDepth(args []string) int {
+	depth := -1
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i] {
+		case "-exec", "-execdir", "-ok", "-okdir":
+			return depth // later words belong to the action's command
+		}
+		if args[i] == "-maxdepth" {
+			if n, err := strconv.Atoi(args[i+1]); err == nil && n >= 0 {
+				depth = n
+			}
+		}
+	}
+	return depth
 }
 
 // pathPrinters are the metadata commands that print the paths they name (or
