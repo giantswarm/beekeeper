@@ -148,3 +148,32 @@ func TestRefStatesReadsALargeParkedSetInBatches(t *testing.T) {
 		t.Error("a reference of the failed batch has a state")
 	}
 }
+
+// A pull request's newest review or comment by anyone but its author is its
+// Reply; a pending review (no submittedAt) and the author's own are left out.
+func TestRefStatesReadsAPullRequestsNewestReply(t *testing.T) {
+	var query string
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		query = args[len(args)-1]
+		return []byte(`{"data":{"r0":{"issueOrPullRequest":{"state":"OPEN","author":{"login":"worker-app"},` +
+			`"reviews":{"nodes":[{"author":{"login":"reviewer"},"state":"CHANGES_REQUESTED","submittedAt":"2026-11-01T10:00:00Z"},{"author":{"login":"reviewer"},"state":"PENDING","submittedAt":null}]},` +
+			`"comments":{"nodes":[{"author":{"login":"worker-app"},"createdAt":"2026-11-01T12:00:00Z"},{"author":null,"createdAt":"2026-11-01T11:00:00Z"}]}}},` +
+			`"r1":{"issueOrPullRequest":{"state":"OPEN","author":{"login":"worker-app"},"reviews":{"nodes":[]},"comments":{"nodes":[{"author":{"login":"worker-app"},"createdAt":"2026-11-01T12:00:00Z"}]}}}}}`), nil
+	}
+	const repo = "example/notes"
+	refs := []PR{{Repo: repo, N: 1}, {Repo: repo, N: 2}}
+	states, err := RefStates(t.Context(), run, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RefState{State: Open, Reply: Reply{By: "ghost", At: time.Date(2026, 11, 1, 11, 0, 0, 0, time.UTC), Kind: "comment"}}
+	if got := states[refs[0]]; got != want {
+		t.Errorf("r0: %+v, want %+v", got, want)
+	}
+	if got := states[refs[1]]; got != (RefState{State: Open}) {
+		t.Errorf("r1, only its author's comment: %+v", got)
+	}
+	if !strings.Contains(query, "...on PullRequest{state author{login} reviews(last:10){nodes{author{login} state submittedAt}} comments(last:10){nodes{author{login} createdAt}}}") {
+		t.Errorf("query %s", query)
+	}
+}

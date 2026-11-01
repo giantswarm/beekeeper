@@ -20,17 +20,50 @@ const (
 // RefState is the state of an issue or pull request as GitHub answered:
 // OPEN, CLOSED or MERGED, and for an issue a closing keyword closed, what
 // closed it (Closer): the pull request whose merge did, as owner/repo#n,
-// or a bare commit as "commit <sha>". Empty for a close by hand.
+// or a bare commit as "commit <sha>". Empty for a close by hand. For a pull
+// request, Reply is its newest review or comment by anyone but its author;
+// zero for none.
 type RefState struct {
 	Kind   string
 	State  string
 	Closer string
+	Reply  Reply
 }
+
+// Reply is a review or comment on a pull request: who, when, and what kind
+// ("review APPROVED", "review CHANGES_REQUESTED", "comment", …).
+type Reply struct {
+	By   string
+	At   time.Time
+	Kind string
+}
+
+// replied reads a pull request's author and its latest reviews and comments
+// (refsReplies of each), for RefState.Replies.
+const replied = "author{login} reviews(last:%d){nodes{author{login} state submittedAt}} comments(last:%d){nodes{author{login} createdAt}}"
+
+// refsReplies is how many of a pull request's latest reviews, and of its
+// latest comments, a RefStates read asks for.
+const refsReplies = 10
 
 // closedBy reads an issue's latest closed event's closer: the pull
 // request whose closing keyword closed it, directly or through its merge
 // commit.
 const closedBy = "timelineItems(last:1,itemTypes:[CLOSED_EVENT]){nodes{...on ClosedEvent{closer{__typename ...on PullRequest{number repository{nameWithOwner}}...on Commit{abbreviatedOid associatedPullRequests(first:1){nodes{number repository{nameWithOwner}}}}}}}}"
+
+// login is an author as GitHub answers it; nil for a deleted account.
+type login struct {
+	Login string `json:"login"`
+}
+
+// name is the author's login, "ghost" for a deleted account, as GitHub
+// shows it.
+func (l *login) name() string {
+	if l == nil || l.Login == "" {
+		return "ghost"
+	}
+	return l.Login
+}
 
 // closer is a closed event's closer as GitHub answers it.
 type closer struct {
@@ -133,7 +166,7 @@ func refStates(ctx context.Context, run GH, refs []PR, states map[PR]RefState) e
 		if !ok {
 			return fmt.Errorf("%s is not owner/repo", r.Repo)
 		}
-		fmt.Fprintf(&q, "r%d:repository(owner:%s,name:%s){issueOrPullRequest(number:%d){__typename ...on Issue{state %s}...on PullRequest{state}}}", i, quote(owner), quote(name), r.N, closedBy)
+		fmt.Fprintf(&q, "r%d:repository(owner:%s,name:%s){issueOrPullRequest(number:%d){__typename ...on Issue{state %s}...on PullRequest{state %s}}}", i, quote(owner), quote(name), r.N, closedBy, fmt.Sprintf(replied, refsReplies, refsReplies))
 	}
 	q.WriteString("}")
 	// A reference GitHub does not answer fails the request but keeps the
@@ -155,6 +188,20 @@ func refStates(ctx context.Context, run GH, refs []PR, states map[PR]RefState) e
 						Closer *closer `json:"closer"`
 					} `json:"nodes"`
 				} `json:"timelineItems"`
+				Author  *login `json:"author"`
+				Reviews struct {
+					Nodes []struct {
+						Author      *login    `json:"author"`
+						State       string    `json:"state"`
+						SubmittedAt time.Time `json:"submittedAt"`
+					} `json:"nodes"`
+				} `json:"reviews"`
+				Comments struct {
+					Nodes []struct {
+						Author    *login    `json:"author"`
+						CreatedAt time.Time `json:"createdAt"`
+					} `json:"nodes"`
+				} `json:"comments"`
 			} `json:"issueOrPullRequest"`
 		}
 		raw, ok := doc.Data[fmt.Sprintf("r%d", i)]
@@ -165,6 +212,18 @@ func refStates(ctx context.Context, run GH, refs []PR, states map[PR]RefState) e
 		// A reopened issue's past close no longer closes it.
 		if s.State == Closed && len(v.Item.Timeline.Nodes) > 0 {
 			s.Closer = v.Item.Timeline.Nodes[0].Closer.ref()
+		}
+		author := v.Item.Author.name()
+		reply := func(by *login, at time.Time, kind string) {
+			if who := by.name(); at.After(s.Reply.At) && who != author {
+				s.Reply = Reply{By: who, At: at, Kind: kind}
+			}
+		}
+		for _, n := range v.Item.Reviews.Nodes {
+			reply(n.Author, n.SubmittedAt, "review "+n.State)
+		}
+		for _, n := range v.Item.Comments.Nodes {
+			reply(n.Author, n.CreatedAt, "comment")
 		}
 		states[r] = s
 	}

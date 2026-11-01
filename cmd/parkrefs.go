@@ -29,15 +29,13 @@ func (a *app) cacheParkRefs(agents []state.Agent, refs map[github.PR]github.RefS
 			if !ok || (read.Kind != github.RefIssue && read.Kind != github.RefPullRequest) {
 				continue
 			}
-			i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(old.Party) })
-			if i < 0 {
-				continue
+			for _, current := range parkedAgents(st) {
+				p := current.Park
+				if !current.Is(old.Party) || p == nil || p.On != old.Park.On || !p.At.Equal(old.Park.At) {
+					continue
+				}
+				p.RefKind, p.RefChecked = read.Kind, a.now.UTC()
 			}
-			p := st.Agents[i].Park
-			if p == nil || p.On != old.Park.On || !p.At.Equal(old.Park.At) {
-				continue
-			}
-			p.RefKind, p.RefChecked = read.Kind, a.now.UTC()
 		}
 		return nil, nil
 	}); err != nil {

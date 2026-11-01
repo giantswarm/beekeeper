@@ -131,3 +131,42 @@ func stubIssuePark(t *testing.T, on string) {
 	}
 	readParkSuggestions = func(context.Context, github.PR) (string, error) { return "", nil }
 }
+
+func TestIssueParkOffTheRosterBoundsReadsAndSettles(t *testing.T) {
+	w := parkingWatch(t, nil)
+	reads, closed := 0, false
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		reads++
+		s := github.Open
+		if closed {
+			s = github.Closed
+		}
+		return map[github.PR]github.RefState{refs[0]: {Kind: github.RefIssue, State: s}}, nil
+	}
+	if _, err := w.park(offSession, refOne, "wait for issue"); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := w.store.Read()
+	if out := w.settledParks(t.Context(), st); len(out) != 0 {
+		t.Fatal(out)
+	}
+	initial := reads
+	for range 3 {
+		st, _ = w.store.Read()
+		if len(st.Parks) != 1 || st.Parks[0].RefChecked.IsZero() || st.Parks[0].RefKind != github.RefIssue {
+			t.Fatalf("cache %+v", st.Parks)
+		}
+		if out := w.settledParks(t.Context(), st); len(out) != 0 {
+			t.Fatal(out)
+		}
+	}
+	if reads != initial {
+		t.Fatalf("off-roster issue read every pass: %d -> %d", initial, reads)
+	}
+	closed = true
+	w.now = w.now.Add(5 * time.Minute)
+	st, _ = w.store.Read()
+	if out := w.settledParks(t.Context(), st); len(out) != 1 || !out[0].party.Is(offSession) || !strings.Contains(out[0].answer, "closed") {
+		t.Fatalf("close %+v", out)
+	}
+}
