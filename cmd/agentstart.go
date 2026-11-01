@@ -1333,6 +1333,10 @@ func (a *app) detachReopen(arg string) error {
 		return err
 	}
 	id := strings.TrimPrefix(arg, "local_")
+	if !a.desktopMode() {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
+		return err
+	}
 	if s := a.readStop(); s != nil {
 		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(s))
 		return err
@@ -1361,6 +1365,10 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 	// A wake names the desktop id (local_…), a start its session id, which
 	// is the desktop id's too.
 	id := strings.TrimPrefix(arg, "local_")
+	if !a.desktopMode() {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
+		return err
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -1595,17 +1603,17 @@ func reopens(st *state.State, id string) (string, bool) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
 			return ag.HostSession == id || ag.Session != "" && "local_"+ag.Session == id
 		})
-		if i < 0 {
+		if i < 0 || st.Agents[i].Execution != nil {
 			return "", false
 		}
 		return st.Agents[i].Name, true
 	}
-	if !slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == id }) {
+	if !slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Execution == nil && !s.Background && s.Session == id }) {
 		return "", false
 	}
 	p := state.Party{Session: id}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-	if i < 0 {
+	if i < 0 || st.Agents[i].Execution != nil {
 		return "", false
 	}
 	return st.Agents[i].Name, true

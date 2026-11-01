@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -73,6 +74,98 @@ func TestPlanChores(t *testing.T) {
 	}
 	if c := planChores(st, sessions, record, busy, 0, now); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
 		t.Errorf("staleAfter 0 takes no stale agent off: %v", c)
+	}
+}
+
+// A managed SSH execution is never removed for local CLI staleness or
+// archived in the desktop; once its stop is acknowledged (or it reported
+// done and its execution is terminal), the doctor takes it off the roster.
+func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
+	a, _ := stubApp(t)
+	now := a.now
+	ref := func(id string) execution.Ref {
+		return execution.Ref{Host: "exec-host-doctor", Execution: execution.ExecutionID(id), Generation: 1}
+	}
+	runningRef, unackedRef, stoppedRef, doneRunningRef, doneExitedRef := ref("run-1"), ref("stop-unacked"), ref("stop-acked"), ref("done-running"), ref("done-exited")
+	mkAgent := func(name string, r execution.Ref, task string, done bool) state.Agent {
+		return state.Agent{
+			Party:      state.Party{Session: string(r.Execution), Name: name},
+			Execution:  &r,
+			Task:       task,
+			Done:       done,
+			Registered: now.Add(-48 * time.Hour),
+			IdleSince:  now.Add(-48 * time.Hour),
+		}
+	}
+	mkStart := func(name string, r execution.Ref, rec *state.ExecutionRecord) state.Start {
+		rec.Handle = execution.Handle{Ref: r, ConversationID: string(r.Execution)}
+		return state.Start{
+			Party:     state.Party{Session: string(r.Execution), Name: name},
+			Execution: rec,
+			Dir:       "/remote/" + string(r.Execution),
+			At:        now.Add(-48 * time.Hour),
+			Harness:   claudeComm,
+		}
+	}
+	const (
+		sshRunning     = "ssh-running"
+		sshStopUnacked = "ssh-stop-unacked"
+		sshStopped     = "ssh-stopped"
+		sshDoneRunning = "ssh-done-running"
+		sshDoneExited  = "ssh-done-exited"
+	)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{
+			mkAgent(sshRunning, runningRef, "active task", false),
+			mkAgent(sshStopUnacked, unackedRef, "stopping task", false),
+			mkAgent(sshStopped, stoppedRef, "stopped task", false),
+			mkAgent(sshDoneRunning, doneRunningRef, "", true),
+			mkAgent(sshDoneExited, doneExitedRef, "", true),
+		}
+		st.Starts = []state.Start{
+			mkStart(sshRunning, runningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart(sshStopUnacked, unackedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s1"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart(sshStopped, stoppedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s2"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopRequested: true, StopAcknowledged: true}}),
+			mkStart(sshDoneRunning, doneRunningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Running}}),
+			mkStart(sshDoneExited, doneExitedRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, now)
+	var got []string
+	for _, c := range chores {
+		got = append(got, c.String())
+	}
+	want := []string{
+		`take "ssh-stopped" off the roster (its SSH execution was stopped)`,
+		`take "ssh-done-exited" off the roster (it reported its work done)`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("planChores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	removed, err := a.removeAgents(chores, watchParty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed = %+v, want 2", removed)
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remaining []string
+	for _, ag := range st.Agents {
+		remaining = append(remaining, ag.Name)
+	}
+	if !slices.Equal(remaining, []string{sshRunning, sshStopUnacked, sshDoneRunning}) {
+		t.Fatalf("remaining agents = %v", remaining)
 	}
 }
 
@@ -512,5 +605,64 @@ func TestCheckCodexSkills(t *testing.T) {
 	}
 	if got := checkCodexSkills(home, stateDir, true, customCfg); !strings.Contains(got, "~/custom-codex/skills is missing; run `beekeeper install`") {
 		t.Errorf("checkCodexSkills(customCfg): got %q", got)
+	}
+}
+
+// The doctor stops the background sessions of finished workers, relieved role
+// runs (whether still on the roster or already removed by their relay) and
+// stale idle entries without a CLI, while leaving active role holders and
+// sessions the person started running.
+func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	a.now = now
+	a.cfg.Agents.Mode = config.ModeBackground
+	a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
+
+	doneWorker := state.Party{Session: "aaaaaaaa-0000-4000-8000-000000000001", Name: loopWorker}
+	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: guideRole.runName(1)}
+	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: guideRole.runName(2)}
+	personSession := state.Party{Session: "dddddddd-0000-4000-8000-000000000004", Name: "person own"}
+
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, p := range []state.Party{doneWorker, relievedGuide, activeGuide} {
+			st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: t.TempDir(), At: now.Add(-time.Hour), Background: true})
+		}
+		// doneWorker is on the roster as Done; relievedGuide was already removed
+		// from st.Agents by its relay when activeGuide took over.
+		st.Agents = []state.Agent{
+			{Party: doneWorker, Done: true, IdleSince: now.Add(-10 * time.Minute)},
+			{Party: activeGuide, Task: activeGuide.Name},
+			{Party: personSession, Done: true, IdleSince: now.Add(-10 * time.Minute)},
+		}
+		st.SetGuideRole(state.Role{
+			Holder:   &state.Supervisor{Party: activeGuide, Since: now.Add(-30 * time.Minute)},
+			Run:      2,
+			Relieved: []state.Relief{{Party: relievedGuide, By: activeGuide, At: now.Add(-30 * time.Minute), Taken: now.Add(-30 * time.Minute)}},
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := stubBackground(t, "",
+		bgSession{ID: doneWorker.Session[:8], SessionID: doneWorker.Session, Kind: bgKind},
+		bgSession{ID: relievedGuide.Session[:8], SessionID: relievedGuide.Session, Kind: bgKind},
+		bgSession{ID: activeGuide.Session[:8], SessionID: activeGuide.Session, Kind: bgKind},
+		bgSession{ID: personSession.Session[:8], SessionID: personSession.Session, Kind: bgKind},
+	)
+	if _, err := a.doctor(t.Context(), doctorRun{by: watchParty}); err != nil {
+		t.Fatal(err)
+	}
+	var stopped []string
+	for _, c := range *calls {
+		if len(c.argv) == 3 && c.argv[1] == bgStopCmd {
+			stopped = append(stopped, c.argv[2])
+		}
+	}
+	slices.Sort(stopped)
+	if want := []string{doneWorker.Session[:8], relievedGuide.Session[:8]}; !slices.Equal(stopped, want) {
+		t.Fatalf("stopped = %v, want %v", stopped, want)
 	}
 }

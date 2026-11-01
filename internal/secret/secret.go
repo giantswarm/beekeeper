@@ -71,8 +71,7 @@ type Ops struct {
 	// file's installation ([AgeInstallationItem]) is looked up in Vault and
 	// each of them.
 	AgeVaults []string
-	// Store is the person's own credential store a store:// age identity
-	// is read from.
+	// Store is the person's own credential store for sources and age identities.
 	Store Store
 	// Index is the value scanner's index reveal checks a value against, its
 	// indexed secrets and token patterns; nil checks the patterns alone.
@@ -129,10 +128,12 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 // key holds), one value of a plain file on the host as a source
 // (file://<absolute path>#<path>, the file in Plain), a value an allowed
 // producer generates as a source (cmd://<command>#<path>, its words in
-// Cmd), a SOPS file, or one path in a SOPS file (file#a.b.c, sops:// in
+// Cmd), a credential-store entry (store://<entry>[#<field>], its entry
+// in Store and attribute in Path), a SOPS file, or one path in a SOPS file (file#a.b.c, sops:// in
 // front optional).
 type Ref struct {
 	Op    string
+	Store string
 	Kube  KubeTarget
 	Plain string
 	Cmd   string
@@ -151,6 +152,9 @@ func ParseRef(s string) (Ref, error) {
 			return Ref{}, fmt.Errorf("%q: one line of an env-style field is op://<vault>/<item>/<field>#<KEY>", s)
 		}
 		return Ref{Op: s}, nil
+	}
+	if strings.HasPrefix(s, StoreRef) {
+		return parseStoreRef(s)
 	}
 	if strings.HasPrefix(s, K8sRef) {
 		return parseKubeRef(s)
@@ -181,6 +185,8 @@ func slicesHasEmpty(ss []string) bool {
 // String is the reference as a log and an answer name it.
 func (r Ref) String() string {
 	switch {
+	case r.Store != "":
+		return StoreRef + r.Store + storeFieldSuffix(r.Path)
 	case r.Op != "":
 		return r.Op
 	case r.IsKube() && r.Path != "":
@@ -203,8 +209,8 @@ func (r Ref) String() string {
 func (r Ref) IsKube() bool { return r.Kube != (KubeTarget{}) }
 
 // IsSource is whether the reference names a value beekeeper only reads: a
-// key of a Kubernetes Secret, a plain file or a producer's output.
-func (r Ref) IsSource() bool { return r.IsKube() || r.Plain != "" || r.Cmd != "" }
+// key of a Kubernetes Secret, a plain file, a credential-store entry or a producer's output.
+func (r Ref) IsSource() bool { return r.IsKube() || r.Plain != "" || r.Cmd != "" || r.Store != "" }
 
 // Single is whether the reference names one value.
 func (r Ref) Single() bool { return r.Op != "" || r.IsSource() || r.Path != "" }
@@ -273,6 +279,13 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 			return nil, err
 		}
 		return map[string]string{r.Op: v}, nil
+	}
+	if r.Store != "" {
+		v, err := o.readStore(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{r.String(): v}, nil
 	}
 	if r.IsKube() {
 		v, err := o.readKube(ctx, r)
