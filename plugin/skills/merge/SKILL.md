@@ -10,17 +10,16 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
 - **One merge command per PR, through the gate**: `devctl pr merge <owner/repo> <n> --update-branch`
   (a rebase line: `--rebase --update-branch`) for `merge.devctlOwners`, `devctl release promote
   <owner/repo> --version <proven RC>` likewise. Act on its exit code, never around it: 76 queued,
-  its outcome wakes the worker (park on the PR, never run it again); 77 refused, its line to the
+  its outcome wakes the worker (park on the PR, never rerun); 77 refused, its line to the
   supervisor, no second merge; 74 unread: the same merge once GitHub answers; 3 still "behind":
-  as below, then the same merge again.
-- **A merge on the person's word** runs `beekeeper answer verify --note <id> --head <sha>` first and quotes its output in the merge step; exit 3 (relayed, stale, another head) is no word: park on the note. The gate names the verified answer on the merge's record.
-- **Protection** is read with `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
-- **Nothing rolls onto an installation while one of its clusters upgrades.**
+  as below, then again.
+- **The person's word**: quote `answer verify --note <id> --head <sha>`; exit 3 is none.
+- **Protection**: `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
+- **Nothing rolls onto an installation while a cluster of it upgrades.**
 - **Before a non-mechanical change**, read the repo's open PRs and recent commits: a
-  teammate's overlapping one is a hard stop, told to the supervisor.
+  teammate's overlap is a hard stop, told to the supervisor.
 - **A personal account's repository**: the person's own `gh` once CI is green: `gh pr merge <n> --repo <owner/repo> --squash --subject "<PR title> (#<n>)"`.
 - **A release candidate is proven live and promoted as routine**; the person is never asked.
 - **Commits.** Conventional subjects, at most 72 characters; no major version bumps.
-- **Behind**: a behind branch merges its base and pushes, never on a rebase line: the gate
-  rebases it at its turn. There, a conflict or merge commit (77) takes a PR from a fresh
-  branch of the base.
+- **Behind**: merge the base, push, never on a rebase line: the gate rebases it at its turn, where a
+  conflict or merge commit (77) takes a PR from a fresh branch of the base.
