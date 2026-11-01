@@ -765,7 +765,7 @@ func TestPlainWaiterDoesNotBlockAnUnparkedOwnersRound(t *testing.T) {
 			}
 		})
 	}
-	for _, tc := range []struct{ answer, kind string }{{"Rework", KindAnswer}, {"Merge", KindGo}} {
+	for _, tc := range []struct{ answer, kind string }{{"Rework — address the remaining findings", KindAnswer}, {"Merge — the answer releases this head", KindGo}} {
 		t.Run("answer/"+tc.answer, func(t *testing.T) {
 			in := escalated(t, tc.answer)
 			in.Workers = workers
