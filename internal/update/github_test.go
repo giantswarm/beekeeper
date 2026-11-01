@@ -370,10 +370,15 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 }
 
 func TestGitHubLookupAuthentication(t *testing.T) {
+	const (
+		loginToken     = "test-login"
+		githubEnvToken = "test-github"
+		ghEnvToken     = "test-gh"
+	)
 	for _, tc := range []struct{ name, gh, github, login, want string }{
-		{name: "login", login: "test-login", want: "test-login"},
-		{name: "gh environment", gh: "test-gh", github: "test-github", login: "test-login", want: "test-gh"},
-		{name: "github environment", github: "test-github", login: "test-login", want: "test-github"},
+		{name: "login", login: loginToken, want: loginToken},
+		{name: "gh environment", gh: ghEnvToken, github: githubEnvToken, login: loginToken, want: ghEnvToken},
+		{name: "github environment", github: githubEnvToken, login: loginToken, want: githubEnvToken},
 		{name: "anonymous"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
