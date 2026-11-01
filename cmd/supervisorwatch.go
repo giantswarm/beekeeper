@@ -185,7 +185,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			if err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.NextNote++
 				text := "Disk remains low after pruning; starts are held. Writers: " + disk.Writers
-				st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: l.a.cfg.Guide.Person, By: loopParty, At: l.a.now, Text: text, Kind: noteDecision, Question: "Free additional disk space?", StatusQuo: text, Default: "keep starts held until the watch reports disk recovery"})
+				st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: l.a.cfg.Guide.Person, By: loopParty, At: l.a.now, Text: text, Kind: noteDecision, Question: "Investigate remaining disk writers (no decision)", StatusQuo: text, Default: "the guide investigates the writers and reclaims disposable data; keep starts held until the watch reports disk recovery"})
 				return []state.Event{event(loopParty, "note.add", "#%d %s", st.NextNote, text), event(loopParty, "supervisor.disk", "%s", superloop.Detail(act, "noted"))}, nil
 			}); err != nil {
 				return err
