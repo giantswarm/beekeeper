@@ -269,6 +269,12 @@ file; a finding filed already names its issue's URL. The log keeps them
 				if m := post.Unlinked(strings.Join(append([]string{report}, found...), "\n"), agentHere(st, ag)); len(m) > 0 {
 					return nil, refused("report refused, it lacks: %s", strings.Join(m, "; "))
 				}
+				if slices.ContainsFunc(st.DeskReviews, func(round state.DeskReview) bool { return sameReviewSession(round.Reviewer, ag.Party) }) && !sameReviewSession(me, ag.Party) {
+					return nil, refused("independent review completion requires its assigned session, not --as")
+				}
+				if err := a.captureExecutionReviewReport(cmd.Context(), st, me, report, a.now, finished); err != nil {
+					return nil, err
+				}
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
@@ -283,7 +289,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 					}
 				}
 				if report != "" || len(found) > 0 {
-					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
+					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
 				}
 				if report != "" {
 					evs = append(evs, event(me, "agents.report", "%s: %s", ag.Name, report))
@@ -296,6 +302,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 			if err != nil {
 				return err
 			}
+			a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			if report != "" || len(found) > 0 {
 				if _, err := fmt.Fprintf(a.out, "register: the report and %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
 					return err
@@ -561,7 +568,7 @@ func findParty(parties []state.Party, q, one, many string) (int, error) {
 func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentView {
 	out := make([]agentView, 0, len(st.Agents))
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
-	desktop := t != nil && !plat.Opener.Running(t).IsZero()
+	desktop := a.desktopMode() && t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
 		if ag.Execution != nil {

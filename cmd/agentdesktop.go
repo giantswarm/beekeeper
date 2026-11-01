@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -59,6 +60,9 @@ the agent.`,
 				}
 				if i, err := find(st); err == nil && a.backgroundAgent(cmd.Context(), st, st.Agents[i].Party) {
 					return refused("%s runs as a background session (agents.mode background): it has no desktop turn, Remote Control and claude attach show it", st.Agents[i].Name)
+				}
+				if i, err := find(st); err == nil && !a.desktopMode() && !strings.HasPrefix(st.Agents[i].HostSession, "local_") {
+					return refused("%s has no desktop turn under agents.mode %s", st.Agents[i].Name, a.cfg.Agents.Mode)
 				}
 			}
 			var ag state.Agent
@@ -247,6 +251,9 @@ func importStatus(ag state.Agent, now time.Time) string {
 // noCLI says that ag runs no CLI, whether an import is pending, and how it
 // gets one when none is.
 func noCLI(ag state.Agent, now time.Time) string {
+	if ag.Execution != nil {
+		return fmt.Sprintf("no local CLI of %q runs (managed SSH execution): `beekeeper agents wake %q \"<message>\"` delivers to its execution host", ag.Name, ag.Name)
+	}
 	s := fmt.Sprintf("no CLI of %q runs; %s", ag.Name, importStatus(ag, now))
 	if !ag.Import.Pending(now) {
 		s += fmt.Sprintf(": `beekeeper agents desktop %q` shows it in the desktop, `beekeeper agents wake %q \"<message>\"` resumes it headless", ag.Name, ag.Name)

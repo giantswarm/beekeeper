@@ -79,14 +79,20 @@ func daemonRan(ctx context.Context, id string) bool {
 // bgKind is the kind claude agents gives a session the daemon runs.
 const bgKind = "background"
 
+// desktopMode reports whether the desk runs its sessions in the desktop
+// (agents.mode desktop, the default).
+func (a *app) desktopMode() bool {
+	return a == nil || a.cfg == nil || cmp.Or(strings.TrimSpace(a.cfg.Agents.Mode), config.ModeDesktop) == config.ModeDesktop
+}
+
 // desktopStarted reports whether p's session is one of beekeeper's starts
 // that the desktop shows: a background start has no desktop row to miss.
 func desktopStarted(st *state.State, p state.Party) bool {
 	if !started(st, p) {
 		return false
 	}
-	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Session == p.Session })
-	return !st.Starts[i].Background
+	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Execution == nil && s.Session == p.Session })
+	return i >= 0 && !st.Starts[i].Background
 }
 
 // cleanEnv is environ without the caller's session and harness variables
@@ -278,7 +284,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		if reg, err = recordStart(st, s, sp.task, sp.serves, live); err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
