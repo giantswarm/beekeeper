@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -65,42 +67,125 @@ func (g *gateRun) lanePending() string {
 
 // awaitReleases runs before the merge's devctl in a lane without an
 // installation: while a release of the lane is being confirmed it warms the
-// pull request up (warmUp), then waits until that release is known and the
-// lane settled, so the merge lands after the previous release's verdict.
-func (g *gateRun) awaitReleases() {
+// pull request up (warmUp, beside the wait), then waits until that release
+// is known and the lane settled, so the merge lands after the previous
+// release's verdict. The wait is the merge's, its place running without a
+// devctl: a stop (SIGINT, a SIGTERM aimed at the run, the gate's context
+// ending, beekeeper gate stop) ends it with nothing merged and the place out
+// of the lane; a hold that preempts the merge puts it back to waiting
+// (preemptedError); a place taken out of the lane refuses; a release still
+// unknown past releasesWait refuses rather than merging ahead of its verdict.
+// The reviews are read again before devctl starts.
+func (g *gateRun) awaitReleases() error {
 	if g.lane.Installation != "" {
-		return
+		return nil
 	}
 	why := g.lanePending()
 	if why == "" {
-		return
+		return nil
 	}
 	gateLine("lane %s: %s; %s updates its branch and waits for its CI meanwhile, and merges once that release is known",
 		g.lane.Name, why, g.key())
-	g.warmUp()
-	deadline := time.Now().Add(releasesWait(g.cfg.Merge.Settle.Duration))
+	ctx, cancel := context.WithCancel(g.ctx)
+	warmed := make(chan struct{})
+	go func() {
+		defer close(warmed)
+		g.warmUp(ctx)
+	}()
+	defer func() {
+		cancel() // the warm-up ends with the wait: nothing outlives it
+		<-warmed
+	}()
+	wait := releasesWait(g.cfg.Merge.Settle.Duration)
+	deadline := time.Now().Add(wait)
+	tick := time.NewTicker(releasesPoll)
+	defer tick.Stop()
 	said := ""
-	for why = g.lanePending(); why != ""; why = g.lanePending() {
+	for {
+		if err := g.stillRunning(); err != nil {
+			return err
+		}
+		if why = g.lanePending(); why == "" {
+			break
+		}
 		if time.Now().After(deadline) {
-			gateLine("lane %s still waits past %s (%s): %s merges now, the confirming gate is wedged", g.lane.Name,
-				releasesWait(g.cfg.Merge.Settle.Duration), why, g.key())
-			return
+			return g.refuseRunning("lane %s still waits for a release's verdict past %s (%s): nothing merged, %s left the lane; run the same command again once beekeeper lanes shows the release known",
+				g.lane.Name, wait, why, g.key())
 		}
 		if why != said {
 			gateLine("%s waits to merge: %s", g.key(), why)
 			said = why
 		}
-		time.Sleep(releasesPoll)
+		select {
+		case s := <-g.sig:
+			if err := g.stopWaiting(s); err != nil {
+				return err
+			}
+		case <-g.ctx.Done():
+			return g.stopWaiting(nil)
+		case <-tick.C:
+		}
+	}
+	if err := g.stillRunning(); err != nil {
+		return err
 	}
 	gateLine("lane %s: the previous release is known, %s merges", g.lane.Name, g.key())
+	return g.checkReviews(g.refuseRunningWith)
+}
+
+// stillRunning says whether the waiting merge may go on: nil while its
+// place runs, preemptedError (its place back to waiting) when a hold set
+// since lets another pull request through first (merge.Preempts), a
+// refusal when its place left the lane.
+func (g *gateRun) stillRunning() error {
+	st, err := g.store.Read()
+	if err != nil {
+		return nil // the next read decides; devctl's start reads it again
+	}
+	i := g.mine(st, state.Running)
+	if i < 0 {
+		return gateRefused("%s was taken out of lane %s while it waited for the lane's release: nothing merged", g.key(), g.lane.Name)
+	}
+	if h, ok := merge.Preempts(st, time.Now(), st.Merges[i], g.lane); ok {
+		return g.toWaiting(h, "before its devctl started")
+	}
+	return nil
+}
+
+// stopWaiting ends the merge's wait for its lane's release on signal s (nil:
+// its context ended), nothing merged, its place out of the lane. A hangup,
+// the caller going away, and a SIGTERM from the caller's timeout cut the
+// call, not the wait: the merge waits on outside it (nil).
+func (g *gateRun) stopWaiting(s os.Signal) error {
+	switch {
+	case s == syscall.SIGHUP:
+		gateLine("hangup: the caller is going away; %s waits on outside it for its lane's release and its outcome reaches its owner", g.key())
+		return nil
+	case s == syscall.SIGTERM && timedCaller():
+		gateLine("SIGTERM from the caller's timeout: it cut the connection, not the wait; %s waits on outside the call", g.key())
+		return nil
+	}
+	code, how := 128+int(syscall.SIGTERM), "its gate's context ended"
+	if sig, ok := s.(syscall.Signal); ok {
+		code, how = 128+int(sig), sig.String()
+	}
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := g.mine(st, state.Running); i >= 0 {
+			st.Merges = slices.Delete(st.Merges, i, i+1)
+		}
+		return []state.Event{event(g.me, "merge.stopped", "%s in lane %s: %s while it waited for the lane's release, nothing merged", g.key(), g.lane.Name, how)}, nil
+	})
+	gateLine("%s: %s stopped it while it waited for lane %s's release; nothing merged, it left the lane", g.key(), how, g.lane.Name)
+	return exitCode(code)
 }
 
 // warmUp brings the pull request's head up to its base when the merge
 // updates its branch (--update-branch; a rebase line by rebase) and waits
-// for its CI: devctl's own run then finds the head current and judged, and
-// merges at once. Its outcome is devctl's to judge, never the warm-up's.
-func (g *gateRun) warmUp() {
-	ctx, cancel := context.WithTimeout(g.ctx, g.cfg.Merge.CITimeout.Duration)
+// for its CI, within the CI timeout and ctx: devctl's own run then finds the
+// head current and judged, and merges at once. Its outcome is devctl's to
+// judge, never the warm-up's.
+func (g *gateRun) warmUp(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.Merge.CITimeout.Duration)
 	defer cancel()
 	if merge.UpdatesBranch(g.argv) {
 		update := updateBranch

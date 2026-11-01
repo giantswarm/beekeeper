@@ -1560,7 +1560,9 @@ func (g *gateRun) runMerge() error {
 		gateLine("%s merges into %s, %s: devctl ends at the merge (--no-release-wait), this merge awaits no release and frees lane %s then",
 			g.key(), g.release.Base, g.releasePRFlow(), g.lane.Name)
 	}
-	g.awaitReleases()
+	if err := g.awaitReleases(); err != nil {
+		return err
+	}
 	base, err := g.mergeFiles()
 	if err != nil {
 		gateLine("%v", err)
@@ -1830,6 +1832,7 @@ func (g *gateRun) record(base string, run childRun) error {
 			confirm = false
 			return nil, nil
 		}
+		r.confirming = confirm
 		ev := recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
 		j := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
@@ -1970,6 +1973,9 @@ type runOutcome struct {
 	rc         int
 	reason     string
 	unanswered error
+	// confirming marks a merge whose release its gate confirms after the
+	// merge (gateRun.overlaps): the verdict follows as merge.release.
+	confirming bool
 }
 
 // recordRun records the outcome of the running merge st.Merges[i] in lane:
@@ -2042,6 +2048,8 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 		release = "failed, nothing rolls"
 	case out.Unconfirmed:
 		release = "unconfirmed (merged per GitHub)"
+	case r.confirming:
+		release = "being confirmed, its verdict follows as merge.release"
 	case release == "":
 		release = "unknown"
 	}

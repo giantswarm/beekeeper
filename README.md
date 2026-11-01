@@ -1577,7 +1577,10 @@ release (`devctl release wait <repo> --pr <n>`, the `merge.release` event), and 
 merge starts meanwhile, updates its branch, waits for its CI and merges only once that release is
 confirmed or failed, so the lane drains one merge per CI run and never merges ahead of a release's
 verdict. The gate's exit is what devctl pr merge's own release wait would have ended with (6
-failed, 9 unconfirmed). A releasing merge whose gate is gone, or whose release the gate could not
+failed, 9 unconfirmed). That wait is the merge's own: a stop (SIGINT, `beekeeper gate stop`, a
+TaskStop) ends it with nothing merged and the place out of the lane, a hold that lets another pull
+request through first puts it back to waiting, the reviews are read again before devctl starts, and
+a verdict still unknown past the release wait's bound refuses the merge rather than land it. A releasing merge whose gate is gone, or whose release the gate could not
 confirm, and one whose release is unknown (merged per GitHub, its run lost) settles that lane for
 `merge.settle` all the same, so a promotion queued behind it does not race the release candidate
 it may be cutting. A central lane, devctl's own and a branch without repository-wide Auto-release
