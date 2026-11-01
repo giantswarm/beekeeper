@@ -16,10 +16,11 @@ func loopFiring() alerts.Firing {
 	return alerts.Firing{Installation: "loop-fixture", Key: "fp@2026-01-01T00:00:00Z", Alert: alerts.Alert{Alertname: "WorkloadDown", Severity: alerts.Page, Where: "ns/app", Since: "2026-01-01T00:00:00Z"}}
 }
 
-func TestLoopAlertPagesOnceAcrossRestartAndRefire(t *testing.T) {
+func TestLoopAlertBlockedWorkPagesOnceAcrossRestartAndRefire(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
+	blockLoopAlert(t, r, f)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	r.pass(t)
 	r.pass(t)
@@ -42,6 +43,7 @@ func TestLoopAlertOwnedDoesNotPage(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
+	blockLoopAlert(t, r, f)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, By: state.Party{Name: "alert-fixture-owner"}}}
@@ -63,6 +65,7 @@ func TestLoopAlertRoutesVisiblePagesOfOtherTeams(t *testing.T) {
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	r.a.cfg.Alerts.Team = "desk-team"
 	f := loopFiring()
+	blockLoopAlert(t, r, f)
 	f.Team = "another-team"
 	w := r.a.newWatcher(false, false)
 	w.publishAlerts([]alerts.Firing{f})
@@ -76,6 +79,7 @@ func TestLoopAlertRoutesVisiblePagesOfOtherTeams(t *testing.T) {
 func TestLoopAlertWakesParkedWorkerOnce(t *testing.T) {
 	r := newLoopRig(t)
 	f := loopFiring()
+	blockLoopAlert(t, r, f)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	r.park(t, alertParkPrefix+f.Alertname, time.Now())
 	r.pass(t)
@@ -256,6 +260,7 @@ func TestLoopAlertFailedWakeDoesNotHideAnotherPage(t *testing.T) {
 	f := loopFiring()
 	other := f
 	other.Key, other.Alertname = "another-fingerprint", "AnotherWorkloadDown"
+	blockLoopAlert(t, r, other)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f, other}, nil }
 	r.park(t, alertParkPrefix+f.Alertname, time.Now())
 	r.answer = func(args []string) (string, int) {
@@ -289,5 +294,105 @@ func TestLoopAlertReparkWaitsForNewFiring(t *testing.T) {
 	r.pass(t)
 	if r.called(agentsName, agentWakeName) == nil {
 		t.Fatal("new firing not delivered")
+	}
+}
+
+func TestLoopAlertUnownedBurstDoesNotPage(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
+	var firing []alerts.Firing
+	for i := range 123 {
+		f := loopFiring()
+		f.Installation = "unowned-" + strconv.Itoa(i%3)
+		f.Key = strconv.Itoa(i)
+		firing = append(firing, f)
+	}
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return firing, nil }
+	r.pass(t)
+	r.pass(t) // A restart must not turn the same burst into guide decisions.
+	summary := "SUPERVISOR ALERTS unowned: unowned-0=41, unowned-1=41, unowned-2=41; count=123; oldest firing=2026-01-01T00:00:00Z"
+	if strings.Count(r.out.String(), summary) != 2 {
+		t.Fatalf("missing aggregate summary: %s", r.out.String())
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 {
+		t.Fatalf("unowned burst produced %d notes", len(st.Notes))
+	}
+}
+
+func blockLoopAlert(t *testing.T, r *loopRig, f alerts.Firing) {
+	t.Helper()
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Records = append(st.Records, state.Record{Session: state.Party{Name: "blocked-worker"}, Issue: loopURL, Waits: alertParkPrefix + f.Name()})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoopAlertRequiresExplicitBlockedWork(t *testing.T) {
+	wait := alertParkPrefix + loopFiring().Alertname
+	for _, tc := range []struct {
+		name, issue, waits string
+		ended              bool
+	}{
+		{name: "unrelated work", issue: loopURL, waits: "CI"},
+		{name: "another installation", issue: loopURL, waits: "alert:another/WorkloadDown"},
+		{name: "no owning item", waits: wait},
+		{name: "ended work", issue: loopURL, waits: wait, ended: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Alerts.PageSeverity = alerts.Page
+			r.a.cfg.Guide.Person = "" // Unowned alerts require no guide configuration.
+			f := loopFiring()
+			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				rec := state.Record{Issue: tc.issue, Waits: tc.waits}
+				if tc.ended {
+					rec.Ended = time.Now()
+				}
+				st.Records = append(st.Records, rec)
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Notes) != 0 {
+				t.Fatalf("unrelated record paged: %+v", st.Notes)
+			}
+		})
+	}
+}
+
+func TestLoopAlertBlockedNotesScopeInstallation(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
+	f := loopFiring()
+	other := f
+	other.Installation = "another"
+	blockLoopAlert(t, r, f)
+	blockLoopAlert(t, r, other)
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f, other, f}, nil }
+	r.pass(t)
+	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 2 {
+		t.Fatalf("notes not deduplicated per installation: %+v", st.Notes)
+	}
+	for _, note := range st.Notes {
+		if len(note.Refs) != 1 || !strings.Contains(note.StatusQuo, "blocks "+note.Refs[0]) {
+			t.Fatalf("note lost blocked item: %+v", note)
+		}
 	}
 }

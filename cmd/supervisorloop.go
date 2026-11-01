@@ -264,8 +264,11 @@ one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
   alerts    consume the beside-running watch events; the watch reads
-            installations every alerts.every; firing unowned alerts at alerts.pageSeverity
-            become notes for guide.person once per firing. A worker parked
+            installations every alerts.every; unowned pages are one summary
+            (installations, counts, oldest firing). A guide.person note requires
+            blocked owned work: an active sessions serve record naming an issue
+            and --waits alert:<name>, with no routable parked worker. Notes are
+            deduplicated per installation and firing. A worker parked
             on alert:<name> (alertname or installation/alertname) is woken;
             an unresumable session is retired and its original task staffed
             again, with a durable replacement intent across restarts.
