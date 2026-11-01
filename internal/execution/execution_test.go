@@ -100,7 +100,16 @@ func testFixture(t *testing.T) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callback := Endpoint{SSH: "coordinator.example", Executable: "/usr/local/bin/beekeeper", Config: "/etc/beekeeper/config.yaml"}
+	// Readiness refuses a host where the embedded worker contract cannot
+	// execute its component, so the fixture installs the pinned executable.
+	hostExecutable := filepath.Join(root, "usr", "local", "bin", "beekeeper")
+	if err := os.MkdirAll(filepath.Dir(hostExecutable), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // fixture executable in the test's own temporary directory
+		t.Fatal(err)
+	}
+	callback := Endpoint{SSH: "coordinator.example", Executable: hostExecutable, Config: "/etc/beekeeper/config.yaml"}
 	cfg := HostConfig{Identity: fixtureHost, WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{"giantswarm/beekeeper": source}, Harnesses: map[string]HarnessConfig{HarnessClaude: {Executable: fixtureClaudeExecutable, Version: "2.1.290", ConfigDir: "/srv/beekeeper/auth"}}, Coordinators: map[string]Coordinator{fixtureCoordinator: {PublicKey: PublicKey(key), Callback: callback}}, MaxBusy: 2}
 	launcher := &fakeLauncher{states: map[string]string{"personal.service": unitActive}}
 	cfg.RulesFile = filepath.Join(root, "host-rules.md")
@@ -108,7 +117,7 @@ func testFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	s := &Server{Config: cfg, Root: filepath.Join(root, "execution"), Executable: "/usr/local/bin/beekeeper", ConfigPath: "/etc/beekeeper/worker.yaml", Version: "test", SecurityDigest: Digest([]byte("host guards")), Rules: []byte("embedded worker rules"), Launcher: launcher, Now: func() time.Time { return now }, GuardProbe: func() error { return nil }, Authorize: func(context.Context, StartRequest) error { return nil }, Resources: func(context.Context) (Resources, error) {
+	s := &Server{Config: cfg, Root: filepath.Join(root, "execution"), Executable: hostExecutable, ConfigPath: "/etc/beekeeper/worker.yaml", Version: "test", SecurityDigest: Digest([]byte("host guards")), Rules: []byte("embedded worker rules"), Launcher: launcher, Now: func() time.Time { return now }, GuardProbe: func() error { return nil }, Authorize: func(context.Context, StartRequest) error { return nil }, Resources: func(context.Context) (Resources, error) {
 		return Resources{AvailableMiB: 8192, DiskFreeGiB: 100, ObservedAt: now}, nil
 	}}
 	s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
