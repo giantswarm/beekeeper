@@ -12,6 +12,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 )
 
+const configEmptyCase = "empty"
+const configUnsetCase = "unset"
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/state")
 	c, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
@@ -307,9 +310,9 @@ func TestSecretFileRoots(t *testing.T) {
 		t.Errorf("fileRoots = %q", got)
 	}
 	for name, raw := range map[string]string{
-		"relative": "secret: {fileRoots: [creds]}",
-		"the root": "secret: {fileRoots: [/]}",
-		"empty":    "secret: {fileRoots: [\"\"]}",
+		"relative":      "secret: {fileRoots: [creds]}",
+		"the root":      "secret: {fileRoots: [/]}",
+		configEmptyCase: "secret: {fileRoots: [\"\"]}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "c.yaml")
@@ -1114,7 +1117,7 @@ func TestSupervisorFillRetryEvery(t *testing.T) {
 // An explicit environment path must never select the default state when absent.
 func TestMissingEnvironmentConfig(t *testing.T) {
 	const missingCase = "missing"
-	for _, value := range []string{missingCase, "empty", "unset"} {
+	for _, value := range []string{missingCase, configEmptyCase, configUnsetCase} {
 		t.Run(value, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOME", root)
@@ -1126,7 +1129,7 @@ func TestMissingEnvironmentConfig(t *testing.T) {
 			switch value {
 			case missingCase:
 				t.Setenv("BEEKEEPER_CONFIG", missing)
-			case "unset":
+			case configUnsetCase:
 				if err := os.Unsetenv("BEEKEEPER_CONFIG"); err != nil {
 					t.Fatal(err)
 				}

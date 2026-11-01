@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	transcriptOutputCount     = "count"
 	transcriptOwner           = "granted-session"
 	transcriptOther           = "foreign-session"
 	transcriptWorker          = "reader-session"
@@ -59,7 +60,7 @@ func TestTranscriptReads(t *testing.T) {
 
 func transcriptDecision(t *testing.T, h Hook, session, tool, p string) *hookOutput {
 	t.Helper()
-	b, err := json.Marshal(map[string]any{sessionKey: session, toolNameKey: tool, toolInputKey: map[string]any{filePathKey: p, pathKey: p, outputModeKey: "count"}})
+	b, err := json.Marshal(map[string]any{sessionKey: session, toolNameKey: tool, toolInputKey: map[string]any{filePathKey: p, pathKey: p, outputModeKey: transcriptOutputCount}})
 	if err != nil {
 		t.Fatal(err)
 	}

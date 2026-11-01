@@ -199,6 +199,9 @@ const (
 	transcriptChmod        = "chmod"
 	transcriptReadlink     = "readlink"
 	transcriptSessions     = "sessions"
+	transcriptBasename     = "basename"
+	transcriptRealpath     = "realpath"
+	transcriptRmdir        = "rmdir"
 )
 
 const transcriptRefusal = "Refused: this call may read another session's private harness transcripts. Use synthetic fixtures for event shapes, or ask the supervisor to grant this session its own transcript or an explicit fixture directory through hooks.transcriptGrants. Narrow broad searches to the task directory. Counts, key filters, copies and redirects do not authorize a read."
@@ -222,7 +225,7 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 	}
 	text := k < len(words) && isBeekeeperTextSubcommand(name, words[k+1:])
 	// Exempt only content-free utilities whose names are not shadowed.
-	metadata := name == "ls" || name == statCommand || name == transcriptReadlink || name == "realpath" || name == "dirname" || name == "basename" || name == "rm" || name == "rmdir" || name == transcriptChmod || name == transcriptTouch || name == "shred"
+	metadata := name == "ls" || name == statCommand || name == transcriptReadlink || name == transcriptRealpath || name == "dirname" || name == transcriptBasename || name == "rm" || name == transcriptRmdir || name == transcriptChmod || name == transcriptTouch || name == shredCmd
 	if name == findCmd {
 		metadata = true
 		for _, arg := range words {
