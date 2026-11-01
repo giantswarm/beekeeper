@@ -141,7 +141,7 @@ func (a *app) pruneCacheRoots(r *diskRun, m diskMachine, pressure bool) {
 	}
 	var recheck func() ([]string, error)
 	if m.refresh != nil {
-		recheck = func() ([]string, error) { refs, _, err := m.refresh(); return refs, err }
+		recheck = func() ([]string, error) { d, err := m.refresh(); return d.refs, err }
 	}
 	for _, c := range caches {
 		var res diskprune.CacheResult

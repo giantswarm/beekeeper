@@ -223,7 +223,7 @@ func TestDiskCacheCommandRunsTheToolsCleaner(t *testing.T) {
 		t.Fatalf("referenced root cleaned: %s", r)
 	}
 	m.refs = nil
-	m.refresh = func() ([]string, bool, error) { return []string{root}, false, nil }
+	m.refresh = func() (diskRefs, error) { return diskRefs{refs: []string{root}}, nil }
 	if r := a.pruneDisk(false, false, read); len(ran) != 0 || r.Kept["in use"] < 1 {
 		t.Fatalf("root opened before the run cleaned: %s", r)
 	}

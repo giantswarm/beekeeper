@@ -304,6 +304,23 @@ func TestDiskPruneTmpAndTrashUseDescendantAge(t *testing.T) {
 	}
 }
 
+// Processes skipped as other namespaces' (a kind node's pause container)
+// keep nothing: every step prunes, and the line counts them.
+func TestDiskPruneForeignProcessesKeepNothing(t *testing.T) {
+	a, m := diskFixture(t)
+	m.refresh = func() (diskRefs, error) { return diskRefs{foreign: 3}, nil }
+	r := a.pruneDisk(false, true, func() (diskMachine, error) { return m, nil })
+	if len(r.Errors) > 0 || r.unknown != nil {
+		t.Fatalf("foreign processes failed the run: %s", r)
+	}
+	if exists(filepath.Join(m.cache, "ab", "data")) || exists(filepath.Join(m.tmp[0], "dead")) || exists(filepath.Join(m.trash[0], "output")) {
+		t.Errorf("foreign processes kept candidates: %s", r)
+	}
+	if !strings.Contains(r.String(), "skipped 3 unreadable processes of other namespaces") {
+		t.Errorf("skipped processes not counted: %s", r)
+	}
+}
+
 // An unreadable process keeps only the step decided while it is unreadable:
 // the run goes on, and later steps read the processes again.
 func TestDiskPruneUnknownProcessKeepsOnlyItsStep(t *testing.T) {
@@ -322,12 +339,12 @@ func TestDiskPruneUnknownProcessKeepsOnlyItsStep(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a, m := diskFixture(t)
 			reads := 0
-			m.refresh = func() ([]string, bool, error) {
+			m.refresh = func() (diskRefs, error) {
 				reads++
 				if reads <= tc.unknownN {
-					return nil, false, unknown
+					return diskRefs{}, unknown
 				}
-				return nil, false, nil
+				return diskRefs{}, nil
 			}
 			r := a.pruneDisk(false, true, func() (diskMachine, error) { return m, nil })
 			if len(r.Errors) > 0 {
