@@ -813,3 +813,84 @@ func TestAReplacedParkIsNoDecision(t *testing.T) {
 		t.Fatalf("replaced park became a decision: %+v", got)
 	}
 }
+
+// A worker that pushes while round 1 runs has its newer head reviewed: a
+// verdict on the head the worker parks on is the round's, never ignored.
+func TestAHeadPushedDuringTheRoundGetsItsGo(t *testing.T) {
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	tk := taken(t, t0, started)
+	approved := Review{ID: "R1", Head: head2, Verdict: Approved, At: t1}
+	for _, at := range []time.Time{t0.Add(-time.Minute), t0.Add(30 * time.Second)} {
+		in := Input{Workers: parked(at), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+		a := only(t, Plan(in), KindGo)
+		if a.Head != head2 || !strings.Contains(a.Message, "review round 1 approved head "+short(head2)+" (the round opened on head "+short(head1)+")") {
+			t.Errorf("parked %s: go = %+v", at, a)
+		}
+	}
+	// No verdict yet on either head: the round runs.
+	if got := Plan(Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head2, true), Rounds: 1, Taken: tk}); len(got) != 0 {
+		t.Errorf("a running round got %+v", got)
+	}
+	// Findings on the pushed head go to the worker and count as round 1's.
+	changes := Review{ID: "R1", Head: head2, Verdict: ChangesRequested, Body: "fix x", At: t1}
+	in := Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head2, true, changes), Rounds: 2, Taken: tk}
+	if a := only(t, Plan(in), KindForward); !strings.Contains(a.Message, "changes on head "+head2) || !strings.HasSuffix(a.Message, "fix x") {
+		t.Errorf("forward = %+v", a)
+	}
+	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Minute), Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})...)
+	in.Workers = parked(t0.Add(time.Hour))
+	in.Pulls = pull(head3, true, changes)
+	if a := only(t, Plan(in), KindReview); a.Round != 2 || a.Head != head3 {
+		t.Errorf("round two = %+v", a)
+	}
+	// Parked again on the head the findings are about: unfixed.
+	in.Pulls, in.Rounds = pull(head2, true, changes), 1
+	if a := only(t, Plan(in), KindRework); a.Head != head2 {
+		t.Errorf("rework = %+v", a)
+	}
+}
+
+// A verdict on a head between the round's and the one the worker parks on
+// now is followed by a round for the newest head.
+func TestAVerdictOnAnOlderPushedHeadIsFollowedByARoundForTheParkedHead(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	approved := Review{ID: "R1", Head: head2, Verdict: Approved, At: t1}
+	in := Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head3, true, approved), Rounds: 1, Taken: tk}
+	a := only(t, Plan(in), KindReview)
+	if a.Round != 2 || a.Head != head3 {
+		t.Errorf("review = %+v", a)
+	}
+	// Round 2 runs on head 3: a late verdict on round 1's head is not its.
+	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Hour), a)...)
+	late := Review{ID: "R2", Head: head1, Verdict: Approved, At: t0.Add(3 * time.Hour)}
+	in.Pulls = pull(head3, true, approved, late)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("round 1's head's verdict gave round 2 %+v", got)
+	}
+	// Round 2's own verdict is the go.
+	in.Pulls = pull(head3, true, approved, late, Review{ID: "R3", Head: head3, Verdict: Approved, At: t0.Add(4 * time.Hour)})
+	if g := only(t, Plan(in), KindGo); g.Head != head3 {
+		t.Errorf("go = %+v", g)
+	}
+}
+
+// A green head past its approval whose park is from before the round gets
+// a leave line with the reason, once, never silence.
+func TestAnUnreviewedHeadWithAnOldParkIsLeftWithAReason(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	in := Input{Workers: parked(t0.Add(-time.Minute)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+	a := only(t, Plan(in), KindLeave)
+	if a.Key != leaveKey(pr, leftUnreviewed(head2)) || a.Agent != worker || !strings.Contains(a.Message, "park on the pull request again") {
+		t.Errorf("leave = %+v", a)
+	}
+	in.Taken = append(in.Taken, taken(t, t0.Add(time.Hour), a)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a second pass took %+v", got)
+	}
+	// Parked again: the new head's review.
+	in.Workers = parked(t0.Add(2 * time.Hour))
+	if r := only(t, Plan(in), KindReview); r.Head != head2 {
+		t.Errorf("review = %+v", r)
+	}
+}

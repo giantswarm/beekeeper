@@ -46,8 +46,9 @@ const (
 	KindEnd = "end"
 	// KindLeave says once why the loop leaves a parked pull request alone:
 	// outside the desk's organisations, in supervisor.ownership.never,
-	// parked before the loop's first start, opened by somebody else, or
-	// another team's.
+	// parked before the loop's first start, opened by somebody else,
+	// another team's, or green on a head past its approval with no park
+	// since the round that approved it.
 	KindLeave = "leave"
 	// KindRelay tells the worker parked on another team's pull request
 	// that team's review, word for word.
@@ -132,10 +133,24 @@ const verdictSlack = 30 * time.Second
 
 // verdict is round rd's verdict: the latest review with one on the round's
 // head submitted after the round started; nil while the round runs. A
-// verdict of an earlier round, or of nobody's round, never counts.
+// worker that pushes while its round runs has the newer head reviewed: with
+// none on the round's head, the latest verdict submitted before the next
+// round started on a head no earlier round reviewed is the round's, on its
+// own head. A verdict of an earlier round, or of nobody's round, never
+// counts.
 func (p Pull) verdict(rd round) *Review {
+	since := rd.at.Add(-verdictSlack)
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
-		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(rd.at.Add(-verdictSlack)) {
+		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) {
+			return &p.Reviews[i]
+		}
+	}
+	for i := len(p.Reviews) - 1; i >= 0; i-- {
+		r := p.Reviews[i]
+		if r.Verdict == "" || r.Head == "" || r.At.Before(since) || !rd.until.IsZero() && !r.At.Before(rd.until) {
+			continue
+		}
+		if !slices.ContainsFunc(rd.earlier, func(h string) bool { return sameHead(h, r.Head) }) {
 			return &p.Reviews[i]
 		}
 	}
@@ -296,10 +311,14 @@ func Detail(a Action, what string) string {
 	return a.Line(a.Agent + ": " + what)
 }
 
-// round is a review round the loop started: the head it reviews and when.
+// round is a review round the loop started: the head it reviews and when,
+// until when the next round started (zero for the last), and the heads the
+// rounds before it reviewed.
 type round struct {
-	head string
-	at   time.Time
+	head    string
+	at      time.Time
+	until   time.Time
+	earlier []string
 }
 
 // escalation is a pull request handed to the guide's person: the head it
@@ -362,6 +381,16 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 				if t.Kind == KindGo {
 					l.goAgent[t.Ref] = t.Agent
 				}
+			}
+		}
+	}
+	for _, rs := range l.rounds {
+		for i := range rs {
+			if i+1 < len(rs) {
+				rs[i].until = rs[i+1].at
+			}
+			for _, rd := range rs[:i] {
+				rs[i].earlier = append(rs[i].earlier, rd.head)
 			}
 		}
 	}
@@ -643,11 +672,17 @@ func Plan(in Input) []Action {
 			continue // the round runs
 		}
 		left := cycles < rounds
+		// reviewed is the head the verdict is on: the round's, or a newer
+		// one the worker pushed while the round ran.
+		reviewed, moved := v.Head, ""
+		if !sameHead(reviewed, last.head) {
+			moved = fmt.Sprintf(" (the round opened on head %s)", short(last.head))
+		}
 		switch v.Verdict {
 		case Approved:
-			if sameHead(last.head, p.Head) {
+			if sameHead(reviewed, p.Head) {
 				if p.Green {
-					add(goAction(in, base, fmt.Sprintf("review round %d approved head %s", len(rs), short(p.Head))))
+					add(goAction(in, base, fmt.Sprintf("review round %d approved head %s%s", len(rs), short(p.Head), moved)))
 				}
 				continue
 			}
@@ -657,11 +692,16 @@ func Plan(in Input) []Action {
 			// the worker's merge of the base), which the approval covers.
 			// The cap counts change-request rounds only, so an approval
 			// never escalates.
-			if !p.Green || !isParked || !w.ParkedAt.After(v.At) {
+			// A park since the round opened asks for the newest head.
+			if !p.Green || !isParked {
 				continue
 			}
-			if in.baseMerged(p, last.head) {
-				add(goAction(in, base, fmt.Sprintf("review round %d approved head %s; head %s only merges %s into it", len(rs), short(last.head), short(p.Head), baseName(p))))
+			if !w.ParkedAt.After(v.At) && !w.ParkedAt.After(last.at) {
+				leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
+				continue
+			}
+			if in.baseMerged(p, reviewed) {
+				add(goAction(in, base, fmt.Sprintf("review round %d approved head %s; head %s only merges %s into it", len(rs), short(reviewed), short(p.Head), baseName(p))))
 				continue
 			}
 			review()
@@ -680,8 +720,8 @@ func Plan(in Input) []Action {
 			}
 			// A head that only merges the base into the head the findings
 			// were about carries no fixes: it is that head, never a go.
-			merged := p.Green && in.baseMerged(p, last.head)
-			if sameHead(p.Head, last.head) || merged {
+			merged := p.Green && in.baseMerged(p, reviewed)
+			if sameHead(p.Head, reviewed) || merged {
 				// The findings stand unfixed: with no round left, or on a
 				// base merge, the worker reworks, once for each such park.
 				// Review and rework are the loop's; no merge question goes
@@ -690,7 +730,7 @@ func Plan(in Input) []Action {
 				if (!left || merged) && (!escalated || !sameHead(esc.head, p.Head)) {
 					a := base
 					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-					a.Message = reworkMessage(p, last.head, cycles, rounds)
+					a.Message = reworkMessage(p, reviewed, cycles, rounds)
 					add(a)
 				}
 				continue
@@ -702,7 +742,7 @@ func Plan(in Input) []Action {
 				review()
 				continue
 			}
-			add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used; head %s carries the fixes of the last round's findings on %s", cycles, rounds, short(p.Head), short(last.head))))
+			add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used; head %s carries the fixes of the last round's findings on %s", cycles, rounds, short(p.Head), short(reviewed))))
 		}
 	}
 	// A reviewer leaves once the loop acted on its round's verdict.
