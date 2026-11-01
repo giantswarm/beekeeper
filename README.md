@@ -45,6 +45,13 @@ default) before retrying, unless the roster or capacity changes first.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
+A worker whose reviewed pull request merges stays reachable for its release proof
+and final `agents idle --done` report. The loop retires an unreported worker only
+after `supervisor.postMergeWindow` (default `2h`) without activity, once its turn
+ends; the log names its merged pull request and missing report. A completed
+self-update wakes retained workers whose merge commit the installed release
+contains, after the broker and post-install steps finish.
+
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
 

@@ -192,6 +192,7 @@ upgrades:
 
 supervisor:                 # what handover --prompt tells the successor supervisor; unset skill and instructions, it opens without them
   loop: false              # install the persistent supervisor loop user service (systemd or launchd); opt-in
+  postMergeWindow: 2h       # retain merged workers until done or this long without activity
   fillRetryEvery: 5m        # retry an empty/failed board read; roster or capacity changes retry immediately
   skill: beekeeper:supervise   # the skill it runs (the plugin's role, see the README); or instructions: ~/supervisor.md, a file that opens the prompt
   scope: The desk's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
