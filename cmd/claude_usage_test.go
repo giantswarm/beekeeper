@@ -314,3 +314,41 @@ func TestClaudeUsageTargetKeepsAggregateRoom(t *testing.T) {
 		t.Fatalf("independent bucket failed to block: room=%d blocks=%v", got.Room, got.Blocks)
 	}
 }
+
+// An idle 5-hour window prints no Current session line; the weekly lines alone
+// read as a 0 % five-hour window without a reset, as a custom reader's
+// explicit idle window does, and leave room for a start.
+func TestClaudeUsageIdleSessionWindow(t *testing.T) {
+	now := time.Date(2026, 10, 31, 23, 25, 0, 0, time.UTC)
+	const idle = `Current week (all models): 74% used · resets Nov 1, 3pm (Europe/Berlin)
+Current week (Fable): 6% used · resets Nov 1, 3pm (Europe/Berlin)`
+	r, err := parseClaudeUsage(claudeUsageJSON(t, idle), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FiveHour == nil || r.FiveHour.UsedPercent != 0 || !r.FiveHour.ResetsAt.IsZero() {
+		t.Fatalf("five-hour window: %+v", r.FiveHour)
+	}
+	if r.SevenDay == nil || r.SevenDay.UsedPercent != 74 || r.Buckets["Fable"].SevenDay.UsedPercent != 6 {
+		t.Fatalf("weekly windows: %+v", r)
+	}
+	cfg, err := config.Load(writeUsageConfig(t, "capacity: {providers: {claude: {}}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Capacity.Providers[claudeComm]
+	r.At = now
+	if err := validateReadingAt(r, p.Usage, now); err != nil {
+		t.Fatal(err)
+	}
+	pv := buildSingleProviderView(claudeComm, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+	if pv.Error != "" || pv.Room == 0 || len(pv.Blocks) != 0 || pv.FiveHour == nil || pv.FiveHour.UsedPercent != 0 {
+		t.Fatalf("idle session view: %+v", pv)
+	}
+	// Without the aggregate week the reading stays unknown.
+	for _, result := range []string{"Current week (Fable): 6% used · resets Nov 1, 3pm (Europe/Berlin)", "Current session: 3% used · resets 3pm (Europe/Berlin)"} {
+		if _, err := parseClaudeUsage(claudeUsageJSON(t, result), now); err == nil {
+			t.Fatalf("accepted %q", result)
+		}
+	}
+}

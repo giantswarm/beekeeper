@@ -639,7 +639,9 @@ func (w *watcher) sendAsync(ctx context.Context, to, msg string, done func(error
 	if !w.stand.busy.CompareAndSwap(false, true) {
 		return false
 	}
+	w.stand.inflight.Add(1)
 	go func() {
+		defer w.stand.inflight.Done()
 		defer w.stand.busy.Store(false)
 		done(w.stand.send(ctx, to, msg))
 	}()

@@ -538,15 +538,21 @@ func TestVaultSigninRejectedReachesThePerson(t *testing.T) {
 	}
 	gaveUpWith := func() secret.SigninCause {
 		t.Helper()
+		// Drive the attempt to completion before testing note deduplication.
+		// ask's failure callback precedes clearing its in-flight marker.
+		ctx, cancel := context.WithTimeout(context.Background(), v.wait)
+		defer cancel()
+		if v.signinUntil(ctx) {
+			t.Fatal("rejected sign-in unexpectedly succeeded")
+		}
 		select {
 		case c := <-gaveUp:
 			return c
-		case <-time.After(5 * time.Second):
-			t.Fatal("the sign-in never gave up")
+		default:
+			t.Fatal("completed sign-in omitted its failure callback")
 			return secret.SigninUnknown
 		}
 	}
-	v.ask(context.Background())
 	if c := gaveUpWith(); c != secret.SigninRejected {
 		t.Fatalf("gave up with %s", c)
 	}
@@ -563,7 +569,6 @@ func TestVaultSigninRejectedReachesThePerson(t *testing.T) {
 		t.Errorf("the note: %+v", n)
 	}
 	// a second sign-in that fails the same way files no second note
-	v.ask(context.Background())
 	gaveUpWith()
 	if st, _ = a.store.Read(); len(st.Notes) != 1 {
 		t.Errorf("notes after the second failure: %+v", st.Notes)

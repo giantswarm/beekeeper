@@ -220,7 +220,7 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 			self := filepath.Join(dir, "bin", "beekeeper")
 			copyTestBinary(t, self)
 			gate := exec.Command(self, append([]string{gateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
-			gate.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(dir, "none.yaml"), "XDG_STATE_HOME="+stateHome,
+			gate.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
 				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", gateRunningEnv, pid))
 			var stdout strings.Builder
 			gate.Stdout = &stdout
