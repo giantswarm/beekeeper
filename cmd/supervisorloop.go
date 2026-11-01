@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -201,6 +202,12 @@ type loopPullJSON struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
 		State      string `json:"state"`
+		// A check run's name and details URL, a commit status's context
+		// and target URL.
+		Name       string `json:"name"`
+		DetailsURL string `json:"detailsUrl"`
+		Context    string `json:"context"`
+		TargetURL  string `json:"targetUrl"`
 	} `json:"statusCheckRollup"`
 	Author loopLogin `json:"author"`
 	Title  string    `json:"title"`
@@ -227,6 +234,10 @@ type loopLogin struct {
 	Login string `json:"login"`
 }
 
+// loopRedConclusions are the conclusions of a check run that are red: a
+// terminal state that never turns green by itself.
+var loopRedConclusions = []string{"FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+
 // parseLoopPull reads gh pr view's JSON of ref.
 func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	var j loopPullJSON
@@ -244,7 +255,14 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		if !ok {
 			p.Green = false
 		}
+		// A red check: a run that concluded and failed, or a status that
+		// failed or errored. One queued, running or pending is not.
+		red := c.Status == "COMPLETED" && slices.Contains(loopRedConclusions, c.Conclusion) || slices.Contains([]string{"FAILURE", "ERROR"}, c.State)
+		if red {
+			p.Red = append(p.Red, superloop.Check{Name: cmp.Or(c.Name, c.Context), URL: cmp.Or(c.DetailsURL, c.TargetURL)})
+		}
 	}
+	slices.SortStableFunc(p.Red, func(x, y superloop.Check) int { return strings.Compare(x.Name, y.Name) })
 	for _, r := range j.Reviews {
 		member := slices.Contains([]string{"MEMBER", "OWNER", "COLLABORATOR"}, r.Association)
 		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Commit: r.Commit.OID, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
@@ -314,6 +332,16 @@ its key first in the detail):
             supervisor.hostsFirst, which prefers hosts always. No host
             with room and no room locally: the start waits. A desk with
             no capacity.choices never places remotely
+  red       an agent parked from its pull request's worktree at its
+            published HEAD (a review request, local or on an execution
+            host) whose head has a check that concluded red (failed,
+            cancelled, timed out, startup failure, action required; a
+            commit status's failure or error): the worker is told each
+            such check's name and URL (agents wake), one wake for the
+            checks red in a pass, each check once for each head and park;
+            the same failure seen again wakes nobody, a new head or a new
+            park on the same head is told again. None after the head's
+            merge go; a red head gets no review
   go        every check on the head green, and either the last round's
             verdict approves that head, or the worker parked after the
             approval on a head that only merges the base into the approved
@@ -664,6 +692,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
 			w.ReviewRequested = ag.Park.ReviewHead != ""
+			w.ParkedHead = ag.Park.ReviewHead
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -883,7 +912,7 @@ func would(act superloop.Action) string {
 		return "install " + act.Version
 	case superloop.KindClassify:
 		return fmt.Sprintf("send its %s to the guide", act.Event.Verb)
-	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
+	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
 	return truncate(oneLine(act.Message), 300)
@@ -940,7 +969,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
 		done = logged(verbStart, opens)
-	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
+	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
@@ -1143,6 +1172,11 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 			return "", err
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
+	case superloop.KindRed:
+		if err := l.wake(ctx, act); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s at %s: red checks told: %s", act.URL, act.Head, redChecks(act.Key)), nil
 	case superloop.KindRework:
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
@@ -1211,6 +1245,12 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.toFile(ctx, st, act)
 	}
 	return "", fmt.Errorf("no transition for %s", act.Kind)
+}
+
+// redChecks are the checks a red wake's key names.
+func redChecks(key string) string {
+	_, checks, _ := strings.Cut(key, ": ")
+	return checks
 }
 
 // loopInTurn reports whether p's session runs a turn.
