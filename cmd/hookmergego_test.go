@@ -12,14 +12,14 @@ import (
 )
 
 func TestRecordedMergeGoRequiresExactLoopAction(t *testing.T) {
-	worker := state.Party{Name: "worker", Session: "worker-session"}
+	worker := state.Party{Name: workerRole, Session: "worker-session"}
 	ref, head := "person/project#7", strings.Repeat("a", 40)
 	goEvent := event(loopParty, "supervisor.go", "[go %s@%s] worker: merge go", ref, head)
 	if !recordedMergeGo([]state.Event{goEvent}, worker, ref, head) {
 		t.Fatal("exact go denied")
 	}
 	for name, events := range map[string][]state.Event{
-		"absent":             nil,
+		"missing go":         nil,
 		"worker copied go":   {event(worker, goEvent.Verb, "%s", goEvent.Detail)},
 		"claim only":         {event(loopParty, loopClaimVerb, "%s", goEvent.Detail)},
 		"changed head":       {event(loopParty, goEvent.Verb, "[go %s@%s] worker: merge go", ref, strings.Repeat("b", 40))},

@@ -31,7 +31,7 @@ func (h Hook) mergeGo(repo, number, head string) string {
 }
 
 func (h Hook) ghMergeGo(args, pos []string, repo, cwd string, known bool) string {
-	if len(pos) >= 2 && pos[0] == "pr" && pos[1] == "merge" {
+	if len(pos) >= 2 && pos[0] == "pr" && pos[1] == executionMerge {
 		number := ""
 		if len(pos) == 3 {
 			number = pos[2]
@@ -61,7 +61,7 @@ func (h Hook) ghMergeGo(args, pos []string, repo, cwd string, known bool) string
 	}
 	words := append([]string{"gh"}, args...)
 	endpoint := ghAPIEndpoint(words)
-	if endpoint == "graphql" {
+	if endpoint == executionGraphQL {
 		if strings.Contains(strings.Join(args, " ")+ghAPIBodies(words, cwd), "mergePullRequest") {
 			return "Refused: use gh pr merge with --match-head-commit so the supervisor go can be checked by repository, pull request and head."
 		}

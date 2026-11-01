@@ -87,7 +87,7 @@ func TestMergeGoRejectsUnpinnedAndDeferredMerges(t *testing.T) {
 func TestMergeGoCannotHideInAnExecutedScript(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "merge.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ngh pr merge 7 -R person/project\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ngh pr merge 7 -R person/project\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, command := range []string{"bash " + script, script, "python3 -c 'import subprocess; subprocess.run([\"gh\",\"pr\",\"merge\",\"7\"])'"} {
