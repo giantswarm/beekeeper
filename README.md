@@ -47,7 +47,13 @@ An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
 default) before retrying, unless `capacity.floor` or `capacity.ceiling`
 changes or an agent is done or leaves the roster first; a park, a resume,
 a wait or a new task, and the busy count and room they move, do not end it. An empty or failed read answers
-the rest of its pass, the done-triggered starts included.
+the rest of its pass, the done-triggered starts included. `board next`
+exiting 3 with no pick (nothing free) is that empty read: a done event's
+next start settles on it ("the board offers nothing") and is never retried
+as a failure. No board read runs while the GitHub budget is under
+`github.floor` (REST until its reset, or the last GraphQL reading within the
+hour, or a GraphQL refusal): the done events wait unsettled and the refill
+skips its read, without a failure or a pause.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
