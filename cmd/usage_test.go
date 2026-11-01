@@ -3693,3 +3693,45 @@ func TestUsageReaderDeadline(t *testing.T) {
 		t.Fatalf("refresh cancels provider deadline: %s", usageRefreshTimeout(k))
 	}
 }
+
+func TestUsageFallbackReportedAgeExpires(t *testing.T) {
+	const readFailure = "reader timeout"
+	store, err := state.OpenVersion(t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := keepNow
+	age := 14.0
+	u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0}}}
+	a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{AgeMinutes: &age, SevenDay: &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
+	}}
+	file := usageProviderFile(claudeComm)
+	r, err := a.resolveReading(context.Background(), file, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReadingAt(r, u, now.Add(30*time.Second)); err != nil {
+		t.Fatalf("valid source rejected: %v", err)
+	}
+	a.now = now.Add(6 * time.Minute)
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{}, errors.New(readFailure)
+	}
+	if _, err := a.resolveReading(context.Background(), file, u); err == nil {
+		t.Fatal("accepted 20-minute source as fallback")
+	}
+	p := config.Provider{Floor: 1, Ceiling: 3, Usage: u}
+	k := config.Capacity{Floor: 1, Ceiling: 3, Providers: map[string]config.Provider{claudeComm: p}}
+	derived, view := a.cachedProvidersCapacityAt(k, a.now, map[string]string{claudeComm: readFailure})
+	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
+		t.Fatalf("cached provider: %+v %+v", derived, view)
+	}
+	w := &watcher{app: a}
+	w.now = a.now
+	w.providerUsageErr = map[string]string{claudeComm: readFailure}
+	derived, view = w.currentUsage(k, a.now)
+	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
+		t.Fatalf("watch cache: %+v %+v", derived, view)
+	}
+}

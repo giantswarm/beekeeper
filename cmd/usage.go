@@ -425,6 +425,11 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 	}
 	if r.AgeMinutes != nil {
 		age := time.Duration(*r.AgeMinutes * float64(time.Minute))
+		// AgeMinutes describes the source at fetch time. Cached reads must
+		// include the time since that fetch, even without an absolute SourceAt.
+		if !r.At.IsZero() && !now.IsZero() {
+			age += max(0, now.Sub(r.At))
+		}
 		if age > maxAge {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(age), dur(maxAge))
 		}
