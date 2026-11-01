@@ -45,6 +45,7 @@ func notifyingWatch(t *testing.T, dir string, standby bool) (*watcher, *desktop,
 	w := &watcher{app: &app{cfg: cfg, store: store, out: &out, now: relayNow}, standby: standby, last: map[string]time.Time{}, reported: map[string]bool{},
 		readHeadroom: func(context.Context, *swapReading) *headroom { return tight() }}
 	w.notifier = notify.New(cfg.Notify.Policy(), dir, d, func(l string) { w.emitNow("notify", "%s", l) })
+	t.Cleanup(func() { w.stand.inflight.Wait() }) // deliveries can write durable watch events
 	return w, d, &out
 }
 
