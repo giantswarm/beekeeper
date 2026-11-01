@@ -339,7 +339,7 @@ func TestLoopForwardsChangesThenEscalatesUnfixedFindings(t *testing.T) {
 	}
 	// The person releases it: the loop's merge go for the head it named.
 	n := &state.Note{ID: 1, By: loopParty, Text: q}
-	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "you can merge", Note: 1}, n)); err != nil {
+	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Channel: channelTerminal, Answer: "you can merge", Note: 1}, n)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
@@ -1173,7 +1173,7 @@ func TestLoopLeavesAnotherTeamsPullRequestToThatTeamUntilThePersonOverrides(t *t
 	}
 	// The person overrides it: the loop reviews it as the desk's own.
 	n := &state.Note{ID: 1, By: loopParty, Text: note[len(note)-1]}
-	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "Override", Note: 1}, n)); err != nil {
+	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Channel: channelTerminal, Answer: "Override", Note: 1}, n)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)

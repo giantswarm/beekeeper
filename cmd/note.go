@@ -445,7 +445,7 @@ naming both. --post is the machine's notes' only.`,
 		},
 	}
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
-	answer.Flags().StringVar(&via, "via", viaCLI, "how the answer came: cli or slack")
+	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack; the channel answer verify reads is set from where it runs")
 	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
 	var listFor string
 	var full bool

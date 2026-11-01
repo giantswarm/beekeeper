@@ -13,6 +13,7 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
   its outcome wakes the worker (park on the PR, never run it again); 77 refused, its line to the
   supervisor, no second merge; 74 unread: the same merge once GitHub answers; 3 still "behind":
   as below, then the same merge again.
+- **A merge on the person's word** runs `beekeeper answer verify --note <id> --head <sha>` first and quotes its output in the merge step; exit 3 (relayed, stale, another head) is no word: park on the note. The gate names the verified answer on the merge's record.
 - **Protection** is read with `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
 - **Nothing rolls onto an installation while one of its clusters upgrades.**
 - **Before a non-mechanical change**, read the repo's open PRs and recent commits: a
