@@ -39,14 +39,14 @@ func TestExecutionReviewReportReadsReviewUnderItsPullRequest(t *testing.T) {
 	reviewer := state.Party{Name: "reviewer", Session: "reviewer-session"}
 	st := &state.State{DeskReviews: []state.DeskReview{{
 		ID: "round", Ref: "o/r#12", Head: head, Round: 1,
-		Worker:     state.Party{Name: "worker", Session: "worker-session"},
+		Worker:     state.Party{Name: workerRole, Session: "assigned-worker"},
 		Reviewer:   reviewer,
 		AssignedAt: time.Now().Add(-time.Minute),
 	}}}
 	if err := (&app{}).captureExecutionReviewReport(context.Background(), st, reviewer, "Review: approved\n"+url, time.Now(), true); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(calls)
+	got, err := os.ReadFile(calls) //nolint:gosec // the fake gh's call log in the test's temp dir
 	if err != nil {
 		t.Fatal(err)
 	}
