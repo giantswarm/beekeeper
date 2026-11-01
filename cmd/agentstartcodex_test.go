@@ -510,9 +510,9 @@ wait "$child"
 	go func() { waitDone <- runner.Wait() }()
 	select {
 	case err := <-waitDone:
-		// The exit status is immaterial here; the runner must terminate
-		// and reap its child after SIGTERM.
-		t.Logf("runner exit after SIGTERM: %v", err)
+		// SIGTERM may produce an exit error; child cleanup below is the
+		// behavior this test proves.
+		_ = err
 	case <-time.After(3 * time.Second):
 		t.Fatal("runner did not exit within 3s after SIGTERM")
 	}
