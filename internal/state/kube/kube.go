@@ -193,7 +193,7 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		changes := snap.diff(want)
 		// Persist a legacy snapshot's high-water mark before GC removes its
 		// highest Note, even if its counter and Events have disappeared.
-		issue := want.issued > snap.next() || (pruned && snap.counter == nil)
+		issue := want.issued > snap.next() || (pruned && (snap.counter == nil || want.issued > snap.issued))
 		switch {
 		case len(changes) == 0 && len(events) > 0:
 			return false, fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)

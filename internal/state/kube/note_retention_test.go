@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
-func checkNoteRetention(t *testing.T, c client.Client) {
+func checkNoteRetention(t *testing.T, c client.Client, laggingCounter bool) {
 	t.Helper()
 	ctx := context.Background()
 	store := New(c)
@@ -57,7 +58,16 @@ func checkNoteRetention(t *testing.T, c client.Client) {
 	}
 	// Exercise legacy recovery: neither the counter nor expired Events can
 	// supply the high-water mark once the highest retained Note is collected.
-	if err := c.Delete(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: DefaultNamespace, Name: noteCounter}}); err != nil {
+	counter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: DefaultNamespace, Name: noteCounter}}
+	if laggingCounter {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(counter), counter); err != nil {
+			t.Fatal(err)
+		}
+		counter.Data[issuedKey] = strconv.Itoa(2)
+		if err := c.Update(ctx, counter); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := c.Delete(ctx, counter); err != nil {
 		t.Fatal(err)
 	}
 	events := &corev1.EventList{}
@@ -113,13 +123,13 @@ func TestNoteClosureRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}, &v1alpha1.Hold{}).WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNamespace}}, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: teamNamespace(team)}}).Build()
-	checkNoteRetention(t, c)
+	checkNoteRetention(t, c, false)
 }
 
 func TestEnvtestNoteClosureRetention(t *testing.T) {
 	_, _, c := envtestStore(t)
 	namespace(t, c, team)
-	checkNoteRetention(t, c)
+	checkNoteRetention(t, c, false)
 }
 
 // collectedNoteClient simulates another collector winning after our read:
@@ -140,5 +150,14 @@ func TestNoteClosureRetentionLostRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}, &v1alpha1.Hold{}).WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNamespace}}, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: teamNamespace(team)}}).Build()
-	checkNoteRetention(t, collectedNoteClient{c})
+	checkNoteRetention(t, collectedNoteClient{c}, false)
+}
+
+func TestNoteClosureRetentionLaggingCounter(t *testing.T) {
+	scheme, err := Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}, &v1alpha1.Hold{}).WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNamespace}}, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: teamNamespace(team)}}).Build()
+	checkNoteRetention(t, c, true)
 }
