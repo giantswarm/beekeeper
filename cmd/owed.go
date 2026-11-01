@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -82,34 +84,60 @@ func (a *app) paid(o state.Owed, why ...string) {
 	})
 }
 
-// payOwed hands o to its owner: a stopped merge's outcome first from its
-// pull request's state on GitHub. A hand-over that fails keeps o owed, its
-// failure logged once, for the watch's next try.
+// payOwed hands o to its owner, on the roster or off it (agents wake by its
+// session id): a stopped merge's outcome first from its pull request's state
+// on GitHub. An owner whose session is gone gets no wake and one line, and
+// its records go back to the board; a hand-over that fails otherwise keeps o
+// owed, its failure logged once, for the watch's next try.
 func (a *app) payOwed(ctx context.Context, o state.Owed) {
 	st, err := a.store.Read()
 	if err != nil {
 		return
 	}
-	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(o.Owner) })
-	if i < 0 {
-		a.paid(o, fmt.Sprintf("%q is no registered agent, nobody is woken", o.Owner.Name))
+	owner := o.Owner
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(o.Owner) }); i >= 0 {
+		owner = st.Agents[i].Party
+	}
+	q := wakeID(owner)
+	if q == "" {
+		a.paid(o, fmt.Sprintf("%q has no session id, nobody is woken", owner.Name))
 		return
 	}
-	ag := st.Agents[i]
 	line, ok := a.owedLine(ctx, o)
 	if !ok {
 		return
 	}
-	q := ag.Session
-	if q == "" {
-		q = ag.HostSession
-	}
-	_ = a.store.Log(event(gateParty, verbUnheard, "%s; waking %q", line, ag.Name))
+	_ = a.store.Log(event(gateParty, verbUnheard, "%s; waking %q", line, owner.Name))
 	if err := wakeOwner(a, ctx, gateParty, q, line, ""); err != nil {
-		a.failedPay(o, fmt.Sprintf("waking %q failed (%v)", ag.Name, err))
+		if errors.Is(err, errGone) {
+			a.paid(o, a.goneWaiter(owner, err))
+			return
+		}
+		a.failedPay(o, fmt.Sprintf("waking %q failed (%v)", owner.Name, err))
 		return
 	}
 	a.paid(o)
+}
+
+// goneWaiter is the one line for a waiter whose session is gone (err says
+// why). One off the roster gives its records back to the board, the issues
+// it served named; a roster agent's are the supervisor's to staff again.
+func (a *app) goneWaiter(p state.Party, err error) string {
+	var issues []string
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if onRoster(st, p) {
+			return nil, nil
+		}
+		for _, r := range clearRecords(st, p) {
+			issues = append(issues, r.Issue)
+		}
+		return nil, nil
+	})
+	line := fmt.Sprintf("%q is not woken: %v", p.Name, err)
+	if len(issues) > 0 {
+		line += "; back to the board: " + strings.Join(issues, ", ")
+	}
+	return line
 }
 
 // owedLine is the line o hands over, false while a stopped merge waits for

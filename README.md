@@ -1551,8 +1551,10 @@ one pull request cost the budget of one. Whichever of the four it is, its outcom
 reaches the session that started it. A caller still listening sees the output and exit code as
 ever; the gate then leaves merge-child a marker. When it does not (a headless turn that ended with
 the command in the background, a caller killed, its CLI gone), merge-child logs `devctl.unheard`
-and wakes the owner, a registered agent, with one line, `<command> exit N: <reason> (output in
-<file>)`, through `agents wake`: by name when its CLI runs, else as a headless turn. The reason is
+and wakes the owner, on the roster or off it (by its session id), with one line, `<command> exit N:
+<reason> (output in <file>)`, through `agents wake`: by name when its CLI runs, else as a headless
+turn. An owner whose session is gone (no transcript, no harness process) gets no wake and one
+`devctl.unheard` line, and the issues an owner off the roster served go back to the board. The reason is
 the document's verdict and reason (a merge's release), else devctl's last stderr line; the output
 is kept under `merge-output/` for seven days. A second `devctl pr merge` of a pull request whose
 merge runs is refused with exit 3, naming that run's start, owner and last line.
