@@ -180,21 +180,11 @@ beekeeper takes that session as its parent and ignores the host id. A copy of `s
 `CLAUDE_CODE_SESSION_ID` (`env -u CLAUDE_CODE_SESSION_ID`, since every tool shell has it),
 stands in for a session that ends when the sleep does, so `sessions serve` and the `SESSION ENDED` line can be tried against
 scratch state. The live supervisor's watch sees it too: give it a name that reads as a test and a
-short life. Two such stand-ins play a supervisor hand-over: each runs `supervisor start`,
-`supervisor relay` or `supervisor status` with its own `CLAUDE_CODE_SESSION_ID`,
-`CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME` in the environment; a short
-a small `supervisor.relayAt` and a short `supervisor.relayTTL` in the scratch configuration,
-a supervisor stand-in started with `--session-id <id>` whose transcript (a real one with its
-content stripped, as `<claude.projectsDir>/<project>/<id>.jsonl`) reports a context above it,
-and a settling merge written into the scratch `state.json` show `RELAY DUE` held back and then
-said once by `watch --once`. A supervisor stand-in killed by its PID and started again with the same
-`--resume <id>` within `supervisor.restartGrace` is a CLI restart: a claim loop from a third
-identity stays refused throughout and `watch --once` says `SUPERVISOR RESTARTED`; one not started
-again keeps the claim loop refused past the grace, until a successor's `supervisor start`. A
-scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`, with
-`dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, says `SUPERVISOR
-GONE` once past the grace and `SUPERVISOR BACK` once a successor stand-in starts; a stand-in
-that ran `supervisor stop` before its kill gives neither and leaves claims ungated. The spare's keep-awake and the crash hand-over need desktop sessions, never the live ones:
+short life. A scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`,
+with `dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, restarts the
+scratch configuration's supervisor loop service once it stopped and says `SUPERVISOR LOOP DOWN`
+once it stayed down past two minutes, then `SUPERVISOR LOOP BACK` once `supervisor loop` runs again;
+no session is ever started for the supervisor. The spare's keep-awake and the crash hand-over need desktop sessions, never the live ones:
 throwaway sessions titled `test: …` on the smallest model, made with `claude -p --session-id <id>`
 in a scratch folder and imported with `claude://resume?session=<id>` (then
 `claude://code/continue?session=<previous>` puts the window back). A `.claude/settings.local.json`
@@ -203,11 +193,9 @@ so their commands never touch the live state. `BEEKEEPER_PEER_TEST=<title> go te
 ./internal/peer/` sends one message to such a session from the command line and checks that an
 absent name is unreachable. A scratch `watch --standby` with the spare in the scratch state keeps
 one session awake past 35 idle minutes while an untouched one is dropped at 30; a stand-in
-supervisor killed by its CLI's PID shows `SUPERVISOR GONE` naming the spare, the `HANDOVER` line
-and the spare's `supervisor start`, with claims refused until then. `supervisor reopen` against a
-scratch state whose supervisor is a stopped throwaway session starts its CLI through the deep
-link. Archive the sessions afterwards. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
-directories into the scratch configuration) shows what a successor would get.
+guide killed by its CLI's PID shows `GUIDE GONE` naming the spare and the spare's `guide start`.
+Archive the sessions afterwards. `guide handover --prompt` on a copy of the live state (`cp -r` of
+the state and lease directories into the scratch configuration) shows what a successor would get.
 
 The roster is tried with real `claude --bg` workers against scratch state: started through
 `systemd-run --user` with the session variables cleared and `BEEKEEPER_CONFIG` naming the

@@ -74,6 +74,7 @@ type usageBucket struct {
 // usageFile or usageProviderFile.
 type usageReading struct {
 	At            time.Time              `json:"at"`
+	Fallback      string                 `json:"fallback,omitempty"`
 	SourceAt      time.Time              `json:"sourceAt,omitzero"`
 	AgeMinutes    *float64               `json:"ageMinutes,omitempty"`
 	Stale         bool                   `json:"stale,omitempty"`
@@ -88,6 +89,7 @@ type usageReading struct {
 // usageView is how capacity, watch and snapshot present subscription usage and
 // the target derived from it.
 type usageView struct {
+	Fallback    string       `json:"fallback,omitempty"`
 	At          time.Time    `json:"at,omitzero"`
 	FiveHour    *usageWindow `json:"fiveHour,omitempty"`
 	SevenDay    *usageWindow `json:"sevenDay,omitempty"`
@@ -423,6 +425,11 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 	}
 	if r.AgeMinutes != nil {
 		age := time.Duration(*r.AgeMinutes * float64(time.Minute))
+		// AgeMinutes describes the source at fetch time. Cached reads must
+		// include the time since that fetch, even without an absolute SourceAt.
+		if !r.At.IsZero() && !now.IsZero() {
+			age += max(0, now.Sub(r.At))
+		}
 		if age > maxAge {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(age), dur(maxAge))
 		}
@@ -583,6 +590,7 @@ func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.C
 	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
 	return derived, &usageView{
 		At:          r.At,
+		Fallback:    r.Fallback,
 		FiveHour:    fh,
 		SevenDay:    sd,
 		Floor:       derived.Floor,
@@ -802,26 +810,22 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			subDerivedCeiling += p.Ceiling
 			continue
 		}
-		if uerr := providerErrs[name]; uerr != "" {
-			errs = append(errs, name+": "+uerr)
+		if providerErrs[name] != "" && slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
+			errs = append(errs, name+": "+providerErrs[name])
 			continue
 		}
 		if a.store == nil {
-			errs = append(errs, name+": usage not read")
+			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
 			continue
 		}
 		var r usageReading
 		found, err := a.store.ReadFile(usageProviderFile(name), &r)
 		if err != nil || !found {
-			errs = append(errs, name+": usage not read")
+			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
 			continue
 		}
 		if verr := validateReadingAt(r, p.Usage, now); verr != nil {
 			errs = append(errs, name+": "+verr.Error())
-			continue
-		}
-		if !usageFresh(r, p.Usage, now) {
-			errs = append(errs, name+": usage reading is stale")
 			continue
 		}
 		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
@@ -866,6 +870,7 @@ func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capac
 }
 
 func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (usageReading, error) {
+	started := time.Now()
 	now := a.now
 	if now.IsZero() {
 		now = time.Now()
@@ -873,7 +878,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	var cached usageReading
 	var haveCached bool
 	if a.store != nil {
-		if found, err := a.store.ReadFile(file, &cached); err == nil && found && validateReadingAt(cached, u, now) == nil {
+		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
 			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
 				return cached, nil
 			}
@@ -886,12 +891,12 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 		err = validateReadingAt(r, u, now)
 	}
 	if err != nil {
-		if haveCached && inSandbox() {
-			grace := u
-			grace.Every = config.Duration{Duration: 2 * u.EffectiveEvery()}
-			if usageFresh(cached, grace, now) {
-				return cached, nil
-			}
+		// The built-in Codex reader consumes authoritative local events, including
+		// explicit spend/rate-limit stops. Never mask those with an older event.
+		if haveCached && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) &&
+			validateReadingAt(cached, u, now.Add(time.Since(started))) == nil {
+			cached.Fallback = err.Error()
+			return cached, nil
 		}
 		return usageReading{}, err
 	}
@@ -1039,7 +1044,11 @@ func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
 }
 
 func (u *usageView) windowsLine(now time.Time) string {
-	return windowsPairLine(u.FiveHour, u.SevenDay, now)
+	s := windowsPairLine(u.FiveHour, u.SevenDay, now)
+	if u.Fallback != "" {
+		s += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(u.At)), truncate(u.Fallback, 120))
+	}
+	return s
 }
 
 func (u *usageView) capacitySuffix(now time.Time) string {
@@ -1129,6 +1138,17 @@ func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now tim
 	return last.IsZero() || now.Sub(last) >= retry
 }
 
+// Providers are read sequentially; allow each its configured command deadline.
+func usageRefreshTimeout(k config.Capacity) time.Duration {
+	var timeout time.Duration
+	for _, p := range k.Providers {
+		if p.Enabled() {
+			timeout += p.EffectiveTimeout()
+		}
+	}
+	return max(timeout, k.Usage.EffectiveTimeout())
+}
+
 func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.Time) {
 	if now.IsZero() {
 		now = w.clk().Now()
@@ -1198,12 +1218,16 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 	w.mu.Lock()
 	uerr := w.usageErr
 	w.mu.Unlock()
-	if uerr != "" {
+	if uerr != "" && slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) {
 		return errorUsageView(k, errors.New(uerr))
 	}
 	var r usageReading
 	if found, err := w.store.ReadFile(usageFile, &r); err == nil && found && validateReadingAt(r, k.Usage, now) == nil {
+		r.Fallback = uerr
 		return deriveUsageView(r, k, now)
+	}
+	if uerr != "" {
+		return errorUsageView(k, errors.New(uerr))
 	}
 	return k, nil
 }
@@ -1238,7 +1262,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	}
 	now := w.now
 	if w.usageNeedsRefresh(k, now) {
-		w.inFlight(ctx, cmp.Or(w.cfg.Watch.Interval.Duration, k.Usage.EffectiveTimeout()), &w.usageBusy, func(ctx context.Context) {
+		w.inFlight(ctx, k.Usage.EffectiveTimeout(), &w.usageBusy, func(ctx context.Context) {
 			w.refreshUsage(ctx, k, now)
 		})
 	}
@@ -1298,7 +1322,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	} else {
 		now := w.now
 		if w.usageNeedsRefresh(k, now) {
-			w.inFlight(ctx, cmp.Or(w.cfg.Watch.Interval.Duration, config.DefaultUsageTimeout), &w.usageBusy, func(ctx context.Context) {
+			w.inFlight(ctx, usageRefreshTimeout(k), &w.usageBusy, func(ctx context.Context) {
 				w.refreshUsage(ctx, k, now)
 			})
 		}
@@ -1312,7 +1336,9 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.mu.Unlock()
 			if uerr != "" {
 				readings[name] = providerReadingResult{err: errors.New(uerr)}
-				continue
+				if slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
+					continue
+				}
 			}
 			if w.store != nil {
 				var r usageReading
@@ -1320,6 +1346,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 					if verr := validateReadingAt(r, p.Usage, w.now); verr != nil {
 						readings[name] = providerReadingResult{err: verr}
 					} else {
+						r.Fallback = uerr
 						readings[name] = providerReadingResult{reading: r, ok: true}
 					}
 				}
@@ -1507,10 +1534,10 @@ func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State,
 // stopped CLIs are skipped so USAGE HIGH never launches a headless turn.
 func liveBusyWorkers(st *state.State, sessions []*claude.Session, now time.Time) []state.Agent {
 	var out []state.Agent
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if st.Report.Running() && ag.Is(st.Report.Party) {

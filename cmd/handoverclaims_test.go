@@ -58,14 +58,13 @@ func TestHandClaimsGivesTheFollowUpItsLeasesAndGrants(t *testing.T) {
 }
 
 // While a hand-over's follow-up and its predecessor both run under the
-// agent's name, the supervisor's `yours` by that name grants the follow-up,
-// the roster's agent, instead of failing as ambiguous.
-func TestYoursByAHandedOverNameGrantsTheFollowUp(t *testing.T) {
+// agent's name, a grant by that name goes to the follow-up, the roster's
+// agent, instead of failing as ambiguous.
+func TestAGrantByAHandedOverNameGoesToTheFollowUp(t *testing.T) {
 	var out bytes.Buffer
 	a := quietApp(t, &out)
 	a.cfg.Resources = []string{uiLab1}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: yoursSup, Since: a.now}
 		st.Agents = append(st.Agents, state.Agent{Party: handedTo, Registered: a.now, Task: theProof})
 		return nil, nil
 	}); err != nil {
@@ -75,15 +74,9 @@ func TestYoursByAHandedOverNameGrantsTheFollowUp(t *testing.T) {
 		{PID: 7, ID: handedFrom.Session, HostID: handedFrom.HostSession, Name: agentOne},
 		{PID: 8, ID: handedTo.Session, HostID: handedTo.HostSession, Name: agentOne},
 	}
-	if got := a.yoursGrants(sessions, yoursSup, agentOne, []string{browser}); !strings.Contains(got, "is recorded: granted browser to \"Agent one\"") {
-		t.Fatalf("yours by the shared name: %q", got)
-	}
-	st, err := a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st.Grants) != 1 || st.Grants[0].To.Session != handedTo.Session {
-		t.Fatalf("grants %+v, want one to session %s", st.Grants, handedTo.Session)
+	to, _, err := a.grantee(sessions, agentOne)
+	if err != nil || to == nil || to.ID != handedTo.Session {
+		t.Fatalf("grantee by the shared name: %+v, %v; want session %s", to, err, handedTo.Session)
 	}
 	// Two sessions of that name neither of which is on the roster stay
 	// ambiguous.

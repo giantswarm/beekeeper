@@ -141,24 +141,16 @@ func titleView(tab int, w int) string {
 	return build(tabShort[:], false, false)
 }
 
-// statusView is the second header line: the supervisor as a status dot
-// and name, then the pending counts as compact chips.
+// statusView is the second header line: the supervisor loop as a status
+// dot, then the pending counts as compact chips.
 func statusView(d *Data) string {
 	if d == nil {
 		return style.Dim.Render("…")
 	}
 	st := d.Status
-	name, cell := "no supervisor", style.Dim
-	if st.Supervisor != "" {
-		name, cell = st.Supervisor, style.OK
-		switch {
-		case st.SupervisorGone:
-			name += " gone"
-			cell = style.Gone
-		case !st.SupervisorLive:
-			name += " not running"
-			cell = style.Warn
-		}
+	name, cell := "supervisor loop down", style.Gone
+	if st.SupervisorLoop {
+		name, cell = "supervisor loop", style.OK
 	}
 	due := fmt.Sprintf("%d due", st.Due)
 	if st.Due > 0 {

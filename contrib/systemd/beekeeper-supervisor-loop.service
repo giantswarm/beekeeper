@@ -1,4 +1,4 @@
-# Written by beekeeper install when supervisor.loop is true.
+# Written by beekeeper install, always: the supervisor loop is the supervisor.
 [Unit]
 Description=beekeeper: supervisor loop
 

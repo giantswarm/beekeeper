@@ -9,10 +9,9 @@ import (
 )
 
 func TestSupervisorLoopSystemdUnit(t *testing.T) {
-	// JSON also lets this regression run against the pre-service SetupSpec:
-	// unknown fields then leave the opt-in service absent.
+	// The loop service is no option: a spec without any loop setting has it.
 	var spec SetupSpec
-	if err := json.Unmarshal([]byte(`{"ConfigDir":"/config","Exe":"/opt/my bin/bee%keeper","ConfigPath":"/config/my $desk%.yaml","SupervisorLoop":true}`), &spec); err != nil {
+	if err := json.Unmarshal([]byte(`{"ConfigDir":"/config","Exe":"/opt/my bin/bee%keeper","ConfigPath":"/config/my $desk%.yaml"}`), &spec); err != nil {
 		t.Fatal(err)
 	}
 	files, _ := (systemdSetup{}).Files(spec)
@@ -30,5 +29,5 @@ func TestSupervisorLoopSystemdUnit(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("opt-in supervisor loop systemd unit missing")
+	t.Fatal("the supervisor loop systemd unit is missing: install always writes it")
 }

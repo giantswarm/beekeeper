@@ -47,7 +47,8 @@ const (
 	// KindLeave says once why the loop leaves a parked pull request alone:
 	// outside the desk's organisations, in supervisor.ownership.never,
 	// parked before the loop's first start, opened by somebody else, or
-	// another team's.
+	// another team's; and why a merged pull request's worker stays for the
+	// open work it still serves.
 	KindLeave = "leave"
 	// KindRelay tells the worker parked on another team's pull request
 	// that team's review, word for word.
@@ -185,6 +186,9 @@ type Worker struct {
 	Waking bool
 	// LastActive is the latest observed session activity.
 	LastActive time.Time
+	// Serves is the issue the agent's active sessions serve record names
+	// (owner/repo#n), "" without one or once it waits for "done".
+	Serves string
 }
 
 // Event is one line of the event log the loop acts on.
@@ -253,6 +257,39 @@ type Input struct {
 	// resolving the merge's conflicts or not, or rebases onto it
 	// (github.ApprovalCovers); nil: never, every new head is a new review.
 	BaseMerged func(p Pull, approved string) bool
+	// Open reports whether an issue or pull request (owner/repo#n) is
+	// open; one it cannot read counts as open. nil: none is, so a merged
+	// pull request's worker is retired as before.
+	Open func(ref string) bool
+	// StaleAfter is agents.staleAfter: a worker kept for the open work it
+	// serves goes once it stayed quiet this long with no park or wake
+	// timer (0: a day).
+	StaleAfter time.Duration
+}
+
+// serving says what open work keeps the worker w of the merged ref on the
+// roster, quiet since last: the open issue its serve record names, or
+// another open pull request it is parked on. "" when nothing does: it
+// serves nothing else open, or it stayed quiet StaleAfter with no park or
+// wake timer, so it does not pile up.
+func (in Input) serving(w Worker, ref string, last time.Time) string {
+	if in.Open == nil {
+		return ""
+	}
+	stale := in.StaleAfter
+	if stale <= 0 {
+		stale = 24 * time.Hour
+	}
+	if w.ParkedOn == "" && !w.Waking && !in.Now.Before(last.Add(stale)) {
+		return ""
+	}
+	if on := w.ParkedOn; IsPull(on) && !strings.EqualFold(on, ref) && in.Open(on) {
+		return "it is parked on " + on + ", still open"
+	}
+	if is := w.Serves; is != "" && !strings.EqualFold(is, ref) && in.Open(is) {
+		return "it serves " + is + ", still open"
+	}
+	return ""
 }
 
 // baseMerged reports whether p's head moved past approved by bringing in
@@ -483,6 +520,10 @@ func retireKey(ref, who string) string { return fmt.Sprintf("done %s %s", ref, w
 // retiredWorker names the worker in its retirement's key.
 const retiredWorker = "worker"
 
+// leftServing is the reason of the leave that keeps a merged pull
+// request's worker on the roster for the open work it still serves.
+const leftServing = "serving"
+
 // prRef matches owner/repo#n.
 var prRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#\d+$`)
 
@@ -618,7 +659,16 @@ func Plan(in Input) []Action {
 					window = 2 * time.Hour
 				}
 				if !in.Now.Before(last.Add(window)) {
-					retire(ref, retiredWorker, l.goAgent[ref], fmt.Sprintf("%s: no report after merge; no activity for %s", p.URL, window))
+					// A worker whose task spans several pull requests
+					// stays while it serves other open work; its own
+					// done or the close of that work retires it.
+					agent := l.goAgent[ref]
+					i := slices.IndexFunc(in.Workers, func(w Worker) bool { return w.Name == agent })
+					if why := in.serving(in.Workers[i], ref, last); why != "" {
+						leave(ref, p.URL, agent, leftServing, fmt.Sprintf("%s merged; %s stays on the roster: %s", p.URL, agent, why))
+					} else {
+						retire(ref, retiredWorker, agent, fmt.Sprintf("%s: no report after merge; no activity for %s", p.URL, window))
+					}
 				}
 			}
 		}

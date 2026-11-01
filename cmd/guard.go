@@ -289,7 +289,7 @@ func (a *app) hookCmd() *cobra.Command {
 		Short: "Claude Code hooks",
 		Long: `The Claude Code hooks beekeeper install registers user-wide. They act
 only in the desk's scope: a session beekeeper started or knows (an agents
-start, the supervisor's or the guide's holder, an agent on the roster), or
+start, the guide's holder, an agent on the roster), or
 one whose working directory or project ($CLAUDE_PROJECT_DIR) lies under one
 of hooks.scope.dirs. Every other session, a person's own project, gets
 nothing from them: no refusal, no rewrite, no redaction, no prelude, no
@@ -347,16 +347,11 @@ refused, naming them. A send to a session with no running CLI passes: the
 desktop starts it. A send by name to an agent on the roster whose CLI does
 not run (its headless turn ended, its import into the desktop waits) is
 refused, saying so and whether an import is pending.
-A SendMessage to "the supervisor" or "the guide" (any case, "the" optional)
-goes to the session holding that role now: its running CLI by name, else
-its desktop session. A brief names the role, so a relay never makes it
+A SendMessage to "the guide" (any case, "the" optional) goes to the session
+holding that role now: its running CLI by name, else its desktop session.
+One to "the supervisor" is refused: the supervisor is the supervisor loop,
+which no session holds. A brief names the role, so a relay never makes it
 stale; with nobody holding the role the send is refused.
-A SendMessage from the session holding the supervisor role whose message
-says "yours <resource>", "<resource> yours" or "<resource> is yours" for a
-leasable resource records the grant of the resource to the message's
-target, as beekeeper lease grant does, and the sender reads what was
-recorded, or why nothing was with the command that records it, as
-additional context. A worker's "yours" records nothing.
 Anything else, malformed input included, passes unchanged.
 
 What leaves the machine is scanned for secret values: the command line
@@ -535,7 +530,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Yours: a.yoursGrant,
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,

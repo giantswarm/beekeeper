@@ -19,7 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
-// The roles' host commands: what a supervisor or a worker needs from the
+// The roles' host commands: what the guide or a worker needs from the
 // host, which the agent sandbox closes, runs through the broker as the
 // asking session (brokeredCall), streamed back while it runs.
 

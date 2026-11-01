@@ -101,11 +101,10 @@ type Config struct {
 	// Lemonade is the host's Lemonade Server, a second model server under
 	// the same model-server lease and ollama's budgets.
 	Lemonade Lemonade `yaml:"lemonade"`
-	// Supervisor is what `handover --prompt` tells a successor supervisor,
-	// how long a relay to it stays open and at what context it is due.
+	// Supervisor configures the supervisor loop.
 	Supervisor Supervisor `yaml:"supervisor"`
 	// Guide is the role that walks the person through the decisions
-	// waiting on them, never in the supervisor's session.
+	// waiting on them.
 	Guide Guide `yaml:"guide"`
 	// Agents configures how a registered agent near its context limit is
 	// handed over to a fresh session.
@@ -872,7 +871,7 @@ type Agents struct {
 	Hosts     map[string]ExecutionHost `yaml:"hosts,omitempty"`
 	Execution *execution.HostConfig    `yaml:"execution,omitempty"`
 	// RelayAt is an agent's session context, in tokens, at which the watch
-	// says its hand-over due (default: supervisor.relayAt).
+	// says its hand-over due (default 400k).
 	RelayAt Tokens `yaml:"relayAt"`
 	// LastStepGrace is how long the watch holds the hand-over of an agent
 	// over RelayAt whose task is in its last step (its sessions serve record
@@ -1009,7 +1008,7 @@ const (
 const (
 	DefaultUsageEvery       = 5 * time.Minute
 	DefaultUsageReportEvery = 30 * time.Minute
-	DefaultUsageTimeout     = 15 * time.Second
+	DefaultUsageTimeout     = 90 * time.Second
 	DefaultUsageStaleAfter  = 15 * time.Minute
 	DefaultUsageHighPercent = 95.0
 )
@@ -1396,7 +1395,7 @@ type Usage struct {
 	// runs Command again (default 5m; a window past its resetsAt re-reads
 	// at once).
 	Every Duration `yaml:"every"`
-	// Timeout bounds one run of Command (default 15s).
+	// Timeout bounds one run of Command (default 90s).
 	Timeout Duration `yaml:"timeout"`
 	// StaleAfter is how old a usage reading may grow before it counts as
 	// stale, yielding ceiling 0 and room 0 for that provider (default 15m).
@@ -2139,15 +2138,10 @@ type Guide struct {
 	WaitingTTL Duration `yaml:"waitingTTL"`
 }
 
-// Supervisor configures the supervisor: its role and the scope it
-// supervises.
+// Supervisor configures the supervisor, which is the supervisor loop: the
+// user service beekeeper install always installs. No session holds a
+// supervisor role.
 type Supervisor struct {
-	// Loop installs the persistent supervisor loop user service (opt-in).
-	Loop bool `yaml:"loop"`
-	Role `yaml:",inline"`
-	// Scope says what the supervisor watches, in a sentence or two; empty,
-	// the prompt names the resources, lanes and installations configured.
-	Scope string `yaml:"scope"`
 	// ReviewRounds is how many review rounds asking for changes `supervisor
 	// loop` runs for a pull request (default 1): after the last one's
 	// request for changes the worker fixes them and merges on the loop's go
@@ -2165,11 +2159,11 @@ type Supervisor struct {
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
 	// Hosts are execution host selectors (agents.hosts) the loop's worker
-	// and reviewer starts may be placed on, in order of preference: when
+	// starts may be placed on, in order of preference: when
 	// the local machine leaves no room for the start, or always with
 	// HostsFirst. A host must map the item's repository and pass its own
 	// check (capacity --host); the start is pinned to the repository's
-	// default branch. Releases and the loop itself stay on the coordinator.
+	// default branch. Reviewers, releases and the loop stay on the coordinator.
 	Hosts []string `yaml:"hosts"`
 	// HostsFirst places a start on the first host of Hosts with room,
 	// whatever the local machine's room is, for what a host can run: a
@@ -2263,18 +2257,17 @@ func (o Ownership) validate() error {
 	return nil
 }
 
-// Role configures a relayed role, the supervisor's or the guide's: the
+// Role configures a relayed role, the guide's: the
 // successor's session prompt (the instructions it follows, a skill or a
 // file, not both) and the relay.
 type Role struct {
-	// Skill is the name of the skill the successor runs (supervise, guide).
+	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
 	// instead.
 	Instructions string `yaml:"instructions"`
 	// RelayAt is the role's session context, in tokens, at which the watch
-	// reports the relay due ("400k"; the guide's default is 150k, the
-	// supervisor's 400k).
+	// reports the relay due ("400k"; the guide's default is 150k).
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
@@ -2283,8 +2276,8 @@ type Role struct {
 	RelayGrace Duration `yaml:"relayGrace"`
 	// RestartGrace is how long beekeeper waits after it first saw the
 	// role's CLI gone: a CLI back under the same session within it is a
-	// restart and keeps the role; past it, the watch says the supervisor
-	// is gone and notifies. The grant rule holds throughout.
+	// restart and keeps the role; past it, the watch says the holder is
+	// gone and starts its successor.
 	RestartGrace Duration `yaml:"restartGrace"`
 	// Dir is the folder a successor starts in (~/ allowed; default: the
 	// folder its predecessor's desktop session started from, not the
@@ -3191,10 +3184,6 @@ func (c *Config) defaults() error {
 			c.Identity.Host, _, _ = strings.Cut(h, ".")
 		}
 	}
-	// The desktop app never restarts a crashed CLI by itself: the grace only
-	// debounces a supervisor someone woke.
-	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
-	c.Supervisor.defaults(home)
 	if c.Supervisor.ReviewRounds == 0 {
 		c.Supervisor.ReviewRounds = 1
 	}
@@ -3228,7 +3217,7 @@ func (c *Config) defaults() error {
 	c.Guide.defaults(home)
 	setDur(&c.Guide.WaitingTTL, 2*time.Hour)
 	if c.Agents.RelayAt == 0 {
-		c.Agents.RelayAt = c.Supervisor.RelayAt
+		c.Agents.RelayAt = defaultRelayAt
 	}
 	setDur(&c.Agents.LastStepGrace, 30*time.Minute)
 	if c.Agents.LastStepCeiling == 0 {
@@ -3485,12 +3474,16 @@ func (c *Config) defaults() error {
 	return nil
 }
 
+// defaultRelayAt is the context, in tokens, at which a role's holder or an
+// agent is relayed unless configured.
+const defaultRelayAt = 400_000
+
 func (r *Role) defaults(home string) {
 	setDur(&r.RelayTTL, 15*time.Minute)
 	setDur(&r.RelayGrace, 30*time.Minute)
 	setDur(&r.RestartGrace, time.Minute)
 	if r.RelayAt == 0 {
-		r.RelayAt = 400_000
+		r.RelayAt = defaultRelayAt
 	}
 	r.Instructions = homePath(home, r.Instructions)
 	r.Dir = homePath(home, r.Dir)
@@ -3680,7 +3673,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name)
 		}
 	}
-	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "supervisor.profile": c.Supervisor.Profile, "guide.profile": c.Guide.Profile} {
+	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "guide.profile": c.Guide.Profile} {
 		if _, ok := c.Agents.ProfileFor(name); name != "" && !ok {
 			return fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile)
 		}
@@ -3825,10 +3818,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector)
 		}
 	}
-	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
-		if r.Skill != "" && r.Instructions != "" {
-			return fmt.Errorf("%s: set skill or instructions, not both", name)
-		}
+	if r := c.Guide.Role; r.Skill != "" && r.Instructions != "" {
+		return errors.New("guide: set skill or instructions, not both")
 	}
 	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
 		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)

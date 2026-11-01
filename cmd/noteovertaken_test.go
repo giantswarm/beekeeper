@@ -287,7 +287,7 @@ func desktopRecord(t *testing.T, dir, host, cli string, archived bool) {
 }
 
 // archivedNotes are notes filed by sessions of the desktop records under
-// dir: an archived worker, a stopped one and an archived supervisor run.
+// dir: an archived worker, a stopped one and an archived guide run.
 func archivedNotes(t *testing.T, dir string) []state.Note {
 	t.Helper()
 	desktopRecord(t, dir, hostArc, "cli-archived", true)
