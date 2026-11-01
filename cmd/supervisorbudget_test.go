@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,28 +11,20 @@ import (
 func TestLoopBudgetHoldsNewStartsUntilRecovery(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
-	held := true
-	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, []string{"budget", "--gate"}) && held {
-			return "under floor", ExitRefused
-		}
-		return "", 0
+	if err := r.a.store.Record(event(watchParty, "watch.budget-state", "true")); err != nil {
+		t.Fatal(err)
 	}
 	r.pass(t)
-	if r.called("budget", "--gate") == nil {
-		t.Fatal("idle poll did not read GitHub budget")
-	}
 	if r.called(agentsName, agentStartName) != nil {
 		t.Fatal("started reviewer under budget floor")
 	}
 	if !strings.Contains(r.out.String(), "SUPERVISOR STARTS HELD") {
 		t.Fatal("budget hold absent from loop log")
 	}
-	held = false
-	r.pass(t)
-	if r.called("budget", "--gate") == nil {
-		t.Fatal("next poll did not refresh GitHub budget")
+	if err := r.a.store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
+		t.Fatal(err)
 	}
+	r.pass(t)
 	if r.called(agentsName, agentStartName) == nil {
 		t.Fatal("budget recovery did not release reviewer start")
 	}

@@ -150,6 +150,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
+	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
+		t.Fatal(err)
+	}
 	// The loop first started a minute ago: the rig's parks are requests
 	// for its review, not parks from before it.
 	first := event(loopParty, loopStartVerb, "started")
@@ -725,7 +728,7 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 	r.pass(t)
 	r.pass(t)
 	// An idle pass probes the budget and looks for a release, silently.
-	if r.out.Len() != 0 || len(r.calls) != 2 || r.called("budget", "--gate") == nil || r.called(selfUpdateCheck...) == nil {
+	if r.out.Len() != 0 || len(r.calls) != 1 || r.called(selfUpdateCheck...) == nil {
 		t.Errorf("an idle loop said %q and ran %v", r.out, r.calls)
 	}
 }

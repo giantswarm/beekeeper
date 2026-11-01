@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -246,13 +248,13 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
-  alerts    read installations every alerts.every, sharing the watch's
-            baseline lock; firing unowned alerts at alerts.pageSeverity
+  alerts    consume the beside-running watch events; the watch reads
+            installations every alerts.every; firing unowned alerts at alerts.pageSeverity
             become notes for guide.person once per firing. A worker parked
             on alert:<name> (alertname or installation/alertname) is woken;
             an unresumable session is retired and its original task staffed
             again, with a durable replacement intent across restarts
-  budget    every poll runs budget --gate; a refusal or unreadable budget
+  budget    every poll consumes watch budget readings; a low or unknown budget
             holds new worker/reviewer starts and event wakes and says so
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
@@ -408,8 +410,8 @@ type supervisorLoop struct {
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
 	releaseAt  time.Time
-	alertAt    time.Time
 	startsHeld bool
+	stopWatch  func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
@@ -441,6 +443,8 @@ func (w *loopOutput) Write(p []byte) (int, error) {
 }
 
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	// One loop per state: a second would take each action again.
 	lock := flock.New(filepath.Join(a.store.Dir(), loopLockFile))
 	held, err := lock.TryLock()
@@ -459,6 +463,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	defer l.timerActs.Wait()
+	if !once {
+		l.stopWatch = a.startLoopWatch(ctx)
+		defer func() {
+			if l.stopWatch != nil {
+				l.stopWatch()
+			}
+		}()
+	}
 	for {
 		a.now = time.Now()
 		if err := l.pass(ctx); err != nil {
@@ -520,23 +532,26 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.timerActs.Wait()
+		if l.stopWatch != nil {
+			l.stopWatch()
+			l.stopWatch = nil
+		}
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+			l.stopWatch = a.startLoopWatch(ctx)
 		}
 	}
-	// Probe on every poll, including otherwise idle passes. A failed probe
-	// holds starts too: an unknown budget is no permission to spend it.
-	out, code, budgetErr := beekeeperRun(ctx, l.as("budget", "--gate")...)
-	l.startsHeld = budgetErr != nil || code != 0
-	if l.startsHeld {
-		l.sayOnce("budget", "SUPERVISOR STARTS HELD: GitHub budget gate: %s (%v)", oneLine(out), budgetErr)
-	} else {
-		delete(l.said, "budget")
+	if !l.dryRun {
+		if err := l.watchConditions(ctx); err != nil {
+			return err
+		}
 	}
-	if err := l.watchAlerts(ctx); err != nil {
-		l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
-	} else {
-		delete(l.said, "alerts")
+	if !l.dryRun {
+		if err := l.watchAlerts(ctx); err != nil {
+			l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
+		} else {
+			delete(l.said, "alerts")
+		}
 	}
 	st, err := a.store.Read()
 	if err != nil {

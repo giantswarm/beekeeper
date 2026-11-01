@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -131,42 +129,6 @@ func TestLoopAlertReplacesUnresumableWorkerAndRetriesStaffing(t *testing.T) {
 	}
 }
 
-func TestLoopAlertCadenceAndReadFailureRetry(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Alerts.Every.Duration = time.Minute
-	l, err := r.a.newSupervisorLoop()
-	if err != nil {
-		t.Fatal(err)
-	}
-	reads := 0
-	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) {
-		reads++
-		if reads == 1 {
-			return nil, errors.New("unreachable")
-		}
-		return nil, nil
-	}
-	if err := l.watchAlerts(context.Background()); err == nil {
-		t.Fatal("read failure lost")
-	}
-	if err := l.watchAlerts(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := l.watchAlerts(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if reads != 2 {
-		t.Fatalf("reads %d", reads)
-	}
-	r.a.now = r.a.now.Add(time.Minute)
-	if err := l.watchAlerts(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if reads != 3 {
-		t.Fatalf("next reading missing: %d", reads)
-	}
-}
-
 func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 	for _, resumable := range []bool{true, false} {
 		t.Run(strconv.FormatBool(resumable), func(t *testing.T) {
@@ -175,11 +137,8 @@ func TestLoopAlertBudgetHoldsWakeAndReplacement(t *testing.T) {
 			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 			loopResumable = func(*app, *state.State, state.Agent) bool { return resumable }
 			r.park(t, alertParkPrefix+f.Alertname, time.Now())
-			r.answer = func(args []string) (string, int) {
-				if slices.Equal(args, []string{"budget", "--gate"}) {
-					return "under floor", ExitRefused
-				}
-				return "", 0
+			if err := r.a.store.Record(event(watchParty, "watch.budget-state", "true")); err != nil {
+				t.Fatal(err)
 			}
 			r.pass(t)
 			if r.called(agentsName, agentWakeName) != nil || r.called(agentsName, agentStartName) != nil || r.called(agentsName, loopRemove) != nil {
@@ -223,34 +182,21 @@ func TestLoopAlertParkCommandAcceptsNamedEvent(t *testing.T) {
 	}
 }
 
-func TestLoopAlertReadsTheWatchOwnedBaselineWithoutStealingIt(t *testing.T) {
+func TestLoopAlertReadsWatchEvent(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
-	r.a.cfg.StateDir = t.TempDir()
-	store := alerts.NewStore(r.a.cfg.StateDir)
-	owned, _, err := store.Own()
-	if err != nil || !owned {
-		t.Fatalf("own baseline: %v %v", owned, err)
-	}
-	defer func() { _ = store.Release() }()
-	base, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
 	f := loopFiring()
-	base.Installations[f.Installation] = &alerts.Installation{Reachable: true, Alerts: alerts.Set{f.Fingerprint(): f.Alert}}
-	if err := store.Save(base); err != nil {
-		t.Fatal(err)
-	}
+	w := r.a.newWatcher(false, false)
+	w.publishAlerts([]alerts.Firing{f})
+	w.emitNow("alerts", "NEW alert line after the structured snapshot")
 	got, err := read(context.Background(), r.a)
 	if err != nil || len(got) != 1 || got[0].Instance() != f.Instance() {
-		t.Fatalf("read shared baseline: %+v %v", got, err)
+		t.Fatalf("watch event: %+v %v", got, err)
 	}
-	// The long-running watch retains ownership after the loop's read.
-	other := alerts.NewStore(r.a.cfg.StateDir)
-	ok, _, err := other.Own()
-	if err != nil || ok {
-		t.Fatalf("loop stole the watch's lock: %v %v", ok, err)
+	w.publishAlerts(nil)
+	got, err = read(context.Background(), r.a)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("resolved: %+v %v", got, err)
 	}
 }
 

@@ -18,32 +18,16 @@ const loopAlertIntent = "supervisor.alert-replacement"
 const loopAlertKind = "alert"
 const loopAlertVerb = "supervisor." + loopAlertKind
 
-// readLoopAlerts shares the watch's baseline lock. While a watch owns it,
-// consume its saved readings; otherwise take one reading ourselves. No
-// port-forward survives a pass, including --once and cancellation.
-var readLoopAlerts = func(ctx context.Context, a *app) ([]alerts.Firing, error) {
-	store := alerts.NewStore(a.cfg.StateDir)
-	owned, _, err := store.Own()
-	if err != nil {
+// readLoopAlerts consumes the watch's durable snapshot. Only watch reads
+// installations; a loop restart can still route a page it has not handled.
+var readLoopAlerts = func(_ context.Context, a *app) ([]alerts.Firing, error) {
+	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "watch.alert-state" })
+	if err != nil || len(evs) == 0 {
 		return nil, err
 	}
-	defer func() { _ = store.Release() }()
-	if owned {
-		reader := a.alertReader()
-		defer reader.Close()
-		lines, noContext := a.alertCycle(ctx, store, reader)
-		for _, line := range lines {
-			_, _ = fmt.Fprintln(a.out, "SUPERVISOR", line)
-		}
-		if len(noContext) > 0 {
-			_, _ = fmt.Fprintln(a.out, alerts.NoContextLine(noContext))
-		}
-	}
-	base, err := store.Load()
-	if err != nil {
-		return nil, err
-	}
-	return base.Firing(""), nil
+	var firing []alerts.Firing
+	err = json.Unmarshal([]byte(evs[len(evs)-1].Detail), &firing)
+	return firing, err
 }
 
 // Only a proven unresumable session is replaced. Capacity refusals and
@@ -109,15 +93,10 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			done[r.Key] = true
 		}
 	}
-	if !l.alertAt.IsZero() && a.now.Sub(l.alertAt) < a.cfg.Alerts.Every.Duration {
-		return nil
-	}
-	// A failed read is retried on the next poll.
 	firing, err := readLoopAlerts(ctx, a)
 	if err != nil {
 		return err
 	}
-	l.alertAt = a.now
 	st, err := a.store.Read()
 	if err != nil {
 		return err
