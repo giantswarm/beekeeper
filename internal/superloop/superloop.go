@@ -16,9 +16,17 @@ import (
 
 // The kinds of action, each logged as "supervisor.<kind>".
 const (
-	KindReview   = "review"
-	KindGo       = "go"
-	KindForward  = "forward"
+	KindReview  = "review"
+	KindGo      = "go"
+	KindForward = "forward"
+	// KindRework tells the worker that parked again on the head whose
+	// findings stand, with no change-request round left, to fix them: the
+	// review rounds stay the loop's, and no merge question reaches the
+	// person.
+	KindRework = "rework"
+	// KindEscalate is an escalation an earlier loop handed the guide's
+	// person; the loop files none now, and only reads the old ones and
+	// their answers back.
 	KindEscalate = "escalate"
 	// KindAnswer tells the worker the person's answer to an escalation
 	// that did not release the pull request.
@@ -53,7 +61,7 @@ const (
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
-	return []string{KindReview, KindGo, KindForward, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
+	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
 		KindLeave, KindRelay, KindOwnership, KindOverride}
 }
 
@@ -304,7 +312,7 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 		goAgent: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}}
 	for _, t := range taken {
 		l.keys[t.Key] = t
-		if slices.Contains([]string{KindReview, KindGo, KindForward, KindEscalate, KindAnswer, KindEnd, KindLeave}, t.Kind) {
+		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave}, t.Kind) {
 			l.acts[t.Ref] = append(l.acts[t.Ref], t.At)
 		}
 		switch t.Kind {
@@ -375,9 +383,12 @@ func ReviewerName(ref string, rd int) string {
 }
 
 // Key renderings.
-func reviewKey(ref, head string) string     { return fmt.Sprintf("review %s@%s", ref, head) }
-func goKey(ref, head string) string         { return fmt.Sprintf("go %s@%s", ref, head) }
-func forwardKey(ref, review string) string  { return fmt.Sprintf("forward %s %s", ref, review) }
+func reviewKey(ref, head string) string    { return fmt.Sprintf("review %s@%s", ref, head) }
+func goKey(ref, head string) string        { return fmt.Sprintf("go %s@%s", ref, head) }
+func forwardKey(ref, review string) string { return fmt.Sprintf("forward %s %s", ref, review) }
+func reworkKey(ref, head string, parked time.Time) string {
+	return fmt.Sprintf("rework %s@%s %s", ref, head, parked.UTC().Format(time.RFC3339Nano))
+}
 func escalateKey(ref, head string) string   { return fmt.Sprintf("escalate %s@%s", ref, head) }
 func answerKey(ref string, note int) string { return fmt.Sprintf("answer %s #%d", ref, note) }
 func endKey(ref string) string              { return "end " + ref }
@@ -398,9 +409,10 @@ var prRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#\d+$`)
 func IsPull(on string) bool { return prRef.MatchString(on) }
 
 // Tracked are the pull requests a pass reads: every verified review request
-// an agent is parked on, every one the loop started a review of that it has not seen merged
-// or closed, nor escalated without the person's answer, and
-// every ended one whose worker waits for its retirement. None outside the
+// an agent is parked on, every one the loop started a review of that it
+// has not seen merged or closed, and every ended one whose worker waits
+// for its retirement. An escalation an earlier loop filed holds none of
+// them: their review rounds are the loop's. None outside the
 // desk's organisations or in its never list is read, nor one whose park
 // is from before the loop's first start.
 func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []string {
@@ -427,9 +439,7 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 		}
 		// An open question about its ownership keeps it read: the owning
 		// team's reviews still reach its worker meanwhile.
-		e, escalated := l.escalated[ref]
-		waits := escalated && e.open()
-		if !l.ended[ref] && !waits || l.ended[ref] && l.workerDue(ref, workers) {
+		if !l.ended[ref] || l.workerDue(ref, workers) {
 			out = append(out, ref)
 		}
 	}
@@ -513,10 +523,10 @@ func Plan(in Input) []Action {
 		if l.ended[ref] {
 			continue
 		}
+		// An escalation an earlier loop filed and nobody answered holds
+		// nothing: the review rounds go on as for any other.
 		esc, escalated := l.escalated[ref]
-		if escalated && esc.open() {
-			continue
-		}
+		escalated = escalated && !esc.open()
 		ask, asked := l.asked[ref]
 		if p.State == Merged || p.State == Closed {
 			if len(l.rounds[ref]) > 0 {
@@ -592,18 +602,6 @@ func Plan(in Input) []Action {
 				cycles++
 			}
 		}
-		escalate := func(question, why string) {
-			// A head escalated already is the person's answered: no
-			// second note on it.
-			if escalated && sameHead(esc.head, p.Head) {
-				return
-			}
-			a := base
-			a.Key, a.Kind = escalateKey(ref, p.Head), KindEscalate
-			a.Question = question
-			a.Message = fmt.Sprintf("%s: %d of %d change-request round(s) used, %s", p.URL, cycles, rounds, why)
-			add(a)
-		}
 		if len(rs) == 0 {
 			if p.Green && isParked {
 				review()
@@ -645,9 +643,16 @@ func Plan(in Input) []Action {
 				continue
 			}
 			if sameHead(p.Head, last.head) {
-				if !left {
-					escalate(EscalationQuestion(p.URL, p.Head),
-						fmt.Sprintf("the last asked for changes on head %s and the worker parked again without a new head: the findings stand unfixed", short(p.Head)))
+				// No round left and the findings stand unfixed: the worker
+				// reworks, once for each park on the unchanged head. Review
+				// and rework are the loop's; no merge question goes to the
+				// person, and an answered escalation of this head is
+				// handled above.
+				if !left && (!escalated || !sameHead(esc.head, p.Head)) {
+					a := base
+					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
+					a.Message = reworkMessage(p, cycles, rounds)
+					add(a)
 				}
 				continue
 			}
@@ -779,9 +784,13 @@ func Plan(in Input) []Action {
 		case VerbProblem:
 			// A problem of a done report rides with its done, which
 			// files it; a reviewer's that matches the changes request
-			// the loop forwarded is the forward's.
-			if !paired(e) && !forwarded(e) {
-				classify(e)
+			// the loop forwarded is the forward's. Any other is a
+			// finding, never a decision: one naming its issue is filed,
+			// one naming none goes to the guide's queue to file in its
+			// owning repository, and the agent keeps its task.
+			if !paired(e) && !forwarded(e) && !Filed(e.Detail) {
+				ev := e
+				add(Action{Key: eventKey(KindFile, e), Kind: KindFile, Agent: e.Agent, Event: &ev, Message: problemText(e)})
 			}
 		case VerbPark:
 			if on, _ := ParkedOn(e.Detail); on == "" && !waiting(e) {
@@ -924,18 +933,11 @@ func goAction(base Action, why string) Action {
 // with it is the person's answer to an escalation.
 const escalationPrefix = "Merge "
 
-// EscalationQuestion is the question an escalation asks the guide's person:
+// EscalationQuestion is the question an escalation of an earlier loop asked
+// the guide's person (the loop files none now; its answers still count):
 // the pull request, the head it names and why it waits for them.
 func EscalationQuestion(url, head string) string {
 	return fmt.Sprintf("%s%s at head %s with its last review's findings unfixed, or have it reworked?", escalationPrefix, url, short(head))
-}
-
-// EscalationOptions are an escalation's choices: the first releases it.
-func EscalationOptions(head string) []string {
-	return []string{
-		fmt.Sprintf("Merge: the supervisor loop gives the worker the merge go for head %s", short(head)),
-		"Rework: the worker is told the answer, fixes the findings and parks again for the merge go",
-	}
 }
 
 // releases are the whole answers, in their own words, that release an
@@ -966,6 +968,13 @@ func Releases(answer string) bool {
 // escalation of head.
 func answerMessage(p Pull, head string, an Answer) string {
 	return fmt.Sprintf("%s answered the escalation of %s at head %s (note #%d), word for word: %s\n\nThe loop does not read it as releasing the merge: rework as it says, push, and park on the pull request again once CI is green on the new head.", an.By, p.URL, short(head), an.Note, an.Text)
+}
+
+// reworkMessage tells the worker of p, parked again on the head its last
+// review asked changes on with no change-request round left, to fix them.
+func reworkMessage(p Pull, cycles, rounds int) string {
+	return fmt.Sprintf("You parked on %s again at head %s, the head its last review asked for changes on: those findings stand unfixed, and %d of %d change-request round(s) are used, so no further review runs and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and park on the pull request again once CI is green on the new head: the merge go for the new head follows.",
+		p.URL, short(p.Head), cycles, rounds)
 }
 
 // oneLine is s on one line.
