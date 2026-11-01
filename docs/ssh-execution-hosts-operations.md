@@ -151,6 +151,14 @@ reservation, workspace, or process. Remote starts require `--repo` and `--ref`;
 coordinator's existing provider and bucket pool across hosts and the selected
 host's physical guards. A host does not create another subscription budget.
 
+`supervisor loop` places its worker and reviewer starts the same way. With
+`supervisor.hosts` naming execution hosts (in order of preference), a start
+whose repository a host maps, and for which `capacity --host <selector>` has
+room, runs there pinned to the repository's default branch — while the
+coordinator is out of room, or always with `supervisor.hostsFirst`. A desk
+without `capacity.choices` never places remotely. A retired remote worker is
+stopped and acknowledged before it leaves the roster.
+
 Preparation creates no model process. The coordinator first records the stable
 execution reference and handle, then signs a short-lived registration receipt.
 The host verifies the receipt and checks live coordinator authority before the

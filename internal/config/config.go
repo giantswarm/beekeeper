@@ -4,8 +4,9 @@
 //
 // The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
 // $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
-// defaults. The defaults are neutral: memory thresholds are fractions of the
-// machine's RAM, swap or filesystem, and every organisation or desk choice
+// defaults unless explicitly named by $BEEKEEPER_CONFIG. The defaults are
+// neutral: memory thresholds are fractions of the machine's RAM, swap or
+// filesystem, and every organisation or desk choice
 // (the production installation, the installations, the lanes, the role
 // names) is unset until configured. docs/examples/config.yaml is a complete
 // desk's configuration.
@@ -958,7 +959,8 @@ const (
 // DefaultClaudeUsageCommand reads plan windows without a model turn.
 var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--output-format", "json"}
 
-// DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
+// DefaultAgyUsageCommand is capacity.providers.agy.command when unset, even
+// with agy: {}: agy's local usage report, read without a model turn.
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
 // DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
@@ -2070,6 +2072,17 @@ type Supervisor struct {
 	// a built-in review brief, and no worker start.
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
+	// Hosts are execution host selectors (agents.hosts) the loop's worker
+	// and reviewer starts may be placed on, in order of preference: when
+	// the local machine leaves no room for the start, or always with
+	// HostsFirst. A host must map the item's repository and pass its own
+	// check (capacity --host); the start is pinned to the repository's
+	// default branch. Releases and the loop itself stay on the coordinator.
+	Hosts []string `yaml:"hosts"`
+	// HostsFirst places every placed start on the first host of Hosts
+	// with room, whatever the local machine's room is; without room on
+	// any host the loop waits, as it does on a full machine.
+	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
 	PostInstall []string `yaml:"postInstall"`
@@ -2086,7 +2099,8 @@ type Supervisor struct {
 	ReleaseEvery Duration `yaml:"releaseEvery"`
 	NoteDue      Duration `yaml:"noteDue"`
 	// FillRetryEvery bounds repeated empty or failed board reads while
-	// capacity and the roster stay unchanged (5m).
+	// capacity's floor and ceiling stay unchanged and no agent is done or
+	// removed (5m).
 	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
@@ -2974,6 +2988,9 @@ func Path(flag string) (string, error) {
 		return flag, nil
 	}
 	if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" {
+		if _, err := os.Stat(filepath.Clean(env)); err != nil { //nolint:gosec // the configuration file explicitly selected by the caller
+			return "", err
+		}
 		return env, nil
 	}
 	dir, err := os.UserConfigDir()
@@ -2984,11 +3001,15 @@ func Path(flag string) (string, error) {
 }
 
 // Load reads the file at path and applies the defaults. A configuration
-// that is only incomplete loads: Incomplete names what is missing.
+// that is only incomplete loads: Incomplete names what is missing. A missing
+// file explicitly named by BEEKEEPER_CONFIG is an error, never defaults.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Clean(path))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" && filepath.Clean(env) == filepath.Clean(path) {
+			return nil, err
+		}
 		raw = nil
 	case err != nil:
 		return nil, err
@@ -3300,7 +3321,7 @@ func (c *Config) defaults() error {
 		if name == ClaudeHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultClaudeUsageCommand)
 		}
-		if name == AgyHarness && len(p.Command) == 0 && p.hasFields() {
+		if name == AgyHarness && len(p.Command) == 0 && !p.SelfHosted() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
 		if name == CodexHarness && len(p.Command) == 0 && p.hasFields() {
@@ -3627,6 +3648,14 @@ func (c *Config) validate() error {
 	}
 	if err := c.Supervisor.Ownership.validate(); err != nil {
 		return fmt.Errorf("supervisor.ownership.%w", err)
+	}
+	for _, selector := range c.Supervisor.Hosts {
+		if selector == "" || selector == "local" {
+			return fmt.Errorf("supervisor.hosts: %q names no SSH execution host", selector)
+		}
+		if _, ok := c.Agents.Hosts[selector]; !ok {
+			return fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector)
+		}
 	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {

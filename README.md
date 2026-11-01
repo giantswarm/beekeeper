@@ -18,8 +18,11 @@ The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
 stops. Remote wakes and resumes use durable ordered message receipts; inspect
-them with `agents messages` and reconcile with `agents hosts sync`. The
-[design](docs/ssh-execution-hosts.md) records the contract and the remaining
+them with `agents messages` and reconcile with `agents hosts sync`. With
+`supervisor.hosts`, `supervisor loop` places its worker and reviewer starts
+on these hosts when the coordinator is out of room (or always with
+`supervisor.hostsFirst`).
+The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
 ## Install
@@ -41,9 +44,29 @@ restart or roster loss without a done report. Each start rechecks capacity
 and stops when its gates refuse, the floor is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
 An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
-default) before retrying, unless the roster or capacity changes first.
+default) before retrying, unless `capacity.floor` or `capacity.ceiling`
+changes or an agent is done or leaves the roster first; a park, a resume,
+a wait or a new task, and the busy count and room they move, do not end it. An empty or failed read answers
+the rest of its pass, the done-triggered starts included.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
+
+The loop routes only relevant alerts, those the watch publishes at
+`alerts.pageSeverity`:
+
+1. The team's own alerts (`alerts.team`) are relevant 24/7: an alert of the
+   team that only `InhibitionOutsideWorkingHours` inhibits is read and routed
+   like any other. With `alerts.team` unset every alert is the desk's.
+2. A silenced alert is ignored, the team's included: beekeeper creates no
+   silence, so every silence is another person's or team's. It gets no
+   summary line and no note.
+
+Everything else, another team's or a team-less alert, gets no note and no
+summary line. A relevant alert nobody owns that a session record explicitly
+waits on (`sessions serve … --waits alert:<name>`) is one decision for the
+guide, which decides whether a worker starts on it; the rest are one
+`SUPERVISOR ALERTS unowned` summary line per pass. A worker parked on an
+alert (`agents park --on alert:<name>`) is woken by it whoever's it is.
 
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
@@ -2027,6 +2050,15 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   An explicit `command` continues to override this default. Only the bare default command is
   parsed as Claude's local `/usage` output; custom readers (including absolute executable paths)
   must print beekeeper's usage JSON.
+  `capacity.providers.agy` without a `command` (even `agy: {}`, or one with only a `ceiling`)
+  defaults to `[agy, -p, /usage]`, agy's local usage report, which takes no model turn. Like
+  Claude's, it runs under beekeeper's state directory (`usage/agy`) at the provider's `every`
+  (default `5m`), with its `timeout`, without the requesting agy worker's `BEEKEEPER_AGY_AGENT` and
+  `BEEKEEPER_AGENT_NAME`, and fails closed once older than `staleAfter`. Each model bucket's
+  `Five Hour Limit Remaining` and `Weekly Limit Remaining` lines become that bucket's 5-hour and
+  7-day windows (used = 100 − remaining) in `buckets`; a bucket printing only one of them is left
+  out, so a choice on it gets no start while the complete buckets still count, and a report with
+  no complete bucket is a failed read. A desk needs no timer of its own to feed `beekeeper capacity`.
   An explicit `"fiveHour": {"usedPercent": null, "resetsAt": null}` means no short window is open yet and counts as 0% used; weekly usage and pace still apply. Missing fields and unknown weekly usage remain errors.
   A `capacity.providers` entry of `kind: self-hosted` is a model served on the desk's own machines rather than a subscription: it sets no usage command and has no pace, only a `ceiling` of busy sessions at once (unset, 10), which `capacity.ceiling` never bounds — a desk that lowers `capacity.ceiling` to 0 to hold a subscription on its weekly pace still starts on its own model, with the machine guards as the only further bound. Its ceiling may follow the serving mode of the model it serves: `serveModeCommand` prints the mode on stdout (cached for `serveModeStaleAfter`, default `1m`) and `serveModeCeilings` names the ceiling per mode, falling back to `ceiling` while the mode names none or the read failed, which the line says as `serving mode unknown (…)`. The provider's line reads `provider <name>: <n> busy of ceiling <c>; serving mode <mode>; <verdict>` and `--json` carries `kind`, `servingMode` and `servingModeError`. Busy agents on a model of that provider count against its ceiling, `beekeeper capacity` and `--json` show both figures, and `agents start --harness omp` or `--harness auto` judging a start on it is judged against that ceiling. Unlike a subscription provider, it never earns a USAGE HIGH: only its ceiling and the machine guards stop a start.
   With `serveModeModes` each mode names the machine's nodes it occupies and the sessions it sustains (the ceiling of the mode per `sessions`), and `serveModeSwitchCommand` is the platform's own tool that switches into the mode named as its last argument (bounded by `serveModeSwitchTimeout`, default `1m`): beekeeper relays to it and holds no control of the model itself. A node a mode occupies is then a leasable resource, and `beekeeper lease claim <node>` the generic constraint "needs node N exclusively": while a constraint holds a node, the model never runs in a mode that occupies it — the claim lowers the provider's ceiling to the widest mode free of the node at once, drains it (no new session starts on the model; running sessions finish or park), runs the switch, and only then grants the lease; `lease release` switches back and raises the ceiling again once no constraint needs the node. One switch runs at a time (a machine-wide lock), never from a session that runs on the model itself, and the watch retries a switch a drain or a failure left pending. `beekeeper status` carries `serving mode <mode> (<n> sessions)` and each held node with the mode that stands while it holds; the event log carries `serve.drained`, `serve.switch` and `serve.refused`. Every failure leaves the mode as the reader reports it: a refused or failed switch keeps the mode, says so in the line and the log, and stays pending for the watch.
@@ -3234,9 +3266,12 @@ exit 69 and queues nothing.
 ## Configuration
 
 `$XDG_CONFIG_HOME/beekeeper/config.yaml` (or `--config`, or `$BEEKEEPER_CONFIG`). Every field is
-optional, and an empty configuration works: `watch`, `snapshot`, `free`, the hook and the
-coordination commands run with neutral defaults. Memory and disk thresholds default to fractions of
-what the machine has, and every organisation or desk choice is unset until configured.
+optional. A non-empty `$BEEKEEPER_CONFIG` must name an existing file; a missing file is an error
+before any state is opened. Pre-tool hooks report the failure as a deny decision. An unset or
+empty variable selects the default path, where a missing file still uses defaults. An empty
+configuration works: `watch`, `snapshot`, `free`, the hook and the coordination commands run
+with neutral defaults. Memory and disk thresholds default to fractions of what the machine
+has, and every organisation or desk choice is unset until configured.
 [`docs/examples/config.yaml`](docs/examples/config.yaml) is a complete desk's configuration, every
 key annotated with what it guards and its default.
 
