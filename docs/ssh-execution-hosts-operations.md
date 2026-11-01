@@ -385,7 +385,9 @@ GitHub login. The remote branch is always
 a worker cannot select a repository, remote, destination ref, default branch,
 force option or arbitrary GitHub API operation. The coordinator resolves the
 repository's default branch and creates the PR against it. Both PR text and
-new commit text pass the ordinary outbound rules; PR text cannot ping accounts.
+new commit text pass the ordinary outbound rules; complete commit messages are
+scanned separately from patch content, so message bullets are never mistaken
+for patch deletions. PR text cannot ping accounts.
 
 The first publication requires a title and body file. Once a PR exists, review
 fixes need only `beekeeper agents publish`: the same branch advances by a normal
@@ -403,7 +405,10 @@ beekeeper agents publish --sync-base
 ```
 
 This transfers upstream commits through the same coordinator, fetches them into
-the owned workspace and merges them with hooks disabled. Resolve conflicts and
+the owned workspace and merges them with hooks disabled. The merge resolves
+the worker's usual author and committer identities, including global Git identity,
+and supplies only those identity fields to the isolated Git operation. Other
+global configuration stays disabled. Resolve conflicts and
 commit locally, then publish. No source checkout is modified and no host GitHub
 credential or SSH agent is forwarded. This command creates no review or merge
 authorization; park on the returned PR and follow the independent review gate.

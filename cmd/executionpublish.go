@@ -49,16 +49,22 @@ func publicationCommit(s string) bool {
 // No shell, global Git configuration, hooks, filters or alternate transport
 // selected by a worker. Only the coordinator's gh credential helper is used.
 var executionPublishGit = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return runPublicationGit(ctx, dir, nil, args...)
+}
+
+func runPublicationGit(ctx context.Context, dir string, identity []string, args ...string) ([]byte, error) {
 	prefix := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.file.allow=always", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"}
 	c := exec.CommandContext(ctx, "git", append(prefix, args...)...) //nolint:gosec // fixed Git subcommands, validated commit/repository identities and component-owned paths; no shell
 	c.Dir = dir
-	c.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
+	c.Env = append(os.Environ(), identity...)
+	c.Env = append(c.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
 	out, err := c.Output()
 	if err != nil {
 		return nil, errors.New("publication Git operation failed; inspect the execution publication before retrying")
 	}
 	return out, nil
 }
+
 var executionPublishGH = github.RunGH
 
 func publishGit(ctx context.Context, dir string, args ...string) (string, error) {
@@ -189,18 +195,32 @@ func (a *app) publishExecution(ctx context.Context, st *state.State, ref executi
 		if _, err = publishGit(ctx, repo, "merge-base", "--is-ancestor", r.Handle.Commit, p.Head); err != nil {
 			return result, refused("publication does not descend from the execution's pinned commit")
 		}
-		patch, patchErr := publishGit(ctx, repo, "log", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", "--format=%B", r.Handle.Commit+".."+p.Head, "--")
+		messages, messageErr := publishGit(ctx, repo, "log", "--no-patch", "--format=%B", r.Handle.Commit+".."+p.Head, "--")
+		if messageErr != nil {
+			return result, messageErr
+		}
+		patch, patchErr := publishGit(ctx, repo, "log", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", "--format=", r.Handle.Commit+".."+p.Head, "--")
 		if patchErr != nil {
 			return result, patchErr
 		}
 		var added strings.Builder
+		inHunk := false
 		for line := range strings.SplitSeq(patch, "\n") {
-			if !strings.HasPrefix(line, "-") {
-				added.WriteString(line)
-				added.WriteByte('\n')
+			switch {
+			case strings.HasPrefix(line, "diff --git "):
+				inHunk = false
+			case strings.HasPrefix(line, "@@ "):
+				inHunk = true
 			}
+			// Only patch deletion lines are omitted. Commit messages are
+			// scanned separately and never passed through this parser.
+			if inHunk && strings.HasPrefix(line, "-") {
+				continue
+			}
+			added.WriteString(line)
+			added.WriteByte('\n')
 		}
-		if reason := outboundGuard(a.cfg.Outbound).PublicationRefusal(p.Title+"\n"+p.Body, added.String()); reason != "" {
+		if reason := outboundGuard(a.cfg.Outbound).PublicationRefusal(p.Title+"\n"+p.Body, messages+"\n"+added.String()); reason != "" {
 			return result, refused("%s", reason)
 		}
 		// Reconcile a lost create response by the exact owned branch. An existing
@@ -334,8 +354,8 @@ func (a *app) executionPublishCmd() *cobra.Command {
 			if _, err = publishGit(ctx, workspace, "fetch", "--no-tags", bundlePath, "refs/heads/base"); err != nil {
 				return err
 			}
-			if _, err = publishGit(ctx, workspace, "merge", "--no-edit", "FETCH_HEAD"); err != nil {
-				return errors.New("base merge needs resolution in the owned workspace; resolve, commit and publish")
+			if err = mergePublicationBase(ctx, workspace); err != nil {
+				return err
 			}
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)

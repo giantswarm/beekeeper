@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -409,6 +410,53 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if json.Unmarshal(output.Bytes(), &result) != nil || result.URL == "" || rig.creates != 1 {
 		t.Fatal("host did not publish through coordinator", output.String())
 	}
+	// Model a normal host whose worker commits use only global identity.
+	if _, err := publishGit(context.Background(), rig.workspace, "checkout", "-b", "publication-upstream", rig.base); err != nil {
+		t.Fatal(err)
+	}
+	rig.commit(t, "upstream-identity.txt", "upstream identity fixture\n")
+	if _, err := publishGit(context.Background(), rig.workspace, "push", rig.remote, "HEAD:main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishGit(context.Background(), rig.workspace, "checkout", "main"); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"user.name", "user.email"} {
+		if _, err := publishGit(context.Background(), rig.workspace, "config", "--unset", key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	globalPath := filepath.Join(root, "global.gitconfig")
+	if err := os.WriteFile(globalPath, []byte("[user]\n name = Global Publication Fixture\n email = publication-global@example.invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalPath)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, key := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	normalCommit := exec.CommandContext(context.Background(), "git", "-c", "core.hooksPath="+os.DevNull, "commit", "--allow-empty", "-m", "normal worker global identity")
+	normalCommit.Dir = rig.workspace
+	if err := normalCommit.Run(); err != nil {
+		t.Fatal("normal global-identity commit failed", err)
+	}
+	command = rig.a.executionPublishCmd()
+	command.SetArgs([]string{"--sync-base"})
+	command.SetOut(&bytes.Buffer{})
+	if err := command.Execute(); err != nil {
+		t.Fatal("global-identity base synchronization failed", err)
+	}
+	parents, err := publishGit(context.Background(), rig.workspace, "rev-list", "--parents", "-n", "1", "HEAD")
+	if err != nil || len(strings.Fields(parents)) != 3 {
+		t.Fatal("base synchronization did not create a divergent merge", err)
+	}
+	committer, err := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%cn <%ce>")
+	if err != nil || committer != "Global Publication Fixture <publication-global@example.invalid>" {
+		t.Fatal("merge lost global commit identity", err)
+	}
 	// A command in an unrelated service cannot impersonate this execution.
 	s.OwnUnit = func() string { return "unrelated.service" }
 	command = rig.a.executionPublishCmd()
@@ -441,5 +489,33 @@ func TestExecutionPublicationRechecksLeaseAfterFetch(t *testing.T) {
 	}
 	if rig.created {
 		t.Fatal("expired execution created a PR")
+	}
+}
+
+func TestExecutionPublicationRejectsBulletMessage(t *testing.T) {
+	rig := newPublicationRig(t)
+	const sentinel = "publication-protected-bullet-sentinel"
+	rig.a.cfg.Outbound.Phrases = []string{sentinel}
+	rig.commit(t, "bullet-message.txt", "ordinary fixture content\n")
+	if _, err := publishGit(context.Background(), rig.workspace, "commit", "--amend", "-m", "fixture message\n\n- "+sentinel); err != nil {
+		t.Fatal(err)
+	}
+	head, err := publishGit(context.Background(), rig.workspace, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := rig.publication(t, head)
+	git := executionPublishGit
+	pushes := 0
+	executionPublishGit = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "push" {
+			pushes++
+		}
+		return git(ctx, dir, args...)
+	}
+	var result executionPublicationResult
+	err = coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
+	if err == nil || pushes != 0 || rig.created {
+		t.Fatalf("protected commit-message bullet escaped: rejected=%t pushes=%d created=%t", err != nil, pushes, rig.created)
 	}
 }
