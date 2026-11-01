@@ -218,7 +218,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
-		if op == "inspect" && reply.Code == "not-found" {
+		if op == inspectOperation && reply.Code == "not-found" {
 			return ErrNotFound
 		}
 		if reply.Code == "unsupported" {
@@ -274,7 +274,7 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 }
 func (t SSHTransport) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	var x Observation
-	err := t.Call(ctx, "inspect", r, nil, &x)
+	err := t.Call(ctx, inspectOperation, r, nil, &x)
 	if err == nil && x.Handle.Ref != r {
 		err = errors.New("observation identity mismatch")
 	}

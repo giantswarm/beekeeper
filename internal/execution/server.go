@@ -501,7 +501,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err == nil {
 					value, err = s.Start(ctx, r)
 				}
-			case "inspect":
+			case inspectOperation:
 				value, err = s.Inspect(ctx, req.Ref)
 			case "sync-control":
 				value, err = s.SyncControl(ctx, req.Ref, nil)
@@ -533,7 +533,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
-				if req.Operation == "inspect" && errors.Is(err, os.ErrNotExist) {
+				if req.Operation == inspectOperation && errors.Is(err, os.ErrNotExist) {
 					reply.Code = "not-found"
 				}
 				if errors.Is(err, ErrUnsupported) {

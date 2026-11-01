@@ -18,30 +18,31 @@ import (
 )
 
 const (
-	HarnessClaude  = "claude"
-	HarnessCodex   = "codex"
-	Preparing      = "preparing"
-	Activating     = "activating"
-	Applied        = "applied"
-	ControlNote    = "note"
-	ControlPark    = "park"
-	ControlReport  = "report"
-	unitActive     = "active"
-	unitInactive   = "inactive"
-	sshCommand     = "ssh"
-	authCommand    = "auth"
-	Protocol       = 1
-	EnvID          = "BEEKEEPER_EXECUTION_ID"
-	EnvCoordinator = "BEEKEEPER_EXECUTION_COORDINATOR"
-	MaxWire        = 1 << 20
-	MaxLog         = 256 << 10
-	Prepared       = "prepared"
-	Running        = "running"
-	Exited         = "exited"
-	Failed         = "failed"
-	Unknown        = "unknown"
-	Reachable      = "reachable"
-	Unreachable    = "unreachable"
+	HarnessClaude    = "claude"
+	HarnessCodex     = "codex"
+	Preparing        = "preparing"
+	Activating       = "activating"
+	Applied          = "applied"
+	ControlNote      = "note"
+	ControlPark      = "park"
+	ControlReport    = "report"
+	unitActive       = "active"
+	unitInactive     = "inactive"
+	inspectOperation = "inspect"
+	sshCommand       = "ssh"
+	authCommand      = "auth"
+	Protocol         = 1
+	EnvID            = "BEEKEEPER_EXECUTION_ID"
+	EnvCoordinator   = "BEEKEEPER_EXECUTION_COORDINATOR"
+	MaxWire          = 1 << 20
+	MaxLog           = 256 << 10
+	Prepared         = "prepared"
+	Running          = "running"
+	Exited           = "exited"
+	Failed           = "failed"
+	Unknown          = "unknown"
+	Reachable        = "reachable"
+	Unreachable      = "unreachable"
 )
 
 // ErrNotFound means an inspected execution has no host journal. Other inspection
