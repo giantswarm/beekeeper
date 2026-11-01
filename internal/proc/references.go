@@ -115,6 +115,13 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		if owner != uid {
 			continue
 		}
+		exited, err := referenceZombie(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		if exited {
+			continue
+		}
 		// A cached directory inode may retain its original owner after a
 		// process becomes non-dumpable. Ptrace-gated children reflect the
 		// current protection, including when status omits Dumpable.
@@ -148,6 +155,33 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		commands = append(commands, strings.TrimSpace(string(comm)))
 	}
 	return refs, commands, nil
+}
+
+// A zombie leader can still have live threads holding references. Only a
+// zombie with a known thread count of zero or one is confirmed exited.
+func referenceZombie(status []byte) (bool, error) {
+	zombie := false
+	threads := -1
+	for line := range strings.Lines(string(status)) {
+		key, value, _ := strings.Cut(line, ":")
+		switch key {
+		case "State":
+			fields := strings.Fields(value)
+			zombie = len(fields) > 0 && fields[0] == "Z"
+		case "Threads":
+			n, err := strconv.Atoi(strings.TrimSpace(value))
+			if err == nil {
+				threads = n
+			}
+		}
+	}
+	if !zombie {
+		return false, nil
+	}
+	if threads < 0 || threads > 1 {
+		return false, errors.New("zombie leader may have live threads: references unavailable")
+	}
+	return true, nil
 }
 
 func referenceOwner(status []byte) (int, bool, error) {

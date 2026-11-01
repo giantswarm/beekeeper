@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	bgID      = "6f1c2a90-4b7e-4d21-9c0a-3e5f7a8b9c10"
-	bgShortID = "6f1c2a90"
-	bgName    = "FIX beekeeper 1670"
-	bgTask    = "Brief: start background sessions"
-	bgModel   = "opus"
+	bgDesktopFlag = "--desktop"
+	bgID          = "6f1c2a90-4b7e-4d21-9c0a-3e5f7a8b9c10"
+	bgShortID     = "6f1c2a90"
+	bgName        = "FIX beekeeper 1670"
+	bgTask        = "Brief: start background sessions"
+	bgModel       = "opus"
 )
 
 // bgCall is one claude --bg call the stub saw.
@@ -346,7 +347,7 @@ func TestBackgroundAgentAsksTheDaemon(t *testing.T) {
 func TestModeBackgroundRefusesDesktopAndOmp(t *testing.T) {
 	brief := filepath.Join(t.TempDir(), "brief.md")
 	writeFile(t, brief, "# a task\n")
-	for _, extra := range [][]string{{"--desktop"}, {"--harness", "omp"}} {
+	for _, extra := range [][]string{{bgDesktopFlag}, {"--harness", "omp"}} {
 		a, _ := stubApp(t)
 		c := a.agentStartCmd()
 		c.SetArgs(append([]string{bgName, brief, modeFlag, config.ModeBackground}, extra...))
@@ -355,6 +356,39 @@ func TestModeBackgroundRefusesDesktopAndOmp(t *testing.T) {
 		if err := c.Execute(); !errors.As(err, &ee) || ee.code != ExitUsage || !strings.Contains(ee.msg, extra[0]) {
 			t.Errorf("%v: err = %v", extra, err)
 		}
+	}
+}
+
+func TestConfiguredBackgroundRefusesDesktop(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dryRun=%t", dryRun), func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.cfg.Agents.Mode = config.ModeBackground
+			c := a.agentStartCmd()
+			args := []string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			c.SetArgs(args)
+			c.SetContext(t.Context())
+			var ee *exitError
+			if err := c.Execute(); !errors.As(err, &ee) || ee.code != ExitUsage || !strings.Contains(ee.msg, bgDesktopFlag) {
+				t.Fatalf("configured background desktop conflict: %v", err)
+			}
+		})
+	}
+}
+
+func TestDesktopModeOverridesConfiguredBackground(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.Agents.Mode = config.ModeBackground
+	c := a.agentStartCmd()
+	c.SetArgs([]string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag, modeFlag, config.ModeDesktop})
+	c.SetContext(t.Context())
+	// Reaching the brief read proves the explicit desktop mode passed
+	// validation without launching a session or consulting capacity.
+	if err := c.Execute(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("explicit desktop mode did not reach the brief read: %v", err)
 	}
 }
 

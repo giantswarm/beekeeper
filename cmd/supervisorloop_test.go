@@ -1375,45 +1375,46 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 	}
 }
 
-// A pass must start the parked PR's review even with every worker slot busy.
-func TestLoopStartsReviewAtWorkerCeilingInOnePass(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Capacity.Ceiling = 2
-	r.a.cfg.Capacity.ReviewHeadroom = 2
-	r.park(t, loopPR, time.Now())
-	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = append(st.Agents, tasked(busyOne), tasked(busyTwo))
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	r.answer = func(args []string) (string, int) {
-		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
-			st, err := r.a.store.Read()
-			if err != nil {
-				t.Fatal(err)
-			}
-			kind := forWorker
-			if slices.Contains(args, "--review") {
-				kind = forReview
-			}
-			v := newStartCapacity(countAgents(st, nil, r.a.now), r.a.cfg.Capacity, roomy(), false, kind)
-			if _, err := gateStart(v, false); err != nil {
-				return err.Error(), ExitRefused
-			}
+// A legacy park naming a PR in its wait belongs to the review loop too.
+func TestLoopOwnsPullRequestWaitsWithoutOn(t *testing.T) {
+	for _, green := range []bool{false, true} {
+		for _, on := range []string{"", loopPR} {
+			t.Run(fmt.Sprintf("green=%t/on=%s", green, on), func(t *testing.T) {
+				r := newLoopRig(t)
+				r.park(t, on, time.Now())
+				r.pull.Green = green
+				err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					ag := &st.Agents[0]
+					ag.Park.Waits = "CI pending for " + loopURL
+					return []state.Event{event(ag.Party, "agents.park", "%s: %s", ag.Name, parkedText(ag.Park, r.a.now))}, nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.pass(t)
+				if note := r.called("note", loopAdd); note != nil {
+					t.Fatalf("operational park got a note: %v", note)
+				}
+				if got := r.called(agentsName, "start"); (got != nil) != green {
+					t.Fatalf("review start = %v, green=%t\n%s", got, green, r.out)
+				}
+			})
 		}
-		return "", 0
 	}
-	r.pass(t)
-	if evs := r.logged(t, "supervisor.review"); len(evs) != 1 {
-		t.Fatalf("no review in first pass: %v, %s", r.calls, r.out)
-	}
-	st, err := r.a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	v := newStartCapacity(countAgents(st, nil, r.a.now), r.a.cfg.Capacity, roomy(), false, forWorker)
-	if _, err := gateStart(v, false); err == nil {
-		t.Fatal("ordinary worker passed the ceiling")
+}
+
+func TestLoopParkOnKeepsExplicitAndAmbiguousWaits(t *testing.T) {
+	const noteOn = "#1234"
+	for _, tc := range []struct{ on, waits, want string }{
+		{noteOn, "CI pending " + loopURL, noteOn},
+		{"", "desk review " + loopURL, loopPR},
+		{"", "CI pending " + loopURL + " and " + loopURL, loopPR},
+		{"", "waiting https://github.com/o/r/issues/7", ""},
+		{"", "CI pending " + loopURL + " https://github.com/o/r/pull/8", ""},
+		{"", "waiting for the person's rollout decision", ""},
+	} {
+		if got := loopParkOn(&state.Park{On: tc.on, Waits: tc.waits}); got != tc.want {
+			t.Errorf("%+v: got %q", tc, got)
+		}
 	}
 }

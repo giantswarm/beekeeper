@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -32,7 +33,17 @@ const (
 // its state for the watch. Without secret.session it keeps nothing.
 func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 	if !a.cfg.Secret.Session {
-		return &vaultBroker{k: secret.NewKeeper(0, nil)}, nil
+		k := secret.NewKeeper(0, nil)
+		if err := secret.Protect(); err != nil {
+			return nil, err
+		}
+		if err := k.RestoreHandover(); err != nil {
+			if !errors.Is(err, secret.ErrNoHandover) {
+				return nil, err
+			}
+		}
+		k.Lock()
+		return &vaultBroker{k: k}, nil
 	}
 	path, err := secret.SocketPath()
 	if err != nil {
@@ -55,11 +66,22 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 		}
 		fmt.Fprintln(os.Stderr, "vault keeper: locked")
 	})
-	// a restarted broker holds no session: its state says so
-	writeState(k.State())
 	if err := secret.Protect(); err != nil {
 		return nil, fmt.Errorf("the vault keeper: %w", err)
 	}
+	var restoreReason string
+	if err := k.RestoreHandover(); err != nil {
+		st := k.State()
+		st.Error = "vault handover rejected: " + err.Error()
+		writeState(st)
+		if !errors.Is(err, secret.ErrNoHandover) {
+			return nil, fmt.Errorf("the vault handover: %w", err)
+		}
+		restoreReason = st.Error
+	}
+	st := k.State()
+	st.Error = restoreReason
+	writeState(st)
 	go func() {
 		if err := secret.ServeVault(ctx, path, k, a.vaultStore, a.vaultStoreItem); err != nil {
 			fmt.Fprintf(os.Stderr, "vault keeper: %v\n", err)
