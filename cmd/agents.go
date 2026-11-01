@@ -296,6 +296,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 			if err != nil {
 				return err
 			}
+			a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			if report != "" || len(found) > 0 {
 				if _, err := fmt.Fprintf(a.out, "register: the report and %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
 					return err

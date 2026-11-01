@@ -121,7 +121,11 @@ open task of a stopped session's entry under that name, which it takes
 over), so the roster shows it at work from its start. A brief naming an
 issue or pull request by URL makes the first one named the session's serve
 record (as sessions serve records it), so board next never offers that
-item again while the worker runs.
+item again while the worker runs. That record is the desk's claim of the
+issue on GitHub too (board.claims): while another desk's live claim holds
+the issue, start refuses with that claim's desk, session and time, exit 3;
+--force starts anyway and the event log records the claim overridden
+(agents.start). A stale claim is said, never honoured.
 
 The start is judged first, as beekeeper capacity judges one: the busy
 agents against capacity.ceiling, MemAvailable, disk swap's growth, the
@@ -322,10 +326,11 @@ work, which takes no choice on a self-hosted provider.`,
 					return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
 				}
 			}
-			if _, err := a.startMode(mode); err != nil {
+			resolvedMode, err := a.startMode(mode)
+			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(mode) == config.ModeBackground && desktop {
+			if resolvedMode == config.ModeBackground && desktop {
 				return usageErr("--mode background and --desktop: a background session has no desktop turn")
 			}
 			if harness != harnessAuto {
@@ -343,6 +348,11 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			brief, err := readBrief(briefFile)
 			if err != nil {
+				return err
+			}
+			// another desk's claim of the brief's issue refuses the start,
+			// --force aside, before anything is judged or recorded
+			if err := a.claimGate(cmd.Context(), name, briefIssue(brief), force, dryRun); err != nil {
 				return err
 			}
 			// an omp agent whose provider's key is in the vault starts where
@@ -456,7 +466,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if err != nil {
 					return err
 				}
-				if err := a.store.Record(event(by, "agents.start", "%s: started over %s (--force)", name, over)); err != nil {
+				if err := a.store.Record(event(by, verbStart, "%s: started over %s (--force)", name, over)); err != nil {
 					return err
 				}
 				if _, err := fmt.Fprintf(a.out, "started over %s (--force)\n", over); err != nil {
@@ -472,6 +482,7 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
 			h, _ := harnessByName(harness)
+			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			return h.Start(cmd.Context(), a, sp)
 		},
 	}
@@ -489,7 +500,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
-	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
+	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start, or another desk claims the brief's issue; the event log records what it overrode")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
@@ -778,7 +789,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		if sp.desktop {
 			st.Agents[len(st.Agents)-1].DesktopTurn = s.At
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -820,7 +831,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	d.urgent = a.asksDesktop(id)
 	if profile != "" {
 		sa.turn = profiledTurn(profile)
-		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		// its row shows from its first turn, as a desktop turn's does
 		d.urgent = func() bool { return true }
 	}
@@ -843,7 +854,7 @@ func (a *app) undelivered(by, p state.Party, why error) error {
 		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
 			st.Agents[i].Undelivered = why.Error()
 		}
-		return []state.Event{event(by, "agents.start", "%s: task not delivered: %v", p.Name, why)}, nil
+		return []state.Event{event(by, verbStart, "%s: task not delivered: %v", p.Name, why)}, nil
 	})
 	if strings.HasPrefix(p.HostSession, agy.HostPrefix) {
 		return fmt.Errorf("%s: task not delivered: %w (start it again with agents start --harness agy, or beekeeper agents remove %q takes it off the roster)",
@@ -907,21 +918,21 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		// runs headless, whose reopen imports it later.
 		if err := a.importVisible(ctx, d, id, sp.name, follow, &sa); err != nil {
 			sa.deferred = err
-			_ = a.store.Record(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
+			_ = a.store.Record(event(by, verbStart, "%s: the desktop did not import it (%v)", sp.name, err))
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
 	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
-		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		return sa, nil
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
 		sa.turn += " on " + w.model
 	}
-	_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+	_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
 		return sa, err
 	}
@@ -1785,6 +1796,9 @@ func (a *app) explicitConfig() string {
 	}
 	return p
 }
+
+// verbStart logs a start and what it overrode.
+const verbStart = "agents.start"
 
 func resumeURL(id string) string { return "claude://resume?session=" + id }
 

@@ -32,7 +32,7 @@ func TestUserReferencesChecksPtraceGatedChildOwnership(t *testing.T) {
 			if uid == 0 {
 				foreignUID = 1
 			}
-			for name, data := range map[string]string{fixtureStatus: fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid), "comm": "helper", fixtureEnvironment: "", fixtureMappings: ""} {
+			for name, data := range map[string]string{fixtureStatus: fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid), fixtureCommand: "helper", fixtureEnvironment: "", fixtureMappings: ""} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 					t.Fatal(err)
 				}
