@@ -26,8 +26,8 @@ func TestGoneAgentBoundaryAndProtections(t *testing.T) {
 		{name: "boundary", gone: true},
 		{name: "between turns", change: func(ag *state.Agent, _ *state.State) { ag.ActivityAt = old.Add(time.Nanosecond) }},
 		{name: "new task", change: func(ag *state.Agent, _ *state.State) { ag.AssignedAt = now }},
-		{name: "kept", change: func(ag *state.Agent, _ *state.State) { ag.Keep = &state.Keep{} }},
-		{name: "parked", change: func(ag *state.Agent, _ *state.State) { ag.Park = &state.Park{Waits: "review"} }},
+		{name: "keep marker", change: func(ag *state.Agent, _ *state.State) { ag.Keep = &state.Keep{} }},
+		{name: "park marker", change: func(ag *state.Agent, _ *state.State) { ag.Park = &state.Park{Waits: reviewFlag} }},
 		{name: "timer", change: func(ag *state.Agent, st *state.State) { st.Timers = []state.Timer{{Wake: ag.Name}} }},
 		{name: "running headless turn", live: true},
 		{name: "recent serve", change: func(ag *state.Agent, st *state.State) { st.Records = []state.Record{{Session: ag.Party, At: now}} }},
@@ -163,7 +163,7 @@ func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 }
 
 func TestGoneRetirementRechecksActivity(t *testing.T) {
-	for _, change := range []string{"wake", "keep", "transcript"} {
+	for _, change := range []string{agentWakeName, "keep", "transcript"} {
 		t.Run(change, func(t *testing.T) {
 			a, _ := stubApp(t)
 			runLive(t, a, nil)
