@@ -12,8 +12,8 @@ import (
 // still runs a scope is taken by no run. beekeeper run stops its scope
 // when its command exits; a scope whose run died with it (a killed run, a
 // lost go test) runs on with what the command left in it, an envtest
-// kube-apiserver say, adopted by the service manager. The watch names such
-// an orphaned slot scope at the sample it first sees it and, after
+// kube-apiserver say, adopted by the service manager or sandbox init. The
+// watch names such an orphaned slot scope at the sample it first sees it and, after
 // slotOrphanGrace, stops it: the slot is free without a person.
 
 // slotOrphanGrace is how long the watch leaves an orphaned slot scope
@@ -22,6 +22,9 @@ const slotOrphanGrace = time.Minute
 
 // slotStopTimeout bounds the stop of an orphaned slot scope.
 const slotStopTimeout = 2 * time.Minute
+
+// sandboxInitCommand is bubblewrap, the PID-namespace init of a sandboxed run.
+const sandboxInitCommand = "bwrap"
 
 // slotOrphans names each orphaned slot scope once (ORPHANED SLOT SCOPE) and,
 // in a watch that does chores, stops it once it has run on for
@@ -86,8 +89,10 @@ func (w *watcher) slotOrphans(now time.Time, t *proc.Table) {
 
 // orphanedScope reports whether a scope's processes outlived the run that
 // started it: every one is a child of another in the scope or adopted by the
-// service manager (or PID 1). A live run's command is the child of its
-// beekeeper run, outside the scope.
+// service manager (or PID 1), or by bubblewrap's PID-namespace init. A live
+// run's command is the child of its beekeeper run, outside the scope.
+// Bubblewrap inside the scope is part of the command's tree, so its own
+// parent must also be checked before the scope can be considered orphaned.
 func orphanedScope(t *proc.Table, pids []int) bool {
 	in := map[int]bool{}
 	for _, pid := range pids {
@@ -96,9 +101,14 @@ func orphanedScope(t *proc.Table, pids []int) bool {
 	adopted := false
 	for _, pid := range pids {
 		p := t.ByPID[pid]
+		var sandboxInit bool
+		if p != nil {
+			parent := t.ByPID[p.PPID]
+			sandboxInit = parent != nil && parent.Comm == sandboxInitCommand
+		}
 		switch {
 		case p == nil, in[p.PPID]:
-		case t.Orphaned(p):
+		case t.Orphaned(p), sandboxInit:
 			adopted = true
 		default:
 			return false

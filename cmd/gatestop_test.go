@@ -4,11 +4,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -267,11 +269,25 @@ func TestStoppingAPipedGateCancelsItsMerge(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "gate.pid")
 	task := exec.Command("sh", "-c", `sh -c 'echo $$ >`+pidFile+`; exec sleep 60' | cat`) //nolint:gosec // the test's own command
 	task.Stdout = f
+	task.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := task.Start(); err != nil {
 		t.Skip("no sh:", err)
 	}
-	t.Cleanup(func() { _ = task.Process.Kill(); _ = task.Wait() })
 	var gate int
+	t.Cleanup(func() {
+		// End the writer first: cat sees EOF and the shell reaps both
+		// pipeline children. Killing only the shell orphans sleep and cat.
+		if gate > 0 {
+			_ = syscall.Kill(gate, syscall.SIGKILL)
+		} else {
+			// Startup failed before the writer published its PID.
+			_ = syscall.Kill(-task.Process.Pid, syscall.SIGKILL)
+		}
+		_ = task.Wait()
+		if err := syscall.Kill(-task.Process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("pipeline process group %d remains after cleanup: %v", task.Process.Pid, err)
+		}
+	})
 	if !eventually(5*time.Second, func() bool {
 		raw, err := os.ReadFile(pidFile) //nolint:gosec // the test's file
 		gate, _ = strconv.Atoi(strings.TrimSpace(string(raw)))

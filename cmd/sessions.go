@@ -308,7 +308,8 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			}
 			return cobra.ExactArgs(2)(c, args)
 		},
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			if clearOwn {
 				return a.clearRecord()
 			}
@@ -340,6 +341,7 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			if err != nil {
 				return err
 			}
+			a.warnClaimedElsewhere(cmd.Context(), cmd.ErrOrStderr(), r.Issue)
 			line := fmt.Sprintf("%q %s", r.Session.Name, recordText(r))
 			if absent != "" {
 				line += "; " + absent
@@ -401,7 +403,8 @@ func (a *app) unserveCmd() *cobra.Command {
 unique part of one or a session id; an issue, owner/repo#n, removes the one
 record serving it (a board next --claim given back).`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			me, err := a.caller()
 			if err != nil {
 				return err

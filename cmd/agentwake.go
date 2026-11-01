@@ -35,6 +35,13 @@ func (a *app) agentWakeCmd() *cobra.Command {
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
 
+A session off the roster is reached the same way: a role's holder by its
+name or ids (a supervisor started by hand), or any session by its own id (a
+CLI session id, a desktop local_ id, an omp_/agy_/codex_ id). This is how
+the outcome of a gated wait or a settled park reaches a waiter that never
+registered. A session that no longer exists (no transcript to resume, no
+harness process reading its inbox) is refused as gone.
+
 An SSH execution receives a durable ordered envelope. Success requires a
 harness acceptance event containing its message ID. A pending or uncertain
 delivery exits nonzero; agents messages shows its receipt and agents hosts
@@ -110,15 +117,14 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err := a.refuseStopped(st, "waking "+q); err != nil {
 		return err
 	}
-	i, err := findAgent(st, q)
+	ag, rostered, err := a.wakeParty(st, q)
 	if err != nil {
 		return err
 	}
-	ag := st.Agents[i]
 	if ag.Execution != nil {
 		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
 	}
-	if st.Supervisor != nil && st.Supervisor.Is(by) {
+	if rostered && st.Supervisor != nil && st.Supervisor.Is(by) {
 		// The supervisor's `yours <resource>` is the grant, as in a
 		// SendMessage; the record follows the word.
 		if named := guard.Yours(msg, a.cfg.Leasable()); len(named) > 0 {
@@ -404,7 +410,7 @@ func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
 func (a *app) sendOmp(name, id, msg string) error {
 	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, omp.ErrNotRunning) {
-		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
+		return goneRefusal("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
@@ -427,7 +433,7 @@ func (a *app) wakeAgy(by state.Party, ag state.Agent, id, msg string) error {
 func (a *app) sendAgy(name, id, msg string) error {
 	err := agy.Send(agy.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, agy.ErrNotRunning) {
-		return refused("%s: its agy agent no longer runs (%s ended): start it again with agents start --harness agy", name, agyUnit(id))
+		return goneRefusal("%s: its agy agent no longer runs (%s ended): start it again with agents start --harness agy", name, agyUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
@@ -450,7 +456,7 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 func (a *app) sendCodex(name, id, msg string) error {
 	err := codex.Send(codex.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, codex.ErrNotRunning) {
-		return refused("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
+		return goneRefusal("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
@@ -495,11 +501,11 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 		}
 	}
 	if w.id == "" {
-		return wakeTarget{}, refused("%s has no session id to resume", ag.Name)
+		return wakeTarget{}, goneRefusal("%s has no session id to resume", ag.Name)
 	}
 	transcript := transcriptOf(cfg, w.id)
 	if transcript == "" {
-		return wakeTarget{}, refused("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
+		return wakeTarget{}, goneRefusal("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
 	}
 	if w.dir == "" {
 		w.dir, _ = claude.TranscriptCwd(transcript)
