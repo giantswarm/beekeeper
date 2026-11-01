@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const loopDiskKind = "disk"
+
 // The installed loop owns a watch for its entire lifetime. Use a separate
 // app value: both loops update their clock and transcript cache.
 var runLoopWatch = func(ctx context.Context, w *watcher) error { return w.run(ctx, false) }
@@ -77,7 +79,7 @@ func (w *watcher) publishBudget(held bool) {
 func (w *watcher) publishMachine() {
 	w.mu.Lock()
 	active := map[string]string{}
-	for _, key := range []string{"disk", "diskfull", "diskfill", "load", "cpupsi", "avail", "psi", "swap", "oomd"} {
+	for _, key := range []string{loopDiskKind, "diskfull", "diskfill", "load", "cpupsi", "avail", "psi", "swap", "oomd"} {
 		if c, ok := w.active[key]; ok {
 			active[key] = c.Label
 		}
@@ -161,15 +163,15 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 		}
 	}
 	if disk.Low {
-		active["disk"] = disk.Writers
-		act := superloop.Action{Kind: "disk", Key: diskKey}
+		active[loopDiskKind] = disk.Writers
+		act := superloop.Action{Kind: loopDiskKind, Key: diskKey}
 		if at, ok := pruned[diskKey]; !ok {
 			claim, claimed := claims[diskKey]
 			if !claimed || lastPrune.Before(claim) {
 				if err := l.claim(act, "disk prune"); err != nil {
 					return err
 				}
-				if _, err := l.run(ctx, "disk", "prune", "--apply"); err != nil {
+				if _, err := l.run(ctx, loopDiskKind, "prune", "--apply"); err != nil {
 					return err
 				}
 			}

@@ -69,12 +69,12 @@ func TestLoopWatchPrunesThenReportsPersistentLowDiskOnce(t *testing.T) {
 	w := r.a.newWatcher(false, false)
 	w.publishDisk(true, "test-writer")
 	r.pass(t)
-	if r.called("disk", "prune", "--apply") == nil {
+	if r.called(loopDiskKind, "prune", "--apply") == nil {
 		t.Fatal("low disk not pruned")
 	}
 	w.publishDisk(true, "test-writer")
 	r.pass(t)
-	if r.called("disk", "prune", "--apply") != nil {
+	if r.called(loopDiskKind, "prune", "--apply") != nil {
 		t.Fatal("same disk episode pruned twice")
 	}
 	st, _ := r.a.store.Read()

@@ -13,12 +13,12 @@ import (
 )
 
 func loopFiring() alerts.Firing {
-	return alerts.Firing{Installation: "test", Key: "fp@2026-01-01T00:00:00Z", Alert: alerts.Alert{Alertname: "WorkloadDown", Severity: "critical", Where: "ns/app", Since: "2026-01-01T00:00:00Z"}}
+	return alerts.Firing{Installation: "loop-fixture", Key: "fp@2026-01-01T00:00:00Z", Alert: alerts.Alert{Alertname: "WorkloadDown", Severity: alerts.Page, Where: "ns/app", Since: "2026-01-01T00:00:00Z"}}
 }
 
 func TestLoopAlertPagesOnceAcrossRestartAndRefire(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Alerts.PageSeverity = "critical"
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	r.pass(t)
@@ -40,11 +40,11 @@ func TestLoopAlertPagesOnceAcrossRestartAndRefire(t *testing.T) {
 
 func TestLoopAlertOwnedAndOtherTeamDoNotPage(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Alerts.PageSeverity = "critical"
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, By: state.Party{Name: "owner"}}}
+		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, By: state.Party{Name: "alert-fixture-owner"}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestLoopAlertReadsWatchEvent(t *testing.T) {
 
 func TestLoopAlertDeliveredWakeDoesNotPageAfterParkClears(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Alerts.PageSeverity = "critical"
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	r.park(t, alertParkPrefix+f.Alertname, time.Now())
@@ -242,7 +242,7 @@ func TestLoopAlertMissingTranscriptRestaffsOriginalTask(t *testing.T) {
 
 func TestLoopAlertFailedWakeDoesNotHideAnotherPage(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Alerts.PageSeverity = "critical"
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
 	other := f
 	other.Key, other.Alertname = "another-fingerprint", "AnotherWorkloadDown"
