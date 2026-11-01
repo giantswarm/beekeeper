@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -30,6 +31,10 @@ var (
 type stopped struct {
 	merge state.Merge
 	end   bool
+	// waiting marks a running merge whose devctl has not started, its gate
+	// waiting for its lane's release (awaitReleases): the stop interrupts
+	// the gate, which leaves the lane with nothing merged.
+	waiting bool
 }
 
 // stopTask is the PreToolUse hook's part in a TaskStop of task in session:
@@ -100,9 +105,13 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 				return !keep
 			case state.Running:
 				end := m.Child != 0 && proc.Alive(m.Child) && readPID(mergeBase(store.Dir(), m.Repo, m.PR)) == m.Child
-				running = append(running, stopped{merge: m, end: end})
-				if end {
+				waiting := m.Child == 0 && m.PID != 0 && proc.Alive(m.PID)
+				running = append(running, stopped{merge: m, end: end, waiting: waiting})
+				switch {
+				case end:
 					evs = append(evs, event(by, "merge.stopped", "%s in lane %s: %s, its devctl (merge-child pid %d) ended", m.Key(), m.Lane, how(m), m.Child))
+				case waiting:
+					evs = append(evs, event(by, "merge.stopped", "%s in lane %s: %s, its gate (pid %d) interrupted before its devctl started", m.Key(), m.Lane, how(m), m.PID))
 				}
 			}
 			return false
@@ -118,8 +127,11 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 		return nil, err
 	}
 	for _, s := range running {
-		if s.end {
+		switch {
+		case s.end:
 			_ = endChild(s.merge.Child)
+		case s.waiting:
+			signalPID(s.merge.PID, os.Interrupt)
 		}
 	}
 	for _, s := range running {
@@ -133,6 +145,13 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 // or the stop cancelled it, as GitHub reports it.
 func stopOutcome(s stopped) string {
 	m := s.merge
+	if s.waiting {
+		gate := fmt.Sprintf("its gate (pid %d) is interrupted", m.PID)
+		if !waitGone(m.PID, stopWait) {
+			gate = fmt.Sprintf("its gate (pid %d) is interrupted and still runs after %s", m.PID, stopWait)
+		}
+		return fmt.Sprintf("%s cancelled while it waited for lane %s's release, before its devctl started: %s, nothing merged; it leaves the lane", m.Key(), m.Lane, gate)
+	}
 	devctl := fmt.Sprintf("its devctl (merge-child pid %d) is ended", m.Child)
 	if !s.end {
 		devctl = "its devctl had ended before the stop"

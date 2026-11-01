@@ -1692,7 +1692,11 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		}
 		lane, ok := w.cfg.LaneNamed(m.Lane)
 		if !ok || lane.Installation == "" {
-			// A release unknown settles by the settle rule: it may be cutting.
+			// A release its gate confirms settles with the verdict, one
+			// unknown by the settle rule: it may be cutting.
+			if merge.Confirming(m, proc.Alive) {
+				continue
+			}
 			if ready, _ := merge.Ready(lane, nil, &m, now, w.cfg.Merge.Settle.Duration); ready {
 				done[m.Key()] = "no installation to roll"
 			}

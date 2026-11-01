@@ -40,11 +40,12 @@ var (
 	tagExists = func(ctx context.Context, repo, tag string) (bool, error) {
 		return github.TagExists(ctx, github.RunGH, repo, tag)
 	}
-	// releaseWait runs devctl release wait for repo's version, its progress
-	// on the gate's stderr, and returns its document.
-	releaseWait = func(ctx context.Context, repo, version string) []byte {
+	// releaseWait runs devctl release wait for repo's release named by
+	// target (a version, or --pr and a number), its progress on the gate's
+	// stderr, and returns its document.
+	releaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 		var out bytes.Buffer
-		c := exec.CommandContext(ctx, merge.Tool, "release", "wait", repo, version) //nolint:gosec // the merge tool, a checked repository and version
+		c := exec.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
 		c.Stdout, c.Stderr = &out, os.Stderr
 		_ = c.Run() // its exit code is the document's verdict
 		return out.Bytes()
@@ -69,6 +70,16 @@ var (
 	}
 	updateRebase = func(ctx context.Context, repo string, n int) error {
 		return github.UpdateByRebase(ctx, github.RunGH, repo, n)
+	}
+	updateBranch = func(ctx context.Context, repo string, n int) error {
+		return github.UpdateBranch(ctx, github.RunGH, repo, n)
+	}
+	// prWarmWait runs devctl pr wait for repo#n, its progress on the gate's
+	// stderr: a warm-up whose verdict the merge's own devctl run judges.
+	prWarmWait = func(ctx context.Context, repo string, n int) {
+		c := exec.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
+		c.Stdout, c.Stderr = io.Discard, os.Stderr
+		_ = c.Run()
 	}
 	// rebaseRetry is how long the gate waits for GitHub to compute whether a
 	// pull request rebases before it reads again.
@@ -728,9 +739,10 @@ func unitExit(rc int) int {
 
 // devctl pr merge's exit codes the unit's exit tells apart.
 const (
-	devctlUsage       = 7
-	devctlAuth        = 8
-	devctlUnconfirmed = 9
+	devctlReleaseFailed = 6
+	devctlUsage         = 7
+	devctlAuth          = 8
+	devctlUnconfirmed   = 9
 )
 
 // childResult is how one merge-child run ended: its spec, the base of its

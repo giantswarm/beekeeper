@@ -384,10 +384,40 @@ func ParseReleaseWait(raw []byte) (o Outcome, reason string, ok bool) {
 		o.Release = doc.Tag
 	case "ci_failed", "status_failed":
 		o.Release, o.ReleaseFailed = doc.Tag, true
+	case "no_release":
+		o.NoRelease = true
 	default:
 		o.Unconfirmed = true
 	}
 	return o, doc.Reason, true
+}
+
+// Confirming says whether the settling merge m's release is being
+// confirmed: m is releasing (state.Merge.Releasing) and its gate runs. The
+// lane's next merge may start its update and CI meanwhile, never merge.
+func Confirming(m state.Merge, alive func(pid int) bool) bool {
+	return m.Phase == state.Settling && m.Releasing && alive(m.PID)
+}
+
+// Unsettled says what the lane without an installation waits for before
+// its next merge, "" when nothing: a settling merge whose release is being
+// confirmed (Confirming) waits for the verdict, one whose release is unknown
+// for the settle rule (Ready). overlap lets a confirming merge through: the
+// next merge's update and CI run beside its release, the merge itself does
+// not.
+func (q Lane) Unsettled(now time.Time, settle time.Duration, overlap bool, alive func(pid int) bool) string {
+	for _, s := range q.AllSettling {
+		if Confirming(*s, alive) {
+			if overlap {
+				continue
+			}
+			return fmt.Sprintf("%s's release is being confirmed", s.Key())
+		}
+		if ready, why := Ready(config.Lane{}, nil, s, now, settle); !ready {
+			return why
+		}
+	}
+	return ""
 }
 
 // MergeCommit is the merge commit a merge's document (ParseDocument) names,

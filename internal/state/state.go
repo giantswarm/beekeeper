@@ -1330,6 +1330,12 @@ type Merge struct {
 	// auto-release run or tag pipeline failed, nothing rolls, and the lane
 	// settles at once.
 	ReleaseFailed bool `json:"releaseFailed,omitempty"`
+	// Releasing marks a merge of a lane without an installation whose gate
+	// confirms its release after devctl ended at the merge: the lane's next
+	// merge starts its update and CI meanwhile and merges once the release
+	// is confirmed or failed. A releasing merge whose gate is gone settles
+	// by the settle rule, its release unknown.
+	Releasing bool `json:"releasing,omitempty"`
 	// HandCut is the merge's base branch when no Auto-release run tags a
 	// merge into it (its tags are cut by hand): devctl awaits no release and
 	// the merge leaves its lane once merged.

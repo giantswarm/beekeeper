@@ -236,7 +236,9 @@ func TestAMergeIntoAPerPluginRepositoryAwaitsThePluginsTag(t *testing.T) {
 			t.Error("plugin tags asked of a repository-wide auto-release")
 			return nil, nil
 		}
-		g := runningMerge(t, scratchRepo, lane)
+		// An installation's lane: devctl awaits the release itself, which a
+		// lane without one confirms in its gate (gateoverlap_test.go).
+		g := runningMerge(t, scratchRepo, config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}})
 		if err := startMerge(t, g); err != nil {
 			t.Fatalf("exit %d, want 0", Code(err))
 		}
@@ -256,8 +258,8 @@ func stubReleaseWait(t *testing.T, doc string) *[]string {
 	asked := new([]string)
 	was := releaseWait
 	t.Cleanup(func() { releaseWait = was })
-	releaseWait = func(_ context.Context, repo, version string) []byte {
-		*asked = append(*asked, repo+" "+version)
+	releaseWait = func(_ context.Context, repo string, target ...string) []byte {
+		*asked = append(*asked, repo+" "+strings.Join(target, " "))
 		return []byte(doc)
 	}
 	return asked

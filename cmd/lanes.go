@@ -31,6 +31,59 @@ type laneView struct {
 	// Pairs say, by key, what each of the lane's paired merges lands with
 	// (the gate's --pair): its sibling and where that is.
 	Pairs map[string]string `json:"pairs,omitempty"`
+	// Pace is how long one place has held the lane of late (lanePace), Drain
+	// how long its queue takes at that pace: its waiting places and the
+	// running one.
+	Pace  time.Duration `json:"pace,omitempty"`
+	Drain time.Duration `json:"drain,omitempty"`
+}
+
+// paceMerges is how many of a lane's latest merges its pace is the median of.
+const paceMerges = 10
+
+// lanePace is how long a place of lane held it, the median over its latest
+// paceMerges merges in events (oldest first): from its start (verbMerging,
+// "<key> in lane <lane>") to its merge (verbMerged, "<key> exit …"), and on
+// to the lane's settle when one followed (verbLaneSettled, "<lane>: <key> …"),
+// the roll an installation's lane waits for. A start-to-merge time holds the
+// wait for the previous release a lane without an installation overlaps with
+// the merge's CI. false when the lane has no merge on record.
+func lanePace(events []state.Event, lane string) (time.Duration, bool) {
+	type place struct{ start, end time.Time }
+	started := map[string]time.Time{}
+	var held []place
+	last := map[string]int{} // a merged key's index in held
+	for _, e := range events {
+		switch e.Verb {
+		case verbMerging:
+			if key, ok := strings.CutSuffix(e.Detail, " in lane "+lane); ok {
+				started[key] = e.At
+			}
+		case verbMerged:
+			key, _, _ := strings.Cut(e.Detail, " ")
+			if at, ok := started[key]; ok {
+				delete(started, key)
+				last[key] = len(held)
+				held = append(held, place{start: at, end: e.At})
+			}
+		case verbLaneSettled:
+			rest, ok := strings.CutPrefix(e.Detail, lane+": ")
+			key, _, _ := strings.Cut(rest, " ")
+			if i, merged := last[key]; ok && merged && e.At.After(held[i].end) {
+				held[i].end = e.At
+			}
+		}
+	}
+	if len(held) == 0 {
+		return 0, false
+	}
+	held = held[max(len(held)-paceMerges, 0):]
+	ds := make([]time.Duration, len(held))
+	for i, p := range held {
+		ds[i] = p.end.Sub(p.start)
+	}
+	slices.Sort(ds)
+	return ds[len(ds)/2], true
 }
 
 // paired is the pair line of the merge key, ", lands with …", "" when none.
@@ -351,6 +404,12 @@ func (a *app) laneViews(st *state.State) []laneView {
 	var out []laneView
 	seen := map[string]bool{}
 	pairs := pairLines(st)
+	var events []state.Event
+	if a.store != nil {
+		events, _ = a.store.Events(0, func(e state.Event) bool {
+			return e.Verb == verbMerging || e.Verb == verbMerged || e.Verb == verbLaneSettled
+		})
+	}
 	add := func(name, installation string) {
 		if seen[name] {
 			return
@@ -375,6 +434,14 @@ func (a *app) laneViews(st *state.State) []laneView {
 		}
 		if h, ok := upgrade.Held(st, installation, a.now); ok && v.Hold == nil {
 			v.Hold = &h
+		}
+		if places := len(v.Waiting); places > 0 || v.Running != nil {
+			if v.Running != nil {
+				places++
+			}
+			if pace, ok := lanePace(events, name); ok {
+				v.Pace, v.Drain = pace, time.Duration(places)*pace
+			}
 		}
 		out = append(out, v)
 	}
@@ -426,6 +493,9 @@ func (a *app) settlingText(m state.Merge) string {
 	case m.Outside:
 		text = fmt.Sprintf("settling %s, merged outside the gate at %s, until %s and its HelmReleases are Ready", m.Key(),
 			clock(a.now, m.Finished), clock(a.now, m.Finished.Add(a.cfg.Merge.Settle.Duration)))
+	case merge.Confirming(m, proc.Alive):
+		return fmt.Sprintf("releasing %s, merged at %s: its gate confirms the release, the next merge's CI runs meanwhile and it merges once the release is known",
+			m.Key(), clock(a.now, m.Finished))
 	case m.ReleaseFailed:
 		release := "release failed"
 		if m.Release != "" {
@@ -480,6 +550,9 @@ func (a *app) printLanes(views []laneView) {
 		}
 		if v.Stall != nil {
 			p("  %s", a.stallText(*v.Stall))
+		}
+		if v.Drain > 0 {
+			p("  drains in about %s: %d places at %s each, the median of its last merges", dur(v.Drain), v.Drain/v.Pace, dur(v.Pace))
 		}
 		present := a.present
 		next := max(slices.IndexFunc(v.Waiting, func(m state.Merge) bool {
