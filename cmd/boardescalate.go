@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -104,9 +106,14 @@ func (a *app) escalate(ctx context.Context, me state.Party, e escalation, every 
 		}
 		return append(out, args...)
 	}
-	question := truncate(fmt.Sprintf("%s is blocked (%s): %s. What unblocks it?", e.URL, e.Why, e.Title), 150)
+	// The question is short and whole; the title and the reason, which may
+	// name issues as owner/repo#n, go to the status quo with their refs
+	// linked, as a note for the person needs.
+	question := fmt.Sprintf("What unblocks %s?", e.URL)
+	here, _, _ := strings.Cut(e.Ref, "#")
+	linked := func(s string) string { return post.Linked(s, nil, here) }
 	note := as(loopNote, loopAdd, "--for", person, "--ref", e.Ref, "--due", a.cfg.Supervisor.NoteDue.String(),
-		"--status-quo", fmt.Sprintf("%s sits in Blocked on the board: %s.", e.URL, e.Why),
+		"--status-quo", truncate(fmt.Sprintf("%s (%s) sits in Blocked on the board: %s.", e.URL, linked(e.Title), linked(e.Why)), 2900),
 		"--why", "a blocked item gets no worker until what holds it is settled",
 		"--default", fmt.Sprintf("it stays blocked; beekeeper checks it again in %s and asks again while it is", every),
 		"--checked", "beekeeper board escalate: the board's Status",
@@ -135,6 +142,21 @@ func (a *app) escalate(ctx context.Context, me state.Party, e escalation, every 
 func escalateBoard(b config.Board) config.Board {
 	b.Order = append(slices.Clone(b.Order), config.BoardStep{Name: boardEscalateName, Status: []string{blockedStatus}})
 	return b
+}
+
+// escalateAll escalates each of es: one item's failure never holds back the
+// others. It returns the escalated ones and the failures joined.
+func (a *app) escalateAll(ctx context.Context, me state.Party, es []escalation, every time.Duration) ([]escalation, error) {
+	var done []escalation
+	var errs []error
+	for _, e := range es {
+		if err := a.escalate(ctx, me, e, every); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		done = append(done, e)
+	}
+	return done, errors.Join(errs...)
 }
 
 // boardEscalateName is the board escalate subcommand.
@@ -180,21 +202,19 @@ Prints one line per escalation.`,
 			if err != nil {
 				return err
 			}
-			es := escalations(snap.Items, blocked, st.Timers, refs)
-			for _, e := range es {
-				if err := a.escalate(cmd.Context(), me, e, every); err != nil {
+			done, failed := a.escalateAll(cmd.Context(), me, escalations(snap.Items, blocked, st.Timers, refs), every)
+			if a.json {
+				if err := a.printJSON(done); err != nil {
 					return err
 				}
+				return failed
 			}
-			if a.json {
-				return a.printJSON(es)
-			}
-			for _, e := range es {
+			for _, e := range done {
 				if _, err := fmt.Fprintf(a.out, "escalated %s (%s): re-checked in %s\n", e.URL, e.Why, every); err != nil {
 					return err
 				}
 			}
-			return nil
+			return failed
 		},
 	}
 }
