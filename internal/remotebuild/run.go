@@ -32,6 +32,14 @@ type Runner struct {
 	StateDir       string
 	Stdout, Stderr io.Writer
 	Command        Command
+	// Tail keeps the remote run's streamed output for the failure record,
+	// exactly as the local scope's stream does; nil keeps nothing.
+	Tail io.Writer
+	// KeepFailure keeps the failed run's tail in the run record and
+	// prints it, named by the run's id; nil keeps nothing. It is the
+	// caller's: the tail's size, masking and directory belong to
+	// `beekeeper run`, not to the transport.
+	KeepFailure func(runID string, exit int)
 }
 
 func (r Runner) kubectl(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
@@ -160,7 +168,10 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 		_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: reconnecting to remote run journal")
 	}
 	count := &countWriter{w: r.Stdout}
-	for attempt := 0; attempt < 4; attempt++ {
+	if r.Tail != nil {
+		count.w = io.MultiWriter(r.Stdout, r.Tail)
+	}
+	for range 4 {
 		err = r.exec(ctx, pod, nil, count, shellBash, "-c", follow, "--", id, strconv.FormatInt(count.n, 10))
 		if ctx.Err() != nil {
 			return true, 130
@@ -170,6 +181,9 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 			if r.exec(ctx, pod, nil, &status, "cat", "/work/runs/"+id+"/rc") == nil {
 				rc, e := strconv.Atoi(strings.TrimSpace(status.String()))
 				if e == nil && rc >= 0 && rc <= 255 {
+					if rc != 0 && r.KeepFailure != nil {
+						r.KeepFailure(id, rc)
+					}
 					_ = cleanup(finish)
 					return true, rc
 				}

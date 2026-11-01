@@ -270,6 +270,17 @@ type Options struct {
 	// Class is the run's class (ClassBuild, …); "" is ClassBuild. Only a
 	// build takes a slot.
 	Class string
+	// Tail keeps the run's output tail for the failure record; nil keeps
+	// nothing (run.tail 0, or a run that execs uncapped).
+	Tail *Tail
+	// TailDir is the directory of the kept tails (<stateDir>/run-tails);
+	// required with Tail.
+	TailDir string
+	// Redact masks a kept tail, the same masking beekeeper applies to
+	// command output reaching the model (guard.Index.Redact); nil masks the
+	// token patterns alone. It runs on the kept tail only, never on the
+	// stream to the terminal.
+	Redact func(string) string
 }
 
 // slotless reports whether the run's class takes no build slot.
@@ -469,9 +480,45 @@ func Run(o Options, argv []string) int {
 			logf("%s (exit %d) — %s", what, rc, advice)
 			end += ", " + detail
 		}
+		if at := o.keepTail(unit, head, rc, logf); at != "" {
+			end += ", tail " + at
+		}
 	}
 	o.record(VerbEnd, end+": "+head)
 	return rc
+}
+
+// keepTail keeps the failed run's output tail in <TailDir>/<unit>.log,
+// masked by o.Redact, and prints the masked tail to the run's stderr under
+// the prefix, so the failing test's name sits at the end of the tool output
+// instead of being truncated out of it. It names the path it kept; a tail
+// that cannot be written costs one line and changes no exit code. The tail
+// keeps nothing (run.tail negative, a run with no state directory): "".
+func (o Options) keepTail(unit, head string, rc int, logf func(string, ...any)) string {
+	if o.Tail == nil || o.TailDir == "" {
+		return ""
+	}
+	at, masked, err := KeepTail(o.TailDir, unit, head, rc, o.Tail, o.Redact)
+	if err != nil {
+		logf("the failure tail is not kept: %v", err)
+		return ""
+	}
+	if masked == "" {
+		return at
+	}
+	_, _ = fmt.Fprintf(o.Stderr, "%sthe failed command's tail (exit %d), kept in %s for `beekeeper run tail`:\n", LogPrefix, rc, at)
+	_, _ = io.WriteString(o.Stderr, masked)
+	if !strings.HasSuffix(masked, "\n") {
+		_, _ = fmt.Fprint(o.Stderr, "\n")
+	}
+	return at
+}
+
+// KeepFailureTail is keepTail for the remote builder's failed run: name,
+// command head and exit come from the caller; the tail, its masking and its
+// directory are the options'. It answers the path it kept.
+func (o Options) KeepFailureTail(name, head string, rc int) string {
+	return o.keepTail(name, head, rc, func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) })
 }
 
 // waitForMemory waits, within o.Wait, until MemAvailable covers the cap of a
@@ -749,7 +796,12 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv, env [
 		}
 		c.Env = append(c.Env, env...)
 	}
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	c.Stdin = os.Stdin
+	if o.Tail != nil {
+		c.Stdout, c.Stderr = teeWriter{os.Stdout, o.Tail}, teeWriter{os.Stderr, o.Tail}
+	} else {
+		c.Stdout, c.Stderr = os.Stdout, os.Stderr
+	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
