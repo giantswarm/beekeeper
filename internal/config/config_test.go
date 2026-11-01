@@ -1054,3 +1054,21 @@ func TestReviewHeadroomConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestSupervisorFillRetryEvery(t *testing.T) {
+	for _, test := range []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"supervisor: {}", 5 * time.Minute},
+		{"supervisor: {fillRetryEvery: 2m}", 2 * time.Minute},
+	} {
+		c, err := Load(writeTemp(t, test.raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Supervisor.FillRetryEvery.Duration; got != test.want {
+			t.Fatalf("fill retry %s, want %s", got, test.want)
+		}
+	}
+}
