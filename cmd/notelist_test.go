@@ -37,7 +37,7 @@ func listNotes(t *testing.T, notes []state.Note, args ...string) string {
 }
 
 var listedNotes = []state.Note{
-	{ID: 1, Kind: noteDecision, For: guideRole.title, Text: fullMemo, Refs: []string{refTwo}},
+	{ID: 1, Kind: noteDecision, For: claimSupervisor, Text: fullMemo, Refs: []string{refTwo}},
 	{ID: 2, Kind: noteDecision, For: notePerson, Text: "approve beekeeper#7?", Default: memoDefault},
 }
 

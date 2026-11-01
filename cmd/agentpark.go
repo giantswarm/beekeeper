@@ -249,12 +249,19 @@ func holdStands(st *state.State, target string, now time.Time) bool {
 
 // leaseSettled says whether the lease res, which ag's park waits on, is
 // free and ag's to claim, and the words that resume it: free while nobody
-// holds it and no upgrade holds it. A holder, or an upgrade, leaves it
-// parked.
+// holds it and no upgrade holds it. A grant to ag that is gone settles the
+// park too, also while the lease is held (it was revoked), for ag to queue
+// again. A holder while ag's grant waits, or an upgrade, leaves it parked.
 func (a *app) leaseSettled(st *state.State, ag state.Agent, res string) (string, bool) {
 	cur, err := lease.Dir(a.cfg.LeaseDir).Get(res)
-	if err != nil || cur != nil {
+	if err != nil {
 		return "", false
+	}
+	if cur != nil {
+		if slices.ContainsFunc(lease.Pending(st, res, true, a.now, a.cfg.GrantTTL.Duration), func(g state.Grant) bool { return g.To.Is(ag.Party) }) {
+			return "", false
+		}
+		return fmt.Sprintf("%s is held by %q and no grant of it to you is left: `beekeeper lease grant %s %q` queues you again", res, cur.Name, res, ag.Name), true
 	}
 	if _, ok := upgrade.Held(st, res, a.now); ok {
 		return "", false

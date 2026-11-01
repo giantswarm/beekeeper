@@ -17,7 +17,7 @@ import (
 
 const (
 	pat       = "Pat"
-	supRun3   = "Supervisor run 3"
+	supRun3   = "Guide run 3"
 	agentFive = "Agent five"
 	agentSix  = "Agent six"
 )

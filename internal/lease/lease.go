@@ -251,10 +251,20 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 // claim, returns its index in st.Grants (-1 when none is needed). While an
 // upgrade runs on the installation of the resource's name only an
 // upgrade-unblock grant admits a claim, in grant order; otherwise a free
-// lease is the caller's: no supervisor session gates claims.
+// lease is the caller's, consuming its own grant if one is queued: no
+// supervisor session gates claims.
 func Check(st *state.State, g Gate) (int, error) {
 	if h, ok := upgrade.Held(st, g.Resource, g.Now); ok {
 		return checkUnblock(st, g, h)
+	}
+	// The caller's own pending grant, wherever it is in the queue, is the
+	// one its claim consumes.
+	for _, p := range Pending(st, g.Resource, g.Held, g.Now, g.TTL) {
+		if p.To.Is(g.Caller) {
+			return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
+				return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
+			}), nil
+		}
 	}
 	return -1, nil
 }

@@ -76,7 +76,7 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	if n := revived.Load(); n != 1 {
 		t.Fatalf("%d resumes, want 1:\n%s", n, out)
 	}
-	if l := out.String(); !strings.Contains(l, `SUPERVISOR GONE: "Supervisor run 67"`) || !strings.Contains(l, "having the desktop start its CLI") {
+	if l := out.String(); !strings.Contains(l, `GUIDE GONE: "Guide run 67"`) || !strings.Contains(l, "having the desktop start its CLI") {
 		t.Errorf("watch lines:\n%s", l)
 	}
 }

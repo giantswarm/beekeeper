@@ -116,7 +116,7 @@ func TestSeedArchives(t *testing.T) {
 	omp := start("omp")
 	omp.HostSession, omp.Harness = "omp_omp", "omp"
 	run := start("run")
-	run.Name = "Supervisor run 7"
+	run.Name = "Guide run 7"
 	st := &state.State{
 		Starts: []state.Start{start("warm"), start("roster"), start("stopped"), start("shelved"), run, omp, start("owed")},
 		Agents: []state.Agent{{Party: state.Party{Session: "roster"}}},

@@ -1009,10 +1009,10 @@ func (a *app) firstText(res string, held bool) string {
 func (a *app) leaseRevokeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "revoke <resource> <session>",
-		Short: "Withdraw a grant not claimed yet (the supervisor's, or the grantee's own)",
+		Short: "Withdraw a grant not claimed yet (any, as the supervisor loop or a person; else the caller's own)",
 		Long: `Withdraw the grants of a resource to the sessions whose name contains
-<session> (or whose session id it is), not claimed yet. While a supervisor is
-recorded, only it revokes another session's grant; a grantee withdraws its own
+<session> (or whose session id it is), not claimed yet. Only the supervisor
+loop or a person (--as) revokes another session's grant; a grantee withdraws its own
 with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lease
 (lease claim --park) is resumed by the watch with the words to ask again.`,
 		Args: cobra.ExactArgs(2),
@@ -1029,6 +1029,11 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				hit := func(g state.Grant) bool {
 					return g.Resource == res && (strings.Contains(strings.ToLower(g.To.Name), who) || g.To.Session == args[1])
+				}
+				for _, g := range st.Grants {
+					if hit(g) && !supervising(me) && !g.To.Is(me) {
+						return nil, refused("%s is granted to %q, not to you: only the supervisor loop or a person revokes another session's grant", res, g.To.Name)
+					}
 				}
 				st.Grants = slices.DeleteFunc(st.Grants, func(g state.Grant) bool {
 					if hit(g) {

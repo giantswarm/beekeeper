@@ -119,12 +119,11 @@ func runIn(a *app, c interface {
 	return out.String(), err
 }
 
-// A supervisor relay keeps the priorities and the holds without a note: the
+// A guide relay keeps the priorities and the holds without a note: the
 // successor's prompt carries the ranked epics with their holds and plans and
 // every held item with what holds it, read from GitHub as the predecessor's
-// was, its first board next walks the same order past the same holds, and
-// the answer given before the relay is in its prompt. Nothing is filed for
-// it.
+// was, and its first board next walks the same order past the same holds.
+// Nothing is filed for it.
 func TestARelayKeepsThePrioritiesAndHoldsWithoutANote(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -152,12 +151,12 @@ func TestARelayKeepsThePrioritiesAndHoldsWithoutANote(t *testing.T) {
 	}
 
 	prompt := func() string {
-		c := a.handoverCmd()
+		c := a.guideHandoverCmd()
 		c.SetOut(a.out)
 		c.SilenceUsage, c.SilenceErrors = true, true
 		s, err := runIn(a, c, "--prompt")
 		if err != nil {
-			t.Fatalf("handover --prompt: %v\n%s", err, s)
+			t.Fatalf("guide handover --prompt: %v\n%s", err, s)
 		}
 		return s
 	}
@@ -205,21 +204,8 @@ func TestARelayKeepsThePrioritiesAndHoldsWithoutANote(t *testing.T) {
 	if was := promptSection(t, before, "Priorities and holds"); was != held {
 		t.Errorf("the relay changed the priorities and holds:\nbefore:\n%s\nafter:\n%s", was, held)
 	}
-	gc := a.guideHandoverCmd()
-	gc.SetOut(a.out)
-	gc.SilenceUsage, gc.SilenceErrors = true, true
-	guide, err := runIn(a, gc, "--prompt")
-	if err != nil {
-		t.Fatalf("guide handover --prompt: %v\n%s", err, guide)
-	}
-	if got := promptSection(t, guide, "Priorities and holds"); got != held {
-		t.Errorf("the guide's priorities and holds differ from the supervisor's:\n%s", got)
-	}
 	if epics := promptSection(t, after, "Epics"); !strings.Contains(epics, "o/r#1 Epic one ("+holdWorking+"): no plan pull request names it") {
 		t.Errorf("the successor's epics lack o/r#1's plan line:\n%s", epics)
-	}
-	if ans := promptSection(t, after, "Answered since the last relay"); !strings.Contains(ans, "epic one goes first after the blocker") {
-		t.Errorf("the successor's prompt lacks the answer:\n%s", ans)
 	}
 
 	if afterNext != beforeNext {

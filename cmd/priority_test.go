@@ -41,7 +41,7 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 		name, as, session, want string
 	}{
 		{"no --as outside a session", "", "", "a call without --as: only the person changes priorities; the guide relays the person's word with --as Timo"},
-		{"the supervisor without --as", "", supSession, "the supervisor without --as: only the person changes priorities"},
+		{"the guide without --as", "", supSession, "the guide without --as: only the person changes priorities"},
 		{"a worker without --as", "", "w1", "the worker without --as: only the person changes priorities"},
 		{"another name", supervisorName, supSession, `--as "supervisor" is no configured person (Timo): only the person changes priorities`},
 	} {

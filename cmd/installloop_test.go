@@ -68,14 +68,11 @@ func TestSupervisorLoopServiceLifecycle(t *testing.T) {
 					unit = f
 				}
 			}
-			if transition == optOut {
-				if unit.Path != "" {
-					t.Fatal("installed loop without opt-in")
-				}
-				return
-			}
 			if unit.Path == "" || !unit.Service {
-				t.Fatal("supervisor.loop: true produced no loop service")
+				t.Fatalf("supervisor.loop: %v produced no loop service: the loop is no option", transition != optOut)
+			}
+			if transition == optOut {
+				return
 			}
 			if !bytes.Contains(unit.Content, []byte(path)) || !bytes.Contains(unit.Content, []byte(e.Exe)) {
 				t.Fatalf("unit lost explicit config or binary: %s", unit.Content)

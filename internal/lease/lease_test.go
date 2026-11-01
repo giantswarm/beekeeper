@@ -34,11 +34,15 @@ func TestCheckAdmitsAFreeLease(t *testing.T) {
 	if err != nil || idx != -1 {
 		t.Fatalf("Check = %d, %v", idx, err)
 	}
-	st := &state.State{Grants: []state.Grant{grant(one, now.Add(-5*time.Minute))}}
-	for _, who := range []state.Party{two, alex} {
+	st := &state.State{Grants: []state.Grant{grant(one, now.Add(-5*time.Minute)), grant(two, now.Add(-4*time.Minute))}}
+	for _, who := range []state.Party{alex, {Session: "s9", Name: "Agent nine"}} {
 		if idx, err := Check(st, Gate{Resource: lab, Caller: who, Now: now, TTL: ttl}); err != nil || idx != -1 {
 			t.Errorf("%s behind a grant to %s: %d, %v", who.Name, one.Name, idx, err)
 		}
+	}
+	// A queued caller's claim consumes its own grant, second or not.
+	if idx, err := Check(st, Gate{Resource: lab, Caller: two, Now: now, TTL: ttl}); err != nil || idx != 1 {
+		t.Errorf("the second grantee's claim: %d, %v", idx, err)
 	}
 }
 

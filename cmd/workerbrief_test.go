@@ -132,11 +132,11 @@ const (
 	cliName = "Swap finding 1051"
 )
 
-// A message to the supervisor goes to the holder's running CLI by the name
+// A message to the guide goes to the holder's running CLI by the name
 // it answers to, its desktop session when none runs.
 func TestRoleAddress(t *testing.T) {
-	holder := &state.Supervisor{Party: state.Party{Name: "Supervisor run 60", Session: "s60", HostSession: hostH60}}
-	if _, err := roleAddress(nil, guideRole, nil, noSocket); err == nil || !strings.Contains(err.Error(), "no session holds the supervisor's role") {
+	holder := &state.Supervisor{Party: state.Party{Name: "Guide run 60", Session: "s60", HostSession: hostH60}}
+	if _, err := roleAddress(nil, guideRole, nil, noSocket); err == nil || !strings.Contains(err.Error(), "no session holds the guide's role") {
 		t.Errorf("no holder: %v", err)
 	}
 	if got, err := roleAddress(holder, guideRole, nil, noSocket); err != nil || got != hostH60 {

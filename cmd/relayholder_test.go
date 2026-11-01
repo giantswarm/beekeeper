@@ -14,7 +14,7 @@ import (
 // address. The relieved run's own status says it was relieved, naming its
 // successor.
 func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
-	const relieved, successor = "Supervisor run 11", "Supervisor run 12"
+	const relieved, successor = "Guide run 11", "Guide run 12"
 	a, out := stubApp(t)
 	from := state.Party{Session: "s3", Name: relieved}
 	to := state.Party{Session: "s9", Name: successor}
@@ -39,7 +39,7 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 		if err := a.roleStatus(guideRole); err != nil {
 			t.Fatalf("status %s: %v", when, err)
 		}
-		if s := out.String(); !strings.HasPrefix(s, `"`+successor+`" supervises`) || strings.Contains(s, relieved) {
+		if s := out.String(); !strings.HasPrefix(s, `"`+successor+`" guides`) || strings.Contains(s, relieved) {
 			t.Errorf("status %s: %q, want %q and never %q", when, s, successor, relieved)
 		}
 	}
@@ -51,8 +51,8 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 	if _, err := findAgent(st, relieved); Code(err) != ExitRefused {
 		t.Errorf("wake still addresses the relieved run: %v", err)
 	}
-	if i, err := findAgent(st, "supervisor"); err != nil || !st.Agents[i].Is(to) {
-		t.Errorf("wake of the supervisor: %d, %v; want %q", i, err, successor)
+	if i, err := findAgent(st, guideName); err != nil || !st.Agents[i].Is(to) {
+		t.Errorf("wake of the guide: %d, %v; want %q", i, err, successor)
 	}
 
 	// The relieved run's CLI ends: it leaves the running sessions, and the

@@ -87,11 +87,11 @@ func TestStatusWithoutSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status on the stub: %v", err)
 	}
-	if got, want := v.bar(), "beekeeper\t?"+agentOne+"\t1\t0\t0\t0/5"; got != want {
+	if got, want := v.bar(), "beekeeper\t!loop\t1\t0\t0\t0/5"; got != want {
 		t.Errorf("status --bar = %q, want %q", got, want)
 	}
-	if got := v.line(); !strings.Contains(got, platform.Unavailable(secSessions)) {
-		t.Errorf("status = %q, want it to say %q", got, platform.Unavailable(secSessions))
+	if got := v.line(); !strings.Contains(got, "the supervisor loop does not run") {
+		t.Errorf("status = %q, want it to say the supervisor loop does not run", got)
 	}
 }
 

@@ -22,13 +22,13 @@ const (
 	guideSeven       = "Guide run 7"
 	hostG7           = "local_G7"
 	sessionG7        = "sG7"
-	supThirteen      = "Supervisor run 13"
+	supThirteen      = "Guide run 13"
 )
 
 func TestRunOf(t *testing.T) {
 	for name, want := range map[string]int{
-		"Supervisor run 35": 35, " Supervisor run 7 ": 7, guideSeven: 0, agentTwentyEight: 0,
-		"Supervisor run": 0, "Supervisor run 3b": 0, "My Supervisor run 3": 0,
+		"Guide run 35": 35, " Guide run 7 ": 7, "Supervisor run 7": 0, agentTwentyEight: 0,
+		"Guide run": 0, "Guide run 3b": 0, "My Guide run 3": 0,
 	} {
 		if got := guideRole.runOf(name); got != want {
 			t.Errorf("runOf(%q) = %d, want %d", name, got, want)
@@ -43,7 +43,7 @@ func TestLastRunReadsTheRecordedNames(t *testing.T) {
 	r := state.Role{
 		Run:      3,
 		Holder:   &state.Supervisor{Party: state.Party{Name: supA.Name}},
-		Relieved: []state.Relief{{Party: state.Party{Name: "Supervisor run 12"}, By: state.Party{Name: "Agent nine"}}},
+		Relieved: []state.Relief{{Party: state.Party{Name: "Guide run 12"}, By: state.Party{Name: "Agent nine"}}},
 	}
 	if got := guideRole.lastRun(r); got != 12 {
 		t.Errorf("lastRun = %d, want 12", got)
@@ -52,17 +52,18 @@ func TestLastRunReadsTheRecordedNames(t *testing.T) {
 	if got := guideRole.lastRun(r); got != 13 {
 		t.Errorf("lastRun with a relay = %d, want 13", got)
 	}
-	if got := guideRole.lastRun(r); got != 3 {
-		t.Errorf("the guide's lastRun reads the supervisor's names: %d", got)
+	r.Relay.To.Name = "Supervisor run 40"
+	if got := guideRole.lastRun(r); got != 12 {
+		t.Errorf("the guide's lastRun reads a retired supervisor run's name: %d", got)
 	}
 }
 
 // A start numbers the run: a relayed or titled run keeps its number, any
 // other start is the next run, a restart keeps its run.
 func TestStartNumbersTheRun(t *testing.T) {
-	st := handOverState() // "Supervisor run 11" supervises
+	st := handOverState() // "Guide run 11" guides; its session is gone
 	msg, _, err := guideRole.start(st, agentC, false, false, relayNow)
-	if err != nil || st.Guide.Run != 12 || !strings.Contains(msg, `"Agent three" supervises now as Supervisor run 12`) {
+	if err != nil || st.Guide.Run != 12 || !strings.Contains(msg, `"Agent three" guides now as Guide run 12`) {
 		t.Fatalf("an untitled start: %q, run %d, %v", msg, st.Guide.Run, err)
 	}
 	if _, _, err := guideRole.start(st, agentC, true, false, relayNow.Add(time.Minute)); err != nil || st.Guide.Run != 12 {
@@ -309,7 +310,7 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	w.stand = standbyWatch{
 		send: func(context.Context, string, string) error { t.Error("a resume message by name"); return nil },
 		revive: func(_ context.Context, rl role, holder state.Party, msg string) error {
-			if rl.name != guideRole.name || !strings.Contains(msg, "`beekeeper handover --prompt`") {
+			if rl.name != guideRole.name || !strings.Contains(msg, "`beekeeper guide handover --prompt`") {
 				t.Errorf("revive %s %q: %q", rl.name, holder.Name, msg)
 			}
 			revived = append(revived, holder.Name)
@@ -347,7 +348,7 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 		t.Errorf("%d successors, want 2 (the third failed one ends the chain)", n)
 	}
 	st, _ := w.store.Read()
-	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Supervisor run 12"`) || st.Notes[0].For != pat {
+	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Guide run 12"`) || st.Notes[0].For != pat {
 		t.Errorf("notes: %+v", st.Notes)
 	}
 	if l := out.String(); !strings.Contains(l, "3 successors did not come up, none further starts (note #1)") || strings.Count(l, "SUCCESSOR DOWN") != 3 {
@@ -442,7 +443,7 @@ func TestRolePromptsOpenWithTheBareSlashCommand(t *testing.T) {
 		cfg  config.Role
 		want string
 	}{
-		{config.Role{Skill: guideRole.inf}, "/supervise "},
+		{config.Role{Skill: guideRole.inf}, "/guide "},
 		{config.Role{Skill: "beekeeper:guide"}, "/beekeeper:guide "},
 		{config.Role{Instructions: "~/guide.md"}, ""},
 		{config.Role{}, ""},
@@ -450,7 +451,7 @@ func TestRolePromptsOpenWithTheBareSlashCommand(t *testing.T) {
 		if got := roleSlash(c.cfg); got != c.want {
 			t.Errorf("roleSlash(%+v) = %q, want %q", c.cfg, got, c.want)
 		}
-		if b := guideRole.successorBrief(c.cfg, "Supervisor run 12", "Supervisor run 11"); !strings.HasPrefix(b, c.want+"You are ") {
+		if b := guideRole.successorBrief(c.cfg, "Guide run 12", "Guide run 11"); !strings.HasPrefix(b, c.want+"You are ") {
 			t.Errorf("the brief under %+v does not open with %q:\n%s", c.cfg, c.want, b)
 		}
 	}

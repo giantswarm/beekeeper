@@ -258,14 +258,14 @@ func noteAnswerMail(seq int64, id, to, text string) mailbox.Delivery {
 	return mailbox.Delivery{Seq: seq, Kind: mailbox.KindMessage, Sender: serveParty.Name, MessageID: id, Envelope: json.RawMessage(raw)}
 }
 
-// A central note's Slack answer reaches the supervisor run holding the role
+// A central note's Slack answer reaches the guide run holding the role
 // now, as on the machine: the run that filed it relayed meanwhile. With no
 // run holding the role, it waits for the role's next start, acked, instead
 // of waiting in the mailbox for a run that never comes back.
 func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	const (
-		ended   = "Supervisor run 268"
-		current = "Supervisor run 269"
+		ended   = "Guide run 268"
+		current = "Guide run 269"
 		answer  = "NOTE ANSWERED #10 by ada@example.com: check once more (on giantswarm/giantswarm#37985)"
 	)
 	mb := &mailboxStandIn{queue: []mailbox.Delivery{noteAnswerMail(13, "note-10-3dbd89ea0570", "local:"+mailHost+"/"+ended, answer)}}
@@ -285,7 +285,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	if !slices.Equal(mb.acked, []int64{13}) {
 		t.Errorf("acked %v, want 13", mb.acked)
 	}
-	if line := "MAILBOX to " + current + ", the supervisor now, for " + ended + ": note-10-3dbd89ea0570"; !strings.Contains(out(), line) {
+	if line := "MAILBOX to " + current + ", the guide now, for " + ended + ": note-10-3dbd89ea0570"; !strings.Contains(out(), line) {
 		t.Errorf("no %q in:\n%s", line, out())
 	}
 
@@ -308,6 +308,6 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != guideRole.name || !strings.Contains(st.RoleLines[0].Line, "NOTE ANSWERED #4") {
-		t.Errorf("role lines %+v, want the answer kept for the supervisor's next start", st.RoleLines)
+		t.Errorf("role lines %+v, want the answer kept for the guide's next start", st.RoleLines)
 	}
 }
