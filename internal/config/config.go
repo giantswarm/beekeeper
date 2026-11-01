@@ -2063,8 +2063,12 @@ type Supervisor struct {
 	// ReviewRounds is how many review rounds asking for changes `supervisor
 	// loop` runs for a pull request (default 1): after the last one's
 	// request for changes the worker fixes them and merges on the loop's go
-	// without another review. An approved round is none of them: every new
-	// head after an approval gets its own review.
+	// without another review. An approved round is none of them: a new head
+	// after an approval gets its own review only for a change the approval
+	// does not cover (more than a merge of the base, its conflicts'
+	// resolution or a rebase). Never more than two reviews start for one
+	// pull request, whatever this says: a third need is a decision for
+	// guide.person.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next

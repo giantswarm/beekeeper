@@ -392,8 +392,9 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 	}
 }
 
-// A new head after an approval gets its own review round, whatever
-// supervisor.reviewRounds says: no escalation, no note.
+// A new head after an approval with a change of its own gets the second
+// review, whatever supervisor.reviewRounds says; a third need is one
+// decision for the person.
 func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -416,6 +417,26 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
 		t.Errorf("review logged as %+v", evs)
+	}
+	// The second review approves, and the worker pushes a change of its
+	// own once more: no third reviewer, one decision for the person.
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
+	const own = "3333333333333333333333333333333333333333"
+	r.pull.Head = own
+	r.park(t, loopPR, time.Now().Add(2*time.Minute))
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a third review started: %v", start)
+	}
+	note := r.called("note", loopAdd)
+	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.EscalationQuestion(loopURL, own) ||
+		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
+		t.Fatalf("no decision for the person: %v\n%s", r.calls, r.out)
+	}
+	r.pass(t)
+	if c := r.called("note", loopAdd); c != nil {
+		t.Errorf("asked twice: %v", c)
 	}
 }
 
@@ -445,7 +466,7 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 		t.Errorf("a base merge started a review: %v", c)
 	}
 	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only merges main into it") {
+	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only brings main into it") {
 		t.Fatalf("no go for the base merge: %v\n%s", r.calls, r.out)
 	}
 	if evs := r.logged(t, "supervisor.go"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
@@ -490,7 +511,7 @@ func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
 		t.Fatalf("a base merge of unfixed findings got the go: %+v", evs)
 	}
 	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "only merges main into head") || !strings.Contains(wake[3], "stand unfixed") {
+	if wake == nil || !strings.Contains(wake[3], "only brings main into head") || !strings.Contains(wake[3], "stand unfixed") {
 		t.Fatalf("no rework for the base merge: %v\n%s", r.calls, r.out)
 	}
 }

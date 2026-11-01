@@ -72,33 +72,49 @@ func approvedChange() []compareFile {
 	}
 }
 
-func TestBaseMergeOnly(t *testing.T) {
+func TestApprovalCovers(t *testing.T) {
 	merge := commitsOf(compareAhead, 1, commitOf(bmHead, bmApproved, bmMain))
 	// main moved a.go's context and line numbers: the change is the same.
 	moved := approvedChange()
 	moved[0].SHA, moved[0].Patch = "a2", "@@ -10,3 +10,3 @@\n other ctx\n-old\n+new\n ctx"
+	// resolved is a.go after a conflict with main's change to it.
+	resolved := func() []compareFile {
+		f := approvedChange()
+		f[0].SHA, f[0].Patch = "a3", "@@ -1,3 +1,3 @@\n ctx\n-old\n+newer\n ctx"
+		return f
+	}
+	mainChangedA := []compareFile{{Name: "a.go", Status: modified, SHA: "a9", Patch: "@@ -50,3 +50,3 @@\n ctx\n-x\n+y\n ctx"}}
 	for name, c := range map[string]struct {
 		added map[string]any
 		now   []compareFile
 		// base is what main changed between the approved head's merge
 		// base (bmFork) and the head's (bmMain); nil: z.go alone.
 		base []compareFile
-		want bool
-		why  string
+		// holds is whether main holds the merged parent bmMain.
+		holds bool
+		want  bool
+		why   string
 	}{
 		"a merge of main alone":                                 {added: merge, now: moved, want: true, why: "only merges main"},
 		"a merge of main and an unchanged blob without a patch": {added: merge, now: approvedChange(), want: true},
-		// The worker kept the approved a.go (git checkout --ours): its
-		// blob is unchanged, its change against main reverts main's edit.
-		"a merge that drops main's change to a file": {
+		"a merge resolving a conflict with main's change": {
+			added: merge, now: resolved(), base: mainChangedA, holds: true,
+			want: true, why: "resolving its conflicts in a.go",
+		},
+		// The worker kept the approved a.go (git checkout --ours): a
+		// conflict resolved its way.
+		"a merge that keeps its side of a conflict": {
 			added: merge,
 			now: func() []compareFile {
 				f := approvedChange()
 				f[0].Patch = "@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n ctx\n@@ -50,3 +50,3 @@\n ctx\n-y\n+x\n ctx"
 				return f
 			}(),
-			base: []compareFile{{Name: "a.go", Status: modified, SHA: "a9", Patch: "@@ -50,3 +50,3 @@\n ctx\n-x\n+y\n ctx"}},
-			why:  otherLines,
+			base: mainChangedA, holds: true, want: true, why: "resolving its conflicts in a.go",
+		},
+		"a resolved conflict of a merge of another branch": {
+			added: merge, now: resolved(), base: mainChangedA,
+			why: "which merges no commit of main",
 		},
 		"a binary main changed, kept at the approved blob": {
 			added: merge, now: approvedChange(),
@@ -114,7 +130,8 @@ func TestBaseMergeOnly(t *testing.T) {
 			added: merge, now: approvedChange(), base: make([]compareFile, compareFiles),
 			why: "at the comparison's cap",
 		},
-		// The same lines added, moved into another hunk of the file.
+		// The same lines added, moved into another hunk of a file main
+		// left alone: no conflict did that.
 		"an added line moved into another hunk": {
 			added: merge,
 			now: func() []compareFile {
@@ -122,24 +139,18 @@ func TestBaseMergeOnly(t *testing.T) {
 				f[0].SHA, f[0].Patch = "a4", "@@ -1,2 +1,1 @@\n ctx\n-old\n@@ -40,2 +39,3 @@\n ctx\n+new\n ctx"
 				return f
 			}(),
-			why: otherLines,
+			why: otherLines + ", and main did not change it",
 		},
 		"a commit of its own": {
 			added: commitsOf(compareAhead, 2, commitOf(bmMain, bmApproved), commitOf(bmHead, bmMain, bmMain)),
 			now:   moved, why: "which is no merge",
 		},
-		"a force push":             {added: commitsOf("diverged", 1, commitOf(bmHead, bmMain, bmMain)), now: moved, why: "diverged"},
-		"more commits than listed": {added: commitsOf(compareAhead, 2, commitOf(bmHead, bmApproved, bmMain)), now: moved, why: "more than the comparison lists"},
-		"a conflict resolved otherwise": {
-			added: merge,
-			now: func() []compareFile {
-				f := approvedChange()
-				f[0].SHA, f[0].Patch = "a3", "@@ -1,3 +1,3 @@\n ctx\n-old\n+newer\n ctx"
-				return f
-			}(),
-			why: otherLines,
-		},
-		"a change the merge carries": {added: merge, now: append(approvedChange(), compareFile{Name: "d.go", Status: "added", SHA: "d1", Patch: "+d"}), why: "4 changed files, not 3"},
+		"a rebase onto main":                      {added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: moved, want: true, why: "rebases the approved head"},
+		"a rebase with another change":            {added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: resolved(), base: mainChangedA, why: "with another change"},
+		"a head behind the approved one":          {added: commitsOf("behind", 0), now: moved, why: "behind"},
+		"more commits than listed":                {added: commitsOf(compareAhead, 2, commitOf(bmHead, bmApproved, bmMain)), now: moved, why: "more than the comparison lists"},
+		"a conflict resolved in a file main kept": {added: merge, now: resolved(), why: otherLines},
+		"a change the merge carries":              {added: merge, now: append(approvedChange(), compareFile{Name: "d.go", Status: "added", SHA: "d1", Patch: "+d"}), why: "4 changed files, not 3"},
 		"a binary the merge changed": {
 			added: merge,
 			now: func() []compareFile {
@@ -147,7 +158,7 @@ func TestBaseMergeOnly(t *testing.T) {
 				f[2].SHA = "c2"
 				return f
 			}(),
-			why: "c.png has no patch to compare",
+			why: "c.png adds or removes other lines",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -155,15 +166,21 @@ func TestBaseMergeOnly(t *testing.T) {
 			if base == nil {
 				base = []compareFile{{Name: "z.go", Status: modified, SHA: "z1", Patch: "+z"}}
 			}
+			holds := commitsOf(compareDiverged, 0)
+			if c.holds {
+				holds = commitsOf(compareIdentical, 0)
+			}
 			gh := compareAnswers{
 				bmApproved + "..." + bmHead: c.added,
 				"main..." + bmApproved:      filesOf(bmFork, approvedChange()),
 				"main..." + bmHead:          filesOf(bmMain, c.now),
 				bmFork + "..." + bmMain:     filesOf("", base),
+				bmApproved + "...main":      commitsOf(compareDiverged, 0),
+				bmMain + "...main":          holds,
 			}.gh(t)
-			got, why, err := BaseMergeOnly(context.Background(), gh, bmRepo, "main", bmApproved, bmHead)
+			got, why, err := ApprovalCovers(context.Background(), gh, bmRepo, "main", bmApproved, bmHead)
 			if err != nil || got != c.want || !strings.Contains(why, c.why) {
-				t.Errorf("BaseMergeOnly = %v, %q, %v; want %v with %q", got, why, err, c.want, c.why)
+				t.Errorf("ApprovalCovers = %v, %q, %v; want %v with %q", got, why, err, c.want, c.why)
 			}
 		})
 	}
@@ -186,7 +203,7 @@ func TestSameChangeAtTheCapProvesNothing(t *testing.T) {
 	for i := range files {
 		files[i] = compareFile{Name: string(rune('a'+i%26)) + strings.Repeat("x", i), Status: modified, SHA: "s"}
 	}
-	if _, why := sameChange(files, files); !strings.Contains(why, "cap") {
+	if _, _, why := sameChange(files, files); !strings.Contains(why, "cap") {
 		t.Errorf("sameChange at the cap = %q", why)
 	}
 }
