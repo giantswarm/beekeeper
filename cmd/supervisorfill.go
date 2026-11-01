@@ -87,6 +87,10 @@ func (l *supervisorLoop) previewFill(ctx context.Context) error {
 		return nil
 	}
 	next, err := l.nextItem(ctx)
+	if errors.Is(err, errLoopLater) {
+		_, err = fmt.Fprintln(l.a.out, "SUPERVISOR WOULD NEXT wait: the GitHub budget is under github.floor")
+		return err
+	}
 	if err != nil {
 		return err
 	}
@@ -172,6 +176,9 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			return nil
 		}
 		next, err := l.nextItem(ctx)
+		if errors.Is(err, errLoopLater) {
+			return nil // the budget recovers on its own: no pause, no failure
+		}
 		if err != nil {
 			pause()
 			l.sayOnce("fill board", "SUPERVISOR NEXT FAILED board next: %v", err)
