@@ -57,6 +57,23 @@ contains, after the broker and post-install steps finish. Stopping or retiring
 a worker immediately reconciles any gate run that ended with it; a runner
 still alive outside the worker continues under the gate.
 
+The loop routes only relevant alerts, those the watch publishes at
+`alerts.pageSeverity`:
+
+1. The team's own alerts (`alerts.team`) are relevant 24/7: an alert of the
+   team that only `InhibitionOutsideWorkingHours` inhibits is read and routed
+   like any other. With `alerts.team` unset every alert is the desk's.
+2. A silenced alert is ignored, the team's included: beekeeper creates no
+   silence, so every silence is another person's or team's. It gets no
+   summary line and no note.
+
+Everything else, another team's or a team-less alert, gets no note and no
+summary line. A relevant alert nobody owns that a session record explicitly
+waits on (`sessions serve … --waits alert:<name>`) is one decision for the
+guide, which decides whether a worker starts on it; the rest are one
+`SUPERVISOR ALERTS unowned` summary line per pass. A worker parked on an
+alert (`agents park --on alert:<name>`) is woken by it whoever's it is.
+
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
 
