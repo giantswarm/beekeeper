@@ -286,19 +286,22 @@ its key first in the detail):
             approval on a head that only merges the base into the approved
             one, or no round is left, its verdict asked for changes, they
             were forwarded and the worker parked again on a new head (its
-            fixes) that is more than a merge of the base: the merge go for that head, told to the worker (agents
-            wake) with the merge command of the repository's path: the
-            gate's devctl pr merge <repo> <n> --update-branch on a
-            repository of merge.devctlOwners, whose base update the go
-            covers, else gh pr merge --match-head-commit <head>. A head
-            only merges the base when the approved head is its ancestor,
-            every commit it adds is a merge, and its change against its
-            merge base with the base branch is the approved head's, file by
-            file, line by line (compare API); anything else, or a
-            comparison GitHub cuts short, is a new head with a new review.
-            Only the verdict of the loop's own last round counts, on the
-            head it reviewed and posted after it started: an older verdict
-            or a round still running authorizes nothing
+            fixes) that is more than a merge of the base: the merge go for
+            that head, told to the worker (agents wake) with the merge
+            command of the repository's path: the gate's devctl pr merge
+            <repo> <n> --update-branch on a repository of
+            merge.devctlOwners, whose base update the go covers, else gh
+            pr merge --match-head-commit <head>. A head only merges the
+            base when the approved head is its ancestor, every commit it
+            adds is a merge, and its change against its merge base with
+            the base branch is the approved head's, file by file, hunk by
+            hunk, line by line (compare API); a file without a patch counts
+            only with the approved blob and no change of the base's to it
+            since. Anything else, or a comparison GitHub cuts short, is a
+            new head with a new review. Only the verdict of the loop's own
+            last round counts, on the head it reviewed and posted after it
+            started: an older verdict or a round still running authorizes
+            nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
   rework    the worker parked again after the forward on the head the
