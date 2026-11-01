@@ -428,7 +428,7 @@ it was last written, its owner and whether it is eligible for removal.
 
 The owner is read from the name: a task number of three digits or more
 (`ao1011`, `go-build-153`) names the roster agent or session record whose
-task or issue mentions it, open tasks first; a name without one is its
+task or issue is that issue or pull request number, open tasks first; a name without one is its
 program's (`~/.local/state/<program>`), and a number nobody mentions is
 `unowned`. A holder is eligible once nothing in it was written for
 `disk.holders.staleAfter` (72h; an aside entry: its retention window

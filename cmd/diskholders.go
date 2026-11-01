@@ -59,22 +59,25 @@ type holder struct {
 }
 
 // holderMachine is what the listing reads besides the files: the paths
-// running processes use and the desk's roster and session records.
+// running processes use and the desk's roster and session records. refsErr
+// says the processes could not all be read: the listing goes on, and no
+// holder is eligible.
 type holderMachine struct {
-	refs []string
-	st   *state.State
+	refs    []string
+	refsErr error
+	st      *state.State
 }
 
 func (a *app) holderMachine() (holderMachine, error) {
-	refs, _, err := diskReferences()
-	if err != nil {
-		return holderMachine{}, fmt.Errorf("process references unavailable: %w", err)
-	}
 	st, err := a.store.Read()
 	if err != nil {
 		return holderMachine{}, err
 	}
-	return holderMachine{refs: refs, st: st}, nil
+	m := holderMachine{st: st}
+	if m.refs, _, err = diskReferences(); err != nil {
+		m.refsErr = fmt.Errorf("process references unavailable, no holder is eligible: %w", err)
+	}
+	return m, nil
 }
 
 var liveHolders = (*app).holderMachine
@@ -116,6 +119,7 @@ func (a *app) listHolders(read func() (holderMachine, error)) holdersRun {
 		r.err = err
 		return r
 	}
+	r.err = m.refsErr
 	entries, err := os.ReadDir(cfg.Root)
 	if err != nil {
 		r.err = err
@@ -150,6 +154,10 @@ func (a *app) listHolders(read func() (holderMachine, error)) holdersRun {
 func (a *app) inspectHolder(m holderMachine, name, path string, aside bool) holder {
 	cfg := a.cfg.Disk.Holders
 	u := diskprune.Inspect(path)
+	// A file written during the walk is no later than now for its age.
+	if u.Written.After(a.now) {
+		u.Written = a.now
+	}
 	h := holder{Name: name, Path: path, Bytes: u.Bytes, Written: u.Written, Aside: aside}
 	h.Owner, h.Task, h.TaskOpen = holderOwner(filepath.Base(path), m.st)
 	window := cfg.StaleAfter.Duration
@@ -161,6 +169,8 @@ func (a *app) inspectHolder(m holderMachine, name, path string, aside bool) hold
 		h.Owner, h.Why = pluginName, "beekeeper's own state"
 	case !aside && slices.Contains(cfg.Keep, name):
 		h.Why = "kept by disk.holders.keep"
+	case m.refsErr != nil:
+		h.Why = "process use unknown"
 	case diskprune.InUse(path, m.refs):
 		h.Why = "in use by a running process"
 	case h.TaskOpen:
@@ -185,8 +195,12 @@ func (a *app) inspectHolder(m holderMachine, name, path string, aside bool) hold
 // or more, so a version's 2 or 10 does not count.
 var taskNumber = regexp.MustCompile(`\d{3,}`)
 
-// holderOwner names the session whose task, last task or record mentions a
-// task number of name, an open one first, and says whether it is open. A
+// issueNumber is an issue or pull request a task or record names:
+// .../issues/<n>, .../pull/<n> or <repo>#<n>.
+var issueNumber = regexp.MustCompile(`(?:/issues/|/pull/|#)(\d+)`)
+
+// holderOwner names the session whose task, last task or record names an
+// issue or pull request numbered as a task number of name, an open one first, and says whether it is open. A
 // name without a task number is its program's; one whose number no session
 // mentions is unowned.
 func holderOwner(name string, st *state.State) (owner, task string, open bool) {
@@ -195,7 +209,7 @@ func holderOwner(name string, st *state.State) (owner, task string, open bool) {
 		return "program " + name, "", false
 	}
 	mentions := func(s string) bool {
-		return slices.ContainsFunc(taskNumber.FindAllString(s, -1), func(n string) bool { return slices.Contains(nums, n) })
+		return slices.ContainsFunc(issueNumber.FindAllStringSubmatch(s, -1), func(m []string) bool { return slices.Contains(nums, m[1]) })
 	}
 	if st != nil {
 		for _, ag := range st.Agents {
@@ -285,7 +299,8 @@ its size, when anything in it was last written, its owner and whether it is
 eligible for removal.
 
 The owner is read from the name: a task number in it (ao1011, go-build-153)
-names the roster agent or session record that mentions it, open tasks
+names the roster agent or session record whose task is that issue
+or pull request number, open tasks
 first; a name without one is its program's. A holder is eligible once
 nothing in it was written for disk.holders.staleAfter (an aside entry:
 disk.holders.asideRetention), no running process uses it, its task is not

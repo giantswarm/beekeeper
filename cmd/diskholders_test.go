@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,15 @@ func TestListHoldersOwnersAndEligibility(t *testing.T) {
 	}
 	if s := r.summary(); !strings.Contains(s, "6 holders under "+root+" eligible for removal") || !strings.Contains(s, "nothing removed") {
 		t.Errorf("summary=%s", s)
+	}
+}
+
+func TestListHoldersWithoutProcessReferencesKeepsAll(t *testing.T) {
+	a, _, m := holdersFixture(t)
+	m.refsErr = errors.New("readlink /proc/1/cwd: permission denied")
+	r := a.listHolders(func() (holderMachine, error) { return m, nil })
+	if r.err == nil || len(r.Holders) == 0 || r.Eligible != 0 || len(r.eligible()) != 0 {
+		t.Fatalf("err=%v holders=%d eligible=%d", r.err, len(r.Holders), r.Eligible)
 	}
 }
 
