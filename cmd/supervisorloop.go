@@ -733,7 +733,7 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+act.Kind, "%s", detail), act.Ref)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), detail)
+	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
 	return err
 }
 
@@ -808,7 +808,7 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), detail)
+	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
 	return err
 }
 
@@ -824,6 +824,8 @@ const loopFailureBackoff = 5 * time.Minute
 
 func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
 	f := loopFailure{Message: cause.Error(), Count: 1}
+	// Compare exact messages: a changing timestamp or PID is a different
+	// failure and starts a new count, rather than hiding a new cause.
 	if f.Message == previous.Message {
 		f.Count = previous.Count + 1
 	}
@@ -1303,11 +1305,15 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 	return fmt.Sprintf("%s to the guide (%s) on %s", e.Verb, label, ref), nil
 }
 
+// fileReportSeparator identifies reports stored in the event itself. Older
+// file transitions only summarized delivery to a note and must not be replayed.
+const fileReportSeparator = "; file in the owning repositories:\n"
+
 // toFile leaves the full finding in the settled transition's event. The
 // guide's feed reads that event once; no decision or thread is needed.
 func (l *supervisorLoop) toFile(_ context.Context, _ *state.State, act superloop.Action) (string, error) {
 	e := *act.Event
-	return fmt.Sprintf("%s reported at %s; file in the owning repositories:\n%s", e.Agent, e.At.UTC().Format(time.RFC3339), act.Message), nil
+	return fmt.Sprintf("%s reported at %s%s%s", e.Agent, e.At.UTC().Format(time.RFC3339), fileReportSeparator, act.Message), nil
 }
 
 // agentRef is the issue or pull request the agent works: what it is

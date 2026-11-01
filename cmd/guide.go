@@ -793,17 +793,31 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 	return lines, changed
 }
 
-// guideProblemLines delivers settled file transitions intact and remembers
-// their keys with the feed, in the same save as its other deliveries.
+// guideProblemLines delivers reports once, escaped onto one physical line.
+// Keys are retained only while their report remains in the event log.
 func guideProblemLines(st *state.State, events []state.Event) (lines []string, changed bool) {
+	current := map[string]bool{}
+	for _, e := range events {
+		key, text, ok := keyed(e.Detail)
+		// Legacy file events summarized a note already delivered to the guide;
+		// only the format carrying the actual report belongs in this feed.
+		if ok && strings.Contains(text, fileReportSeparator) {
+			current["problem:"+key] = true
+		}
+	}
 	guideRole.update(st, func(r *state.Role) {
+		before := len(r.Fed)
+		r.Fed = slices.DeleteFunc(r.Fed, func(key string) bool {
+			return strings.HasPrefix(key, "problem:") && !current[key]
+		})
+		changed = len(r.Fed) != before
 		for _, e := range events {
 			key, text, ok := keyed(e.Detail)
-			if !ok || slices.Contains(r.Fed, "problem:"+key) {
+			if !ok || !strings.Contains(text, fileReportSeparator) || !current["problem:"+key] || slices.Contains(r.Fed, "problem:"+key) {
 				continue
 			}
 			r.Fed = append(r.Fed, "problem:"+key)
-			lines = append(lines, "GUIDE PROBLEM: "+text)
+			lines = append(lines, "GUIDE PROBLEM: "+escapedLine(text))
 			changed = true
 		}
 	})
