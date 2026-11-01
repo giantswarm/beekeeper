@@ -1952,6 +1952,8 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   This local command uses no model tokens and needs no credential reader or status line. It runs
   under beekeeper's state directory at the provider's `every` (default `5m`), with its `timeout`.
   `Current session` supplies the 5-hour window and `Current week (all models)` the 7-day window;
+  without a `Current session` line (an idle 5-hour window) the 5-hour window reads 0% used with
+  no reset, and only a missing `Current week (all models)` fails the reading;
   per-model weeks are retained as supplemental buckets. Reset times use the timezone printed
   by Claude and the next occurrence of the date or time. An API-key login reports `no plan windows`
   with no subscription room, cached at the same interval; an unparseable window fails with its raw line.
