@@ -182,7 +182,7 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 }
 
 // tellFiler delivers line from by to the session that filed n, on the roster
-// or off it (by its session id). A note filed in a role (the supervisor's, the guide's)
+// or off it (by its session id). A note filed in a role (the guide's)
 // goes to the role's holder now, as a message to the role does: the run that
 // filed it may have relayed since. While no session holds the role, or its
 // holder cannot be told, line waits for the role's next start. It returns

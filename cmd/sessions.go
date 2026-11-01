@@ -34,23 +34,27 @@ type sessionView struct {
 
 // view is everything the session-level commands show.
 type view struct {
-	Sessions   []*sessionView   `json:"sessions"`
-	Totals     *metricsTotals   `json:"totals,omitempty"`
-	Overlaps   []claude.Overlap `json:"overlaps,omitempty"`
-	Supervisor *supervisorView  `json:"supervisor,omitempty"`
-	Leases     []leaseView      `json:"leases,omitempty"`
-	raw        []*claude.Session
-	st         *state.State
+	Sessions []*sessionView   `json:"sessions"`
+	Totals   *metricsTotals   `json:"totals,omitempty"`
+	Overlaps []claude.Overlap `json:"overlaps,omitempty"`
+	// SupervisorLoop is the PID of the running supervisor loop, 0 when it
+	// does not run.
+	SupervisorLoop int         `json:"supervisorLoopPID,omitempty"`
+	Leases         []leaseView `json:"leases,omitempty"`
+	raw            []*claude.Session
+	st             *state.State
 }
 
-type supervisorView struct {
+// roleView is a relayed role's holder (the guide's) as the commands show
+// it.
+type roleView struct {
 	state.Supervisor
 	Live bool `json:"live"`
 	// CLIGone is set while its CLI is gone, RestartUntil while it may still
-	// come back as a restart; the grant rule holds either way.
+	// come back as a restart.
 	CLIGone      time.Time `json:"cliGone,omitzero"`
 	RestartUntil time.Time `json:"restartUntil,omitzero"`
-	// Relay is the supervisor's last relay; Relieved says it relieved the caller.
+	// Relay is the role's last relay; Relieved says it relieved the caller.
 	Relay    *state.Relay `json:"relay,omitempty"`
 	Relieved bool         `json:"relieved,omitempty"`
 	// Run is the role's run the holder is: "<Role> run <Run>".
@@ -61,27 +65,21 @@ type supervisorView struct {
 	RelayAt int64 `json:"relayAt"`
 }
 
-// viewSupervisor is the recorded supervisor as sv reads it, with its
-// session's context; nil when none is recorded.
-func (a *app) viewSupervisor(st *state.State, sessions []*claude.Session, sv supervision) *supervisorView {
-	return a.viewRole(supervisorRole, st.SupervisorRole(), sessions, sv)
-}
-
 // viewRole is rl's recorded holder r as sv reads it, with its session's
 // context; nil when none is recorded.
-func (a *app) viewRole(rl role, r state.Role, sessions []*claude.Session, sv supervision) *supervisorView {
+func (a *app) viewRole(rl role, r state.Role, sessions []*claude.Session, sv supervision) *roleView {
 	if r.Holder == nil {
 		return nil
 	}
-	return &supervisorView{
+	return &roleView{
 		Supervisor: *r.Holder, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: r.Relay,
 		Context: sessionContext(sessions, r.Holder.Party), RelayAt: int64(rl.cfg(a.cfg).RelayAt), Run: r.Run,
 	}
 }
 
-// contextText says how far the supervisor's context is towards relayAt,
+// contextText says how far the holder's context is towards relayAt,
 // "" when it is not known.
-func (v *supervisorView) contextText() string {
+func (v *roleView) contextText() string {
 	if v.Context == 0 {
 		return ""
 	}
@@ -104,7 +102,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 		return nil, err
 	}
 	v := &view{raw: raw, st: st}
-	v.Supervisor = a.viewSupervisor(st, raw, a.supervision(st, raw))
+	v.SupervisorLoop = a.loopPID()
 	for _, h := range holders {
 		v.Leases = append(v.Leases, a.leaseView(raw, h))
 	}
@@ -139,7 +137,6 @@ func (a *app) collect(withWork bool) (*view, error) {
 	slices.SortFunc(v.Sessions, func(x, y *sessionView) int { return y.LastActive.Compare(x.LastActive) })
 	if withWork {
 		v.Overlaps = claude.Overlaps(raw, work, claude.OverlapOptions{
-			Skip:        func(s *claude.Session) bool { return st.Supervisor != nil && st.Supervisor.Is(s.Party()) },
 			Ignore:      a.cfg.Overlaps.Ignore,
 			ActiveSince: a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration),
 		})
@@ -299,7 +296,7 @@ registered agent whose CLI does not run is recorded too, and the line says
 so. The record stores the roster name of a registered agent, the session's
 own name otherwise.
 
-A worker (a registered agent holding no supervisor or guide role) records
+A worker (a registered agent holding no guide role) records
 only its own session: a serve naming another session is refused. --clear
 removes the calling session's own record; agents idle --done clears it too.`,
 		Args: func(c *cobra.Command, args []string) error {

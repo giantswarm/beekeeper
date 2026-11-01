@@ -133,11 +133,9 @@ func TestSendMessageByAHoldersRunNameGoesToTheHolder(t *testing.T) {
 }
 
 // A message by a name several running CLIs carry goes where Agent sends it
-// (the roster agent's own socket), a `yours` in it grants by the name, and
-// Agent's refusal refuses the send.
+// (the roster agent's own socket), and Agent's refusal refuses the send.
 func TestSendMessageByASharedNameGoesToTheAgent(t *testing.T) {
 	const worker, sock = "KG worker", "uds:/run/user/1000/cc-socks/8.sock"
-	var granted string
 	h := Hook{
 		Agent: func(name string) (string, error) {
 			if name == worker {
@@ -145,11 +143,10 @@ func TestSendMessageByASharedNameGoesToTheAgent(t *testing.T) {
 			}
 			return "", nil
 		},
-		Yours: func(_, to, _ string) string { granted = to; return "" },
 	}
 	d := decideSend(t, h, worker)
-	if d == nil || d.PermissionDecision != decisionAllow || d.UpdatedInput["to"] != sock || granted != worker {
-		t.Fatalf("want a redirect to the agent's socket granting by name, got %+v (granted to %q)", d, granted)
+	if d == nil || d.PermissionDecision != decisionAllow || d.UpdatedInput["to"] != sock {
+		t.Fatalf("want a redirect to the agent's socket, got %+v", d)
 	}
 	if d := decideSend(t, h, "another"); d != nil {
 		t.Fatalf("a name Agent leaves passes: %+v", d)

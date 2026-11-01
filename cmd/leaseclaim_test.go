@@ -18,11 +18,9 @@ var (
 	claimMe    = state.Party{Session: "s-me", Name: "Agent me"}
 	claimOther = state.Party{Session: "s-other", Name: "Agent other"}
 	claimFirst = state.Party{Session: "s-first", Name: "Agent first"}
-	claimSup   = state.Party{Session: "s-sup", Name: claimSupervisor}
 )
 
-// claimApp is the session "Agent me" under a supervisor that granted
-// grants, in their order; the lab agentlab-1's kind cluster runs. The lease
+// claimApp is the session "Agent me" with grants queued, in their order; the lab agentlab-1's kind cluster runs. The lease
 // store is the test's directory, the kubeconfig kind's stub.
 func claimApp(t *testing.T, grants ...state.Grant) *app {
 	t.Helper()
@@ -42,7 +40,6 @@ func claimApp(t *testing.T, grants ...state.Grant) *app {
 	a.labDirs = func() (map[string]string, error) { return labDirs, nil }
 	a.cfg.GrantTTL = config.Duration{Duration: 30 * time.Minute}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.SetSupervisorRole(state.Role{Holder: &state.Supervisor{Party: claimSup}})
 		st.Grants = grants
 		return nil, nil
 	}); err != nil {
@@ -70,7 +67,6 @@ func TestLeaseClaimQueued(t *testing.T) {
 	holdLease(t, a, labOne, claimOther)
 	for res, want := range map[string]string{
 		labOne: `queued: number 1 behind "Agent other", who holds agentlab-1 since 01:50: a proof;`,
-		labTwo: `queued: number 2 behind "Agent first", granted agentlab-2 first`,
 	} {
 		out, err := runLease(a, "claim", res, "-p", "my proof")
 		if Code(err) != ExitRefused || !strings.HasPrefix(out, want) {
@@ -94,7 +90,6 @@ func TestLeaseClaimRefused(t *testing.T) {
 	holdLease(t, a, graveler, claimOther)
 	for res, want := range map[string]string{
 		graveler: `refused: graveler is held by "Agent other" since 01:50: a proof`,
-		labTwo:   `refused: agentlab-2: supervisor "Supervisor"`,
 	} {
 		out, err := runLease(a, "claim", res, "-p", "my proof")
 		if Code(err) != ExitRefused || !strings.HasPrefix(out, want) || strings.Contains(out, "KUBECONFIG") {
@@ -235,28 +230,6 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 	}
 }
 
-// A lease granted to another session first does not wake a parked claim:
-// the lease freed, it stays parked behind that grant.
-func TestLeaseParkStaysBehindAnotherGrant(t *testing.T) {
-	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute), claimGrant(labTwo, claimMe, 4*time.Minute))
-	claimAgent(t, a)
-	woke := stubWakes(t)
-	holdLease(t, a, labTwo, claimOther)
-	if out, err := runLease(a, "claim", labTwo, "-p", "my proof", "--park"); Code(err) != ExitRefused || !strings.Contains(out, "parked on lease agentlab-2") {
-		t.Fatalf("a parked claim: %q, exit %d", out, Code(err))
-	}
-	if err := lease.Dir(a.cfg.LeaseDir).Release(labTwo); err != nil {
-		t.Fatal(err)
-	}
-	settleParks(t, a)
-	if len(*woke) > 0 {
-		t.Errorf("woken while %q is granted the lease first: %q", claimFirst.Name, *woke)
-	}
-	if ag := agentOf(t, &watcher{app: a}); ag.Park == nil || ag.Park.On != "lease agentlab-2" || !ag.Park.Resumable.IsZero() {
-		t.Errorf("the park after the release: %+v", ag.Park)
-	}
-}
-
 // A refused claim with --park parks nothing: no grant waits for it.
 func TestLeaseClaimParkRefusedParksNothing(t *testing.T) {
 	a := claimApp(t)
@@ -281,16 +254,13 @@ func TestLeaseClaimWaitIsShort(t *testing.T) {
 	}
 }
 
-// asSupervisor makes the calling session the supervisor of claimApp.
-func asSupervisor(t *testing.T) {
-	t.Helper()
-	t.Setenv("CLAUDE_CODE_SESSION_ID", claimSup.Session)
-	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimSup.Name)
-}
+// asSupervisor makes a's caller the supervisor loop.
+func asSupervisor(a *app) { a.as = loopParty.Name }
 
-// A worker's grant --first is refused; the supervisor's grant --first, and
-// its `yours`, to a session queued second or third moves its grant to the head of the queue: the grants it passes
-// keep their order behind it, and its claim is held.
+// A worker's grant --first is refused; the supervisor loop's grant --first
+// to a session queued second or third moves its grant to the head of the
+// queue: the grants it passes keep their order behind it, and its claim is
+// held.
 func TestGrantFirstMovesTheGrantToTheHead(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute), claimGrant(labTwo, claimOther, 4*time.Minute), claimGrant(labTwo, claimMe, 3*time.Minute))
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -314,13 +284,13 @@ func TestGrantFirstMovesTheGrantToTheHead(t *testing.T) {
 		return names
 	}
 	out, err := runLease(a, "grant", labTwo, claimOther.Name, "--first")
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `only the supervisor "Supervisor" puts a grant ahead of the queue`) {
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `only the supervisor loop or a person puts a grant ahead of the queue`) {
 		t.Errorf("a worker's grant --first: %q, %v; want refused", out, err)
 	}
 	if got, want := queue(), []string{claimFirst.Name, claimOther.Name, claimMe.Name}; !slices.Equal(got, want) {
 		t.Errorf("after the worker's refused grant --first: %q, want %q", got, want)
 	}
-	asSupervisor(t)
+	asSupervisor(a)
 	out, err = runLease(a, "grant", labTwo, claimOther.Name, "--first")
 	if err != nil || !strings.HasPrefix(out, `agentlab-2 is granted to "Agent other" first now, ahead of "Agent first": it claims with`) {
 		t.Errorf("grant --first to the second: %q, %v", out, err)
@@ -328,13 +298,14 @@ func TestGrantFirstMovesTheGrantToTheHead(t *testing.T) {
 	if got, want := queue(), []string{claimOther.Name, claimFirst.Name, claimMe.Name}; !slices.Equal(got, want) {
 		t.Errorf("after the grant to the second: %q, want %q", got, want)
 	}
-	got := a.yoursGrants(nil, claimSup, claimMe.Name, []string{labTwo})
-	if !strings.Contains(got, `agentlab-2 is granted to "Agent me" first now, ahead of "Agent other", then "Agent first"`) {
-		t.Errorf("yours to the third: %q", got)
+	out, err = runLease(a, "grant", labTwo, claimMe.Name, "--first")
+	if err != nil || !strings.HasPrefix(out, `agentlab-2 is granted to "Agent me" first now, ahead of "Agent other", then "Agent first"`) {
+		t.Errorf("grant --first to the third: %q, %v", out, err)
 	}
 	if got, want := queue(), []string{claimMe.Name, claimOther.Name, claimFirst.Name}; !slices.Equal(got, want) {
-		t.Errorf("after the yours to the third: %q, want %q", got, want)
+		t.Errorf("after the grant to the third: %q, want %q", got, want)
 	}
+	a.as = ""
 	t.Setenv("CLAUDE_CODE_SESSION_ID", claimMe.Session)
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimMe.Name)
 	if out, err := runLease(a, "claim", labTwo, "-p", "my proof"); err != nil || !strings.HasPrefix(out, "held by you since") {
@@ -345,7 +316,7 @@ func TestGrantFirstMovesTheGrantToTheHead(t *testing.T) {
 	}
 }
 
-// The supervisor's new grant --first goes ahead of the earlier grants.
+// The supervisor loop's new grant --first goes ahead of the earlier grants.
 func TestNewGrantFirst(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute))
 	holdLease(t, a, labTwo, claimOther)
@@ -355,7 +326,7 @@ func TestNewGrantFirst(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	asSupervisor(t)
+	asSupervisor(a)
 	out, err := runLease(a, "grant", labTwo, claimMe.Name, "--first")
 	if err != nil || !strings.HasPrefix(out, `granted agentlab-2 to "Agent me", first in its queue ahead of "Agent first": "Agent other" holds it (a proof)`) {
 		t.Errorf("a new grant --first: %q, %v", out, err)
@@ -366,21 +337,5 @@ func TestNewGrantFirst(t *testing.T) {
 	}
 	if q := lease.Pending(st, labTwo, true, a.now, a.cfg.GrantTTL.Duration); len(q) != 2 || !q[0].To.Is(claimMe) || !q[1].To.Is(claimFirst) {
 		t.Errorf("queue %+v", q)
-	}
-}
-
-// A grant --first under --as, a person's name, is refused too while a
-// supervisor is recorded: --as names no session the role could match.
-func TestGrantFirstAsAPersonIsRefused(t *testing.T) {
-	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute))
-	a.as = personTimo
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = append(st.Agents, state.Agent{Party: claimMe, Registered: relayNow})
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := runLease(a, "grant", labTwo, claimMe.Name, "--first"); Code(err) != ExitRefused {
-		t.Errorf("grant --first --as a person: %q, %v; want refused", out, err)
 	}
 }

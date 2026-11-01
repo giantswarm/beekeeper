@@ -18,7 +18,8 @@ func (a *app) statusCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "status [--bar]",
 		Short: "One line: the supervisor, the leases held, the holds, what is due and the busy agents",
-		Long: `Print the machine's coordination state in one line: who supervises, the
+		Long: `Print the machine's coordination state in one line: whether the
+supervisor loop runs, the
 leases held, the holds in force, the notes and timers that are due and the
 busy agents against capacity.floor and capacity.ceiling; while beekeeper
 stop stands, the line starts with STOPPED and the stop's reason.
@@ -29,10 +30,8 @@ contract is fixed: six fields, always present, in this order:
 
   beekeeper  <supervisor>  <leases>  <holds>  <due>  <busy>
 
-  supervisor  the supervising session's name; - when none is recorded;
-              ~<name> while its CLI restarts (the grant rule holds);
-              !<name> when the recorded one's session no longer runs;
-              ?<name> when the platform cannot list sessions
+  supervisor  loop while the supervisor loop runs; !loop when it does
+              not
   leases      the number of leases held
   holds       the number of holds in force
   due         the number of notes and timers whose time has come
@@ -63,17 +62,11 @@ The exit code is 0 whenever the state can be read.`,
 
 // statusView is what status shows.
 type statusView struct {
-	// Supervisor is the recorded supervisor's name, empty when none is.
-	Supervisor string `json:"supervisor"`
-	// SupervisorLive is whether its session runs.
-	SupervisorLive bool `json:"supervisorLive"`
-	// SupervisorUnknown is set when the platform cannot list sessions to
-	// tell whether it runs.
-	SupervisorUnknown bool `json:"supervisorUnknown,omitempty"`
-	// RestartUntil is set while its CLI may still come back as a restart.
-	RestartUntil time.Time `json:"restartUntil,omitzero"`
-	Leases       []string  `json:"leases"`
-	Holds        []string  `json:"holds"`
+	// SupervisorLoop is the PID of the running supervisor loop, 0 when it
+	// does not run.
+	SupervisorLoop int      `json:"supervisorLoopPID"`
+	Leases         []string `json:"leases"`
+	Holds          []string `json:"holds"`
 	// Lifted are the upgrade holds lifted while their upgrades run, with
 	// who lifted them.
 	Lifted []string `json:"lifted,omitempty"`
@@ -115,16 +108,7 @@ func (a *app) status() (*statusView, error) {
 	}
 	v.Busy = len(countAgents(st, sessions, a.now).Busy)
 	v.Serving = a.serveModeStatusLine()
-	if st.Supervisor != nil {
-		v.Supervisor = st.Supervisor.Name
-		if missing {
-			v.SupervisorUnknown = true
-		} else {
-			renameHolder(st.Supervisor, sessions)
-			sv := a.supervision(st, sessions)
-			v.Supervisor, v.SupervisorLive, v.RestartUntil = st.Supervisor.Name, sv.live, sv.until
-		}
-	}
+	v.SupervisorLoop = a.loopPID()
 	for _, h := range holders {
 		v.Leases = append(v.Leases, h.Env)
 	}
@@ -163,16 +147,9 @@ func dueCount(st *state.State, now time.Time) int {
 
 // bar is the fixed row of status --bar.
 func (v *statusView) bar() string {
-	sup := "-"
-	switch {
-	case v.Supervisor != "" && v.SupervisorLive:
-		sup = v.Supervisor
-	case v.Supervisor != "" && v.SupervisorUnknown:
-		sup = "?" + v.Supervisor
-	case v.Supervisor != "" && !v.RestartUntil.IsZero():
-		sup = "~" + v.Supervisor
-	case v.Supervisor != "":
-		sup = "!" + v.Supervisor
+	sup := "!loop"
+	if v.SupervisorLoop > 0 {
+		sup = "loop"
 	}
 	fields := []string{"beekeeper", sup, fmt.Sprint(len(v.Leases)), fmt.Sprint(len(v.Holds)), fmt.Sprint(v.Due), fmt.Sprintf("%d/%d", v.Busy, v.Floor)}
 	for i, f := range fields {
@@ -183,16 +160,9 @@ func (v *statusView) bar() string {
 
 // line is status in words.
 func (v *statusView) line() string {
-	sup := "no supervisor"
-	switch {
-	case v.Supervisor != "" && v.SupervisorLive:
-		sup = fmt.Sprintf("%q supervises", v.Supervisor)
-	case v.Supervisor != "" && v.SupervisorUnknown:
-		sup = fmt.Sprintf("%q supervises (whether it runs is unknown; %s)", v.Supervisor, platform.Unavailable(secSessions))
-	case v.Supervisor != "" && !v.RestartUntil.IsZero():
-		sup = fmt.Sprintf("%q supervises (its CLI is restarting, grace until %s)", v.Supervisor, stamp(v.RestartUntil))
-	case v.Supervisor != "":
-		sup = fmt.Sprintf("no supervisor (%q's session is gone; claims wait for a successor)", v.Supervisor)
+	sup := "the supervisor loop does not run"
+	if v.SupervisorLoop > 0 {
+		sup = "the supervisor loop runs"
 	}
 	list := func(n int, one, many string, names []string) string {
 		s := fmt.Sprintf("%d %s", n, many)

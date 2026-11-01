@@ -85,11 +85,11 @@ func TestStartSuccessorFindsARestartedHolder(t *testing.T) {
 	holder := state.Party{Session: restartedCLI, HostSession: restartHost, Name: "Supervisor run 11"}
 	seed(t, a, func(st *state.State) {
 		*st = *handOverState()
-		st.Supervisor.Party = holder
+		st.Guide.Holder.Party = holder
 		st.Starts = []state.Start{restartedStart(missing, "")}
 	})
-	a.cfg.Supervisor.RelayTTL.Duration = 15 * time.Minute
-	_, _, err := a.startSuccessor(context.Background(), supervisorRole, holder, holder, "")
+	a.cfg.Guide.RelayTTL.Duration = 15 * time.Minute
+	_, _, err := a.startSuccessor(context.Background(), guideRole, holder, holder, "")
 	if err == nil || !strings.Contains(err.Error(), missing) {
 		t.Fatalf("startSuccessor of a restarted holder: %v, want the start's folder %s", err, missing)
 	}

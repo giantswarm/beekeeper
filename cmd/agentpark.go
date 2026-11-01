@@ -107,8 +107,8 @@ a new publication asks for that head's review. Every other park (including one w
 publication cannot be verified) records a plain wait: no reviewer, merge
 go or findings forwarded. The command says which it recorded. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
-park. A session off the roster parks too (a supervisor started by hand, any
-session that never registered): its park is kept apart from the roster,
+park. A session off the roster parks too (any session that never
+registered): its park is kept apart from the roster,
 settles the same way and resumes it by its session id; one whose session
 is gone by then gets no wake and one line, and the issues it served go
 back to the board. A roster agent without a task is refused: it has
@@ -283,35 +283,28 @@ func holdStands(st *state.State, target string, now time.Time) bool {
 
 // leaseSettled says whether the lease res, which ag's park waits on, is
 // free and ag's to claim, and the words that resume it: free while nobody
-// holds it, ag's while no upgrade holds it and ag's grant is first in its
-// queue (or no supervisor is recorded); a grant to ag that is gone settles
-// the park too, for ag to ask again, also while the lease is held (the
-// supervisor revoked it). A grant to another session first, or a holder
-// while ag's grant waits, leaves it parked.
+// holds it and no upgrade holds it. A grant to ag that is gone settles the
+// park too, also while the lease is held (it was revoked), for ag to queue
+// again. A holder while ag's grant waits, or an upgrade, leaves it parked.
 func (a *app) leaseSettled(st *state.State, ag state.Agent, res string) (string, bool) {
 	cur, err := lease.Dir(a.cfg.LeaseDir).Get(res)
 	if err != nil {
 		return "", false
 	}
 	if cur != nil {
-		if st.SupervisorRole().Holder == nil || slices.ContainsFunc(lease.Pending(st, res, true, a.now, a.cfg.GrantTTL.Duration), func(g state.Grant) bool { return g.To.Is(ag.Party) }) {
+		if slices.ContainsFunc(lease.Pending(st, res, true, a.now, a.cfg.GrantTTL.Duration), func(g state.Grant) bool { return g.To.Is(ag.Party) }) {
 			return "", false
 		}
-		return fmt.Sprintf("%s is held by %q and no grant of it to you is left: ask the supervisor `need %s` again", res, cur.Name, res), true
+		return fmt.Sprintf("%s is held by %q and no grant of it to you is left: `beekeeper lease grant %s %q` queues you again", res, cur.Name, res, ag.Name), true
 	}
 	if _, ok := upgrade.Held(st, res, a.now); ok {
 		return "", false
 	}
-	_, err = lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Supervisor: st.SupervisorRole().Holder, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
-	claim := fmt.Sprintf("beekeeper lease claim %s -p \"<purpose>\"", res)
-	var r *lease.Refusal
-	switch {
-	case err == nil:
-		return fmt.Sprintf("%s is free and yours: claim it now with `%s`, within %s", res, claim, dur(a.cfg.GrantTTL.Duration)), true
-	case errors.As(err, &r) && r.Position > 0:
+	if _, err := lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Now: a.now, TTL: a.cfg.GrantTTL.Duration}); err != nil {
 		return "", false
 	}
-	return fmt.Sprintf("%s is free, but no grant of it to you is left: ask the supervisor `need %s` again", res, res), true
+	claim := fmt.Sprintf("beekeeper lease claim %s -p \"<purpose>\"", res)
+	return fmt.Sprintf("%s is free and yours: claim it now with `%s`, within %s", res, claim, dur(a.cfg.GrantTTL.Duration)), true
 }
 
 func (a *app) agentResumeCmd() *cobra.Command {

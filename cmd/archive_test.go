@@ -81,8 +81,8 @@ func TestPlanArchivesDrops(t *testing.T) {
 	st := &state.State{
 		Archives: []state.Archive{owed("put-away", archiveNow), owed("lost", archiveNow), owed("back", archiveNow),
 			owed("role", archiveNow), owed("old", archiveNow.Add(-archiveOwedFor)), owed("due", archiveNow)},
-		Agents:     []state.Agent{{Party: state.Party{Session: "back"}, Task: "more"}},
-		Supervisor: &state.Supervisor{Party: state.Party{Session: "role"}},
+		Agents: []state.Agent{{Party: state.Party{Session: "back"}, Task: "more"}},
+		Guide:  &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "role"}}},
 	}
 	record := func(host string) (*claude.Record, bool) {
 		switch host {
@@ -116,7 +116,7 @@ func TestSeedArchives(t *testing.T) {
 	omp := start("omp")
 	omp.HostSession, omp.Harness = "omp_omp", "omp"
 	run := start("run")
-	run.Name = "Supervisor run 7"
+	run.Name = "Guide run 7"
 	st := &state.State{
 		Starts: []state.Start{start("warm"), start("roster"), start("stopped"), start("shelved"), run, omp, start("owed")},
 		Agents: []state.Agent{{Party: state.Party{Session: "roster"}}},
@@ -146,10 +146,10 @@ func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
 	back := state.Party{Session: "w-back", HostSession: "local_w-back", Name: "brought back"}
 	stale := state.Party{Session: "stale", HostSession: "local_stale", Name: "left stale"}
 	st.Starts = []state.Start{{Party: supA}, {Party: supB}, {Party: done}, {Party: back}, {Party: stale}}
-	if _, _, err := relayRole(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := startRole(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
+	if _, _, err := guideRole.start(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	st.Archives, st.ArchivesSeeded, st.FinishedSeeded = nil, true, true
@@ -272,13 +272,13 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 func TestRelievedRunIsArchived(t *testing.T) {
 	st := handOverState()
 	st.Starts = []state.Start{{Party: supA}, {Party: supB}}
-	if _, _, err := relayRole(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if len(st.Archives) != 0 {
 		t.Fatalf("owed before the successor took the role: %+v", st.Archives)
 	}
-	msg, _, err := startRole(st, supB, true, false, relayNow.Add(time.Minute))
+	msg, _, err := guideRole.start(st, supB, true, false, relayNow.Add(time.Minute))
 	if err != nil || !strings.Contains(msg, "archives its desktop session local_A once its CLI runs no turn") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
@@ -297,7 +297,7 @@ func TestRelievedRunIsArchived(t *testing.T) {
 		t.Errorf("roleKeeps: holder %v, relieved %v", roleKeeps(st, supB), roleKeeps(st, supA))
 	}
 	// The relieved run supervises again: its archive is owed no longer.
-	st.Supervisor = &state.Supervisor{Party: supA}
+	st.Guide = &state.Role{Holder: &state.Supervisor{Party: supA}}
 	if p := planArchives(st, unarchived, idle, relayNow.Add(3*time.Minute)); !strings.Contains(p[0].drop, "role") {
 		t.Errorf("holding again: %s", p[0])
 	}

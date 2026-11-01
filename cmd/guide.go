@@ -26,12 +26,10 @@ func (a *app) guideCmd() *cobra.Command {
 		Short: "Start, stop or show the guide: the session that walks the person through their decisions",
 		Long: `The guide is the session that walks the person through the decisions
 waiting on them and takes their answers back to the sessions that asked.
-It is never the supervisor's session: ` + "`guide start`" + ` in the supervisor's
-session and ` + "`supervisor start`" + ` in the guide's are refused. It has no grant
-power; the grant rule stays the supervisor's.
+The supervisor is the supervisor loop, no session. The guide has no grant
+power.
 
-The role moves like the supervisor's, in two steps that leave no gap: the
-relay starts the next run, "Guide run N+1", as a fresh session, and its
+The role moves in two steps that leave no gap: the relay starts the next run, "Guide run N+1", as a fresh session, and its
 start takes the role (` + "`beekeeper guide handover --prompt`" + ` is its prompt). ` + "`beekeeper guide watch`" + `
 says GUIDE RELAY DUE once the guide's context reaches guide.relayAt.
 
@@ -492,7 +490,8 @@ relay and the queue. --prompt prints the successor's session prompt instead:
 the configured instructions (guide.skill's bare slash command, "/guide you
 take over …", or guide.instructions), the
 priorities and holds read from GitHub and the epics with their plans (as
-beekeeper handover --prompt shows them; a failed read is shown as not read),
+beekeeper handover --section priorities shows them; a failed read is shown
+as not read),
 the queue, an open relay and the commands that read the live values; no
 other live value. Both carry the desk's standing
 instructions in full: standing.md in the state directory. A caller that has read

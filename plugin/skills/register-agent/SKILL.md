@@ -5,8 +5,8 @@ description: Register a freshly started, empty Claude session with the running s
 
 # register-agent — a session the person started, on the supervisor's roster
 
-Every task normally gets a fresh worker the supervisor (`/supervise`) starts with `beekeeper agents
-start`. When the person starts an empty session themselves, this skill puts it on the supervisor's
+Every task normally gets a fresh worker the supervisor (the supervisor loop, `beekeeper supervisor
+loop`) starts with `beekeeper agents start`. When the person starts an empty session themselves, this skill puts it on the supervisor's
 roster for one task. `$ARGUMENTS`, when given, is the session's name (`Agent four`).
 
 ## Goal
@@ -21,10 +21,11 @@ session, and beekeeper takes this one off the roster and archives it once its tu
 
 ## Context
 
-- **The supervisor** is the session `beekeeper supervisor status` names (exit 3: none runs): a
-  worker reports through `agents idle --done --report`, parks through `agents park`, asks questions
-  through `note add --for "<supervisor>"`, and receives wakes through its inbox (`agents wake`; in
-  Claude Code, `SendMessage` to `the supervisor` also reaches the current holder).
+- **The supervisor** is the supervisor loop, a service no session holds (`beekeeper supervisor
+  status`, exit 3 when it does not run): a worker reports through `agents idle --done --report`,
+  parks through `agents park`, asks questions through `note add`, and receives wakes through its
+  inbox (`agents wake`). No message reaches the supervisor: `SendMessage` to `the supervisor` is
+  refused.
 - **The registration** is `beekeeper agents register [--name <name>]`, which puts the session on the
   roster under its title and prints the message's first line, which stands alone: `register:
   <session name> idle, ready for a task`. `beekeeper agents idle` marks a finished task and prints
@@ -44,9 +45,8 @@ session, and beekeeper takes this one off the roster and archives it once its tu
 - **An unanswered grant is no reason to sit still.** When a grant or go stays unanswered
   for 20 minutes, the session carries on with the work that needs none. A merge needs no word: the
   gate queues it in its lane and wakes the session with the outcome. An
-  explicit `hold <repo>` still stands until `release <repo>`, and a lab or the browser is still
-  never claimed without `yours <env>` or `browser yours`, and nothing that needs it runs before
-  the claim exited 0.
+  explicit `hold <repo>` still stands until `release <repo>`, and nothing that needs a lab or the
+  browser runs before its claim exited 0 (`beekeeper:lease`).
 - **Subagents** only when the supervisor's brief allows them.
 - **Waiting is quiet.** While a desktop agent waits for a task or a grant, one bounded background
   wait keeps it reachable (a `sleep` of at most 25 minutes, `run_in_background`, re-armed when it

@@ -47,7 +47,7 @@ func (w *watcher) loopRunning() bool {
 		return true
 	}
 	var pid int
-	found, err := w.store.ReadFile("supervisor-loop-pid.json", &pid)
+	found, err := w.store.ReadFile(loopPIDFile, &pid)
 	return err == nil && found && pid > 0 && proc.Alive(pid)
 }
 

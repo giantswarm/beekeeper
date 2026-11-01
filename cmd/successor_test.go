@@ -22,15 +22,15 @@ const (
 	guideSeven       = "Guide run 7"
 	hostG7           = "local_G7"
 	sessionG7        = "sG7"
-	supThirteen      = "Supervisor run 13"
+	supThirteen      = "Guide run 13"
 )
 
 func TestRunOf(t *testing.T) {
 	for name, want := range map[string]int{
-		"Supervisor run 35": 35, " Supervisor run 7 ": 7, guideSeven: 0, agentTwentyEight: 0,
-		"Supervisor run": 0, "Supervisor run 3b": 0, "My Supervisor run 3": 0,
+		"Guide run 35": 35, " Guide run 7 ": 7, "Supervisor run 7": 0, agentTwentyEight: 0,
+		"Guide run": 0, "Guide run 3b": 0, "My Guide run 3": 0,
 	} {
-		if got := supervisorRole.runOf(name); got != want {
+		if got := guideRole.runOf(name); got != want {
 			t.Errorf("runOf(%q) = %d, want %d", name, got, want)
 		}
 	}
@@ -43,38 +43,39 @@ func TestLastRunReadsTheRecordedNames(t *testing.T) {
 	r := state.Role{
 		Run:      3,
 		Holder:   &state.Supervisor{Party: state.Party{Name: supA.Name}},
-		Relieved: []state.Relief{{Party: state.Party{Name: "Supervisor run 12"}, By: state.Party{Name: "Agent nine"}}},
+		Relieved: []state.Relief{{Party: state.Party{Name: guideRole.runName(12)}, By: state.Party{Name: "Agent nine"}}},
 	}
-	if got := supervisorRole.lastRun(r); got != 12 {
+	if got := guideRole.lastRun(r); got != 12 {
 		t.Errorf("lastRun = %d, want 12", got)
 	}
 	r.Relay = &state.Relay{To: state.Party{Name: supThirteen}}
-	if got := supervisorRole.lastRun(r); got != 13 {
+	if got := guideRole.lastRun(r); got != 13 {
 		t.Errorf("lastRun with a relay = %d, want 13", got)
 	}
-	if got := guideRole.lastRun(r); got != 3 {
-		t.Errorf("the guide's lastRun reads the supervisor's names: %d", got)
+	r.Relay.To.Name = "Supervisor run 40"
+	if got := guideRole.lastRun(r); got != 12 {
+		t.Errorf("the guide's lastRun reads a retired supervisor run's name: %d", got)
 	}
 }
 
 // A start numbers the run: a relayed or titled run keeps its number, any
 // other start is the next run, a restart keeps its run.
 func TestStartNumbersTheRun(t *testing.T) {
-	st := handOverState() // "Supervisor run 11" supervises
-	msg, _, err := supervisorRole.start(st, agentC, false, false, relayNow)
-	if err != nil || st.SupervisorRun != 12 || !strings.Contains(msg, `"Agent three" supervises now as Supervisor run 12`) {
-		t.Fatalf("an untitled start: %q, run %d, %v", msg, st.SupervisorRun, err)
+	st := handOverState() // "Guide run 11" guides; its session is gone
+	msg, _, err := guideRole.start(st, agentC, false, false, relayNow)
+	if err != nil || st.Guide.Run != 12 || !strings.Contains(msg, `"Agent three" guides now as Guide run 12`) {
+		t.Fatalf("an untitled start: %q, run %d, %v", msg, st.Guide.Run, err)
 	}
-	if _, _, err := supervisorRole.start(st, agentC, true, false, relayNow.Add(time.Minute)); err != nil || st.SupervisorRun != 12 {
-		t.Fatalf("a restart: run %d, %v", st.SupervisorRun, err)
+	if _, _, err := guideRole.start(st, agentC, true, false, relayNow.Add(time.Minute)); err != nil || st.Guide.Run != 12 {
+		t.Fatalf("a restart: run %d, %v", st.Guide.Run, err)
 	}
 	next := state.Party{Session: "sN", HostSession: "local_N", Name: supThirteen}
-	if _, _, err := supervisorRole.relay(st, agentC, next, relayNow.Add(2*time.Minute), 15*time.Minute); err != nil || st.SupervisorRun != 13 {
-		t.Fatalf("the relay: run %d, %v", st.SupervisorRun, err)
+	if _, _, err := guideRole.relay(st, agentC, next, relayNow.Add(2*time.Minute), 15*time.Minute); err != nil || st.Guide.Run != 13 {
+		t.Fatalf("the relay: run %d, %v", st.Guide.Run, err)
 	}
-	msg, _, err = supervisorRole.start(st, next, true, false, relayNow.Add(3*time.Minute))
-	if err != nil || st.SupervisorRun != 13 || strings.Contains(msg, " as ") {
-		t.Fatalf("the successor's start: %q, run %d, %v", msg, st.SupervisorRun, err)
+	msg, _, err = guideRole.start(st, next, true, false, relayNow.Add(3*time.Minute))
+	if err != nil || st.Guide.Run != 13 || strings.Contains(msg, " as ") {
+		t.Fatalf("the successor's start: %q, run %d, %v", msg, st.Guide.Run, err)
 	}
 }
 
@@ -98,22 +99,22 @@ func TestAFailedSuccessorWithdrawsItsRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfg config.Config
-	cfg.Supervisor.RelayTTL.Duration = 15 * time.Minute
+	cfg.Guide.RelayTTL.Duration = 15 * time.Minute
 	cfg.Claude.DesktopDir = t.TempDir()
 	a := &app{cfg: &cfg, store: store, now: relayNow, out: os.Stdout}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) { *st = *handOverState(); return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = a.startSuccessor(context.Background(), supervisorRole, supA, supA, filepath.Join(t.TempDir(), "missing"))
-	if err == nil || !strings.Contains(err.Error(), `starting "Supervisor run 12"`) || !strings.Contains(err.Error(), "withdrawn") {
+	_, _, err = a.startSuccessor(context.Background(), guideRole, supA, supA, filepath.Join(t.TempDir(), "missing"))
+	if err == nil || !strings.Contains(err.Error(), `starting "Guide run 12"`) || !strings.Contains(err.Error(), "withdrawn") {
 		t.Fatalf("startSuccessor: %v", err)
 	}
 	st, _ := store.Read()
-	if st.Relay != nil || !st.Supervisor.Is(supA) || st.SupervisorRun != 12 {
-		t.Fatalf("after the failed start: relay %+v, supervisor %+v, run %d", st.Relay, st.Supervisor, st.SupervisorRun)
+	if st.Guide.Relay != nil || !st.Guide.Holder.Is(supA) || st.Guide.Run != 12 {
+		t.Fatalf("after the failed start: relay %+v, guide %+v, run %d", st.Guide.Relay, st.Guide.Holder, st.Guide.Run)
 	}
-	evs, _ := store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "supervisor.relay") })
-	if len(evs) != 2 || evs[1].Verb != "supervisor.relay-cancel" {
+	evs, _ := store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "guide.relay") })
+	if len(evs) != 2 || evs[1].Verb != "guide.relay-cancel" {
 		t.Fatalf("relay events: %+v", evs)
 	}
 }
@@ -168,8 +169,8 @@ func TestAFirstTurnIsNotGone(t *testing.T) {
 		},
 	}
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}
-		st.SupervisorCLI = &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 44, Gone: relayNow.Add(-time.Hour)}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}}
+		st.Guide.CLI = &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 44, Gone: relayNow.Add(-time.Hour)}
 		return nil, nil
 	})
 	if err != nil {
@@ -287,9 +288,8 @@ func TestSuccessorDir(t *testing.T) {
 func supervisedBy(t *testing.T, w *watcher, p state.Party, since time.Time) {
 	t.Helper()
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Relay = nil
-		st.Supervisor = &state.Supervisor{Party: p, Since: since}
-		st.SupervisorCLI = &state.CLI{Supervisor: p, Since: since, PID: 50, Gone: w.now.Add(-2 * time.Minute)}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: p, Since: since}}
+		st.Guide.CLI = &state.CLI{Supervisor: p, Since: since, PID: 50, Gone: w.now.Add(-2 * time.Minute)}
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: since})
 		return nil, nil
 	})
@@ -310,7 +310,7 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	w.stand = standbyWatch{
 		send: func(context.Context, string, string) error { t.Error("a resume message by name"); return nil },
 		revive: func(_ context.Context, rl role, holder state.Party, msg string) error {
-			if rl.name != supervisorRole.name || !strings.Contains(msg, "`beekeeper handover --prompt`") {
+			if rl.name != guideRole.name || !strings.Contains(msg, "`beekeeper guide handover --prompt`") {
 				t.Errorf("revive %s %q: %q", rl.name, holder.Name, msg)
 			}
 			revived = append(revived, holder.Name)
@@ -329,7 +329,7 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	}
 	at := relayNow
 	for i, wait := range []time.Duration{successorBackoff, 2 * successorBackoff, time.Hour} {
-		run := state.Party{Session: fmt.Sprintf("s%d", 12+i), Name: supervisorRole.runName(12 + i)}
+		run := state.Party{Session: fmt.Sprintf("s%d", 12+i), Name: guideRole.runName(12 + i)}
 		w.now = at
 		supervisedBy(t, w, run, at.Add(-time.Minute))
 		poll(at)
@@ -348,7 +348,7 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 		t.Errorf("%d successors, want 2 (the third failed one ends the chain)", n)
 	}
 	st, _ := w.store.Read()
-	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Supervisor run 12"`) || st.Notes[0].For != pat {
+	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Guide run 12"`) || st.Notes[0].For != pat {
 		t.Errorf("notes: %+v", st.Notes)
 	}
 	if l := out.String(); !strings.Contains(l, "3 successors did not come up, none further starts (note #1)") || strings.Count(l, "SUCCESSOR DOWN") != 3 {
@@ -370,12 +370,12 @@ func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
 			succeeded.Add(1)
 			return state.Party{}, nil
 		},
-		chains: map[string]*successorChain{supervisorRole.name: {failures: 1, next: relayNow.Add(time.Hour)}},
+		chains: map[string]*successorChain{guideRole.name: {failures: 1, next: relayNow.Add(time.Hour)}},
 	}
 	t.Cleanup(w.stand.inflight.Wait)
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}
-		st.SupervisorCLI = &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 44}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}}
+		st.Guide.CLI = &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 44}
 		return nil, nil
 	})
 	if err != nil {
@@ -383,11 +383,11 @@ func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
 	}
 	w.now = relayNow
 	w.pending(context.Background(), []*claude.Session{{ID: four.Session, HostID: hostFour, Name: agentFour, PID: 44}})
-	if w.stand.chains[supervisorRole.name] != nil {
-		t.Fatalf("a supervisor up again kept the chain: %+v", w.stand.chains[supervisorRole.name])
+	if w.stand.chains[guideRole.name] != nil {
+		t.Fatalf("a supervisor up again kept the chain: %+v", w.stand.chains[guideRole.name])
 	}
 	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.SupervisorCLI.Gone = relayNow
+		st.Guide.CLI.Gone = relayNow
 		return nil, nil
 	})
 	w.now = relayNow.Add(2 * time.Minute)
@@ -443,7 +443,7 @@ func TestRolePromptsOpenWithTheBareSlashCommand(t *testing.T) {
 		cfg  config.Role
 		want string
 	}{
-		{config.Role{Skill: supervisorRole.inf}, "/supervise "},
+		{config.Role{Skill: guideRole.inf}, "/guide "},
 		{config.Role{Skill: "beekeeper:guide"}, "/beekeeper:guide "},
 		{config.Role{Instructions: "~/guide.md"}, ""},
 		{config.Role{}, ""},
@@ -451,7 +451,7 @@ func TestRolePromptsOpenWithTheBareSlashCommand(t *testing.T) {
 		if got := roleSlash(c.cfg); got != c.want {
 			t.Errorf("roleSlash(%+v) = %q, want %q", c.cfg, got, c.want)
 		}
-		if b := supervisorRole.successorBrief(c.cfg, "Supervisor run 12", "Supervisor run 11"); !strings.HasPrefix(b, c.want+"You are ") {
+		if b := guideRole.successorBrief(c.cfg, guideRole.runName(12), guideRole.runName(11)); !strings.HasPrefix(b, c.want+"You are ") {
 			t.Errorf("the brief under %+v does not open with %q:\n%s", c.cfg, c.want, b)
 		}
 	}

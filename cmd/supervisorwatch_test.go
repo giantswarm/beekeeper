@@ -53,10 +53,10 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(true, false)
-	if err := r.a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+	if err := r.a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
-	if !w.supervisorGone(context.Background(), &state.State{}, nil) {
+	if !w.checkLoop(context.Background(), &state.State{}) {
 		t.Fatal("standby ignored running loop")
 	}
 }

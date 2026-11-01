@@ -29,7 +29,7 @@ import (
 // probes and remedies the known faults of doctor.faults. Each is
 // reversible (the desktop's Archived list brings a session back, a worker
 // registers again), and it never archives or retitles a session a person
-// started or one that holds or held the supervisor's or the guide's role;
+// started or one that holds or held the guide's role;
 // a run a relay relieved it archives, and a handed-over session.
 
 // remedyTimeout bounds one run of a fault's remedy.
@@ -606,7 +606,7 @@ line:
 - takes an agent off the roster once it reported its work done (agents idle
   --done) and its CLI runs no turn, a turn that only sleeps in tool shells
   it left behind (a background wait loop) stopped first, once it was relieved of the
-  supervisor's or the guide's role, or once it stayed idle
+  guide's role, or once it stayed idle
   agents.staleAfter (24h) with no CLI running; the desktop sessions
   beekeeper started for the finished and the stale ones are archived in
   one steward's turn (the desktop's Archived list brings one back); a
@@ -616,7 +616,7 @@ line:
   recorded it) on its later runs while the CLI runs no turn, until the
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
   so are archived the session an agents handover ended and the run of the
-  supervisor or the guide a relay relieved, which frees its desktop CLI;
+  guide a relay relieved, which frees its desktop CLI;
   the steward is an idle desktop CLI of another session; with none
   running, a finished worker's own desktop CLI archives it, warmed by
   showing the session in the desktop for a moment once the person's
@@ -624,7 +624,7 @@ line:
   -p --resume <id>, a wake's): that turn is its CLI; the watch leaves such
   a warmed CLI of a handed-over session running 5 minutes for
   its archive call instead of stopping it as REVIVED; a relieved run of the
-  supervisor or the guide archives itself the same way, its own CLI
+  guide archives itself the same way, its own CLI
   warmed when no other steward is idle; a steward that declined is asked for no archive for
   24h; a run that asks no steward counts no turn and waits 10 minutes;
 - gives a session beekeeper started the roster name back when the desktop
@@ -707,7 +707,7 @@ line:
   is installed.
 
 A session a person started is never archived or retitled, nor one that
-holds or held the supervisor's or the guide's role unless a relay
+holds or held the guide's role unless a relay
 relieved it. The watch runs the
 doctor every tick (beekeeper watch); --dry-run says what it would do,
 the archives it owes and the kept entries it leaves included, probing the

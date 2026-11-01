@@ -4,17 +4,16 @@ import "testing"
 
 func TestKnows(t *testing.T) {
 	st := &State{
-		Starts:     []Start{{Party: Party{Session: "started"}}},
-		Supervisor: &Supervisor{Party: Party{Session: "supervisor"}},
-		Guide:      &Role{Holder: &Supervisor{Party: Party{HostSession: "local_guide"}}},
-		Agents:     []Agent{{Party: Party{Session: "agent", Name: "bee"}}},
+		Starts: []Start{{Party: Party{Session: "started"}}},
+		Guide:  &Role{Holder: &Supervisor{Party: Party{HostSession: "local_guide"}}},
+		Agents: []Agent{{Party: Party{Session: "agent", Name: "bee"}}},
 	}
 	for _, c := range []struct {
 		p    Party
 		want bool
 	}{
 		{Party{Session: "started"}, true},
-		{Party{Session: "supervisor"}, true},
+		{Party{Session: "supervisor"}, false},
 		{Party{Session: "x", HostSession: "local_guide"}, true},
 		{Party{Session: "agent"}, true},
 		{Party{Session: "own"}, false},

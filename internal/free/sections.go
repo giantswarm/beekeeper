@@ -105,7 +105,7 @@ func (r *Run) alive(sid string) (name, why string) {
 
 // counted says why the desk counts on the session sid, whose desktop session
 // is host: an agent the roster keeps with its task (busy or parked) or the
-// holder of the supervisor's or the guide's role. "" when it does not.
+// holder of the guide's role. "" when it does not.
 func (r *Run) counted(sid, host string) (name, why string) {
 	is := func(p state.Party) bool { return p.Session == sid || host != "" && p.HostSession == host }
 	for _, ag := range r.Desk.Agents {
@@ -113,11 +113,8 @@ func (r *Run) counted(sid, host string) (name, why string) {
 			return ag.Name, "the roster keeps it with its task"
 		}
 	}
-	holders := map[string]*state.Supervisor{roleSupervisor: r.Desk.SupervisorRole().Holder, roleGuide: r.Desk.GuideRole().Holder}
-	for role, h := range holders {
-		if h != nil && is(h.Party) {
-			return h.Name, "it holds the " + role + "'s role"
-		}
+	if h := r.Desk.GuideRole().Holder; h != nil && is(h.Party) {
+		return h.Name, "it holds the " + roleGuide + "'s role"
 	}
 	return "", ""
 }

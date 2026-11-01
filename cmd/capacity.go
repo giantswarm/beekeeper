@@ -164,6 +164,7 @@ func (b *bucketView) windowsLine(now time.Time) string {
 // providerView is one provider's busy agents, usage windows, derived target
 // and capacity verdict.
 type providerView struct {
+	Fallback    string                 `json:"fallback,omitempty"`
 	Name        string                 `json:"name"`
 	Busy        []string               `json:"busy"`
 	Floor       int                    `json:"floor"`
@@ -210,7 +211,12 @@ func (p *providerView) findBucket(name string) *bucketView {
 	return nil
 }
 
-func (p *providerView) windowsSummary(now time.Time) string {
+func (p *providerView) windowsSummary(now time.Time) (summary string) {
+	defer func() {
+		if p.Fallback != "" {
+			summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
+		}
+	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {
 			return "serving mode unknown (" + truncate(p.ServingModeError, 120) + ")"
@@ -415,7 +421,7 @@ const waitQuiet = 5 * time.Minute
 // their person or in a wait of their own (none known without them).
 func countAgents(st *state.State, sessions []*claude.Session, now time.Time) agentCount {
 	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}}
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
 			if executionReserved(st, ag) {
@@ -426,7 +432,7 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 			continue
 		}
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if ag.Task == "" || ag.Done {
@@ -464,7 +470,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 	for _, name := range k.ProviderNames() {
 		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
 	}
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
 			if !executionReserved(st, ag) {
@@ -497,7 +503,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 			continue
 		}
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if ag.Task == "" || ag.Done || keptBy(st, ag, now) != "" {
@@ -932,6 +938,7 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		}
 		r := res.reading
 		pv.At = r.At
+		pv.Fallback = r.Fallback
 		if r.NoPlanWindows {
 			pv.NoPlanWindows = true
 			pv.Blocks = []string{claudeNoPlanWindows}
