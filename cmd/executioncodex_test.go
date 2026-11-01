@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -139,7 +140,11 @@ func TestExecutionPublicationAndMergeAcceptRemoteCodex(t *testing.T) {
 }
 
 func TestExecutionGuardDecisionMatchesHookFormatToHarness(t *testing.T) {
-	workspace := t.TempDir()
+	// The guard compares resolved paths; macOS temporary roots are symlinks.
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	thread := "019a0000-0000-7000-8000-000000000001"
 	codexRaw := []byte(`{"hook_event_name":"PreToolUse","tool_name":"exec_command","tool_input":{"cmd":"git status"},"session_id":"` + thread + `","cwd":"` + workspace + `"}`)
 	deniedCodex := func(b []byte) bool { return strings.Contains(string(b), `"permissionDecision":"deny"`) }

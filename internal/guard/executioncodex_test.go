@@ -59,7 +59,7 @@ func TestExecutionCodexGuard(t *testing.T) {
 		"merge":                    executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "gh pr merge 7 --repo giantswarm/beekeeper"}, executionThread, workspace),
 		"push to main":             executionCodexEvent("shell", map[string]any{commandKey: "git push origin HEAD:refs/heads/main"}, executionThread, workspace),
 		"harness lifecycle":        executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "codex exec resume --last"}, executionThread, workspace),
-		"identity override":        executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "BEEKEEPER_EXECUTION_ID=other beekeeper agents idle"}, executionThread, workspace),
+		"identity override":        executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "env BEEKEEPER_CONFIG=/srv/other.yaml beekeeper agents idle"}, executionThread, workspace),
 		"protected write":          executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "rm " + filepath.Join(protected, "policy.json")}, executionThread, workspace),
 		"patch outside":            executionCodexEvent(codexApplyPatchTool, map[string]any{codexInputKey: patch(filepath.Join(outside, "file"))}, executionThread, workspace),
 		"patch through symlink":    executionCodexEvent(codexApplyPatchTool, map[string]any{codexInputKey: patch("escape/new-file")}, executionThread, workspace),
