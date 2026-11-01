@@ -798,6 +798,7 @@ type Start struct {
 type ExecutionRecord struct {
 	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
+	Settled         bool                               `json:"settled,omitempty"`
 	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
 	Handle          execution.Handle                   `json:"handle"`
 	Request         execution.StartRequest             `json:"request"`
