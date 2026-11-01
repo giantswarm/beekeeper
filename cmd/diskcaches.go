@@ -97,6 +97,13 @@ func resolveDiskCaches(entries []config.DiskCache) []diskCache {
 			out = append(out, diskCache{name: e.Name, policy: diskprune.Policy{Root: root, Files: e.Mode == config.DiskCacheFiles, OlderThan: e.OlderThan.Duration, MaxBytes: e.MaxBytes(), Regenerable: e.Regenerable}})
 		}
 	}
+	for i := range out {
+		for j := range out {
+			if i != j && strings.HasPrefix(out[j].policy.Root, out[i].policy.Root+string(filepath.Separator)) {
+				out[i].policy.Nested = append(out[i].policy.Nested, out[j].policy.Root)
+			}
+		}
+	}
 	return out
 }
 
@@ -142,7 +149,11 @@ func (r diskRun) listing() string {
 		if c.Held == 0 && c.Freed == 0 && len(c.Kept) == 0 && len(c.Errors) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "  %s %s: holds %s, %s %s in %d entries", c.name, c.root, sizeStr(c.Held), verb, sizeStr(c.Freed), c.Removed)
+		label := c.root
+		if c.name != c.root && !strings.ContainsAny(c.name, "*?[") {
+			label = c.name + " " + c.root
+		}
+		fmt.Fprintf(&b, "  %s: holds %s, %s %s in %d entries", label, sizeStr(c.Held), verb, sizeStr(c.Freed), c.Removed)
 		var keeps []string
 		for _, why := range sortedReasons(c.Kept) {
 			keeps = append(keeps, fmt.Sprintf("%d %s", c.Kept[why], why))

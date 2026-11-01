@@ -153,3 +153,19 @@ func exists(p string) bool {
 	_, err := os.Lstat(p)
 	return err == nil
 }
+
+func TestCacheNestedPolicyGovernsItsSubtree(t *testing.T) {
+	root := t.TempDir()
+	cacheFile(t, root, "project/variants/v1/f", 1000, 10*day)
+	cacheFile(t, root, "project/source", 1000, 10*day)
+	cacheFile(t, root, "other/f", 1000, 10*day)
+	inner := filepath.Join(root, "project", "variants")
+	r := Cache(Policy{Root: root, OlderThan: time.Hour, Nested: []string{inner}}, time.Now(), false, nil, nil, true)
+	if r.Freed != 1000 || r.Held != 1000 || r.Kept["another policy's cache"] != 1 {
+		t.Fatalf("outer: %+v", r)
+	}
+	r = Cache(Policy{Root: root, Files: true, OlderThan: time.Hour, Nested: []string{inner}}, time.Now(), false, nil, nil, true)
+	if r.Freed != 2000 {
+		t.Fatalf("outer files: %+v", r)
+	}
+}

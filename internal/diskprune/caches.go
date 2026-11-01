@@ -26,6 +26,9 @@ type Policy struct {
 	OlderThan   time.Duration
 	MaxBytes    int64
 	Regenerable bool
+	// Nested are other policies' roots inside this one: each governs its
+	// own subtree, which this policy neither counts nor removes.
+	Nested []string
 }
 
 // CacheResult is one root's outcome: Held is what it held before, Newest
@@ -75,7 +78,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 		if !ok {
 			return r
 		}
-		units = u
+		units = slices.DeleteFunc(u, func(u unit) bool { return nestedIn(u.path, p.Nested) })
 	} else {
 		entries, err := os.ReadDir(p.Root)
 		if err != nil {
@@ -89,7 +92,12 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 			}
 		}
 		for _, e := range entries {
-			u := inspect(filepath.Join(p.Root, e.Name()))
+			path := filepath.Join(p.Root, e.Name())
+			if nestedIn(path, p.Nested) || InUse(path, p.Nested) {
+				r.Keep("another policy's cache")
+				continue
+			}
+			u := inspect(path)
 			if u.why == "" && InUse(u.path, refs) {
 				u.why = "in use"
 			}
@@ -166,6 +174,16 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 		removeEmptied(p.Root, emptied)
 	}
 	return r
+}
+
+// nestedIn reports whether path lies inside (or is) one of roots.
+func nestedIn(path string, roots []string) bool {
+	for _, n := range roots {
+		if InUse(n, []string{path}) {
+			return true
+		}
+	}
+	return false
 }
 
 var errChanged = errors.New("written since the scan")

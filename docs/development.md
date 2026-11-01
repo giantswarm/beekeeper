@@ -353,7 +353,9 @@ removed whole; in `files` mode its regular files, and directories a trim
 empties go with them. A unit untouched for `olderThan` (a Go duration or whole
 days, `7d`) goes; past `maxGiB` the least recently written go until the root
 fits; a `regenerable` cache drops everything older than an hour under disk
-pressure. Whatever a policy says, the step keeps:
+pressure. A root inside another policy's root is governed by its own policy
+alone: the outer one neither counts nor removes the entry holding it. Whatever
+a policy says, the step keeps:
 
 - anything written within the last hour;
 - a unit any process of the user references (cwd, open file, mapping); in

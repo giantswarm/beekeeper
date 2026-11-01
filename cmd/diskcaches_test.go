@@ -51,6 +51,9 @@ func TestDiskPruneFreesZeroUntilACachePolicyNamesTheCache(t *testing.T) {
 	if l := r.listing(); !strings.Contains(l, "app "+app+": holds 2 MiB, would free 2 MiB in 2 entries") {
 		t.Fatalf("listing=%q", l)
 	}
+	if roots := resolveDiskCaches([]config.DiskCache{{Name: "outer", Path: base}, {Name: "app", Path: app}}); !slices.Equal(roots[0].policy.Nested, []string{app}) || roots[1].policy.Nested != nil {
+		t.Fatalf("nested roots: %+v", roots)
+	}
 	r = a.pruneDisk(false, false, read)
 	if r.Freed != 2<<20 || exists(filepath.Join(app, "a")) || exists(filepath.Join(app, "b")) || !exists(app) {
 		t.Fatalf("apply: %s", r)
