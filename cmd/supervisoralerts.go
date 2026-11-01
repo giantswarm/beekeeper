@@ -194,7 +194,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			installations = append(installations, fmt.Sprintf("%s=%d", name, count))
 		}
 		slices.Sort(installations)
-		since := "unknown"
+		since := kindUnknown
 		if !oldest.IsZero() {
 			since = oldest.UTC().Format(time.RFC3339Nano)
 		}
