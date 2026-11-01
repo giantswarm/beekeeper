@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -114,14 +115,32 @@ func ownedDirectory(p string) error {
 	return os.MkdirAll(p, 0o700)
 }
 
+// managedBinary is how the embedded worker contract invokes the component
+// (agents note, park and idle): by bare name through the harness PATH.
+const managedBinary = "beekeeper"
+
 // cleanEnvironment retains user-manager plumbing and local authentication
 // location only. It never inherits a caller's harness identity/provider keys.
-func cleanEnvironment(configDir string) []string {
+// The component argument is the policy-bound beekeeper executable: the
+// service manager's PATH cannot be assumed to carry a per-user installation,
+// so its directory is placed first, which lets the owned harness resolve the
+// bare worker commands to exactly the executable the host policy pins.
+func cleanEnvironment(configDir, component string) []string {
+	dir := ""
+	if component != "" {
+		dir = filepath.Clean(filepath.Dir(component))
+	}
 	var out []string
 	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
+		k, v, _ := strings.Cut(kv, "=")
 		switch k {
-		case "HOME", "PATH", "USER", "LOGNAME", "LANG", "SHELL", "TERM", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "SSH_AUTH_SOCK", "SSL_CERT_FILE", "SSL_CERT_DIR":
+		case "PATH":
+			if dir != "" {
+				out = append(out, "PATH="+pathWithFirst(dir, v))
+				continue
+			}
+			out = append(out, kv)
+		case "HOME", "USER", "LOGNAME", "LANG", "SHELL", "TERM", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "SSH_AUTH_SOCK", "SSL_CERT_FILE", "SSL_CERT_DIR":
 			out = append(out, kv)
 		default:
 			if strings.HasPrefix(k, "LC_") {
@@ -129,10 +148,25 @@ func cleanEnvironment(configDir string) []string {
 			}
 		}
 	}
+	if dir != "" && !slices.ContainsFunc(out, func(kv string) bool { return strings.HasPrefix(kv, "PATH=") }) {
+		out = append(out, "PATH="+dir)
+	}
 	if configDir != "" {
 		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	}
 	return out
+}
+
+// pathWithFirst places dir first on path, dropping any later duplicate so
+// the policy-bound executable can never be shadowed by a stale entry.
+func pathWithFirst(dir, path string) string {
+	var rest []string
+	for _, d := range filepath.SplitList(path) {
+		if d != "" && filepath.Clean(d) != dir {
+			rest = append(rest, d)
+		}
+	}
+	return strings.Join(append([]string{dir}, rest...), string(filepath.ListSeparator))
 }
 
 type HostCommand func(context.Context, string, []string, string, ...string) ([]byte, error)
