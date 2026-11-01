@@ -385,6 +385,12 @@ func TestLoopFillDryRunPreviewsWithoutStartingOrWriting(t *testing.T) {
 // repository.
 func hostFillRig(t *testing.T) (*loopRig, *int) {
 	t.Helper()
+	return hostFillRigRoom(t, 0)
+}
+
+// hostFillRigRoom is hostFillRig with localRoom the coordinator's room.
+func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
+	t.Helper()
 	r, busy := fillRig(t)
 	r.sshLoopHost(t, true)
 	branch := ghDefaultBranch
@@ -397,7 +403,7 @@ func hostFillRig(t *testing.T) (*loopRig, *int) {
 			if slices.Contains(args, loopHostFlag) {
 				return loopRoomJSON, 0
 			}
-			out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: 0, agentCount: agentCount{Busy: make([]string, *busy)}})
+			out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: localRoom, agentCount: agentCount{Busy: make([]string, *busy)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -450,10 +456,13 @@ func TestLoopFillStaysBoundByLocalRoomWithoutHosts(t *testing.T) {
 }
 
 // TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim covers a
-// placed start refused after it reserved its execution: the loop recovers it, and the claim stays open until
-// the taken line, so an interruption in between still reconciles it.
+// placed start refused after it reserved its execution: the loop recovers
+// it, and the claim stays open until the taken line, so an interruption in
+// between still reconciles it. supervisor.hostsFirst places the start on
+// the host although the coordinator has room.
 func TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim(t *testing.T) {
-	r, busy := hostFillRig(t)
+	r, busy := hostFillRigRoom(t, 5)
+	r.a.cfg.Supervisor.HostsFirst = true
 	name := repoName(sshTestRepository) + " 10"
 	original := r.answer
 	recovered := 0
