@@ -62,6 +62,7 @@ func TestClaudeWindowResets(t *testing.T) {
 		{"unused", "0% used", ""},
 		{"hour", "18% used · resets 3pm (Europe/Berlin)", "2027-01-01T14:00:00Z"},
 		{"minute", "18% used · resets 3:29am (Europe/Berlin)", "2027-01-01T02:29:00Z"},
+		{"next-day", "18% used · resets 12:15am (Europe/Berlin)", "2027-01-01T23:15:00Z"},
 		{"other-zone", "18% used · resets Dec 31, 5pm (America/Los_Angeles)", "2027-01-01T01:00:00Z"},
 		{"next-year", "18% used · resets Jan 1, 3pm (Europe/Berlin)", "2027-01-01T14:00:00Z"},
 		{"summer", "18% used · resets Jul 1, 3pm (Europe/Berlin)", "2027-07-01T13:00:00Z"},
@@ -79,6 +80,34 @@ func TestClaudeWindowResets(t *testing.T) {
 			}
 			if got := w.ResetsAt.Format(time.RFC3339); got != tc.want {
 				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudeWindowRecentlyPassedReset(t *testing.T) {
+	for _, tc := range []struct{ name, now, stamp, want string }{
+		{"dated-seconds", "2026-11-01T02:29:30Z", "Nov 1, 3:29am", "2026-11-01T02:29:00Z"},
+		{"time-seconds", "2026-11-01T02:29:30Z", "3:29am", "2026-11-01T02:29:00Z"},
+		{"dated-lag", "2026-11-01T02:31:00Z", "Nov 1, 3:29am", "2026-11-01T02:29:00Z"},
+		{"time-lag", "2026-11-01T02:31:00Z", "3:29am", "2026-11-01T02:29:00Z"},
+		{"previous-year", "2026-12-31T23:00:30Z", "Dec 31, 11:59pm", "2026-12-31T22:59:00Z"},
+		{"previous-day", "2026-11-01T23:00:30Z", "11:59pm", "2026-11-01T22:59:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now, err := time.Parse(time.RFC3339, tc.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := parseClaudeWindow("18% used · resets "+tc.stamp+" (Europe/Berlin)", now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := w.ResetsAt.Format(time.RFC3339); got != tc.want {
+				t.Fatalf("reset = %s, want %s", got, tc.want)
+			}
+			if usageFresh(usageReading{At: now.Add(-5 * time.Minute), FiveHour: w}, config.Usage{}, now) {
+				t.Fatal("an elapsed reset must trigger a fresh probe")
 			}
 		})
 	}
@@ -181,7 +210,9 @@ func TestClaudeUsageProbeCwdAndCache(t *testing.T) {
 	calls := filepath.Join(dir, "calls")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "test-parent")
 	t.Setenv(claudeCodeEnv, "1")
-	script := "#!/bin/sh\ntest -z \"$CLAUDE_CODE_SESSION_ID$CLAUDECODE\" || exit 1\ntest \"$*\" = \"-p /usage --output-format json\" || exit 1\npwd >> '" + calls + "'\ncat '" + fixture + "'\n"
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "1")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-only-placeholder")
+	script := "#!/bin/sh\ntest -z \"$CLAUDE_CODE_SESSION_ID$CLAUDECODE\" || exit 1\ntest \"$CLAUDE_CODE_USE_VERTEX\" = 1 || exit 1\ntest \"${CLAUDE_CODE_OAUTH_TOKEN+present}\" = present || exit 1\ntest \"$*\" = \"-p /usage --output-format json\" || exit 1\npwd >> '" + calls + "'\ncat '" + fixture + "'\n"
 	if err := os.WriteFile(filepath.Join(dir, claudeComm), []byte(script), 0o700); err != nil { //nolint:gosec // executable test CLI in the test-owned temporary directory
 		t.Fatal(err)
 	}
@@ -249,5 +280,35 @@ func TestClaudeUsageCapacityPickKeepsAggregateWindows(t *testing.T) {
 	pv := result.Capacity.Providers[claudeComm]
 	if result.Pick != claudeComm+" "+pickOpus || pv == nil || pv.FiveHour == nil || pv.SevenDay == nil || pv.Room == 0 || pv.Buckets["Fable"] == nil {
 		t.Fatalf("aggregate plan lost in capacity pick: %s", out.String())
+	}
+}
+
+func TestClaudeUsageTargetKeepsAggregateRoom(t *testing.T) {
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	cfg, err := config.Load(writeUsageConfig(t, `capacity:
+  ceiling: 2
+  providers:
+    claude: {ceiling: 2}
+  choices:
+    - {harness: claude, model: claude-fable, bucket: Fable}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parseClaudeUsage(claudeUsageJSON(t, claudeUsageSample), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pv := buildSingleProviderView(claudeComm, cfg.Capacity.Providers[claudeComm], providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+	v := &capacityView{Room: pv.Room, Providers: map[string]*providerView{claudeComm: pv}}
+	got := v.forTarget(cfg.Capacity, claudeComm, "claude-fable-5-1")
+	if got.Room != 2 || len(got.Blocks) != 0 {
+		t.Fatalf("supplemental model week blocks aggregate room: room=%d blocks=%v", got.Room, got.Blocks)
+	}
+	// Ordinary independent usage buckets must still bound their own starts.
+	pv.supplementalBuckets = false
+	got = v.forTarget(cfg.Capacity, claudeComm, "claude-fable-5-1")
+	if got.Room != 0 || len(got.Blocks) == 0 {
+		t.Fatalf("independent bucket failed to block: room=%d blocks=%v", got.Room, got.Blocks)
 	}
 }

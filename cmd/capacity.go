@@ -1963,7 +1963,7 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 		}
 		return v
 	}
-	if bucket != "" && len(pv.Buckets) > 0 {
+	if bucket != "" && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 		if bv := pv.findBucket(bucket); bv != nil {
 			if bv.Room == 0 {
 				v.Room = 0

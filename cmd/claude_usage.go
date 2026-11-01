@@ -114,12 +114,18 @@ func parseClaudeWindow(value string, now time.Time) (*usageWindow, error) {
 			month, day = t.Month(), t.Day()
 		}
 		resetAt := time.Date(year, month, day, t.Hour(), t.Minute(), 0, 0, loc)
-		if resetAt.Before(now) {
-			if dated {
-				resetAt = time.Date(year+1, month, day, t.Hour(), t.Minute(), 0, 0, loc)
-			} else {
-				resetAt = resetAt.AddDate(0, 0, 1)
+		// Printed resets have minute precision and may lag the rollover.
+		// Keep a recent past reset rather than extending the old window.
+		if dated {
+			if resetAt.Before(now.Add(-183 * 24 * time.Hour)) {
+				resetAt = resetAt.AddDate(1, 0, 0)
+			} else if previous := resetAt.AddDate(-1, 0, 0); !previous.After(now) && now.Sub(previous) <= 5*time.Minute {
+				resetAt = previous
 			}
+		} else if resetAt.Before(now.Add(-5 * time.Minute)) {
+			resetAt = resetAt.AddDate(0, 0, 1)
+		} else if previous := resetAt.AddDate(0, 0, -1); !previous.After(now) && now.Sub(previous) <= 5*time.Minute {
+			resetAt = previous
 		}
 		w.ResetsAt = resetAt.UTC()
 		return w, nil

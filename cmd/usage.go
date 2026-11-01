@@ -118,7 +118,8 @@ func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Du
 		c.Env = make([]string, 0)
 		for _, entry := range os.Environ() {
 			key, _, _ := strings.Cut(entry, "=")
-			if key != claudeCodeEnv && !strings.HasPrefix(key, "CLAUDE_CODE_") {
+			if key != claudeCodeEnv && key != "CLAUDE_CODE_ENTRYPOINT" && key != "CLAUDE_CODE_PARENT_SESSION_ID" &&
+				!strings.HasPrefix(key, "CLAUDE_CODE_SESSION_") && !strings.HasPrefix(key, "CLAUDE_CODE_HOST_SESSION_") {
 				c.Env = append(c.Env, entry)
 			}
 		}
