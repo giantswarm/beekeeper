@@ -430,6 +430,7 @@ type watcher struct {
 	usageReported                  time.Time
 	providerLastUsage              map[string]time.Time
 	providerUsageErr               map[string]string
+	executionSyncFailures          map[string]int
 	// sinkPending are the events of the sink's verbs within sink.Window,
 	// sinking is set while their dispatch runs, sinkLedger claims each one
 	// once across the machine's watches.

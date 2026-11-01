@@ -407,7 +407,11 @@ func (a *app) executionFailure(ref execution.Ref, failure error) {
 		if r == nil {
 			return nil, nil
 		}
+		wasUnconfirmed := r.Observation.Reachability == execution.Unreachable || r.Observation.LastError != ""
 		r.Observation = r.Observation.FailedContact(failure, time.Now().UTC())
+		if wasUnconfirmed {
+			return nil, nil
+		}
 		return []state.Event{event(st.Starts[i].By, "execution.unconfirmed", "%s: %s", st.Starts[i].Name, failure.Error())}, nil
 	})
 }

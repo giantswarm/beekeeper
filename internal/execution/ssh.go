@@ -150,6 +150,9 @@ func SSHCommand(ctx context.Context, argv []string, stdin []byte) ([]byte, error
 	// into a protocol response or transcript.
 	c.Stdout, c.Stderr = out, io.Discard
 	if err := c.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("SSH command failed (%w): %w", context.DeadlineExceeded, err)
+		}
 		return nil, fmt.Errorf("SSH command failed: %w", err)
 	}
 	return out.Bytes(), nil
