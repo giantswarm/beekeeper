@@ -604,7 +604,7 @@ func TestEventAgent(t *testing.T) {
 
 // A problem of a done report reaches whoever files it: one naming its
 // issue is filed and rides with the done; one filed nowhere goes to the
-// guide's queue to file first, and the done follows.
+// guide's feed to file first, and the done follows.
 func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 	done := Event{At: t0, Verb: VerbDone, Agent: worker, Detail: worker + " done: fix it"}
 	filed := Event{At: t0.Add(20 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": CI flakes in o/r, filed as https://github.com/o/r/issues/9"}
@@ -620,7 +620,7 @@ func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 	}
 	in.Taken = taken(t, t1, f)
 	a = only(t, Plan(in), KindDone)
-	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's queue") {
+	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's feed") {
 		t.Errorf("done message after the file = %q", a.Message)
 	}
 	late := Event{At: t0.Add(time.Hour), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab is gone"}
