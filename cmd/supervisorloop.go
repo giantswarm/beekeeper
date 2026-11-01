@@ -254,11 +254,13 @@ its key first in the detail):
   leave     a park the desk's ownership leaves alone (below), said once with
             its reason: no reviewer, no go, no forward, no escalation, and
             a reviewer the loop started on it earlier retires
-  resume    a settled park whose local worker session ended: restart under
+  resume    a settled park whose non-Claude harness reports its session gone:
+            restart under
             the same name with supervisor.workerBrief and a capacity pick,
             continuing its open task and the wait's answer; a failed start
             releases the ended task holder so board next can offer it again.
-            Live sessions, managed SSH executions and a stopped desk are left alone
+            Claude transcript resumes, live sessions, managed SSH executions and a
+            stopped desk are left alone
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, for every new head the worker parked on after an
