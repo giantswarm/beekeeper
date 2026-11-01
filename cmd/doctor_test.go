@@ -107,20 +107,27 @@ func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 			Harness:   claudeComm,
 		}
 	}
+	const (
+		sshRunning     = "ssh-running"
+		sshStopUnacked = "ssh-stop-unacked"
+		sshStopped     = "ssh-stopped"
+		sshDoneRunning = "ssh-done-running"
+		sshDoneExited  = "ssh-done-exited"
+	)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{
-			mkAgent("ssh-running", runningRef, "active task", false),
-			mkAgent("ssh-stop-unacked", unackedRef, "stopping task", false),
-			mkAgent("ssh-stopped", stoppedRef, "stopped task", false),
-			mkAgent("ssh-done-running", doneRunningRef, "", true),
-			mkAgent("ssh-done-exited", doneExitedRef, "", true),
+			mkAgent(sshRunning, runningRef, "active task", false),
+			mkAgent(sshStopUnacked, unackedRef, "stopping task", false),
+			mkAgent(sshStopped, stoppedRef, "stopped task", false),
+			mkAgent(sshDoneRunning, doneRunningRef, "", true),
+			mkAgent(sshDoneExited, doneExitedRef, "", true),
 		}
 		st.Starts = []state.Start{
-			mkStart("ssh-running", runningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
-			mkStart("ssh-stop-unacked", unackedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s1"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
-			mkStart("ssh-stopped", stoppedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s2"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopRequested: true, StopAcknowledged: true}}),
-			mkStart("ssh-done-running", doneRunningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Running}}),
-			mkStart("ssh-done-exited", doneExitedRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart(sshRunning, runningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart(sshStopUnacked, unackedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s1"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart(sshStopped, stoppedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s2"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopRequested: true, StopAcknowledged: true}}),
+			mkStart(sshDoneRunning, doneRunningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Running}}),
+			mkStart(sshDoneExited, doneExitedRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
 		}
 		return nil, nil
 	}); err != nil {
@@ -157,7 +164,7 @@ func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 	for _, ag := range st.Agents {
 		remaining = append(remaining, ag.Name)
 	}
-	if !slices.Equal(remaining, []string{"ssh-running", "ssh-stop-unacked", "ssh-done-running"}) {
+	if !slices.Equal(remaining, []string{sshRunning, sshStopUnacked, sshDoneRunning}) {
 		t.Fatalf("remaining agents = %v", remaining)
 	}
 }

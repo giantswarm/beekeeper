@@ -388,15 +388,16 @@ func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
 	plat.Machine = tableMachine{plat.Machine}
 	plat.Opener = &recordingOpener{}
 	now := a.now
-	sshRef := execution.Ref{Host: "exec-host-row", Execution: "ssh00001", Generation: 1}
-	sshParty := state.Party{Session: "ssh00001", Name: "ssh worker"}
+	const sshExecID = "ssh00001"
+	sshRef := execution.Ref{Host: "exec-host-row", Execution: sshExecID, Generation: 1}
+	sshParty := state.Party{Session: sshExecID, Name: "ssh worker"}
 	st := &state.State{
 		Starts: []state.Start{{
 			Party:     sshParty,
 			Dir:       "/remote/ssh00001/workspace",
 			At:        now.Add(-time.Hour),
 			Harness:   claudeComm,
-			Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: sshRef, ConversationID: "ssh00001"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopAcknowledged: true}},
+			Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: sshRef, ConversationID: sshExecID}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopAcknowledged: true}},
 		}},
 		Agents: []state.Agent{{
 			Party:     sshParty,
@@ -414,7 +415,7 @@ func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
 	if lines := a.reopenRowless(t.Context(), st, rowlessTable(), rowlessRecord, doctorRun{by: by}); len(lines) != 0 || len(l.started) != 0 {
 		t.Fatalf("reopen of SSH execution: lines=%v started=%+v", lines, l.started)
 	}
-	if name, ok := reopens(st, "ssh00001"); ok || name != "" {
+	if name, ok := reopens(st, sshExecID); ok || name != "" {
 		t.Fatalf("reopens(ssh00001) = %q, %v", name, ok)
 	}
 
