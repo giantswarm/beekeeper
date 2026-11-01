@@ -55,7 +55,7 @@ func TestExecutionCodexGuard(t *testing.T) {
 		"another session":          executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus}, "019a-other", workspace),
 		"no recorded thread":       nil,
 		"cwd outside":              executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus}, executionThread, outside),
-		"workdir outside":          executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus, "workdir": outside}, executionThread, workspace),
+		"workdir outside":          executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus, codexWorkdirKey: outside}, executionThread, workspace),
 		"merge":                    executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "gh pr merge 7 --repo giantswarm/beekeeper"}, executionThread, workspace),
 		"push to main":             executionCodexEvent("shell", map[string]any{commandKey: "git push origin HEAD:refs/heads/main"}, executionThread, workspace),
 		"harness lifecycle":        executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "codex exec resume --last"}, executionThread, workspace),
@@ -79,7 +79,7 @@ func TestExecutionCodexGuard(t *testing.T) {
 		}
 	}
 	allowed := map[string][]byte{
-		"status":             executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus, "workdir": workspace}, executionThread, workspace),
+		"status":             executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus, codexWorkdirKey: workspace}, executionThread, workspace),
 		"component park":     executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "beekeeper agents park --on giantswarm/beekeeper#1 'desk review'"}, executionThread, workspace),
 		"workspace patch":    executionCodexEvent(codexApplyPatchTool, map[string]any{codexInputKey: patch("new-file.txt")}, executionThread, workspace),
 		"poll a command":     executionCodexEvent(codexWriteStdinTool, map[string]any{codexCharsKey: "", sessionKey: 1}, executionThread, workspace),
@@ -93,5 +93,61 @@ func TestExecutionCodexGuard(t *testing.T) {
 	}
 	if !executionCodexDenied(t, ExecutionDenyCodex("fixture")) {
 		t.Fatal("codex denial is not a codex deny decision")
+	}
+}
+
+// Relative operands resolve against the tool's effective directory: a
+// workdir or cwd below the workspace root, or a cd inside the command, must
+// not let ../ walk into a sibling execution's protected workspace.
+func TestExecutionShellResolvesTheEffectiveDirectory(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaces := filepath.Join(root, "workspaces")
+	workspace := filepath.Join(workspaces, "owned", "workspace")
+	sub := filepath.Join(workspace, "sub")
+	victim := filepath.Join(workspaces, "victim", "workspace")
+	for _, d := range []string{sub, victim} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	protected := []string{workspaces}
+	escape := "rm ../../../victim/workspace/file"
+	h := Hook{}
+	codexDenied := func(input map[string]any, cwd string) bool {
+		return executionCodexDenied(t, h.DecideExecutionCodex(executionCodexEvent(codexExecCommand, input, executionThread, cwd), executionThread, workspace, protected))
+	}
+	claudeDenied := func(command, cwd string) bool {
+		return executionDenied(h.DecideExecution(executionEvent(bashTool, map[string]any{commandKey: command}, cwd), executionFixture, workspace, protected))
+	}
+	for name, denied := range map[string]bool{
+		"codex workdir below the root":       codexDenied(map[string]any{codexCmdKey: escape, codexWorkdirKey: sub}, workspace),
+		"codex relative workdir":             codexDenied(map[string]any{codexCmdKey: escape, codexWorkdirKey: "sub"}, workspace),
+		"codex cwd below the root":           codexDenied(map[string]any{codexCmdKey: escape}, sub),
+		"codex cd inside the command":        codexDenied(map[string]any{codexCmdKey: "cd sub && " + escape}, workspace),
+		"codex cd in a subshell":             codexDenied(map[string]any{codexCmdKey: "(cd sub) ; " + escape}, workspace),
+		"codex dynamic cd":                   codexDenied(map[string]any{codexCmdKey: "cd \"$TARGET\" && rm file"}, workspace),
+		"claude cwd below the root":          claudeDenied(escape, sub),
+		"claude cd inside the command":       claudeDenied("cd sub && "+escape, workspace),
+		"claude nested shell below the root": claudeDenied("bash -c '"+escape+"'", sub),
+	} {
+		if !denied {
+			t.Errorf("%s: a sibling workspace was reachable", name)
+		}
+	}
+	for name, denied := range map[string]bool{
+		"codex workdir read inside": codexDenied(map[string]any{codexCmdKey: "cat ../README.md", codexWorkdirKey: sub}, workspace),
+		// Every directory the command may be in is checked, so ".." after a
+		// cd is judged from the original directory too: only operands inside
+		// the workspace from each of them pass.
+		"codex cd and list":          codexDenied(map[string]any{codexCmdKey: "cd sub && ls ."}, workspace),
+		"claude cwd read inside":     claudeDenied("cat ../README.md", sub),
+		"claude cd to the workspace": claudeDenied("cd "+workspace+" && git status", sub),
+	} {
+		if denied {
+			t.Errorf("%s: an owned-workspace command was denied", name)
+		}
 	}
 }

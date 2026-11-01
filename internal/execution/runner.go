@@ -76,7 +76,8 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 				j.Phase, j.LastError = Exited, "stopped: "+j.StopRequest.Reason
 				return nil
 			}
-			if !j.StopAcknowledged && j.StopRequest == nil {
+			// A failure the runner already journaled keeps its own reason.
+			if !j.StopAcknowledged && j.StopRequest == nil && (j.Phase != Failed || j.LastError == "") {
 				j.Phase, j.LastError = Failed, "owned harness turn failed; inspect its process state and logs"
 			}
 			return nil

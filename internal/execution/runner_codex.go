@@ -13,6 +13,10 @@ import (
 	"strings"
 )
 
+// codexTurnFailure is the journal's reason for a turn that failed after its
+// acceptance; the coordinator's inspect reports it with the failed phase.
+const codexTurnFailure = "codex turn failed after acceptance; inspect agents logs and recover the execution"
+
 // Codex thread events the runner reads from `codex exec --json`.
 const (
 	codexThreadStarted = "thread.started"
@@ -82,13 +86,19 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 		return nil
 	}
 	thread, accepted, turnErr := s.codexTurn(ctx, ref, h, env, log, j, j.Request.Prompt, "", first)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if !accepted || thread == "" {
 		return s.codexEnd(ctx, ref, Failed, "harness failed or ended before first-task acceptance")
 	}
+	// Acceptance is delivery evidence, not a finished turn: a turn that
+	// fails afterwards ends the execution as failed, so its task is
+	// recovered instead of a silent runner holding the lease and the room.
+	if turnErr != nil {
+		return s.codexEnd(ctx, ref, Failed, codexTurnFailure)
+	}
 	if !j.Request.Messaging {
-		if turnErr != nil {
-			return s.codexEnd(ctx, ref, Failed, "owned harness turn failed; inspect its process state and logs")
-		}
 		return s.codexEnd(ctx, ref, Exited, "")
 	}
 	for {
@@ -136,7 +146,13 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 			return err
 		}
 		accept := func() error { return s.acceptCodexMessage(ctx, ref, current.Handle.ConversationID, next.ID) }
-		_, accepted, _ := s.codexTurn(ctx, ref, h, env, log, current, codexMessageText(next), thread, accept)
+		_, accepted, turnErr := s.codexTurn(ctx, ref, h, env, log, current, codexMessageText(next), thread, accept)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if accepted && turnErr != nil {
+			return s.codexEnd(ctx, ref, Failed, codexTurnFailure)
+		}
 		if !accepted {
 			// The write's outcome is unknown: the receipt stays uncertain and
 			// blocks replay until the coordinator resolves it.
@@ -206,7 +222,7 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		_ = c.Wait()
 		return thread, false, err
 	}
-	accepted := false
+	accepted, failed := false, false
 	scan := bufio.NewScanner(stdout)
 	scan.Buffer(make([]byte, 64<<10), MaxWire)
 	for scan.Scan() {
@@ -239,6 +255,8 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 				}
 				thread = id
 			}
+		case codexTurnFailed:
+			failed = true
 		case codexTurnStarted:
 			if thread == "" {
 				return kill(errors.New("codex turn started before its thread"))
@@ -257,6 +275,9 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 	err = c.Wait()
 	if err == nil {
 		err = scan.Err()
+	}
+	if err == nil && failed {
+		err = errors.New("codex reported a failed turn")
 	}
 	return thread, accepted, err
 }

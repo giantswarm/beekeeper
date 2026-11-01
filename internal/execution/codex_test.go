@@ -45,6 +45,8 @@ else
   printf '{"type":"thread.started","thread_id":"%s"}\n' 019a0000-0000-7000-8000-000000000001
 fi
 echo '{"type":"turn.started"}'
+if [ -e "$(dirname "$0")/fail-turn" ]; then exit 1; fi
+if [ -e "$(dirname "$0")/turn-failed" ]; then echo '{"type":"turn.failed","error":{"message":"fixture"}}'; exit 0; fi
 echo '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
 echo '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 `
@@ -340,4 +342,75 @@ func TestCodexRunnerRefusesForeignThread(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// A turn that fails after its acceptance ends a messaging runner as failed:
+// acceptance is delivery evidence, not a finished turn, and a silent runner
+// would keep its lease and the host's room with nobody to wake it.
+func TestCodexRunnerSurfacesFailedTurns(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", "fail-turn"}, {"first turn reports turn.failed", "turn-failed"}} {
+		t.Run(test.name, func(t *testing.T) {
+			f, dir := codexFixture(t)
+			f.r.Messaging = true
+			ctx := startCodex(t, f)
+			if err := os.WriteFile(filepath.Join(dir, test.marker), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.s.Run(ctx, f.r.Ref); err == nil {
+				t.Fatal("a failed first turn left the runner waiting")
+			}
+			// The unit ends with its runner; the coordinator then observes the failure.
+			f.launcher.mu.Lock()
+			f.launcher.states[UnitName(f.r.Ref)] = unitInactive
+			f.launcher.mu.Unlock()
+			o, err := f.s.Inspect(ctx, f.r.Ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if j, _ := f.s.Read(f.r.Ref); j.Phase != Failed || !j.Ready || j.LastError != codexTurnFailure || o.ProcessState != Failed {
+				t.Fatalf("failed turn recorded as %s ready=%v %q, observed %s", j.Phase, j.Ready, j.LastError, o.ProcessState)
+			}
+		})
+	}
+	t.Run("wake turn exits nonzero", func(t *testing.T) {
+		f, dir := codexFixture(t)
+		f.r.Messaging = true
+		ctx := startCodex(t, f)
+		done := make(chan error, 1)
+		go func() { done <- f.s.Run(ctx, f.r.Ref) }()
+		for {
+			if j, _ := f.s.Read(f.r.Ref); j.Ready && j.Thread != "" {
+				break
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("runner ended before its wake: %v", err)
+			case <-ctx.Done():
+				t.Fatal("first turn not accepted")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, "fail-turn"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		m := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "follow-up"}
+		if _, err := f.s.Message(ctx, f.r.Ref, m); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("a failed wake turn ended the runner as a success")
+			}
+		case <-ctx.Done():
+			t.Fatal("a failed wake turn left the runner waiting")
+		}
+		j, _ := f.s.Read(f.r.Ref)
+		if j.Phase != Failed || j.Messages.Entries[m.ID].Stage != Accepted {
+			t.Fatalf("wake turn failure recorded as %s, receipt %s", j.Phase, j.Messages.Entries[m.ID].Stage)
+		}
+	})
 }
