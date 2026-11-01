@@ -157,7 +157,9 @@ type Observation struct {
 	Reachability     string      `json:"reachability"`
 	ObservedAt       time.Time   `json:"observedAt"`
 	ReachabilityAt   time.Time   `json:"reachabilityAt"`
+	LastActive       time.Time   `json:"lastActive,omitzero"`
 	Ready            bool        `json:"ready"`
+	InTurn           bool        `json:"inTurn,omitempty"`
 	StopRequested    bool        `json:"stopRequested"`
 	StopAcknowledged bool        `json:"stopAcknowledged"`
 	LastError        string      `json:"lastError,omitempty"`

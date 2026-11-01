@@ -200,7 +200,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		r.teamReads++
 		return r.teams, r.teamsErr
 	}
-	loopInTurn = func(_ *app, p state.Party) bool { return r.inTurn(p) }
+	loopInTurn = func(a *app, p state.Party) bool { return r.inTurn(p) || a.executionInTurn(p) }
 	loopSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return r.sessions, &proc.Table{}, nil }
 	loopBinary = func() replaceable { return loopFakeBinary{r} }
 	loopBroker = func(context.Context) (string, error) { return r.broker() }
@@ -2646,5 +2646,144 @@ func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
 	}
 	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
 		t.Fatalf("the remote worker stays: %v\n%s", r.calls, r.out)
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1921: a remote (SSH
+// execution) worker has no local session or process, so post-merge
+// retirement and KindDone must consult its execution record and host
+// observation rather than retiring it mid-turn once postMergeWindow passes.
+func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, r.a.now)
+	r.started(t, loopWorker, "worker-session")
+	r.pass(t)
+	reviewer := r.called(agentsName, agentStartName)[2]
+	r.started(t, reviewer, "reviewer-session")
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
+	}
+
+	ref := execution.Ref{Host: execution.HostID(sshTestSelector), Execution: execution.ExecutionID("22223333-4444-5555-6666-777788889999"), Generation: 1}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+		st.Agents[i].Execution = &ref
+		st.Agents[i].Park = nil
+		for j := range st.Starts {
+			if st.Starts[j].Name == loopWorker {
+				st.Starts[j].Execution = &state.ExecutionRecord{
+					Handle:      execution.Handle{Ref: ref},
+					Request:     execution.StartRequest{Ref: ref},
+					Phase:       execution.Running,
+					LastActive:  old,
+					Observation: execution.Observation{Handle: execution.Handle{Ref: ref}, ProcessState: execution.Running, Reachability: execution.Reachable, ObservedAt: old, LastActive: old, Ready: true},
+				}
+			}
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r.pull.State = superloop.Merged
+	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
+	r.pass(t) // records [end o/r#7]
+
+	assertRetained := func(step string) {
+		t.Helper()
+		for _, verb := range []string{loopStop, loopRemove} {
+			if c := r.called(agentsName, verb, loopWorker); c != nil {
+				t.Fatalf("%s: remote worker retired early (%s): %v\n%s", step, verb, c, r.out)
+			}
+		}
+	}
+
+	// 1. Past end.At + postMergeWindow, but the execution recorded activity
+	// within postMergeWindow: Plan does not schedule retirement.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.LastActive = time.Now().Add(time.Minute)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("recent execution activity")
+
+	// 2. Past lastActive + postMergeWindow, but the host is unreachable:
+	// a failed observation never retires a post-merge worker.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.LastActive = old
+		rec.Observation.Reachability = execution.Unreachable
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("unreachable execution host")
+
+	// 3. Host reachable again and past lastActive + postMergeWindow, but the
+	// remote session is still in a turn (Observation.InTurn): KindDone waits.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.Observation.Reachability = execution.Reachable
+		rec.Observation.InTurn = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("host observation inTurn")
+	if !strings.Contains(r.out.String(), "SUPERVISOR DONE WAITS "+loopWorker+": its session runs a turn") {
+		t.Fatalf("missing in-turn wait message:\n%s", r.out)
+	}
+
+	// 4. Observation.InTurn is false, but an in-flight wake message is
+	// uncertain: KindDone still waits for the remote turn.
+	r.out.Reset()
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.Observation.InTurn = false
+		rec.Messages = []state.ExecutionMessage{{Key: "wake-1", Stage: execution.Uncertain}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("uncertain wake message")
+
+	// 5. No message is in flight, but the coordinator recorded turn activity
+	// within stewardQuiet (while PostMergeWindow=1ns has elapsed): KindDone waits.
+	r.out.Reset()
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.Messages = nil
+		rec.LastActive = time.Now().Add(-time.Millisecond)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("recent coordinator callback activity within stewardQuiet")
+
+	// 6. The remote turn ends and activity is older than stewardQuiet: the
+	// loop stops the execution and removes the worker from the roster.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.LastActive = old
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, loopStop, loopWorker); c == nil {
+		t.Fatalf("the remote worker was not stopped after its turn ended: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("the remote worker was not removed after its turn ended: %v\n%s", r.calls, r.out)
 	}
 }

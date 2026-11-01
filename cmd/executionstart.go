@@ -450,6 +450,9 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		}
 		o.Reachability, o.ReachabilityAt = execution.Reachable, time.Now().UTC()
 		r.Observation = o
+		if o.LastActive.After(r.LastActive) {
+			r.LastActive = o.LastActive
+		}
 		var evs []state.Event
 		switch r.Phase {
 		case executionPending, execution.Preparing, execution.Prepared, execution.Activating:

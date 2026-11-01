@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -164,6 +165,14 @@ func (a *app) syncExecutionMessages(ctx context.Context, ref execution.Ref) erro
 				}
 				if ack.Stage != execution.Accepted {
 					return nil, nil
+				}
+				now := a.now.UTC()
+				if now.IsZero() {
+					now = time.Now().UTC()
+				}
+				r.LastActive = now
+				if now.After(r.Observation.LastActive) {
+					r.Observation.LastActive = now
 				}
 				if p := r.Messages[i].Resume; p != nil {
 					for i := range st.Agents {
