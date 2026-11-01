@@ -57,14 +57,34 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		if runErr == nil {
 			return
 		}
+		// A SIGTERM reaches the runner only through a stop of its own owned
+		// unit, and both owners of that stop — the coordinator's stop and a
+		// lease expiry — record their stop intent durably before the unit is
+		// stopped. A runner whose harness dies with its own termination is
+		// carrying that stop out, not crashing: it records the orderly exit
+		// with the recorded stop reason and exits 0, so a failed unit is not
+		// mistaken for a crash and the journal names the stop. The terminal
+		// write continues past the runner's own termination and waits on the
+		// journal lock instead of dropping as "execution journal is busy".
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
+		stopping := ctx.Err() != nil
+		stopped := false
 		err := s.update(cleanup, ref, func(j *Journal) error {
-			if !j.StopAcknowledged {
+			if stopping && j.StopRequest != nil {
+				stopped = true
+				j.Phase, j.LastError = Exited, "stopped: "+j.StopRequest.Reason
+				return nil
+			}
+			if !j.StopAcknowledged && j.StopRequest == nil {
 				j.Phase, j.LastError = Failed, "owned harness turn failed; inspect its process state and logs"
 			}
 			return nil
 		})
+		if err == nil && stopped {
+			runErr = nil
+			return
+		}
 		runErr = errors.Join(runErr, err)
 	}()
 	leaseStarted := time.Now()

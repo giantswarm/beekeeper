@@ -23,6 +23,17 @@ import (
 const diskPruneFile = "disk-prune.json"
 const diskPruneLock = "disk-prune.lock"
 
+// keptReferencesUnknown keeps a candidate decided while some process's
+// references could not be read.
+const keptReferencesUnknown = "process references unknown"
+
+// unknownReferences reports a scan that read every process but some: its
+// references are known for all but those, so only the step it gates keeps.
+func unknownReferences(err error) bool {
+	var unknown *proc.UnknownError
+	return errors.As(err, &unknown)
+}
+
 // diskMachine is a snapshot of live references and disposable disk places.
 // Tests replace the reader, so automatic pruning never reaches real data.
 type diskMachine struct {
@@ -33,6 +44,9 @@ type diskMachine struct {
 	tmp, trash     []string
 	trees          worktreeMachine
 	refresh        func() ([]string, bool, error)
+	// unknown is the read's unreadable processes; without refresh, every
+	// step keeps its candidates while it is set.
+	unknown error
 	// sccacheServers lists the user's sccache processes; stopSccache stops
 	// them before a trim. Nil, no server runs.
 	sccacheServers func() []int
@@ -43,7 +57,7 @@ var liveDisk = (*app).diskMachine
 
 func diskReferences() ([]string, bool, error) {
 	refs, commands, err := proc.UserReferences(os.Getuid())
-	if err != nil {
+	if err != nil && !unknownReferences(err) {
 		return nil, false, err
 	}
 	builds := false
@@ -54,7 +68,7 @@ func diskReferences() ([]string, bool, error) {
 	}
 	slices.Sort(refs)
 	refs = slices.Compact(refs)
-	return refs, builds, nil
+	return refs, builds, err
 }
 
 func (a *app) diskMachine() (diskMachine, error) {
@@ -64,7 +78,9 @@ func (a *app) diskMachine() (diskMachine, error) {
 	}
 	var err error
 	m.refs, m.builds, err = diskReferences()
-	if err != nil {
+	if unknownReferences(err) {
+		m.unknown = err
+	} else if err != nil {
 		return m, fmt.Errorf("disk pruning kept everything: process references unavailable: %w", err)
 	}
 	m.sccache = os.Getenv("SCCACHE_DIR")
@@ -101,6 +117,7 @@ func (a *app) diskMachine() (diskMachine, error) {
 	m.trees.automatic, m.trees.buildDirs, m.trees.outputs, m.trees.refs = true, a.cfg.Disk.BuildDirs, a.cfg.Disk.BuildOutputs, m.refs
 	m.trees.live = append(m.trees.live, m.refs...)
 	m.trees.recheck = func() ([]string, error) { refs, _, err := diskReferences(); return refs, err }
+	m.trees.unknown = m.unknown
 	return m, nil
 }
 
@@ -109,6 +126,8 @@ type diskRun struct {
 	trees  worktreeRun
 	locked bool
 	dry    bool
+	// unknown names the processes whose references kept candidates.
+	unknown error
 }
 
 func (r diskRun) String() string {
@@ -129,6 +148,9 @@ func (r diskRun) String() string {
 	}
 	if len(keeps) > 0 {
 		parts = append(parts, "kept: "+strings.Join(keeps, ", "))
+	}
+	if r.unknown != nil {
+		parts = append(parts, "references unknown: "+r.unknown.Error())
 	}
 	if err := errors.Join(r.Errors...); err != nil {
 		parts = append(parts, "failed: "+err.Error())
@@ -166,37 +188,38 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	}
 	pressure = pressure || m.pressure
 	a.pruneDiskCaches(&r, m, pressure)
-	if m.refresh != nil {
-		refs, _, err := m.refresh()
-		if err != nil {
-			r.Errors = append(r.Errors, err)
-			return r
-		}
-		m.refs = refs
+	known, ok := rereadDisk(&r, &m)
+	if !ok {
+		return r
 	}
-	for _, d := range m.tmp {
-		r.Add(diskprune.Children(d, a.now.Add(-time.Hour), m.refs, dry))
+	if known {
+		for _, d := range m.tmp {
+			r.Add(diskprune.Children(d, a.now.Add(-time.Hour), m.refs, dry))
+		}
+	} else {
+		r.Keep("tmp: " + keptReferencesUnknown)
 	}
 	m.trees.automatic = true
 	m.trees.refs = m.refs
+	m.trees.unknown = m.unknown
 	m.trees.trash = filepath.Join(a.store.Dir(), "trash")
 	r.trees = a.trimWorktrees(dry, func() (worktreeMachine, error) { return m.trees, nil })
-	if m.refresh != nil {
-		refs, _, err := m.refresh()
-		if err != nil {
-			r.Errors = append(r.Errors, err)
-			return r
+	known, ok = rereadDisk(&r, &m)
+	if !ok {
+		return r
+	}
+	if known {
+		cutoff := a.now.Add(-time.Hour)
+		if pressure {
+			cutoff = time.Time{}
 		}
-		m.refs = refs
-	}
-	cutoff := a.now.Add(-time.Hour)
-	if pressure {
-		cutoff = time.Time{}
-	}
-	trash := append(slices.Clone(m.trash), m.trees.trash)
-	slices.Sort(trash)
-	for _, d := range slices.Compact(trash) {
-		r.Add(diskprune.Children(d, cutoff, m.refs, dry))
+		trash := append(slices.Clone(m.trash), m.trees.trash)
+		slices.Sort(trash)
+		for _, d := range slices.Compact(trash) {
+			r.Add(diskprune.Children(d, cutoff, m.refs, dry))
+		}
+	} else {
+		r.Keep("trash: " + keptReferencesUnknown)
 	}
 	if r.trees.err != nil {
 		r.Errors = append(r.Errors, r.trees.err)
@@ -208,6 +231,29 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		_ = a.store.Log(event(watchParty, "disk.prune", "%s", r))
 	}
 	return r
+}
+
+// rereadDisk refreshes m's references before a step. known is false while
+// a process's references are unknown: that step keeps its candidates and
+// the next step reads again. ok is false when the process table itself is
+// unreadable, which ends the run.
+func rereadDisk(r *diskRun, m *diskMachine) (known, ok bool) {
+	if m.refresh == nil {
+		if m.unknown != nil {
+			r.unknown = m.unknown
+		}
+		return m.unknown == nil, true
+	}
+	refs, builds, err := m.refresh()
+	if err != nil && !unknownReferences(err) {
+		r.Errors = append(r.Errors, err)
+		return false, false
+	}
+	m.refs, m.builds, m.unknown = refs, builds, err
+	if err != nil {
+		r.unknown = err
+	}
+	return err == nil, true
 }
 
 func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
@@ -225,17 +271,17 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 		return
 	}
 	defer release()
-	if m.refresh != nil {
-		refs, builds, err := m.refresh()
-		if err != nil {
-			r.Errors = append(r.Errors, err)
-			return
-		}
-		if builds {
-			r.Keep("caches: builds running")
-			return
-		}
-		m.refs = refs
+	known, ok := rereadDisk(r, &m)
+	if !ok {
+		return
+	}
+	if m.builds {
+		r.Keep("caches: builds running")
+		return
+	}
+	if !known {
+		r.Keep("caches: " + keptReferencesUnknown)
+		return
 	}
 	// Also honor use locks held by older runs and manual cache clear go.
 	if m.cache != "" {

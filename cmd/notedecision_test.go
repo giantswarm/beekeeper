@@ -120,7 +120,7 @@ func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 	for _, an := range got {
 		said = append(said, an.Via+" "+an.Answer)
 	}
-	if want := []string{"cli wait — if CI is green", "cli merge", "slack neither, ask Kim"}; !slices.Equal(said, want) {
+	if want := []string{"terminal wait — if CI is green", "terminal merge", "terminal neither, ask Kim"}; !slices.Equal(said, want) {
 		t.Fatalf("answers %q, want %q", said, want)
 	}
 	if st, _ := a.store.Read(); len(st.Notes) != 1 || st.Notes[0].ID != 4 {
@@ -134,7 +134,7 @@ const laneQuestion = "Which lane? (a: b)"
 func TestAnswerEventsParse(t *testing.T) {
 	const words, comment = "portal: it rolls (with backstage)", "https://x/c"
 	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: "agent-one"}}
-	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Answer: words, Note: 4}
+	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Channel: channelSlack, Answer: words, Note: 4}
 	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
 	if !ok || an.About != privateThread || an.For != "Kim" || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != laneQuestion {
 		t.Fatalf("%+v %v", an, ok)

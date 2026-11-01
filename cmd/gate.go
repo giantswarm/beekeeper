@@ -1806,6 +1806,9 @@ func (g *gateRun) record(base string, run childRun) error {
 	if output != "" {
 		note += ", output in " + output
 	}
+	if g.pr != 0 {
+		note += g.answerAuthority(fmt.Sprintf("%s#%d", g.repo, g.pr), time.Now().UTC())
+	}
 	r := runOutcome{rc: rc, reason: withInfra(runFailure(doc, lastLine(base+".log"), g.handCut()), g.infra)}
 	var ok bool
 	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
