@@ -48,14 +48,6 @@ default) before retrying, unless the roster or capacity changes first.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
-A park on a pull request requests the supervisor loop's independent review only
-when run from that pull request's worktree branch at its published HEAD. The
-command records and prints the verified head. Other parks, including older parks
-without this evidence, are plain waits: no reviewer, merge go or findings
-forwarded; the watch resumes them when the pull request merges or closes. If
-publication could not be verified, request review in one shell call:
-`cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`.
-
 The loop routes only relevant alerts, those the watch publishes at
 `alerts.pageSeverity`:
 
@@ -2285,6 +2277,14 @@ entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board nex
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
 returns the entry to `agents.staleAfter`. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
+
+A park on a pull request requests the supervisor loop's independent review only
+when run from that pull request's worktree branch at its published HEAD. The
+command records and prints the verified head. Other parks, including older parks
+without this evidence, are plain waits: no reviewer, merge go or findings
+forwarded; the watch resumes them when the pull request merges or closes. If
+publication could not be verified, request review in one shell call:
+`cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`.
 
 A worker that waits on a person, a merge lane or a release parks instead of sleeping in a turn
 that holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|<context>#note|owner/repo#n>]
