@@ -1115,12 +1115,6 @@ func TestSupervisorFillRetryEvery(t *testing.T) {
 	}
 }
 
-// The names of the empty and unset cases of the table tests.
-const (
-	emptyCase = "empty"
-	unsetCase = "unset"
-)
-
 // An explicit environment path must never select the default state when absent.
 func TestMissingEnvironmentConfig(t *testing.T) {
 	const missingCase = "missing"
