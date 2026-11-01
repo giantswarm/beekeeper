@@ -160,7 +160,7 @@ cat "` + outFile + `"
 	if err := os.WriteFile(codeFile, []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a.now = a.now.Add(6 * time.Minute)
+	a.now = a.now.Add(16 * time.Minute)
 	var capOut bytes.Buffer
 	a.out = &capOut
 	if err := a.capacityCmd().Execute(); err != nil {
@@ -1793,12 +1793,12 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 	w.providerUsageErr = map[string]string{claudeComm: "endpoint timeout"}
 
 	kw, uw := w.currentUsage(cfg.Capacity, t0)
-	if kw.Floor != 1 || kw.Ceiling != 2 || uw == nil || !strings.Contains(uw.Error, "claude: endpoint timeout") {
+	if kw.Floor != 3 || kw.Ceiling != 6 || uw != nil {
 		t.Fatalf("watcher.currentUsage with providerUsageErr: kw=(%d,%d), uw=%+v", kw.Floor, kw.Ceiling, uw)
 	}
-	w.capacity(context.Background(), &state.State{}, nil)
-	if strings.Contains(watchOut.String(), "CAPACITY LOW") {
-		t.Fatalf("watcher.capacity emitted CAPACITY LOW on unreadable provider usage:\n%s", watchOut.String())
+	w.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
+	if !strings.Contains(watchOut.String(), "last good read 1m") || !strings.Contains(watchOut.String(), "endpoint timeout") {
+		t.Fatalf("watch lost fallback: %s", watchOut.String())
 	}
 
 	// 4. Nit check: watchProvidersUsage with !w.chores and w.store == nil reuses the in-memory reading.
@@ -3630,5 +3630,65 @@ func TestIdleFiveHourProviderCapacity(t *testing.T) {
 		if view.Error != "" || view.High || view.Ceiling != want || view.Room != want {
 			t.Fatalf("weekly %g: idle capacity %+v", weekly, view)
 		}
+	}
+}
+
+func TestUsageLastGoodFallback(t *testing.T) {
+	for _, cause := range []string{"claude timed out after 90s", "reader failed"} {
+		t.Run(cause, func(t *testing.T) {
+			store, err := state.OpenVersion(t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := keepNow
+			u := config.Usage{Command: []string{"reader"}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}
+			original := usageReading{At: now.Add(-6 * time.Minute), SevenDay: &usageWindow{UsedPercent: 80, ResetsAt: now.Add(6 * 24 * time.Hour)}}
+			if err := store.WriteFile(usageProviderFile("claude"), original); err != nil {
+				t.Fatal(err)
+			}
+			a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
+				return usageReading{}, errors.New(cause)
+			}}
+			r, err := a.resolveReading(context.Background(), usageProviderFile("claude"), u)
+			if err != nil || r.Fallback != cause || !r.At.Equal(original.At) {
+				t.Fatalf("fallback: %+v %v", r, err)
+			}
+			p := config.Provider{Usage: u, Floor: 1, Ceiling: 3}
+			pv := buildSingleProviderView("claude", p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+			if pv.Ceiling != 0 {
+				t.Fatalf("fallback bypassed pace: %+v", pv)
+			}
+			if !strings.Contains(pv.watchSummary(now), "last good read 6m") || !strings.Contains(pv.line(now), cause) {
+				t.Fatalf("fallback missing from output: %s", pv.line(now))
+			}
+			r.SevenDay = &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}
+			pv = buildSingleProviderView("claude", p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+			if pv.Ceiling != 3 {
+				t.Fatalf("below-pace fallback blocked: %+v", pv)
+			}
+			a.now = now.Add(10 * time.Minute)
+			if _, err := a.resolveReading(context.Background(), usageProviderFile("claude"), u); err == nil {
+				t.Fatal("expired reading accepted")
+			}
+			a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+				return usageReading{SevenDay: &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
+			}
+			r, err = a.resolveReading(context.Background(), usageProviderFile("claude"), u)
+			if err != nil || r.Fallback != "" || !r.At.Equal(a.now) {
+				t.Fatalf("recovery: %+v %v", r, err)
+			}
+		})
+	}
+}
+
+func TestUsageReaderDeadline(t *testing.T) {
+	_, err := runUsageCommand(context.Background(), []string{"/bin/sh", "-c", "exec sleep 60"}, 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out after") {
+		t.Fatalf("deadline: %v", err)
+	}
+	u := config.Usage{Command: []string{"reader"}, Timeout: config.Duration{Duration: 2 * time.Minute}}
+	k := config.Capacity{Providers: map[string]config.Provider{"one": {Usage: u}, "two": {Usage: u}}}
+	if usageRefreshTimeout(k) != 4*time.Minute {
+		t.Fatalf("refresh cancels provider deadline: %s", usageRefreshTimeout(k))
 	}
 }
