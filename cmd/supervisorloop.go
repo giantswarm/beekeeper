@@ -143,7 +143,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -193,6 +193,9 @@ const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
+	MergeCommit struct {
+		OID string `json:"oid"`
+	} `json:"mergeCommit"`
 	State  string `json:"state"`
 	URL    string `json:"url"`
 	Head   string `json:"headRefOid"`
@@ -233,7 +236,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -368,8 +371,9 @@ its key first in the detail):
             (agents remove); the loop retires a session beekeeper started
             the same way, once its turn ends: a reviewer once the loop
             acted on its round's verdict (a go, forward, escalation, next
-            round or end), and the worker of a pull request the loop gave
-            the go for once it merged, reported or not. A managed SSH
+            round or end), and a worker given the merge go after its post-merge
+            report or supervisor.postMergeWindow without activity
+            (default 2h). A managed SSH
             execution stops (agents stop) and leaves the roster only once
             the host acknowledged its termination. Each pass also runs the
             doctor's roster and archive step (removing finished, relieved
@@ -481,7 +485,8 @@ type supervisorLoop struct {
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
-	stages map[string]bool
+	stages    map[string]bool
+	postMerge []superloop.Action
 	// fillPause defers an unproductive board read until capacity changes,
 	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
@@ -655,7 +660,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	own := a.cfg.Supervisor.Ownership
-	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now,
+	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now, PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
 		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) }}
@@ -747,6 +752,28 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
 		in.Pulls[ref] = p
+	}
+	l.postMerge = superloop.ReleaseWorkers(in)
+	if len(l.postMerge) > 0 {
+		sessions, _, sessionErr := a.sessions()
+		for i, ag := range st.Agents {
+			if sessionErr != nil && !platform.Missing(sessionErr) {
+				in.Workers[i].LastActive = a.now // never retire on a failed observation
+			} else if s, ok := claude.Live(sessions, ag.Party); ok {
+				in.Workers[i].LastActive = s.LastActive
+			}
+		}
+	}
+	if !l.dryRun && len(l.postMerge) > 0 {
+		for i := len(in.Taken) - 1; i >= 0; i-- {
+			if t := in.Taken[i]; t.Kind == superloop.KindRelease {
+				version := strings.TrimPrefix(t.Key, "release ")
+				if err := l.wakeReleased(ctx, superloop.Action{Key: t.Key, Version: version}); err != nil {
+					l.sayOnce("release wake "+version, "SUPERVISOR RELEASE WAKE FAILED %s: %v", version, err)
+				}
+				break
+			}
+		}
 	}
 	// A release claimed and not finished goes on, whatever --check says
 	// now that it is installed.
@@ -1786,6 +1813,9 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 	if err != nil || code != 0 {
 		return "", fmt.Errorf("%s installed, but self-update --check exits %d: %s", version, code, oneLine(out))
 	}
+	if err := l.wakeReleased(ctx, act); err != nil {
+		return "", err
+	}
 	return strings.Join(append(what, "the latest"), ", "), nil
 }
 
@@ -1985,5 +2015,53 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 		w.actTimers(ctx, fires)
 		w.timerActs.Wait()
 	})
+	return nil
+}
+
+// loopReleaseContains fails closed: only this program's repository is installed
+// by self-update, and GitHub must prove the merge is an ancestor of its tag.
+var loopReleaseContains = func(ctx context.Context, ref, commit, version string) (bool, error) {
+	r, ok := parseRef(ref)
+	if !ok || r.Repo != "giantswarm/beekeeper" || commit == "" {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	out, err := github.RunGH(ctx, "api", "repos/"+r.Repo+"/compare/"+commit+"..."+version, "--jq", ".status")
+	if err != nil {
+		return false, err
+	}
+	status := strings.TrimSpace(string(out))
+	return status == "ahead" || status == "identical", nil
+}
+
+func (l *supervisorLoop) wakeReleased(ctx context.Context, release superloop.Action) error {
+	for _, w := range l.postMerge {
+		stage := "post-merge wake " + w.Ref + "@" + w.Head + " " + w.Agent
+		checked := release.Key + " excludes " + w.Ref + "@" + w.Head
+		if w.Head == "" || l.stages[stage] || l.stages[checked] {
+			continue
+		}
+		contains, err := loopReleaseContains(ctx, w.Ref, w.Head, release.Version)
+		if err != nil {
+			return err
+		}
+		if !contains {
+			if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] merge absent from installed release", checked)); err != nil {
+				return err
+			}
+			l.stages[checked] = true
+			continue
+		}
+		w.Key = stage
+		w.Message = fmt.Sprintf("Release %s is installed and contains the merge of %s (%s). Complete the live proof and board update, then report with agents idle --done --report and --problem.", release.Version, w.URL, w.Head)
+		if err := l.wake(ctx, w); err != nil {
+			return err
+		}
+		if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] woke worker", stage)); err != nil {
+			return err
+		}
+		l.stages[stage] = true
+	}
 	return nil
 }

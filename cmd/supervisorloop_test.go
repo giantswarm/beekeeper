@@ -39,6 +39,7 @@ const (
 	loopQwen        = "qwen"
 	loopPostInstall = "restart-things"
 	loopClassifier  = "classify"
+	loopNewRelease  = "v2.0.0 is newer than v1.0.0"
 	// loopDesk is the login the desk opens its pull requests as, loopTeamB
 	// another team, loopReviewer the reviewer of the rig's first round.
 	loopDesk     = "desk"
@@ -888,7 +889,7 @@ func (r *loopRig) started(t *testing.T, name, session string) {
 	}
 }
 
-func TestLoopRetiresTheReviewerAndTheMergedWorker(t *testing.T) {
+func TestLoopRetiresTheReviewerAndRetainsTheMergedWorker(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.started(t, loopWorker, "worker-session")
@@ -914,13 +915,18 @@ func TestLoopRetiresTheReviewerAndTheMergedWorker(t *testing.T) {
 	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
 		t.Errorf("the worker left before its merge: %v", c)
 	}
-	// The worker merges and never reports.
+	// The worker merges and stays reachable until its inactivity window.
 	r.pull.State = superloop.Merged
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+		t.Fatalf("removed at merge: %v", c)
+	}
+	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
 	r.pass(t)
 	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
 		t.Fatalf("the merged worker stays: %v\n%s", r.calls, r.out)
 	}
-	if evs := r.logged(t, "supervisor.done"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "merged after the merge go") {
+	if evs := r.logged(t, "supervisor.done"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "no report after merge") {
 		t.Errorf("logged %+v", evs)
 	}
 	r.pass(t)
@@ -1229,7 +1235,7 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 }
 
 func TestParseLoopPull(t *testing.T) {
-	green := `{"state":"OPEN","url":"` + loopURL + `","headRefOid":"` + loopHead + `",
+	green := `{"state":"OPEN","url":"` + loopURL + `","headRefOid":"` + loopHead + `","mergeCommit":{"oid":"` + loopFixed + `"},
 	  "statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"state":"SUCCESS"},{"status":"COMPLETED","conclusion":"SKIPPED"}],
 	  "author":{"login":"` + loopDesk + `"},"title":"fix: x","headRefName":"fix/x","files":[{"path":"a.go"}],"changedFiles":2,
 	  "reviews":[{"id":"R2","state":"COMMENTED","author":{"login":"` + loopDesk + `"},"authorAssociation":"OWNER","body":"Review: approved\nHead reviewed: ` + "`1111111`" + `","submittedAt":"2026-10-30T10:00:00Z","commit":{"oid":"abc"}},
@@ -1238,7 +1244,7 @@ func TestParseLoopPull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.Green || len(p.Reviews) != 2 || p.Reviews[0].ID != "R1" || p.Reviews[1].Verdict != superloop.Approved || p.Reviews[1].Head != "1111111" {
+	if p.MergeCommit != loopFixed || !p.Green || len(p.Reviews) != 2 || p.Reviews[0].ID != "R1" || p.Reviews[1].Verdict != superloop.Approved || p.Reviews[1].Head != "1111111" {
 		t.Errorf("pull = %+v", p)
 	}
 	if p.Author != loopDesk || p.Title != "fix: x" || p.Branch != "fix/x" || !slices.Equal(p.Files, []string{"a.go"}) || p.ChangedFiles != 2 ||
@@ -1376,7 +1382,7 @@ func TestLoopResumesAReleaseWhosePostInstallFailed(t *testing.T) {
 	installed := false
 	r.answer = func(args []string) (string, int) {
 		if slices.Equal(args, selfUpdateCheck) && !installed {
-			return "v2.0.0 is newer than v1.0.0", ExitOutdated
+			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
 			installed = true
@@ -1408,7 +1414,7 @@ func TestLoopReleaseWaitsForTheBroker(t *testing.T) {
 	installed := false
 	r.answer = func(args []string) (string, int) {
 		if slices.Equal(args, selfUpdateCheck) && !installed {
-			return "v2.0.0 is newer than v1.0.0", ExitOutdated
+			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
 			installed = true
@@ -1886,6 +1892,110 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 		if !strings.Contains(r.out.String(), want) {
 			t.Errorf("the dry run did not say %q:\n%s", want, r.out)
 		}
+	}
+}
+
+func TestLoopWakesRetainedWorkerAfterInstalledReleaseAndRetiresOnReport(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "post-merge-session")
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
+	r.pass(t)
+	// A new loop instance reconstructs the retained worker from the log.
+	contains := loopReleaseContains
+	t.Cleanup(func() { loopReleaseContains = contains })
+	carried := false
+	loopReleaseContains = func(_ context.Context, ref, commit, version string) (bool, error) {
+		if ref != loopPR || commit != loopFixed || version != "v2.0.0" {
+			t.Fatalf("containment: %s %s %s", ref, commit, version)
+		}
+		return carried, nil
+	}
+	installed := false
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && !installed {
+			return loopNewRelease, ExitOutdated
+		}
+		if slices.Equal(args, []string{selfUpdateCmdName}) {
+			installed = true
+		}
+		return "", 0
+	}
+	// Failed post-install blocks the wake. A failed containment lookup retries.
+	r.a.cfg.Supervisor.PostInstall = []string{loopPostInstall}
+	r.command = func([]string) (string, int) { return "", 1 }
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+		t.Fatalf("wake before ready: %v", c)
+	}
+	r.command = func([]string) (string, int) { return "", 0 }
+	loopReleaseContains = func(context.Context, string, string, string) (bool, error) { return false, errors.New("offline") }
+	r.pass(t)
+	if len(r.logged(t, "supervisor.release")) != 0 {
+		t.Fatal("lost failed containment retry")
+	}
+	loopReleaseContains = func(context.Context, string, string, string) (bool, error) { return carried, nil }
+	carried = true
+	r.pass(t)
+	c := r.called(agentsName, agentWakeName, loopWorker)
+	if c == nil || !strings.Contains(c[3], "v2.0.0 is installed") || !strings.Contains(c[3], loopFixed) {
+		t.Fatalf("missing installed wake: %v", r.calls)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+		t.Fatalf("duplicate wake: %v", c)
+	}
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: release proven", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("reported worker retained: %v", r.calls)
+	}
+}
+
+func TestLoopReleaseWakeSkipsReleasesWithoutTheMergeAndSurvivesRestart(t *testing.T) {
+	r := newLoopRig(t)
+	old := loopReleaseContains
+	t.Cleanup(func() { loopReleaseContains = old })
+	checks := 0
+	loopReleaseContains = func(_ context.Context, _, _, version string) (bool, error) { checks++; return version == "v2.0.1", nil }
+	l := &supervisorLoop{a: r.a, stages: map[string]bool{}, postMerge: []superloop.Action{{Ref: loopPR, URL: loopURL, Agent: loopWorker, Head: loopFixed}}}
+	ctx := context.Background()
+	v := superloop.Action{Key: "release v2.0.0", Version: "v2.0.0"}
+	if err := l.wakeReleased(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.wakeReleased(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 1 || r.called(agentsName, agentWakeName) != nil {
+		t.Fatalf("absent merge: %d %v", checks, r.calls)
+	}
+	v = superloop.Action{Key: "release v2.0.1", Version: "v2.0.1"}
+	if err := l.wakeReleased(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatal("no wake for containing release")
+	}
+	// Stages are reconstructed from the durable event log after re-exec.
+	l.stages = map[string]bool{}
+	for _, e := range r.logged(t, loopStageVerb) {
+		key, _, ok := keyed(e.Detail)
+		if ok {
+			l.stages[key] = true
+		}
+	}
+	r.calls = nil
+	if err := l.wakeReleased(ctx, superloop.Action{Key: "release v2.0.2", Version: "v2.0.2"}); err != nil {
+		t.Fatal(err)
+	}
+	if r.called(agentsName, agentWakeName) != nil || checks != 2 {
+		t.Fatalf("wake repeated after restart: %d %v", checks, r.calls)
 	}
 }
 

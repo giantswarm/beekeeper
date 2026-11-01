@@ -139,6 +139,7 @@ func (w *watcher) stopRevived(ctx context.Context, sessions []*claude.Session) [
 		}
 		drop[s] = true
 		lines := stopUnits(ctx, s.ID)
+		w.recordStoppedGates(ctx)
 		if s.HostID != "" && desktopArchived(w.cfg, s.HostID) {
 			_ = w.store.Record(event(watchParty, "agents.archive", "%s: session %s's CLI %d stopped: its desktop session %s is archived and %s carries its name",
 				s.Name, s.ID, s.PID, s.HostID, r.by))
