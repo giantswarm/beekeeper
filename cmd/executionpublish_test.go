@@ -417,3 +417,29 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 		t.Fatal("unowned process published")
 	}
 }
+
+func TestExecutionPublicationRechecksLeaseAfterFetch(t *testing.T) {
+	rig := newPublicationRig(t)
+	head := rig.commit(t, "change.txt", "lease deadline fixture\n")
+	p := rig.publication(t, head)
+	st, err := rig.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh := executionPublishGH
+	executionPublishGH = func(ctx context.Context, args ...string) ([]byte, error) {
+		out, err := gh(ctx, args...)
+		// Simulate the lease expiring during repository/PR reads, without a sleep
+		// or another process racing the coordinating state transaction.
+		if len(args) > 1 && args[0] == "pr" && args[1] == "list" {
+			st.Starts[0].Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
+		}
+		return out, err
+	}
+	if _, err := rig.a.publishExecution(context.Background(), st, rig.request.Ref, p); err == nil {
+		t.Fatal("publication wrote after lease expiry")
+	}
+	if rig.created {
+		t.Fatal("expired execution created a PR")
+	}
+}

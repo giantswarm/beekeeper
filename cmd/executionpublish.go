@@ -95,6 +95,8 @@ func (a *app) publishExecution(ctx context.Context, st *state.State, ref executi
 	if err != nil {
 		return result, err
 	}
+	ctx, cancel := context.WithDeadline(ctx, r.Lease.ExpiresAt)
+	defer cancel()
 	if !publicationCommit(p.Head) || len(p.Title) > 256 || len(p.Body) > 64<<10 {
 		return result, refused("invalid or oversized publication")
 	}
@@ -220,6 +222,9 @@ func (a *app) publishExecution(ctx context.Context, st *state.State, ref executi
 		if len(pulls) == 0 && (strings.TrimSpace(p.Title) == "" || strings.TrimSpace(p.Body) == "") {
 			return result, refused("first publication requires --title and --body-file")
 		}
+		if _, liveErr := a.executionPublicationLive(st, ref); liveErr != nil {
+			return result, liveErr
+		}
 		if _, err = publishGit(ctx, repo, "push", remote, p.Head+":refs/heads/"+result.Branch); err != nil {
 			return result, err
 		}
@@ -230,6 +235,9 @@ func (a *app) publishExecution(ctx context.Context, st *state.State, ref executi
 			bodyPath := filepath.Join(dir, "body.md")
 			if err = os.WriteFile(bodyPath, []byte(p.Body), 0o600); err != nil {
 				return result, err
+			}
+			if _, liveErr := a.executionPublicationLive(st, ref); liveErr != nil {
+				return result, liveErr
 			}
 			raw, err = executionPublishGH(ctx, "pr", "create", "--repo", r.Request.Repository, "--base", base, "--head", result.Branch, "--title", p.Title, "--body-file", bodyPath)
 			if err != nil {
