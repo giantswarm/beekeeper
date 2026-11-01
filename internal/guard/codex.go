@@ -18,6 +18,7 @@ const (
 	codexViewImageTool  = "view_image"
 	codexUpdatePlanTool = "update_plan"
 	codexWebTool        = "webrun"
+	webSearchTool       = "WebSearch"
 	codexCmdKey         = "cmd"
 	codexCharsKey       = "chars"
 	codexPatchKey       = "pa" + "tch"
@@ -191,7 +192,7 @@ func ValidateCodexInput(input []byte) string {
 			return "Refused: view_image call is missing a non-empty string `path` in tool_input; failing closed."
 		}
 	// Web tools are read-only and go through the shared guard, like Claude web calls.
-	case toolName == codexUpdatePlanTool || toolName == codexWebTool || toolName == "WebFetch" || toolName == "WebSearch":
+	case toolName == codexUpdatePlanTool || toolName == codexWebTool || toolName == "WebFetch" || toolName == webSearchTool:
 		return ""
 	case toolName == readTool || toolName == writeTool || toolName == editTool || toolName == multiEditTool:
 		p, ok := toolInput[filePathKey].(string)
