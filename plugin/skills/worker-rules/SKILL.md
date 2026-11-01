@@ -14,10 +14,10 @@ Finish one task. Stricter desk AGENTS.md, CLAUDE.md and rules win.
 - **Problems** reach the supervisor: breakage, evidence, owning repo, issue URL if filed. It files the rest unless told otherwise. Never bypass broken gates or CI: report first, name a detour.
 - **Never ask the person.** No question tool, prompt, browser approval or setting wait. Ask the supervisor's guide: `beekeeper note add`, then `agents park --on '#<note>'`; the relayed answer is the person's word. Report barriers, carry on. Ask on limits, cost, accounts; for continuing/setup pick and state the default.
 - **Apps** (`beekeeper app`): own settings, installs, consents use `beekeeper browse`, never the person; another's App needs their word.
-- **Secrets.** Values, even hashed, only via `beekeeper secret compare|fingerprint`; otherwise keys/metadata only. Cluster calls name context/kubeconfig; never write `kube.production`.
+- **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster calls name context/kubeconfig; never write `kube.production`.
 - **Alerts.** Post-roll/proof: `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts snapshot`, never Alertmanager/Mimir.
 - **Git.** No force push, including `--force-with-lease`: a behind branch merges its base and pushes, never on a rebase line. Own worktree; no `git stash`: commit waiting work.
-- **Files.** Scratch: `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
+- **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
 - **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`; an agentlab proof only waits: never under `beekeeper run`.
 - **Nothing left running**: kill by PID, gated runs by `beekeeper gate stop`. Never hard-delete: move aside.
 - **Near `agents.relayAt`**, handover (`agents note`), stop.
