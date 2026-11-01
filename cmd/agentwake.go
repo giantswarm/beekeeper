@@ -117,36 +117,12 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err := a.refuseStopped(st, "waking "+q); err != nil {
 		return err
 	}
-	ag, rostered, err := a.wakeParty(st, q)
+	ag, _, err := a.wakeParty(st, q)
 	if err != nil {
 		return err
 	}
 	if ag.Execution != nil {
 		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
-	}
-	if rostered && st.Supervisor != nil && st.Supervisor.Is(by) {
-		// The supervisor's `yours <resource>` is the grant, as in a
-		// SendMessage; the record follows the word.
-		if named := guard.Yours(msg, a.cfg.Leasable()); len(named) > 0 {
-			sessions, _, err := a.sessions()
-			if err != nil {
-				return err
-			}
-			if _, err := fmt.Fprintln(a.out, "wake: "+a.yoursGrants(sessions, st.Supervisor.Party, ag.Name, named)); err != nil {
-				return err
-			}
-		}
-		// A wake carrying the next task to an agent that reported its
-		// last idle restores its task record, as a SendMessage does.
-		line, err := a.retaskAgent(by, rosterIndex(ag.Party), msg)
-		if err != nil {
-			return err
-		}
-		if line != "" {
-			if _, err := fmt.Fprintln(a.out, "wake: "+line); err != nil {
-				return err
-			}
-		}
 	}
 	if ag.Undelivered != "" {
 		// A delivered turn is the task's start agents start did not make.
@@ -673,17 +649,23 @@ func printsTurn(p *proc.Process) bool {
 	return p.Comm == claudeComm && (slices.Contains(p.Args, "-p") || slices.Contains(p.Args, "--print"))
 }
 
-// roleTarget is the PreToolUse hook's lookup for a message to a role (the
-// supervisor, the guide): relayAddress of its record now. A relay moves the
-// role, so a brief names the role, never the holder.
+// errSupervisorMessage refuses a message to "the supervisor": the
+// supervisor is the supervisor loop, which no session holds and no message
+// reaches.
+var errSupervisorMessage = errors.New("the supervisor is the supervisor loop, a service no session holds, so no message reaches it: report with `beekeeper agents idle --done --report`, wait with `beekeeper agents park --on`, ask with `beekeeper note add`")
+
+// roleTarget is the PreToolUse hook's lookup for a message to a role: the
+// guide's relayAddress of its record now (a relay moves the role, so a
+// brief names the role, never the holder), and a refusal for the
+// supervisor (errSupervisorMessage).
 func (a *app) roleTarget(name string) (string, error) {
+	if name != guard.RoleGuide {
+		return "", errSupervisorMessage
+	}
 	if err := a.loadConfig(); err != nil {
 		return "", fmt.Errorf("beekeeper's configuration does not load, so the %s is unknown: %w", name, err)
 	}
-	rl := supervisorRole
-	if name == guard.RoleGuide {
-		rl = guideRole
-	}
+	rl := guideRole
 	store, err := state.Open(a.cfg.StateDir)
 	if err != nil {
 		return "", err
@@ -727,8 +709,7 @@ func (a *app) heldRole(name string) string {
 
 // holderRole names the role whose holder name addresses: the holder's
 // recorded name or session id, or the name of its roster entry, which keeps
-// the run name ("Supervisor run 82") after the holder takes its desktop
-// title; "" when name addresses no holder.
+// the run name ("Guide run 82") after the holder takes its desktop title; "" when name addresses no holder.
 func holderRole(st *state.State, name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -872,6 +853,9 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 	}
 	return socketAddress + path, nil
 }
+
+// socketAddress starts a SendMessage target that is a CLI's peer socket.
+const socketAddress = "uds:"
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
 // says that the roster agent of that name (or session id) runs no CLI and

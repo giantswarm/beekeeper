@@ -83,8 +83,8 @@ stopped until beekeeper resume:
   headless turn, its CLI and what it left running, a background session
   through claude stop so its daemon does not resume it.
 
-It never touches a session the person started, the guide's or the
-supervisor's session, or the session that runs it.
+It never touches a session the person started, the guide's session, or the
+session that runs it.
 
 While the stop stands, agents start (--force included), agents handover,
 agents wake, agents desktop, a timer's wake, a note answer's wake, a
@@ -279,14 +279,11 @@ func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string
 	return said, failed
 }
 
-// spared are the sessions a stop leaves running: the supervisor's, the
-// guide's and the caller's own. A session the person started is spared
+// spared are the sessions a stop leaves running: the guide's and the
+// caller's own. A session the person started is spared
 // by not being one of beekeeper's starts.
 func spared(st *state.State, me state.Party) []state.Party {
 	out := []state.Party{me}
-	if st.Supervisor != nil {
-		out = append(out, st.Supervisor.Party)
-	}
 	if st.Guide != nil && st.Guide.Holder != nil {
 		out = append(out, st.Guide.Holder.Party)
 	}

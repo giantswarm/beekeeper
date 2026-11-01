@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"cmp"
-	"context"
 	"fmt"
 	"maps"
 	"os"
@@ -16,70 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// liveCommands are the commands that read what the prompt leaves out: the
-// values that go stale within minutes.
-var liveCommands = [][2]string{
-	{"beekeeper sessions", "the running sessions, what each is on and runs, their memory"},
-	{"beekeeper capacity", "the busy agents against the floor and ceiling (parked and waiting ones apart), the headroom and whether a start fits"},
-	{"beekeeper snapshot", "the machine's memory, swap, load and OOM kills, and what changed"},
-	{"beekeeper watch", "one line per change, silent otherwise: the source of a Monitor"},
-	{"beekeeper lanes", "the merge lanes now: the running merge, the settling rollout, who is next"},
-	{"beekeeper lease list", "the leases and grant queues now"},
-	{"beekeeper alerts snapshot", "the installations' current alerts"},
-	{"beekeeper budget", "the GitHub budget and who draws on it"},
-	{"beekeeper priority", "the priority list now, with each epic's hold"},
-	{"beekeeper board next", "the next free board item, every held one above it with what holds it, each ranked epic without a worker (EPIC UNSTAFFED)"},
-	{"beekeeper log", "the latest events"},
-	{"beekeeper self-update --check", "whether a newer beekeeper is released"},
-	{"gh issue view / gh pr view <n> --repo <owner/repo>", "an issue's or a pull request's state"},
-}
-
-// printPrompt prints the successor's session prompt: the configured
-// instructions, the scope and the pending state with the priorities and
-// holds pv read from GitHub, then the commands that read the live values. It
-// carries no standing rule and no other live value (a version, a memory
-// figure, a pull request's state): those belong to the instructions and to
-// the commands, and a prompt that restates them goes stale.
-func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alertsView, ans answers, pv *prioritiesView) error {
-	intro, err := a.instructions(v.st)
-	if err != nil {
-		return err
-	}
-	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-	s, err := a.readStanding()
-	if err != nil {
-		return err
-	}
-	p("%s\n", intro)
-	p("## Scope\n\n%s\n", a.scope(al))
-	p("## Pending state, %s\n", a.stamp(a.now))
-	promptStanding(p, s)
-	a.promptPriorities(p, pv)
-	notes := a.splitNotes(v.st.Notes)
-	a.promptNotes(p, notes)
-	a.promptAnswers(p, ans)
-	a.promptTimers(p, v.st.Timers)
-	a.promptLeases(p, l)
-	a.promptHolds(p, a.activeHolds(v.st))
-	a.promptLanes(p, a.laneViews(v.st))
-	a.promptRecords(p, v.st, v.raw)
-	a.promptAgents(p, v.st.Agents, v.raw)
-	a.promptCapacity(p, v.st, v.raw)
-	a.promptAlerts(p, al)
-	p("## Live values\n\nRead them when you need them; this prompt holds none:\n")
-	for _, c := range liveCommands {
-		p("- `%s`: %s", c[0], c[1])
-	}
-	return ctx.Err()
-}
-
-// instructions opens the supervisor's prompt: the configured skill or file.
-func (a *app) instructions(st *state.State) (string, error) {
-	return a.roleInstructions(supervisorRole, st.SupervisorRole())
-}
-
 // roleSlash is the bare slash command that opens a prompt of rl as the
-// person would type it ("/supervise "), "" when rl runs no skill. A role
+// person would type it ("/guide "), "" when rl runs no skill. A role
 // skill carries disable-model-invocation, so the Skill tool refuses it: only
 // a prompt that starts with its slash command loads it.
 func roleSlash(cfg config.Role) string {
@@ -108,30 +45,6 @@ func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
 		return fmt.Sprintf("%syou take over %s%s.", roleSlash(cfg), rl.duty, from), nil
 	}
 	return fmt.Sprintf("You take over %s%s. (No instructions are configured: set %s.skill or %s.instructions.)", rl.duty, from, rl.name, rl.name), nil
-}
-
-// scope is the configured scope, or what the configuration watches.
-func (a *app) scope(al *alertsView) string {
-	if a.cfg.Supervisor.Scope != "" {
-		return strings.TrimSpace(a.cfg.Supervisor.Scope)
-	}
-	parts := []string{"the Claude Code sessions on this machine"}
-	parts = append(parts, "the leases of "+strings.Join(a.cfg.Leasable(), ", "))
-	if len(a.cfg.Lanes) > 0 {
-		lanes := make([]string, len(a.cfg.Lanes))
-		for i, l := range a.cfg.Lanes {
-			lanes[i] = l.Name
-		}
-		parts = append(parts, "the merge lanes "+strings.Join(lanes, ", "))
-	}
-	if len(al.Targets) > 0 {
-		names := make([]string, len(al.Targets))
-		for i, t := range al.Targets {
-			names[i] = t.Name
-		}
-		parts = append(parts, "the alerts of "+strings.Join(names, ", "))
-	}
-	return "Supervise " + strings.Join(parts, "; ") + "."
 }
 
 // stamp is a time with its zone: the successor may read it in another one.

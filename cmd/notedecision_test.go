@@ -252,7 +252,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		for i, by := range []state.Party{{Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "w1", Name: "agent-x"}} {
 			st.Notes = append(st.Notes, state.Note{ID: i + 1, Kind: noteDecision, By: by, Text: fmt.Sprintf("question %d", i+1), Refs: []string{privateThread}})
 		}
-		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -275,7 +275,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	}
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = nil
+		st.Guide = nil
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -289,7 +289,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	}
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -319,7 +319,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		t.Fatalf("recorded answers %+v, want 4", an)
 	}
 	st.RoleLines = append(st.RoleLines, state.RoleLine{Role: guideRole.name, Line: "for the guide"})
-	lines := takeRoleLines(st, supervisorRole)
+	lines := takeRoleLines(st, guideRole)
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "NOTE ANSWERED #2") || !strings.HasPrefix(lines[1], "NOTE ANSWERED #3") {
 		t.Fatalf("waiting lines %q", lines)
 	}

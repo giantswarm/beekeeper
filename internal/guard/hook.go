@@ -169,12 +169,6 @@ type Hook struct {
 	// socket; "" leaves the name as written, an error refuses the send.
 	// Nil reads every name as written.
 	Agent func(name string) (string, error)
-	// Yours records a `yours <resource>` in a message from the session
-	// holding the supervisor role as the resource's grant to the message's
-	// target (to, after the hook's own redirects) and returns what the
-	// sender is told: the grant recorded, or why none was; "" says nothing.
-	// Nil records nothing.
-	Yours func(session, to, message string) string
 	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
 	// instructions Claude Code loads itself; "" takes the call's cwd.
 	Project string

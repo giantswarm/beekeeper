@@ -1507,10 +1507,10 @@ func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State,
 // stopped CLIs are skipped so USAGE HIGH never launches a headless turn.
 func liveBusyWorkers(st *state.State, sessions []*claude.Session, now time.Time) []state.Agent {
 	var out []state.Agent
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if st.Report.Running() && ag.Is(st.Report.Party) {

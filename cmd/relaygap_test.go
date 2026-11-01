@@ -50,7 +50,7 @@ func useLauncher(t *testing.T, l platform.Launcher) {
 // past the restart grace: the reopen is no turn.
 func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: supervisorRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.runName(67)}
 	l := &unitLauncher{stopping: []string{"beekeeper-agent-4579230b.service"}}
 	useLauncher(t, l)
 	var revived atomic.Int32
@@ -86,7 +86,7 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 // once and warms the desktop's CLI, which a resume would run beside.
 func TestStandbyWaitsForAnUrgentReopen(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: supervisorRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: guideRole.runName(67)}
 	useLauncher(t, &unitLauncher{stopping: []string{"beekeeper-agent-4579230b.service"}})
 	w.stand = standbyWatch{
 		turning:   unitsTurning,
@@ -114,7 +114,7 @@ func TestStandbyWaitsForAnUrgentReopen(t *testing.T) {
 // While the headless turn of a start or wake runs, its holder is not gone.
 func TestStandbyWaitsForARunningTurn(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: runSixtySeven, Name: supervisorRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, Name: guideRole.runName(67)}
 	useLauncher(t, &unitLauncher{active: []string{wakeSixtySeven}})
 	w.stand = standbyWatch{
 		turning: unitsTurning,
@@ -142,7 +142,7 @@ func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	a.cfg.Claude.DesktopDir = t.TempDir()
 	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_"+id, id, false)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		p := state.Party{Session: id, Name: supervisorRole.runName(67)}
+		p := state.Party{Session: id, Name: guideRole.runName(67)}
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: time.Now()})
 		st.Agents = append(st.Agents, state.Agent{Party: p})
 		return nil, nil
@@ -230,7 +230,7 @@ func TestReopenYieldsToAResumeStartedDuringItsWait(t *testing.T) {
 	a.cfg.Claude.DesktopDir = t.TempDir()
 	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_"+id, id, false)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		p := state.Party{Session: id, Name: supervisorRole.runName(67)}
+		p := state.Party{Session: id, Name: guideRole.runName(67)}
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: time.Now()})
 		st.Agents = append(st.Agents, state.Agent{Party: p})
 		return nil, nil
@@ -284,7 +284,7 @@ func TestReopenImportsBesideAHeadlessResume(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
 	a.cfg.Claude.DesktopDir = t.TempDir()
-	id, name := runSixtySeven, supervisorRole.runName(67)
+	id, name := runSixtySeven, guideRole.runName(67)
 	transcript := filepath.Join(a.cfg.Claude.ProjectsDir, "lab", id+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
 		t.Fatal(err)
@@ -405,7 +405,7 @@ func (o *importingOpener) Open(ctx context.Context, url string, running bool) er
 // holder's desktop id and the message word for word.
 func TestSendRequestDeliversTheMessageThroughTheDesktop(t *testing.T) {
 	host := "local_" + runSixtySeven
-	msg := supervisorRole.resumeMessage("the desktop runs your CLI now")
+	msg := guideRole.resumeMessage("the desktop runs your CLI now")
 	got := sendRequest(host, msg)
 	for _, want := range []string{sendTool, `session_id "` + host + `"`, msg} {
 		if !strings.Contains(got, want) {

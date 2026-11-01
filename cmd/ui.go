@@ -81,7 +81,6 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 		return nil, err
 	}
 	st := v.st
-	sv := a.supervision(st, v.raw)
 	t, terr := plat.Machine.Processes()
 	var errs []string
 	if terr != nil {
@@ -99,7 +98,7 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 		Overlaps: uiOverlaps(v.Overlaps),
 		Holds:    uiHolds(a.activeHolds(st)),
 		Lanes:    a.uiLanes(st),
-		Roles:    a.uiRoles(st, v.raw, sv),
+		Roles:    a.uiRoles(st, v.raw),
 		Agents:   uiAgents(a.agentViews(st, v.raw)),
 		Notes:    uiNotes(st.Notes),
 		Timers:   uiTimers(st.Timers),
@@ -107,10 +106,7 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 		Alerts:   a.uiAlerts(&errs),
 		Events:   a.uiEvents(&errs),
 	}
-	d.Status = tui.Status{SupervisorLive: sv.live, SupervisorGone: sv.down()}
-	if st.Supervisor != nil {
-		d.Status.Supervisor = st.Supervisor.Name
-	}
+	d.Status = tui.Status{SupervisorLoop: v.SupervisorLoop > 0}
 	if s, err := a.status(); err != nil {
 		errs = append(errs, "status: "+err.Error())
 	} else {
@@ -656,12 +652,11 @@ func uiMerge(m state.Merge) tui.Merge {
 		Release: m.Release, Roll: slices.Clone(m.Roll)}
 }
 
-// uiRoles is the supervisor's and the guide's record as the screen reads
-// them, each with its open relay.
-func (a *app) uiRoles(st *state.State, sessions []*claude.Session, sv supervision) []tui.Role {
-	out := []tui.Role{a.uiRole(supervisorRole, st.SupervisorRole(), sessions, sv)}
+// uiRoles is the guide's record as the screen reads it, with its open
+// relay. The supervisor is the supervisor loop: the status line shows it.
+func (a *app) uiRoles(st *state.State, sessions []*claude.Session) []tui.Role {
 	guide := readHolder(st.GuideRole(), sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
-	return append(out, a.uiRole(guideRole, st.GuideRole(), sessions, guide))
+	return []tui.Role{a.uiRole(guideRole, st.GuideRole(), sessions, guide)}
 }
 
 // uiRole is rl's record with r and sv as the screen reads it.

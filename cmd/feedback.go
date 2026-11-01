@@ -128,11 +128,12 @@ func (w *watcher) deliverFeedback(ctx context.Context, a *app, c *central.Client
 	to, msg := feedback.Route(r.Text, names)
 	label := to
 	if to == "" {
-		if st.Supervisor == nil {
-			w.emitNow("feedback", "FEEDBACK on %s waits: no supervisor to deliver it to", th.Report)
+		g := st.GuideRole().Holder
+		if g == nil {
+			w.emitNow("feedback", "FEEDBACK on %s waits: it names no agent and no guide holds the role to deliver it to", th.Report)
 			return false
 		}
-		to, label = st.Supervisor.Session, "the supervisor"
+		to, label = g.Session, "the guide"
 	}
 	person := a.cfg.Reporter.Person
 	body := fmt.Sprintf("Feedback from %s in Slack, a reply to the status report %s: %s", person, th.Report, msg)

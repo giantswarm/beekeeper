@@ -21,13 +21,13 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 	worker := state.Party{Session: "s5", Name: agentFour}
 	runLive(t, a, map[int]string{3: relieved, 9: successor, 5: agentFour})
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: from, Since: a.now.Add(-time.Hour)}
-		st.SupervisorRun = 11
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: from, Since: a.now.Add(-time.Hour)}}
+		st.Guide.Run = 11
 		st.Agents = []state.Agent{{Party: from}, {Party: to}, {Party: worker}}
-		if _, _, err := supervisorRole.relay(st, from, to, a.now, 15*time.Minute); err != nil {
+		if _, _, err := guideRole.relay(st, from, to, a.now, 15*time.Minute); err != nil {
 			return nil, err
 		}
-		_, evs, err := supervisorRole.start(st, to, true, false, a.now.Add(time.Minute))
+		_, evs, err := guideRole.start(st, to, true, false, a.now.Add(time.Minute))
 		return evs, err
 	}); err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 	status := func(when string) {
 		t.Helper()
 		out.Reset()
-		if err := a.roleStatus(supervisorRole); err != nil {
+		if err := a.roleStatus(guideRole); err != nil {
 			t.Fatalf("status %s: %v", when, err)
 		}
 		if s := out.String(); !strings.HasPrefix(s, `"`+successor+`" supervises`) || strings.Contains(s, relieved) {
@@ -63,7 +63,7 @@ func TestStatusAndWakeNameTheHolderAfterARelay(t *testing.T) {
 	a.as = ""
 	t.Setenv("CLAUDE_CODE_SESSION_ID", from.Session)
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
-	if err := a.roleStatus(supervisorRole); Code(err) != ExitRelieved || !strings.Contains(err.Error(), `"`+successor+`" took the role`) {
+	if err := a.roleStatus(guideRole); Code(err) != ExitRelieved || !strings.Contains(err.Error(), `"`+successor+`" took the role`) {
 		t.Errorf("the relieved run's status: %v, want exit %d naming %q", err, ExitRelieved, successor)
 	}
 }

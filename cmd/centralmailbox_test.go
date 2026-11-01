@@ -271,7 +271,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	mb := &mailboxStandIn{queue: []mailbox.Delivery{noteAnswerMail(13, "note-10-3dbd89ea0570", "local:"+mailHost+"/"+ended, answer)}}
 	w, sent, out := mailboxWatch(t, mb)
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s269", Name: current}, Since: relayNow}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "s269", Name: current}, Since: relayNow}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -290,7 +290,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	}
 
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = nil
+		st.Guide = nil
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -307,7 +307,7 @@ func TestMailboxNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != supervisorRole.name || !strings.Contains(st.RoleLines[0].Line, "NOTE ANSWERED #4") {
+	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != guideRole.name || !strings.Contains(st.RoleLines[0].Line, "NOTE ANSWERED #4") {
 		t.Errorf("role lines %+v, want the answer kept for the supervisor's next start", st.RoleLines)
 	}
 }

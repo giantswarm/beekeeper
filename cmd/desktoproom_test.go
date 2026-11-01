@@ -45,7 +45,7 @@ func TestRoomFor(t *testing.T) {
 		{Party: state.Party{Session: "tasked"}, Task: "its own task"},
 		{Party: state.Party{Session: onhold}, Task: "its parked task", Park: &state.Park{}},
 	}
-	st.Supervisor = &state.Supervisor{Party: state.Party{Session: "watcher", HostSession: "local_watcher"}, Since: now.Add(-time.Hour)}
+	st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "watcher", HostSession: "local_watcher"}, Since: now.Add(-time.Hour)}}
 	const stale, fresh, waiting = "local_stale", "local_fresh", "local_onhold"
 	if got := roomFor(st, sessions, tbl, now, nil, false); got == nil || got.HostID != stale {
 		t.Fatalf("ends %v, want beekeeper's finished worker idle longest, %s", got, stale)

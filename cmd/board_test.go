@@ -892,7 +892,7 @@ func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T
 		work[i] = claude.Work{Refs: []string{"t/w#" + s.ID, "n/lab#1", "t/w#2", unserved}}
 	}
 	st := &state.State{
-		Supervisor: &state.Supervisor{Party: state.Party{Session: "sv"}},
+		Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "sv"}}},
 		Agents: []state.Agent{
 			{Party: state.Party{Session: "wk"}, Task: "its task"},
 			{Party: state.Party{Session: "id"}, LastTask: "its last task"},

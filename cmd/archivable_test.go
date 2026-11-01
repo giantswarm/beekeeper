@@ -186,7 +186,7 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 		t.Run(c.desc, func(t *testing.T) {
 			a, _ := archiveApp(t, func(st *state.State) {
 				st.Starts = append(st.Starts, state.Start{Party: run}, state.Start{Party: worker})
-				st.Relieved = []state.Relief{{Party: run, Taken: time.Now()}}
+				st.Guide = &state.Role{Relieved: []state.Relief{{Party: run, Taken: time.Now()}}}
 				if c.declined {
 					st.Declines = []state.Decline{{Host: finishedHost, At: time.Now(), Why: "No."}}
 				}

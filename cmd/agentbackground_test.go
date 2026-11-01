@@ -249,28 +249,28 @@ func TestBackgroundSuccessor(t *testing.T) {
 	plat.Machine = tableMachine{plat.Machine}
 	a.now = relayNow
 	a.cfg.Agents.Mode = config.ModeBackground
-	a.cfg.Supervisor.RelayTTL.Duration = 15 * time.Minute
+	a.cfg.Guide.RelayTTL.Duration = 15 * time.Minute
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { *st = *handOverState(); return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	calls := stubBackground(t, "backgrounded · "+bgShortID+" · Supervisor run 12\n", bgSession{ID: bgShortID, SessionID: bgID})
-	to, _, err := a.startSuccessor(t.Context(), supervisorRole, supA, supA, t.TempDir())
+	calls := stubBackground(t, "backgrounded · "+bgShortID+" · Guide run 12\n", bgSession{ID: bgShortID, SessionID: bgID})
+	to, _, err := a.startSuccessor(t.Context(), guideRole, supA, supA, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if to.Session != bgID || to.HostSession != "" || to.Name != supervisorRole.runName(12) {
+	if to.Session != bgID || to.HostSession != "" || to.Name != guideRole.runName(12) {
 		t.Errorf("successor %+v", to)
 	}
 	if len(*calls) != 1 {
 		t.Fatalf("calls %+v", *calls)
 	}
 	argv := (*calls)[0].argv
-	if brief := argv[len(argv)-1]; !strings.Contains(brief, "`beekeeper supervisor start`") || strings.Contains(brief, "end the turn") || strings.Contains(brief, "desktop") {
+	if brief := argv[len(argv)-1]; !strings.Contains(brief, "`beekeeper guide start`") || strings.Contains(brief, "end the turn") || strings.Contains(brief, "desktop") {
 		t.Errorf("brief:\n%s", brief)
 	}
 	st, _ := a.store.Read()
-	if st.Relay == nil || st.Relay.To.Session != bgID || st.Relay.To.Name != to.Name {
-		t.Errorf("relay %+v", st.Relay)
+	if st.Guide.Relay == nil || st.Guide.Relay.To.Session != bgID || st.Guide.Relay.To.Name != to.Name {
+		t.Errorf("relay %+v", st.Guide.Relay)
 	}
 	if i := st.StartIndex(to); i < 0 || !st.Starts[i].Background {
 		t.Errorf("starts %+v", st.Starts)
@@ -431,7 +431,7 @@ func TestAgentsRemoveStopsABackgroundStart(t *testing.T) {
 	if st, _ := a.store.Read(); len(st.Agents) != 0 {
 		t.Errorf("roster %+v", st.Agents)
 	}
-	// The supervisor's own background session stays.
+	// The guide's own background session stays.
 	sv := state.Party{Session: "s1", Name: agentOne}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = append(st.Starts, state.Start{Party: sv, Mode: state.ModeBypass, Dir: t.TempDir(), At: time.Now(), Background: true})
@@ -441,8 +441,8 @@ func TestAgentsRemoveStopsABackgroundStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	remove(agentOne)
-	if len(*calls) != 0 || !strings.Contains(out.String(), "supervisor's or the guide's role") {
-		t.Errorf("the supervisor's session: calls %+v, output:\n%s", *calls, out)
+	if len(*calls) != 0 || !strings.Contains(out.String(), "the guide's role") {
+		t.Errorf("the guide's session: calls %+v, output:\n%s", *calls, out)
 	}
 }
 
@@ -456,7 +456,7 @@ func TestParkedResident(t *testing.T) {
 	mk := func(n int) state.Party {
 		return state.Party{Session: fmt.Sprintf("6f1c2a90-0000-4000-8000-%012d", n), Name: fmt.Sprintf("agent %d", n)}
 	}
-	st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Name: agentOne, Session: "s1"}}}
+	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: agentOne, Session: "s1"}}}}
 	var sessions []*claude.Session
 	add := func(p state.Party, bg bool, ag state.Agent, s *claude.Session) {
 		st.Starts = append(st.Starts, state.Start{Party: p, Background: bg})
@@ -477,7 +477,7 @@ func TestParkedResident(t *testing.T) {
 	add(mk(7), true, state.Agent{}, &claude.Session{LastActive: idle}) // not parked
 	add(mk(8), true, state.Agent{Park: &state.Park{At: idle, Resumable: now}}, &claude.Session{LastActive: idle})
 	add(mk(9), true, state.Agent{Park: park, Execution: &execution.Ref{}}, &claude.Session{LastActive: idle})
-	add(st.Supervisor.Party, true, state.Agent{Park: park}, &claude.Session{LastActive: idle})
+	add(st.Guide.Holder.Party, true, state.Agent{Park: park}, &claude.Session{LastActive: idle})
 	got := parkedResident(st, sessions, &proc.Table{ByPID: map[int]*proc.Process{}}, now)
 	if len(got) != 1 || !got[0].Is(stopped) {
 		t.Errorf("parkedResident = %+v, want only %s", got, stopped.Name)

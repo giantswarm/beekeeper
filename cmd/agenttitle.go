@@ -462,7 +462,7 @@ func handedOver(st *state.State, start state.Start) bool {
 		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return other(ag.Party) })
 }
 
-// keepsRole reports whether p holds or held the supervisor's or the guide's
+// keepsRole reports whether p holds or held the guide's
 // role: a relieved supervisor still follows its role's rules. A session
 // named as a role's run held it, also once its relief is forgotten.
 func keepsRole(st *state.State, p state.Party) bool {
@@ -897,7 +897,7 @@ func (a *app) archivableRecord(st *state.State, ag state.Party) (host, why strin
 		return "", "its desktop session stays: beekeeper did not start it"
 	}
 	if roleKeeps(st, ag) {
-		return "", "its desktop session stays: it holds or held the supervisor's or the guide's role, and no relay relieved it"
+		return "", "its desktop session stays: it holds or held the guide's role, and no relay relieved it"
 	}
 	host = st.Starts[i].HostSession
 	switch r, ok := claude.ReadRecord(a.cfg, host); {

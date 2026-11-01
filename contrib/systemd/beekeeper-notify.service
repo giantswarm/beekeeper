@@ -1,8 +1,9 @@
 # beekeeper watch --notify --standby as a systemd user unit: the events that
-# need a person reach the desktop when no supervisor runs. While a
-# supervisor's session runs, it leaves the notes, timers and relays to the
-# supervisor's watch and never reads the alerts; each event is one
-# notification, whichever watch --notify sends it.
+# need a person reach the desktop when the supervisor loop does not run,
+# and the standby restarts the loop's service. While the loop runs, it
+# leaves the notes, timers and relays to the loop's watch and never reads
+# the alerts; each event is one notification, whichever watch --notify
+# sends it.
 #
 # Install (README, "Desktop notifications"): copy it to
 # ~/.config/systemd/user/, point ExecStart at `command -v beekeeper`, then

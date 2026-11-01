@@ -170,11 +170,11 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				Execution *execution.Ref `json:"execution,omitempty"`
 			}
 			rows := []row{}
-			supervisor := st.SupervisorRole().Holder
+			guide := st.GuideRole().Holder
 			for _, ag := range st.Agents {
 				role := ""
-				if supervisor != nil && supervisor.Is(ag.Party) {
-					role = supervisorRole.name
+				if guide != nil && guide.Is(ag.Party) {
+					role = guideRole.name
 				}
 				rows = append(rows, row{ag.Name, ag.Task, ag.Host, role, ag.Execution})
 			}

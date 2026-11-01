@@ -22,6 +22,9 @@ const (
 	// its session ended: long enough for the run that saw the end and its
 	// successor to re-query the issue.
 	endedKeep = time.Hour
+	// answeredRecent is how far back an answered decision counts as recent:
+	// listed in full, the older ones of answeredWindow counted.
+	answeredRecent = 24 * time.Hour
 )
 
 // noteSplit is the open notes as a role's hand-over shows them: the role's
@@ -158,14 +161,13 @@ func (a *app) answeredSince(since time.Time) ([]answered, error) {
 }
 
 // answers is what a hand-over shows of the answered decisions: all of
-// answeredWindow, and since when the recent ones count (the predecessor's
-// start, the last relay).
+// answeredWindow, and since when the recent ones count (answeredRecent).
 type answers struct {
 	Since time.Time
 	All   []answered
 }
 
-// Recent is the decisions answered since the last relay.
+// Recent is the decisions answered since Since.
 func (s answers) Recent() []answered {
 	i := slices.IndexFunc(s.All, func(an answered) bool { return an.At.After(s.Since) })
 	if i < 0 {
@@ -174,31 +176,13 @@ func (s answers) Recent() []answered {
 	return s.All[i:]
 }
 
-// handoverAnswers reads the answered decisions for a hand-over of st.
-func (a *app) handoverAnswers(st *state.State) (answers, error) {
-	floor := a.now.Add(-answeredWindow)
-	all, err := a.answeredSince(floor)
+// handoverAnswers reads the answered decisions for a hand-over.
+func (a *app) handoverAnswers() (answers, error) {
+	all, err := a.answeredSince(a.now.Add(-answeredWindow))
 	if err != nil {
 		return answers{}, err
 	}
-	since, err := a.lastRelay(st, floor)
-	return answers{Since: since, All: all}, err
-}
-
-// lastRelay is when the current supervisor's predecessor started: the
-// latest supervisor.start before the holder's own, no earlier than floor.
-func (a *app) lastRelay(st *state.State, floor time.Time) (time.Time, error) {
-	before := a.now
-	if st.Supervisor != nil {
-		before = st.Supervisor.Since
-	}
-	starts, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == supervisorRole.name+".start" && e.At.After(floor) && e.At.Before(before)
-	})
-	if err != nil || len(starts) == 0 {
-		return floor, err
-	}
-	return starts[len(starts)-1].At, nil
+	return answers{Since: a.now.Add(-answeredRecent), All: all}, nil
 }
 
 // answeredText is an answer in a line: its thread, its answer in full, the

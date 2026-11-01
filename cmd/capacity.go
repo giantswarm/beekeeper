@@ -331,7 +331,7 @@ const waitQuiet = 5 * time.Minute
 // their person or in a wait of their own (none known without them).
 func countAgents(st *state.State, sessions []*claude.Session, now time.Time) agentCount {
 	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}}
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
 			if executionReserved(st, ag) {
@@ -342,7 +342,7 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 			continue
 		}
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if ag.Task == "" || ag.Done {
@@ -380,7 +380,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 	for _, name := range k.ProviderNames() {
 		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
 	}
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
 			if !executionReserved(st, ag) {
@@ -413,7 +413,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 			continue
 		}
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if ag.Task == "" || ag.Done || keptBy(st, ag, now) != "" {

@@ -42,7 +42,7 @@ func stubApp(t *testing.T) (*app, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: state.Party{Name: agentOne, Session: "s1"}, Since: time.Now().Add(-time.Hour)}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: agentOne, Session: "s1"}, Since: time.Now().Add(-time.Hour)}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

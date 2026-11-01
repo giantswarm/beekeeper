@@ -256,8 +256,8 @@ func (a *app) supervisorLoopCmd() *cobra.Command {
 	var once, dryRun bool
 	c := &cobra.Command{
 		Use:   "loop [--once] [--dry-run]",
-		Short: "Run the supervisor's fixed procedure as a deterministic loop over beekeeper's events: no supervisor session needed",
-		Long: `loop takes the supervisor's routine transitions without a supervisor session,
+		Short: "Run the supervisor: a deterministic loop over beekeeper's events",
+		Long: `loop is the supervisor: it takes the supervisor's routine transitions,
 every supervisor.loopInterval (30s; --once: one pass), as the party
 "supervisor loop". It is silent while nothing happens and prints and logs
 one line per transition (supervisor.<kind>, the pull request its subject,
@@ -517,10 +517,10 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 	}
 	defer func() { _ = lock.Unlock() }()
 	// Observers read a PID marker instead of briefly contending for this lock.
-	if err := a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		return err
 	}
-	defer func() { _ = a.store.WriteFile("supervisor-loop-pid.json", 0) }()
+	defer func() { _ = a.store.WriteFile(loopPIDFile, 0) }()
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
@@ -555,6 +555,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 
 // loopLockFile is the lock one running loop holds, beside the state.
 const loopLockFile = "supervisor-loop.lock"
+
+// loopPIDFile is the running loop's PID marker, beside the state: 0 once
+// it stopped.
+const loopPIDFile = "supervisor-loop-pid.json"
+
+// loopUnit is the user service that runs the loop, which beekeeper install
+// always installs.
+const loopUnit = "beekeeper-supervisor-loop.service"
 
 // dryRunSupervisorLoop is one pass that says what it would take: it runs
 // only read-only queries, logs nothing, fires no timer and takes no lock,

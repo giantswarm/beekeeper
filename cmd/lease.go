@@ -63,13 +63,11 @@ configuration stands for its kind cluster: the list shows whether that
 cluster runs, a claim names it, and a running kind cluster no lab lease maps
 is listed as unmapped.
 
-While a supervisor runs, a free lease is not permission: a session claims
-only what the supervisor granted it, in the order the grants were given. The
-supervisor's ` + "`yours <resource>`" + ` in a message to the session (SendMessage, agents
-wake) records the grant itself; ` + "`beekeeper lease grant`" + ` records one without the
-word. Without a supervisor a free lease is claimed directly. A claim that is
-refused exits 3, naming the grant it lacks: gate the action on it (claim &&
-act), never run the action after a failed claim.
+A free lease is claimed directly: the supervisor is the supervisor loop, and
+no session's grant gates a claim. ` + "`beekeeper lease grant`" + ` queues a session for a
+held resource, so its claim can park on it. A claim that is refused exits 3:
+gate the action on it (claim && act), never run the action after a failed
+claim.
 
 Without a subcommand, lists the leases.`,
 		Args: cobra.NoArgs,
@@ -94,11 +92,6 @@ func heldMap(holders []lease.Holder) map[string]bool {
 		m[h.Env] = true
 	}
 	return m
-}
-
-// supervision reads st's supervisor with the configured restart grace.
-func (a *app) supervision(st *state.State, sessions []*claude.Session) supervision {
-	return readSupervision(st, sessions, a.now, a.cfg.Supervisor.RestartGrace.Duration)
 }
 
 // servedNode says whether res names a node some self-hosted provider's
@@ -127,16 +120,12 @@ func (a *app) claimGateOpen(res string, me state.Party, sessions []*claude.Sessi
 	if err != nil {
 		return false
 	}
-	sv := a.supervision(st, sessions)
 	_, err = lease.Check(st, lease.Gate{
-		Resource:     res,
-		Caller:       me,
-		Supervisor:   sv.sup,
-		RestartUntil: sv.until,
-		Gone:         sv.down(),
-		Held:         false,
-		Now:          a.now,
-		TTL:          a.cfg.GrantTTL.Duration,
+		Resource: res,
+		Caller:   me,
+		Held:     false,
+		Now:      a.now,
+		TTL:      a.cfg.GrantTTL.Duration,
 	})
 	return err == nil
 }
@@ -330,7 +319,6 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		}
 	}
 	var msg string
-	var refusal error
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		holders, err := dir.List()
 		if err != nil {
@@ -338,16 +326,8 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		}
 		held := heldMap(holders)
 		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
-		// What this claim saw of the supervisor's CLI is kept even
-		// when it is refused: the restart grace runs from it.
-		seen, evs := observeCLI(st, sessions, a.now)
-		refuse := func(err error) ([]state.Event, error) {
-			if !seen {
-				return nil, err
-			}
-			refusal = err
-			return evs, nil
-		}
+		var evs []state.Event
+		refuse := func(err error) ([]state.Event, error) { return nil, err }
 		if cur, _ := dir.Get(res); cur != nil {
 			if cur.Party().Is(me) {
 				// The holder's own retry: with the switch already run
@@ -371,16 +351,12 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 			}
 			return refuse(a.claimHeld(st, me, sessions, *cur))
 		}
-		sv := a.supervision(st, sessions)
 		idx, err := lease.Check(st, lease.Gate{
-			Resource:     res,
-			Caller:       me,
-			Supervisor:   sv.sup,
-			RestartUntil: sv.until,
-			Gone:         sv.down(),
-			Held:         false,
-			Now:          a.now,
-			TTL:          a.cfg.GrantTTL.Duration,
+			Resource: res,
+			Caller:   me,
+			Held:     false,
+			Now:      a.now,
+			TTL:      a.cfg.GrantTTL.Duration,
 		})
 		if r := (*lease.Refusal)(nil); errors.As(err, &r) {
 			if r.Position > 0 {
@@ -452,11 +428,12 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		}
 		return append(evs, event(me, verbLeaseClaim, "%s: %s%s", res, purpose, modeLine)), nil
 	})
-	if err == nil {
-		err = refusal
-	}
 	return msg, err
 }
+
+// supervising says whether me may order the grant queue: the supervisor
+// loop, or a person (no session), never a session.
+func supervising(me state.Party) bool { return me == loopParty || me.Session == "" }
 
 // claimBudget is the GiB a claim of res carries: set only on the model
 // server, within its maximum.
@@ -488,7 +465,7 @@ const claimWaitMax = 9 * time.Minute
 // grant to wait on.
 func (a *app) parkClaim(me state.Party, r *claimRefusal, purpose string) string {
 	if !r.queued {
-		return fmt.Sprintf("not parked: no grant of %s to you waits; ask the supervisor `need %s` first", r.res, r.res)
+		return fmt.Sprintf("not parked: no grant of %s to you waits; `beekeeper lease grant %s <you>` queues you first", r.res, r.res)
 	}
 	line, err := a.park(me, leaseParkOn(r.res), fmt.Sprintf("the lease %s: %s", r.res, oneLine(purpose)))
 	if err != nil {
@@ -888,13 +865,12 @@ func (a *app) leaseGrantCmd() *cobra.Command {
 	var first bool
 	c := &cobra.Command{
 		Use:   "grant <resource> <session>",
-		Short: "Grant a resource to a session, queued behind earlier grants (--first: ahead of them, as `yours <resource>`)",
-		Long: `Record the supervisor's grant of a resource to a session: the session may
-claim it once it is free and every earlier grant for it is claimed or
-expired. --first puts the grant at the head of the queue, as the
-supervisor's ` + "`yours <resource>`" + ` does: a waiting grant to the session moves
-there, the grants it passes keep their order behind it; while a supervisor
-is recorded, only it gives --first. A grant waits while the resource is
+		Short: "Queue a session for a resource, behind earlier grants (--first: ahead of them)",
+		Long: `Record a grant of a resource to a session: its claim of the held resource
+queues, and parks on it with --park, until the resource is free. --first
+puts the grant at the head of the queue: a waiting grant to the session
+moves there, the grants it passes keep their order behind it; only the
+supervisor loop or a person (--as) gives --first. A grant waits while the resource is
 held; once it is free the grant expires after grantTTL (default 30m). The
 session is a name, a unique part of one, a session id or a PID; a
 registered agent also by its roster name.
@@ -939,7 +915,7 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 		},
 	}
 	c.Flags().StringVar(&unblock, "upgrade-unblock", "", "grant the claim that unblocks the upgrade holding the resource, and say why (supervisor only)")
-	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants, as the supervisor's `yours` does (supervisor only)")
+	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants (the supervisor loop or a person only)")
 	return c
 }
 
@@ -958,13 +934,13 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		}
 		held := heldMap(holders)
 		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
-		if sup := st.SupervisorRole().Holder; first && sup != nil && !me.Is(sup.Party) {
-			return nil, refused("only the supervisor %q puts a grant ahead of the queue: grant %s without --first, or ask it for `yours %s`", sup.Name, res, res)
+		if first && !supervising(me) {
+			return nil, refused("only the supervisor loop or a person puts a grant ahead of the queue: grant %s without --first", res)
 		}
 		var hold state.Hold
 		if unblock != "" {
-			if r := st.SupervisorRole(); r.Holder == nil || !r.Holder.Is(me) {
-				return nil, refused("only the supervisor grants an upgrade unblock")
+			if !supervising(me) {
+				return nil, refused("only the supervisor loop or a person grants an upgrade unblock")
 			}
 			var ok bool
 			if hold, ok = upgrade.Held(st, res, a.now); !ok {
@@ -1063,11 +1039,6 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 				hit := func(g state.Grant) bool {
 					return g.Resource == res && (strings.Contains(strings.ToLower(g.To.Name), who) || g.To.Session == args[1])
 				}
-				for _, g := range st.Grants {
-					if hit(g) && !mayRevoke(st, me, g) {
-						return nil, refused("%s is granted to %q, not to you: only the supervisor %q revokes another session's grant", res, g.To.Name, st.SupervisorRole().Holder.Name)
-					}
-				}
 				st.Grants = slices.DeleteFunc(st.Grants, func(g state.Grant) bool {
 					if hit(g) {
 						removed++
@@ -1090,12 +1061,4 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 			return err
 		},
 	}
-}
-
-// mayRevoke says whether me may withdraw the grant g: its grantee may, and
-// the supervisor, a person (no session), or anyone while no supervisor is
-// recorded.
-func mayRevoke(st *state.State, me state.Party, g state.Grant) bool {
-	sup := st.SupervisorRole().Holder
-	return sup == nil || me.Session == "" || me.Is(sup.Party) || g.To.Is(me)
 }

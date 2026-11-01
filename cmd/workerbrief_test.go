@@ -136,18 +136,18 @@ const (
 // it answers to, its desktop session when none runs.
 func TestRoleAddress(t *testing.T) {
 	holder := &state.Supervisor{Party: state.Party{Name: "Supervisor run 60", Session: "s60", HostSession: hostH60}}
-	if _, err := roleAddress(nil, supervisorRole, nil, noSocket); err == nil || !strings.Contains(err.Error(), "no session holds the supervisor's role") {
+	if _, err := roleAddress(nil, guideRole, nil, noSocket); err == nil || !strings.Contains(err.Error(), "no session holds the supervisor's role") {
 		t.Errorf("no holder: %v", err)
 	}
-	if got, err := roleAddress(holder, supervisorRole, nil, noSocket); err != nil || got != hostH60 {
+	if got, err := roleAddress(holder, guideRole, nil, noSocket); err != nil || got != hostH60 {
 		t.Errorf("no CLI: %q, %v", got, err)
 	}
 	live := []*claude.Session{{PID: 7, ID: "s60", HostID: hostH60, Name: cliName}}
-	if got, err := roleAddress(holder, supervisorRole, live, noSocket); err != nil || got != cliName {
+	if got, err := roleAddress(holder, guideRole, live, noSocket); err != nil || got != cliName {
 		t.Errorf("running CLI: %q, %v", got, err)
 	}
 	twins := append(live, &claude.Session{PID: 8, ID: "s61", Name: cliName})
-	if _, err := roleAddress(holder, supervisorRole, twins, noSocket); err == nil {
+	if _, err := roleAddress(holder, guideRole, twins, noSocket); err == nil {
 		t.Error("an ambiguous name is refused")
 	}
 	if got, _ := roleAddress(&state.Supervisor{Party: state.Party{Name: "Guide run 3"}}, guideRole, nil, noSocket); got != "Guide run 3" {

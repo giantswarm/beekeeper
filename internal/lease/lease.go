@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -195,13 +194,6 @@ func (r *Refusal) Error() string { return r.Reason }
 type Gate struct {
 	Resource string
 	Caller   state.Party
-	// Supervisor is the recorded supervisor, nil when none is.
-	Supervisor *state.Supervisor
-	// RestartUntil is set while the supervisor's CLI may still come back
-	// as a restart; Gone once its CLI stayed away longer: claims wait for
-	// its successor.
-	RestartUntil time.Time
-	Gone         bool
 	// Held is whether the resource is held right now (by anyone).
 	Held bool
 	Now  time.Time
@@ -258,47 +250,13 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 // Check decides whether the caller may claim and, when a grant carries the
 // claim, returns its index in st.Grants (-1 when none is needed). While an
 // upgrade runs on the installation of the resource's name only an
-// upgrade-unblock grant admits a claim, in grant order.
+// upgrade-unblock grant admits a claim, in grant order; otherwise a free
+// lease is the caller's: no supervisor session gates claims.
 func Check(st *state.State, g Gate) (int, error) {
 	if h, ok := upgrade.Held(st, g.Resource, g.Now); ok {
 		return checkUnblock(st, g, h)
 	}
-	if g.Supervisor == nil || g.Caller.Is(g.Supervisor.Party) || g.Caller.Session == "" {
-		// No supervisor is recorded, the supervisor itself, or a person.
-		return -1, nil
-	}
-	pending := Pending(st, g.Resource, g.Held, g.Now, g.TTL)
-	for pos, p := range pending {
-		if !p.To.Is(g.Caller) {
-			continue
-		}
-		if pos > 0 {
-			return -1, &Refusal{Reason: fmt.Sprintf("%s is granted to %q first; you are number %d in its queue", g.Resource, pending[0].To.Name, pos+1), Position: pos + 1, Ahead: pending[0].To.Name}
-		}
-		return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
-			return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
-		}), nil
-	}
-	switch {
-	case g.Gone:
-		return -1, &Refusal{Reason: fmt.Sprintf("supervisor %q is gone: a free lease is not a grant until its successor's `beekeeper supervisor start`; send the successor `%s needed: <purpose>`",
-			g.Supervisor.Name, g.Resource)}
-	case !g.RestartUntil.IsZero():
-		return -1, &Refusal{Reason: fmt.Sprintf("supervisor %q is restarting its CLI (grace until %s): a free lease is not a grant; send it `%s needed: <purpose>` once it is back",
-			g.Supervisor.Name, g.RestartUntil.Local().Format(time.TimeOnly), g.Resource)}
-	}
-	who := granteeName(g.Caller)
-	return -1, &Refusal{Reason: fmt.Sprintf("supervisor %q runs and recorded no grant of %s to %s: a free lease is not a grant. Send it `%s needed: <purpose>`; its `yours %s` to you records the grant (as `beekeeper lease grant %s %s` does), then claim",
-		g.Supervisor.Name, g.Resource, who, g.Resource, g.Resource, g.Resource, who)}
-}
-
-// granteeName is how a refusal names the caller a grant would go to: its
-// name quoted, as the grant command takes it, else its session id.
-func granteeName(p state.Party) string {
-	if p.Name != "" {
-		return strconv.Quote(p.Name)
-	}
-	return p.Session
+	return -1, nil
 }
 
 // checkUnblock admits a claim during the upgrade h only by the caller's

@@ -50,7 +50,7 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 			a, store := priorityApp(t, tc.as)
 			if err := store.Update(func(st *state.State) ([]state.Event, error) {
-				st.SetSupervisorRole(state.Role{Holder: &state.Supervisor{Party: sup}})
+				guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: sup}})
 				st.Agents = append(st.Agents, state.Agent{Party: worker, Task: refOne})
 				return nil, nil
 			}); err != nil {

@@ -39,9 +39,7 @@ func TestRolesBusyAndParkedNeverStale(t *testing.T) {
 	parked := cli(5, "s-parked", "Parked", long)
 	parked.Waiting = &claude.Waiting{}
 	r.Sessions = []*claude.Session{
-		cli(1, "s-sup", "Supervisor run 9", long),
 		cli(2, "s-guide", "Guide run 3", long),
-		cli(3, "s-spare", "Supervisor run 10", long),
 		cli(4, "s-busy", "Agent busy", long),
 		parked,
 		cli(6, "s-idle", "Agent idle", 13*time.Hour),
@@ -49,8 +47,6 @@ func TestRolesBusyAndParkedNeverStale(t *testing.T) {
 		cli(8, "s-gspare", "Guide run 4", long),
 	}
 	r.Desk = &state.State{
-		Supervisor: &state.Supervisor{Party: state.Party{Session: "s-sup"}},
-		Relay:      &state.Relay{To: state.Party{Session: "s-spare"}, Expires: now.Add(time.Minute)},
 		Guide: &state.Role{
 			Holder: &state.Supervisor{Party: state.Party{Session: "s-guide"}},
 			Relay:  &state.Relay{To: state.Party{Session: "s-gspare"}, Expires: now.Add(time.Minute)},
@@ -74,9 +70,7 @@ func TestRolesBusyAndParkedNeverStale(t *testing.T) {
 		t.Errorf("only the idle and the done roster agents are stale:\n%s", report)
 	}
 	want := strings.Join([]string{
-		"cli\t1\t1\t6000\t/work\ts-sup\tSupervisor run 9\t-\tsupervisor\t100\t-",
 		"cli\t2\t2\t6000\t/work\ts-guide\tGuide run 3\t-\tguide\t100\t-",
-		"cli\t3\t3\t6000\t/work\ts-spare\tSupervisor run 10\t-\tspare\t100\t-",
 		"cli\t4\t4\t6000\t/work\ts-busy\tAgent busy\tbusy\t-\t100\t-",
 		"cli\t5\t5\t6000\t/work\ts-parked\tParked\tparked\t-\t100\t-",
 		"cli\t6\t6\t780\t/work\ts-idle\tAgent idle\tidle\t-\t13\tstale",
@@ -90,10 +84,10 @@ func TestRolesBusyAndParkedNeverStale(t *testing.T) {
 
 func TestExpiredRelayIsNoSpare(t *testing.T) {
 	r, out := newRun(t, Options{Summary: true, CLIStale: 12 * time.Hour})
-	r.Sessions = []*claude.Session{cli(3, "s-spare", "Supervisor run 10", 20*time.Hour)}
-	r.Desk = &state.State{Relay: &state.Relay{To: state.Party{Session: "s-spare"}, Expires: now.Add(-time.Minute)}}
+	r.Sessions = []*claude.Session{cli(3, "s-spare", "Guide run 10", 20*time.Hour)}
+	r.Desk = &state.State{Guide: &state.Role{Relay: &state.Relay{To: state.Party{Session: "s-spare"}, Expires: now.Add(-time.Minute)}}}
 	r.Do()
-	if want := "cli\t3\t3\t1200\t/work\ts-spare\tSupervisor run 10\t-\t-\t20\tstale\n"; out.String() != want {
+	if want := "cli\t3\t3\t1200\t/work\ts-spare\tGuide run 10\t-\t-\t20\tstale\n"; out.String() != want {
 		t.Errorf("summary:\n%s\nwant:\n%s", out, want)
 	}
 }

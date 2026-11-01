@@ -1590,7 +1590,7 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 			}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Timers = []state.Timer{timer, {ID: 2, Due: timer.Due, Wake: loopWorker, What: "wake worker"}}
-				st.Supervisor = &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}
+				st.Guide = &state.Role{Holder: &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)

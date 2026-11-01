@@ -296,8 +296,8 @@ func TestEnvtestRefusals(t *testing.T) {
 		"local member of a shared record": {func(st *state.State) {
 			st.Merges = nil
 			st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()})
-			st.Supervisor = &state.Supervisor{Party: ana}
-		}, "supervisor"},
+			st.Guide = &state.Role{Holder: &state.Supervisor{Party: ana}}
+		}, "guide"},
 		"two objects": {func(st *state.State) {
 			st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()},
 				state.Grant{Resource: "glean", To: ana, By: bo, At: time.Now()})
