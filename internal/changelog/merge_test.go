@@ -13,7 +13,7 @@ func TestQueuedChangelogEntriesMerge(t *testing.T) {
 	dir := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command("git", args...) //nolint:gosec // fixed executable and literal test arguments
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.invalid", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.invalid")
 		out, err := cmd.CombinedOutput()
@@ -24,7 +24,7 @@ func TestQueuedChangelogEntriesMerge(t *testing.T) {
 	}
 	write := func(name, content string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil { //nolint:gosec // literal filenames inside an owned temporary test repository
 			t.Fatal(err)
 		}
 	}
@@ -51,7 +51,7 @@ func TestQueuedChangelogEntriesMerge(t *testing.T) {
 	git("checkout", "main")
 	git("merge", "--no-edit", "first")
 	git("merge", "--no-edit", "second")
-	merged, err := os.ReadFile(filepath.Join(dir, "CHANGELOG.md"))
+	merged, err := os.ReadFile(filepath.Join(dir, "CHANGELOG.md")) //nolint:gosec // owned temporary test repository
 	if err != nil {
 		t.Fatal(err)
 	}
