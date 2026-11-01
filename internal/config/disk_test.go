@@ -18,6 +18,10 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 	if !c.Disk.Auto() || c.Disk.Every.Duration != time.Hour || len(c.Disk.TrashDirs) != 2 || c.Disk.SccacheMaxGiB != 10 {
 		t.Fatalf("defaults=%+v", c.Disk)
 	}
+	if h := c.Disk.Holders; h.Root != base || h.StaleAfter.Duration != 72*time.Hour || h.AsideRetention.Duration != 7*24*time.Hour ||
+		len(h.AsideDirs) != 2 || h.WarnGiB != 10 || h.Every.Duration != 6*time.Hour {
+		t.Fatalf("holders defaults=%+v", h)
+	}
 	for _, tc := range []struct {
 		raw   string
 		valid bool
@@ -30,6 +34,11 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		{"disk: {buildDirs: [.git]}", false},
 		{"disk: {buildOutputs: [{path: /scratch, worktree: /scratch/worktree}]}", false},
 		{"disk: {buildOutputs: [{path: relative, worktree: /scratch/worktree}]}", false},
+		{"disk: {holders: {keep: [hf-cache], asideDirs: [aside], warnGiB: -1}}", true},
+		{"disk: {holders: {root: /}}", false},
+		{"disk: {holders: {root: relative}}", false},
+		{"disk: {holders: {keep: [a/b]}}", false},
+		{"disk: {holders: {asideDirs: [..]}}", false},
 		{"disk: {buildDirs: [artifacts], buildOutputs: [{path: /scratch/output, worktree: /scratch/worktree}]}", true},
 	} {
 		if err := os.WriteFile(p, []byte(tc.raw), 0600); err != nil {

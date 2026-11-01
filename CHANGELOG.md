@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `beekeeper disk holders` lists the state home's holders (each entry of `~/.local/state`, and each entry of its `aside` and `moved-aside` directories) by size and last write with an owner read from the name (a task number names the roster agent or session record that mentions it; otherwise the program), and says which are eligible for removal: unused for `disk.holders.staleAfter` (72h; aside entries after `disk.holders.asideRetention`, 168h), unused by any process, of no open task, holding no checkout outside an aside directory, and neither beekeeper's own state nor in `disk.holders.keep`. It removes nothing. Every `disk.holders.every` (6h) the watch says `STATE HOLDERS` with the largest eligible holders while they take `disk.holders.warnGiB` (10) or more ([https://github.com/giantswarm/beekeeper/issues/1581](https://github.com/giantswarm/beekeeper/issues/1581)).
+
 ### Fixed
 
 - The secret-file guard closes reads it did not see, in the Bash and Codex adapters and in scripts they run: a link to a directory holding a credential file followed by a read through it, a relative link source resolved from the link's directory or a `cd` through `$HOME`, `find -exec`/`-execdir`/`-ok`/`-okdir` running a reader, and a path printed by `readlink`, `realpath`, `find`, `ls` or `stat` (with its path in the format) piped or substituted into a command that may open it. Under Codex a helper defined on the command line can no longer write its protected home through parameter operators, `$*`, `printf -v` or `mkdir`. Standalone metadata checks stay allowed ([https://github.com/giantswarm/beekeeper/issues/1738](https://github.com/giantswarm/beekeeper/issues/1738)).

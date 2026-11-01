@@ -711,6 +711,31 @@ type Disk struct {
 	BuildDirs []string `yaml:"buildDirs"`
 	// BuildOutputs associates external build output with its owning worktree.
 	BuildOutputs []BuildOutput `yaml:"buildOutputs"`
+	// Holders is the lifecycle of the state home's holders (beekeeper disk
+	// holders): it lists them and what is eligible for removal, removing
+	// nothing.
+	Holders Holders `yaml:"holders"`
+}
+
+// Holders configures the listing of the state home's holders: each entry of
+// Root (default the parent of stateDir, ~/.local/state), and each entry of
+// its AsideDirs one by one. A holder unused for StaleAfter (default 72h), or
+// an aside entry kept past AsideRetention (default 168h), whose task is not
+// open and which no process uses, is eligible for removal; the watch says
+// STATE HOLDERS once the eligible ones reach WarnGiB (default 10; negative,
+// never), looking every Every (default 6h).
+type Holders struct {
+	Root           string   `yaml:"root"`
+	StaleAfter     Duration `yaml:"staleAfter"`
+	AsideRetention Duration `yaml:"asideRetention"`
+	// AsideDirs are the root's directories holding moved-aside material
+	// (default aside, moved-aside).
+	AsideDirs []string `yaml:"asideDirs"`
+	// Keep names the root's entries never eligible (model weights, costly
+	// to fetch again).
+	Keep    []string `yaml:"keep"`
+	WarnGiB int      `yaml:"warnGiB"`
+	Every   Duration `yaml:"every"`
 }
 
 // BuildOutput is explicitly disposable output of the task in Worktree.
@@ -3065,6 +3090,16 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Disk.Every, time.Hour)
 	setInt(&c.Disk.SccacheMaxGiB, 10)
+	h := &c.Disk.Holders
+	setStr(&h.Root, filepath.Dir(c.StateDir))
+	h.Root = filepath.Clean(homePath(home, h.Root))
+	setDur(&h.StaleAfter, 72*time.Hour)
+	setDur(&h.AsideRetention, 7*24*time.Hour)
+	if h.AsideDirs == nil {
+		h.AsideDirs = []string{"aside", "moved-aside"}
+	}
+	setInt(&h.WarnGiB, 10)
+	setDur(&h.Every, 6*time.Hour)
 	for i, p := range c.Disk.Checkouts {
 		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
 	}
@@ -3484,6 +3519,14 @@ func (c *Config) validate() error {
 	for _, n := range c.Disk.BuildDirs {
 		if n == "" || n == "." || filepath.IsAbs(n) || strings.Contains(n, "..") || strings.Contains(n, ".git") {
 			return fmt.Errorf("disk.buildDirs: invalid directory %q", n)
+		}
+	}
+	if r := c.Disk.Holders.Root; r != "" && (!filepath.IsAbs(r) || filepath.Clean(r) == string(filepath.Separator)) {
+		return fmt.Errorf("disk.holders.root: must be an absolute directory, not a filesystem root")
+	}
+	for _, n := range append(slices.Clone(c.Disk.Holders.AsideDirs), c.Disk.Holders.Keep...) {
+		if n == "" || n == "." || strings.ContainsRune(n, filepath.Separator) || strings.Contains(n, "..") {
+			return fmt.Errorf("disk.holders: %q is no entry name of the root", n)
 		}
 	}
 	for _, o := range c.Disk.BuildOutputs {
