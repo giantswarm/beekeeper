@@ -19,6 +19,7 @@ const (
 	probeHolds = "true"
 	probeFails = "false"
 	prMerged7  = "pr-merged o/r#7"
+	bk228      = "BK 228"
 )
 
 func TestTimerConditionsProbeTheirReference(t *testing.T) {
@@ -75,6 +76,7 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 // once, and closes.
 func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.chores = true // a running watch, not --once
 	merged := false
 	fakeRead(t, func(cmd string) ([]byte, error) {
 		if !strings.Contains(cmd, "repos/o/r/pulls/7") {
@@ -90,8 +92,8 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	}
 	t.Cleanup(func() { wakeOwner = wasWake })
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: "BK 228"}}}
-		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: "BK 228", What: "rebase on it"}}
+		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
+		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: bk228, What: "rebase on it"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -115,6 +117,68 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `TIMER: #1, pr-merged o/r#7 holds: waking "BK 228": rebase on it`) {
 		t.Fatalf("watch said %q", out.String())
+	}
+}
+
+// watch --once is a look: a due timer it finds is a line marked that --once
+// writes nothing, and its agent is not woken, its command not run and the
+// timer neither closed nor re-armed nor checked.
+func TestWatchOnceFiresNoTimer(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.chores = false // --once
+	fakeRead(t, func(cmd string) ([]byte, error) { return []byte("true\n"), nil })
+	var woke []string
+	wasWake := wakeOwner
+	wakeOwner = func(_ *app, _ context.Context, _ state.Party, q, msg, _ string) error {
+		woke = append(woke, q+": "+msg)
+		return nil
+	}
+	t.Cleanup(func() { wakeOwner = wasWake })
+	ran := filepath.Join(t.TempDir(), "ran")
+	past := relayNow.Add(-time.Minute)
+	timers := []state.Timer{
+		{ID: 1, Due: past, When: prMerged7, Wake: bk228, What: "rebase on it"},
+		{ID: 2, Due: past, Wake: bk228, What: "check again"},
+		{ID: 3, Due: past, Run: "touch " + ran, What: "resume"},
+		{ID: 4, Due: past, Wake: bk228, Repeat: "daily", What: "standup"},
+		{ID: 5, Due: past, Probe: probeFails, Checked: relayNow, Every: time.Hour, Until: relayNow, Expire: true, What: "moot"},
+	}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
+		st.Timers = timers
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.pending(context.Background(), []*claude.Session{})
+	w.timerActs.Wait()
+	if len(woke) != 0 {
+		t.Fatalf("--once woke %q", woke)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("--once ran a timer's command")
+	}
+	st, _ := w.store.Read()
+	if len(st.Timers) != len(timers) {
+		t.Fatalf("--once settled timers: %+v", st.Timers)
+	}
+	for i, x := range st.Timers {
+		if !x.Due.Equal(timers[i].Due) || !x.Checked.Equal(timers[i].Checked) {
+			t.Errorf("--once changed timer #%d: %+v", x.ID, x)
+		}
+	}
+	if evs, _ := w.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "timer.") }); len(evs) != 0 {
+		t.Errorf("--once logged %+v", evs)
+	}
+	for _, want := range []string{
+		`TIMER (--once writes nothing): #1, pr-merged o/r#7 holds: waking "BK 228": rebase on it`,
+		`TIMER (--once writes nothing): #2, due`,
+		`TIMER (--once writes nothing): #3, due`,
+		`TIMER EXPIRED (--once writes nothing): #5,`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("--once did not say %q in %q", want, out.String())
+		}
 	}
 }
 

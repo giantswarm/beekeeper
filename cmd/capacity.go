@@ -106,6 +106,9 @@ type providerView struct {
 	// it stands, the provider's ceiling is that mode's and no session
 	// starts on the model.
 	DrainTo string `json:"drainTo,omitempty"`
+
+	NoPlanWindows       bool `json:"noPlanWindows,omitempty"`
+	supplementalBuckets bool
 }
 
 func (p *providerView) findBucket(name string) *bucketView {
@@ -137,11 +140,17 @@ func (p *providerView) windowsSummary(now time.Time) string {
 		}
 		return ""
 	}
+	if p.NoPlanWindows {
+		return claudeNoPlanWindows
+	}
 	if p.Error != "" {
 		return "usage unknown (" + truncate(p.Error, 120) + ")"
 	}
 	if len(p.Buckets) > 0 {
 		var parts []string
+		if p.supplementalBuckets {
+			parts = append(parts, "usage "+windowsPairLine(p.FiveHour, p.SevenDay, now))
+		}
 		for _, bName := range p.bucketOrder {
 			if bv := p.Buckets[bName]; bv != nil {
 				parts = append(parts, bName+" "+bv.windowsLine(now))
@@ -466,6 +475,19 @@ func agentHarnessModel(st *state.State, sessions []*claude.Session, ag state.Age
 	return harness, model
 }
 
+// ompChoiceModel reports whether model, as an omp agent's start records it
+// (the provider/id omp lists), is ch's omp model named by its bare id, as
+// capacity.choices names it and capacity pick returns it. The models file's
+// provider need not carry the capacity provider's name, so only the id
+// after it is compared.
+func ompChoiceModel(ch config.Choice, model string) bool {
+	id := strings.ToLower(strings.TrimSpace(ch.Model))
+	if !strings.EqualFold(strings.TrimSpace(ch.Harness), omp.Harness) || id == "" {
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "/"+id)
+}
+
 func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov, bucket string) {
 	h := cmp.Or(strings.TrimSpace(harness), claudeComm)
 	m := strings.TrimSpace(model)
@@ -473,7 +495,7 @@ func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov,
 		if !strings.EqualFold(ch.Harness, h) {
 			continue
 		}
-		if m != "" && (strings.EqualFold(ch.Model, m) || strings.HasPrefix(strings.ToLower(m), strings.ToLower(ch.Model))) {
+		if m != "" && (strings.EqualFold(ch.Model, m) || strings.HasPrefix(strings.ToLower(m), strings.ToLower(ch.Model)) || ompChoiceModel(ch, m)) {
 			p := ch.EffectiveProvider()
 			return p, ch.EffectiveBucket(k.Providers[p])
 		}
@@ -783,7 +805,13 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 		}
 		r := res.reading
 		pv.At = r.At
-		if len(r.Buckets) > 0 {
+		if r.NoPlanWindows {
+			pv.NoPlanWindows = true
+			pv.Blocks = []string{claudeNoPlanWindows}
+			pv.Verdict = providerVerdict(0, pv.Blocks)
+			return pv
+		}
+		if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
 			pv.Buckets = make(map[string]*bucketView, len(r.Buckets))
 			pv.bucketOrder = bucketNames(r)
 			maxBucketCeiling := 0
@@ -889,6 +917,16 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 		pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
 	default:
 		pv.Room = pv.Ceiling - len(pv.Busy)
+	}
+	// Model weeks supplement, rather than replace, the aggregate plan windows.
+	if res.ok && len(res.reading.Buckets) > 0 && (res.reading.FiveHour != nil || res.reading.SevenDay != nil) {
+		pv.supplementalBuckets = true
+		pv.Buckets = make(map[string]*bucketView)
+		pv.bucketOrder = bucketNames(res.reading)
+		for _, name := range pv.bucketOrder {
+			b := res.reading.Buckets[name]
+			pv.Buckets[name] = &bucketView{Name: name, SevenDay: effectiveSevenDayWindow(b.SevenDay, now)}
+		}
 	}
 	pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
 	return pv
@@ -1202,7 +1240,7 @@ func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, 
 		if pv == nil {
 			continue
 		}
-		if cand.Bucket != "" && len(pv.Buckets) > 0 {
+		if cand.Bucket != "" && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			if bv := pv.findBucket(cand.Bucket); bv != nil {
 				key := cand.Provider + "/" + bv.Name
 				if !seenBucket[key] {
@@ -1298,7 +1336,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		pCfg := k.Providers[provName]
 		pv := providers[provName]
 		bucketName := ""
-		if pv != nil && len(pv.Buckets) > 0 {
+		if pv != nil && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			bucketName = ch.EffectiveBucket(pCfg)
 		}
 		cand := choiceCandidate{
@@ -1314,7 +1352,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			behind := 0.0
 			if subscription {
 				sd := pv.SevenDay
-				if len(pv.Buckets) > 0 {
+				if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 					sd = pv.findBucket(bucketName).SevenDay
 				}
 				if sd != nil && sd.Pace != nil {
@@ -1362,7 +1400,7 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 	}
 
 	var fh, sd *usageWindow
-	if len(pv.Buckets) > 0 {
+	if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 		bv := pv.findBucket(bucketName)
 		if bv == nil {
 			return fmt.Sprintf("bucket %q not in %s usage output", bucketName, pv.Name)
@@ -1634,6 +1672,12 @@ subagents' transcripts have been quiet for 5 minutes is waiting, listed
 apart with what it waits on; one
 without a task, or done, is idle. Only busy agents hold a slot: parked and
 waiting agents do no work, spend next to no budget and never block a start.
+There is no separate cap on live sessions (busy plus waiting): memory, swap,
+load and lab headroom bound new starts instead. A fixed session cap would let
+waiters exclude useful work despite available headroom. These guards judge
+starts, not simultaneous wakes: waiters that wake together can push busy over
+its ceiling; existing agents finish, and new starts wait for room. Re-read
+capacity before starting replacement work.
 The supervisor, the guide and a role's successor are not counted.
 
 The headroom bounds a start: MemAvailable against capacity.availMinMiB,
@@ -1925,7 +1969,7 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 		}
 		return v
 	}
-	if bucket != "" && len(pv.Buckets) > 0 {
+	if bucket != "" && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 		if bv := pv.findBucket(bucket); bv != nil {
 			if bv.Room == 0 {
 				v.Room = 0
@@ -2062,7 +2106,7 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 func choicesHaveModel(choices []config.Choice, model string) bool {
 	m := strings.TrimSpace(model)
 	return slices.ContainsFunc(choices, func(ch config.Choice) bool {
-		return strings.EqualFold(strings.TrimSpace(ch.Model), m)
+		return strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m)
 	})
 }
 
@@ -2073,7 +2117,7 @@ func filterChoiceModel(k config.Capacity, model string) config.Capacity {
 	}
 	var filtered []config.Choice
 	for _, ch := range k.Choices {
-		if strings.EqualFold(strings.TrimSpace(ch.Model), m) {
+		if strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m) {
 			filtered = append(filtered, ch)
 		}
 	}

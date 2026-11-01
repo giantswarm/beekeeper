@@ -181,8 +181,8 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 	return false, false
 }
 
-// tellFiler delivers line from by to the session that filed n, when it is a
-// registered agent. A note filed in a role (the supervisor's, the guide's)
+// tellFiler delivers line from by to the session that filed n, on the roster
+// or off it (by its session id). A note filed in a role (the supervisor's, the guide's)
 // goes to the role's holder now, as a message to the role does: the run that
 // filed it may have relayed since. While no session holds the role, or its
 // holder cannot be told, line waits for the role's next start. It returns
@@ -203,6 +203,11 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	if n.By.Name == "" {
 		return ""
 	}
+	// The supervisor loop is no session: it reads the answer from the log
+	// at its next pass.
+	if n.By.Name == loopParty.Name && n.By.Session == "" {
+		return fmt.Sprintf("note #%d: the supervisor loop acts on the answer at its next pass", n.ID)
+	}
 	quiet := *a
 	quiet.executionRequestID = fmt.Sprintf("note/%d/%s", n.ID, execution.Digest([]byte(line)))
 	a = &quiet
@@ -213,14 +218,14 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	}
 	rl, ok := filedRole(st, n.By)
 	if !ok {
-		if err := a.quietWake(ctx, by, cmp.Or(n.By.Session, n.By.Name), line); err != nil {
+		if err := a.quietWake(ctx, by, cmp.Or(wakeID(n.By), n.By.Name), line); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "note #%d: telling %q failed (%v): %s\n", n.ID, n.By.Name, err, line)
 		}
 		return ""
 	}
 	why := fmt.Sprintf("no session holds the %s's role", rl.name)
 	if h := rl.get(st).Holder; h != nil {
-		err := a.quietWake(ctx, by, cmp.Or(h.Session, h.Name), line)
+		err := a.quietWake(ctx, by, cmp.Or(wakeID(h.Party), h.Name), line)
 		switch {
 		case err == nil && h.Is(n.By):
 			return ""
