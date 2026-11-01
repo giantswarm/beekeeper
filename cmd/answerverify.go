@@ -2,13 +2,16 @@ package cmd
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -160,10 +163,11 @@ func (an answered) unverified(q answerQuery, central bool, now time.Time) string
 	}
 	named := shaWord.FindAllString(an.Question+"\n"+an.Answer, -1)
 	if len(named) == 0 {
-		return fmt.Sprintf("neither the question nor the answer names a commit: it approves no head, %s asked", q.Head)
+		return fmt.Sprintf("neither the question nor the answer names a commit: it names no head, %s asked", q.Head)
 	}
+	head := strings.ToLower(q.Head)
 	for _, s := range named {
-		if strings.HasPrefix(strings.ToLower(q.Head), strings.ToLower(s)) {
+		if s = strings.ToLower(s); strings.HasPrefix(head, s) || strings.HasPrefix(s, head) {
 			return ""
 		}
 	}
@@ -191,10 +195,13 @@ func (an answered) strength() string {
 	return ghNone
 }
 
-// verifiedAnswer is answer verify's account of one answer.
+// verifiedAnswer is answer verify's account of one answer. Context is the
+// central instance's context for an answer recorded there, "" for the
+// machine's.
 type verifiedAnswer struct {
 	About    string    `json:"about"`
 	Note     int       `json:"note,omitempty"`
+	Context  string    `json:"context,omitempty"`
 	Question string    `json:"question,omitempty"`
 	By       string    `json:"by"`
 	Channel  string    `json:"channel"`
@@ -206,9 +213,15 @@ type verifiedAnswer struct {
 	Strength string    `json:"authenticatedBy,omitempty"`
 }
 
+// noteName is how the answer's note is named on the machine: #<n> for its
+// own, <context>#<n> for the central instance's.
+func (v verifiedAnswer) noteName() string {
+	return v.Context + "#" + strconv.Itoa(v.Note)
+}
+
 func (a *app) answerVerifyCmd() *cobra.Command {
 	var q answerQuery
-	var ref string
+	var note, ref string
 	c := &cobra.Command{
 		Use:   "verify --note <id> | --ref <owner/repo#n> [--head <sha>]",
 		Short: "Show the person's recorded answer and whether it is their own, for the session it concerns",
@@ -216,8 +229,14 @@ func (a *app) answerVerifyCmd() *cobra.Command {
 newest about the thread (--ref), who gave it, the channel it came through,
 who recorded it and when. Exit 0 only when it is the person's own answer
 through an authenticated channel, about --ref when given, at most ` + shortDur(answerFresh) + `
-old and, with --head, naming that commit (7 to 40 hex digits of it) in its
-note's question or its words; else exit 3 with the reason.
+old and, with --head, naming that commit (7 to 40 hex digits of it, or it
+a prefix of them) in its note's question or its words; else exit 3 with
+the reason. Verified is the person's own word, not what it says: read the
+words, a "no" verifies as well as a "yes".
+
+--note <n> or #<n> is the machine's note, read from its log;
+<context>#<n> is the central instance's (central.context), which reads
+its own log through answer_verify: a number never stands for the other's.
 
 beekeeper sets the channel from where answer runs, never from a flag:
 central and slack are the central instance's note_answer as the caller's
@@ -225,16 +244,17 @@ verified email, through the person's Slack decision or their own call;
 terminal is the desk's own login, a terminal on stdin with no agent
 session in the environment or among the process's ancestors; session is
 an answer recorded from inside an agent session (the guide's relay, for
-one) and script one recorded without a terminal: neither is ever the
-person's own. A terminal is the desk's login, not an identity: a process
-of the same user that hides its session can forge it, as it can write the
-log; central and slack carry the identity the central instance checked.
+one, and the CLI's note answer on a central note, which names its agent)
+and script one recorded without a terminal: neither is ever the person's
+own. A terminal is the desk's login, not an identity: a process of the
+same user that hides its session can forge it, as it can write the log;
+central and slack carry the identity the central instance checked.
 
 A session that needs the person's word for a step (a merge) runs it and
 quotes its output there instead of asking the person to type in its
 conversation.`,
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if ref != "" {
 				r, ok := parseRef(ref)
 				if !ok {
@@ -242,36 +262,85 @@ conversation.`,
 				}
 				q.About = refName(r)
 			}
+			ctx, err := a.verifyNote(note, &q)
+			if err != nil {
+				return err
+			}
 			if q.Note == 0 && q.About == "" {
 				return usageErr("which answer: --note <id> or --ref <owner/repo#n>")
 			}
-			return a.verifyAnswer(q)
+			return a.verifyAnswer(cmd.Context(), q, ctx)
 		},
 	}
-	c.Flags().IntVar(&q.Note, "note", 0, "the note the answer answered")
+	c.Flags().StringVar(&note, "note", "", "the note the answer answered: <n> the machine's, <context>#<n> the central instance's")
 	c.Flags().StringVar(&ref, "ref", "", "the issue or pull request the answer concerns")
-	c.Flags().StringVar(&q.Head, "head", "", "the commit the answer must approve")
+	c.Flags().StringVar(&q.Head, "head", "", "the commit its question or words must name")
 	return c
 }
 
-// verifyAnswer prints the answer q asks for and refuses one not verified.
-func (a *app) verifyAnswer(q answerQuery) error {
+// verifyNote reads --note s into q: the machine's note (<n>, #<n>), or the
+// central instance's (<context>#<n>), whose context it returns.
+func (a *app) verifyNote(s string, q *answerQuery) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	ctx, num, _ := strings.Cut(strings.TrimSpace(s), "#")
+	if !strings.Contains(s, "#") {
+		ctx, num = "", s
+	}
+	n, err := strconv.Atoi(num)
+	switch {
+	case err != nil || n <= 0:
+		return "", usageErr("--note %q: a note is <n>, #<n> or <context>#<n>", s)
+	case ctx != "" && (a.central || !a.cfg.Central.Enabled() || ctx != a.cfg.Central.Context):
+		return "", usageErr("--note %q: %q is not this machine's central instance (central.context %q)", s, ctx, a.cfg.Central.Context)
+	}
+	q.Note = n
+	return ctx, nil
+}
+
+// answerAccount is the account of the answer q asks for on the app's own
+// log, with the party that recorded it.
+func (a *app) answerAccount(q answerQuery) (verifiedAnswer, state.Party, error) {
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded })
 	if err != nil {
-		return err
+		return verifiedAnswer{}, state.Party{}, err
 	}
 	an, ok := newestAnswer(evs, q)
-	if !ok {
-		if q.Note != 0 {
-			return refused("no answer to note #%d is recorded (beekeeper log --verb %s)", q.Note, answerRecorded)
-		}
-		return refused("no answer about %s is recorded (beekeeper log --verb %s)", q.About, answerRecorded)
+	switch {
+	case !ok && q.Note != 0:
+		return verifiedAnswer{}, state.Party{}, refused("no answer to note #%d is recorded (beekeeper log --verb %s)", q.Note, answerRecorded)
+	case !ok:
+		return verifiedAnswer{}, state.Party{}, refused("no answer about %s is recorded (beekeeper log --verb %s)", q.About, answerRecorded)
 	}
 	why := an.unverified(q, a.central, a.now)
 	v := verifiedAnswer{About: an.About, Note: an.ID, Question: an.Question, By: an.For, Channel: an.Via,
 		Recorder: partyName(an.Recorder), At: an.At, Answer: an.Answer, Verified: why == "", Why: why}
 	if v.Verified {
 		v.Strength = an.strength()
+	}
+	return v, an.Recorder, nil
+}
+
+// verifyAnswer prints the answer q asks for, of the central instance's
+// note when central is its context, and refuses one not verified.
+func (a *app) verifyAnswer(ctx context.Context, q answerQuery, central string) error {
+	var v verifiedAnswer
+	if central == "" {
+		var err error
+		if v, _, err = a.answerAccount(q); err != nil {
+			return err
+		}
+	} else {
+		me, err := a.caller()
+		if err != nil {
+			return err
+		}
+		args := map[string]any{paramNote: q.Note, paramHead: q.Head, paramAbout: q.About}
+		if _, err := a.callCentral(ctx, me, toolAnswerVerifyName, args, &v); err != nil {
+			return err
+		}
+		v.Context = central
 	}
 	if a.json {
 		if err := a.printJSON(v); err != nil {
@@ -281,7 +350,7 @@ func (a *app) verifyAnswer(q answerQuery) error {
 		return err
 	}
 	if !v.Verified {
-		return refused("not the person's own answer: %s", why)
+		return refused("not the person's own answer: %s", v.Why)
 	}
 	return nil
 }
@@ -289,7 +358,7 @@ func (a *app) verifyAnswer(q answerQuery) error {
 func (a *app) printVerified(v verifiedAnswer) error {
 	var b strings.Builder
 	if v.Note != 0 {
-		fmt.Fprintf(&b, "note #%d on %s: %q\n", v.Note, v.About, v.Question)
+		fmt.Fprintf(&b, "note %s on %s: %q\n", v.noteName(), v.About, v.Question)
 	}
 	fmt.Fprintf(&b, "answer on %s by %s via %s, recorded by %s at %s (%s ago):\n",
 		v.About, v.By, v.Channel, v.Recorder, v.At.UTC().Format(time.RFC3339), ago(a.now, v.At))
@@ -297,7 +366,7 @@ func (a *app) printVerified(v verifiedAnswer) error {
 		b.WriteString("> " + strings.TrimRight(line, "\n") + "\n")
 	}
 	if v.Verified {
-		fmt.Fprintf(&b, "verified: %s's own answer, authenticated by %s\n", v.By, v.Strength)
+		fmt.Fprintf(&b, "verified: %s's own answer, authenticated by %s; read the words, a no verifies too\n", v.By, v.Strength)
 	} else {
 		fmt.Fprintf(&b, "not verified: %s\n", v.Why)
 	}
@@ -306,7 +375,8 @@ func (a *app) printVerified(v verifiedAnswer) error {
 }
 
 // answerAuthority is what a merge of ref names of the person's word: the
-// newest verified answer about it, "" for none.
+// newest verified answer about it, "" for none. It names the answer, not
+// what it says.
 func (a *app) answerAuthority(ref string, now time.Time) string {
 	q := answerQuery{About: ref}
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded })
@@ -318,7 +388,45 @@ func (a *app) answerAuthority(ref string, now time.Time) string {
 		return ""
 	}
 	if an.ID != 0 {
-		return fmt.Sprintf(", on %s's answer to note #%d via %s", an.For, an.ID, an.Via)
+		return fmt.Sprintf(", %s's verified answer: note #%d via %s", an.For, an.ID, an.Via)
 	}
-	return fmt.Sprintf(", on %s's answer via %s at %s", an.For, an.Via, an.At.UTC().Format(time.RFC3339))
+	return fmt.Sprintf(", %s's verified answer via %s at %s", an.For, an.Via, an.At.UTC().Format(time.RFC3339))
+}
+
+// The answer_verify tool's name and its own parameters.
+const (
+	toolAnswerVerifyName = "answer_verify"
+	paramHead            = "head"
+	paramAbout           = "about"
+)
+
+// mayReadAnswer says whether who may read an answer rec recorded: the
+// answering person, a member of their team, or its supervisor role.
+func mayReadAnswer(rec state.Party, email, team string, supervises bool) bool {
+	return rec.Person != "" && strings.EqualFold(rec.Person, email) || rec.Team != "" && rec.Team == team || supervises
+}
+
+// toolAnswerVerify is answer verify on the central instance's log: the
+// account of the answer to its note, or the newest about a thread, for the
+// answering person, their team or its supervisor role.
+func toolAnswerVerify(c *call, req mcp.CallToolRequest) (any, error) {
+	q := answerQuery{Note: req.GetInt(paramNote, 0), Head: strings.TrimSpace(req.GetString(paramHead, ""))}
+	if about := strings.TrimSpace(req.GetString(paramAbout, "")); about != "" {
+		r, ok := parseRef(about)
+		if !ok {
+			return nil, usageErr("about %q: an issue or pull request is owner/repo#n or its URL", about)
+		}
+		q.About = refName(r)
+	}
+	if q.Note <= 0 && q.About == "" {
+		return nil, usageErr("note or about is required: the note's number, or the issue or pull request")
+	}
+	v, rec, err := c.app.answerAccount(q)
+	if err != nil {
+		return nil, err
+	}
+	if !mayReadAnswer(rec, c.who.Email, c.who.Team, c.s.ids.Supervises(c.who, rec.Team)) {
+		return nil, refused("the answer is %s's: only that person, their team or its supervisor role reads it", cmp.Or(rec.Person, rec.Name))
+	}
+	return v, nil
 }

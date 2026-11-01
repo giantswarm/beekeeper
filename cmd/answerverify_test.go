@@ -1,10 +1,16 @@
 package cmd
 
 import (
+	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
+
+	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -14,6 +20,7 @@ const (
 	verifyGuide = "Guide run 40"
 	flagHead    = "--head"
 	flagNote    = "--note"
+	verifyNum   = "12"
 )
 
 // verifyNote files note 1 for the person on privateThread, its question
@@ -58,7 +65,7 @@ func TestTheTerminalsAnswerVerifies(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	for _, args := range [][]string{{flagNote, "1", flagHead, verifyHead}, {flagRef, "https://github.com/o/private/pull/7", flagHead, "ABC1234"}} {
+	for _, args := range [][]string{{flagNote, "1", flagHead, verifyHead}, {flagNote, "#1", flagRef, "https://github.com/o/private/pull/7", flagHead, "ABC1234"}} {
 		if err := runAnswer(a, append([]string{"verify"}, args...)...); err != nil {
 			t.Errorf("verify %q: %v", args, err)
 		}
@@ -80,7 +87,7 @@ func TestTheTerminalsAnswerVerifies(t *testing.T) {
 	if err := runAnswer(a, "o/r#9", "go ahead"); err != nil {
 		t.Fatal(err)
 	}
-	if err := runAnswer(a, "verify", flagRef, "o/r#9", flagHead, verifyHead); Code(err) != ExitRefused || !strings.Contains(err.Error(), "approves no head") {
+	if err := runAnswer(a, "verify", flagRef, "o/r#9", flagHead, verifyHead); Code(err) != ExitRefused || !strings.Contains(err.Error(), "it names no head") {
 		t.Errorf("no head named: %v", err)
 	}
 	if err := runAnswer(a, "verify", flagRef, "o/r#9"); err != nil {
@@ -208,10 +215,110 @@ func TestAMergeNamesTheVerifiedAnswer(t *testing.T) {
 	if err := runAnswer(a, privateThread, flagNote, "1", "merge it"); err != nil {
 		t.Fatal(err)
 	}
-	if s, want := a.answerAuthority(privateThread, time.Now()), ", on Pat's answer to note #1 via terminal"; s != want {
+	if s, want := a.answerAuthority(privateThread, time.Now()), ", Pat's verified answer: note #1 via terminal"; s != want {
 		t.Errorf("a merge names %q, want %q", s, want)
 	}
 	if s := a.answerAuthority(privateThread, time.Now().Add(25*time.Hour)); s != "" {
 		t.Errorf("a stale answer, a merge names %q", s)
+	}
+}
+
+// A question naming the full commit verifies for --head's short form too.
+func TestAShortHeadMatchesAFullOneNamed(t *testing.T) {
+	an := answered{About: privateThread, For: notePerson, Via: channelTerminal, Question: "Merge at " + verifyHead + "?", Answer: "approved", At: time.Now()}
+	for _, head := range []string{verifyHead, "abc1234", "ABC1234DEF"} {
+		if why := an.unverified(answerQuery{Head: head}, false, time.Now()); why != "" {
+			t.Errorf("--head %s: %s", head, why)
+		}
+	}
+	if why := an.unverified(answerQuery{Head: "abc1235"}, false, time.Now()); !strings.Contains(why, "not the head abc1235") {
+		t.Errorf("another head: %q", why)
+	}
+}
+
+// answerVerifyStandIn is the central instance's answer_verify: it answers
+// with v and keeps the arguments.
+type answerVerifyStandIn struct {
+	v     verifiedAnswer
+	calls []map[string]any
+}
+
+func (s *answerVerifyStandIn) url(t *testing.T) string {
+	srv := mcpserver.NewMCPServer(mailServer, "test")
+	srv.AddTool(mcp.NewTool(toolAnswerVerifyName), func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		s.calls = append(s.calls, req.GetArguments())
+		return mcp.NewToolResultStructured(s.v, "the answer"), nil
+	})
+	h := httptest.NewServer(mcpserver.NewStreamableHTTPServer(srv, mcpserver.WithStateLess(true)))
+	t.Cleanup(h.Close)
+	return h.URL + "/mcp"
+}
+
+// A central note's answer is verified on the central instance's log from
+// the desk: <context>#<n> asks it, a bare number reads the desk's own log
+// and never the central note of that number.
+func TestACentralNotesAnswerVerifiesFromTheDesk(t *testing.T) {
+	s := &answerVerifyStandIn{v: verifiedAnswer{About: privateThread, Note: 12, Question: "Merge o/private#7 at abc1234?", By: verifyEmail,
+		Channel: channelSlack, Recorder: verifyEmail, At: time.Now(), Answer: "merge it", Verified: true, Strength: "the central instance's verified identity " + verifyEmail}}
+	a, out := answerApp(t)
+	stubWakes(t)
+	m := centraltest.New(t, s.url(t), mailServer)
+	bin, _ := centraltest.Binary(t, m.URL, "token")
+	a.cfg.Central.Context, a.cfg.Central.Server = lab, mailServer
+	a.cfg.Central.Muster, a.cfg.Central.Timeout.Duration = bin, 10*time.Second
+	if err := runAnswer(a, "verify", flagNote, lab+"#"+verifyNum, flagHead, verifyHead); err != nil {
+		t.Fatalf("verify: %v\n%s", err, out)
+	}
+	if len(s.calls) != 1 || s.calls[0][paramNote] != float64(12) || s.calls[0][paramHead] != verifyHead {
+		t.Fatalf("answer_verify calls %v", s.calls)
+	}
+	for _, want := range []string{`note lab#12 on o/private#7: "Merge o/private#7 at abc1234?"`, "by pat@example.com via slack", "verified: pat@example.com's own answer"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	// Its refusal is the desk's exit 3, with its reason.
+	s.v.Verified, s.v.Why, s.v.Strength = false, "it is 25h old, older than 24h", ""
+	if err := runAnswer(a, "verify", flagNote, lab+"#"+verifyNum); Code(err) != ExitRefused || !strings.Contains(err.Error(), "older than 24h") {
+		t.Errorf("a stale central answer: %v", err)
+	}
+	// A bare 12 is the desk's note 12, whose answer was relayed.
+	stubSeat(t, verifyGuide, true)
+	if err := a.store.Log(event(state.Party{Session: "s1", Name: verifyGuide}, answerRecorded, `%s answered by %q via %s, note #12 asked by "x": "y": merge it`, privateThread, notePerson, channelSession)); err != nil {
+		t.Fatal(err)
+	}
+	for _, note := range []string{verifyNum, "#" + verifyNum} {
+		if err := runAnswer(a, "verify", flagNote, note); Code(err) != ExitRefused || !strings.Contains(err.Error(), "relayed it") {
+			t.Errorf("--note %s: %v", note, err)
+		}
+	}
+	if len(s.calls) != 2 {
+		t.Errorf("a bare number asked the central instance: %v", s.calls)
+	}
+	for _, note := range []string{"elsewhere#" + verifyNum, "lab#x", "0"} {
+		if err := runAnswer(a, "verify", flagNote, note); Code(err) != ExitUsage {
+			t.Errorf("--note %s: %v", note, err)
+		}
+	}
+}
+
+// The central instance shows an answer to the answering person, their
+// team and its supervisor role only.
+func TestOnlyTheAnswerersTeamReadsItsAnswer(t *testing.T) {
+	rec := state.Party{Name: verifyEmail, Person: verifyEmail, Team: "planeteers"}
+	for name, c := range map[string]struct {
+		email, team string
+		supervises  bool
+		want        bool
+	}{
+		"the person":       {"PAT@example.com", otherTeam, false, true},
+		"a teammate":       {"kai@example.com", "planeteers", false, true},
+		"the supervisor":   {"sam@example.com", otherTeam, true, true},
+		"another team's":   {"eve@example.org", otherTeam, false, false},
+		"no team, no name": {"", "", false, false},
+	} {
+		if got := mayReadAnswer(rec, c.email, c.team, c.supervises); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
 	}
 }
