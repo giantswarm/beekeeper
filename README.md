@@ -18,8 +18,11 @@ The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
 stops. Remote wakes and resumes use durable ordered message receipts; inspect
-them with `agents messages` and reconcile with `agents hosts sync`. The
-[design](docs/ssh-execution-hosts.md) records the contract and the remaining
+them with `agents messages` and reconcile with `agents hosts sync`. With
+`supervisor.hosts`, `supervisor loop` places its worker and reviewer starts
+on these hosts when the coordinator is out of room (or always with
+`supervisor.hostsFirst`).
+The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
 ## Install
@@ -627,6 +630,20 @@ The invocation must contain no other command, assignment or redirection. Codex a
 script's link destinations against its protected home. Globs, reassignment, branches, loops,
 additional helper commands and nested shell code get no link exemption. A command or script that
 also reads or copies the credential file is refused, including a read through the new link.
+
+The same holds for a link to a directory that holds a credential file (the home directory and `/`
+included), and for a relative link source, resolved from the link's own directory as well as the
+working directory. Outside that one-link exemption, `ln` or a helper defined on the command line
+that links such a directory is refused like a link to the file itself. A `find` whose `-exec`,
+`-execdir`, `-ok` or `-okdir` runs anything but a metadata command (or `shred`, `unlink`, `rmdir`,
+`echo`, `printf`) on a start path holding a credential file its `-name`/`-iname` tests accept is a
+read of it. A command that prints a credential file's path (`readlink`, `realpath`, `find`, `ls`,
+`stat` with its path in the format, …) is a read too when its output is piped into a stage that may
+open it or substituted into a command other than `echo`, `printf`, `test`, `[`, `basename` or
+`dirname` (`readlink -f link | xargs cat`, `cat "$(readlink -f link)"`); `| wc -l`, `>/dev/null`,
+`[ -n "$(ls …)" ]` and `stat -c %s` stay metadata. Codex refuses these in the same way, and in
+addition refuses a helper defined on the command line that is handed a path in its protected home,
+since its body (parameter operators, `$*`, `printf -v`, `mkdir`) may write it.
 
 Static checks such as `bash -n scripts/install.sh`, `sh -n scripts/install.sh` and
 `shellcheck scripts/install.sh` inspect script text without executing its credential operations.
@@ -2011,6 +2028,15 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   An explicit `command` continues to override this default. Only the bare default command is
   parsed as Claude's local `/usage` output; custom readers (including absolute executable paths)
   must print beekeeper's usage JSON.
+  `capacity.providers.agy` without a `command` (even `agy: {}`, or one with only a `ceiling`)
+  defaults to `[agy, -p, /usage]`, agy's local usage report, which takes no model turn. Like
+  Claude's, it runs under beekeeper's state directory (`usage/agy`) at the provider's `every`
+  (default `5m`), with its `timeout`, without the requesting agy worker's `BEEKEEPER_AGY_AGENT` and
+  `BEEKEEPER_AGENT_NAME`, and fails closed once older than `staleAfter`. Each model bucket's
+  `Five Hour Limit Remaining` and `Weekly Limit Remaining` lines become that bucket's 5-hour and
+  7-day windows (used = 100 − remaining) in `buckets`; a bucket printing only one of them is left
+  out, so a choice on it gets no start while the complete buckets still count, and a report with
+  no complete bucket is a failed read. A desk needs no timer of its own to feed `beekeeper capacity`.
   An explicit `"fiveHour": {"usedPercent": null, "resetsAt": null}` means no short window is open yet and counts as 0% used; weekly usage and pace still apply. Missing fields and unknown weekly usage remain errors.
   A `capacity.providers` entry of `kind: self-hosted` is a model served on the desk's own machines rather than a subscription: it sets no usage command and has no pace, only a `ceiling` of busy sessions at once (unset, 10), which `capacity.ceiling` never bounds — a desk that lowers `capacity.ceiling` to 0 to hold a subscription on its weekly pace still starts on its own model, with the machine guards as the only further bound. Its ceiling may follow the serving mode of the model it serves: `serveModeCommand` prints the mode on stdout (cached for `serveModeStaleAfter`, default `1m`) and `serveModeCeilings` names the ceiling per mode, falling back to `ceiling` while the mode names none or the read failed, which the line says as `serving mode unknown (…)`. The provider's line reads `provider <name>: <n> busy of ceiling <c>; serving mode <mode>; <verdict>` and `--json` carries `kind`, `servingMode` and `servingModeError`. Busy agents on a model of that provider count against its ceiling, `beekeeper capacity` and `--json` show both figures, and `agents start --harness omp` or `--harness auto` judging a start on it is judged against that ceiling. Unlike a subscription provider, it never earns a USAGE HIGH: only its ceiling and the machine guards stop a start.
   With `serveModeModes` each mode names the machine's nodes it occupies and the sessions it sustains (the ceiling of the mode per `sessions`), and `serveModeSwitchCommand` is the platform's own tool that switches into the mode named as its last argument (bounded by `serveModeSwitchTimeout`, default `1m`): beekeeper relays to it and holds no control of the model itself. A node a mode occupies is then a leasable resource, and `beekeeper lease claim <node>` the generic constraint "needs node N exclusively": while a constraint holds a node, the model never runs in a mode that occupies it — the claim lowers the provider's ceiling to the widest mode free of the node at once, drains it (no new session starts on the model; running sessions finish or park), runs the switch, and only then grants the lease; `lease release` switches back and raises the ceiling again once no constraint needs the node. One switch runs at a time (a machine-wide lock), never from a session that runs on the model itself, and the watch retries a switch a drain or a failure left pending. `beekeeper status` carries `serving mode <mode> (<n> sessions)` and each held node with the mode that stands while it holds; the event log carries `serve.drained`, `serve.switch` and `serve.refused`. Every failure leaves the mode as the reader reports it: a refused or failed switch keeps the mode, says so in the line and the log, and stays pending for the watch.
@@ -3218,9 +3244,12 @@ exit 69 and queues nothing.
 ## Configuration
 
 `$XDG_CONFIG_HOME/beekeeper/config.yaml` (or `--config`, or `$BEEKEEPER_CONFIG`). Every field is
-optional, and an empty configuration works: `watch`, `snapshot`, `free`, the hook and the
-coordination commands run with neutral defaults. Memory and disk thresholds default to fractions of
-what the machine has, and every organisation or desk choice is unset until configured.
+optional. A non-empty `$BEEKEEPER_CONFIG` must name an existing file; a missing file is an error
+before any state is opened. Pre-tool hooks report the failure as a deny decision. An unset or
+empty variable selects the default path, where a missing file still uses defaults. An empty
+configuration works: `watch`, `snapshot`, `free`, the hook and the coordination commands run
+with neutral defaults. Memory and disk thresholds default to fractions of what the machine
+has, and every organisation or desk choice is unset until configured.
 [`docs/examples/config.yaml`](docs/examples/config.yaml) is a complete desk's configuration, every
 key annotated with what it guards and its default.
 
