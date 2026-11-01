@@ -210,9 +210,9 @@ func TestRestartBrokerOn(t *testing.T) {
 		failing bool
 		want    string
 	}{
-		{name: "replaced and idle", bin: restartExe, start: before, want: "restart beekeeper-sandbox.service (pid 40): on " + restartExe + " now; its vault session goes with it"},
+		{name: "replaced and idle", bin: restartExe, start: before, want: "restart beekeeper-sandbox.service (pid 40): on " + restartExe + " now; install prepares the vault handover"},
 		{name: "serving a call", bin: restartExe, start: before, child: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary while it serves 1 call(s)"},
-		{name: "restart refused", bin: restartExe, start: before, failing: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary (refused): systemctl --user restart beekeeper-sandbox.service puts it on " + restartExe},
+		{name: "restart refused", bin: restartExe, start: before, failing: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary (refused): rerun beekeeper install to retry onto " + restartExe},
 		{name: "another binary", bin: "/opt/beekeeper", start: before},
 		{name: "started on the new binary", bin: restartExe, start: after},
 		{name: "no broker", bin: restartExe, start: before, down: true},
@@ -243,7 +243,7 @@ func TestRestartBrokerOn(t *testing.T) {
 				return nil
 			}
 			var out bytes.Buffer
-			restartBrokerOn(context.Background(), &out, restartExe, written, tab, false)
+			restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, false)
 			if c.want == "" {
 				if out.Len() != 0 || restarted {
 					t.Fatalf("restarted %v, said %q; want nothing", restarted, out.String())
@@ -266,8 +266,49 @@ func TestRestartBrokerOn(t *testing.T) {
 	restartBroker = func(context.Context) error { t.Fatal("a dry run restarted the broker"); return nil }
 	var out bytes.Buffer
 	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Comm: project.Name, Start: before}}}
-	restartBrokerOn(context.Background(), &out, restartExe, written, tab, true)
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, true, false)
 	if !strings.HasPrefix(out.String(), "restart beekeeper-sandbox.service (pid 40)") {
 		t.Fatalf("dry run said %q", out.String())
+	}
+}
+
+func TestRestartBrokerRefusesUnavailableHandover(t *testing.T) {
+	prevP, prevR, prevH := brokerProcess, restartBroker, prepareBrokerHandover
+	t.Cleanup(func() { brokerProcess, restartBroker, prepareBrokerHandover = prevP, prevR, prevH })
+	brokerProcess = func() (int, string, error) { return 40, restartExe, nil }
+	prepareBrokerHandover = func(context.Context) error { return errors.New("unsupported handover") }
+	restartBroker = func(context.Context) error { t.Fatal("restarted without the session handover"); return nil }
+	written := time.Now()
+	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Start: written.Add(-time.Hour)}}}
+	var out bytes.Buffer
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, true)
+	if !strings.Contains(out.String(), "restart refused") {
+		t.Fatal("missing warning before restart")
+	}
+}
+
+func TestRestartBrokerPreparesHandoverBeforeStopping(t *testing.T) {
+	prevP, prevR, prevH := brokerProcess, restartBroker, prepareBrokerHandover
+	t.Cleanup(func() { brokerProcess, restartBroker, prepareBrokerHandover = prevP, prevR, prevH })
+	brokerProcess = func() (int, string, error) { return 40, restartExe, nil }
+	prepared, restarted := false, false
+	prepareBrokerHandover = func(context.Context) error { prepared = true; return nil }
+	restartBroker = func(context.Context) error {
+		if !prepared {
+			t.Fatal("restart preceded handover")
+		}
+		restarted = true
+		return nil
+	}
+	written := time.Now()
+	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Start: written.Add(-time.Hour)}}}
+	var out bytes.Buffer
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, true, true)
+	if prepared || restarted {
+		t.Fatal("dry run changed broker state")
+	}
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, true)
+	if !prepared || !restarted {
+		t.Fatal("restart did not use the prepared handover")
 	}
 }

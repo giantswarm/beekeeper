@@ -29,6 +29,7 @@ const (
 	VaultUnlock    = "unlock"
 	VaultLock      = "lock"
 	VaultStatus    = "status"
+	VaultPrepare   = "prepare-handover"
 	VaultStore     = "store"
 	VaultStoreItem = "store-item"
 )
@@ -152,6 +153,10 @@ func answerVault(ctx context.Context, c net.Conn, k *Keeper, store Storer, store
 		st.Error = "a request is one JSON line"
 	case req.Op == VaultUnlock:
 		if err := k.Unlock(req.Name, req.Token, time.Now()); err != nil {
+			st.Error = err.Error()
+		}
+	case req.Op == VaultPrepare:
+		if err := k.PrepareHandover(); err != nil {
 			st.Error = err.Error()
 		}
 	case req.Op == VaultLock:

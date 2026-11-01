@@ -1057,3 +1057,27 @@ func TestCodexHooksAndSkills(t *testing.T) {
 		t.Errorf("Agy skills broken after Codex-only uninstall: %q", got)
 	}
 }
+
+func TestInstallRefusesRestartBeforeHandover(t *testing.T) {
+	f := &fakeSetup{}
+	e, _ := env(t, t.TempDir(), f, f.run)
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	e.Exe, e.Spec.Exe = "/new/bin/beekeeper", "/new/bin/beekeeper"
+	f.ran = nil
+	e.BeforeRestart = func(context.Context, string) error { return errors.New("handover unavailable") }
+	e.DryRun = true
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal("dry run attempted handover", err)
+	}
+	e.DryRun = false
+	if err := Install(context.Background(), e); err == nil {
+		t.Fatal("install ignored failed preparation")
+	}
+	for _, command := range f.ran {
+		if strings.HasPrefix(command, "restart ") {
+			t.Fatal("service restarted despite failed handover")
+		}
+	}
+}

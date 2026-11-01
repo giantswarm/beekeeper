@@ -45,7 +45,9 @@ type Env struct {
 	Spec                                                                     platform.SetupSpec
 	// Run runs one service manager command.
 	Run func(ctx context.Context, argv []string) error
-	Out io.Writer
+	// BeforeRestart prepares a service for restart, or refuses before stopping it.
+	BeforeRestart func(context.Context, string) error
+	Out           io.Writer
 	// DryRun prints every step and takes none.
 	DryRun bool
 }
@@ -296,6 +298,9 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 		p.add("keep", name, "its definition is not beekeeper install's", nil)
 	case state != fileNew && e.Setup.Started(ctx, path):
 		if state == fileUpdated {
+			if e.BeforeRestart != nil {
+				p.add("prepare", name, "preserve running state before restart", func() error { return e.BeforeRestart(ctx, name) })
+			}
 			for _, argv := range e.Setup.Restart(path) {
 				p.command(ctx, e, argv)
 			}
