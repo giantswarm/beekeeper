@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -115,6 +116,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			return fmt.Errorf("reading alert owners: %w", err)
 		}
 	}
+	var unowned []alerts.Firing
 	for _, f := range firing {
 		// A preceding event may have resumed or replaced a parked worker.
 		// Use its current roster entry before routing the next instance.
@@ -164,18 +166,65 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 		if owned || waiting || staffed || done[key] || f.Severity != a.cfg.Alerts.PageSeverity {
 			continue
 		}
+		refs := blockedAlertRefs(st, f)
+		if len(refs) == 0 {
+			unowned = append(unowned, f)
+			continue
+		}
 		act := superloop.Action{Kind: loopAlertKind, Key: key}
 		question := "Assign an owner to the firing alert " + f.Name() + "?"
 		// Alert identities are events, not GitHub issues. File a local note
 		// directly, so no invented issue reference or public data is needed.
-		if err := l.alertNote(act, question, f); err != nil {
+		if err := l.alertNote(act, question, f, refs); err != nil {
 			return err
 		}
+		done[key] = true
+	}
+	if len(unowned) > 0 {
+		counts := map[string]int{}
+		var oldest time.Time
+		for _, f := range unowned {
+			counts[f.Installation]++
+			if since, err := time.Parse(time.RFC3339Nano, f.Since); err == nil && (oldest.IsZero() || since.Before(oldest)) {
+				oldest = since
+			}
+		}
+		var installations []string
+		for name, count := range counts {
+			installations = append(installations, fmt.Sprintf("%s=%d", name, count))
+		}
+		slices.Sort(installations)
+		since := kindUnknown
+		if !oldest.IsZero() {
+			since = oldest.UTC().Format(time.RFC3339Nano)
+		}
+		_, err := fmt.Fprintf(a.out, "SUPERVISOR ALERTS unowned: %s; count=%d; oldest firing=%s\n", strings.Join(installations, ", "), len(unowned), since)
+		return err
 	}
 	return nil
 }
 
-func (l *supervisorLoop) alertNote(act superloop.Action, question string, f alerts.Firing) error {
+// A configured installation, a lease or an unrelated task is not evidence
+// of blocked work. An active session record must name its issue and explicitly
+// wait on this alert (sessions serve ... --waits alert:<name>). Parked agents
+// are routed above; these records cover work the loop cannot route itself.
+func blockedAlertRefs(st *state.State, f alerts.Firing) []string {
+	var refs []string
+	for _, r := range st.Records {
+		q, ok := strings.CutPrefix(r.Waits, alertParkPrefix)
+		ref, valid := parseRef(r.Issue)
+		if !r.Ended.IsZero() || !valid || !ok || len(alerts.Match([]alerts.Firing{f}, q)) == 0 {
+			continue
+		}
+		name := refName(ref)
+		if !slices.Contains(refs, name) {
+			refs = append(refs, name)
+		}
+	}
+	return refs
+}
+
+func (l *supervisorLoop) alertNote(act superloop.Action, question string, f alerts.Firing, refs []string) error {
 	if l.a.cfg.Guide.Person == "" {
 		return fmt.Errorf("guide.person is unset: cannot route unowned alert %s", f.Name())
 	}
@@ -184,9 +233,9 @@ func (l *supervisorLoop) alertNote(act superloop.Action, question string, f aler
 		// Use the same durable note state as note add, without GitHub calls.
 		st.NextNote++
 		id := st.NextNote
-		status := fmt.Sprintf("%s %s since %s", f.Instance(), f.Where, f.Since)
+		status := fmt.Sprintf("%s %s since %s blocks %s", f.Instance(), f.Where, f.Since, strings.Join(refs, ", "))
 		st.Notes = append(st.Notes, state.Note{
-			ID: id, For: l.a.cfg.Guide.Person, By: loopParty,
+			Refs: refs, ID: id, For: l.a.cfg.Guide.Person, By: loopParty,
 			Text: question + "\n" + status, At: l.a.now, Kind: noteDecision,
 			Question: question, StatusQuo: status,
 			Default: "keep this alert unowned until an owner is assigned",
