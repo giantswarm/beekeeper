@@ -192,6 +192,12 @@ upgrades:
 
 supervisor:                 # what handover --prompt tells the successor supervisor; unset skill and instructions, it opens without them
   loop: false              # install the persistent supervisor loop user service (systemd or launchd); opt-in
+  # The loop owns a watch beside it, reading alerts every alerts.every;
+  # unowned pages become guide.person notes. A worker can wait on a named
+  # alert with agents park --on alert:<alertname|installation/alertname>.
+  # An unresumable parked session is replaced on its original task. Every
+  # watch poll reads the budget; the loop holds starts on low/stale budget
+  # or machine pressure. Watch lines are durable watch.* events.
   fillRetryEvery: 5m        # retry an empty/failed board read; roster or capacity changes retry immediately
   skill: beekeeper:supervise   # the skill it runs (the plugin's role, see the README); or instructions: ~/supervisor.md, a file that opens the prompt
   scope: The desk's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
@@ -256,7 +262,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
     claude:
       floor: 1
       ceiling: 4
-      command: [~/.local/bin/read-usage]
+      command: [claude, -p, /usage, --output-format, json] # default for claude, even with claude: {}; no model turn, no status line or credential reader
       staleAfter: 15m       # a reading older than staleAfter or a failed read yields ceiling 0, room 0 for this provider
       fiveHourMax: 90
       sevenDayMax: 95

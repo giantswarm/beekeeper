@@ -398,7 +398,9 @@ type registration struct {
 // sessions that no longer run, and is refused a name the entry of a running
 // session holds. An open task of a dropped entry is never lost: the new
 // entry takes it over with its assignment time, and two dropped entries with
-// open tasks are refused, since one entry holds one task.
+// open tasks are refused, since one entry holds one task. A park the session
+// took off the roster ends, as a new task ends an agent's: the roster
+// entry's own task and park, if any, are what it waits on now.
 func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
 	var reg registration
 	var holder, lastTask, harness, model string
@@ -439,6 +441,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
+	st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
 	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep, Harness: harness, Model: model})
 	return reg, nil
 }

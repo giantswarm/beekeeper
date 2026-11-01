@@ -115,3 +115,31 @@ func TestNoteAddFilesLocallyWhileCentralIsUnreachable(t *testing.T) {
 		t.Errorf("notes %v, out %q: want the decision filed on the machine, as stderr says", st.Notes, out.String())
 	}
 }
+
+// A failed central read prints a warning even when the caller suppresses
+// Cobra's error printing, while the local notes remain available.
+func TestCentralNoteListWarns(t *testing.T) {
+	const listVerb = "list"
+	for _, args := range [][]string{{listVerb}, {listVerb, "--full"}, {}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			a, out, m := centralNoteApp(t, &noteAddStandIn{})
+			m.Down(true)
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Notes = []state.Note{{ID: 1, Text: "local decision"}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			c := a.noteCmd()
+			c.SetArgs(args)
+			c.SetOut(out)
+			c.SetErr(out)
+			c.SilenceErrors = true
+			c.SilenceUsage = true
+			err := c.Execute()
+			if Code(err) != ExitCentral || !strings.Contains(out.String(), "warning: ") || !strings.Contains(out.String(), "local decision") || !strings.Contains(out.String(), "central instance's notes (lab) are not listed") {
+				t.Fatalf("list: %v: %s", err, out.String())
+			}
+		})
+	}
+}

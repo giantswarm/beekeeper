@@ -1004,7 +1004,11 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
-	Notes    []Note               `json:"notes,omitempty"`
+	// Parks are the parks of sessions off the roster (agents park by a
+	// session no roster entry names), one per session, its By: the watch
+	// settles and resumes them as it does a roster agent's.
+	Parks []Park `json:"parks,omitempty"`
+	Notes []Note `json:"notes,omitempty"`
 	// Defaulted are the decisions closed by their default within the last
 	// day: an answer that arrives meanwhile replaces the default.
 	Defaulted []Note  `json:"defaulted,omitempty"`

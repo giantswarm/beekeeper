@@ -47,7 +47,7 @@ func (s *Server) git(ctx context.Context, dir string, args ...string) ([]byte, e
 	// checkout hooks must not execute before registration or inherit the
 	// operator's unrelated Git settings.
 	args = append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false"}, args...)
-	return s.command(ctx, dir, append(cleanEnvironment(""), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), "git", args...)
+	return s.command(ctx, dir, append(cleanEnvironment("", ""), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), "git", args...)
 }
 
 func (s *Server) workspace(ctx context.Context, j *Journal) error {

@@ -106,6 +106,9 @@ type providerView struct {
 	// it stands, the provider's ceiling is that mode's and no session
 	// starts on the model.
 	DrainTo string `json:"drainTo,omitempty"`
+
+	NoPlanWindows       bool `json:"noPlanWindows,omitempty"`
+	supplementalBuckets bool
 }
 
 func (p *providerView) findBucket(name string) *bucketView {
@@ -137,11 +140,17 @@ func (p *providerView) windowsSummary(now time.Time) string {
 		}
 		return ""
 	}
+	if p.NoPlanWindows {
+		return claudeNoPlanWindows
+	}
 	if p.Error != "" {
 		return "usage unknown (" + truncate(p.Error, 120) + ")"
 	}
 	if len(p.Buckets) > 0 {
 		var parts []string
+		if p.supplementalBuckets {
+			parts = append(parts, "usage "+windowsPairLine(p.FiveHour, p.SevenDay, now))
+		}
 		for _, bName := range p.bucketOrder {
 			if bv := p.Buckets[bName]; bv != nil {
 				parts = append(parts, bName+" "+bv.windowsLine(now))
@@ -557,9 +566,11 @@ func (c agentCount) line(k config.Capacity) string {
 // the 1-minute load against the watch's limit, the kind labs against their
 // cap, and for a start that builds the free build slots.
 type headroom struct {
-	AvailableMiB int    `json:"availableMiB"`
-	AvailMinMiB  int    `json:"availMinMiB"`
-	MemErr       string `json:"memError,omitempty"`
+	// Disk is the watch's latest reading, sharing its thresholds and source.
+	Disk         *watchDiskReading `json:"disk,omitempty"`
+	AvailableMiB int               `json:"availableMiB"`
+	AvailMinMiB  int               `json:"availMinMiB"`
+	MemErr       string            `json:"memError,omitempty"`
 	// PSI is memory pressure now ("full avg60" of /proc/pressure/memory,
 	// in percent), PSIMax the most under which disk swap's growth is a
 	// warning rather than a block (capacity.swapPSIMax).
@@ -622,6 +633,9 @@ const (
 // start that does not build has no use for it.
 func (h *headroom) blocks(builds bool) []string {
 	var out []string
+	if h.Disk != nil && h.Disk.Low {
+		out = append(out, "disk pressure: "+h.diskFigure())
+	}
 	switch {
 	case h.MemErr != "":
 		out = append(out, "MemAvailable unknown ("+h.MemErr+")")
@@ -694,6 +708,10 @@ func pct(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) + "%" }
 // slotBusy reports whether no build slot is free.
 func (h *headroom) slotBusy() bool { return h.Slots > 0 && h.SlotsFree == 0 }
 
+func (h *headroom) diskFigure() string {
+	return fmt.Sprintf("free disk / %d MiB (floor %d MiB)", h.Disk.FreeMiB, h.Disk.MinMiB)
+}
+
 // line says the headroom in one line.
 func (h *headroom) line() string {
 	mem := "MemAvailable unknown"
@@ -701,6 +719,9 @@ func (h *headroom) line() string {
 		mem = fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
 	}
 	mem += ", " + h.psiFigure()
+	if h.Disk != nil {
+		mem += ", " + h.diskFigure()
+	}
 	swap := "swap growth not measured (no watch reading)"
 	if s := h.Swap; s != nil {
 		swap = fmt.Sprintf("disk swap %d MiB, zswap %d MiB, growth not yet measured", s.DiskMiB, s.ZswapMiB)
@@ -796,7 +817,13 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 		}
 		r := res.reading
 		pv.At = r.At
-		if len(r.Buckets) > 0 {
+		if r.NoPlanWindows {
+			pv.NoPlanWindows = true
+			pv.Blocks = []string{claudeNoPlanWindows}
+			pv.Verdict = providerVerdict(0, pv.Blocks)
+			return pv
+		}
+		if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
 			pv.Buckets = make(map[string]*bucketView, len(r.Buckets))
 			pv.bucketOrder = bucketNames(r)
 			maxBucketCeiling := 0
@@ -902,6 +929,16 @@ func buildSingleProviderView(name string, pCfg config.Provider, pa providerAgent
 		pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
 	default:
 		pv.Room = pv.Ceiling - len(pv.Busy)
+	}
+	// Model weeks supplement, rather than replace, the aggregate plan windows.
+	if res.ok && len(res.reading.Buckets) > 0 && (res.reading.FiveHour != nil || res.reading.SevenDay != nil) {
+		pv.supplementalBuckets = true
+		pv.Buckets = make(map[string]*bucketView)
+		pv.bucketOrder = bucketNames(res.reading)
+		for _, name := range pv.bucketOrder {
+			b := res.reading.Buckets[name]
+			pv.Buckets[name] = &bucketView{Name: name, SevenDay: effectiveSevenDayWindow(b.SevenDay, now)}
+		}
 	}
 	pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
 	return pv
@@ -1215,7 +1252,7 @@ func eligibleChoicesRoom(k config.Capacity, providers map[string]*providerView, 
 		if pv == nil {
 			continue
 		}
-		if cand.Bucket != "" && len(pv.Buckets) > 0 {
+		if cand.Bucket != "" && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			if bv := pv.findBucket(cand.Bucket); bv != nil {
 				key := cand.Provider + "/" + bv.Name
 				if !seenBucket[key] {
@@ -1311,7 +1348,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		pCfg := k.Providers[provName]
 		pv := providers[provName]
 		bucketName := ""
-		if pv != nil && len(pv.Buckets) > 0 {
+		if pv != nil && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			bucketName = ch.EffectiveBucket(pCfg)
 		}
 		cand := choiceCandidate{
@@ -1327,7 +1364,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			behind := 0.0
 			if subscription {
 				sd := pv.SevenDay
-				if len(pv.Buckets) > 0 {
+				if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 					sd = pv.findBucket(bucketName).SevenDay
 				}
 				if sd != nil && sd.Pace != nil {
@@ -1375,7 +1412,7 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 	}
 
 	var fh, sd *usageWindow
-	if len(pv.Buckets) > 0 {
+	if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 		bv := pv.findBucket(bucketName)
 		if bv == nil {
 			return fmt.Sprintf("bucket %q not in %s usage output", bucketName, pv.Name)
@@ -1553,6 +1590,7 @@ func (a *app) liveCapacity() config.Capacity {
 func (a *app) readHeadroom(ctx context.Context, k config.Capacity, swap *swapReading) *headroom {
 	slotDir, slots := a.slotView()
 	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
+	h.Disk = a.watchDisk()
 	m, err := plat.Machine.Mem()
 	if err != nil {
 		h.MemErr = err.Error()
@@ -1647,9 +1685,16 @@ subagents' transcripts have been quiet for 5 minutes is waiting, listed
 apart with what it waits on; one
 without a task, or done, is idle. Only busy agents hold a slot: parked and
 waiting agents do no work, spend next to no budget and never block a start.
+There is no separate cap on live sessions (busy plus waiting): memory, swap,
+load and lab headroom bound new starts instead. A fixed session cap would let
+waiters exclude useful work despite available headroom. These guards judge
+starts, not simultaneous wakes: waiters that wake together can push busy over
+its ceiling; existing agents finish, and new starts wait for room. Re-read
+capacity before starting replacement work.
 The supervisor, the guide and a role's successor are not counted.
 
-The headroom bounds a start: MemAvailable against capacity.availMinMiB,
+The headroom bounds a start: the watch's free disk reading against
+watch.diskMinMiB, MemAvailable against capacity.availMinMiB,
 disk swap's growth over the watch's readings of watch.swapWindow against
 capacity.swapGrowthMaxMiB (never the swap in use, never zswap's share,
 which sits in RAM, and never zswap's writeback), the 1-minute load against the watch's HIGH LOAD limit
@@ -1938,7 +1983,7 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 		}
 		return v
 	}
-	if bucket != "" && len(pv.Buckets) > 0 {
+	if bucket != "" && len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 		if bv := pv.findBucket(bucket); bv != nil {
 			if bv.Room == 0 {
 				v.Room = 0

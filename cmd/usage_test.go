@@ -2456,6 +2456,9 @@ func newSelfHostedApp(cfgPath string, cfg *config.Config, store state.Store, out
 		now:     now,
 		out:     out,
 		as:      usageCaller,
+		readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
+			return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+		},
 	}
 }
 
@@ -2513,7 +2516,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	if !strings.Contains(got, "provider local-model: 0 busy of ceiling 2; room for 2 starts") {
 		t.Fatalf("self-hosted provider line:\n%s", got)
 	}
-	if !strings.Contains(got, "provider claude: 0 busy of floor 1, ceiling 2; no start: ceiling 0") {
+	if !strings.Contains(got, "provider claude: 0 busy of floor 1, ceiling 2; usage 5h 0%, 7d 0%; no start: ceiling 0") {
 		t.Fatalf("subscription provider line:\n%s", got)
 	}
 	// The subscription's choice has no room, so the self-hosted one is what a

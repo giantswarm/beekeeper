@@ -57,7 +57,7 @@ func (Capper) Adopt(int, string, platform.Cap) error {
 
 // Reap is the host's: the sandbox keeps the service manager out of reach,
 // so the host's watch stops a scope whose run is gone (an orphaned slot
-// scope).
+// scope), including children adopted by bubblewrap's PID-namespace init.
 func (Capper) Reap(string) ([]int, error) { return nil, nil }
 
 // EnterScope asks the broker to move this process into the capped scope
