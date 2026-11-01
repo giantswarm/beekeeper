@@ -463,10 +463,8 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
-	// WorkScope offers only the work scope: an issue under an epic of the
-	// priority list, an order (an item of a step without WorkScope) and an
-	// open recorded blocker of either; anything else is skipped as "not in
-	// a priority epic".
+	// WorkScope is read and ignored, so an existing configuration loads:
+	// the priority list no longer gates what a step offers.
 	WorkScope bool `yaml:"workScope"`
 }
 

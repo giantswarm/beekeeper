@@ -78,16 +78,13 @@ never offered through its sub-issues; an issue whose nearest epic among its
 parents on the board is in planning is skipped as "sub-issue of epic
 <owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
 the go: from then its open sub-issues are offered, in their order. The
-person's priority list (beekeeper priority, the board's Priority field) comes
-first: the candidates are ordered by the rank of their epic, an issue's own
-or that of its nearest ranked ancestor through the sub-issue relation, the
-unranked after the ranked, each rank in the order above; the pick prints the
-rank it applied ("priority 2 of epic <owner/repo#n>", --json priority and
-priorityOf). A step with workScope offers only the work scope: an issue
-under an epic of the priority list, an order (an item a step without
-workScope offers) and an open recorded blocker of either; an item under an
-unranked epic or under none is skipped as "not in a priority epic", not
-ordered last. A plan is
+order is the steps' alone: their Status (board.order lists In Progress, then
+Up Next, then Backlog), and within a step the board's own order of its
+items. The person's priority list (beekeeper priority, the board's Priority
+field) neither orders nor gates anything: the pick only prints the rank of
+its epic, an issue's own or that of its nearest ranked ancestor through the
+sub-issue relation ("priority 2 of epic <owner/repo#n>", --json priority and
+priorityOf). A step's workScope is read and ignored. A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
@@ -214,8 +211,7 @@ the whole walk.`,
 			}
 			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			board.ByPriority(cands, snap.Priorities.Ranks(), snap.Parent)
-			snap.Scope(cands)
+			board.Annotate(cands, snap.Priorities.Ranks(), snap.Parent)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -610,7 +606,6 @@ const (
 	kindPlanning = "planning"
 	kindUnknown  = "unknown"
 	kindOrder    = "order"
-	kindScope    = "scope"
 )
 
 // skipKind names the kind of a skip reason: who holds the item, or what
@@ -633,8 +628,6 @@ func skipKind(reason string) string {
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
 		return kindUnknown
-	case reason == board.OutOfScope:
-		return kindScope
 	}
 	return kindOrder
 }
