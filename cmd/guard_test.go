@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/testenv"
 )
 
 // The test binary doubles as beekeeper (BEEKEEPER_TEST_MAIN=1), so the hook's
@@ -112,6 +113,7 @@ func TestMain(m *testing.M) {
 	// No test asks the machine's Claude Code for its plugins; one that
 	// wants a list sets it.
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
+	testenv.Setup()
 	os.Exit(runIsolated(m))
 }
 

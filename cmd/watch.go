@@ -2305,8 +2305,8 @@ func reportLines(r state.WorkerReport) []string {
 
 // parkOnPerson reports whether park p waits on a person's word: a note, or
 // waits that name a person's answer, review or reply, or person; waits that
-// name only the supervisor or the guide beside a lease grant, a timer or a
-// probe wait on a resource. A park on a lease never waits on a person.
+// name only the supervisor or the guide wait on an operational handoff,
+// including a gate or install chain. A park on a lease never waits on a person.
 func parkOnPerson(p *state.Park, person string) bool {
 	if _, note := parkNote(p.On); note {
 		return true
@@ -2317,8 +2317,7 @@ func parkOnPerson(p *state.Park, person string) bool {
 	if _, lease := parkLease(p.On); lease {
 		return false
 	}
-	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person) ||
-		parkedOn(p.Waits, person) != "" && !resourceWaitWords.MatchString(p.Waits)
+	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person)
 }
 
 // parkedNews says once per park which agents parked on a person (a note,
