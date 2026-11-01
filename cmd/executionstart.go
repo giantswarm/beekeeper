@@ -187,7 +187,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
 		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now), k, readings, h, false, exclude, kind, a.now)
 	} else {
-		v = newCapacity(counts, k, h, false).withUsage(legacy, a.now)
+		v = newStartCapacity(counts, k, h, false, kind).withUsage(legacy, a.now)
 	}
 	v = v.forTarget(k, harness, model)
 	v.Builds = builds

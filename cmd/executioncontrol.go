@@ -40,6 +40,7 @@ type executionPark struct {
 	// coordinator checks it against the pull request itself (a host's own
 	// branch and GitHub view are no proof); ReviewHead is an older host's.
 	Head       string `json:"head,omitempty"`
+	RefKind    string `json:"refKind,omitempty"`
 	ReviewHead string `json:"reviewHead,omitempty"`
 	On         string `json:"on"`
 	Waits      string `json:"waits"`
@@ -320,7 +321,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
-		reviewHead := ""
+		reviewHead, kind := "", v.RefKind
 		if _, isRef := parseRef(v.On); isRef && ag.Execution != nil {
 			if r, _ := executionRecord(st, *ag.Execution); r != nil {
 				head := v.Head
@@ -330,7 +331,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				reviewHead = executionReviewHead(ctx, r, v.On, head)
 			}
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), ReviewHead: reviewHead}
+		if reviewHead != "" {
+			kind = github.RefPullRequest
+		}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)

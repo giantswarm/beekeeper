@@ -59,7 +59,7 @@ func answer(t *testing.T, w *watcher) {
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
 		st.Notes = nil
-		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Answer: parkAnswer, Note: n.ID}
+		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Channel: channelTerminal, Answer: parkAnswer, Note: n.ID}
 		return []state.Event{answerEvent(state.Party{Name: personTimo, Person: personTimo}, rec, &n)}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -349,7 +349,7 @@ func replyingRefs(t *testing.T, reply *github.Reply) {
 	refStates = func(_ context.Context, rs []github.PR) (map[github.PR]github.RefState, error) {
 		m := map[github.PR]github.RefState{}
 		for _, r := range rs {
-			m[r] = github.RefState{State: github.Open, Reply: *reply}
+			m[r] = github.RefState{Kind: github.RefPullRequest, State: github.Open, Reply: *reply}
 		}
 		return m, nil
 	}
@@ -489,7 +489,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
 	for _, head := range []string{"", loopHead} {
-		w := parkingWatch(t, nil)
+		w := parkingWatch(t, map[string]string{refOne: github.Open})
 		parkReviewHead = func(string) string { return head }
 		line, err := w.park(offSession, refOne, "waiting")
 		if err != nil {
@@ -499,7 +499,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || !strings.Contains(line, parkReviewMode(head)) {
+		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || !strings.Contains(line, parkReviewMode(head)) {
 			t.Fatalf("parks %+v, line %q", st.Parks, line)
 		}
 	}

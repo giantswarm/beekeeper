@@ -86,10 +86,13 @@ alert:<name> waits for a firing alert (a bare alertname or installation/alertnam
 lease claim --park parks on a lease. The supervisor loop wakes alert waits
 and replaces a parked session that cannot be resumed, keeping its task.
 
-Once the note is closed (answered, defaulted, done or overtaken), the pull
-request merged or closed or given a review or comment by anyone but its
-author since the park (a review posted under the author's own login settles
-nothing), the hold
+GitHub targets are resolved before the park is recorded; a confirmed unknown
+target is refused. If GitHub cannot be read, the park is recorded and its type
+resolved later. Issues are plain waits checked every five minutes and never
+enter pull request review. Once the note is closed (answered, defaulted, done
+or overtaken), the issue closed, the pull request merged or closed or given a
+review or comment by anyone but its author since the park (a review posted
+under the author's own login settles nothing), the hold
 lifted or ended, or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
@@ -148,10 +151,14 @@ agents wake: its task is that message's first line.`,
 				}
 			}
 			if a.managedExecutionID() != "" {
+				kind, err := resolveParkRef(cmd.Context(), on)
+				if err != nil {
+					return err
+				}
 				// The coordinator proves the review head against the
 				// execution's owned branch: the workspace's own branch
 				// never is the published one, nor does the host read GitHub.
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, Head: a.executionWorkspaceHead(cmd.Context(), on)})
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on)})
 			}
 			line, err := a.park(me, on, waits)
 			if err != nil {
@@ -179,9 +186,13 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		}
 		id, isNote = parkNote(on)
 	}
+	kind, err := resolveParkRef(context.Background(), on)
+	if err != nil {
+		return "", err
+	}
 	reviewHead := parkReviewHead(on)
 	var line string
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
 		if i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done) {
 			return nil, refused("%q has no task: park keeps a task, an idle agent has nothing to wait for", st.Agents[i].Name)
@@ -198,7 +209,7 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		if target, ok := parkHold(on); ok && !holdStands(st, target, a.now) {
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
-		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, ReviewHead: reviewHead}
+		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
 		name, counted, resume := me.Name, "off the roster, woken by its session id", fmt.Sprintf("beekeeper agents resume %s", wakeID(me))
 		// One park per session: a new one replaces the last, also one it
 		// took off the roster before it registered.
@@ -234,6 +245,11 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		}
 		return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
 	})
+	if err == nil && kind == github.RefIssue {
+		if suggestion := a.parkSuggestion(me, on); suggestion != "" {
+			line += " This is an issue wait. For desk review, park on your open pull request: " + suggestion
+		}
+	}
 	return line, err
 }
 
@@ -501,6 +517,9 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			}
 		} else if r, ok := parseRef(p.On); ok {
 			parked = append(parked, ag)
+			if p.RefKind != github.RefPullRequest && !p.RefChecked.IsZero() && w.now.Sub(p.RefChecked) < parkRefRetry {
+				continue
+			}
 			if !slices.Contains(refs, r) {
 				refs = append(refs, r)
 			}
@@ -512,7 +531,20 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	}
 	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
-		// A failed batch leaves its agents parked; the others settle.
+		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
+		// its agents parked; the others settle.
+		attempts := map[github.PR]github.RefState{}
+		for _, ag := range parked {
+			if ag.Park != nil && ag.Park.RefKind != github.RefPullRequest {
+				r, ok := parseRef(ag.Park.On)
+				if ok && slices.Contains(refs, r) {
+					attempts[r] = github.RefState{Kind: ag.Park.RefKind}
+				}
+			}
+		}
+		if len(attempts) > 0 {
+			w.cacheParkRefs(parked, attempts)
+		}
 		s, err := refStates(ctx, refs)
 		if err != nil {
 			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
@@ -520,6 +552,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			w.clear("park-refs")
 		}
 		states = s
+		w.cacheParkRefs(parked, s)
 	}
 	var closes map[int]string
 	if len(closed) > 0 {
@@ -571,7 +604,7 @@ func noteCloses(evs []state.Event, ids []int, central string) map[int]string {
 		for _, id := range ids {
 			if an, ok := parseAnswered(e); ok {
 				if an.ID == id {
-					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.For, an.Answer)
+					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.attribution(), an.Answer)
 					if an.Comment != "" {
 						closes[id] += " (" + an.Comment + ")"
 					}

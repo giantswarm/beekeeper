@@ -304,7 +304,7 @@ its key first in the detail):
             (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
-            capacity.choices), decided like any start; a worker on a
+            capacity.choices), using reserved review headroom; a worker on a
             self-hosted provider's model gets one on no self-hosted
             provider (--review-of-self-hosted). With supervisor.hosts
             (execution hosts, agents.hosts) the start goes to the first
@@ -735,6 +735,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		tracked = nil
 	}
 	for _, ref := range tracked {
+		if !a.parkIsPull(ctx, st, ref) {
+			continue
+		}
 		p, err := readLoopPull(ctx, ref)
 		if err != nil {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
