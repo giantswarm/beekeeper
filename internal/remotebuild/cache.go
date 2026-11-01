@@ -89,7 +89,7 @@ func (c Cache) env() []corev1.EnvVar {
 		{Name: "SCCACHE_IGNORE_SERVER_IO_ERROR", Value: "1"},
 		{Name: "SCCACHE_IDLE_TIMEOUT", Value: "0"},
 	}
-	for _, key := range []string{"CACHEPROG_S3_ENDPOINT", "CACHEPROG_S3_BUCKET", "CACHEPROG_S3_REGION", "CACHEPROG_S3_ACCESS_KEY_ID", "CACHEPROG_S3_ACCESS_KEY_SECRET", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ENDPOINT_URL_S3", "SCCACHE_BUCKET", "SCCACHE_ENDPOINT", "SCCACHE_REGION", "SCCACHE_S3_USE_SSL"} {
+	for _, key := range []string{"CACHEPROG_S3_ENDPOINT", "CACHEPROG_S3_BUCKET", "CACHEPROG_S3_REGION", "CACHEPROG_S3_ACCESS_KEY_ID", "CACHEPROG_S3_ACCESS_KEY_SECRET", "CACHEPROG_S3_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_ENDPOINT_URL_S3", "SCCACHE_BUCKET", "SCCACHE_ENDPOINT", "SCCACHE_REGION", "SCCACHE_S3_USE_SSL"} {
 		env = append(env, corev1.EnvVar{Name: key, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: c.Secret}, Key: key, Optional: ptr.To(true)}}})
 	}
 	return env
@@ -102,19 +102,19 @@ const cacheSetup = `cache_rust_started=0
 if [ "${BEEKEEPER_CACHE_ENABLED:-}" = 1 ]; then
  case "$tool" in
  go)
-  export CACHEPROG_DISK_STORAGE_ROOT="$r/cache"
-  if [ -n "${CACHEPROG_S3_BUCKET:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_ID:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_SECRET:-}" ] && command -v "${BEEKEEPER_GO_CACHE_HELPER:-cacheprog}" >/dev/null 2>&1 && timeout --foreground -k 1s 5s "$BEEKEEPER_GO_CACHE_HELPER" direct </dev/null >/dev/null 2>&1; then
+  export CACHEPROG_ROOT_DIRECTORY="$r/cache"
+  if [ -n "${CACHEPROG_S3_BUCKET:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_ID:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_SECRET:-}" ] && command -v "${BEEKEEPER_GO_CACHE_HELPER:-cacheprog}" >/dev/null 2>&1 && timeout --foreground -k 1s 5s "$BEEKEEPER_GO_CACHE_HELPER" direct --root-directory "$CACHEPROG_ROOT_DIRECTORY" </dev/null >/dev/null 2>&1; then
    export BEEKEEPER_CACHE_LOG="$r/log"
    cat > "$r/go-cache" <<'CACHEGO'
 #!/bin/bash
-export CACHEPROG_DISK_STORAGE_ROOT="$CACHEPROG_DISK_STORAGE_ROOT/$$"
+export CACHEPROG_ROOT_DIRECTORY="$CACHEPROG_ROOT_DIRECTORY/$$"
 exec 3> >(while IFS= read -r line; do
  if [[ "$line" == *"cacheprog statistics"* ]] && [[ "$line" =~ get_hits[\"=:[:space:]]+([0-9]+) ]]; then
   printf 'beekeeper run: Go cache hits %s\n' "${BASH_REMATCH[1]}" >> "$BEEKEEPER_CACHE_LOG"
  fi
 done)
 filter=$!
-"$BEEKEEPER_GO_CACHE_HELPER" direct 2>&3
+"$BEEKEEPER_GO_CACHE_HELPER" direct --root-directory "$CACHEPROG_ROOT_DIRECTORY" 2>&3
 rc=$?
 exec 3>&-
 wait "$filter"

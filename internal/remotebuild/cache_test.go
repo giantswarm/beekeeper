@@ -33,7 +33,7 @@ func TestCacheSecretProjection(t *testing.T) {
 			}
 		}
 	}
-	if refs != 13 || values["CACHEPROG_DISABLE_PUT"] != "true" || values["SCCACHE_S3_RW_MODE"] != "READ_ONLY" || values["CACHEPROG_S3_PREFIX"] == values["SCCACHE_S3_KEY_PREFIX"] {
+	if refs != 15 || values["CACHEPROG_DISABLE_PUT"] != "true" || values["SCCACHE_S3_RW_MODE"] != "READ_ONLY" || values["CACHEPROG_S3_PREFIX"] == values["SCCACHE_S3_KEY_PREFIX"] {
 		t.Fatalf("cache env policy: refs=%d", refs)
 	}
 	if len(pod.Containers[0].EnvFrom) != 0 {
@@ -78,9 +78,9 @@ func TestCacheStartupFailureDoesNotFailCommand(t *testing.T) {
 			// echoes sensitive request details. These are synthetic, noncredential data.
 			for _, name := range []string{"cacheprog", "sccache"} {
 				p := filepath.Join(bin, name)
-				if err := os.WriteFile(p, []byte("#!/bin/sh\necho PROVIDER_DIAGNOSTIC_MUST_NOT_APPEAR >&2\nexit 19\n"), 0o700); err != nil {
+				if err := os.WriteFile(p, []byte("#!/bin/sh\necho PROVIDER_DIAGNOSTIC_MUST_NOT_APPEAR >&2\nexit 19\n"), 0o700); err != nil { //nolint:gosec // executable test fixture
 					t.Fatal(err)
-				} //nolint:gosec // executable test fixture
+				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -89,14 +89,14 @@ func TestCacheStartupFailureDoesNotFailCommand(t *testing.T) {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("wrapper failed: %v %s", err, out)
 			}
-			rc, err := os.ReadFile(filepath.Join(dir, "runs/test/rc"))
+			rc, err := os.ReadFile(filepath.Join(dir, "runs/test/rc")) //nolint:gosec // owned test fixture
 			if err != nil || string(rc) != "37\n" {
 				t.Fatalf("exit=%q err=%v", rc, err)
-			} //nolint:gosec // owned fixture
-			log, err := os.ReadFile(filepath.Join(dir, "runs/test/log"))
+			}
+			log, err := os.ReadFile(filepath.Join(dir, "runs/test/log")) //nolint:gosec // owned test fixture
 			if err != nil {
 				t.Fatal(err)
-			} //nolint:gosec // owned fixture
+			}
 			if !bytes.Contains(log, []byte("BUILD_COMPLETED")) || bytes.Contains(log, []byte("PROVIDER_DIAGNOSTIC_MUST_NOT_APPEAR")) || !bytes.Contains(log, []byte("unavailable")) {
 				t.Fatalf("bad safe fallback journal: %s", log)
 			}
@@ -125,7 +125,7 @@ func TestCacheFiltersDiagnosticsAndCleansDisk(t *testing.T) {
 				t.Fatal(err)
 			}
 			helper := `#!/bin/bash
-mkdir -p "$CACHEPROG_DISK_STORAGE_ROOT"
+mkdir -p "$CACHEPROG_ROOT_DIRECTORY"
 echo PROVIDER_DIAGNOSTIC_MUST_NOT_APPEAR >&2
 echo 'cacheprog statistics get_calls=9 get_hits=7 put_calls=2' >&2
 echo CACHE_PROTOCOL_OK
@@ -137,9 +137,9 @@ case "$1" in
 esac
 `
 			for name, body := range map[string]string{"cacheprog": helper, "sccache": sccache} {
-				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable test fixture
 					t.Fatal(err)
-				} //nolint:gosec // executable test fixture
+				}
 			}
 			command := `"$GOCACHEPROG" </dev/null; printf BUILD_COMPLETED; exit 37`
 			hits := "Go cache hits 7"
@@ -154,10 +154,10 @@ esac
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("wrapper: %v %s", err, out)
 			}
-			log, err := os.ReadFile(filepath.Join(dir, "runs/test/log"))
+			log, err := os.ReadFile(filepath.Join(dir, "runs/test/log")) //nolint:gosec // owned test fixture
 			if err != nil {
 				t.Fatal(err)
-			} //nolint:gosec // owned fixture
+			}
 			if strings.Count(string(log), "BUILD_COMPLETED") != 1 || !bytes.Contains(log, []byte(hits)) || bytes.Contains(log, []byte("PROVIDER_DIAGNOSTIC_MUST_NOT_APPEAR")) {
 				t.Fatalf("unsafe or missing statistics: %s", log)
 			}

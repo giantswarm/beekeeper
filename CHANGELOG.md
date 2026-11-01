@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `run.remote.cache` shares Go and Rust builder caches through an S3-compatible store and namespace Secret references, with read-only mode, bounded startup/remote fallback and per-run Go cache cleanup ([https://github.com/giantswarm/beekeeper/issues/1782](https://github.com/giantswarm/beekeeper/issues/1782)).
+
 - Opt-in `run.remote` builder Jobs for Go and Cargo commands, worktree snapshots, reconnectable output and local-slot fallback; `run --local` keeps worktree writes local ([https://github.com/giantswarm/beekeeper/issues/1781](https://github.com/giantswarm/beekeeper/issues/1781)).
 
 - `supervisor.ownership`: the desk's team ownership, which decides where `supervisor loop` reviews and gives the merge go. Those are the desk's own team's repositories (`team`, as the team files in `teamFiles` name it, default `giantswarm/github/repositories`, read every hour with `gh api`), the repositories `review` names (patterns such as `giantswarm/*-configs`), and single pull requests the person overrode.
