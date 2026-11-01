@@ -50,7 +50,7 @@ func TestAgentDirRoleFolders(t *testing.T) {
 			if err != nil || got != dir {
 				t.Fatalf("role folder: %q, %v, want %q", got, err, dir)
 			}
-			for _, name := range []string{"", workerRole, "unknown"} {
+			for _, name := range []string{"", workerRole, kindUnknown} {
 				if _, err := a.agentDir(dir, name); err == nil {
 					t.Errorf("role folder accepted for %q", name)
 				}
@@ -113,7 +113,7 @@ func TestSuccessorStartsInRoleFolder(t *testing.T) {
 			if r := rl.get(st); r.Relay == nil || !r.Relay.To.Is(to) {
 				t.Fatalf("successor relay lost: %+v", r)
 			}
-			if _, err := a.startAgent(t.Context(), agentStart{name: "worker", role: workerRole, dir: dir, by: &from}); err == nil {
+			if _, err := a.startAgent(t.Context(), agentStart{name: workerRole, role: workerRole, dir: dir, by: &from}); err == nil {
 				t.Fatal("worker launched in the role folder")
 			}
 			if len(*calls) != 1 {
