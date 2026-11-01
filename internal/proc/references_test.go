@@ -449,3 +449,100 @@ func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 		}
 	}
 }
+
+// A process the kernel refuses (EACCES) is skipped and counted when it runs
+// in another pid or user namespace, a kind pod's pause container sharing the
+// person's uid but not their gid for one; in the person's own namespaces it
+// stays unknown and fails closed. Another uid's is skipped uncounted.
+func TestUserScanSkipsForeignNamespacesOnPermissionDenied(t *testing.T) {
+	uid := os.Getuid()
+	ids := func(id int) string { return fmt.Sprintf("%d %d %d %d", id, id, id, id) }
+	const ourMap = "0 0 4294967295\n"
+	type process struct {
+		gid           int
+		uid           int
+		nspid, uidMap string
+		denied        bool
+	}
+	for _, tc := range []struct {
+		name        string
+		processes   map[int]process
+		wantForeign []int
+		wantUnknown []int
+	}{
+		{"foreign namespaces and the person's own", map[int]process{
+			10: {gid: 2000, uid: uid, nspid: "10 1657 1", uidMap: ourMap, denied: true},     // kind pause: fsGroup, nested pid ns
+			11: {gid: uid, uid: uid, nspid: "11", uidMap: "0 100000 65536\n", denied: true}, // rootless container: another user ns
+			12: {gid: 2000, uid: uid, nspid: "12", uidMap: ourMap, denied: true},            // the person's own namespaces
+			13: {gid: uid, uid: uid, nspid: "13", uidMap: ourMap},                           // readable
+			14: {gid: 0, uid: uid + 1, nspid: "14 2 1", uidMap: ourMap, denied: true},       // another user's
+		}, []int{10, 11}, []int{12}},
+		{"only foreign namespaces", map[int]process{
+			10: {gid: 2000, uid: uid, nspid: "10 1657 1", uidMap: ourMap, denied: true},
+			13: {gid: uid, uid: uid, nspid: "13", uidMap: ourMap},
+		}, []int{10}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			write := func(path, data string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(root, "self", "uid_map"), ourMap)
+			denied := map[string]bool{}
+			for pid, p := range tc.processes {
+				dir := filepath.Join(root, strconv.Itoa(pid))
+				if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				write(filepath.Join(dir, fixtureStatus), fmt.Sprintf("Uid: %s\nGid: %s\nNSpid: %s\n", ids(p.uid), ids(p.gid), p.nspid)+fixtureLiveStatus)
+				write(filepath.Join(dir, fixtureCommand), "pause")
+				write(filepath.Join(dir, fixtureEnvironment), "")
+				write(filepath.Join(dir, fixtureMappings), "")
+				write(filepath.Join(dir, "uid_map"), p.uidMap)
+				if p.denied {
+					denied[dir] = true
+				}
+			}
+			files := referenceFiles()
+			files.readlink = func(path string) (string, error) {
+				if denied[filepath.Dir(path)] {
+					return "", &os.PathError{Op: "readlink", Path: path, Err: syscall.EACCES}
+				}
+				return "/scratch/held", nil
+			}
+			s, err := userScanAt(root, uid, files)
+			var foreign, unknown []int
+			for _, p := range s.Foreign {
+				foreign = append(foreign, p.PID)
+				if p.Command != "pause" || !errors.Is(p.Err, os.ErrPermission) {
+					t.Errorf("foreign process %d lost its command or cause: %+v", p.PID, p)
+				}
+			}
+			var u *UnknownError
+			if errors.As(err, &u) {
+				for _, p := range u.Processes {
+					unknown = append(unknown, p.PID)
+				}
+				if !errors.Is(err, os.ErrPermission) {
+					t.Errorf("unknown process lost its cause: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("scan failed: %v", err)
+			}
+			slices.Sort(foreign)
+			slices.Sort(unknown)
+			if !slices.Equal(foreign, tc.wantForeign) || !slices.Equal(unknown, tc.wantUnknown) {
+				t.Errorf("foreign %v unknown %v, want foreign %v unknown %v", foreign, unknown, tc.wantForeign, tc.wantUnknown)
+			}
+			if !slices.Contains(s.Refs, "/scratch/held") {
+				t.Errorf("readable process's references lost: %v", s.Refs)
+			}
+		})
+	}
+}

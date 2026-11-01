@@ -410,7 +410,14 @@ processes again. An exited zombie holds no references and is skipped; a
 zombie thread-group leader is read through its live threads
 (`/proc/<pid>/task/<tid>`). Expected kernel permission denials on
 non-dumpable helpers or helpers with different credentials or capabilities
-do not stop pruning; their readable references still protect data. Ownership
+do not stop pruning; their readable references still protect data. A
+process of the person's uid the kernel refuses (EACCES) in another pid
+namespace (`NSpid` lists more than one id) or user namespace (its `uid_map`
+differs) is a container's, a kind pod's pause container with the pod's
+`fsGroup` for one: its paths name the container's filesystem, so it is
+skipped and the `DISK PRUNE` line counts it (`skipped N unreadable processes
+of other namespaces`); refused in the person's own namespaces it stays
+unknown. Ownership
 of ptrace-gated child entries detects changes in dumpability even when the
 process directory still has its original owner.
 

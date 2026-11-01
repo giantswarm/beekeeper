@@ -43,7 +43,9 @@ type diskMachine struct {
 	cache, sccache string
 	tmp, trash     []string
 	trees          worktreeMachine
-	refresh        func() ([]string, bool, error)
+	refresh        func() (diskRefs, error)
+	// foreign counts the read's skipped processes of other namespaces.
+	foreign int
 	// unknown is the read's unreadable processes; without refresh, every
 	// step keeps its candidates while it is set.
 	unknown error
@@ -55,20 +57,29 @@ type diskMachine struct {
 
 var liveDisk = (*app).diskMachine
 
-func diskReferences() ([]string, bool, error) {
-	refs, commands, err := proc.UserReferences(os.Getuid())
+// diskRefs is one read of the user's process references.
+type diskRefs struct {
+	refs   []string
+	builds bool
+	// foreign counts the unreadable processes skipped as other
+	// namespaces' (proc.Scan.Foreign).
+	foreign int
+}
+
+func diskReferences() (diskRefs, error) {
+	scan, err := proc.UserScan(os.Getuid())
 	if err != nil && !unknownReferences(err) {
-		return nil, false, err
+		return diskRefs{}, err
 	}
-	builds := false
-	for _, comm := range commands {
+	d := diskRefs{foreign: len(scan.Foreign)}
+	for _, comm := range scan.Commands {
 		if slices.Contains([]string{"go", "compile", "link", "cargo", "rustc", "cc", "gcc", "clang", "ninja", "make", "cmake"}, comm) {
-			builds = true
+			d.builds = true
 		}
 	}
-	slices.Sort(refs)
-	refs = slices.Compact(refs)
-	return refs, builds, err
+	slices.Sort(scan.Refs)
+	d.refs = slices.Compact(scan.Refs)
+	return d, err
 }
 
 func (a *app) diskMachine() (diskMachine, error) {
@@ -76,8 +87,8 @@ func (a *app) diskMachine() (diskMachine, error) {
 	if d, err := machine.ReadDisk(a.cfg.StateDir); err == nil {
 		m.pressure = d.FreeMiB < a.cfg.Watch.DiskMin(d.TotalMiB)
 	}
-	var err error
-	m.refs, m.builds, err = diskReferences()
+	d, err := diskReferences()
+	m.refs, m.builds, m.foreign = d.refs, d.builds, d.foreign
 	if unknownReferences(err) {
 		m.unknown = err
 	} else if err != nil {
@@ -116,7 +127,7 @@ func (a *app) diskMachine() (diskMachine, error) {
 	m.trees.roots = roots
 	m.trees.automatic, m.trees.buildDirs, m.trees.outputs, m.trees.refs = true, a.cfg.Disk.BuildDirs, a.cfg.Disk.BuildOutputs, m.refs
 	m.trees.live = append(m.trees.live, m.refs...)
-	m.trees.recheck = func() ([]string, error) { refs, _, err := diskReferences(); return refs, err }
+	m.trees.recheck = func() ([]string, error) { d, err := diskReferences(); return d.refs, err }
 	m.trees.unknown = m.unknown
 	return m, nil
 }
@@ -128,6 +139,8 @@ type diskRun struct {
 	dry    bool
 	// unknown names the processes whose references kept candidates.
 	unknown error
+	// foreign counts the last read's skipped processes of other namespaces.
+	foreign int
 }
 
 func (r diskRun) String() string {
@@ -148,6 +161,9 @@ func (r diskRun) String() string {
 	}
 	if len(keeps) > 0 {
 		parts = append(parts, "kept: "+strings.Join(keeps, ", "))
+	}
+	if r.foreign > 0 {
+		parts = append(parts, fmt.Sprintf("skipped %d unreadable processes of other namespaces", r.foreign))
 	}
 	if r.unknown != nil {
 		parts = append(parts, "references unknown: "+r.unknown.Error())
@@ -187,6 +203,7 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		return r
 	}
 	pressure = pressure || m.pressure
+	r.foreign = m.foreign
 	a.pruneDiskCaches(&r, m, pressure)
 	known, ok := rereadDisk(&r, &m)
 	if !ok {
@@ -244,12 +261,13 @@ func rereadDisk(r *diskRun, m *diskMachine) (known, ok bool) {
 		}
 		return m.unknown == nil, true
 	}
-	refs, builds, err := m.refresh()
+	d, err := m.refresh()
 	if err != nil && !unknownReferences(err) {
 		r.Errors = append(r.Errors, err)
 		return false, false
 	}
-	m.refs, m.builds, m.unknown = refs, builds, err
+	m.refs, m.builds, m.foreign, m.unknown = d.refs, d.builds, d.foreign, err
+	r.foreign = d.foreign
 	if err != nil {
 		r.unknown = err
 	}
