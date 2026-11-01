@@ -396,6 +396,10 @@ type Board struct {
 	// supervisor loop runs board tidy (default 1h; negative: never).
 	ArchiveAfter Duration `yaml:"archiveAfter"`
 	TidyEvery    Duration `yaml:"tidyEvery"`
+	// EscalateEvery is how long board escalate waits before it checks an
+	// escalated blocked item again and, while it stays blocked, escalates
+	// it to the person once more (default 24h; negative: never escalate).
+	EscalateEvery Duration `yaml:"escalateEvery"`
 	// Claims publishes the desk's session records on their issues, for
 	// the other desks working the same repositories.
 	Claims BoardClaims `yaml:"claims"`
@@ -463,10 +467,8 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
-	// WorkScope offers only the work scope: an issue under an epic of the
-	// priority list, an order (an item of a step without WorkScope) and an
-	// open recorded blocker of either; anything else is skipped as "not in
-	// a priority epic".
+	// WorkScope is read and ignored, so an existing configuration loads:
+	// the priority list no longer gates what a step offers.
 	WorkScope bool `yaml:"workScope"`
 }
 
@@ -2149,8 +2151,12 @@ type Supervisor struct {
 	// ReviewRounds is how many review rounds asking for changes `supervisor
 	// loop` runs for a pull request (default 1): after the last one's
 	// request for changes the worker fixes them and merges on the loop's go
-	// without another review. An approved round is none of them: every new
-	// head after an approval gets its own review.
+	// without another review. An approved round is none of them: a new head
+	// after an approval gets its own review only for a change the approval
+	// does not cover (more than a merge of the base, its conflicts'
+	// resolution or a rebase). Never more than two reviews start for one
+	// pull request, whatever this says: a third need is a decision for
+	// guide.person.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -3278,6 +3284,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
 	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.EscalateEvery, 24*time.Hour)
 	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
 	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 

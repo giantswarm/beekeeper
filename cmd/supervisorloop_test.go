@@ -404,8 +404,9 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 	}
 }
 
-// A new head after an approval gets its own review round, whatever
-// supervisor.reviewRounds says: no escalation, no note.
+// A new head after an approval with a change of its own gets the second
+// review, whatever supervisor.reviewRounds says; a third need is one
+// decision for the person.
 func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -428,6 +429,26 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
 		t.Errorf("review logged as %+v", evs)
+	}
+	// The second review approves, and the worker pushes a change of its
+	// own once more: no third reviewer, one decision for the person.
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
+	const own = "3333333333333333333333333333333333333333"
+	r.pull.Head = own
+	r.park(t, loopPR, time.Now().Add(2*time.Minute))
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a third review started: %v", start)
+	}
+	note := r.called("note", loopAdd)
+	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.EscalationQuestion(loopURL, own) ||
+		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
+		t.Fatalf("no decision for the person: %v\n%s", r.calls, r.out)
+	}
+	r.pass(t)
+	if c := r.called("note", loopAdd); c != nil {
+		t.Errorf("asked twice: %v", c)
 	}
 }
 
@@ -457,7 +478,7 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 		t.Errorf("a base merge started a review: %v", c)
 	}
 	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only merges main into it") {
+	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only brings main into it") {
 		t.Fatalf("no go for the base merge: %v\n%s", r.calls, r.out)
 	}
 	if evs := r.logged(t, "supervisor.go"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
@@ -502,7 +523,7 @@ func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
 		t.Fatalf("a base merge of unfixed findings got the go: %+v", evs)
 	}
 	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "only merges main into head") || !strings.Contains(wake[3], "stand unfixed") {
+	if wake == nil || !strings.Contains(wake[3], "only brings main into head") || !strings.Contains(wake[3], "stand unfixed") {
 		t.Fatalf("no rework for the base merge: %v\n%s", r.calls, r.out)
 	}
 }
@@ -1645,33 +1666,41 @@ func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Board = config.Board{Owner: "o", Project: 7, TidyEvery: config.Duration{Duration: time.Hour}}
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, []string{loopBoard, boardTidyName}) {
+		switch {
+		case slices.Equal(args, []string{loopBoard, boardTidyName}):
 			return "https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done\n", 0
+		case slices.Equal(args, []string{loopBoard, boardEscalateName}):
+			return "escalated https://github.com/o/r/issues/2 (Status Blocked): re-checked in 24h0m0s\n", 0
 		}
 		return "", 0
 	}
 	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
 	st := &state.State{}
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 1 || !strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") {
+	// Each tidy escalates the board's blocked items after it.
+	if len(r.calls) != 2 || !slices.Equal(r.calls[1], []string{loopBoard, boardEscalateName}) ||
+		!strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") ||
+		!strings.Contains(r.out.String(), "SUPERVISOR BOARD escalated https://github.com/o/r/issues/2") {
 		t.Fatalf("calls %v, out %q", r.calls, r.out)
 	}
 	// Within tidyEvery: no second run.
 	r.a.now = r.a.now.Add(30 * time.Minute)
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 1 {
+	if len(r.calls) != 2 {
 		t.Fatalf("tidied again within tidyEvery: %v", r.calls)
 	}
 	// The GitHub budget under its floor: none.
 	r.a.now = r.a.now.Add(time.Hour)
 	r.a.cfg.GitHub.Floor = 100
 	l.tidy(context.Background(), &state.State{Budget: &state.Budget{Remaining: 10, Reset: r.a.now.Add(time.Hour)}})
-	if len(r.calls) != 1 {
+	if len(r.calls) != 2 {
 		t.Fatalf("tidied on a low budget: %v", r.calls)
 	}
+	// A negative escalateEvery tidies and escalates nothing.
+	r.a.cfg.Board.EscalateEvery.Duration = -1
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 2 {
-		t.Fatalf("no tidy past tidyEvery: %v", r.calls)
+	if len(r.calls) != 3 || !slices.Equal(r.calls[2], []string{loopBoard, boardTidyName}) {
+		t.Fatalf("no tidy past tidyEvery, or an escalation with escalating off: %v", r.calls)
 	}
 	// A negative tidyEvery, or no board: never.
 	r.a.now = r.a.now.Add(2 * time.Hour)
@@ -1679,7 +1708,7 @@ func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
 	l.tidy(context.Background(), st)
 	r.a.cfg.Board = config.Board{TidyEvery: config.Duration{Duration: time.Hour}}
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 2 {
+	if len(r.calls) != 3 {
 		t.Fatalf("tidied without a board or with tidying off: %v", r.calls)
 	}
 }
