@@ -58,7 +58,9 @@ func TestLoopAlertOwnedDoesNotPage(t *testing.T) {
 	}
 }
 
-func TestLoopAlertRoutesVisiblePagesOfOtherTeams(t *testing.T) {
+// With alerts.team set only the team's own alerts are relevant: another
+// team's page, blocking work or not, gets neither a note nor a summary line.
+func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
 	readLoopAlerts = read
@@ -67,12 +69,50 @@ func TestLoopAlertRoutesVisiblePagesOfOtherTeams(t *testing.T) {
 	f := loopFiring()
 	blockLoopAlert(t, r, f)
 	f.Team = "another-team"
+	unowned := loopFiring()
+	unowned.Installation, unowned.Team = "unowned-fixture", "another-team"
 	w := r.a.newWatcher(false, false)
-	w.publishAlerts([]alerts.Firing{f})
+	w.publishAlerts([]alerts.Firing{f, unowned})
 	r.pass(t)
 	st, err := r.a.store.Read()
-	if err != nil || len(st.Notes) != 1 {
-		t.Fatalf("watch-visible page was discarded: notes=%+v err=%v", st.Notes, err)
+	if err != nil || len(st.Notes) != 0 {
+		t.Fatalf("another team's page reached the guide: notes=%+v err=%v", st.Notes, err)
+	}
+	if strings.Contains(r.out.String(), "SUPERVISOR ALERTS") {
+		t.Fatalf("another team's page was summarized: %s", r.out.String())
+	}
+}
+
+// The team's alerts are relevant 24/7: one the business-hours inhibition
+// mutes is read from the Alertmanager's answer, published by the watch and
+// routed by the loop like any other page.
+func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
+	read := readLoopAlerts
+	r := newLoopRig(t)
+	readLoopAlerts = read
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
+	r.a.cfg.Alerts.Team = "desk-team"
+	hours := alerts.Raw{Fingerprint: "wh", Labels: map[string]string{"alertname": alerts.WorkingHours, "severity": "none"}, StartsAt: "2026-01-01T00:00:00Z"}
+	labels := map[string]string{"alertname": "WorkloadDown", "severity": alerts.Page, "team": "desk-team",
+		"namespace": "ns", "deployment": "app", "cancel_if_outside_working_hours": "true"}
+	page := alerts.Raw{Fingerprint: "fp", Labels: labels, StartsAt: "2026-01-01T00:00:00Z", Status: alerts.Status{InhibitedBy: []string{"wh"}}}
+	other := alerts.Raw{Fingerprint: "ot", Labels: map[string]string{"alertname": "WorkloadDown", "severity": alerts.Page, "team": "another-team"},
+		StartsAt: "2026-01-01T00:00:00Z", Status: alerts.Status{InhibitedBy: []string{"wh"}}}
+	rules := alerts.Rules{Team: "desk-team", Ignore: []string{alerts.WorkingHours}}
+	var firing []alerts.Firing
+	for fp, al := range rules.Normalize([]alerts.Raw{hours, page, other}, "loop-fixture") {
+		firing = append(firing, alerts.Firing{Installation: "loop-fixture", Key: alerts.Key(fp, al), Alert: al})
+	}
+	if len(firing) != 1 || firing[0].Team != "desk-team" {
+		t.Fatalf("read alerts: %+v", firing)
+	}
+	blockLoopAlert(t, r, firing[0])
+	w := r.a.newWatcher(false, false)
+	w.publishAlerts(firing)
+	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil || len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, firing[0].Instance()) {
+		t.Fatalf("inhibited team page did not reach the guide: notes=%+v err=%v", st.Notes, err)
 	}
 }
 
