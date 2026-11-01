@@ -14,7 +14,16 @@ merge is refused in this slice, including when a local approval exists.
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
-host needs Linux with a working user service manager, Git, and a pinned Claude Code version
+host installation may sit at any absolute path, including a per-user one; the
+pinned configuration and prepared policy bind that exact executable. A managed
+worker calls its component by bare `beekeeper`, and the runner places the
+bound installation's directory first on the harness PATH, so a system-wide
+installation is not required. Install the prepared executable under the name
+`beekeeper`: `agents hosts check` refuses a host where the bare command does
+not resolve to the very executable the prepared policy binds (missing, not
+executable, or shadowed by a stale sibling), because that worker could not
+report or park. The host needs Linux with a working user service manager,
+Git, and a pinned Claude Code version
 in the supported family (`>= 2.1.268, < 3.0.0`). Provision its subscription login
 there independently. `agents hosts check` reads version and authentication
 metadata; it makes no model request. Starting a session never copies a provider
@@ -113,7 +122,14 @@ agents:
       operationTimeout: 30s
 ```
 
-Changing the binary, rules, settings, or protected host configuration invalidates
+Coordinator and host releases may differ while they use the same execution
+protocol. A coordinator self-update does not require reinstalling or re-preparing
+the hosts. `hosts check` reports each host's release for diagnostics, and still
+requires the expected identity, protocol, pinned policy, harness and fresh resource
+observation. A different protocol is refused; upgrade the host to a release with
+the coordinator's protocol before starting new work.
+
+Changing the host binary, rules, settings, or protected host configuration invalidates
 the policy. Prepare and pin a matching bundle again before starting new work.
 Do not weaken a required guard to make a check pass.
 

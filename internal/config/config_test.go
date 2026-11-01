@@ -184,6 +184,11 @@ func TestLoadRejects(t *testing.T) {
 		"urgency of no kind":          "notify: {urgency: {sessions: low}}",
 		"bad quiet hours":             "notify: {quietHours: 22-7}",
 		"bad relayAt":                 "supervisor: {relayAt: 400kb}",
+		"team files without a dir":    "supervisor: {ownership: {team: t, teamFiles: o/github}}",
+		"bad review pattern":          "supervisor: {ownership: {review: [\"o/[\"]}}",
+		"review without an owner":     "supervisor: {ownership: {review: [shared-configs]}}",
+		"never without an owner":      "supervisor: {ownership: {never: [tool]}}",
+		"never without a name":        "supervisor: {ownership: {never: [o/]}}",
 		"negative relayAt":            "supervisor: {relayAt: -1}",
 		"bad store glob":              "outbound: {storeDeny: [{vault: \"[\"}]}",
 		"bad outbound path":           "outbound: {paths: [\"[\"]}",
@@ -558,6 +563,25 @@ func TestThresholdsDefaultToFractions(t *testing.T) {
 	}
 	if want := []string{filepath.Join(home, ".local", "state", "beekeeper", "kube", "teleport.yaml")}; !slices.Equal(kc.Alerts.Kubeconfig, want) {
 		t.Errorf("alerts.kubeconfig = %q, want %q", kc.Alerts.Kubeconfig, want)
+	}
+}
+
+func TestSupervisorOwnership(t *testing.T) {
+	c, err := Load(writeTemp(t, "supervisor: {ownership: {review: [\"o/*-configs\"]}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without a team, no team files to read.
+	if o := c.Supervisor.Ownership; o.TeamFiles != "" || o.OwnerWait.Duration != 24*time.Hour {
+		t.Errorf("ownership without a team = %+v", o)
+	}
+	c, err = Load(writeTemp(t, "supervisor: {ownership: {team: team-a, ownerWait: 2h}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Supervisor.Ownership
+	if repo, dir := o.TeamFilesRepo(); o.TeamFiles != DefaultTeamFiles || repo != "giantswarm/github" || dir != "repositories" || o.OwnerWait.Duration != 2*time.Hour {
+		t.Errorf("ownership = %+v (%s, %s)", o, repo, dir)
 	}
 }
 
@@ -990,7 +1014,7 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 		"unknown provider in choice": "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: agy, model: m}\n",
 		"choices without providers":  "capacity:\n  choices:\n    - {harness: claude, model: m}\n",
 		"missing model in choice":    "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: claude}\n",
-		"provider without command":   "capacity:\n  providers:\n    claude: {fiveHourMax: 90}\n",
+		"provider without command":   "capacity:\n  providers:\n    custom: {fiveHourMax: 90}\n",
 		"descending paceCaps":        "capacity:\n  providers:\n    claude:\n      command: [r]\n      paceCaps:\n        - {overBy: 10, ceiling: 2}\n        - {overBy: 5, ceiling: 1}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -998,5 +1022,91 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 				t.Errorf("%s: loaded invalid config", name)
 			}
 		})
+	}
+}
+
+func TestClaudeUsageDefault(t *testing.T) {
+	for _, raw := range []string{"capacity: {providers: {claude: {}}}\n", "capacity: {providers: {claude: {ceiling: 2}}}\n"} {
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers[ClaudeHarness]
+		if !slices.Equal(p.Command, DefaultClaudeUsageCommand) || !p.Enabled() || p.EffectiveEvery() != DefaultUsageEvery {
+			t.Fatalf("claude default: %+v", p)
+		}
+	}
+	c, err := Load(writeTemp(t, "capacity: {providers: {claude: {command: [custom-reader]}}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Capacity.Providers[ClaudeHarness].Command; !slices.Equal(got, []string{"custom-reader"}) {
+		t.Fatal(got)
+	}
+	c, err = Load(writeTemp(t, "{}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Capacity.Providers[ClaudeHarness]; ok {
+		t.Fatal("created an unconfigured Claude provider")
+	}
+}
+
+// A provider with only thresholds and a ceiling must receive its default
+// command before validation, just like an empty provider entry.
+func TestClaudeUsageDefaultWithThresholds(t *testing.T) {
+	const raw = `capacity:
+  floor: 5
+  ceiling: 14
+  providers:
+    claude:
+      ceiling: 10
+      fiveHourMax: 90
+      sevenDayMax: 97
+    codex:
+      ceiling: 6
+      fiveHourMax: 92
+      sevenDayMax: 97
+  choices:
+    - {harness: claude, model: claude-opus-5-5}
+    - {harness: codex, model: gpt-6.1-sol}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatalf("threshold-only provider must validate: %v", err)
+	}
+	claude := c.Capacity.Providers[ClaudeHarness]
+	if !claude.Enabled() || !slices.Equal(claude.Command, DefaultClaudeUsageCommand) {
+		t.Fatalf("threshold-only Claude provider did not use /usage default: %+v", claude)
+	}
+	if claude.Ceiling != 10 || claude.FiveHourMax != 90 || claude.SevenDayMax != 97 {
+		t.Fatalf("Claude thresholds were changed by defaulting: %+v", claude)
+	}
+	codex := c.Capacity.Providers[CodexHarness]
+	if !slices.Equal(codex.Command, DefaultCodexUsageCommand) || codex.Ceiling != 6 || codex.FiveHourMax != 92 || codex.SevenDayMax != 97 {
+		t.Fatalf("Codex defaults or thresholds: %+v", codex)
+	}
+	if c.Capacity.Floor != 5 || c.Capacity.Ceiling != 14 || len(c.Capacity.Choices) != 2 ||
+		c.Capacity.Choices[0].Harness != ClaudeHarness || c.Capacity.Choices[0].Model != "claude-opus-5-5" ||
+		c.Capacity.Choices[1].Harness != CodexHarness || c.Capacity.Choices[1].Model != "gpt-6.1-sol" {
+		t.Fatalf("capacity choices or total bounds changed: %+v", c.Capacity)
+	}
+}
+
+func TestSupervisorFillRetryEvery(t *testing.T) {
+	for _, test := range []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"supervisor: {}", 5 * time.Minute},
+		{"supervisor: {fillRetryEvery: 2m}", 2 * time.Minute},
+	} {
+		c, err := Load(writeTemp(t, test.raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Supervisor.FillRetryEvery.Duration; got != test.want {
+			t.Fatalf("fill retry %s, want %s", got, test.want)
+		}
 	}
 }

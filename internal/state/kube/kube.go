@@ -879,13 +879,7 @@ func (snap *snapshot) state() *state.State {
 	}
 	for _, k := range sortedKeys(snap.notes) {
 		n := snap.notes[k]
-		if n.Status.State == "" {
-			continue // created, its status (filer, state) not yet written: the creator's
-		}
-		note := state.Note{ID: n.Spec.ID, For: n.Spec.For, Text: n.Spec.Text, Due: timeOf(n.Spec.Due),
-			Default: n.Spec.Default, By: party(n.Status.By), At: n.Status.At.Time, Fired: timeOf(n.Status.Fired),
-			Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
-			Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: n.Status.Posted}
+		note := noteOf(n)
 		if n.Status.State == noteDefaulted {
 			st.Defaulted = append(st.Defaulted, note)
 		} else {
@@ -897,6 +891,36 @@ func (snap *snapshot) state() *state.State {
 	}
 	canonical(st)
 	return st
+}
+
+func noteOf(n *v1alpha1.Note) state.Note {
+	status := initialNoteStatus(n)
+	return state.Note{ID: n.Spec.ID, For: n.Spec.For, Text: n.Spec.Text, Due: timeOf(n.Spec.Due),
+		Default: n.Spec.Default, By: party(status.By), At: status.At.Time, Fired: timeOf(status.Fired),
+		Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
+		Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: status.Posted}
+}
+
+// initialNoteStatus recovers a create whose second (status) write failed.
+// Older Notes lack spec provenance: keep them visible with their namespace's
+// team and creation time, without inventing a person who may withdraw them.
+func initialNoteStatus(n *v1alpha1.Note) v1alpha1.NoteStatus {
+	status := n.Status
+	if status.State != "" {
+		return status
+	}
+	status.State = noteOpen
+	if n.Spec.Filer != nil {
+		status.By = *n.Spec.Filer
+	} else if status.By.Team == "" {
+		status.By.Team = strings.TrimPrefix(n.Namespace, "beekeeper-")
+	}
+	if n.Spec.FiledAt != nil {
+		status.At = *n.Spec.FiledAt
+	} else if status.At.IsZero() {
+		status.At = n.CreationTimestamp
+	}
+	return status
 }
 
 // canonical orders the document the way state renders it: grants and
@@ -997,11 +1021,6 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		want.holds[name] = hold
 	}
 
-	for k, cur := range snap.notes {
-		if cur.Status.State == "" {
-			want.notes[k] = cur // awaiting its status, which its creator writes
-		}
-	}
 	defaulted := len(st.Notes)
 	for i, n := range slices.Concat(st.Notes, st.Defaulted) {
 		if n.By.Team == "" {
@@ -1014,6 +1033,15 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		}
 		if cur, ok := snap.notes[k]; ok {
 			note = cur.DeepCopy()
+			if cur.Status.State == "" && i < defaulted && equal(n, noteOf(cur)) {
+				// Reading an unfinished create must not make an unrelated
+				// update repair it or contend with its creator.
+				want.notes[k] = note
+				continue
+			}
+		} else {
+			filer := apiParty(n.By)
+			note.Spec.Filer, note.Spec.FiledAt = &filer, apiTime(n.At)
 		}
 		note.Spec.ID, note.Spec.For, note.Spec.Text, note.Spec.Due = n.ID, n.For, n.Text, apiTime(n.Due)
 		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Refs
@@ -1185,7 +1213,13 @@ func (s *Store) write(ctx context.Context, c change) (client.Object, error) {
 		}
 		restoreStatus(c.obj, status)
 		setObserved(c.obj)
-		return c.obj, s.c.Status().Update(ctx, c.obj)
+		err := s.c.Status().Update(ctx, c.obj)
+		if err != nil {
+			if _, ok := c.obj.(*v1alpha1.Note); ok {
+				return c.obj, fmt.Errorf("note %s was created but its initial status write failed; it remains open and listed: %w", key(c.obj), err)
+			}
+		}
+		return c.obj, err
 	}
 	if c.spec {
 		status := statusCopy(c.obj)

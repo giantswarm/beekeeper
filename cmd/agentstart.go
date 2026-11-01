@@ -230,7 +230,9 @@ agents handover start in the mode agents.mode names.
 
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
 in yolo approval mode on --model (default: omp.model; with neither, or a
-model omp does not list as provider/id, the start is refused), in
+model omp does not list as provider/id, the start is refused; a bare id,
+as capacity pick returns an omp choice, is the one provider/id omp lists
+for it, and an id two providers list is refused), in
 a transient user unit beekeeper-omp-<id>, with its stdin on a FIFO inbox
 in beekeeper's state folder and the brief as its first message. It is
 registered on the roster as omp_<id> under <name> and shows in sessions
@@ -345,6 +347,16 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			// an omp agent whose provider's key is in the vault starts where
 			// the vault session is: the host's broker
+			if !dryRun && harness == omp.Harness && model != "" {
+				// a bare id resolves once here; the broker and the start get
+				// the selector omp lists
+				if q := a.ompQualified(model); q != model {
+					if err := cmd.Flags().Set("model", q); err != nil {
+						return err
+					}
+					model = q
+				}
+			}
 			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
 				if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
 					return err
@@ -413,6 +425,11 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 				if err := validateStartHarness(ch.Harness, mode); err != nil {
 					return err
+				}
+				if ch.Harness == omp.Harness {
+					// the pick names an omp model by its bare id: the
+					// broker and the start get the selector omp lists
+					ch.Model = a.ompQualified(ch.Model)
 				}
 				if err := a.preflightStartTarget(cmd.Context(), ch.Harness, ch.Model, dir); err != nil {
 					return err
@@ -526,7 +543,7 @@ func forwardBrokeredChoice(cmd *cobra.Command, harness, model string, choiceLine
 func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir string) error {
 	switch harness {
 	case harnessAgy:
-		resolvedDir, err := a.agentDir(dir)
+		resolvedDir, err := a.agentDir(dir, "")
 		if err != nil {
 			return err
 		}
@@ -547,18 +564,14 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
 			return usageErr("--dir %s: not a directory", resolvedDir)
 		}
-		bin, err := exec.LookPath(omp.Comm)
-		if err != nil {
-			return err
-		}
-		m, err := ompModel(model, a.cfg.Omp.Model, func() ([]string, error) { return ompModels(ctx, bin) })
+		m, err := ompModel(model, a.cfg.Omp.Model, func() ([]string, error) { return a.ompListed(ctx) })
 		if err != nil {
 			return err
 		}
 		_, err = a.ompCredentials(m)
 		return err
 	case codex.Harness:
-		resolvedDir, err := a.agentDir(dir)
+		resolvedDir, err := a.agentDir(dir, "")
 		if err != nil {
 			return err
 		}
@@ -571,7 +584,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		_, err = exec.LookPath(codex.Comm)
 		return err
 	default:
-		resolvedDir, err := a.agentDir(dir)
+		resolvedDir, err := a.agentDir(dir, "")
 		if err != nil {
 			return err
 		}
@@ -693,7 +706,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err := a.refuseStopped(st, "starting "+sp.name); err != nil {
 		return startedAgent{}, err
 	}
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -1949,7 +1962,7 @@ func (a *app) dryRunStart(ctx context.Context, sp agentStart, gaps []string) err
 }
 
 func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
@@ -1970,7 +1983,7 @@ func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
 
 // dryRunTurn prints the profile and the first turn's command line of sp.
 func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}

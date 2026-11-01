@@ -182,3 +182,15 @@ func TestGHBodyFullURLCheckClaudeAndAgy(t *testing.T) {
 		}
 	}
 }
+
+func TestGHBodyUnreadableFileExplainsEarlierToolCall(t *testing.T) {
+	h := Hook{Self: testBeekeeperExe, Shell: testShell}
+	cmd := `gh pr create -R o/r --title t --body-file missing.md`
+	const want = "write the file in an earlier tool call"
+	if d := decide(t, h, t.TempDir(), cmd, nil); d == nil || !strings.Contains(d.Reason, want) {
+		t.Fatalf("got %+v, want refusal containing %q", d, want)
+	}
+	if d := decideAgyCmd(t, h, t.TempDir(), cmd); !strings.Contains(d.Reason, want) {
+		t.Fatalf("agy got %+v, want refusal containing %q", d, want)
+	}
+}

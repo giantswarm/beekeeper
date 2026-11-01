@@ -71,8 +71,12 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   sent. The question dialog names the owning session, and its question carries a `Status quo: …`
   and a `Why: …` part, a `Checked: …` part for a claim that something is merged, green, released,
   rolled or closed, and every issue or PR as its full URL; each option's description is its
-  consequence. The hook refuses a question that lacks one, naming what it lacks. A decision that
-  blocks a session's work also goes to the person's phone with `PushNotification`.
+  consequence. The hook refuses a question that lacks one, naming what it lacks.
+- **Waiting decisions are asked, not listed.** Each `GUIDE DECISION` and `GUIDE WAITING`, and
+  every decision `beekeeper guide next` serves, is put to the person in the question dialog of this
+  conversation, the one they read, one at a time and without waiting for them to ask. A note in the
+  queue is not the asking. A note that is work rather than a decision (a problem found to file in
+  its owning repository) is carried out or handed to the supervisor, not put to the person.
 - **Answers travel word for word.** Each answer, given on a note, in this conversation or on Slack,
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
