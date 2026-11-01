@@ -806,3 +806,10 @@ func TestAnEscalationWithoutAHeadIsOnTheLastRoundsHead(t *testing.T) {
 		t.Errorf("the same head after the answer got %+v", got)
 	}
 }
+
+func TestAReplacedParkIsNoDecision(t *testing.T) {
+	in := Input{Workers: []Worker{{Name: worker, ParkedAt: t1}}, Events: []Event{{At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: CI pending for " + prURL}}}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("replaced park became a decision: %+v", got)
+	}
+}

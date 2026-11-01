@@ -20,13 +20,13 @@ require (
 	github.com/gofrs/flock v0.13.1
 	github.com/google/uuid v1.6.0
 	github.com/itchyny/gojq v0.12.19
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/mark3labs/mcp-go v1.4.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/crypto v0.58.0
-	golang.org/x/mod v0.41.0
+	golang.org/x/mod v0.42.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -34,7 +34,7 @@ require (
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
-	k8s.io/utils v0.0.0-20260626114624-be93311217bd
+	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab
 	mvdan.cc/sh/v3 v3.14.1
 	sigs.k8s.io/controller-runtime v0.25.2
 )
@@ -106,7 +106,7 @@ require (
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-runewidth v0.0.30 // indirect

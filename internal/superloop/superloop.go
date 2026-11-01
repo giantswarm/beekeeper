@@ -759,10 +759,10 @@ func Plan(in Input) []Action {
 	// waiting is a park on nothing that still waits on something: a timer
 	// that wakes the agent, a note its wait names, or a note it asked
 	// that is open. One whose agent is no longer parked on nothing has
-	// nothing left to decide.
+	// nothing left to decide. An event from a replaced park is settled too.
 	waiting := func(e Event) bool {
 		w, ok := workers[e.Agent]
-		if !ok || w.ParkedAt.IsZero() || w.ParkedOn != "" {
+		if !ok || w.ParkedAt.IsZero() || w.ParkedOn != "" || e.At.Before(w.ParkedAt) {
 			return true
 		}
 		if _, waits := ParkedOn(e.Detail); w.Waking || noteRef.MatchString(waits) {
