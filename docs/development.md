@@ -325,6 +325,74 @@ timer from the running watches.
 
 ## Automatic disk reclamation
 
+### Cache policies
+
+`disk.caches` lists the caches the disk step trims. Beekeeper's own caches are
+its default entries: `go-build` (mode `go`, cap `doctor.goCacheMaxGiB`),
+`sccache` (mode `sccache`, cap `disk.sccacheMaxGiB`) and `beekeeper-tmp`
+(`stateDir/tmp`, mode `entries`, `olderThan: 1h`). An entry with a built-in's
+name changes the fields it sets (`maxGiB`, `olderThan`, `path`); `mode: off`
+drops it. Any other entry needs a `path` and a rule:
+
+```yaml
+disk:
+  caches:
+    - path: ~/.cache/some-app       # each direct child is removed whole
+      olderThan: 7d                 # when nothing in it was written for a week
+      regenerable: true             # under disk pressure: everything older than 1h
+    - path: ~/.cache/pkg-manager
+      mode: files                   # single files, least recently written first
+      maxGiB: 2                     # until the cache fits two GiB
+    - path: ~/.cache/*-dev          # a glob: each match is a cache root
+      maxGiB: 1
+    - path: ~/.cache/tool
+      mode: command                 # the tool's own cleaner, which keeps its metadata
+      command: tool cache prune     # words, no shell; runs in the cache root
+      maxGiB: 4                     # over the budget, and under disk pressure
+```
+
+`path` is absolute or `~/…` and may be a glob; each match is a cache root. In
+`entries` mode (the default) a root's direct children are the units, each
+removed whole; in `files` mode its regular files, and directories a trim
+empties go with them. A unit untouched for `olderThan` (a Go duration or whole
+days, `7d`) goes; past `maxGiB` the least recently written go until the root
+fits; a `regenerable` cache drops everything older than an hour under disk
+pressure. In `command` mode beekeeper removes nothing itself: it runs the
+tool's cleaner (at most ten minutes) once the root holds more than `maxGiB`,
+and on every pressure run (without `maxGiB`, only those); the bytes it freed
+are measured after it, and a dry run says `cleaner would run`. A root inside another policy's root is governed by its own policy
+alone: the outer one neither counts nor removes the entry holding it. Whatever
+a policy says, the step keeps:
+
+- anything written within the last hour;
+- a unit any process of the user references (cwd, open file, mapping); in
+  `files` mode one reference anywhere in the root keeps the whole root;
+- a unit holding a `.git` (a checkout, so possibly uncommitted or unpushed
+  work); in `files` mode such a root is kept whole, and a root that is itself
+  a checkout is never trimmed;
+- a root that is a symbolic link, or that holds the home, the state directory,
+  a configured checkout or a worktree root;
+- everything while some process's references are unreadable.
+
+The scan of a large cache takes a while, so before removing anything the
+step reads the processes' references again, and right before it removes an
+entry it inspects that entry again: one a process opened meanwhile, one
+written since the scan, or one that now holds a checkout stays. A file is
+removed only if unchanged since the scan. The tools' own locks are only
+known to their cleaners: a cache whose tool locks it belongs in `command`
+mode.
+
+`beekeeper disk prune` (or `--dry-run`) lists each cache root with what it
+holds and would free; `--report` adds the largest entries of the user cache
+directory no policy covers, with their last write, so the list can be
+extended. A pressure run's `DISK PRUNE` line names the caches still holding
+the most, and when the disk is still under the free-disk floor after it, the
+largest directories (100 MiB or more) of the user cache directory no policy
+covers, with their last write. The supervisor's "Disk remains low after
+pruning" note carries the same.
+
+### The disk step
+
 `disk.prune: auto` is the default. A long-running watch runs the disk step
 hourly (`disk.every`) and within five minutes of `LOW DISK` or `DISK FILLING`.
 `watch --once` reports disk pressure without deleting anything. Watches share
