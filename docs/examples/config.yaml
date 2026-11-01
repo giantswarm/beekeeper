@@ -277,7 +277,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
     agy:
       floor: 1
       ceiling: 2
-      command: [agy, -p, /usage]  # default for agy; parses "Gemini Models" and "Claude and GPT models" buckets by model
+      command: [agy, -p, /usage]  # default for agy, even with agy: {}; no model turn; each bucket's 5-hour and weekly windows ("Gemini Models", "Claude and GPT models")
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
