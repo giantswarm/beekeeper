@@ -31,14 +31,14 @@ const lookupTimeout = 15 * time.Second
 // ErrOutdated is what a check returns when a newer release exists.
 var ErrOutdated = errors.New("a newer beekeeper release is available")
 
-// Seams the tests replace: where releases come from (nil is public GitHub,
-// anonymous unless GITHUB_TOKEN is set; go-selfupdate asks an empty release
-// list again and adds the latest release), what a download must verify against
+// Seams the tests replace: where releases come from (public GitHub,
+// anonymous unless GITHUB_TOKEN is set; an empty release list uses the upstream
+// retry and latest-release fallback), what a download must verify against
 // (the shared cosign validator: a CircleCI build of Repository, against the
 // Sigstore public-good trust root), the file the update replaces and the
 // running version.
 var (
-	newSource      = func() selfupdate.Source { return nil }
+	newSource      = newGitHubSource
 	newValidator   = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
