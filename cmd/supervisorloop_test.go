@@ -1120,6 +1120,49 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 	}
 }
 
+func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board = config.Board{Owner: "o", Project: 7, TidyEvery: config.Duration{Duration: time.Hour}}
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, []string{loopBoard, boardTidyName}) {
+			return "https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done\n", 0
+		}
+		return "", 0
+	}
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	st := &state.State{}
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 1 || !strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") {
+		t.Fatalf("calls %v, out %q", r.calls, r.out)
+	}
+	// Within tidyEvery: no second run.
+	r.a.now = r.a.now.Add(30 * time.Minute)
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 1 {
+		t.Fatalf("tidied again within tidyEvery: %v", r.calls)
+	}
+	// The GitHub budget under its floor: none.
+	r.a.now = r.a.now.Add(time.Hour)
+	r.a.cfg.GitHub.Floor = 100
+	l.tidy(context.Background(), &state.State{Budget: &state.Budget{Remaining: 10, Reset: r.a.now.Add(time.Hour)}})
+	if len(r.calls) != 1 {
+		t.Fatalf("tidied on a low budget: %v", r.calls)
+	}
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 2 {
+		t.Fatalf("no tidy past tidyEvery: %v", r.calls)
+	}
+	// A negative tidyEvery, or no board: never.
+	r.a.now = r.a.now.Add(2 * time.Hour)
+	r.a.cfg.Board.TidyEvery.Duration = -1
+	l.tidy(context.Background(), st)
+	r.a.cfg.Board = config.Board{TidyEvery: config.Duration{Duration: time.Hour}}
+	l.tidy(context.Background(), st)
+	if len(r.calls) != 2 {
+		t.Fatalf("tidied without a board or with tidying off: %v", r.calls)
+	}
+}
+
 // ownedBy configures the rig's desk as team-a's, with the review and never
 // lists, and the team files saying team owns o/r.
 func (r *loopRig) ownedBy(team string) {
