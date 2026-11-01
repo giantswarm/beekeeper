@@ -339,6 +339,9 @@ func TestParseTokens(t *testing.T) {
 const (
 	backstage = "giantswarm/backstage"
 	portal    = "portal-tools"
+	// Test case names shared by the config tests.
+	emptyCase = "empty"
+	unsetCase = "unset"
 )
 
 func TestLanes(t *testing.T) {
