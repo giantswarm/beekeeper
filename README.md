@@ -21,7 +21,9 @@ stops. Remote wakes and resumes use durable ordered message receipts; inspect
 them with `agents messages` and reconcile with `agents hosts sync`. With
 `supervisor.hosts`, `supervisor loop` places its worker and reviewer starts
 on these hosts when the coordinator is out of room (or always with
-`supervisor.hostsFirst`).
+`supervisor.hostsFirst`, for what a host can run: a repository no host maps
+and a choice of a harness no host has an adapter for start locally within
+`capacity.local.ceiling`).
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
@@ -2073,7 +2075,14 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   apart (`waiting: <agent> (waits: <command>)`, `--json` `waiting`). Parked and waiting agents do no
   work and never hold a slot: only the busy count against the ceiling, in `capacity`, the start
   gate and the watch's CAPACITY lines. The
-  supervisor, the guide and a role's successor are not counted. `beekeeper capacity` (and
+  supervisor, the guide and a role's successor are not counted. `capacity.local.ceiling`, when
+  set, caps the busy agents the coordinator's own machine runs apart from `capacity.ceiling`,
+  which bounds the subscriptions across the desk and its execution hosts: every busy agent whose
+  session runs locally counts, a self-hosted provider's included; an agent on an execution host
+  counts against that host's `maxBusy` and never against it. Every local start, the loop's and
+  one by hand, worker, reviewer and resume alike, is refused at it (`no start: N busy locally at
+  capacity.local.ceiling N`); `capacity` prints it as its `local:` line (`--json` `local`). Unset,
+  there is no local cap; 0 refuses every unforced local start. `beekeeper capacity` (and
   `--json`) prints the count, the headroom that bounds a new start (MemAvailable against
   `capacity.availMinMiB`, disk swap's growth over the watch's readings of `watch.swapWindow` against
   `capacity.swapGrowthMaxMiB`, never the swap in use, the 1-minute load against the watch's HIGH

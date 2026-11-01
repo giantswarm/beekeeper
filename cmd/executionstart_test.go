@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -323,5 +325,27 @@ func TestExecutionAdmissionServeModeCeiling(t *testing.T) {
 	a.executionReadings(context.Background(), a.liveCapacity())
 	if got := a.cfg.Capacity.Providers[provLocal].Ceiling; got != 5 {
 		t.Fatalf("executionReadings mutated the configured ceiling to %d, want 5", got)
+	}
+}
+
+// A host's verdict weighs only the choices it can run: an omp choice with
+// room is no room on a Claude-only host, so the loop never places a start
+// there that the host's start would refuse.
+func TestExecutionCapacityWeighsOnlyTheHostsHarnesses(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	host := a.cfg.Agents.Hosts[sshTestSelector]
+	// A self-hosted omp choice with room of its own: locally it would start.
+	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{"local": {Kind: config.KindSelfHosted, Ceiling: 2}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "local/fixture", Provider: "local"}}}
+	if v := buildProvidersCapacity(agentCount{}, nil, k, nil, roomy(), false, nil, forWorker, a.now); v.Room == 0 {
+		t.Fatalf("fixture: the omp choice has no room locally either: %v", v.Blocks)
+	}
+	resources := execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room != 0 || (v.Choice != nil && v.Choice.Harness != "") {
+		t.Fatalf("a Claude-only host offers an omp choice: room %d, choice %+v", v.Room, v.Choice)
+	}
+	k = a.cfg.Capacity
+	k.Choices = append([]config.Choice{{Harness: codex.Harness, Model: "gpt-fixture"}}, k.Choices...)
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != claudeComm {
+		t.Fatalf("the host's Claude choice: room %d, choice %+v, blocks %v", v.Room, v.Choice, v.Blocks)
 	}
 }
