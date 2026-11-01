@@ -612,6 +612,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.tidy(ctx, st)
+		if err := a.syncClaims(ctx); err != nil {
+			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
+		}
 	}
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
@@ -895,7 +898,7 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged("agents.start", opens)
+		done = logged(verbStart, opens)
 	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:

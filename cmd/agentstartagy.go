@@ -80,7 +80,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, "agents.start", "%s: agy agent %s on %s in %s, dangerously-skip-permissions, busy with %q", sp.name, id, model, dir, reg.task)}, nil
+		return []state.Event{event(by, verbStart, "%s: agy agent %s on %s in %s, dangerously-skip-permissions, busy with %q", sp.name, id, model, dir, reg.task)}, nil
 	})
 	if err != nil {
 		return err

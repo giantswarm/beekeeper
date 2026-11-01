@@ -1871,6 +1871,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	w.clear("state-read")
+	if w.chores {
+		defer w.claims(ctx)
+	}
 	st = w.syncExecutions(ctx, st)
 	w.records = st.Records
 	supervised := w.supervisorGone(ctx, st, sessions)
