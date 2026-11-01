@@ -184,3 +184,25 @@ intentionally readable by untrusted jobs, use a separate prefix-scoped
 read-only storage identity or an anonymous read-only gateway. A client
 read-only flag cannot restrict credentials that still have write permission.
 Runners without network access or credentials keep their existing local cache.
+
+
+## Builder retirement
+
+`beekeeper worktrees` also sweeps the initiating machine's builder journal.
+It retires builders for missing worktrees and for inspected worktrees whose
+pull requests merged, including worktrees retained for uncommitted work.
+A builder holding its per-worktree run lock is busy and stays until a later
+sweep. Dry runs make no cluster changes. A failed deletion retains its journal
+for retry; each journal records the original explicit cluster connection so
+changing desk configuration does not redirect cleanup to a different cluster.
+Ownership records stay in the machine's state directory; neither hostnames nor
+worktree paths are uploaded to Kubernetes. Other machines' builders stay.
+Builders created before this journal was introduced retire through their idle
+timeout. If the initiating machine disappears, the pod watchdog and completed
+Job TTL remain the backstop.
+
+Worktree retirement deletes only its builder Job and local ownership record.
+Shared S3 objects survive it. Configure the store's native size quota or object
+age/lifecycle policy independently for the configured Go and Rust prefixes;
+workers do not receive bucket-administration permissions or enumerate/delete
+shared objects during worktree cleanup.

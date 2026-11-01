@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -64,6 +65,7 @@ type worktreeMachine struct {
 	outputs   []config.BuildOutput
 	trash     string
 	refs      []string
+	retire    func(context.Context, []string, bool) error
 	recheck   func() ([]string, error)
 }
 
@@ -320,6 +322,10 @@ func (a *app) trimWorktrees(dryRun bool, read func() (worktreeMachine, error)) w
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), worktreesTimeout)
 	defer cancel()
+	if m.retire == nil {
+		runner := remotebuild.Runner{StateDir: a.cfg.StateDir, Stdout: a.out}
+		m.retire = runner.Sweep
+	}
 	r.trim(ctx, m)
 	if !dryRun && (r.acted() || len(r.failed) > 0) {
 		_ = a.store.Log(event(watchParty, worktreesVerb, "%s\n%s", r, strings.Join(r.paths(), "\n")))
@@ -332,6 +338,12 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 	var trees []worktrees.Tree
 	var heads []github.Head
 	var errs []error
+	var finished []string
+	defer func() {
+		if m.retire != nil {
+			r.err = errors.Join(r.err, m.retire(ctx, finished, r.dryRun))
+		}
+	}()
 	for _, d := range m.dirs {
 		if diskprune.InUse(d, append(slices.Clone(m.live), m.refs...)) {
 			r.kept[worktrees.KeptLive]++
@@ -376,6 +388,9 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 			v := worktrees.Automatic(t, pull, false, false, false, false, m.now)
 			r.kept[v.Kept]++
 			continue
+		}
+		if pull != nil && pull.State == github.Merged {
+			finished = append(finished, t.Dir)
 		}
 		knownPushed := pull != nil && pushed(ctx, m.git, t, pull.HeadOid)
 		v := worktrees.Decide(t, pull, false, knownPushed, m.now)
@@ -458,6 +473,9 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 			o := worktreeOutcome{dir: t.Dir, why: v.Why, bytes: worktrees.Size(t.Dir)}
 			if !r.dryRun {
 				o.err = removeWorktree(ctx, m.git, t.Dir)
+				if o.err == nil {
+					finished = append(finished, t.Dir)
+				}
 			}
 			r.record(&r.removed, o)
 		case worktrees.Clean:

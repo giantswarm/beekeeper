@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Builder ownership journals let `beekeeper worktrees` retire this machine's missing or merged worktree builders, skip active runs, and retry cluster outages without deleting shared caches (https://github.com/giantswarm/beekeeper/issues/1783).
+
 - `run.remote.cache` shares Go and Rust builder caches through an S3-compatible store and namespace Secret references, with read-only mode, bounded startup/remote fallback and per-run Go cache cleanup ([https://github.com/giantswarm/beekeeper/issues/1782](https://github.com/giantswarm/beekeeper/issues/1782)).
 
 - Opt-in `run.remote` builder Jobs for Go and Cargo commands, worktree snapshots, reconnectable output and local-slot fallback; `run --local` keeps worktree writes local ([https://github.com/giantswarm/beekeeper/issues/1781](https://github.com/giantswarm/beekeeper/issues/1781)).

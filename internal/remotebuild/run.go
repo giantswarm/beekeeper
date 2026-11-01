@@ -3,8 +3,6 @@ package remotebuild
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,8 +105,7 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	if err != nil {
 		return fallback("host identity unavailable")
 	}
-	sum := sha256.Sum256([]byte(host + "\x00" + root))
-	name := "bkb-" + hex.EncodeToString(sum[:12])
+	name := builderName(host, root)
 	dir := filepath.Join(r.StateDir, "remote-build")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fallback("cannot create local run journal")
@@ -129,6 +126,9 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 			return true, 130
 		}
 		return fallback(err.Error())
+	}
+	if err := r.remember(root, host, name); err != nil {
+		return fallback("cannot record builder ownership")
 	}
 	src, err := archive(setup, root, dir)
 	if err != nil {
