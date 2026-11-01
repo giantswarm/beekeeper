@@ -828,3 +828,38 @@ func TestBlockingForAdmitsTheHoldsSession(t *testing.T) {
 		}
 	}
 }
+
+// A lane without an installation waits before its next merge for a release
+// its gate confirms and for an unknown release's settle rule; the overlap
+// lets a confirming release through for the next merge's start, never a
+// release whose gate is gone, which settles by the rule.
+func TestUnsettledWaitsForAConfirmedReleaseUnlessOverlapping(t *testing.T) {
+	now := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	confirming := state.Merge{Repo: failedRepo, PR: 1, Lane: "l", PID: 11, Phase: state.Settling, Releasing: true, Finished: now}
+	alive := func(pid int) bool { return pid == 11 }
+	q := Lane{Name: "l", AllSettling: []*state.Merge{&confirming}}
+	if why := q.Unsettled(now, time.Minute, false, alive); why != failedRepo+"#1's release is being confirmed" {
+		t.Errorf("no overlap: %q", why)
+	}
+	if why := q.Unsettled(now, time.Minute, true, alive); why != "" {
+		t.Errorf("overlap: %q, want the start let through", why)
+	}
+	gone := func(int) bool { return false }
+	if why := q.Unsettled(now, time.Minute, true, gone); !strings.Contains(why, "release is unknown") {
+		t.Errorf("gate gone: %q, want the settle rule", why)
+	}
+	if why := q.Unsettled(now.Add(2*time.Minute), time.Minute, true, gone); why != "" {
+		t.Errorf("gate gone, settled: %q", why)
+	}
+	if Confirming(state.Merge{Phase: state.Running, Releasing: true, PID: 11}, alive) {
+		t.Error("a running merge confirms a release")
+	}
+}
+
+// devctl release wait's no_release verdict is a merge that warranted none.
+func TestParseReleaseWaitNoRelease(t *testing.T) {
+	o, _, ok := ParseReleaseWait([]byte(`{"verdict":"no_release","reason":"no bump"}`))
+	if !ok || !o.Merged || !o.NoRelease || o.Unconfirmed {
+		t.Errorf("%+v, %v", o, ok)
+	}
+}

@@ -224,8 +224,8 @@ func TestARebaseMergeBehindItsBaseAtItsTurnIsRebasedAndMerged(t *testing.T) {
 	if d := lastEvent(t, g, "merge.rebased"); !strings.Contains(d, "o/r#7 was behind its base at its turn") || !strings.Contains(d, "(head bbbbbbbbb)") {
 		t.Errorf("merge.rebased event: %q", d)
 	}
-	if got, err := os.ReadFile(args); err != nil || !strings.HasPrefix(string(got), "pr merge o/r 7 --rebase") { //nolint:gosec // the test's own file
-		t.Errorf("devctl ran with %q (%v), want the gated command", got, err)
+	if got, err := os.ReadFile(args); err != nil || !strings.HasPrefix(string(got), "pr merge --no-release-wait o/r 7 --rebase") { //nolint:gosec // the test's own file
+		t.Errorf("devctl ran with %q (%v), want the gated command, ending at the merge in a lane without an installation", got, err)
 	}
 	if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
 		t.Errorf("merged event: %q", d)

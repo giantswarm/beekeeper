@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -512,6 +513,8 @@ func busyWith(st *state.State, cfg *config.Config, held map[string]bool, now tim
 		switch {
 		case m.Phase == state.Running && alive(m.PID):
 			return m.Key() + " merges"
+		case merge.Confirming(m, alive):
+			return m.Key() + " confirms its release"
 		case m.Phase == state.Settling && settles(m, cfg, now, rolled):
 			return m.Key() + " settles"
 		}

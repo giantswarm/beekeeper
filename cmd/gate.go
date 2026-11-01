@@ -1274,14 +1274,14 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 // lane without an installation has nothing to roll, but a merge whose
 // release is unknown (its run lost, merged without a confirmed release)
 // settles it by the settle rule all the same: its release may be cutting
-// now, and a promotion behind it would race that. An installation that
-// cannot be read refuses.
+// now, and a promotion behind it would race that. A merge whose release its
+// gate confirms (merge.Confirming) lets an overlapping merge start
+// (overlaps), which merges only once that release is known (awaitReleases).
+// An installation that cannot be read refuses.
 func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 	if g.lane.Installation == "" {
-		for _, s := range q.AllSettling {
-			if ready, why := merge.Ready(g.lane, nil, s, g.now, g.cfg.Merge.Settle.Duration); !ready {
-				return nil, fmt.Sprintf("next in lane %s, %s", g.lane.Name, why), nil
-			}
+		if why := q.Unsettled(g.now, g.cfg.Merge.Settle.Duration, g.overlaps(), proc.Alive); why != "" {
+			return nil, fmt.Sprintf("next in lane %s, %s", g.lane.Name, why), nil
 		}
 		return nil, "", nil
 	}
@@ -1378,7 +1378,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		}
 		g.startPair(st)
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
-			if m.Lane == g.lane.Name && m.Phase == state.Settling {
+			if m.Lane == g.lane.Name && m.Phase == state.Settling && !merge.Confirming(m, proc.Alive) {
 				settled = append(settled, m)
 				return true
 			}
@@ -1560,6 +1560,7 @@ func (g *gateRun) runMerge() error {
 		gateLine("%s merges into %s, %s: devctl ends at the merge (--no-release-wait), this merge awaits no release and frees lane %s then",
 			g.key(), g.release.Base, g.releasePRFlow(), g.lane.Name)
 	}
+	g.awaitReleases()
 	base, err := g.mergeFiles()
 	if err != nil {
 		gateLine("%v", err)
@@ -1588,7 +1589,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	if g.pr != 0 && g.runsDevctl() {
 		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
 	}
-	if g.handCut() != "" || g.plugins() || g.releasePR() {
+	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
 	}
 	return merge.AcceptRed(argv, g.acceptRed), nil
@@ -1818,18 +1819,30 @@ func (g *gateRun) record(base string, run childRun) error {
 	case g.releasePR() && r.out.Merged && r.unanswered == nil:
 		releaseLine = g.awaitReleasePR(&r.out)
 	}
+	// devctl ended at the merge (overlaps): a clean merge's release is
+	// confirmed once its lane place is releasing; a run judged by GitHub
+	// settles by the settle rule, as without the overlap.
+	confirm := g.overlaps() && rc == 0 && r.out.Merged && r.unanswered == nil && !r.out.Unconfirmed && !r.out.NoRelease && r.out.Release == ""
 	settles := false
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
 		if i < 0 {
+			confirm = false
 			return nil, nil
 		}
 		ev := recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
-		settles = slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+		j := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
 		})
+		settles = j >= 0
+		if confirm = confirm && settles; confirm {
+			st.Merges[j].Releasing, st.Merges[j].PID = true, os.Getpid()
+		}
 		return ev, nil
 	})
+	if confirm && err == nil {
+		releaseLine, rc = g.confirmRelease(&r.out, rc)
+	}
 	var stale *state.StaleWriterError
 	if errors.As(err, &stale) {
 		gateLine("%s's outcome is not recorded by this call, which runs beekeeper %s, older than the %s that wrote the state: its document and exit code stay in %s for the watch of the installed %s, which records the run at its next poll",
@@ -2022,7 +2035,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	case handCut != "":
 		release = "none awaited (" + handCut + " has no auto-release)"
 	case out.NoRelease:
-		release = "none warranted"
+		release = noneWarranted
 	case out.ReleaseFailed && release != "":
 		release += " failed, nothing rolls"
 	case out.ReleaseFailed:
