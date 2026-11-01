@@ -168,3 +168,33 @@ func TestExecutionGuardDecisionMatchesHookFormatToHarness(t *testing.T) {
 		t.Fatal("codex-format hook ran in a claude execution")
 	}
 }
+
+// A host's verdict offers codex only where its entry lists codex, and the
+// loop's hostsFirst leaves a codex choice to the hosts only when one of them
+// lists it.
+func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	host := a.cfg.Agents.Hosts[sshTestSelector]
+	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{codex.Harness: {Ceiling: 1}}, Choices: []config.Choice{{Harness: codex.Harness, Model: codexTestModel}}}
+	resources := execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room != 0 {
+		t.Fatalf("a Claude-only host offers the codex choice: %+v", v.Choice)
+	}
+	host.Harnesses = []string{claudeComm, codex.Harness}
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != codex.Harness {
+		t.Fatalf("a codex host does not offer the codex choice: room %d, %+v, %v", v.Room, v.Choice, v.Blocks)
+	}
+	// The check's verdict narrows the catalogue: a codex the host failed is no choice.
+	if got := hostUnoffered(execution.Capabilities{Harnesses: map[string]string{claudeComm: codexTestClaudeVer}}); len(got) != 1 || got[0] != codex.Harness {
+		t.Fatalf("unoffered harnesses: %v", got)
+	}
+
+	both := config.Capacity{Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: codexTestModel}}}
+	claudeOnly := a.cfg.Agents.Hosts[sshTestSelector]
+	if hosted, mixed := hostChoices(both, []execution.Host{claudeOnly}); len(hosted) != 1 || !mixed {
+		t.Fatalf("claude-only hosts: hosted %v, mixed %v", hosted, mixed)
+	}
+	if hosted, mixed := hostChoices(both, []execution.Host{claudeOnly, host}); len(hosted) != 2 || mixed {
+		t.Fatalf("a codex host: hosted %v, mixed %v", hosted, mixed)
+	}
+}

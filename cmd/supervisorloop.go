@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -196,18 +198,14 @@ type loopPullJSON struct {
 	MergeCommit struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
-	State  string `json:"state"`
-	URL    string `json:"url"`
-	Head   string `json:"headRefOid"`
-	Base   string `json:"baseRefName"`
-	Rollup []struct {
-		Status     string `json:"status"`
-		Conclusion string `json:"conclusion"`
-		State      string `json:"state"`
-	} `json:"statusCheckRollup"`
-	Author loopLogin `json:"author"`
-	Title  string    `json:"title"`
-	Branch string    `json:"headRefName"`
+	State  string      `json:"state"`
+	URL    string      `json:"url"`
+	Head   string      `json:"headRefOid"`
+	Base   string      `json:"baseRefName"`
+	Rollup []loopCheck `json:"statusCheckRollup"`
+	Author loopLogin   `json:"author"`
+	Title  string      `json:"title"`
+	Branch string      `json:"headRefName"`
 	Files  []struct {
 		Path string `json:"path"`
 	} `json:"files"`
@@ -230,6 +228,51 @@ type loopLogin struct {
 	Login string `json:"login"`
 }
 
+// loopCheck is one entry of a pull request's check rollup: a check run
+// reports a status and a conclusion, a commit status a state.
+type loopCheck struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+	// A check run's name and details URL, a commit status's context and
+	// target URL.
+	Name       string `json:"name"`
+	DetailsURL string `json:"detailsUrl"`
+	Context    string `json:"context"`
+	TargetURL  string `json:"targetUrl"`
+}
+
+// The states of a check run and a commit status the loop reads.
+const (
+	checkCompleted = "COMPLETED"
+	checkSuccess   = "SUCCESS"
+	checkFailure   = "FAILURE"
+	checkError     = "ERROR"
+)
+
+// loopRedConclusions are the conclusions of a check run that are red: a
+// terminal state that never turns green by itself.
+var loopRedConclusions = []string{checkFailure, "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+
+// green reports whether the check concluded successfully.
+func (c loopCheck) green() bool {
+	return c.State == checkSuccess || c.Status == checkCompleted && slices.Contains([]string{checkSuccess, "NEUTRAL", "SKIPPED"}, c.Conclusion)
+}
+
+// red reports whether the check concluded red: a run that failed, or a
+// status that failed or errored. One queued, running or pending is not.
+func (c loopCheck) red() bool {
+	return c.Status == checkCompleted && slices.Contains(loopRedConclusions, c.Conclusion) || slices.Contains([]string{checkFailure, checkError}, c.State)
+}
+
+// concluded reports whether the check reached a terminal state.
+func (c loopCheck) concluded() bool {
+	if c.Status != "" {
+		return c.Status == checkCompleted
+	}
+	return slices.Contains([]string{checkSuccess, checkFailure, checkError}, c.State)
+}
+
 // parseLoopPull reads gh pr view's JSON of ref.
 func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	var j loopPullJSON
@@ -241,13 +284,14 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		p.Files = append(p.Files, f.Path)
 	}
 	for _, c := range j.Rollup {
-		// A check run reports a status and a conclusion, a commit status
-		// a state.
-		ok := c.State == "SUCCESS" || c.Status == "COMPLETED" && slices.Contains([]string{"SUCCESS", "NEUTRAL", "SKIPPED"}, c.Conclusion)
-		if !ok {
+		if !c.green() {
 			p.Green = false
 		}
+		if c.red() {
+			p.Red = append(p.Red, superloop.Check{Name: cmp.Or(c.Name, c.Context), URL: cmp.Or(c.DetailsURL, c.TargetURL)})
+		}
 	}
+	slices.SortStableFunc(p.Red, func(x, y superloop.Check) int { return strings.Compare(x.Name, y.Name) })
 	for _, r := range j.Reviews {
 		member := slices.Contains([]string{"MEMBER", "OWNER", "COLLABORATOR"}, r.Association)
 		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Commit: r.Commit.OID, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
@@ -314,9 +358,20 @@ its key first in the detail):
             host whose own check (capacity --host) has room for its kind
             and that maps the repository, pinned to its default branch;
             the local machine keeps starts while it has room, unless
-            supervisor.hostsFirst, which prefers hosts always. No host
-            with room and no room locally: the start waits. A desk with
+            supervisor.hostsFirst, which prefers hosts for what a host
+            can run, as for a worker. No host with room and no room
+            locally: the start waits. A desk with
             no capacity.choices never places remotely
+  red       an agent parked from its pull request's worktree at its
+            published HEAD (a review request, local or on an execution
+            host) whose head has a check that concluded red (failed,
+            cancelled, timed out, startup failure, action required; a
+            commit status's failure or error): the worker is told each
+            such check's name and URL (agents wake), one wake for the
+            checks red in a pass, each check once for each head and park;
+            the same failure seen again wakes nobody, a new head or a new
+            park on the same head is told again. None after the head's
+            merge go; a red head gets no review
   go        every check on the head green, and either the last round's
             verdict approves that head, or the worker parked after the
             approval on a head that only merges the base into the approved
@@ -390,8 +445,12 @@ its key first in the detail):
             check (agents hosts check, capacity --host) has room and that
             maps the item's repository, pinned to its default branch; the
             local machine keeps the start while it has room, unless
-            supervisor.hostsFirst, which prefers hosts always. No host
-            with room and no room locally: the start waits. Releases
+            supervisor.hostsFirst, which prefers hosts for what a host
+            can run: with no host room a Claude start waits, while a
+            repository no host maps, or a choice no host has an adapter
+            for (every harness but Claude), starts locally within the
+            local room (capacity.local.ceiling among its guards). No
+            host with room and no room locally: the start waits. Releases
             and the loop itself stay on the coordinator. One board read
             answers a pass; nothing free (board next's exit 3 with no
             pick) settles a done's start, never a failure, and no read
@@ -669,6 +728,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
 			w.ReviewRequested = ag.Park.ReviewHead != ""
+			w.ParkedHead = ag.Park.ReviewHead
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -913,7 +973,7 @@ func would(act superloop.Action) string {
 		return "install " + act.Version
 	case superloop.KindClassify:
 		return fmt.Sprintf("send its %s to the guide", act.Event.Verb)
-	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
+	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
 	return truncate(oneLine(act.Message), 300)
@@ -970,7 +1030,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
 		done = logged(verbStart, opens)
-	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
+	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
@@ -1173,6 +1233,11 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 			return "", err
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
+	case superloop.KindRed:
+		if err := l.wake(ctx, act); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s at %s: red checks told: %s", act.URL, act.Head, redChecks(act.Key)), nil
 	case superloop.KindRework:
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
@@ -1241,6 +1306,12 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.toFile(ctx, st, act)
 	}
 	return "", fmt.Errorf("no transition for %s", act.Kind)
+}
+
+// redChecks are the checks a red wake's key names.
+func redChecks(key string) string {
+	_, checks, _ := strings.Cut(key, ": ")
+	return checks
 }
 
 // loopInTurn reports whether p's session runs a turn.
@@ -1372,6 +1443,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		}
 	}
 	args = append(args, place.remoteStartFlags()...)
+	args = append(args, place.excludeFlags()...)
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
@@ -1430,6 +1502,38 @@ type startHost struct {
 	Selector string
 	Repo     string
 	Ref      string
+	// Exclude are the choices a local start leaves to the hosts
+	// (supervisor.hostsFirst): those a mapped host can run, which wait for
+	// a host with room rather than start here.
+	Exclude []string
+}
+
+// excludeFlags are what a local start placed past the hosts' choices
+// names on its agents start line.
+func (h startHost) excludeFlags() []string {
+	var args []string
+	for _, e := range h.Exclude {
+		args = append(args, "--"+excludeFlag, e)
+	}
+	return args
+}
+
+// hostChoices are the choices of k one of hosts can run, each as
+// harness/model, the form --exclude matches exactly; mixed says whether
+// k also has a choice no host can run, which only the local machine
+// starts.
+func hostChoices(k config.Capacity, hosts []execution.Host) (choices []string, mixed bool) {
+	for _, ch := range k.Choices {
+		if !hostRunsHarness(ch.Harness, hosts) {
+			mixed = true
+			continue
+		}
+		c := cmp.Or(strings.TrimSpace(ch.Harness), claudeComm) + "/" + strings.TrimSpace(ch.Model)
+		if !slices.Contains(choices, c) {
+			choices = append(choices, c)
+		}
+	}
+	return choices, mixed
 }
 
 // remote reports whether the start runs on an execution host.
@@ -1488,10 +1592,14 @@ func (l *supervisorLoop) placesRemotely() bool {
 // --host, which probes the host first) has room and that maps the
 // repository takes it, pinned to the repository's default branch; a host
 // that cannot be read, maps no repository or has no room is said once (or
-// passed quietly) and skipped. With supervisor.hostsFirst and no host with
-// room the start waits, as it does on a full machine; without the
-// preference the local machine attempts it, whose own start gate makes it
-// wait when it has none either.
+// passed quietly) and skipped; a host's check weighs only the choices it
+// can run (Claude Code). With supervisor.hostsFirst and no host with room
+// a start a host could run waits, as it does on a full machine; a start no
+// host can run starts locally within the local room (capacity.local.
+// ceiling among its guards): one whose repository no host maps, or the
+// choices no host has an adapter for, the host-run choices excluded (see
+// hostsFirstLocal). Without the preference the local machine attempts it,
+// whose own start gate makes it wait when it has none either.
 func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
 	k := l.a.cfg.Supervisor
 	if !l.placesRemotely() {
@@ -1508,16 +1616,18 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 	if roomOpen(out) && !k.HostsFirst {
 		return startHost{}, nil
 	}
+	mapped := false
 	for _, selector := range k.Hosts {
 		h, err := l.a.executionHost(selector)
 		if err != nil {
 			l.sayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
 			continue
 		}
-		if _, mapped := h.Repositories[repo]; !mapped {
+		if _, ok := h.Repositories[repo]; !ok {
 			l.sayOnce("host "+selector+" "+repo, "SUPERVISOR HOST WAITS: %s maps no %s", selector, repo)
 			continue
 		}
+		mapped = true
 		if !l.capacityRoom(ctx, append([]string{"--host", selector}, flags...)...) {
 			continue
 		}
@@ -1529,9 +1639,40 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
 	}
 	if k.HostsFirst {
-		return startHost{}, errLoopLater
+		return l.hostsFirstLocal(ctx, flags, roomOpen(out), mapped)
 	}
 	return startHost{}, nil
+}
+
+// hostsFirstLocal is supervisor.hostsFirst's answer when no host took a
+// start: hosts are preferred only for what a host can run. A repository
+// no host maps, or a desk whose choices no host can run, starts locally
+// while the local verdict (localRoom) has room. With a mapped repository
+// the choices a host can run wait for one; the others start locally, the
+// host-run choices excluded from the start, while the local verdict
+// without them has room. Everything else waits.
+func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, localRoom, mapped bool) (startHost, error) {
+	var hosts []execution.Host
+	for _, selector := range l.a.cfg.Supervisor.Hosts {
+		if h, err := l.a.executionHost(selector); err == nil {
+			hosts = append(hosts, h)
+		}
+	}
+	hosted, mixed := hostChoices(l.a.cfg.Capacity, hosts)
+	if !mapped || len(hosted) == 0 {
+		if !localRoom {
+			return startHost{}, errLoopLater
+		}
+		return startHost{}, nil
+	}
+	if !mixed {
+		return startHost{}, errLoopLater
+	}
+	place := startHost{Exclude: hosted}
+	if !l.capacityRoom(ctx, append(slices.Clone(flags), place.excludeFlags()...)...) {
+		return startHost{}, errLoopLater
+	}
+	return place, nil
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:
@@ -1729,6 +1870,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		// comes from that host's decision.
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
+	args = append(args, place.excludeFlags()...)
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}

@@ -1434,6 +1434,12 @@ type Event struct {
 	Subject string `json:"subject,omitempty"`
 }
 
+// NoteHistory is the optional history of a store that retains central note
+// closures beyond the late-answer window. File-backed stores need not implement it.
+type NoteHistory interface {
+	NoteClosure(int) (*Event, error)
+}
+
 // Store is the seam every command reads and changes the state through.
 type Store interface {
 	// Dir is the machine-local directory beside the state: the merge

@@ -321,3 +321,30 @@ func TestEnvtestCentralNoteListingLifecycle(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *metav1.Time { v := metav1.NewTime(t); return &v }
+
+// An expired central default remains distinguishable from an unknown note,
+// including through the desk's note_answer call and after its Event expires.
+func TestEnvtestCentralDefaultCloseReason(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{}
+	decisionsVia(t, e, gw)
+	m := centraltest.New(t, e.url, "beekeeper")
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, anaLaptop, anaAgent)
+	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
+	id := ana.fileCentral("Which lane after expiry?", "1h")
+	if err := e.srv.defaultDue(context.Background(), e.srv.now().Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// Advance the default's late-answer window without touching production.
+	if err := e.srv.defaultDue(context.Background(), e.srv.now().Add(26*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	out, code := bo.run("note", "answer", fmt.Sprintf("lab#%d", id), "--choice", "1")
+	if code != ExitRefused || !strings.Contains(out, "closed by its default") || !strings.Contains(out, "expired") {
+		t.Fatalf("expired default answer: exit %d: %s", code, out)
+	}
+	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteDefaulted })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, fmt.Sprintf("#%d defaulted", id)) {
+		t.Fatalf("close log: %+v %v", evs, err)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -81,17 +82,10 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
-	// Only the harnesses this host lists and its check passed are choices;
-	// agy and omp have no remote adapter yet.
-	exclude := append(slices.Clone(o.Exclude), "agy", "omp")
-	for _, name := range []string{claudeComm, codex.Harness} {
-		if !host.Supports(name) || caps.Harnesses[name] == "" {
-			exclude = append(exclude, name)
-		}
-	}
 	if o.Harness != harnessAuto && caps.Harnesses[o.Harness] == "" {
 		return refused("execution host %s does not offer harness %s: %s", host.Identity, o.Harness, caps.Unavailable[o.Harness])
 	}
+	exclude := append(slices.Clone(o.Exclude), hostUnoffered(caps)...)
 	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
 	if o.Harness == harnessAuto {
 		choice, err := pickAutoChoice(verdict, o.Force)
@@ -190,6 +184,15 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 }
 
 func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]providerReadingResult, legacy *usageView, builds bool, exclude []string, kind startFor, harness, model string) *capacityView {
+	// A host runs only the harnesses it has an adapter for: its verdict
+	// weighs those choices alone, so a choice it cannot run never shows as
+	// its room.
+	exclude = append(slices.Clone(exclude), hostUnsupportedHarnesses...)
+	for _, name := range []string{claudeComm, codex.Harness} {
+		if !host.Supports(name) {
+			exclude = append(exclude, name)
+		}
+	}
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
@@ -219,6 +222,40 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 		v.Room = 0
 	}
 	return v.stopped(a, st.Stop)
+}
+
+// hostUnsupportedHarnesses are the harnesses an execution host has no
+// adapter for. Of the others, Claude Code and Codex, a host runs those its
+// catalogue entry lists (executionCapacity) and its check offers
+// (hostUnoffered). hostRunsHarness is the other side, a harness some host
+// runs ("" is Claude Code).
+var hostUnsupportedHarnesses = []string{harnessAgy, omp.Harness}
+
+// hostUnoffered are the remote harnesses a host's check did not offer: a
+// harness whose version, login or guard failed there is no choice on it.
+func hostUnoffered(caps execution.Capabilities) []string {
+	var out []string
+	for _, name := range []string{claudeComm, codex.Harness} {
+		if caps.Harnesses[name] == "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// hostRunsHarness says whether one of hosts can run harness: Claude Code on
+// any host, as before, and Codex on a host whose entry lists it.
+func hostRunsHarness(harness string, hosts []execution.Host) bool {
+	h := strings.TrimSpace(harness)
+	if h == "" || h == claudeComm {
+		return true
+	}
+	for _, host := range hosts {
+		if execution.SupportedHarness(h) && host.Supports(h) {
+			return true
+		}
+	}
+	return false
 }
 
 func executionReserved(st *state.State, ag state.Agent) bool {

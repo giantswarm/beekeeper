@@ -1184,3 +1184,40 @@ func TestMissingEnvironmentConfig(t *testing.T) {
 		})
 	}
 }
+
+// capacity.local.ceiling is the coordinator machine's own cap: unset means
+// none, 0 is honoured and a negative one is refused.
+func TestCapacityLocalCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		yaml  string
+		want  int
+		set   bool
+		bad   bool
+		label string
+	}{
+		{label: "unset", yaml: "capacity:\n  ceiling: 14\n"},
+		{label: "zero", yaml: "capacity:\n  local:\n    ceiling: 0\n", want: 0, set: true},
+		{label: "five", yaml: "capacity:\n  ceiling: 14\n  local:\n    ceiling: 5\n", want: 5, set: true},
+		{label: "negative", yaml: "capacity:\n  local:\n    ceiling: -1\n", bad: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.local.ceiling") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, ok := c.Capacity.Local.Limit(); n != tc.want || ok != tc.set {
+				t.Fatalf("local ceiling %d (set %v), want %d (set %v)", n, ok, tc.want, tc.set)
+			}
+		})
+	}
+}
