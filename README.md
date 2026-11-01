@@ -19,11 +19,12 @@ starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
 stops. Remote wakes and resumes use durable ordered message receipts; inspect
 them with `agents messages` and reconcile with `agents hosts sync`. With
-`supervisor.hosts`, `supervisor loop` places its worker and reviewer starts
+`supervisor.hosts`, `supervisor loop` places its worker starts
 on these hosts when the coordinator is out of room (or always with
 `supervisor.hostsFirst`, for what a host can run: a repository no host maps
 and a choice of a harness no host has an adapter for start locally within
-`capacity.local.ceiling`).
+`capacity.local.ceiling`). Reviewers stay on the coordinator, where they can
+read GitHub and post the public review required for merge authorization.
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
