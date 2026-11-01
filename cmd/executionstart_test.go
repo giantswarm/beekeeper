@@ -349,3 +349,98 @@ func TestExecutionCapacityWeighsOnlyTheHostsHarnesses(t *testing.T) {
 		t.Fatalf("the host's Claude choice: room %d, choice %+v, blocks %v", v.Room, v.Choice, v.Blocks)
 	}
 }
+
+// The original coordinator prepared the host but lost its reply before source
+// transfer existed. The upgraded transport offers uploads; recovery must still
+// use the original journal/request, without fetching or uploading new source.
+func TestExecutionUpgradeRecoversLegacyLostPreparationReply(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	var original execution.StartRequest
+	var handle execution.Handle
+	prepared, running, activations, uploads, fetches := false, false, 0, 0, 0
+	fake := &testExecutionTransport{}
+	fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+		if !prepared {
+			original = r
+			handle = execution.Handle{Ref: r.Ref, Repository: r.Repository, Commit: strings.Repeat("a", 40), Workspace: path.Join(a.cfg.Agents.Hosts[sshTestSelector].WorkspaceRoot, string(r.Ref.Execution), "workspace"), Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}
+			prepared = true
+			return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: errors.New("lost legacy preparation reply")}
+		}
+		if r.Digest() != original.Digest() {
+			return execution.Handle{}, errors.New("legacy journal request digest changed")
+		}
+		if r.RegistrationReceipt != "" {
+			activations++
+			running = true
+		}
+		return handle, nil
+	}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		phase := execution.Prepared
+		if running {
+			phase = execution.Running
+		}
+		return execution.Observation{Handle: handle, ProcessState: phase, Ready: running}, nil
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	if _, err := runAgents(a, agentStartName, "--name", "upgrade-worker", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--model", bgModel); err == nil {
+		t.Fatal("lost preparation reply succeeded")
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := executionRecord(st, original.Ref)
+	if rec == nil || rec.Phase != executionPending || rec.Request.SourceDigest != "" {
+		t.Fatal("fixture is not a pending legacy preparation")
+	}
+	gitBefore := executionPublishGit
+	t.Cleanup(func() { executionPublishGit = gitBefore })
+	executionPublishGit = func(context.Context, string, ...string) ([]byte, error) {
+		fetches++
+		return nil, errors.New("legacy recovery must not fetch source")
+	}
+	upgraded := &sourceRecoveryTransport{testExecutionTransport: fake, upload: func(context.Context, execution.Ref, []byte) error {
+		uploads++
+		return errors.New("legacy journal has no source bundle")
+	}}
+	a.executionTransport = func(execution.Host) execution.Transport { return upgraded }
+	inspectBefore := fake.inspect
+	for _, failure := range []error{errors.New("unreadable legacy journal"), &execution.UnreachableError{Operation: sshTestInspect, Cause: errors.New("connection lost")}} {
+		fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+			return execution.Observation{}, failure
+		}
+		if err := a.activateExecution(context.Background(), original.Ref); !errors.Is(err, failure) {
+			t.Fatalf("inspection error was not preserved: %v", err)
+		}
+		st, err = a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, _ = executionRecord(st, original.Ref)
+		if fetches != 0 || uploads != 0 || (rec.Request.Digest() != original.Digest() || rec.RequestDigest != original.Digest()) {
+			t.Fatal("uncertain inspection changed the legacy request")
+		}
+	}
+	fake.inspect = inspectBefore
+	if err := a.activateExecution(context.Background(), original.Ref); err != nil {
+		t.Fatalf("upgraded recovery: %v", err)
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = executionRecord(st, original.Ref)
+	if fetches != 0 || uploads != 0 || activations != 1 || (rec.Request.Digest() != original.Digest() || rec.RequestDigest != original.Digest()) || !rec.Observation.Ready {
+		t.Fatal("recovery changed the legacy request, uploaded source, or duplicated activation")
+	}
+}
+
+type sourceRecoveryTransport struct {
+	*testExecutionTransport
+	upload func(context.Context, execution.Ref, []byte) error
+}
+
+func (t *sourceRecoveryTransport) UploadSource(ctx context.Context, ref execution.Ref, data []byte) error {
+	return t.upload(ctx, ref, data)
+}
