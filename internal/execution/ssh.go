@@ -61,12 +61,12 @@ func (h Host) Validate() error {
 		return err
 	}
 	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) == 0 {
-		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses (claude, codex)")
+		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses (claude, codex, omp)")
 	}
 	seen := map[string]bool{}
 	for _, name := range h.Harnesses {
 		if !SupportedHarness(name) || seen[name] {
-			return errors.New("host harnesses must be distinct entries of claude and codex")
+			return errors.New("host harnesses must be distinct entries of claude, codex and omp")
 		}
 		seen[name] = true
 	}

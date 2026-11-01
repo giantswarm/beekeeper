@@ -45,9 +45,14 @@ const ClaudeVersions = ">= 2.1.268, < 3.0.0"
 // PreToolUse hooks from CODEX_HOME and --dangerously-bypass-hook-trust.
 const CodexVersions = ">= 0.165.0, < 1.0.0"
 
+// The omp adapter relies on print mode's JSON events (session, turn_start),
+// --resume of a session in --session-dir, and blocking tool_call handlers of
+// an explicit --hook extension while discovery is off (--no-extensions).
+const OmpVersions = ">= 18.13.0, < 19.0.0"
+
 func (c HostConfig) Validate() error {
 	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
-		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude or codex")
+		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex or omp")
 	}
 	for repo, p := range c.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
@@ -77,9 +82,9 @@ func (c HostConfig) Validate() error {
 }
 
 func (h HarnessConfig) validate(name string) error {
-	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions}[name]
+	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions, HarnessOmp: OmpVersions}[name]
 	if constraint == "" {
-		return errors.New("execution host harnesses must be claude or codex")
+		return errors.New("execution host harnesses must be claude, codex or omp")
 	}
 	v, err := semver.StrictNewVersion(h.Version)
 	rangeOK, _ := semver.NewConstraint(constraint)
@@ -90,6 +95,11 @@ func (h HarnessConfig) validate(name string) error {
 	// managed home links only that file and never receives a copied credential.
 	if name == HarnessCodex && h.ConfigDir == "" {
 		return errors.New("codex requires configDir, the host CODEX_HOME holding its own login")
+	}
+	// omp reads its models and the provider key from the host's own agent
+	// directory; the coordinator never hands it a key.
+	if name == HarnessOmp && h.ConfigDir == "" {
+		return errors.New("omp requires configDir, the host omp agent directory holding its own models and provider key")
 	}
 	return nil
 }
@@ -111,6 +121,9 @@ type Policy struct {
 	// CodexDigest binds the managed CODEX_HOME's config, hooks and rules. It
 	// is empty on a host that runs no codex, leaving its policy unchanged.
 	CodexDigest string `json:"codexDigest,omitempty"`
+	// OmpDigest binds the managed omp guard extension and rules. It is empty
+	// on a host that runs no omp.
+	OmpDigest string `json:"ompDigest,omitempty"`
 }
 
 func (p Policy) Digest() string { b, _ := json.Marshal(p); return Digest(b) }
@@ -125,6 +138,9 @@ func (s *Server) Policy() Policy {
 	p := Policy{Protocol: Protocol, Version: s.Version, ConfigurationDigest: Digest(b), RulesDigest: Digest(s.Rules), SettingsDigest: Digest(s.settings())}
 	if _, ok := s.Config.Harnesses[HarnessCodex]; ok {
 		p.CodexDigest = Digest(mustJSON(s.codexFiles()))
+	}
+	if _, ok := s.Config.Harnesses[HarnessOmp]; ok {
+		p.OmpDigest = Digest(mustJSON(s.ompFiles()))
 	}
 	return p
 }
@@ -240,6 +256,18 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 	}
+	if p.OmpDigest != "" {
+		for _, dir := range []string{s.ompDir(), s.ompSessionsDir()} {
+			if err := ownedDirectory(dir); err != nil {
+				return "", err
+			}
+		}
+		for name, b := range s.ompFiles() {
+			if err := atomicFile(filepath.Join(s.ompDir(), name), b); err != nil {
+				return "", err
+			}
+		}
+	}
 	// The manifest comes last: a host is prepared only once every file is.
 	if err := atomicFile(filepath.Join(s.Root, "policy.json"), mustJSON(p)); err != nil {
 		return "", err
@@ -269,6 +297,14 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 			b, err := readRegular(filepath.Join(s.codexHomeDir(), name), MaxWire)
 			if err != nil || Digest(b) != Digest(want) {
 				return p, errors.New("installed codex rules, configuration or hooks do not match the policy")
+			}
+		}
+	}
+	if p.OmpDigest != "" {
+		for name, want := range s.ompFiles() {
+			b, err := readRegular(filepath.Join(s.ompDir(), name), MaxWire)
+			if err != nil || Digest(b) != Digest(want) {
+				return p, errors.New("installed omp rules or guard extension do not match the policy")
 			}
 		}
 	}
@@ -303,8 +339,11 @@ func (s *Server) workerExecutable() error {
 // Probe runs no model call and returns no authentication values. Its output is
 // only metadata. No provider credential from the SSH login shell is inherited.
 func (s *Server) probe(ctx context.Context, name string, h HarnessConfig) error {
-	if name == HarnessCodex {
+	switch name {
+	case HarnessCodex:
 		return s.probeCodex(ctx, h)
+	case HarnessOmp:
+		return s.probeOmp(ctx, h)
 	}
 	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))
