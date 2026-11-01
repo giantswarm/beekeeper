@@ -2050,8 +2050,10 @@ and a crash both start a fresh session.
   worker a reboot stopped, a desktop session closed) does not come back by itself. `watch` says
   `AGENTS STOPPED` once per agent, and the `handover` Agents section marks it, each with
   how to resume it: `claude --bg --resume <session> "…"` for a background worker, its
-  `claude://code/continue` link for a desktop session. Nothing is resumed automatically: a burst
-  of resumed workers after a login is the supervisor's call against the machine's memory. The
+  `claude://code/continue` link for a desktop session, or `beekeeper agents wake <name> <message>`
+  for codex, omp and agy workers. Those workers count as running while their harness runner
+  lives, including between turns and before their first transcript. Nothing is resumed automatically:
+  a burst of resumed workers after a login is the supervisor's call against the machine's memory. The
   line tells a worker parked on a person (its serve record's `--waits` names the person, a note,
   the supervisor or the guide: `parked on a person: …`) apart from one whose headless turn ended
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
