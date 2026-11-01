@@ -413,6 +413,7 @@ func TestRemoteScriptReadsInAnyLoginShell(t *testing.T) {
 func TestStoreSourceToRemoteUsesStdinOnly(t *testing.T) {
 	var calls []sshCall
 	o := remoteOps(t, &calls, nil)
+	o.Fingerprint = func(string) string { t.Fatal("copy fingerprinted a store value without an explicit fingerprint operation"); return "" }
 	run := o.Run
 	o.Store.Read = []string{storeReader}
 	o.Run = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
@@ -433,6 +434,7 @@ func TestStoreSourceToRemoteUsesStdinOnly(t *testing.T) {
 	if err != nil || len(calls) != 1 {
 		t.Fatalf("remote: %d calls, %v", len(calls), err)
 	}
+	if res.Fingerprint != "" { t.Fatal("copy returned a store fingerprint") }
 	if calls[0].stdin != token || strings.Contains(strings.Join(calls[0].argv, " "), token) {
 		t.Fatal("remote value was not confined to stdin")
 	}

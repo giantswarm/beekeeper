@@ -809,7 +809,9 @@ put `{field}` in an argument of `secret.store.read`: it is replaced with the
 requested field, or `password` when omitted, and no attribute option is added.
 The entry remains the final argument; no shell evaluates it. Store-command errors
 name the reference and suppress command output, which might contain credentials.
-An unconfigured source is refused with `secret.store.read` named. A store reference
+Store copies return no automatic fingerprint, including SSH delivery; request one
+with `secret fingerprint` when needed. An unconfigured source is refused with
+`secret.store.read` named. A store reference
 is a source only; `secret store` continues to write into the shared vault.
 
 ```bash

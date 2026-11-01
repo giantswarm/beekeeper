@@ -717,14 +717,18 @@ func (a *app) secretCopyToRemote(ctx context.Context, src secret.Ref, enc secret
 	if err != nil && !errors.Is(err, secret.ErrVault) {
 		err = refused("%v", err)
 	}
-	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(enc), f, outcome(err, fmt.Sprintf("%d bytes, mode %s, %s", res.Bytes, res.Mode, res.Fingerprint))); err != nil {
+	summary := fmt.Sprintf("%d bytes, mode %s", res.Bytes, res.Mode)
+	if res.Fingerprint != "" { summary += ", " + res.Fingerprint }
+	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(enc), f, outcome(err, summary)); err != nil {
 		return err
 	}
 	own := ""
 	if res.Owner != "" {
 		own = ", owner " + res.Owner
 	}
-	return a.secretPrint(res, fmt.Sprintf("wrote %s: %d bytes, mode %s%s, value %d bytes, fingerprint %s\n", res.File, res.Bytes, res.Mode, own, res.Length, res.Fingerprint))
+	fingerprint := ""
+	if res.Fingerprint != "" { fingerprint = ", fingerprint " + res.Fingerprint }
+	return a.secretPrint(res, fmt.Sprintf("wrote %s: %d bytes, mode %s%s, value %d bytes%s\n", res.File, res.Bytes, res.Mode, own, res.Length, fingerprint))
 }
 
 // copyPairs are the <ref>=<path> pairs of copy into a new file: every
