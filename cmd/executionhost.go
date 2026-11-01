@@ -89,7 +89,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 				} `json:"hookSpecificOutput"`
 			}
 			b := h.DecideExecution(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
-			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != "deny" {
+			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("execution hook conformance probe failed")
 			}
 			if _, ok := cfg.Harnesses[execution.HarnessCodex]; !ok {
@@ -98,7 +98,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 			raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
 			out.Hook.Decision = ""
 			b = h.DecideExecutionCodex(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
-			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != "deny" {
+			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("codex execution hook conformance probe failed")
 			}
 		}
@@ -144,6 +144,9 @@ func executionGuardDecision(h guard.Hook, format string, j execution.Journal, pr
 		return h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, protected)
 	}
 }
+
+// guardDeny is a hook's deny decision, in both harnesses' formats.
+const guardDeny = "deny"
 
 func mustSelf() string { s, _ := os.Executable(); return s }
 

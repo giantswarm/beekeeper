@@ -11,11 +11,15 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-const codexTestModel = "gpt-fixture"
+const (
+	codexTestModel     = "gpt-fixture"
+	codexTestClaudeVer = "2.1.290-remote"
+)
 
 // sshCodexTestApp is a coordinator with a codex provider whose first host
 // lists claude and codex; offered is what the host's check advertises.
@@ -48,7 +52,7 @@ func sshCodexTestApp(t *testing.T, offered map[string]string) (*app, string, *[]
 }
 
 func TestExecutionStartsCodexOnAHostThatOffersIt(t *testing.T) {
-	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: "2.1.290", codex.Harness: "0.166.0"})
+	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, codex.Harness: "0.166.0"})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-codex", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", codex.Harness, "--model", codexTestModel); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +78,7 @@ func TestExecutionStartsCodexOnAHostThatOffersIt(t *testing.T) {
 }
 
 func TestExecutionRefusesCodexTheHostDoesNotOffer(t *testing.T) {
-	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: "2.1.290"})
+	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: codexTestClaudeVer})
 	_, err := runAgents(a, agentStartName, "--name", "remote-codex", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", codex.Harness, "--model", codexTestModel)
 	if err == nil || !strings.Contains(err.Error(), "does not offer harness codex") || len(*requests) != 0 {
 		t.Fatalf("a host whose codex check failed started it: %v", err)
@@ -117,9 +121,9 @@ func TestExecutionPublicationAndMergeAcceptRemoteCodex(t *testing.T) {
 	owner, _, _ := strings.Cut(sshTestRepository, "/")
 	a.cfg.GitHub.AllowedOrgs = []string{owner}
 	ref := execution.Ref{Host: sshTestSelector, Execution: "3aa27721-fb1e-4f07-b0aa-bdf100e0fdd9", Generation: 1}
-	for _, harness := range []string{codex.Harness, "omp"} {
+	for _, harness := range []string{codex.Harness, omp.Harness} {
 		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Commit: strings.Repeat("a", 40)}, Request: execution.StartRequest{Ref: ref, Repository: sshTestRepository, Harness: harness, LeaseRequired: true}, Lease: &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}}
-		st := &state.State{Starts: []state.Start{{Party: state.Party{Name: "remote-worker"}, Execution: rec}}}
+		st := &state.State{Starts: []state.Start{{Party: state.Party{Name: "remote-codex-worker"}, Execution: rec}}}
 		_, err := a.executionPublicationLive(st, ref)
 		if (err == nil) != (harness == codex.Harness) {
 			t.Fatalf("publication for %s: %v", harness, err)
