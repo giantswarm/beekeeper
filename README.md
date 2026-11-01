@@ -85,6 +85,27 @@ run`'s capped commands, with their CPU budget (`memcap.cpuQuota`, `memcap.cpuWei
 with the app running when it does not). Without a config it writes a starter one, the [example
 configuration](docs/examples/config.yaml) with every key commented out. The standby service runs
 `watch --standby`, and `watch --notify --standby` only with `watch.notify: true` (off by default).
+Before restarting a broker with `secret.session`, install prepares a vault
+handover through the broker's private socket. The session passes in an anonymous
+memory descriptor held by systemd, with its original expiry; no session value is
+written to disk or returned to the installer. Locking or replacing the session
+revokes a prepared handover. If the running broker or service manager cannot
+prepare it, install reports the failure, skips only the broker restart and
+finishes installing the other services. This includes the first upgrade from a
+broker without handover support or without a notification socket. A deliberate
+`systemctl --user restart beekeeper-sandbox.service` then puts it on the new
+binary, drops the old session and requires a new sign-in. Repeating install
+cannot add handover support to an already-running old broker. Dry runs prepare nothing.
+
+The user manager holds the plaintext memory descriptor briefly during a handover.
+Unlike the undumpable broker, a dumpable user manager can expose that descriptor
+through `/proc/<pid>/fd` to unsandboxed processes of the same user. This is an
+explicit tradeoff of the descriptor-store handover. Preparation happens immediately
+before restart; a failed restart revokes and wipes the snapshot. A still-running
+broker also wipes an abandoned preparation after 30 seconds. The replacement
+wipes the shared bytes after reading them even if descriptor-store removal fails.
+A revoked or expired snapshot starts a locked broker that continues serving.
+
 A file already as install writes it stays; one an earlier install wrote, a unit that runs this
 binary and a hook entry that runs this binary's hook command (an older matcher, a self-update's
 settings) are updated in place, never added twice; one that differs and is none of these it keeps
