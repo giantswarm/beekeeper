@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -158,15 +159,40 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 	return p, nil
 }
 
+// workerExecutable fails closed when the embedded worker contract cannot
+// execute its component. The managed turn commands the host by bare
+// `beekeeper` through the harness PATH, which the runner pins to this
+// installation's directory, so readiness must refuse a host where note, park
+// and report cannot run instead of starting a worker that cannot reach its
+// coordinator. A per-user installation is accepted; a system-wide one is not
+// required.
+func (s *Server) workerExecutable() error {
+	bound := filepath.Clean(s.Executable)
+	resolved := filepath.Join(filepath.Clean(filepath.Dir(bound)), managedBinary)
+	fi, err := os.Stat(resolved)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return errors.New("no executable beekeeper at the bound execution host installation; install it and prepare the matching bundle")
+	}
+	// The runner prepends this directory and drops its duplicates, so the
+	// resolved command is what the bare worker commands reach: it must be
+	// the very file the prepared policy binds, not a stale sibling beside
+	// a differently named or versioned installation.
+	own, err := os.Stat(bound)
+	if err != nil || !os.SameFile(fi, own) {
+		return errors.New("the bare worker command does not resolve to the bound execution host executable; install the prepared executable as " + managedBinary + " in its directory")
+	}
+	return nil
+}
+
 // Probe runs no model call and returns no authentication values. Its output is
 // only metadata. No provider credential from the SSH login shell is inherited.
 func (s *Server) probe(ctx context.Context, h HarnessConfig) error {
-	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
+	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) == 0 || parts[0] != h.Version {
 		return errors.New("unsupported or mismatched harness version/flags")
 	}
-	raw, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir), h.Executable, authCommand, "status")
+	raw, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, authCommand, "status")
 	if err != nil {
 		return errors.New("harness authentication is not ready; provision it on the execution host")
 	}
