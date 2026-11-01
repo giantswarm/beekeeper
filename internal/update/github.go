@@ -2,28 +2,43 @@ package update
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
+	"runtime"
+	"sort"
+	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	"github.com/google/go-github/v93/github"
 )
 
-// githubSource retains the upstream downloader and empty-list fallback, but
-// lists every page: GitHub's release order is not semantic version order.
+// Bound candidate reads when tags have no published, signed binary. A normal
+// lookup uses two small requests, independent of the release history's size.
+const maxReleaseCandidates = 8
+const emptyRefAttempts = 3
+
 type githubSource struct {
-	selfupdate.Source
-	api *github.Client
+	selfupdate.Source // retain the upstream asset downloader
+	api               *github.Client
+	prereleases       bool
 }
 
-func newGitHubSource() selfupdate.Source {
-	source, _ := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
+func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
+	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
+	if err != nil {
+		return nil, err
+	}
 	var opts []github.ClientOptionsFunc
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		opts = append(opts, github.WithAuthToken(token))
 	}
-	client, _ := github.NewClient(opts...)
-	return &githubSource{Source: source, api: client}
+	client, err := github.NewClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &githubSource{Source: source, api: client, prereleases: prereleases}, nil
 }
 
 func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
@@ -31,26 +46,73 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 	if err != nil {
 		return nil, err
 	}
-	var releases []selfupdate.SourceRelease
-	opts := &github.ListOptions{PerPage: 100}
-	for {
-		page, response, err := s.api.Repositories.ListReleases(ctx, owner, repo, opts)
+	// Release lists include every historical body and asset and stop at 1,000
+	// anonymous results. Matching refs carry just tag metadata without that cap.
+	var refs []*github.Reference
+	for attempt := 0; attempt < emptyRefAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var response *github.Response
+		refs, response, err = s.api.Git.ListMatchingRefs(ctx, owner, repo, "tags/v")
 		if err != nil {
-			if opts.Page == 0 && response != nil && response.StatusCode == http.StatusNotFound {
+			if response != nil && response.StatusCode == http.StatusNotFound {
 				return nil, nil
 			}
 			return nil, err
 		}
-		for _, release := range page {
-			releases = append(releases, selfupdate.NewGitHubRelease(release))
-		}
-		if response.NextPage == 0 {
+		if len(refs) != 0 {
 			break
 		}
-		opts.Page = response.NextPage
 	}
-	if len(releases) == 0 {
-		return s.Source.ListReleases(ctx, repository)
+	type candidate struct {
+		tag     string
+		version *semver.Version
 	}
-	return releases, nil
+	candidates := make([]candidate, 0, len(refs))
+	for _, ref := range refs {
+		tag := strings.TrimPrefix(ref.GetRef(), "refs/tags/")
+		version, err := semver.NewVersion(tag)
+		if err != nil || (!s.prereleases && version.Prerelease() != "") {
+			continue
+		}
+		candidates = append(candidates, candidate{tag, version})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].version.Equal(candidates[j].version) {
+			return candidates[i].tag < candidates[j].tag
+		}
+		return candidates[i].version.GreaterThan(candidates[j].version)
+	})
+	for i, candidate := range candidates {
+		if i == maxReleaseCandidates {
+			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags; refusing an incomplete lookup", maxReleaseCandidates)
+		}
+		release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, candidate.tag)
+		if response != nil && response.StatusCode == http.StatusNotFound {
+			continue
+		} // tag without a release
+		if err != nil {
+			return nil, err
+		}
+		if release.GetDraft() || (!s.prereleases && release.GetPrerelease()) {
+			continue
+		}
+		if release.GetTagName() != candidate.tag {
+			return nil, fmt.Errorf("release tag %q does not match requested tag %q", release.GetTagName(), candidate.tag)
+		}
+		name := "beekeeper-" + runtime.GOOS + "-" + runtime.GOARCH
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		binary, bundle := false, false
+		for _, asset := range release.Assets {
+			binary = binary || asset.GetName() == name
+			bundle = bundle || asset.GetName() == name+".bundle"
+		}
+		if binary && bundle {
+			return []selfupdate.SourceRelease{selfupdate.NewGitHubRelease(release)}, nil
+		}
+	}
+	return nil, nil
 }

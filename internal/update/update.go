@@ -32,8 +32,8 @@ const lookupTimeout = 15 * time.Second
 var ErrOutdated = errors.New("a newer beekeeper release is available")
 
 // Seams the tests replace: where releases come from (public GitHub,
-// anonymous unless GITHUB_TOKEN is set; an empty release list uses the upstream
-// retry and latest-release fallback), what a download must verify against
+// anonymous unless GITHUB_TOKEN is set; empty tag responses are retried),
+// what a download must verify against
 // (the shared cosign validator: a CircleCI build of Repository, against the
 // Sigstore public-good trust root), the file the update replaces and the
 // running version.
@@ -74,7 +74,11 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases or with go install %s@latest", res.Current, project.Source, project.Module)
 	}
 
-	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: newValidator(), Prerelease: prerelease(res.Current)})
+	source, err := newSource(prerelease(res.Current))
+	if err != nil {
+		return res, fmt.Errorf("creating release source: %w", err)
+	}
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: source, Validator: newValidator(), Prerelease: prerelease(res.Current)})
 	if err != nil {
 		return res, err
 	}
