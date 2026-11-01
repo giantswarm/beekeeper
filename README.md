@@ -44,9 +44,29 @@ restart or roster loss without a done report. Each start rechecks capacity
 and stops when its gates refuse, the floor is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
 An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
-default) before retrying, unless the roster or capacity changes first.
+default) before retrying, unless `capacity.floor` or `capacity.ceiling`
+changes or an agent is done or leaves the roster first; a park, a resume,
+a wait or a new task, and the busy count and room they move, do not end it. An empty or failed read answers
+the rest of its pass, the done-triggered starts included.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
+
+The loop routes only relevant alerts, those the watch publishes at
+`alerts.pageSeverity`:
+
+1. The team's own alerts (`alerts.team`) are relevant 24/7: an alert of the
+   team that only `InhibitionOutsideWorkingHours` inhibits is read and routed
+   like any other. With `alerts.team` unset every alert is the desk's.
+2. A silenced alert is ignored, the team's included: beekeeper creates no
+   silence, so every silence is another person's or team's. It gets no
+   summary line and no note.
+
+Everything else, another team's or a team-less alert, gets no note and no
+summary line. A relevant alert nobody owns that a session record explicitly
+waits on (`sessions serve … --waits alert:<name>`) is one decision for the
+guide, which decides whether a worker starts on it; the rest are one
+`SUPERVISOR ALERTS unowned` summary line per pass. A worker parked on an
+alert (`agents park --on alert:<name>`) is woken by it whoever's it is.
 
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
