@@ -475,6 +475,9 @@ type Hooks struct {
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
+	// TranscriptGrants authorize exact transcript files or fixture directories per session ID.
+	// Set by the supervisor, never inferred from a hook event.
+	TranscriptGrants map[string][]string `yaml:"transcriptGrants"`
 	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
 	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
 	// session would create directly in one, and one git neither tracks nor
