@@ -419,3 +419,21 @@ process directory still has its original owner.
 on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
 freeing (`doctor.freeEvery`) and Docker reclamation remain independent
 in both modes.
+
+## Central note closure audit
+
+A central Note closes only with a recognised close event (`answer.recorded`,
+`note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
+line atomically with the outcome. Closed Notes remain as history, outside the
+open notes and the 24-hour default-answer window, for 30 days after closure.
+Note-only updates, including the periodic default tick, collect older closed
+records; unrelated object updates leave collection to that tick. Cleanup first
+preserves the note counter, so expired numbers are never issued again.
+`beekeeper log` includes the retained line even after Kubernetes Events expire
+or an Event write fails. An answer after the default-answer window explicitly
+reports that the note was closed by its default. Folding a new question into an
+open note leaves the existing note open and logs `note.folded`.
+
+The original trigger of an already missing note cannot be recovered once its
+old logs and Events have expired. Retaining the close record makes subsequent
+closures attributable without relying on that retention window.
