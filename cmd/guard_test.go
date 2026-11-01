@@ -14,14 +14,17 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/claim/claimtest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/testenv"
 )
 
 // The test binary doubles as beekeeper (BEEKEEPER_TEST_MAIN=1), so the hook's
@@ -34,6 +37,18 @@ func TestMain(m *testing.M) {
 	// Nor does an answer reach GitHub: every thread but unknownThread is a
 	// private one to it; a test that reads the comments stubs its own.
 	boardGH = (&answerGH{}).run
+	// Nor does a claim: every issue's thread is an empty one of its own; a
+	// test of the claims keeps its own.
+	claimGH = claimtest.New().GH
+	// Nor does a worker's note read its threads: every one is open, of no
+	// epic; a test of the supersede check stubs its own.
+	noteThreads = func(_ context.Context, rs []github.PR) (map[github.PR]github.Thread, error) {
+		m := make(map[github.PR]github.Thread, len(rs))
+		for _, r := range rs {
+			m[r] = github.Thread{State: github.Open}
+		}
+		return m, nil
+	}
 	// Nor does a browse move a window of the desktop's compositor; a test
 	// that places one stubs its own hyprctl.
 	hyprRunning = func() bool { return false }
@@ -112,6 +127,7 @@ func TestMain(m *testing.M) {
 	// No test asks the machine's Claude Code for its plugins; one that
 	// wants a list sets it.
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
+	testenv.Setup()
 	os.Exit(runIsolated(m))
 }
 
@@ -133,6 +149,12 @@ func runIsolated(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(root) }()
 	isolatedRoot = root
+	if err := os.MkdirAll(filepath.Join(root, "config", "beekeeper"), 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "beekeeper", "config.yaml"), nil, 0o600); err != nil {
+		panic(err)
+	}
 	for k, v := range map[string]string{
 		"BEEKEEPER_CONFIG": filepath.Join(root, "config", "beekeeper", "config.yaml"),
 		"XDG_CONFIG_HOME":  filepath.Join(root, "config"),
@@ -210,7 +232,7 @@ func capped(t *testing.T) (state string, env []string) {
 		_ = os.Unsetenv(k)
 	}
 	state = t.TempDir()
-	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(state, "none.yaml"),
+	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(state, "config.yaml")),
 		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s", "MEMCAP_TEST=1",
 		"CLAUDE_CODE_SESSION_ID=test-session", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME=capped test")
 }
@@ -699,4 +721,13 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 	if len(okRes) != 0 {
 		t.Errorf("ordinary command: got %v, want {}", okRes)
 	}
+}
+
+// emptyTestConfig creates the file an isolated command explicitly selects.
+func emptyTestConfig(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

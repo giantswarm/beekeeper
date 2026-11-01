@@ -152,6 +152,61 @@ func TestANewHeadAfterAnApprovalGetsItsOwnReview(t *testing.T) {
 	}
 }
 
+// A head that only merges the base into the approved one (the gate's
+// --update-branch) gets the go without a review; any other new head gets
+// its review and no go.
+func TestABaseMergeAfterAnApprovalGetsTheGo(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	var asked []string
+	baseMerged := func(only bool) func(Pull, string) bool {
+		return func(p Pull, from string) bool {
+			asked = append(asked, from+".."+p.Head)
+			return only
+		}
+	}
+	in := Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	a := only(t, Plan(in), KindGo)
+	if a.Head != head2 || !strings.Contains(a.Message, "approved head "+short(head1)+"; head "+short(head2)+" only merges the base into it") {
+		t.Errorf("go = %+v", a)
+	}
+	if !slices.Equal(asked, []string{head1 + ".." + head2}) {
+		t.Errorf("asked %v", asked)
+	}
+	// Taken once: the next pass gives no second go.
+	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Hour), a)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a second pass took %+v", got)
+	}
+	// Any other change is a new head with its own review.
+	in = Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(false)}
+	if a := only(t, Plan(in), KindReview); a.Head != head2 {
+		t.Errorf("review = %+v", a)
+	}
+	// Red checks on the merged head: no go, and no read of GitHub.
+	asked = nil
+	in = Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, false, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	if got := Plan(in); len(got) != 0 || len(asked) != 0 {
+		t.Errorf("a red base merge got %+v after asking %v", got, asked)
+	}
+}
+
+// The go names the merge command of the repository's path.
+func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	in := Input{Workers: parked(t0), Pulls: pull(head1, true, approved), Rounds: 1, Taken: tk, DevctlOwners: []string{"O"}}
+	a := only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`devctl pr merge o/r 7 --update-branch`") || !strings.Contains(a.Message, "merging the base alone") || strings.Contains(a.Message, "--match-head-commit") {
+		t.Errorf("a devctl repository's go = %q", a.Message)
+	}
+	in.DevctlOwners = []string{"giantswarm"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") {
+		t.Errorf("a gh repository's go = %q", a.Message)
+	}
+}
+
 // An approved round leaves the change-request round for the next head's
 // review: its findings go back with one more round, the fixes then merge.
 func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
@@ -267,6 +322,34 @@ func TestOpenFindingsPastTheLastRoundGoBackToTheWorker(t *testing.T) {
 	in.Pulls = pull(head2, true, rev)
 	if g := only(t, Plan(in), KindGo); g.Head != head2 {
 		t.Errorf("go = %+v, want the fixed head", g)
+	}
+}
+
+// A head that only merges the base into the head a review asked changes on
+// carries no fixes: the worker reworks, with or without a round left, and
+// no go comes; a head with fixes after it is judged as before.
+func TestABaseMergeAfterAChangeRequestGetsNoGo(t *testing.T) {
+	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
+	tk := taken(t, t0,
+		Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
+		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
+	baseMerged := func(p Pull, from string) bool { return from == head1 && p.Head == head2 }
+	for rounds, next := range map[int]string{1: "the merge go for the new head follows", 2: "the next review round starts then"} {
+		p := pull(head2, true, rev)
+		pp := p[pr]
+		pp.Base = "main"
+		p[pr] = pp
+		in := Input{Workers: parked(t0.Add(time.Hour)), Pulls: p, Rounds: rounds, Taken: tk, BaseMerged: baseMerged}
+		rw := only(t, Plan(in), KindRework)
+		if rw.Head != head2 || !strings.Contains(rw.Message, "only merges main into head "+short(head1)) || !strings.Contains(rw.Message, "stand unfixed") || !strings.Contains(rw.Message, next) {
+			t.Errorf("rounds %d: rework = %+v", rounds, rw)
+		}
+		// Its fixes on top: the go (no round left) or the next round.
+		in.Pulls = pull(head3, true, rev)
+		want := map[int]string{1: KindGo, 2: KindReview}[rounds]
+		if a := only(t, Plan(in), want); a.Head != head3 {
+			t.Errorf("rounds %d: %s = %+v", rounds, want, a)
+		}
 	}
 }
 
@@ -521,7 +604,7 @@ func TestEventAgent(t *testing.T) {
 
 // A problem of a done report reaches whoever files it: one naming its
 // issue is filed and rides with the done; one filed nowhere goes to the
-// guide's queue to file first, and the done follows.
+// guide's feed to file first, and the done follows.
 func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 	done := Event{At: t0, Verb: VerbDone, Agent: worker, Detail: worker + " done: fix it"}
 	filed := Event{At: t0.Add(20 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": CI flakes in o/r, filed as https://github.com/o/r/issues/9"}
@@ -537,7 +620,7 @@ func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 	}
 	in.Taken = taken(t, t1, f)
 	a = only(t, Plan(in), KindDone)
-	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's queue") {
+	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's feed") {
 		t.Errorf("done message after the file = %q", a.Message)
 	}
 	late := Event{At: t0.Add(time.Hour), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab is gone"}
@@ -650,8 +733,15 @@ func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
 			t.Errorf("%q: a red head got %+v", words, got)
 		}
 	}
-	// An answer to an older escalation, or to another note, counts not.
+	// A head that only merges the base into the released one has the go.
 	in := escalated(t, "Merge")
+	in.Pulls = pull(head2, true, in.Pulls[pr].Reviews...)
+	in.BaseMerged = func(Pull, string) bool { return true }
+	if a := only(t, Plan(in), KindGo); a.Head != head2 || !strings.Contains(a.Message, "only merges the base into the released head "+short(head1)) {
+		t.Errorf("a base merge of the released head: go = %+v", a)
+	}
+	// An answer to an older escalation, or to another note, counts not.
+	in = escalated(t, "Merge")
 	in.Answers[0].At = t0.Add(time.Hour)
 	if got := only(t, Plan(in), KindRework); got.Head != head1 {
 		t.Errorf("an answer from before the escalation got %+v", got)
@@ -714,5 +804,12 @@ func TestAnEscalationWithoutAHeadIsOnTheLastRoundsHead(t *testing.T) {
 	in.Workers = parked(t0.Add(5 * time.Hour))
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("the same head after the answer got %+v", got)
+	}
+}
+
+func TestAReplacedParkIsNoDecision(t *testing.T) {
+	in := Input{Workers: []Worker{{Name: worker, ParkedAt: t1}}, Events: []Event{{At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: CI pending for " + prURL}}}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("replaced park became a decision: %+v", got)
 	}
 }

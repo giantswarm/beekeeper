@@ -632,6 +632,19 @@ type Record struct {
 	rest rest
 }
 
+// Claim is a record published on its issue as a marker comment other desks
+// read: the comment, the session it names, since when and when this desk
+// last refreshed it.
+type Claim struct {
+	Issue   string    `json:"issue"`
+	Comment int64     `json:"comment"`
+	Session Party     `json:"session"`
+	At      time.Time `json:"at"`
+	Seen    time.Time `json:"seen"`
+
+	rest rest
+}
+
 // AlertOwner is the session that owns a firing alert (alerts own), until the
 // session ends or the alert resolves. A party without a session id is a
 // person, who owns it until it resolves.
@@ -787,6 +800,7 @@ type Start struct {
 // Request includes the private component callback credential and must never
 // be returned by an operator status or logs command.
 type ExecutionRecord struct {
+	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
 	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
 	Handle          execution.Handle                   `json:"handle"`
@@ -991,7 +1005,11 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
-	Notes    []Note               `json:"notes,omitempty"`
+	// Parks are the parks of sessions off the roster (agents park by a
+	// session no roster entry names), one per session, its By: the watch
+	// settles and resumes them as it does a roster agent's.
+	Parks []Park `json:"parks,omitempty"`
+	Notes []Note `json:"notes,omitempty"`
 	// Defaulted are the decisions closed by their default within the last
 	// day: an answer that arrives meanwhile replaces the default.
 	Defaulted []Note  `json:"defaulted,omitempty"`
@@ -1000,6 +1018,9 @@ type State struct {
 	NextTimer int     `json:"nextTimer,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
+	// Claims are the records this desk published on GitHub as claims
+	// other desks read (board.claims).
+	Claims []Claim `json:"claims,omitempty"`
 	// Starts are the sessions beekeeper started, what the permission hook
 	// answers for.
 	Starts []Start `json:"starts,omitempty"`
@@ -1054,6 +1075,7 @@ type State struct {
 	// WorkerReports are the reports workers finished with (agents idle
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
+	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
@@ -1179,6 +1201,7 @@ func (s *State) PairOf(key string) int {
 // follow-ups). The supervisor's watch prints it once and drops it; the event
 // log keeps it (agents.report, agents.problem).
 type WorkerReport struct {
+	Finished bool      `json:"finished,omitempty"`
 	By       Party     `json:"by"`
 	At       time.Time `json:"at"`
 	Task     string    `json:"task,omitempty"`

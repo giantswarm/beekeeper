@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,13 +12,16 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const (
 	fillCapacityCommand = "capacity"
 	fillEmptyBoardJSON  = `{"pick":null}`
 	fillNoRoomJSON      = `{"floor":3,"room":0}`
+	fillAgentDone       = "an agent is done"
 )
 
 // Only external commands are replaced; capacity changes after each start.
@@ -251,23 +255,42 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 	}
 }
 
-func TestLoopFillStateChangesInvalidateBoardBackoff(t *testing.T) {
-	for _, change := range []string{"busy count changes", "available room changes", "roster membership changes", "capacity cycles through the floor"} {
+func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
+	for _, tc := range []struct {
+		change string
+		reads  int
+	}{
+		{"the floor changes", 2},
+		{"the ceiling changes", 2},
+		{"an agent is removed", 2},
+		{fillAgentDone, 2},
+		// A park or resume moves an agent in or out of busy and room with
+		// it; neither can make an empty board offer an item.
+		{"busy count changes", 1},
+		{"available room changes", 1},
+		{"capacity cycles through the floor", 1},
+	} {
+		change := tc.change
 		t.Run(change, func(t *testing.T) {
 			r, busy := fillRig(t)
 			original := r.answer
 			reads := 0
-			changedRoom := false
+			changedRoom, floor, ceiling := false, 3, 5
 			r.answer = func(args []string) (string, int) {
 				if args[0] == loopBoard {
 					reads++
 					return fillEmptyBoardJSON, 0
 				}
-				if args[0] == fillCapacityCommand && changedRoom {
-					return `{"floor":3,"room":1}`, 0
+				if args[0] == fillCapacityCommand {
+					room := ceiling - *busy
+					if changedRoom {
+						room = 1
+					}
+					return fmt.Sprintf(`{"floor":%d,"ceiling":%d,"room":%d,"busy":%s}`, floor, ceiling, room, busyJSON(*busy)), 0
 				}
 				return original(args)
 			}
+			r.started(t, "a worker", "a-session")
 			l, err := r.a.newSupervisorLoop(false)
 			if err != nil {
 				t.Fatal(err)
@@ -276,12 +299,26 @@ func TestLoopFillStateChangesInvalidateBoardBackoff(t *testing.T) {
 				t.Fatal(err)
 			}
 			switch change {
+			case "the floor changes":
+				floor = 4
+			case "the ceiling changes":
+				ceiling = 6
 			case "busy count changes":
 				*busy = 1
 			case "available room changes":
 				changedRoom = true
-			case "roster membership changes":
-				r.started(t, "another worker", "another-session")
+			case "an agent is removed", fillAgentDone:
+				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == "a worker" })
+					if change == fillAgentDone {
+						st.Agents[i].Done = true
+					} else {
+						st.Agents = slices.Delete(st.Agents, i, i+1)
+					}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 			case "capacity cycles through the floor":
 				*busy = 3
 				if err := l.pass(t.Context()); err != nil {
@@ -293,10 +330,114 @@ func TestLoopFillStateChangesInvalidateBoardBackoff(t *testing.T) {
 			if err := l.pass(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if reads != 2 {
-				t.Fatalf("%s did not invalidate backoff: %d reads", change, reads)
+			if reads != tc.reads {
+				t.Fatalf("%s: %d board reads, want %d", change, reads, tc.reads)
 			}
 		})
+	}
+}
+
+// busyJSON is a capacity read's busy list of n agents.
+func busyJSON(n int) string {
+	b, _ := json.Marshal(make([]string, n))
+	return string(b)
+}
+
+// emptyBoardFill is a refill rig whose board offers nothing, counting reads.
+func emptyBoardFill(t *testing.T) (*loopRig, *supervisorLoop, *int) {
+	t.Helper()
+	r, _ := fillRig(t)
+	original := r.answer
+	reads := 0
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopBoard {
+			reads++
+			return fillEmptyBoardJSON, 0
+		}
+		return original(args)
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, l, &reads
+}
+
+func TestLoopFillPauseHoldsThroughRosterChurn(t *testing.T) {
+	r, l, reads := emptyBoardFill(t)
+	// Capacity counts the stored roster as the capacity command does: a
+	// park moves its agent out of busy and gives room back.
+	board := r.answer
+	r.answer = func(args []string) (string, int) {
+		if args[0] != fillCapacityCommand {
+			return board(args)
+		}
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := countAgents(st, nil, r.a.now)
+		out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: 5 - len(c.Busy), agentCount: c})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), 0
+	}
+	r.started(t, "a worker", "a-session")
+	retry := r.a.cfg.Supervisor.FillRetryEvery.Duration
+	start := r.a.now
+	for i := 0; r.a.now.Before(start.Add(2 * retry)); i++ {
+		// Every pass a worker parks, resumes, re-parks, changes session or
+		// task, and another joins: none of it makes room.
+		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			for j := range st.Agents {
+				ag := &st.Agents[j]
+				ag.Session = fmt.Sprintf("session-%d", i)
+				ag.Task = fmt.Sprintf("task %d", i)
+				ag.Park = nil
+				if i%2 == 0 {
+					ag.Park = &state.Park{On: fmt.Sprintf("o/r#%d", i)}
+				}
+			}
+			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: fmt.Sprintf("joiner %d", i)}})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.pass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		r.a.now = r.a.now.Add(30 * time.Second)
+	}
+	if *reads != 2 {
+		t.Fatalf("roster churn over two retry intervals read the board %d times, want 2", *reads)
+	}
+}
+
+func TestLoopPassSharesAnEmptyBoardRead(t *testing.T) {
+	r, l, reads := emptyBoardFill(t)
+	l.boardNone = nil // a pass's start
+	act := superloop.Action{Kind: superloop.KindNext, Key: "next after r 1"}
+	what, err := l.startNext(t.Context(), act)
+	if err != nil || !strings.Contains(what, "the board offers nothing") {
+		t.Fatalf("done-triggered start: %q, %v", what, err)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.fill(t.Context(), st, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if *reads != 1 || l.fillPause.until.IsZero() {
+		t.Fatalf("one pass: %d board reads, refill paused %v", *reads, !l.fillPause.until.IsZero())
+	}
+	r.a.now = r.a.now.Add(time.Second)
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if *reads != 1 {
+		t.Fatalf("the refill's pause did not hold the next pass: %d reads", *reads)
 	}
 }
 
@@ -374,5 +515,124 @@ func TestLoopFillDryRunPreviewsWithoutStartingOrWriting(t *testing.T) {
 				t.Fatalf("dry run: busy %d, events %d -> %d, reads %d/%d, calls %v", *busy, len(before), len(after), capacityReads, boardReads, r.calls)
 			}
 		})
+	}
+}
+
+// hostFillRig is fillRig with an execution host configured: the
+// coordinator's machine has no room (local capacity --json answers room
+// 0), the host has room, and the board offers items of the mapped
+// repository.
+func hostFillRig(t *testing.T) (*loopRig, *int) {
+	t.Helper()
+	return hostFillRigRoom(t, 0)
+}
+
+// hostFillRigRoom is hostFillRig with localRoom the coordinator's room.
+func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
+	t.Helper()
+	r, busy := fillRig(t)
+	r.sshLoopHost(t, true)
+	branch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	original := r.answer
+	r.answer = func(args []string) (string, int) {
+		switch args[0] {
+		case fillCapacityCommand:
+			if slices.Contains(args, loopHostFlag) {
+				return loopRoomJSON, 0
+			}
+			out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: localRoom, agentCount: agentCount{Busy: make([]string, *busy)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(out), 0
+		case loopBoard:
+			n := *busy + 10
+			return fmt.Sprintf(`{"pick":{"ref":"%s#%d","url":"https://github.com/%s/issues/%d"}}`, sshTestRepository, n, sshTestRepository, n), 0
+		}
+		return original(args)
+	}
+	return r, busy
+}
+
+// TestLoopFillPlacesOnAHostWhenTheCoordinatorIsFull is the issue's case for
+// the capacity fill: the coordinator's machine is at its floor of room, a
+// host has room, and the shortfall is filled there rather than not at all.
+func TestLoopFillPlacesOnAHostWhenTheCoordinatorIsFull(t *testing.T) {
+	r, busy := hostFillRig(t)
+	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR WOULD NEXT fill 3 to capacity.floor") {
+		t.Fatalf("no refill preview onto the host: %s", r.out)
+	}
+	r.pass(t)
+	if *busy != 3 || len(r.logged(t, "supervisor.next")) != 3 {
+		t.Fatalf("the fill did not reach the floor on the host: busy %d\n%s", *busy, r.out)
+	}
+	for _, c := range r.calls {
+		if c[0] == agentsName && c[1] == agentStartName {
+			for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch} {
+				if !slices.Contains(c, want) {
+					t.Errorf("the fill's start names no %q: %v", want, c)
+				}
+			}
+		}
+	}
+}
+
+// TestLoopFillStaysBoundByLocalRoomWithoutHosts keeps the fill's local
+// bound when nothing can be placed remotely: no capacity.choices means no
+// remote start, so the full coordinator starts nothing.
+func TestLoopFillStaysBoundByLocalRoomWithoutHosts(t *testing.T) {
+	r, busy := hostFillRig(t)
+	r.a.cfg.Capacity.Choices = nil
+	r.pass(t)
+	if *busy != 0 || r.called(agentsName, agentStartName) != nil {
+		t.Fatalf("a full coordinator started without a placeable host: %v", r.calls)
+	}
+}
+
+// TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim covers a
+// placed start refused after it reserved its execution: the loop recovers
+// it, and the claim stays open until the taken line, so an interruption in
+// between still reconciles it. supervisor.hostsFirst places the start on
+// the host although the coordinator has room.
+func TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim(t *testing.T) {
+	r, busy := hostFillRigRoom(t, 5)
+	r.a.cfg.Supervisor.HostsFirst = true
+	name := repoName(sshTestRepository) + " 10"
+	original := r.answer
+	recovered := 0
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName && args[2] == name {
+			// The start reserved its execution, then was refused before
+			// the host accepted the first task.
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: name}, Execution: &execution.Ref{Host: execution.HostID(sshTestSelector), Execution: "x1", Generation: 1}})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return "refused: execution reserved", ExitRefused
+		}
+		if args[0] == agentsName && args[1] == loopRecover {
+			recovered++
+			*busy++
+			return "recovered", 0
+		}
+		return original(args)
+	}
+	r.pass(t)
+	if recovered != 1 {
+		t.Fatalf("the reserved execution was not recovered: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, loopClaimEndVerb); len(evs) != 0 {
+		t.Fatalf("the recovered start's claim was closed as failed: %+v", evs)
+	}
+	evs := r.logged(t, "supervisor.next")
+	if len(evs) == 0 || !strings.Contains(evs[0].Detail, "recovered") {
+		t.Fatalf("the recovery is not the start taken: %+v", evs)
 	}
 }
