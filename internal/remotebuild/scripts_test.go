@@ -147,7 +147,10 @@ func TestRemoteRunThroughShellTransport(t *testing.T) {
 		}
 	}
 	var output, diagnostics bytes.Buffer
-	r := Runner{Config: validConfig(), StateDir: t.TempDir(), Stdout: &output, Stderr: &diagnostics}
+	var events []string
+	r := Runner{Config: validConfig(), StateDir: t.TempDir(), Stdout: &output, Stderr: &diagnostics,
+		Name: "go test ./...", Repo: "giantswarm/beekeeper", Head: "16a89d963f2a9c1b",
+		Record: func(verb, detail string) { events = append(events, verb+" "+detail) }}
 	r.Command = func(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
 		a := args[7:]
 		switch a[0] {
@@ -184,5 +187,17 @@ func TestRemoteRunThroughShellTransport(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(dir, "src", testMain)) //nolint:gosec // owned test fixture
 	if err != nil || string(source) != "edited source" {
 		t.Fatalf("source=%q err=%v", source, err)
+	}
+	// The production scripts through a real workspace: the failed run's
+	// record names the pod, the repository and its exit, and keeps the
+	// journal's tail read back from the pod.
+	if len(events) != 2 {
+		t.Fatalf("events %q", events)
+	}
+	if !strings.HasPrefix(events[0], "run.start remote:test-pod.") || !strings.Contains(events[0], " giantswarm/beekeeper@16a89d96 ns build-test cache cold: go test ./...") {
+		t.Fatalf("start %q", events[0])
+	}
+	if !strings.HasPrefix(events[1], "run.end remote:test-pod.") || !strings.Contains(events[1], "exit 37 after ") || !strings.Contains(events[1], "failed: remote output: go test ./...") {
+		t.Fatalf("end %q", events[1])
 	}
 }

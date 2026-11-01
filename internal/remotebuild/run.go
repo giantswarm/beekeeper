@@ -22,16 +22,39 @@ import (
 	"github.com/google/uuid"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/giantswarm/beekeeper/internal/runrecord"
 )
 
 // Command is the kubectl transport. Tests replace it without a live cluster.
 type Command func(context.Context, io.Reader, io.Writer, ...string) error
+
+// Record appends one of the run's events (runrecord.Start, End, Fallback)
+// to the event log; nil records nothing. Like guard.Options.Record, it must
+// not fail or block the run.
+type Record func(verb, detail string)
+
+// TailBytes bounds the tail of a failed remote run kept in its record, so
+// the failure reads from beekeeper log and nobody reruns the command to see
+// it (issue #796, kept for remote runs by issue #1937).
+const TailBytes = 1200
 
 type Runner struct {
 	Config         Config
 	StateDir       string
 	Stdout, Stderr io.Writer
 	Command        Command
+	// Record writes the run's events; nil records nothing.
+	Record Record
+	// Name is the command the run's records name (guard.CommandHead of the
+	// caller's argv); Repo and Head what it builds.
+	Name, Repo, Head string
+}
+
+func (r Runner) record(verb, detail string) {
+	if r.Record != nil {
+		r.Record(verb, detail)
+	}
 }
 
 func (r Runner) kubectl(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
@@ -65,10 +88,14 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	if r.Stderr == nil {
 		r.Stderr = os.Stderr
 	}
+	facts := runrecord.Facts(r.Repo, r.Head)
 	fallback := func(reason string) (bool, int) {
 		if ctx.Err() != nil {
 			return true, 130
 		}
+		// The local slot runs the command; its own start and end follow
+		// under the local id. The fallback says why it came here.
+		r.record(runrecord.Fallback, runrecord.FallbackDetail(facts, reason, r.Name))
 		_, _ = fmt.Fprintf(r.Stderr, "beekeeper run: remote unavailable (%s); using local slot\n", reason)
 		return false, 0
 	}
@@ -123,7 +150,7 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 	defer stop()
 	setup, cancel := context.WithTimeout(ctx, r.Config.PlacementTimeout)
 	defer cancel()
-	pod, err := r.ensurePod(setup, name, image)
+	pod, warm, err := r.ensurePod(setup, name, image)
 	if err != nil {
 		if ctx.Err() != nil {
 			return true, 130
@@ -145,6 +172,16 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 		_ = cleanup(interrupt)
 		return fallback("source upload failed or worktree busy")
 	}
+	// From the uploaded source on the command may have started: the run is
+	// recorded like a local one, under the pod's id, and never retried
+	// locally. The record's tail and duration come back with the host's
+	// event log, which outlives the pod and its 60 s TTL.
+	rid := runrecord.RemoteID(pod, id)
+	started := time.Now()
+	r.record(runrecord.Start, runrecord.StartDetail(rid, facts+runrecord.Cache(warm, r.Config.Namespace), r.Name))
+	end := func(rc int, extra string) {
+		r.record(runrecord.End, runrecord.EndDetail(rid, rc, time.Since(started), extra, r.Name))
+	}
 	// A launch reply may be lost after the command starts; never retry locally.
 	defer func() {
 		if ctx.Err() != nil {
@@ -160,9 +197,10 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 		_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: reconnecting to remote run journal")
 	}
 	count := &countWriter{w: r.Stdout}
-	for attempt := 0; attempt < 4; attempt++ {
+	for range 4 {
 		err = r.exec(ctx, pod, nil, count, shellBash, "-c", follow, "--", id, strconv.FormatInt(count.n, 10))
 		if ctx.Err() != nil {
+			end(130, "interrupted")
 			return true, 130
 		}
 		if err == nil {
@@ -170,15 +208,39 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 			if r.exec(ctx, pod, nil, &status, "cat", "/work/runs/"+id+"/rc") == nil {
 				rc, e := strconv.Atoi(strings.TrimSpace(status.String()))
 				if e == nil && rc >= 0 && rc <= 255 {
+					extra := ""
+					if rc != 0 {
+						if t := r.tailOf(pod, id); t != "" {
+							extra = "failed: " + t
+						}
+					}
 					_ = cleanup(finish)
+					end(rc, extra)
 					return true, rc
 				}
 			}
 		}
 	}
 	_ = cleanup(interrupt)
+	end(125, "remote journal lost: the command was not retried locally")
 	_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: remote journal unavailable; command was not retried locally")
 	return true, 125
+}
+
+// tailOf reads the last bytes of the run's log while its pod still stands:
+// the failure's tail goes into the record, so nobody reruns the command to
+// read it (issue #796, kept for remote runs by issue #1937). A pod already
+// gone (or a log the watchdog reclaimed) costs the tail, not the run.
+func (r Runner) tailOf(pod, id string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var b bytes.Buffer
+	if err := r.exec(ctx, pod, nil, &b, shellBash, "-c", tail, "--", id, strconv.Itoa(TailBytes)); err != nil {
+		return ""
+	}
+	// ": " belongs to the record's command, not to its tail: a colon-space
+	// in output would move the command out of RunCommand's reading.
+	return strings.ReplaceAll(runrecord.OneLine(b.String()), ": ", "; ")
 }
 
 func (r Runner) exec(ctx context.Context, pod string, in io.Reader, out io.Writer, args ...string) error {
@@ -190,30 +252,34 @@ func (r Runner) exec(ctx context.Context, pod string, in io.Reader, out io.Write
 	return r.kubectl(ctx, in, out, append(flags, args...)...)
 }
 
-func (r Runner) ensurePod(ctx context.Context, name, image string) (podName string, resultErr error) {
+// ensurePod places the worktree's builder Job and returns its running pod
+// with whether it was already there (warm: its build caches hold earlier
+// runs) or created now (cold).
+func (r Runner) ensurePod(ctx context.Context, name, image string) (podName string, warm bool, resultErr error) {
 	var b bytes.Buffer
 	if err := r.kubectl(ctx, nil, &b, "get", "job", name, "--ignore-not-found", "-o", "json"); err != nil {
-		return "", errors.New("cluster unreachable")
+		return "", false, errors.New("cluster unreachable")
 	}
 	if b.Len() > 0 {
 		var j batchv1.Job
 		if json.Unmarshal(b.Bytes(), &j) != nil {
-			return "", errors.New("invalid builder response")
+			return "", false, errors.New("invalid builder response")
 		}
 		if j.Labels["app.kubernetes.io/name"] != appLabel || len(j.Spec.Template.Spec.Containers) != 1 || j.Spec.Template.Spec.Containers[0].Image != image || j.Annotations["beekeeper.dev/builder-spec"] != Job(r.Config, name, image).Annotations["beekeeper.dev/builder-spec"] {
-			return "", errors.New("existing builder differs; remove idle Job before changing configuration")
+			return "", false, errors.New("existing builder differs; remove idle Job before changing configuration")
 		}
 		if j.Status.Succeeded > 0 || j.Status.Failed > 0 || j.DeletionTimestamp != nil {
-			return "", errors.New("builder retiring; waiting for TTL cleanup")
+			return "", false, errors.New("builder retiring; waiting for TTL cleanup")
 		}
+		warm = true
 	} else {
 		b.Reset()
 		if err := r.kubectl(ctx, nil, &b, "get", "pods", "-o", "json"); err != nil {
-			return "", errors.New("cluster unreachable")
+			return "", false, errors.New("cluster unreachable")
 		}
 		var pods corev1.PodList
 		if json.Unmarshal(b.Bytes(), &pods) != nil {
-			return "", errors.New("invalid capacity response")
+			return "", false, errors.New("invalid capacity response")
 		}
 		active := 0
 		for _, p := range pods.Items {
@@ -222,14 +288,14 @@ func (r Runner) ensurePod(ctx context.Context, name, image string) (podName stri
 			}
 		}
 		if active >= r.Config.MaxPods {
-			return "", errors.New("cluster full")
+			return "", false, errors.New("cluster full")
 		}
 		raw, err := json.Marshal(Job(r.Config, name, image))
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		if err = r.kubectl(ctx, bytes.NewReader(raw), io.Discard, "create", "-f", "-"); err != nil {
-			return "", errors.New("builder admission failed (quota or concurrent creation)")
+			return "", false, errors.New("builder admission failed (quota or concurrent creation)")
 		}
 		// Only remove a Job created by this attempt if it cannot place in time.
 		defer func() {
@@ -242,22 +308,22 @@ func (r Runner) ensurePod(ctx context.Context, name, image string) (podName stri
 	}
 	wait := "--timeout=" + r.Config.PlacementTimeout.String()
 	if err := r.kubectl(ctx, nil, io.Discard, "wait", "--for=jsonpath={.status.ready}=1", "job/"+name, wait); err != nil {
-		return "", errors.New("builder not ready within placement bound")
+		return "", false, errors.New("builder not ready within placement bound")
 	}
 	b.Reset()
 	if err := r.kubectl(ctx, nil, &b, "get", "pods", "-l", "job-name="+name, "-o", "json"); err != nil {
-		return "", errors.New("builder pod unavailable")
+		return "", false, errors.New("builder pod unavailable")
 	}
 	var pods corev1.PodList
 	if json.Unmarshal(b.Bytes(), &pods) != nil {
-		return "", errors.New("invalid builder response")
+		return "", false, errors.New("invalid builder response")
 	}
 	for _, p := range pods.Items {
 		if p.DeletionTimestamp == nil && p.Status.Phase == corev1.PodRunning {
-			return p.Name, nil
+			return p.Name, warm, nil
 		}
 	}
-	return "", errors.New("builder pod unavailable")
+	return "", false, errors.New("builder pod unavailable")
 }
 
 type countWriter struct {

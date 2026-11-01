@@ -34,6 +34,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/runrecord"
 )
 
 // Exit codes Run returns besides the command's own.
@@ -70,13 +71,17 @@ const (
 // plat caps the runs and reads the machine.
 var plat = platform.Current(platform.Options{})
 
-// The event log verbs of a capped run. Their detail is
-// "<scope> <facts>: <command>": the scope's unit name exactly as the kernel
-// prints it in an OOM kill's memcg path, then the slot and the cap (start) or
-// the exit code, the duration and the cap's victims (end), then CommandHead.
+// The event log verbs of a run, formatted by the runrecord package, which
+// internal/remotebuild shares (guard imports it, so the shape lives in a
+// leaf of its own). A local run's id is its scope's unit name exactly as the
+// kernel prints it in an OOM kill's memcg path; a remote one's names the
+// builder pod. The facts are the slot and the cap, or the repository, HEAD
+// and cache (start), or the exit code, the duration and the cap's victims or
+// the failure's tail (end); a remote fallback names its reason.
 const (
-	VerbStart = "run.start"
-	VerbEnd   = "run.end"
+	VerbStart    = runrecord.Start
+	VerbEnd      = runrecord.End
+	VerbFallback = runrecord.Fallback
 )
 
 // A capped run's scope is <ScopePrefix><pid>-<n>.scope in memcap.slice. A
@@ -267,6 +272,11 @@ type Options struct {
 	TmpDir string
 	// BuildLock coordinates all build caches, even when GOCACHE is off.
 	BuildLock string
+	// Repo and Head name what the command builds (owner/repo and the HEAD
+	// commit); "" where none is known. run.start states them, local and
+	// remote alike, so `run stats` can count runs per repository.
+	Repo string
+	Head string
 	// Class is the run's class (ClassBuild, …); "" is ClassBuild. Only a
 	// build takes a slot.
 	Class string
@@ -456,7 +466,7 @@ func Run(o Options, argv []string) int {
 	case shared:
 		how = "shared " + how
 	}
-	o.record(VerbStart, fmt.Sprintf("%s.scope %s max %s: %s", unit, how, o.Max, head))
+	o.record(VerbStart, fmt.Sprintf("%s.scope%s %s max %s: %s", unit, runrecord.Facts(o.Repo, o.Head), how, o.Max, head))
 	start := time.Now()
 	rc := scope(capper, unit, o, slot, argv, env, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))

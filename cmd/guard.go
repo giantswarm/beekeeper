@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +31,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 // memcapCPU is memcap.slice's CPU budget from the configuration, the part
@@ -126,6 +129,14 @@ broker (beekeeper sandbox broker) caps the slot and moves the command into
 its scope, the command still in the sandbox; with no broker answering, run
 refuses (exit 1) rather than run a build uncapped.
 
+Every run records itself in the event log as run.start / run.end, local and
+remote alike: where it ran (its scope, or the builder pod), what it built
+(repository and HEAD), the command, its duration and exit, and for a failed
+remote run the tail of its output. beekeeper log --verb run. shows the
+records; beekeeper run stats [--since WHEN] counts them per repository:
+local vs remote, minutes, failures and the builder pods' cache. A remote
+attempt that fell back records run.fallback with its reason.
+
 For the length of the command a run holds the Go build cache's use lock
 shared, so no trim of the cache (doctor.goCacheMaxGiB) removes an entry a
 compile reads; a run that begins during a trim waits for its end, within
@@ -215,10 +226,13 @@ machine's files stay untouched.`,
 				}
 				o.Class = guard.DefaultClass(args)
 			}
+			repo, head := a.worktreeIdentity(cmd.Context())
+			o.Repo, o.Head = repo, head
 			// Per-run local resource/wait overrides retain their existing semantics.
 			// Remote pods use the desk-configured resources and placement bound.
 			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
-				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr}
+				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr,
+					Record: a.runRecorder(), Name: guard.CommandHead(args), Repo: repo, Head: head}
 				if handled, rc := runner.Try(cmd.Context(), args); handled {
 					if rc != 0 {
 						return &exitError{code: rc}
@@ -239,6 +253,9 @@ machine's files stay untouched.`,
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&classFlag, "class", "", "the run's class: build takes a build slot, benchmark and lab take none (default build, lab for agentlab)")
 	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT, else 8m, 60m in a background call)")
+	// `run stats` is a reader, not a run: a command literally named stats
+	// still runs with `run -- stats …`.
+	c.AddCommand(a.runStatsCmd())
 	return c
 }
 
@@ -266,6 +283,23 @@ func (a *app) parseableKnownHosts() {
 
 // noSession names a process no Claude Code session started.
 const noSession = "no session"
+
+// worktreeIdentity is what a run builds: the owner/repo of the current
+// worktree's origin and its HEAD commit, "" where neither is known (outside
+// a git worktree, an origin that is no GitHub repository). Each git call has
+// its own short bound: a hung repository costs the run no more than that.
+func (a *app) worktreeIdentity(ctx context.Context) (repo, head string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	git := func(args ...string) string {
+		out, err := exec.CommandContext(ctx, "git", args...).Output() //nolint:gosec // fixed executable and typed arguments
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	return worktrees.RepoOf(git("remote", "get-url", "origin")), git("rev-parse", "HEAD")
+}
 
 // runRecorder appends a run's events to the event log as the calling
 // session, or nil when the log cannot be opened: a build runs regardless.

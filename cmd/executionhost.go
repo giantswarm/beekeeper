@@ -198,7 +198,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents publish", "agents merge", "run", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents publish", "agents merge", "run", "run stats", "agents idle", "agents park", "agents note", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {

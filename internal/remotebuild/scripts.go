@@ -85,3 +85,12 @@ if [ ! -f "$r/pid" ]; then rm -rf /work/busy /work/incoming; fi`
 
 const finish = `id=$1
 [ -f "/work/runs/$id/rc" ] && rm -rf "/work/runs/$id"`
+
+// Emit the log's last bytes: the tail of a failed remote run, so its record
+// names the failure. The watchdog deletes the journal when a client vanishes
+// mid-run and when finish cleans up; a run whose record is still open has its
+// journal. tail cannot know the bytes already streamed and must not repeat
+// them: the reader keeps what follows the stream's offset.
+const tail = `id=$1 n=$2 r=/work/runs/$id
+[ -f "$r/log" ] || exit 0
+tail -c "$n" "$r/log"`
