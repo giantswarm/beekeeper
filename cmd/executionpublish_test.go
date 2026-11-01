@@ -16,6 +16,7 @@ import (
 )
 
 const publicationClaudeVersion = "2.1.291"
+const publicationExpiredLease = "expired publication lease"
 
 type publicationRig struct {
 	a                       *app
@@ -224,7 +225,7 @@ func TestExecutionPublicationSyncBaseBundleAndMerge(t *testing.T) {
 }
 
 func TestExecutionPublicationRefusesRevokedAndForgedAuthority(t *testing.T) {
-	for _, kind := range []string{bgStopCmd, "completed", handoverExpiredMode, "missing-lease", "allowlist", "generation", "forged-proof", "github-hold"} {
+	for _, kind := range []string{bgStopCmd, "completed", publicationExpiredLease, "missing-lease", "allowlist", "generation", "forged-proof", "github-hold"} {
 		t.Run(kind, func(t *testing.T) {
 			rig := newPublicationRig(t)
 			head := rig.commit(t, "change.txt", "one\n")
@@ -236,7 +237,7 @@ func TestExecutionPublicationRefusesRevokedAndForgedAuthority(t *testing.T) {
 					st.Stop = &state.Stop{Reason: "publication authority fixture"}
 				case "completed":
 					r.Completed = true
-				case handoverExpiredMode:
+				case publicationExpiredLease:
 					r.Lease.ExpiresAt = time.Now().Add(-time.Minute)
 				case "missing-lease":
 					r.Lease = nil
