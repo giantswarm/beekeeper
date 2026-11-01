@@ -317,6 +317,7 @@ func TestScratchStartInTheSandboxAsksTheHostBroker(t *testing.T) {
 
 // Store sources use the broker in the sandbox or with a vault session.
 func TestStoreSourceUsesBrokerWhenRequired(t *testing.T) {
+	const brokerStoreResponse = "brokered store\n"
 	for _, tc := range []struct{ session, sandbox bool }{{true, false}, {false, true}, {true, true}} {
 		t.Run(fmt.Sprint(tc), func(t *testing.T) {
 			a, _, _ := secretApp(t)
@@ -338,18 +339,18 @@ func TestStoreSourceUsesBrokerWhenRequired(t *testing.T) {
 					if req.Op != sandbox.OpSecret {
 						return sandbox.Reply{}, fmt.Errorf("unexpected broker operation %s", req.Op)
 					}
-					return sandbox.Reply{Out: "brokered store\n"}, nil
+					return sandbox.Reply{Out: brokerStoreResponse}, nil
 				})
 			}()
 			t.Cleanup(func() { cancel(); <-done })
 			out, err := runSecret(a, fingerprintOp, noBrokerStoreRef)
-			if err != nil || out != "brokered store\n" {
+			if err != nil || out != brokerStoreResponse {
 				t.Fatalf("store did not reach broker: %q, %v", out, err)
 			}
 			if tc.session && !tc.sandbox {
 				a.out = &bytes.Buffer{}
 				out, err = runSecret(a, fingerprintOp, "--", noBrokerStoreRef)
-				if err != nil || out != "brokered store\n" {
+				if err != nil || out != brokerStoreResponse {
 					t.Fatalf("flag separator lost store routing: %q, %v", out, err)
 				}
 			}
