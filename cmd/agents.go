@@ -577,7 +577,7 @@ func findParty(parties []state.Party, q, one, many string) (int, error) {
 func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentView {
 	out := make([]agentView, 0, len(st.Agents))
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
-	desktop := t != nil && !plat.Opener.Running(t).IsZero()
+	desktop := a.desktopMode() && t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
 		v := agentView{agentFields: agentFields(ag), Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
 		if ag.Execution != nil {

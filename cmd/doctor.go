@@ -99,13 +99,16 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 	var out []chore
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
+			if why := stoppedExecutionWhy(st, ag); why != "" {
+				out = append(out, chore{kind: choreRemove, agent: ag, why: why})
+			}
 			continue
 		}
 		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone && !busy(ag.Party) {
 			out = append(out, chore{kind: choreRemove, agent: ag, archive: true, stale: true, gone: true, why: goneActivityPrefix + last.UTC().Format(time.RFC3339)})
 			continue
 		}
-		if ag.Task != "" || holdsRole(st, ag.Party) {
+		if ag.Task != "" && !relieved(st, ag.Party) || holdsRole(st, ag.Party) || openRelayTo(st, ag.Party, now) {
 			continue
 		}
 		_, live := claude.Live(sessions, ag.Party)
@@ -113,11 +116,13 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 		switch {
 		case ag.Done:
 			if !busy(ag.Party) {
-				out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: "it reported its work done"})
+				out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: whyReportedDone})
 			}
 			continue
 		case keepsRole(st, ag.Party):
-			out = append(out, chore{kind: choreRemove, agent: ag, why: "it was relieved of its role, which relays instead"})
+			if !busy(ag.Party) {
+				out = append(out, chore{kind: choreRemove, agent: ag, why: "it was relieved of its role, which relays instead"})
+			}
 			continue
 		case !live && staleAfter > 0 && idle >= staleAfter:
 			stale := fmt.Sprintf("idle %s, its CLI no longer runs", dur(idle))
@@ -322,7 +327,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	rep.faults = checkFaults(ctx, a.cfg.Doctor.Faults, fix, run)
 	if r.dryRun {
 		for _, c := range chores {
-			if c.archive {
+			if c.archive && (st.StartIndex(c.agent.Party) < 0 || !st.Starts[st.StartIndex(c.agent.Party)].Background) {
 				if host, why := a.archivable(st, c.agent.Party); why != "" {
 					c.archive, c.stays = false, why
 					if host != "" {
@@ -335,6 +340,9 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		seedArchives(st, record, a.reseed(sessions), a.now)
 		for _, o := range planArchives(st, record, busy, a.now) {
 			rep.chores = append(rep.chores, "would "+o.String())
+		}
+		for _, p := range a.backgroundStartsToStop(ctx, st, sessions, busy) {
+			rep.chores = append(rep.chores, fmt.Sprintf("would stop the background session %s of %q", p.Session[:min(8, len(p.Session))], p.Name))
 		}
 		rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
 		if line := resetOwnUnits(ctx, true); line != "" {
@@ -353,42 +361,15 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return rep, err
 		}
 	}
-	removed, err := a.removeAgents(chores, r.by)
+	rosterLines, unagreed, err := a.finishRoster(ctx, chores, sessions, record, busy, r.by, "beekeeper doctor")
 	if err != nil {
 		return rep, err
 	}
-	var archive []state.Party
-	for _, c := range removed {
-		rep.chores = append(rep.chores, fmt.Sprintf("took %q off the roster: %s", c.agent.Name, c.why))
-		if c.archive {
-			archive = append(archive, c.agent.Party)
-		}
-	}
-	owed, err := a.owedArchives(sessions, record, busy, r.by)
+	rep.chores = append(rep.chores, rosterLines...)
+	rep.unagreed += unagreed
+	st, err = a.store.Read()
 	if err != nil {
 		return rep, err
-	}
-	rep.chores = append(rep.chores, owed.lines...)
-	for _, p := range owed.retry {
-		if !slices.ContainsFunc(archive, p.Is) {
-			archive = append(archive, p)
-		}
-	}
-	if len(archive) > 0 {
-		outcomes := a.archiveDesktops(ctx, st, archive, "beekeeper doctor")
-		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-			lines := owe(st, outcomes, a.now)
-			var evs []state.Event
-			for i, l := range lines {
-				if outcomes[i].unagreed {
-					rep.unagreed++
-					continue
-				}
-				rep.chores = append(rep.chores, fmt.Sprintf("%q: %s", archive[i].Name, l))
-				evs = append(evs, event(r.by, "agents.archive", "%s: %s", archive[i].Name, l))
-			}
-			return evs, nil
-		})
 	}
 	for _, c := range chores {
 		if c.kind != choreRetitle || (r.retry != nil && !r.retry(c.host)) {
@@ -464,12 +445,130 @@ func (a *app) owedArchives(sessions []*claude.Session, record func(host string) 
 	if err != nil {
 		return run, err
 	}
-	seeded := st.ArchivesSeeded
-	if sort(st); seeded && len(run.lines) == 0 {
+	seeded := st.FinishedSeeded && st.DoneSeeded
+	if sort(st); (seeded || len(st.Starts) == 0 && len(st.Archives) == 0) && len(run.lines) == 0 {
 		return run, nil
 	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) { return sort(st), nil })
 	return run, err
+}
+
+// openRelayTo reports whether an open relay names p as the successor.
+func openRelayTo(st *state.State, p state.Party, now time.Time) bool {
+	for _, rl := range roles {
+		if rel := rl.get(st).Relay; rel.Open(now) && takesRelay(rel.To, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// backgroundStartsToStop returns the background sessions beekeeper started
+// that have left the roster, keep no role and are not named by an open
+// relay, whose CLI still runs (in sessions or claude agents) and runs no
+// turn or gated merge.
+func (a *app) backgroundStartsToStop(ctx context.Context, st *state.State, sessions []*claude.Session, busy func(state.Party) bool) []state.Party {
+	var candidates []state.Start
+	for _, s := range st.Starts {
+		if !s.Background || s.Session == "" || roleKeeps(st, s.Party) || openRelayTo(st, s.Party, a.now) {
+			continue
+		}
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party) }) {
+			continue
+		}
+		if busy(s.Party) {
+			continue
+		}
+		candidates = append(candidates, s)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	var running map[string]bool
+	var out []state.Party
+	for _, s := range candidates {
+		if _, live := claude.Live(sessions, s.Party); !live {
+			if running == nil {
+				running = daemonRunning(ctx, a.explicitConfig())
+			}
+			if !running[s.Session] {
+				continue
+			}
+		}
+		out = append(out, s.Party)
+	}
+	return out
+}
+
+// finishRoster removes the chores' agents from the roster and archives or
+// stops their sessions, along with any owed desktop archives and finished or
+// relieved background starts that already left the roster.
+func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*claude.Session,
+	record func(string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party, byCmd string,
+) ([]string, int, error) {
+	var lines []string
+	var unagreed int
+	removed, err := a.removeAgents(chores, by)
+	if err != nil {
+		return nil, 0, err
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, 0, err
+	}
+	var archive []state.Party
+	for _, c := range removed {
+		lines = append(lines, fmt.Sprintf("took %q off the roster: %s", c.agent.Name, c.why))
+		if c.archive || !roleKeeps(st, c.agent.Party) {
+			archive = append(archive, c.agent.Party)
+		}
+	}
+	owed, err := a.owedArchives(sessions, record, busy, by)
+	if err != nil {
+		return lines, 0, err
+	}
+	lines = append(lines, owed.lines...)
+	for _, p := range slices.Concat(owed.retry, a.backgroundStartsToStop(ctx, st, sessions, busy)) {
+		if !slices.ContainsFunc(archive, p.Is) {
+			archive = append(archive, p)
+		}
+	}
+	if len(archive) > 0 {
+		outcomes := a.archiveDesktops(ctx, st, archive, byCmd)
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			owedLines := owe(st, outcomes, a.now)
+			var evs []state.Event
+			for i, l := range owedLines {
+				if outcomes[i].unagreed {
+					unagreed++
+					continue
+				}
+				lines = append(lines, fmt.Sprintf("%q: %s", archive[i].Name, l))
+				evs = append(evs, event(by, "agents.archive", "%s: %s", archive[i].Name, l))
+			}
+			return evs, nil
+		})
+	}
+	return lines, unagreed, nil
+}
+
+const whyReportedDone = "it reported its work done"
+
+// stoppedExecutionWhy is why the doctor takes a managed SSH execution
+// off the roster, "" while its reservation or run continues. An
+// execution has no local desktop session to archive or retitle.
+func stoppedExecutionWhy(st *state.State, ag state.Agent) string {
+	if ag.Execution == nil || holdsRole(st, ag.Party) {
+		return ""
+	}
+	r, _ := executionRecord(st, *ag.Execution)
+	switch {
+	case ag.Done && !executionReserved(st, ag):
+		return whyReportedDone
+	case r != nil && r.Observation.StopAcknowledged:
+		return "its SSH execution was stopped"
+	}
+	return ""
 }
 
 // removeAgents takes the agents of the remove chores off the roster, those
@@ -502,9 +601,12 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 		var evs []state.Event
 		for _, c := range chores {
 			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool {
-				return (x.Task == "" || c.gone || relieved(st, x.Party)) && x.Is(c.agent.Party) && x.Task == c.agent.Task && x.ActivityAt.Equal(c.agent.ActivityAt) && x.AssignedAt.Equal(c.agent.AssignedAt)
+				return (x.Task == "" || c.gone || relieved(st, x.Party) || stoppedExecutionWhy(st, x) != "") && x.Is(c.agent.Party) && x.Task == c.agent.Task && x.ActivityAt.Equal(c.agent.ActivityAt) && x.AssignedAt.Equal(c.agent.AssignedAt)
 			})
 			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
+				continue
+			}
+			if st.Agents[i].Execution != nil && executionReserved(st, st.Agents[i]) {
 				continue
 			}
 			if c.gone {

@@ -306,3 +306,41 @@ func TestGoneProtectionAllowsWakeOffTheRoster(t *testing.T) {
 		t.Fatalf("off-roster wake: units=%d agents=%+v", len(launcher.units), st.Agents)
 	}
 }
+
+func TestGoneLoopRetiresOnlyInactiveTask(t *testing.T) {
+	r := newLoopRig(t)
+	a := r.a
+	a.cfg.Agents.Mode = config.ModeBackground
+	a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
+	a.cfg.Claude.ProjectsDir = t.TempDir()
+	a.cfg.Claude.DesktopDir = t.TempDir()
+	runLive(t, a, nil)
+	stubBackground(t, "")
+	old := a.now.Add(-48 * time.Hour)
+	gone, fresh := tasked("loop-gone"), tasked("loop-fresh")
+	gone.Registered, fresh.Registered = old, old
+	transcript := filepath.Join(a.cfg.Claude.ProjectsDir, "loop-proof", fresh.Session+".jsonl")
+	writeFile(t, transcript, "{}\n")
+	if err := os.Chtimes(transcript, a.now, a.now); err != nil {
+		t.Fatal(err)
+	}
+	seed(t, a, func(st *state.State) {
+		st.Agents = []state.Agent{gone, fresh}
+		st.Records = []state.Record{{Session: gone.Party, At: old}}
+	})
+	l := &supervisorLoop{a: a}
+	if err := l.roster(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Agents) != 1 || !st.Agents[0].Is(fresh.Party) || st.Records[0].Ended.IsZero() {
+		t.Fatalf("loop retirement: agents=%+v records=%+v", st.Agents, st.Records)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.gone" })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, gone.Task) {
+		t.Fatalf("gone events=%+v err=%v", evs, err)
+	}
+}

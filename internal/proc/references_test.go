@@ -21,6 +21,7 @@ const (
 	fixtureStat        = "stat"
 	fixtureZombieState = "Z (zombie)"
 	fixtureLiveStatus  = "State: S\nThreads: 1\n"
+	fixtureName        = "fixture"
 )
 
 func TestReferencesReadsOpenFilesMappingsAndBuildDirectories(t *testing.T) {
@@ -164,10 +165,10 @@ func TestUserReferencesSkipsOnlyConfirmedZombies(t *testing.T) {
 	}{
 		{"single-thread zombie", fixtureZombieState, "1", true, false},
 		{"zero-thread zombie", fixtureZombieState, "0", true, false},
-		{"zombie leader with live threads", fixtureZombieState, "2", false, false},
-		{"unknown zombie threads", fixtureZombieState, "", false, false},
-		{"invalid zombie threads", fixtureZombieState, "invalid", false, false},
-		{"negative zombie threads", fixtureZombieState, "-1", false, false},
+		{"zombie leader with live threads", fixtureZombieState, "2", false, true},
+		{"unknown zombie threads", fixtureZombieState, "", false, true},
+		{"invalid zombie threads", fixtureZombieState, "invalid", false, true},
+		{"negative zombie threads", fixtureZombieState, "-1", false, true},
 		{"sleeping", "S (sleeping)", "1", false, true},
 		{"malformed state", "Zebra", "1", false, true},
 		{"missing state", "", "1", false, true},
@@ -175,19 +176,25 @@ func TestUserReferencesSkipsOnlyConfirmedZombies(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "42")
-			if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
-				t.Fatal(err)
-			}
 			uid := os.Getuid()
 			status := fmt.Sprintf("State:\t%s\nUid:\t%d %d %d %d\n", tc.state, uid, uid, uid, uid)
 			if tc.threads != "" {
 				status += "Threads:\t" + tc.threads + "\n"
 			}
-			if err := os.WriteFile(filepath.Join(dir, fixtureStatus), []byte(status), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, fixtureEnvironment), nil, 0600); err != nil {
-				t.Fatal(err)
+			// The leader's own task is a zombie; thread 43 is alive.
+			for _, d := range []string{dir, filepath.Join(dir, "task", "42"), filepath.Join(dir, "task", "43")} {
+				if err := os.MkdirAll(filepath.Join(d, "fd"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				data := status
+				if filepath.Base(d) == "43" {
+					data = fixtureLiveStatus
+				}
+				for name, content := range map[string]string{fixtureStatus: data, fixtureEnvironment: "", fixtureCommand: fixtureName} {
+					if err := os.WriteFile(filepath.Join(d, name), []byte(content), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			files := referenceFiles()
 			inspected := false
@@ -205,10 +212,102 @@ func TestUserReferencesSkipsOnlyConfirmedZombies(t *testing.T) {
 				}
 			} else if err == nil || inspected != tc.inspect {
 				t.Fatalf("unconfirmed zombie did not fail closed: inspected=%v err=%v", inspected, err)
-			} else if tc.inspect && !errors.Is(err, os.ErrPermission) {
+			} else if !errors.Is(err, os.ErrPermission) {
 				t.Fatalf("live process lost permission error: %v", err)
 			}
 		})
+	}
+}
+
+// A zombie leader is read through its live threads and counts as exited
+// once every other thread has exited too.
+func TestUserReferencesReadsZombieLeaderThroughLiveThreads(t *testing.T) {
+	for _, tc := range []struct {
+		name, thread string
+		want         bool
+	}{
+		{"live thread", fixtureLiveStatus, true},
+		{"exited thread", "State: Z\n", false},
+		{"vanished thread", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "42")
+			uid := os.Getuid()
+			ids := fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid)
+			for _, d := range []string{dir, filepath.Join(dir, "task", "42"), filepath.Join(dir, "task", "43")} {
+				if err := os.MkdirAll(filepath.Join(d, "fd"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				data := ids + "State: Z (zombie)\nThreads: 2\n"
+				if filepath.Base(d) == "43" {
+					data = tc.thread
+				}
+				for name, content := range map[string]string{fixtureStatus: data, fixtureEnvironment: "", fixtureMappings: "", fixtureCommand: fixtureName} {
+					if err := os.WriteFile(filepath.Join(d, name), []byte(content), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if tc.thread == "" {
+				if err := os.Remove(filepath.Join(dir, "task", "43", fixtureStatus)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink("/scratch/held", filepath.Join(dir, "task", "43", "fd", "3")); err != nil {
+				t.Skip(err)
+			}
+			// The leader itself has released its files.
+			files := referenceFiles()
+			files.readDir = func(path string) ([]os.DirEntry, error) {
+				if path == filepath.Join(dir, "fd") {
+					return nil, syscall.ESRCH
+				}
+				return os.ReadDir(path)
+			}
+			refs, commands, err := userReferencesAt(root, uid, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := slices.Contains(refs, "/scratch/held"); got != tc.want || (len(commands) == 1) != tc.want {
+				t.Fatalf("refs=%v commands=%v, want thread references=%v", refs, commands, tc.want)
+			}
+		})
+	}
+}
+
+// One unreadable process leaves the others' references known.
+func TestUserReferencesKeepsReadableProcessesNextToUnreadable(t *testing.T) {
+	root := t.TempDir()
+	uid := os.Getuid()
+	for _, pid := range []string{"42", "43"} {
+		dir := filepath.Join(root, pid)
+		if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		for name, content := range map[string]string{fixtureStatus: fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid), fixtureEnvironment: "", fixtureMappings: "", fixtureCommand: "p" + pid} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Symlink("/scratch/held", filepath.Join(root, "43", "fd", "3")); err != nil {
+		t.Skip(err)
+	}
+	files := referenceFiles()
+	files.readFile = func(path string) ([]byte, error) {
+		if path == filepath.Join(root, "42", fixtureMappings) {
+			return nil, syscall.EIO
+		}
+		return os.ReadFile(filepath.Clean(path))
+	}
+	refs, commands, err := userReferencesAt(root, uid, files)
+	var unknown *UnknownError
+	if !errors.As(err, &unknown) || len(unknown.Processes) != 1 || unknown.Processes[0].PID != 42 || unknown.Processes[0].Command != "p42" || !errors.Is(err, syscall.EIO) {
+		t.Fatalf("unreadable process not named: %v", err)
+	}
+	if !slices.Contains(refs, "/scratch/held") || !slices.Equal(commands, []string{"p43"}) {
+		t.Fatalf("readable process lost: refs=%v commands=%v", refs, commands)
 	}
 }
 
@@ -247,7 +346,7 @@ func TestUserReferencesAgainstLiveProc(t *testing.T) {
 			if err != nil {
 				continue
 			} // A process can exit after ReadDir.
-			if exited, err := referenceZombie(status); err == nil && exited {
+			if zombie, threads := referenceState(status); zombie && threads >= 0 && threads <= 1 {
 				selected = append(selected, entry)
 			}
 		}
@@ -292,9 +391,21 @@ func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 					t.Fatal(err)
 				}
 				uid := os.Getuid()
-				for name, data := range map[string]string{"status": fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid) + tc.status, "environ": "", "maps": "", fixtureCommand: "fixture"} {
+				for name, data := range map[string]string{"status": fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid) + tc.status, "environ": "", "maps": "", fixtureCommand: fixtureName} {
 					if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 						t.Fatal(err)
+					}
+				}
+				if tc.leader {
+					// A zombie leader is read through its live thread.
+					thread := filepath.Join(dir, "task", "43")
+					if err := os.MkdirAll(filepath.Join(thread, "fd"), 0700); err != nil {
+						t.Fatal(err)
+					}
+					for name, data := range map[string]string{fixtureStatus: fixtureLiveStatus, fixtureEnvironment: "", fixtureMappings: ""} {
+						if err := os.WriteFile(filepath.Join(thread, name), []byte(data), 0600); err != nil {
+							t.Fatal(err)
+						}
 					}
 				}
 				failure := tc.failure
@@ -331,7 +442,7 @@ func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 					}
 				} else if err == nil {
 					t.Fatal("unconfirmed exit did not fail closed")
-				} else if !tc.leader && !errors.Is(err, failure) {
+				} else if !errors.Is(err, failure) {
 					t.Fatalf("unexpected process error lost: %v", err)
 				}
 			})
