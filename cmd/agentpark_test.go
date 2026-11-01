@@ -288,7 +288,7 @@ func TestAReviewResumesASessionParkedOffTheRoster(t *testing.T) {
 	for range 3 {
 		w.pending(context.Background(), nil)
 	}
-	want := watchParty.Name + " → " + offSession.Session + ": Your park on o/r#1 (the desk review) is over: o/r#1 has a new review changes_requested by "+reviewerLogin+" at " +
+	want := watchParty.Name + " → " + offSession.Session + ": Your park on o/r#1 (the desk review) is over: o/r#1 has a new review changes_requested by " + reviewerLogin + " at " +
 		relayNow.Add(time.Minute).UTC().Format(time.RFC3339) + ": read and answer its reviews and comments since the park. Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q\nwant %q", *woke, want)
