@@ -165,7 +165,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 				return "", 0
 			}
 			w := r.a.newWatcher(false, false)
-			w.publishDisk(watchDiskReading{Low: true, Writers: "fixture"})
+			w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
 			l, err := r.a.newSupervisorLoop(false)
 			if err != nil {
 				t.Fatal(err)
@@ -177,7 +177,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 				if !l.startsHeld {
 					t.Fatal("low disk allowed starts")
 				}
-				w.publishDisk(watchDiskReading{Low: true, Writers: "fixture"})
+				w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
 			}
 			restarted, err := r.a.newSupervisorLoop(false)
 			if err != nil {
@@ -227,7 +227,7 @@ func TestLoopWatchDiskNoteFailureKeepsPassAlive(t *testing.T) {
 	w.publishDisk(watchDiskReading{Low: true})
 	r.pass(t)
 	w.publishDisk(watchDiskReading{Low: true})
-	r.failRecord = func(e state.Event) bool { return e.Verb == "note.add" }
+	r.failRecord = func(e state.Event) bool { return e.Verb == loopNote+"."+loopAdd }
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
