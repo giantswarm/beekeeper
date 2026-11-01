@@ -431,7 +431,7 @@ func TestExecutionPublicationRechecksLeaseAfterFetch(t *testing.T) {
 		out, err := gh(ctx, args...)
 		// Simulate the lease expiring during repository/PR reads, without a sleep
 		// or another process racing the coordinating state transaction.
-		if len(args) > 1 && args[0] == "pr" && args[1] == "list" {
+		if len(args) > 1 && strings.Join(args[:2], " ") == "pr list" {
 			st.Starts[0].Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
 		}
 		return out, err
