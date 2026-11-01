@@ -2032,6 +2032,17 @@ type Supervisor struct {
 	// a built-in review brief, and no worker start.
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
+	// Hosts are execution host selectors (agents.hosts) the loop's worker
+	// and reviewer starts may be placed on, in order of preference: when
+	// the local machine leaves no room for the start, or always with
+	// HostsFirst. A host must map the item's repository and pass its own
+	// check (capacity --host); the start is pinned to the repository's
+	// default branch. Releases and the loop itself stay on the coordinator.
+	Hosts []string `yaml:"hosts"`
+	// HostsFirst places every placed start on the first host of Hosts
+	// with room, whatever the local machine's room is; without room on
+	// any host the loop waits, as it does on a full machine.
+	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
 	PostInstall []string `yaml:"postInstall"`
@@ -3570,6 +3581,14 @@ func (c *Config) validate() error {
 	}
 	if err := c.Supervisor.Ownership.validate(); err != nil {
 		return fmt.Errorf("supervisor.ownership.%w", err)
+	}
+	for _, selector := range c.Supervisor.Hosts {
+		if selector == "" || selector == "local" {
+			return fmt.Errorf("supervisor.hosts: %q names no SSH execution host", selector)
+		}
+		if _, ok := c.Agents.Hosts[selector]; !ok {
+			return fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector)
+		}
 	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {

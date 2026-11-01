@@ -368,7 +368,7 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		return refused("remote observation identity mismatch")
 	}
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		r, _ := executionRecord(st, ref)
+		r, i := executionRecord(st, ref)
 		if r == nil {
 			return nil, refused("execution is not registered")
 		}
@@ -397,12 +397,21 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		}
 		o.Reachability, o.ReachabilityAt = execution.Reachable, time.Now().UTC()
 		r.Observation = o
-		if o.Ready {
-			r.Phase = execution.Running
+		var evs []state.Event
+		switch r.Phase {
+		case executionPending, execution.Preparing, execution.Prepared, execution.Activating:
+			if o.Ready {
+				// The line every other harness's start leaves: the supervisor
+				// loop reads a claimed next start back from it and takes no
+				// second one after a restart. Logged once, on the first
+				// observation that confirms the run, start or recovery alike.
+				evs = append(evs, event(st.Starts[i].By, "agents.start", "%s: SSH execution %s on %s, workspace %s, %s", st.Starts[i].Name, ref.Execution, ref.Host, o.Handle.Workspace, o.ProcessState))
+				r.Phase = execution.Running
+			}
 		}
 		if o.ProcessState == execution.Exited || o.ProcessState == execution.Failed {
 			r.Phase = o.ProcessState
 		}
-		return nil, nil
+		return evs, nil
 	})
 }

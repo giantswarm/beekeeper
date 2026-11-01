@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -450,6 +451,290 @@ func TestLoopTakesADoneWorkerOffTheRosterAndStartsTheNext(t *testing.T) {
 	r.pass(t)
 	if c := r.called(agentsName); c != nil {
 		t.Errorf("acted again: %v", c)
+	}
+}
+
+// sshLoopHost puts sshTestSelector in the rig's configuration as an
+// execution host mapping sshTestRepository, and the loop's placement in
+// supervisor.hosts; choices gives the desk a capacity.choices so a remote
+// start has a model to name.
+func (r *loopRig) sshLoopHost(t *testing.T, choices bool) {
+	t.Helper()
+	host := execution.Host{Endpoint: execution.Endpoint{SSH: sshTestSelector + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: execution.HostID(sshTestSelector), WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{sshTestRepository: "/srv/source"}, Harnesses: []string{claudeComm}, PolicyDigest: execution.Digest([]byte("fixture policy")), MaxBusy: 2}
+	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{sshTestSelector: host}
+	r.a.cfg.Supervisor.Hosts = []string{sshTestSelector}
+	if choices {
+		r.a.cfg.Capacity = config.Capacity{Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}}}
+	}
+}
+
+// The capacity --json answers the placement tests hand out.
+const (
+	loopRoomJSON   = `{"room": 1}`
+	loopNoRoomJSON = `{"room": 0}`
+	loopRoomJSON2  = `{"room": 2}`
+	loopAsFlagArg  = "--" + asFlag
+)
+
+// nextPickJSON is board next --json's answer naming the second item of the
+// mapped repository.
+const loopNextPickJSON = `{"pick":{"ref":"` + sshTestRepository + `#9","url":"https://github.com/` + sshTestRepository + `/issues/9","title":"next"}}`
+
+// nextBrief writes the worker brief template into the rig.
+func nextBrief(t *testing.T, r *loopRig) {
+	t.Helper()
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Work {{.URL}}.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.a.cfg.Supervisor.WorkerBrief = brief
+}
+
+// loopNextDone records the done of worker one with a report, so the next
+// transition plans.
+func loopNextDone(t *testing.T, r *loopRig) {
+	t.Helper()
+	titled := state.Party{Name: "#1743: a session title"}
+	done := event(titled, "agents.done", "%s done: fix it", loopWorker)
+	report := event(titled, "agents.report", "%s: merged %s", loopWorker, loopURL)
+	report.At = done.At.Add(10 * time.Microsecond)
+	if err := r.a.store.Record(done, report); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// splitAs drops the loop's own party arguments from a beekeeper line.
+func splitAs(args []string) []string {
+	if len(args) >= 2 && args[0] == loopAsFlagArg {
+		return args[2:]
+	}
+	return args
+}
+
+// TestLoopStartsTheNextWorkerOnAnExecutionHost is the issue's case: the
+// coordinator's machine has no room, a checked host has room and maps the
+// board item's repository; the loop starts the worker there, on the
+// repository's default branch, instead of waiting for the local machine.
+func TestLoopStartsTheNextWorkerOnAnExecutionHost(t *testing.T) {
+	r := newLoopRig(t)
+	nextBrief(t, r)
+	r.sshLoopHost(t, true)
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	loopNextDone(t, r)
+	run, branch := beekeeperRun, ghDefaultBranch
+	t.Cleanup(func() { beekeeperRun, ghDefaultBranch = run, branch })
+	branchReads := 0
+	ghDefaultBranch = func(context.Context, string) (string, error) {
+		branchReads++
+		return mainBranch, nil
+	}
+	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+		args = splitAs(args)
+		r.calls = append(r.calls, args)
+		switch args[0] {
+		case loopCapacity:
+			// The coordinator's machine is full; the host has room.
+			if slices.Contains(args, loopHostFlag) {
+				return loopRoomJSON, 0, nil
+			}
+			return loopNoRoomJSON, 0, nil
+		case loopBoard:
+			return loopNextPickJSON, 0, nil
+		}
+		if e, ok := logs(args); ok {
+			if err := r.a.store.Record(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return "", 0, nil
+	}
+	// The done removes the worker; the next starts on the host.
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("not taken off the roster: %v\n%s", r.calls, r.out)
+	}
+	r.pass(t)
+	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	if start == nil {
+		t.Fatalf("the next item did not start: %v\n%s", r.calls, r.out)
+	}
+	for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch} {
+		if !slices.Contains(start, want) {
+			t.Errorf("the remote start names no %q: %v", want, start)
+		}
+	}
+	if !slices.Contains(start, "--harness") {
+		t.Errorf("the placed start loses capacity's pick: %v", start)
+	}
+	if evs := r.logged(t, "supervisor.next"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "on "+sshTestSelector) {
+		t.Errorf("the next logged as %+v", evs)
+	}
+	// A restarted loop takes the transition no second time.
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("a restart started %v again", c)
+	}
+	if branchReads != 1 {
+		t.Errorf("the default branch read %d times", branchReads)
+	}
+}
+
+// TestLoopKeepsTheNextWorkerLocalWithRoom says the host preference does
+// not steal a start the coordinator's own machine still fits: local room
+// without supervisor.hostsFirst keeps it local.
+func TestLoopKeepsTheNextWorkerLocalWithRoom(t *testing.T) {
+	r := newLoopRig(t)
+	nextBrief(t, r)
+	r.sshLoopHost(t, true)
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	loopNextDone(t, r)
+	branch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity {
+			return loopRoomJSON2, 0
+		}
+		if args[0] == loopBoard {
+			return loopNextPickJSON, 0
+		}
+		return "", 0
+	}
+	r.pass(t)
+	r.pass(t)
+	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	if start == nil {
+		t.Fatalf("the next item did not start: %v\n%s", r.calls, r.out)
+	}
+	if slices.Contains(start, loopHostFlag) {
+		t.Errorf("a machine with room placed the start remotely: %v", start)
+	}
+}
+
+// TestLoopWaitsWhenNoHostHasRoom is supervisor.hostsFirst with the
+// coordinator full and the checked host full too: the loop waits instead
+// of starting anywhere.
+func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
+	r := newLoopRig(t)
+	nextBrief(t, r)
+	r.a.cfg.Supervisor.HostsFirst = true
+	r.sshLoopHost(t, true)
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	loopNextDone(t, r)
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity {
+			return loopNoRoomJSON, 0
+		}
+		if args[0] == loopBoard {
+			return loopNextPickJSON, 0
+		}
+		return "", 0
+	}
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("a full desk and a full host started %v anyway", c)
+	}
+	if evs := r.logged(t, "supervisor.next"); len(evs) != 0 {
+		t.Errorf("the wait logged as taken: %+v", evs)
+	}
+}
+
+// TestLoopReviewersFollowTheHostPreference covers the review half: with no
+// room on the coordinator's machine, the reviewer starts on the host that
+// maps the pull request's repository.
+func TestLoopReviewersFollowTheHostPreference(t *testing.T) {
+	r := newLoopRig(t)
+	r.sshLoopHost(t, true)
+	pr := sshTestRepository + "#7"
+	r.park(t, pr, time.Now())
+	r.pulls[pr] = superloop.Pull{Ref: pr, URL: "https://github.com/" + sshTestRepository + "/pull/7", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	run, branch := beekeeperRun, ghDefaultBranch
+	t.Cleanup(func() { beekeeperRun, ghDefaultBranch = run, branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return "trunk", nil }
+	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+		args = splitAs(args)
+		r.calls = append(r.calls, args)
+		if args[0] == loopCapacity {
+			if slices.Contains(args, loopHostFlag) {
+				return loopRoomJSON, 0, nil
+			}
+			return loopNoRoomJSON, 0, nil
+		}
+		if e, ok := logs(args); ok {
+			if err := r.a.store.Record(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return "", 0, nil
+	}
+	r.pass(t)
+	start := r.called(agentsName, agentStartName)
+	if start == nil {
+		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
+	}
+	for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, "trunk", "--review"} {
+		if !slices.Contains(start, want) {
+			t.Errorf("the remote reviewer names no %q: %v", want, start)
+		}
+	}
+}
+
+// TestLoopStopsARemoteWorkerBeforeRemovingIt: agents remove refuses a
+// managed execution until the host acknowledged its termination, so the
+// retirement stops first and removes only after the stop stands.
+func TestLoopStopsARemoteWorkerBeforeRemovingIt(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	// The worker runs as a managed SSH execution with a live reservation.
+	ref := execution.Ref{Host: execution.HostID(sshTestSelector), Execution: execution.ExecutionID("11112222-3333-4444-5555-666677778888"), Generation: 1}
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Agents {
+			if st.Agents[i].Name == loopWorker {
+				st.Agents[i].Execution = &ref
+			}
+		}
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: loopWorker}, By: loopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopNextDone(t, r)
+	var order []string
+	run := beekeeperRun
+	t.Cleanup(func() { beekeeperRun = run })
+	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+		args = splitAs(args)
+		r.calls = append(r.calls, args)
+		switch {
+		case args[0] == loopBoard:
+			return `{}`, 0, nil
+		case len(args) >= 2 && args[0] == agentsName && args[1] == loopStop:
+			order = append(order, loopStop)
+			return "", 0, nil
+		case len(args) >= 2 && args[0] == agentsName && args[1] == loopRemove:
+			order = append(order, loopRemove)
+			if e, ok := logs(args); ok {
+				if err := r.a.store.Record(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return "", 0, nil
+		}
+		return "", 0, nil
+	}
+	r.pass(t)
+	if !slices.Equal(order, []string{loopStop, loopRemove}) {
+		t.Errorf("the retirement ran %v, want stop then remove: %v\n%s", order, r.calls, r.out)
 	}
 }
 
