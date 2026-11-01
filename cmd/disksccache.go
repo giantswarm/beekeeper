@@ -139,9 +139,31 @@ func removeEmptyDirs(root string) {
 // clients a running build started.
 func sccacheServers() []int { return proc.Named("sccache", os.Getuid()) }
 
+// sccacheServerAddress are the variables that select the server a client
+// talks to.
+var sccacheServerAddress = []string{"SCCACHE_SERVER_PORT", "SCCACHE_SERVER_UDS"}
+
+// sccacheStopEnv is the caller's environment base with the server address
+// of server's environment alone: a caller's own address never reaches
+// another server, and a server without one is reached at sccache's default.
+func sccacheStopEnv(base []string, server map[string]string) []string {
+	env := slices.DeleteFunc(slices.Clone(base), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		return slices.Contains(sccacheServerAddress, k)
+	})
+	for _, k := range sccacheServerAddress {
+		if v, ok := server[k]; ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
+
 // stopSccacheServers asks each sccache server to stop as sccache
 // --stop-server does, through its own executable and the server address its
-// environment names, and waits for every process to exit.
+// environment names (none, sccache's default), and waits for every process to
+// exit. A server whose environment cannot be read is not asked: the caller's
+// address could reach another server.
 func stopSccacheServers(pids []int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), sccacheStopWait)
 	defer cancel()
@@ -154,15 +176,13 @@ func stopSccacheServers(pids []int) error {
 				continue
 			}
 		}
-		c := proc.Command(ctx, exe, "--stop-server")
-		c.Env = os.Environ()
-		if env, err := proc.Environ(pid); err == nil {
-			for _, k := range []string{"SCCACHE_SERVER_PORT", "SCCACHE_SERVER_UDS"} {
-				if v, ok := env[k]; ok {
-					c.Env = append(c.Env, k+"="+v)
-				}
-			}
+		env, err := proc.Environ(pid)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("sccache server address unknown: %w", err))
+			continue
 		}
+		c := proc.Command(ctx, exe, "--stop-server")
+		c.Env = sccacheStopEnv(os.Environ(), env)
 		if err := c.Run(); err != nil {
 			errs = append(errs, fmt.Errorf("sccache --stop-server: %w", err))
 		}

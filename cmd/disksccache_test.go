@@ -174,12 +174,30 @@ func TestStopSccacheServersStopsARealServer(t *testing.T) {
 		t.Fatal("no new sccache server")
 	}
 	t.Cleanup(func() { proc.Terminate(mine, time.Second) })
-	// The watch's environment need not name the server's port.
+	// The watch's environment need not name the server's port, and an
+	// address of the watch's own the server lacks does not divert the stop.
 	t.Setenv("SCCACHE_SERVER_PORT", "")
+	t.Setenv("SCCACHE_SERVER_UDS", filepath.Join(t.TempDir(), "other.sock"))
 	if err := stopSccacheServers(mine); err != nil {
 		t.Fatal(err)
 	}
 	if slices.ContainsFunc(mine, proc.Alive) {
 		t.Fatal("server still running")
+	}
+}
+
+func TestSccacheStopEnvCarriesOnlyTheServersAddress(t *testing.T) {
+	const home, dir = "HOME=/h", "SCCACHE_DIR=/c"
+	base := []string{home, "SCCACHE_SERVER_PORT=5000", "SCCACHE_SERVER_UDS=/caller.sock", dir}
+	got := sccacheStopEnv(base, map[string]string{})
+	if want := []string{home, dir}; !slices.Equal(got, want) {
+		t.Fatalf("default server: %q, want %q", got, want)
+	}
+	got = sccacheStopEnv(base, map[string]string{"SCCACHE_SERVER_PORT": "6000"})
+	if want := []string{home, dir, "SCCACHE_SERVER_PORT=6000"}; !slices.Equal(got, want) {
+		t.Fatalf("custom port: %q, want %q", got, want)
+	}
+	if !slices.Contains(base, "SCCACHE_SERVER_PORT=5000") {
+		t.Fatal("caller's environment changed")
 	}
 }
