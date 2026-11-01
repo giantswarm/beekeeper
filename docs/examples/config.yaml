@@ -192,6 +192,8 @@ upgrades:
 
 supervisor:                 # what handover --prompt tells the successor supervisor; unset skill and instructions, it opens without them
   loop: false              # install the persistent supervisor loop user service (systemd or launchd); opt-in
+  hosts: []                # execution host selectors (agents.hosts) the loop's worker and reviewer starts may run on, in order; with no room locally, or always with hostsFirst: true; a host must map the item's repository and pass its check (capacity --host); empty: the coordinator's own machine
+  hostsFirst: false        # prefer the first host with room over the coordinator's own machine, whatever its room is
   # The loop owns a watch beside it, reading alerts every alerts.every;
   # unowned pages become guide.person notes. A worker can wait on a named
   # alert with agents park --on alert:<alertname|installation/alertname>.
