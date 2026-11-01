@@ -139,11 +139,24 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
 	return parseLoopPull(ref, out)
+}
+
+// readBaseMerge reads whether p's head only merges its base into approved
+// (github.BaseMergeOnly).
+var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
+	r, ok := parseRef(p.Ref)
+	if !ok || p.Base == "" {
+		return false, fmt.Errorf("%s names no pull request with a base", p.Ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	only, _, err := github.BaseMergeOnly(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	return only, err
 }
 
 // readDeskLogin is the login gh acts as: the one the desk's agents open
@@ -179,6 +192,7 @@ type loopPullJSON struct {
 	State  string `json:"state"`
 	URL    string `json:"url"`
 	Head   string `json:"headRefOid"`
+	Base   string `json:"baseRefName"`
 	Rollup []struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
@@ -215,7 +229,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -264,7 +278,8 @@ its key first in the detail):
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, for every new head the worker parked on after an
-            approval (one review per head), or after the last round's
+            approval (one review per head) but one that only merges the
+            base into the approved head (below), or after the last round's
             findings were forwarded and the worker parked again on a new
             head while a change-request round is left
             (supervisor.reviewRounds, default 1): a reviewer starts
@@ -274,22 +289,37 @@ its key first in the detail):
             self-hosted provider's model gets one on no self-hosted provider
             (--review-of-self-hosted)
   go        every check on the head green, and either the last round's
-            verdict approves that head, or no round is left, its verdict
-            asked for changes, they were forwarded and the worker parked
-            again on a new head (its fixes): the merge go for that head,
-            told to the worker (agents wake) with --match-head-commit
-            <head>. Only the verdict of the loop's own last round counts,
-            on the head it reviewed and posted after it started: an older
-            verdict or a round still running authorizes nothing
+            verdict approves that head, or the worker parked after the
+            approval on a head that only merges the base into the approved
+            one, or no round is left, its verdict asked for changes, they
+            were forwarded and the worker parked again on a new head (its
+            fixes) that is more than a merge of the base: the merge go for
+            that head, told to the worker (agents wake) with the merge
+            command of the repository's path: the gate's devctl pr merge
+            <repo> <n> --update-branch on a repository of
+            merge.devctlOwners, whose base update the go covers, else gh
+            pr merge --match-head-commit <head>. A head only merges the
+            base when the approved head is its ancestor, every commit it
+            adds is a merge, and its change against its merge base with
+            the base branch is the approved head's, file by file, hunk by
+            hunk, line by line (compare API); a file without a patch counts
+            only with the approved blob and no change of the base's to it
+            since. Anything else, or a comparison GitHub cuts short, is a
+            new head with a new review. Only the verdict of the loop's own
+            last round counts, on the head it reviewed and posted after it
+            started: an older verdict or a round still running authorizes
+            nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
-  rework    no change-request round left (supervisor.reviewRounds counts
-            the rounds that asked for changes; an approved head is none)
-            and the worker parked again after the forward on the head the
-            findings were about: the worker is told to fix them and push
-            (agents wake), once for each such park; its new green head
-            gets the merge go. Review and rework stay in the loop: no
-            merge question goes to guide.person
+  rework    the worker parked again after the forward on the head the
+            findings were about with no change-request round left
+            (supervisor.reviewRounds counts the rounds that asked for
+            changes; an approved head is none), or, rounds left or not, on
+            a head that only merges the base into it, which carries no
+            fixes: the worker is told to fix them and push (agents wake),
+            once for each such park; its new green head gets the next
+            round, or the merge go once none is left. Review and rework
+            stay in the loop: no merge question goes to guide.person
   answer    the person answered an escalation an earlier loop filed
             (beekeeper answer --note): an answer that releases it (the
             Merge option, or words to merge that refuse nothing) is the
@@ -423,6 +453,9 @@ type supervisorLoop struct {
 	teamsAt time.Time
 	// dryRun prints a pass's transitions and takes none.
 	dryRun bool
+	// baseMerges are the answers of readBaseMerge, by pull request,
+	// approved head and head: two commits' relation does not change.
+	baseMerges map[string]bool
 }
 
 // loopOutput serializes loop transitions with asynchronous timer output.
@@ -494,7 +527,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -541,7 +574,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	own := a.cfg.Supervisor.Ownership
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
-			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration}}
+			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
+		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) }}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
@@ -672,6 +706,23 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	return l.fill(ctx, st, claims, in.Taken)
+}
+
+// baseMerged reports whether p's head only merges its base into approved,
+// read once per pair of heads; a read that fails is said once and counts as
+// no: the new head gets its review.
+func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
+	key := p.Ref + " " + approved + " " + p.Head
+	if ok, read := l.baseMerges[key]; read {
+		return ok
+	}
+	ok, err := readBaseMerge(ctx, p, approved)
+	if err != nil {
+		l.sayOnce("base merge "+key, "SUPERVISOR LOOP cannot tell whether %s's head only merges its base: %v", p.Ref, err)
+		return false
+	}
+	l.baseMerges[key] = ok
+	return ok
 }
 
 // ownership readies the desk's policy for a pass's reads: the logins the
