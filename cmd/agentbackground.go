@@ -448,7 +448,7 @@ func (a *app) wokeStamp(id string) string {
 // parkStopLock is session id's lock (parkStopDir).
 func (a *app) parkStopLock(id string) (*flock.Flock, error) {
 	dir := filepath.Join(a.cfg.StateDir, parkStopDir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // the state directory's own subdirectory
 		return nil, err
 	}
 	return flock.New(filepath.Join(dir, filepath.Base(id)+".lock")), nil
@@ -484,7 +484,7 @@ func (a *app) lockForWake(ctx context.Context, st *state.State, p state.Party) (
 	}
 	return func() {
 		stamp, now := a.wokeStamp(p.Session), time.Now()
-		_ = os.WriteFile(stamp, nil, 0o600)
+		_ = os.WriteFile(stamp, nil, 0o600) //nolint:gosec // under the state directory, the session id's base name
 		_ = os.Chtimes(stamp, now, now)
 		_ = l.Unlock()
 	}, nil

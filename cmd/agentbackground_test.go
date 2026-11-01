@@ -611,7 +611,7 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 		quiet := *a
 		quiet.out = io.Discard
 		go func() {
-			done <- quiet.wakeAgent(context.Background(), state.Party{Name: supervisorName}, bgName, "your review", "")
+			done <- quiet.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "your review", "")
 		}()
 		time.Sleep(200 * time.Millisecond) // the wake runs meanwhile, and waits
 		mu.Lock()
