@@ -187,7 +187,7 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: "wait for PR", ReviewHead: head})}
-		line, _, err := a.applyExecutionControl(st, st.Agents[0].Party, c)
+		line, _, err := a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, c)
 		if err != nil {
 			t.Fatal(err)
 		}
