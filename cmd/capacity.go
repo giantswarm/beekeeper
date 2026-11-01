@@ -321,8 +321,8 @@ const waitQuiet = 5 * time.Minute
 
 // countAgents sorts st's roster at now; sessions say which agents wait on
 // their person or in a wait of their own (none known without them).
-func countAgents(st *state.State, sessions []*claude.Session, now time.Time, configs ...*config.Config) agentCount {
-	cfg, staleAfter := rosterConfig(configs)
+func countAgents(st *state.State, sessions []*claude.Session, now time.Time, cfg *config.Config) agentCount {
+	cfg, staleAfter := rosterConfig(cfg)
 	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}, Gone: []string{}}
 	sup, guide := st.SupervisorRole(), st.GuideRole()
 	for _, ag := range st.Agents {
@@ -372,8 +372,8 @@ type providerAgents struct {
 	BucketBusy  map[string][]string
 }
 
-func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time, configs ...*config.Config) map[string]providerAgents {
-	cfg, staleAfter := rosterConfig(configs)
+func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time, cfg *config.Config) map[string]providerAgents {
+	cfg, staleAfter := rosterConfig(cfg)
 	out := make(map[string]providerAgents, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}

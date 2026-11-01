@@ -60,7 +60,7 @@ func TestPlanChores(t *testing.T) {
 	}
 	busy := func(p state.Party) bool { return p.Session == "done-busy" }
 	var got []string
-	for _, c := range planChores(st, sessions, record, busy, 24*time.Hour, now) {
+	for _, c := range planChores(st, sessions, record, busy, 24*time.Hour, now, nil) {
 		got = append(got, c.String())
 	}
 	want := []string{
@@ -72,7 +72,7 @@ func TestPlanChores(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("chores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if c := planChores(st, sessions, record, busy, 0, now); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
+	if c := planChores(st, sessions, record, busy, 0, now, nil); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
 		t.Errorf("staleAfter 0 takes no stale agent off: %v", c)
 	}
 }

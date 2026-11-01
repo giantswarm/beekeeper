@@ -94,9 +94,8 @@ func (c chore) String() string {
 // title than its roster name is retitled while its CLI runs no turn.
 // record reads a desktop session's record.
 func planChores(st *state.State, sessions []*claude.Session, record func(host string) (*claude.Record, bool),
-	busy func(state.Party) bool, staleAfter time.Duration, now time.Time, configs ...*config.Config,
+	busy func(state.Party) bool, staleAfter time.Duration, now time.Time, cfg *config.Config,
 ) []chore {
-	cfg, _ := rosterConfig(configs)
 	var out []chore
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {

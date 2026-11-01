@@ -49,17 +49,17 @@ func TestGoneAgentBoundaryAndProtections(t *testing.T) {
 			if gone != tt.gone {
 				t.Fatalf("gone = %v, want %v", gone, tt.gone)
 			}
-			c := countAgents(st, sessions, now)
+			c := countAgents(st, sessions, now, nil)
 			if (len(c.Gone) == 1) != tt.gone {
 				t.Fatalf("capacity = %+v", c)
 			}
-			pa := countProviderAgents(st, sessions, config.Capacity{}, now)
+			pa := countProviderAgents(st, sessions, config.Capacity{}, now, nil)
 			for _, p := range pa {
 				if tt.gone && len(p.Busy) > 0 {
 					t.Fatalf("gone holds provider: %+v", pa)
 				}
 			}
-			chores := planChores(st, sessions, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return tt.live }, 24*time.Hour, now)
+			chores := planChores(st, sessions, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return tt.live }, 24*time.Hour, now, nil)
 			if (len(chores) == 1 && chores[0].kind == choreRemove) != tt.gone {
 				t.Fatalf("chores = %+v", chores)
 			}
@@ -253,7 +253,7 @@ func TestGoneConfiguredAge(t *testing.T) {
 	if len(countAgents(st, nil, keepNow, cfg).Gone) != 1 {
 		t.Fatal("configured age ignored")
 	}
-	if len(countAgents(st, nil, keepNow).Busy) != 1 {
+	if len(countAgents(st, nil, keepNow, nil).Busy) != 1 {
 		t.Fatal("default age ignored")
 	}
 	cfg.Agents.StaleAfter.Duration = -time.Hour

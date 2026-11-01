@@ -87,7 +87,7 @@ func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *t
 					t.Fatal("interrupted start reported success")
 				}
 				st, readErr := a.store.Read()
-				if readErr != nil || len(st.Starts) != 1 || len(st.Agents) != 1 || len(countAgents(st, nil, a.now).Busy) != 1 {
+				if readErr != nil || len(st.Starts) != 1 || len(st.Agents) != 1 || len(countAgents(st, nil, a.now, nil).Busy) != 1 {
 					t.Fatal("interruption dropped the reservation")
 				}
 				if err = a.activateExecution(context.Background(), *st.Agents[0].Execution); err != nil {
@@ -142,7 +142,7 @@ func TestExecutionTwoHostsCompeteForFinalProviderSlot(t *testing.T) {
 	if err != nil || len(st.Agents) != 1 || len(st.Starts) != 1 || preparations != 1 {
 		t.Fatalf("provider reservation raced: %d preparations, %v", preparations, err)
 	}
-	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, nil)
 	if len(counts[claudeComm].Busy) != 1 || st.Starts[0].Execution.Observation.Reachability != execution.Unreachable {
 		t.Fatal("unreachable host released its provider reservation")
 	}
@@ -170,12 +170,12 @@ func TestExecutionProviderReservationStaysPinnedAcrossConfigurationChanges(t *te
 	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "remote-worker"}, Execution: &ref, Harness: claudeComm, Model: bgModel, Done: true}}, Starts: []state.Start{{Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Provider: claudeComm, Observation: execution.Observation{ProcessState: execution.Running, Reachability: execution.Unreachable}}}}}
 	a.cfg.Capacity.Providers["other-pool"] = config.Provider{Ceiling: 2}
 	a.cfg.Capacity.Choices[0].Provider = "other-pool"
-	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, nil)
 	if len(counts[claudeComm].Busy) != 1 || len(counts["other-pool"].Busy) != 0 {
 		t.Fatal("configuration moved a live reservation to a fresh provider")
 	}
 	delete(a.cfg.Capacity.Providers, claudeComm)
-	counts = countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts = countProviderAgents(st, nil, a.cfg.Capacity, a.now, nil)
 	if len(counts["other-pool"].Unconfirmed) != 1 {
 		t.Fatal("removing the pinned provider released its reservation")
 	}

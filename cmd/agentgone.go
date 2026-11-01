@@ -72,9 +72,9 @@ func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, 
 	return last, !last.IsZero() && now.Sub(last) >= staleAfter
 }
 
-func rosterConfig(configs []*config.Config) (*config.Config, time.Duration) {
-	if len(configs) > 0 && configs[0] != nil {
-		return configs[0], configs[0].Agents.StaleAfter.Duration
+func rosterConfig(cfg *config.Config) (*config.Config, time.Duration) {
+	if cfg != nil {
+		return cfg, cfg.Agents.StaleAfter.Duration
 	}
 	return nil, 24 * time.Hour
 }
