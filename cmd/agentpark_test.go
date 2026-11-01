@@ -489,7 +489,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 	was := parkReviewHead
 	t.Cleanup(func() { parkReviewHead = was })
 	for _, head := range []string{"", loopHead} {
-		w := parkingWatch(t, nil)
+		w := parkingWatch(t, map[string]string{refOne: github.Open})
 		parkReviewHead = func(string) string { return head }
 		line, err := w.park(offSession, refOne, "waiting")
 		if err != nil {
@@ -499,7 +499,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || !strings.Contains(line, parkReviewMode(head)) {
+		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || !strings.Contains(line, parkReviewMode(head)) {
 			t.Fatalf("parks %+v, line %q", st.Parks, line)
 		}
 	}

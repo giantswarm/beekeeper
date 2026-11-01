@@ -213,13 +213,13 @@ func TestManagedParkRecordsFailedLookupThenClassifies(t *testing.T) {
 	if err != nil || kind != "" {
 		t.Fatalf("managed resolution %q %v", kind, err)
 	}
-	request := execution.ControlRequest{Ref: r.Ref, ID: "park-unresolved", Sequence: 1, Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: refOne, Waits: "waiting for GitHub", RefKind: kind})}
+	request := execution.ControlRequest{Ref: r.Ref, ID: "park-unresolved", Sequence: 1, Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: refOne, Waits: "waiting for GitHub", RefKind: kind, ReviewHead: loopHead})}
 	var result execution.ControlResult
 	if err := coordinatorTestCall(t, a, r, "control", request, &result, false); err != nil || result.Error != "" {
 		t.Fatalf("managed park: %v %s", err, result.Error)
 	}
 	st, _ := a.store.Read()
-	if p := st.Agents[0].Park; p == nil || p.On != refOne || p.RefKind != "" {
+	if p := st.Agents[0].Park; p == nil || p.On != refOne || p.RefKind != "" || p.ReviewHead != loopHead {
 		t.Fatalf("unresolved managed park %+v", p)
 	}
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
