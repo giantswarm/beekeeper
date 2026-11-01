@@ -26,6 +26,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -1553,13 +1554,13 @@ func (h startHost) excludeFlags() []string {
 	return args
 }
 
-// hostChoices are the choices of k an execution host can run, each as
+// hostChoices are the choices of k one of hosts can run, each as
 // harness/model, the form --exclude matches exactly; mixed says whether
 // k also has a choice no host can run, which only the local machine
 // starts.
-func hostChoices(k config.Capacity) (choices []string, mixed bool) {
+func hostChoices(k config.Capacity, hosts []execution.Host) (choices []string, mixed bool) {
 	for _, ch := range k.Choices {
-		if !hostRunsHarness(ch.Harness) {
+		if !hostRunsHarness(ch.Harness, hosts) {
 			mixed = true
 			continue
 		}
@@ -1687,7 +1688,13 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 // host-run choices excluded from the start, while the local verdict
 // without them has room. Everything else waits.
 func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, localRoom, mapped bool) (startHost, error) {
-	hosted, mixed := hostChoices(l.a.cfg.Capacity)
+	var hosts []execution.Host
+	for _, selector := range l.a.cfg.Supervisor.Hosts {
+		if h, err := l.a.executionHost(selector); err == nil {
+			hosts = append(hosts, h)
+		}
+	}
+	hosted, mixed := hostChoices(l.a.cfg.Capacity, hosts)
 	if !mapped || len(hosted) == 0 {
 		if !localRoom {
 			return startHost{}, errLoopLater

@@ -1880,7 +1880,7 @@ nothing; it makes no GitHub call.`,
 				if len(k.Providers) == 0 {
 					k, legacy = a.resolveUsage(cmd.Context(), k)
 				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, exclude, startKind(review, ofSelfHosted), harnessAuto, "")
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, "")
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted)).withLocal(st, liveCap).stopped(a, st.Stop)
 			} else {

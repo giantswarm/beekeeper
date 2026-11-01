@@ -74,7 +74,7 @@ func publishGit(ctx context.Context, dir string, args ...string) (string, error)
 
 func (a *app) executionPublicationLive(st *state.State, ref execution.Ref) (*state.ExecutionRecord, error) {
 	r, _ := executionRecord(st, ref)
-	if r == nil || r.Request.Harness != execution.HarnessClaude || !r.Request.LeaseRequired || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || r.StopRequest != nil || r.Completed || r.Terminal() || st.Stop != nil {
+	if r == nil || !execution.SupportedHarness(r.Request.Harness) || !r.Request.LeaseRequired || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || r.StopRequest != nil || r.Completed || r.Terminal() || st.Stop != nil {
 		return nil, refused("publication requires a live, leased execution")
 	}
 	owner, _, _ := strings.Cut(r.Request.Repository, "/")
@@ -290,7 +290,7 @@ func (a *app) executionPublishCmd() *cobra.Command {
 			return err
 		}
 		policy, err := s.InstalledPolicy()
-		if err != nil || policy.Digest() != j.Request.PolicyDigest || j.StopRequest != nil || j.Completed || j.Request.Harness != execution.HarnessClaude {
+		if err != nil || policy.Digest() != j.Request.PolicyDigest || j.StopRequest != nil || j.Completed || !execution.SupportedHarness(j.Request.Harness) {
 			return refused("publication policy changed or execution is unavailable")
 		}
 		ctx := cmd.Context()
