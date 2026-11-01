@@ -15,7 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `watch` discovers codex, omp and agy runners as well as Claude Code sessions, so a running worker no longer produces false `AGENTS STOPPED` and `SESSION ENDED` alerts. Stopped workers of those harnesses get an `agents wake` command instead of a Claude desktop link ([https://github.com/giantswarm/beekeeper/issues/1965](https://github.com/giantswarm/beekeeper/issues/1965)).
 - `beekeeper watch` no longer flaps `EXECUTION UNCONFIRMED` and `ENDED EXECUTION UNCONFIRMED` every minute across SSH execution hosts when reconciliation hits its deadline: each operation uses the host's operation timeout (30s default) instead of a shared 5-second window across all hosts and executions, deadline-killed SSH calls report `execution host deadline exceeded` rather than `execution host unreachable`, failed host reconciliations back off (`2m`, `4m`, `8m`, `15m`) and log `execution.unconfirmed` once while unconfirmed, and terminal executions whose final state and outbox are confirmed are no longer re-reconciled on later watch ticks ([https://github.com/giantswarm/beekeeper/issues/1963](https://github.com/giantswarm/beekeeper/issues/1963)).
 - Merge independent changelog additions with Git’s union driver so queued pull requests can update their base without conflicting on top-of-section entries (https://github.com/giantswarm/beekeeper/issues/1953).
 
@@ -48,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `beekeeper run` without `--class` runs a command that cannot build at once, uncapped and outside the build slot queue: a single `true`, `false`, `echo` or `printf`, or a command that only prints its help or version (`go version`, `make help`, `kubectl --help`). It waited for a build slot like a build ([#919](https://github.com/giantswarm/beekeeper/issues/919)).
 
 - PR parks request desk review only when made from the PR's published worktree, with matching branch and HEAD. Other parks remain plain waits and resume on merge or close. After upgrading, reissue existing PR review parks from their published worktrees: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` ([https://github.com/giantswarm/beekeeper/issues/1824](https://github.com/giantswarm/beekeeper/issues/1824)).
+
+- `watch` discovers codex, omp and agy runners as well as Claude Code sessions, so a running worker no longer produces false `AGENTS STOPPED` and `SESSION ENDED` alerts. Stopped workers of those harnesses get an `agents wake` command instead of a Claude desktop link ([https://github.com/giantswarm/beekeeper/issues/1965](https://github.com/giantswarm/beekeeper/issues/1965)).
 
 ### Changed
 
