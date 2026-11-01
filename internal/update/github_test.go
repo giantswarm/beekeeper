@@ -20,7 +20,6 @@ func TestGitHubReleasePagination(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = old })
 	pages := 0
 	http.DefaultTransport = releaseTransport(func(r *http.Request) (*http.Response, error) {
-		body := `[]`
 		header := make(http.Header)
 		if strings.HasSuffix(r.URL.Path, "/latest") {
 			return &http.Response{StatusCode: 404, Header: header, Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
@@ -32,7 +31,7 @@ func TestGitHubReleasePagination(t *testing.T) {
 		} else {
 			header.Set("Link", `<https://api.github.com/repos/giantswarm/beekeeper/releases?page=2>; rel="next"`)
 		}
-		body = fmt.Sprintf(`[{"id":%d,"tag_name":%q,"prerelease":true,"assets":[{"id":1,"name":%q},{"id":2,"name":%q}]}]`, pages, tag, binaryName(), binaryName()+".bundle")
+		body := fmt.Sprintf(`[{"id":%d,"tag_name":%q,"prerelease":true,"assets":[{"id":1,"name":%q},{"id":2,"name":%q}]}]`, pages, tag, binaryName(), binaryName()+".bundle")
 		return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})
 	setup(t, "v0.171.0-rc.98", newSource())
