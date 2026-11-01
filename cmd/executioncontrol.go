@@ -126,6 +126,31 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			r.Lease = &grant
 			value = grant
+		case publicationTransfer:
+			var chunk publicationChunk
+			if execution.Decode(req.Payload, &chunk) != nil {
+				return nil, errors.New("invalid publication transfer")
+			}
+			result, transferErr := a.transferPublication(st, req.Ref, chunk)
+			if transferErr != nil {
+				return nil, transferErr
+			}
+			value = result
+		case executionPublish:
+			var publication executionPublication
+			if execution.Decode(req.Payload, &publication) != nil {
+				return nil, errors.New("invalid publication request")
+			}
+			publishCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
+			if publishErr != nil {
+				reply.Error = publishErr.Error()
+				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s", publication.Head))
+			} else {
+				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
+			}
+			value = result
 		case runMerge:
 			var use execution.MergeUse
 			if execution.Decode(req.Payload, &use) != nil || use.Ref != req.Ref {

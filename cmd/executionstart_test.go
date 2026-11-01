@@ -39,7 +39,7 @@ func sshStartTestApp(t *testing.T) (*app, string) {
 		a.cfg.Agents.Hosts[selector] = execution.Host{Endpoint: execution.Endpoint{SSH: selector + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: execution.HostID(selector), WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{sshTestRepository: "/srv/source"}, Harnesses: []string{claudeComm}, PolicyDigest: execution.Digest([]byte("fixture policy")), MaxBusy: 2}
 	}
 	a.executionProbe = func(_ context.Context, h execution.Host) (execution.Capabilities, error) {
-		return execution.Capabilities{Protocol: execution.Protocol, Identity: h.Identity, Version: project.Version(), PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{claudeComm: "2.1.290"}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
+		return execution.Capabilities{Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: project.Version(), PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{claudeComm: "2.1.290"}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
 	}
 	brief := filepath.Join(t.TempDir(), "brief.md")
 	if err := os.WriteFile(brief, []byte(sshTestTask), 0o600); err != nil {
