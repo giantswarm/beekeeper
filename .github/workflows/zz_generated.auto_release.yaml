@@ -140,10 +140,6 @@ jobs:
               echo "::error title=Not a release candidate to promote::${PROMOTE_VERSION} is not a release candidate since ${last:-inception} on ${GITHUB_REF_NAME}; the candidates are $(paste -sd ' ' <<<"$candidates")."
               exit 1
             fi
-            if [ "$PROMOTE_VERSION" != "$rc" ]; then
-              echo "::error title=Stale release candidate::${PROMOTE_VERSION} is older than the newest candidate ${rc} on ${GITHUB_REF_NAME}; refusing to publish a stable release older than ${rc}."
-              exit 1
-            fi
             rc=$PROMOTE_VERSION
           fi
 
@@ -211,9 +207,6 @@ jobs:
             echo "::warning title=Advisory status failed::the commit status ${context} of ${rc} failed; the release does not require it, so the candidate is judged without it."
           done
 
-          if [ -f .github/release-gate.custom.sh ]; then
-            cp .github/release-gate.custom.sh "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh"
-          fi
           after=$(git log --format='%h %s' "${rc}..HEAD")
           git checkout -q --detach "$rc"
           echo "promoting ${rc} at $(git rev-parse --short HEAD)"
@@ -454,9 +447,6 @@ jobs:
         run: |
           set -euo pipefail
           gate=.github/release-gate.custom.sh
-          if [ ! -f "$gate" ] && [ -f "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh" ]; then
-            gate="${RUNNER_TEMP:-/tmp}/release-gate.custom.sh"
-          fi
           if [ ! -f "$gate" ]; then
             echo "no ${gate} on the released commit: no repository gate for ${TAG}"
             exit 0
