@@ -104,7 +104,7 @@ if [ "${BEEKEEPER_CACHE_ENABLED:-}" = 1 ]; then
  case "$tool" in
  go)
   export CACHEPROG_ROOT_DIRECTORY="$r/cache"
-  if [ -n "${CACHEPROG_S3_BUCKET:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_ID:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_SECRET:-}" ] && command -v "${BEEKEEPER_GO_CACHE_HELPER:-cacheprog}" >/dev/null 2>&1 && timeout --foreground -k 1s 15s "$BEEKEEPER_GO_CACHE_HELPER" direct --root-directory "$CACHEPROG_ROOT_DIRECTORY" </dev/null >/dev/null 2>&1; then
+  if [ -n "${CACHEPROG_S3_BUCKET:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_ID:-}" ] && [ -n "${CACHEPROG_S3_ACCESS_KEY_SECRET:-}" ] && command -v "${BEEKEEPER_GO_CACHE_HELPER:-cacheprog}" >/dev/null 2>&1 && timeout -k 1s 15s "$BEEKEEPER_GO_CACHE_HELPER" direct --root-directory "$CACHEPROG_ROOT_DIRECTORY" </dev/null >/dev/null 2>&1; then
    export BEEKEEPER_CACHE_LOG="$r/log"
    cat > "$r/go-cache" <<'CACHEGO'
 #!/bin/bash
@@ -136,7 +136,7 @@ CACHEGO
   export SCCACHE_DIR=/work/sccache
   if [ -n "${SCCACHE_BUCKET:-}" ] && [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && command -v sccache >/dev/null 2>&1; then
    cache_rust_started=1
-   if timeout --foreground -k 1s 15s sccache --start-server >/dev/null 2>&1; then
+   if timeout -k 1s 15s sccache --start-server >/dev/null 2>&1; then
     cache_rust_started=2
     export RUSTC_WRAPPER=sccache
    else
@@ -154,7 +154,7 @@ fi
 `
 
 const cacheFinish = `if [ "${cache_rust_started:-0}" = 2 ]; then
- timeout --foreground -k 1s 5s sccache --show-stats 2>/dev/null | while read -r a b n d rest; do
+ timeout -k 1s 5s sccache --show-stats 2>/dev/null | while read -r a b n d rest; do
   case "$a $b" in
    'Cache hits'|'Cache misses'|'Cache writes'|'Non-cacheable calls')
     if [[ "$n" =~ ^[0-9]+$ ]]; then printf 'beekeeper run: Rust %s %s %s\n' "${a,,}" "${b,,}" "$n" >> "$r/log"; fi;;
@@ -164,7 +164,7 @@ const cacheFinish = `if [ "${cache_rust_started:-0}" = 2 ]; then
  done
 fi
 if [ "${cache_rust_started:-0}" != 0 ]; then
- timeout --foreground -k 1s 5s sccache --stop-server >/dev/null 2>&1 || true
+ timeout -k 1s 5s sccache --stop-server >/dev/null 2>&1 || true
 fi
 rm -rf "$r/cache"
 `
