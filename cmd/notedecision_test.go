@@ -318,12 +318,12 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	if an, _ := a.answeredSince(time.Time{}); len(an) != 4 {
 		t.Fatalf("recorded answers %+v, want 4", an)
 	}
-	st.RoleLines = append(st.RoleLines, state.RoleLine{Role: "another", Line: "for another role"})
+	st.RoleLines = append(st.RoleLines, state.RoleLine{Role: "retired role", Line: "for a retired role"})
 	lines := takeRoleLines(st, guideRole)
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "NOTE ANSWERED #2") || !strings.HasPrefix(lines[1], "NOTE ANSWERED #3") {
 		t.Fatalf("waiting lines %q", lines)
 	}
-	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != "another" {
+	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != "retired role" {
 		t.Fatalf("left %+v, want the other role's line", st.RoleLines)
 	}
 }

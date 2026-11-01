@@ -43,7 +43,7 @@ func TestLastRunReadsTheRecordedNames(t *testing.T) {
 	r := state.Role{
 		Run:      3,
 		Holder:   &state.Supervisor{Party: state.Party{Name: supA.Name}},
-		Relieved: []state.Relief{{Party: state.Party{Name: "Guide run 12"}, By: state.Party{Name: "Agent nine"}}},
+		Relieved: []state.Relief{{Party: state.Party{Name: guideRole.runName(12)}, By: state.Party{Name: "Agent nine"}}},
 	}
 	if got := guideRole.lastRun(r); got != 12 {
 		t.Errorf("lastRun = %d, want 12", got)
@@ -451,7 +451,7 @@ func TestRolePromptsOpenWithTheBareSlashCommand(t *testing.T) {
 		if got := roleSlash(c.cfg); got != c.want {
 			t.Errorf("roleSlash(%+v) = %q, want %q", c.cfg, got, c.want)
 		}
-		if b := guideRole.successorBrief(c.cfg, "Guide run 12", "Guide run 11"); !strings.HasPrefix(b, c.want+"You are ") {
+		if b := guideRole.successorBrief(c.cfg, guideRole.runName(12), guideRole.runName(11)); !strings.HasPrefix(b, c.want+"You are ") {
 			t.Errorf("the brief under %+v does not open with %q:\n%s", c.cfg, c.want, b)
 		}
 	}

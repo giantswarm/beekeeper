@@ -82,7 +82,7 @@ func TestRoomFor(t *testing.T) {
 // Neither the holder nor a run still active within stewardQuiet is ended.
 func TestRoomForRelievedRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 13, 4, 0, 0, time.UTC)
-	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: "Guide run 12"}
+	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: guideRole.runName(12)}
 	succ := state.Party{Session: "successor", HostSession: "local_successor", Name: "Guide run 13"}
 	sessions := []*claude.Session{
 		{PID: 1, ID: old.Session, HostID: old.HostSession, Name: old.Name, LastActive: now.Add(-3 * time.Minute)},

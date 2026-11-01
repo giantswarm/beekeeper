@@ -22,7 +22,7 @@ const browser = "browser"
 // holds none), and two agents.
 var (
 	supA   = state.Party{Session: "sA", HostSession: "local_A", Name: "Guide run 11"}
-	supB   = state.Party{Session: "sB", HostSession: "local_B", Name: "Guide run 12"}
+	supB   = state.Party{Session: "sB", HostSession: "local_B", Name: guideRole.runName(12)}
 	agentC = state.Party{Session: "sC", Name: "Agent three"}
 	agentD = state.Party{Session: "sD", Name: "Agent five"}
 )
