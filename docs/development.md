@@ -49,10 +49,30 @@ BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmod
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
 
+A Note stores its filer and filing time in its initial spec as well as status. Kubernetes
+creates the object and writes its status separately; if the latter fails, the note still
+lists as open and can be answered, withdrawn or closed by its default. Older objects
+without either status or spec provenance remain visible with their namespace's team and
+creation time, without an invented filer identity. Listing does not repair status during
+another object's update. Apply the generated Note CRD before running the new server so
+Kubernetes preserves these optional spec fields.
+
+`note list` and `guide queue` show open notes. An answer removes a note from both; a
+successful filing followed by an empty listing can mean it was answered between those
+calls. Check the server's `note_add` and `note_answer` audit lines before diagnosing a lost
+note. A failed central read emits a warning on stderr and preserves the local listing;
+`note list` also returns the central read's error, while `guide queue` serves the local queue.
+
 The `run` tests (`cmd/guard_test.go`) need zsh and a user systemd: they skip in CI and run on a
 desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the hook's rewrite runs
 the build under test, and each test starts its command in a scope of its own: on a guarded machine
 `go test` itself runs in a capped scope, where `run` takes no slot.
+
+`TestWatchStopsSandboxOrphan` additionally needs bubblewrap. It starts a real PID namespace,
+enters a scratch scope through the broker, and leaves a background child adopted by the sandbox
+init. Sandboxed `Capper.Reap` leaves cleanup to the host watch: the test proves a reporting-only
+watch preserves the child and an active watch stops its scope after the orphan grace period.
+Its scope and sandbox are stopped at test cleanup; no installed configuration is changed.
 
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
