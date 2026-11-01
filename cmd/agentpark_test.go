@@ -354,7 +354,7 @@ func TestResumeOffTheRoster(t *testing.T) {
 // later settle wakes nobody, through registerAgent or any other way onto the
 // roster.
 func TestJoiningTheRosterEndsAParkOffIt(t *testing.T) {
-	for _, via := range []string{"register", "roster entry"} {
+	for _, viaRegister := range []bool{true, false} {
 		w := parkingWatch(t, nil)
 		w.cfg.Agents.AutoResume = true
 		reply := &github.Reply{}
@@ -364,7 +364,7 @@ func TestJoiningTheRosterEndsAParkOffIt(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-			if via == "register" {
+			if viaRegister {
 				_, err := registerAgent(st, offSession, func(state.Party) bool { return false }, relayNow)
 				return nil, err
 			}
@@ -373,18 +373,18 @@ func TestJoiningTheRosterEndsAParkOffIt(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if st, _ := w.store.Read(); via == "register" && len(st.Parks) != 0 {
-			t.Errorf("%s: the park off the roster outlived the registration: %+v", via, st.Parks)
+		if st, _ := w.store.Read(); viaRegister && len(st.Parks) != 0 {
+			t.Errorf("the park off the roster outlived the registration: %+v", st.Parks)
 		}
 		*reply = github.Reply{By: reviewerLogin, At: relayNow.Add(time.Minute), Kind: "comment"}
 		for range 2 {
 			w.pending(context.Background(), nil)
 		}
 		if len(*woke) != 0 {
-			t.Errorf("%s: a stale park woke the agent: %q", via, *woke)
+			t.Errorf("register %v: a stale park woke the agent: %q", viaRegister, *woke)
 		}
 		if st, _ := w.store.Read(); len(st.Parks) != 0 {
-			t.Errorf("%s: parks %+v", via, st.Parks)
+			t.Errorf("register %v: parks %+v", viaRegister, st.Parks)
 		}
 	}
 }
