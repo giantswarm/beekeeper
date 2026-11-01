@@ -435,7 +435,7 @@ func TestLoadReporter(t *testing.T) {
 		t.Errorf("plans: %+v, %v", c.Plans, err)
 	}
 	for _, raw := range []string{"reporter: {every: 1h}\n", "reporter: {every: 10s, brief: b.md}\n",
-		"reporter: {every: 1h, brief: b.md, tz: Mars/Olympus}\n", "reporter: {every: 1h, brief: b.md, reviews: [plans]}\n", "plans: {repositories: [plans]}\n"} {
+		"reporter: {every: 1h, brief: b.md, tz: Mars/Olympus}\n", "reporter: {every: 1h, brief: b.md, reviews: [plans]}\n", "plans: {repositories: [plans]}\n", "merge: {admin: [owner]}\n"} {
 		if _, err := Load(write(raw)); err == nil {
 			t.Errorf("%q loads", raw)
 		}
@@ -443,7 +443,8 @@ func TestLoadReporter(t *testing.T) {
 }
 
 // devctl serves the owners of merge.devctlOwners, none by default; any
-// other owner's repository takes the plain squash merge.
+// other owner's repository takes the plain squash merge. merge.admin lists
+// the repositories merged with --admin after the approved desk review.
 func TestDevctlServes(t *testing.T) {
 	var c Config
 	if err := c.defaults(); err != nil {
@@ -452,10 +453,19 @@ func TestDevctlServes(t *testing.T) {
 	if c.Merge.DevctlServes("example/x") {
 		t.Error("devctl serves an owner by default")
 	}
+	if c.Merge.AdminMerge("example/x") {
+		t.Error("admin merge by default")
+	}
 	c.Merge.DevctlOwners = []string{"example"}
 	for repo, want := range map[string]bool{"example/beekeeper": true, "Example/x": true, "someone/notebook": false} {
 		if got := c.Merge.DevctlServes(repo); got != want {
 			t.Errorf("%s: %v, want %v", repo, got, want)
+		}
+	}
+	c.Merge.Admin = []string{"example/beekeeper"}
+	for repo, want := range map[string]bool{"example/beekeeper": true, "Example/Beekeeper": true, "example/x": false, "someone/beekeeper": false} {
+		if got := c.Merge.AdminMerge(repo); got != want {
+			t.Errorf("admin %s: %v, want %v", repo, got, want)
 		}
 	}
 }
