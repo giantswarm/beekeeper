@@ -273,6 +273,63 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 }
 func strconvOffset(s string) (int, error) { var n int; _, err := fmt.Sscan(s, &n); return n, err }
 
+// A failed remote run keeps the tail of its streamed output — the transport
+// calls back once, with the exit code, and the caller's keeper prints the
+// masked tail and writes the record; a passed one calls back never.
+func TestRemoteFailureKeepsTail(t *testing.T) {
+	root := worktree(t)
+	t.Chdir(root)
+	t.Setenv("GOFLAGS", "")
+	for _, rc := range []int{0, 37} {
+		c := validConfig()
+		var output, diagnostic bytes.Buffer
+		var ring bytes.Buffer
+		kept := -1
+		r := Runner{Config: c, StateDir: t.TempDir(), Stdout: &output, Stderr: &diagnostic,
+			Tail: &ring, KeepFailure: func(runID string, exit int) { kept = exit }}
+		r.Command = func(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
+			a := args[7:]
+			switch a[0] {
+			case "get":
+				if a[1] == "job" {
+					return nil
+				}
+				pods := corev1.PodList{Items: []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "builder-pod"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}}}
+				return json.NewEncoder(out).Encode(pods)
+			case "create", "wait":
+				return nil
+			case "exec":
+				switch {
+				case slices.Contains(a, upload):
+					_, err := io.Copy(io.Discard, in)
+					return err
+				case slices.Contains(a, start):
+					return nil
+				case slices.Contains(a, follow):
+					_, err := io.WriteString(out, "first second\n")
+					return err
+				case slices.Contains(a, "cat"):
+					_, err := fmt.Fprintf(out, "%d\n", rc)
+					return err
+				}
+				return nil
+			}
+			t.Fatalf("unexpected call: %v", a)
+			return nil
+		}
+		handled, got := r.Try(context.Background(), []string{"go", "test", testPackages})
+		if !handled || got != rc {
+			t.Fatalf("handled=%v rc=%d: %s", handled, got, diagnostic.String())
+		}
+		if ring.String() != "first second\n" {
+			t.Errorf("rc %d: the tail ring streamed %q", rc, ring.String())
+		}
+		if want := map[bool]int{true: 37, false: -1}[rc != 0]; kept != want {
+			t.Errorf("rc %d: KeepFailure saw exit %d, want %d", rc, kept, want)
+		}
+	}
+}
+
 func TestRemoteExistingBuilder(t *testing.T) {
 	for _, mode := range []string{"warm", "different-image", "different-resources", "foreign", "retiring", "placement"} {
 		t.Run(mode, func(t *testing.T) {
