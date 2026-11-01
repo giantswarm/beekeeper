@@ -1008,7 +1008,7 @@ const (
 const (
 	DefaultUsageEvery       = 5 * time.Minute
 	DefaultUsageReportEvery = 30 * time.Minute
-	DefaultUsageTimeout     = 15 * time.Second
+	DefaultUsageTimeout     = 90 * time.Second
 	DefaultUsageStaleAfter  = 15 * time.Minute
 	DefaultUsageHighPercent = 95.0
 )
@@ -1395,7 +1395,7 @@ type Usage struct {
 	// runs Command again (default 5m; a window past its resetsAt re-reads
 	// at once).
 	Every Duration `yaml:"every"`
-	// Timeout bounds one run of Command (default 15s).
+	// Timeout bounds one run of Command (default 90s).
 	Timeout Duration `yaml:"timeout"`
 	// StaleAfter is how old a usage reading may grow before it counts as
 	// stale, yielding ceiling 0 and room 0 for that provider (default 15m).

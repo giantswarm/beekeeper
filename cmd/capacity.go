@@ -164,6 +164,7 @@ func (b *bucketView) windowsLine(now time.Time) string {
 // providerView is one provider's busy agents, usage windows, derived target
 // and capacity verdict.
 type providerView struct {
+	Fallback    string                 `json:"fallback,omitempty"`
 	Name        string                 `json:"name"`
 	Busy        []string               `json:"busy"`
 	Floor       int                    `json:"floor"`
@@ -210,7 +211,12 @@ func (p *providerView) findBucket(name string) *bucketView {
 	return nil
 }
 
-func (p *providerView) windowsSummary(now time.Time) string {
+func (p *providerView) windowsSummary(now time.Time) (summary string) {
+	defer func() {
+		if p.Fallback != "" {
+			summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
+		}
+	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {
 			return "serving mode unknown (" + truncate(p.ServingModeError, 120) + ")"
@@ -932,6 +938,7 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		}
 		r := res.reading
 		pv.At = r.At
+		pv.Fallback = r.Fallback
 		if r.NoPlanWindows {
 			pv.NoPlanWindows = true
 			pv.Blocks = []string{claudeNoPlanWindows}
