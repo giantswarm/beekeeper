@@ -82,7 +82,9 @@ note of is the central instance's), an issue or pull request
 (owner/repo#n) or a hold (hold:<target>, the one a gate's exit 77 names);
 lease claim --park parks on a lease. Once the note is closed (answered,
 defaulted, done or overtaken), the pull request merged or closed or given
-a review or comment by anyone but its author since the park, the hold
+a review or comment by anyone but its author since the park (a review
+posted under the author's own login, as a desk whose sessions share one
+login posts its own, settles nothing), the hold
 lifted or ended, or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
@@ -373,7 +375,9 @@ func offRosterPark(st *state.State, q string) (int, bool) {
 // resumeOffRoster ends the park of p, a session off the roster, and wakes it
 // by its session id with parkMessage, as resumeParked does an agent. A
 // session that is gone gets no wake and one line, its records back to the
-// board; a wake that fails otherwise puts the park back.
+// board; a wake that fails otherwise puts the park back. A session that
+// joined the roster since gets no wake: its park ended with that (an
+// agent's own park is its roster entry's).
 func (a *app) resumeOffRoster(ctx context.Context, by, p state.Party, force bool) error {
 	st, err := a.store.Read()
 	if err != nil {
@@ -385,6 +389,7 @@ func (a *app) resumeOffRoster(ctx context.Context, by, p state.Party, force bool
 		return refused("no resume: %s (--force resumes anyway)", block)
 	}
 	var park state.Park
+	var joined bool
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		k := slices.IndexFunc(st.Parks, func(x state.Park) bool { return x.By.Is(p) })
 		if k < 0 {
@@ -392,9 +397,13 @@ func (a *app) resumeOffRoster(ctx context.Context, by, p state.Party, force bool
 		}
 		park = st.Parks[k]
 		st.Parks = slices.Delete(st.Parks, k, k+1)
+		if onRoster(st, p) {
+			joined = true
+			return []state.Event{event(by, resumedEvent, "%s: its park off the roster ended when it joined the roster, nobody is woken: %s", p.Name, parkedText(&park, a.now))}, nil
+		}
 		return []state.Event{event(by, resumedEvent, "%s (off the roster): %s", p.Name, parkedText(&park, a.now))}, nil
 	})
-	if err != nil {
+	if err != nil || joined {
 		return err
 	}
 	werr := wakeOwner(a, ctx, by, wakeID(p), parkMessage(&park, by.Name), "")
