@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claim/claimtest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -42,6 +43,15 @@ func TestMain(m *testing.M) {
 	// Nor does a claim: every issue's thread is an empty one of its own; a
 	// test of the claims keeps its own.
 	claimGH = claimtest.New().GH
+	// Nor does a worker's note read its threads: every one is open, of no
+	// epic; a test of the supersede check stubs its own.
+	noteThreads = func(_ context.Context, rs []github.PR) (map[github.PR]github.Thread, error) {
+		m := make(map[github.PR]github.Thread, len(rs))
+		for _, r := range rs {
+			m[r] = github.Thread{State: github.Open}
+		}
+		return m, nil
+	}
 	// Nor does a browse move a window of the desktop's compositor; a test
 	// that places one stubs its own hyprctl.
 	hyprRunning = func() bool { return false }
