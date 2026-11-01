@@ -3558,3 +3558,57 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 		t.Fatalf("dry run started something: %d agents, %d starts", len(st.Agents), len(st.Starts))
 	}
 }
+
+// An explicitly unopened short window must not deadlock subscription starts.
+func TestParseUsageIdleFiveHour(t *testing.T) {
+	for _, tc := range []struct {
+		name, window string
+		wantError    bool
+	}{
+		{"unopened window", `{"usedPercent":null,"resetsAt":null}`, false},
+		{"missing usage", `{"resetsAt":null}`, true},
+		{"missing reset", `{"usedPercent":null}`, true},
+		{"empty", `{}`, true},
+		{"active unknown", `{"usedPercent":null,"resetsAt":"2026-11-01T12:00:00Z"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := parseUsageJSON([]byte(`{"fiveHour":` + tc.window + `,"sevenDay":{"usedPercent":73,"pace":80}}`))
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("accepted incomplete usage")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.FiveHour == nil || r.FiveHour.UsedPercent != 0 || !r.FiveHour.ResetsAt.IsZero() {
+				t.Fatalf("idle window = %+v", r.FiveHour)
+			}
+			if r.SevenDay == nil || r.SevenDay.UsedPercent != 73 || r.SevenDay.Pace == nil || *r.SevenDay.Pace != 80 {
+				t.Fatalf("weekly usage changed: %+v", r.SevenDay)
+			}
+		})
+	}
+	if _, err := parseUsageJSON([]byte(`{"sevenDay":{"usedPercent":null,"resetsAt":null}}`)); err == nil {
+		t.Fatal("accepted unknown weekly usage")
+	}
+}
+
+func TestIdleFiveHourProviderCapacity(t *testing.T) {
+	for _, weekly := range []float64{73, 85} {
+		r, err := parseUsageJSON([]byte(fmt.Sprintf(`{"fiveHour":{"usedPercent":null,"resetsAt":null},"sevenDay":{"usedPercent":%g,"pace":80}}`, weekly)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		provider := config.Provider{Floor: 1, Ceiling: 2, Usage: config.Usage{Command: []string{"reader"}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}}
+		view := buildSingleProviderView("claude", provider, providerAgents{}, providerReadingResult{reading: r, ok: true}, keepNow)
+		want := 2
+		if weekly > 80 {
+			want = 0
+		}
+		if view.Error != "" || view.High || view.Ceiling != want || view.Room != want {
+			t.Fatalf("weekly %g: idle capacity %+v", weekly, view)
+		}
+	}
+}
