@@ -581,6 +581,12 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 // (cutOwed), which the watch hands over from GitHub's answer. It returns
 // what it recorded, the cut runs and the lost merges.
 func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []state.Merge) {
+	return a.recordGateExits(ctx, false)
+}
+
+// recordGateExits also settles unreadable exits immediately when a worker
+// has just been stopped. Ordinary watch recovery retains its lost-run event.
+func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded, cut []string, lost []state.Merge) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, nil, nil
@@ -601,6 +607,9 @@ func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []st
 		var ok bool
 		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
 			r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1)
+			if r.unanswered != nil && !workerStopped {
+				continue
+			}
 		}
 		runs[m.Key()] = r
 	}
@@ -816,6 +825,6 @@ func (a *app) pullText(p github.Pull) string {
 // signalled. An unreadable outcome enters Settling under the usual rules.
 func (a *app) recordStoppedGates(ctx context.Context) {
 	if a.store != nil {
-		a.recordGone(ctx)
+		a.recordGateExits(ctx, true)
 	}
 }
