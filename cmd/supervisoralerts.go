@@ -155,7 +155,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 				break
 			}
 		}
-		if owned || waiting || staffed || done[key] || f.Severity != a.cfg.Alerts.PageSeverity || (a.cfg.Alerts.Team != "" && f.Team != a.cfg.Alerts.Team) {
+		if owned || waiting || staffed || done[key] || f.Severity != a.cfg.Alerts.PageSeverity {
 			continue
 		}
 		act := superloop.Action{Kind: loopAlertKind, Key: key}

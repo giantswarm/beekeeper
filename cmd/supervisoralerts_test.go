@@ -38,7 +38,7 @@ func TestLoopAlertPagesOnceAcrossRestartAndRefire(t *testing.T) {
 	}
 }
 
-func TestLoopAlertOwnedAndOtherTeamDoNotPage(t *testing.T) {
+func TestLoopAlertOwnedDoesNotPage(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	f := loopFiring()
@@ -54,12 +54,22 @@ func TestLoopAlertOwnedAndOtherTeamDoNotPage(t *testing.T) {
 	if len(st.Notes) != 0 {
 		t.Fatal("owned alert paged")
 	}
-	r.a.cfg.Alerts.Team = "another-team"
-	f.Key += "-new"
+}
+
+func TestLoopAlertRoutesVisiblePagesOfOtherTeams(t *testing.T) {
+	read := readLoopAlerts
+	r := newLoopRig(t)
+	readLoopAlerts = read
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
+	r.a.cfg.Alerts.Team = "desk-team"
+	f := loopFiring()
+	f.Team = "another-team"
+	w := r.a.newWatcher(false, false)
+	w.publishAlerts([]alerts.Firing{f})
 	r.pass(t)
-	st, _ = r.a.store.Read()
-	if len(st.Notes) != 0 {
-		t.Fatal("another team's alert paged")
+	st, err := r.a.store.Read()
+	if err != nil || len(st.Notes) != 1 {
+		t.Fatalf("watch-visible page was discarded: notes=%+v err=%v", st.Notes, err)
 	}
 }
 
