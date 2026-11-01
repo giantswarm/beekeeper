@@ -112,3 +112,22 @@ func TestLoopDoesNotReadAnUnresolvedParkAsPull(t *testing.T) {
 	}
 	r.pass(t)
 }
+
+// stubIssuePark keeps harness identity tests independent of GitHub credentials
+// while exercising the new reference resolution before their park is recorded.
+func stubIssuePark(t *testing.T, on string) {
+	t.Helper()
+	want, ok := parseRef(on)
+	if !ok {
+		t.Fatalf("bad fixture reference %q", on)
+	}
+	before, suggestions := refStates, readParkSuggestions
+	t.Cleanup(func() { refStates, readParkSuggestions = before, suggestions })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		if len(refs) != 1 || refs[0] != want {
+			t.Fatalf("park resolution %v, want %v", refs, want)
+		}
+		return map[github.PR]github.RefState{want: {Kind: github.RefIssue, State: github.Open}}, nil
+	}
+	readParkSuggestions = func(context.Context, github.PR) (string, error) { return "", nil }
+}
