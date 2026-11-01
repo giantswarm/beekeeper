@@ -1355,7 +1355,7 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 		_, turn := turnRunning(sessions, t, p, a.now)
 		return turn || loopInTurn(a, p) || inFlight(p)
 	}
-	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now), func(c chore) bool {
+	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
 	_, _, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")

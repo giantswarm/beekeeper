@@ -2362,7 +2362,17 @@ open timer that wakes the agent by name (`timer add --wake`) keeps it the same w
 is done. `agents` shows what keeps an entry in its KEPT column, `doctor --dry-run` names each kept
 entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board next` counts its
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
-returns the entry to `agents.staleAfter`. The doctor also reopens a worker whose session the desktop
+returns the entry to `agents.staleAfter`.
+
+A task holder with no running CLI or turn and no transcript or roster activity
+for `agents.staleAfter` is **gone**. Kept and parked agents, agents with a wake
+timer, and remote executions are protected. `capacity` releases its busy and
+provider slots; `agents` and the watch show its last activity. The doctor retires
+it through the usual archive path, ends its serve record so the board can offer
+its item again, and logs its unfinished task and latest hand-over note as an
+`agents.gone` event without asking for a decision. Before retirement, a wake, resume or
+new activity restores its slot. Setting `agents.staleAfter` negative disables
+stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
 
 A park on a pull request requests the supervisor loop's independent review only

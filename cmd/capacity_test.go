@@ -72,7 +72,7 @@ func capacityRoster() (*state.State, []*claude.Session) {
 // runs are not counted.
 func TestCountAgents(t *testing.T) {
 	st, sessions := capacityRoster()
-	c := countAgents(st, sessions, keepNow)
+	c := countAgents(st, sessions, keepNow, nil)
 	want := agentCount{
 		Busy:   []string{busyOne, busyTwo},
 		Parked: []string{"Judge (kept: a person returns to it)", "BK 3 (timer #7 wakes it)", "BK 4 (waits on its person)"},
@@ -83,7 +83,7 @@ func TestCountAgents(t *testing.T) {
 	}
 	// The successor of an open relay is the role's, not a worker.
 	st.Relay = &state.Relay{To: st.Agents[2].Party, Expires: keepNow.Add(time.Minute)}
-	if c := countAgents(st, sessions, keepNow); !slices.Equal(c.Busy, []string{busyTwo}) {
+	if c := countAgents(st, sessions, keepNow, nil); !slices.Equal(c.Busy, []string{busyTwo}) {
 		t.Errorf("busy with a relay open to %s: %v", busyOne, c.Busy)
 	}
 }
@@ -103,7 +103,7 @@ func TestCountAgentsWaiting(t *testing.T) {
 		{ID: "s-Fresh", LastActive: keepNow.Add(-time.Minute), Commands: []claude.Command{sleep}},
 		{ID: "s-Build", LastActive: quiet, Commands: []claude.Command{sleep, {Args: "go test ./..."}}},
 	}
-	c := countAgents(st, sessions, keepNow)
+	c := countAgents(st, sessions, keepNow, nil)
 	if want := []string{"Fresh", "Build"}; !slices.Equal(c.Busy, want) {
 		t.Errorf("busy %v, want %v", c.Busy, want)
 	}
@@ -222,7 +222,7 @@ func TestCapacityVerdict(t *testing.T) {
 // overrides: a busy build slot refuses only a start that builds.
 func TestGateStart(t *testing.T) {
 	k := config.Capacity{Floor: 5, Ceiling: 10}
-	three := countAgents(supervised(3), nil, keepNow)
+	three := countAgents(supervised(3), nil, keepNow, nil)
 	slotBusy := roomy()
 	slotBusy.SlotsFree = 0
 	for _, c := range []struct {
@@ -344,7 +344,7 @@ func TestPromptCapacity(t *testing.T) {
 // with the waiters still ahead.
 func TestQueueStart(t *testing.T) {
 	k := config.Capacity{Floor: 5, Ceiling: 10}
-	three := countAgents(supervised(3), nil, keepNow)
+	three := countAgents(supervised(3), nil, keepNow, nil)
 	slotBusy := roomy()
 	slotBusy.SlotsFree = 0
 	tightBusy := tight()
@@ -413,7 +413,7 @@ func TestDryRunSlotNamesTheWait(t *testing.T) {
 func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	zero := config.Capacity{Floor: 0, Ceiling: 0}
 	for _, n := range []int{0, 2} {
-		v := newCapacity(countAgents(supervised(n), nil, keepNow), zero, roomy(), false)
+		v := newCapacity(countAgents(supervised(n), nil, keepNow, nil), zero, roomy(), false)
 		if got := v.verdict(); got != noStartCeilingZero || v.Room != 0 {
 			t.Errorf("%d busy at ceiling 0: verdict %q (room %d), want %q", n, got, v.Room, noStartCeilingZero)
 		}

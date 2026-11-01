@@ -33,7 +33,7 @@ func remoteTasked(name string) state.Agent {
 func TestLocalCeilingCountsOnlyThisMachine(t *testing.T) {
 	st := supervised(3)
 	st.Agents = append(st.Agents, remoteTasked("remote 1"), remoteTasked("remote 2"))
-	c := countAgents(st, nil, keepNow)
+	c := countAgents(st, nil, keepNow, nil)
 	if len(c.Busy) != 5 {
 		t.Fatalf("busy %v, want the three local and two remote agents", c.Busy)
 	}

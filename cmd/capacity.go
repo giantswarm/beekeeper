@@ -404,6 +404,7 @@ type agentCount struct {
 	Parked  []string `json:"parked"`
 	Waiting []string `json:"waiting"`
 	Idle    []string `json:"idle"`
+	Gone    []string `json:"gone"`
 }
 
 // waitQuiet is how long a session whose tool commands only wait must have
@@ -413,8 +414,9 @@ const waitQuiet = 5 * time.Minute
 
 // countAgents sorts st's roster at now; sessions say which agents wait on
 // their person or in a wait of their own (none known without them).
-func countAgents(st *state.State, sessions []*claude.Session, now time.Time) agentCount {
-	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}}
+func countAgents(st *state.State, sessions []*claude.Session, now time.Time, cfg *config.Config) agentCount {
+	cfg, staleAfter := rosterConfig(cfg)
+	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}, Gone: []string{}}
 	sup, guide := st.SupervisorRole(), st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
@@ -435,6 +437,10 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 		}
 		if k := keptBy(st, ag, now); k != "" {
 			c.Parked = append(c.Parked, fmt.Sprintf("%s (%s)", ag.Name, k))
+			continue
+		}
+		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone {
+			c.Gone = append(c.Gone, fmt.Sprintf("%s (last activity %s)", ag.Name, last.UTC().Format(time.RFC3339)))
 			continue
 		}
 		s, live := claude.Live(sessions, p)
@@ -459,7 +465,8 @@ type providerAgents struct {
 	BucketBusy  map[string][]string
 }
 
-func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time) map[string]providerAgents {
+func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time, cfg *config.Config) map[string]providerAgents {
+	cfg, staleAfter := rosterConfig(cfg)
 	out := make(map[string]providerAgents, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
@@ -505,6 +512,9 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 		}
 		s, live := claude.Live(sessions, p)
 		if live && (s.Waiting != nil || s.OwnWait(now, waitQuiet) != "") {
+			continue
+		}
+		if _, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone {
 			continue
 		}
 		harness, model := agentHarnessModel(st, sessions, ag)
@@ -642,7 +652,11 @@ func (c agentCount) line(k config.Capacity) string {
 	if len(c.Busy) > 0 {
 		s += ": " + strings.Join(c.Busy, ", ")
 	}
-	return s + fmt.Sprintf("; %d parked, %d waiting, %d idle", len(c.Parked), len(c.Waiting), len(c.Idle))
+	s += fmt.Sprintf("; %d parked, %d waiting, %d idle", len(c.Parked), len(c.Waiting), len(c.Idle))
+	if len(c.Gone) > 0 {
+		s += "; gone: " + strings.Join(c.Gone, ", ")
+	}
+	return s
 }
 
 // headroom is what bounds a new start: MemAvailable, disk swap's growth
@@ -1606,8 +1620,8 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 	if now.IsZero() {
 		now = time.Now()
 	}
-	c := countAgents(st, sessions, now)
-	pa := countProviderAgents(st, sessions, k, now)
+	c := countAgents(st, sessions, now, a.cfg)
+	pa := countProviderAgents(st, sessions, k, now, a.cfg)
 	readings := make(map[string]providerReadingResult, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
@@ -1884,7 +1898,7 @@ nothing; it makes no GitHub call.`,
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted)).withLocal(st, liveCap).stopped(a, st.Stop)
 			} else {
-				c := countAgents(st, sessions, a.now)
+				c := countAgents(st, sessions, a.now, a.cfg)
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop)
 			}
@@ -2252,7 +2266,7 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st.Stop), nil
 	}
-	c := countAgents(st, sessions, a.now)
+	c := countAgents(st, sessions, a.now, a.cfg)
 	k, u := a.resolveUsage(ctx, liveCap)
 	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop), nil
 }
@@ -2301,7 +2315,7 @@ func (w *watcher) keepSwap(r *swapReading) {
 func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*claude.Session) {
 	live := w.liveCapacity()
 	k, u := w.currentUsage(live, w.now)
-	c := countAgents(st, sessions, w.now)
+	c := countAgents(st, sessions, w.now, w.cfg)
 	busy := len(c.Busy)
 	// A configured capacity.ceiling of 0 keeps both lines silent even when
 	// the derived ceiling is positive (a self-hosted provider's own ceiling

@@ -1327,8 +1327,8 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		}
 	}
 
-	c := countAgents(st, sessions, w.now)
-	pa := countProviderAgents(st, sessions, k, w.now)
+	c := countAgents(st, sessions, w.now, w.cfg)
+	pa := countProviderAgents(st, sessions, k, w.now, w.cfg)
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if !p.SelfHosted() {

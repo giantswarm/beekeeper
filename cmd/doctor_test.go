@@ -36,6 +36,7 @@ func TestPlanChores(t *testing.T) {
 	done.Done, doneBusy.Done = true, true
 	task, doneTask := agent("task", 48*time.Hour), agent("done-task", time.Minute)
 	task.Task, doneTask.Task, doneTask.Done = "a task", "a new task", true
+	task.AssignedAt = now
 	st := &state.State{
 		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
 			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0), doneTask},
@@ -60,7 +61,7 @@ func TestPlanChores(t *testing.T) {
 	}
 	busy := func(p state.Party) bool { return p.Session == "done-busy" }
 	var got []string
-	for _, c := range planChores(st, sessions, record, busy, 24*time.Hour, now) {
+	for _, c := range planChores(st, sessions, record, busy, 24*time.Hour, now, nil) {
 		got = append(got, c.String())
 	}
 	want := []string{
@@ -72,7 +73,7 @@ func TestPlanChores(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("chores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if c := planChores(st, sessions, record, busy, 0, now); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
+	if c := planChores(st, sessions, record, busy, 0, now, nil); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
 		t.Errorf("staleAfter 0 takes no stale agent off: %v", c)
 	}
 }
@@ -137,7 +138,7 @@ func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, now)
+	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, now, nil)
 	var got []string
 	for _, c := range chores {
 		got = append(got, c.String())

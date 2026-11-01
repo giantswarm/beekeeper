@@ -98,7 +98,7 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 		t.Fatalf("agent %+v park %+v", ag, ag.Park)
 	}
 	st, _ := w.store.Read()
-	c := countAgents(st, nil, relayNow)
+	c := countAgents(st, nil, relayNow, nil)
 	if len(c.Busy) != 0 || len(c.Parked) != 1 || !strings.Contains(c.Parked[0], "parked on #3: Timo's answer on the rollout") {
 		t.Errorf("count %+v", c)
 	}

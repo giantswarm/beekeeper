@@ -376,7 +376,7 @@ func TestLoopFillPauseHoldsThroughRosterChurn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := countAgents(st, nil, r.a.now)
+		c := countAgents(st, nil, r.a.now, r.a.cfg)
 		out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: 5 - len(c.Busy), agentCount: c})
 		if err != nil {
 			t.Fatal(err)

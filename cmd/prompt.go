@@ -345,7 +345,7 @@ func (a *app) promptAgents(p printer, agents []state.Agent, sessions []*claude.S
 func (a *app) promptCapacity(p printer, st *state.State, sessions []*claude.Session) {
 	section(p, "Capacity", false, "")
 	k, u := a.cachedUsageCapacity(a.liveCapacity())
-	line := countAgents(st, sessions, a.now).line(k)
+	line := countAgents(st, sessions, a.now, a.cfg).line(k)
 	if u != nil && u.Error == "" {
 		line += "; " + u.capacitySuffix(a.now)
 	}

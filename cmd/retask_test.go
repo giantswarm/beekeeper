@@ -45,7 +45,7 @@ func TestRetaskedWorkerParksAgain(t *testing.T) {
 		t.Fatalf("re-tasked agent %+v", ag)
 	}
 	st, _ := w.store.Read()
-	if chores := planChores(st, nil, nil, func(state.Party) bool { return false }, 0, w.now); len(chores) != 0 {
+	if chores := planChores(st, nil, nil, func(state.Party) bool { return false }, 0, w.now, nil); len(chores) != 0 {
 		t.Errorf("the doctor plans %+v for a re-tasked worker", chores)
 	}
 
