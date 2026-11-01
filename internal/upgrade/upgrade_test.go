@@ -355,6 +355,9 @@ func TestLiftBackfillsTarget(t *testing.T) {
 	}
 }
 
+// marked is cluster-api-events' upgrading mark set.
+const marked = "true"
+
 // withMC returns the phase's objects with mc's annotations changed by set.
 func withMC(t *testing.T, phase string, set map[string]string) []Object {
 	t.Helper()
@@ -375,13 +378,13 @@ func withMC(t *testing.T, phase string, set map[string]string) []Object {
 // release, lifts on that reading.
 func TestStaleMark(t *testing.T) {
 	stamp := func(d time.Duration) string { return at.Add(-d).Format(time.RFC3339) }
-	marked := map[string]string{upgradingMark: "true", upgradeStartTime: stamp(10 * time.Minute)}
-	if ups := Detect(withMC(t, "0843-after", marked), at, func(string) bool { return false }); len(ups) != 1 || ups[0].Rolling {
+	mark := map[string]string{upgradingMark: marked, upgradeStartTime: stamp(10 * time.Minute)}
+	if ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return false }); len(ups) != 1 || ups[0].Rolling {
 		t.Errorf("a marked upgrade within its grace: %+v", ups)
 	}
 	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "mc"), Reason: "upgrade prod/mc ? → " + to, At: at.Add(-50 * time.Hour), UpgradeTo: to}}}
-	marked[upgradeStartTime], marked[lastKnownTime] = stamp(50*time.Hour), stamp(70*time.Hour)
-	ups := Detect(withMC(t, "0843-after", marked), at, func(string) bool { return true })
+	mark[upgradeStartTime], mark[lastKnownTime] = stamp(50*time.Hour), stamp(70*time.Hour)
+	ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return true })
 	if len(ups) != 0 {
 		t.Errorf("a stale mark upgrades: %+v", ups)
 	}
@@ -397,7 +400,7 @@ func TestStaleMark(t *testing.T) {
 // began is over, marked or not; one younger runs on.
 func TestStalled(t *testing.T) {
 	stamp := func(d time.Duration) string { return at.Add(-d).Format(time.RFC3339) }
-	for _, mark := range []string{"true", "false"} {
+	for _, mark := range []string{marked, "false"} {
 		young := map[string]string{upgradingMark: mark, upgradeStartTime: stamp(2 * time.Hour)}
 		if ups := Detect(withMC(t, "0827-during", young), at, func(string) bool { return true }); len(ups) != 1 {
 			t.Errorf("mark %s: a rollout of 2h ended: %+v", mark, ups)
@@ -418,7 +421,7 @@ func TestStalled(t *testing.T) {
 // though the previous one's mark is stale.
 func TestStaleMarkKeepsDueSchedule(t *testing.T) {
 	objs := withMC(t, "0843-after", map[string]string{
-		upgradingMark: "true", upgradeStartTime: at.Add(-50 * time.Hour).Format(time.RFC3339),
+		upgradingMark: marked, upgradeStartTime: at.Add(-50 * time.Hour).Format(time.RFC3339),
 		scheduleRelease: "35.2.0", scheduleTime: at.Add(-time.Minute).Format(time.RFC3339),
 	})
 	ups := Detect(objs, at, func(string) bool { return false })
