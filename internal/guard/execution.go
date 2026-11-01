@@ -96,6 +96,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 	default:
 		return ExecutionDeny("tool is not supported by the managed remote adapter; use component commands for notes and reports")
 	}
+	// The execution journal and tool identity above have already established
+	// this session as a managed worker, independent of the local starts roster.
+	h.Transcripts.Managed = func(string) (bool, error) { return true, nil }
 	return h.Decide(raw)
 }
 
@@ -249,7 +252,7 @@ func executionShell(command, workspace string, protected []string, depth int) er
 					refusal = errors.New("managed execution identity and configuration cannot be removed")
 				}
 			}
-		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", "omp":
+		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", ompCommand:
 			refusal = errors.New("harness and service lifecycle belongs to the coordinating component")
 		case "gh", "devctl":
 			args := executionVerb(words[1:])

@@ -153,7 +153,7 @@ func TestSkillsSuggestNoLongLeaseWait(t *testing.T) {
 // one-commit PR's commit message otherwise.
 func TestMergeSkillNamesTheSquashSubject(t *testing.T) {
 	merge := strings.Join(strings.Fields(Skill("merge")), " ")
-	if !strings.Contains(merge, `--squash --subject "<PR title> (#<n>)"`) {
+	if !strings.Contains(merge, `--squash --match-head-commit <reviewed-head-sha> --subject "<PR title> (#<n>)"`) {
 		t.Error("the merge skill does not name --subject for a personal account's merge")
 	}
 }
@@ -271,5 +271,31 @@ func TestWorkerRulesStateFullURLRuleOnce(t *testing.T) {
 	const want = "Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`."
 	if n := strings.Count(rules, want); n != 1 {
 		t.Errorf("the worker rules state %q %d times, want 1", want, n)
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1795: the guide asks each
+// waiting decision in the conversation the person reads; no skill assumes
+// a phone or a push notification reaches them.
+func TestTheGuideAsksWaitingDecisionsInItsConversation(t *testing.T) {
+	err := fs.WalkDir(Skills, SkillsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(Skills, path)
+		if err != nil {
+			return err
+		}
+		if lower := strings.ToLower(string(b)); strings.Contains(lower, "pushnotification") || strings.Contains(lower, "phone") {
+			t.Errorf("%s assumes a phone or a push notification reaches the person", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := strings.Join(strings.Fields(Skill("guide")), " ")
+	if !strings.Contains(guide, "in the question dialog of this conversation") || !strings.Contains(guide, "without waiting for them to ask") {
+		t.Error("the guide skill does not ask waiting decisions in its conversation")
 	}
 }

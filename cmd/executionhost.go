@@ -112,7 +112,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 }
 
 func (a *app) executionHook() guard.Hook {
-	return guard.Hook{Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
+	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
 
 func mustSelf() string { s, _ := os.Executable(); return s }
@@ -198,7 +198,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "run", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents publish", "agents merge", "run", "agents idle", "agents park", "agents note", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -288,7 +288,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return []*cobra.Command{hostRPC, guardCmd, run, a.executionCoordinatorCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
+	return []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -372,8 +372,14 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if err != nil {
 		return c, err
 	}
-	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Version != project.Version() || c.Harnesses[claudeComm] == "" {
-		return c, refused("execution host identity, protocol, binary, harness or policy does not match")
+	// Protocol is the wire compatibility boundary. The pinned host policy
+	// still binds its own binary and rules; a coordinator-only release must
+	// not invalidate that independently prepared policy.
+	if !c.Publication {
+		return c, refused("execution host lacks coordinator publication support; upgrade and prepare the host before starting workers")
+	}
+	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Harnesses[claudeComm] == "" {
+		return c, refused("execution host identity, protocol, harness or policy does not match")
 	}
 	if err := c.Resources.Validate(time.Now()); err != nil {
 		return c, refused("%v", err)

@@ -9,9 +9,15 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/state/kube"
+	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
 // fileCentral files a decision for bo from p's machine with note add, due
@@ -108,13 +114,15 @@ func TestEnvtestCentralNotesTwoPersons(t *testing.T) {
 		!strings.Contains(out, "note "+laneRef+" answered as "+boEmail+": own") {
 		t.Fatalf("bo's answer: exit %d: %s", code, out)
 	}
+	// bo's CLI calls as his agent: the central instance cannot tell his
+	// terminal from it, so his answer reaches ana as relayed.
 	msgs, _ := e.expect(t, e.as(t, anaToken), "receive_messages", map[string]any{}, false, "")["messages"].([]any)
 	if len(msgs) != 1 {
 		t.Fatalf("ana's mailbox %+v, want the answer", msgs)
 	}
 	raw, _ := json.Marshal(msgs[0].(map[string]any)["envelope"])
 	var env mailEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil || !strings.HasPrefix(env.Message.text(), fmt.Sprintf("NOTE ANSWERED #%d by %s: own", lane, boEmail)) {
+	if err := json.Unmarshal(raw, &env); err != nil || !strings.HasPrefix(env.Message.text(), fmt.Sprintf("NOTE ANSWERED #%d by %s (relayed by bo-agent): own", lane, boEmail)) {
 		t.Fatalf("ana's delivery %+v: %v", env, err)
 	}
 
@@ -260,5 +268,83 @@ func TestEnvtestCentralParkAndFold(t *testing.T) {
 	if len(parks) != 1 || parks[0].on != laneRef || !strings.HasPrefix(parks[0].answer, "note "+laneRef+" answered by ") ||
 		!strings.HasSuffix(parks[0].answer, ": own — until Friday") {
 		t.Fatalf("parks settled after bo's answer: %+v (watch: %s)", parks, watched.String())
+	}
+}
+
+// An answer before the first desk listing removes the note from that
+// listing. An unfinished create, in contrast, stays open and defaults.
+func TestEnvtestCentralNoteListingLifecycle(t *testing.T) {
+	e := newServeEnv(t)
+	decisionsVia(t, e, &fakeGateway{})
+	stubAnswerGH(t, &answerGH{})
+	m := centraltest.New(t, e.url, "beekeeper")
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, anaLaptop, anaAgent)
+	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
+	id := ana.fileCentral("Which lane before the first list?", "3h")
+	ref := fmt.Sprintf("lab#%d", id)
+	if out, code := bo.run("note", "answer", ref, "--choice", "2"); code != 0 {
+		t.Fatalf("answer: %d %s", code, out)
+	}
+	if out, code := ana.run("note", "list"); code != 0 || !strings.Contains(out, "no open notes") {
+		t.Fatalf("first listing after answer: %d %s", code, out)
+	}
+	if out, code := ana.run("note", "done", ref); code != ExitRefused {
+		t.Fatalf("withdraw answered: %d %s", code, out)
+	}
+	scheme, err := kube.Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ctrlclient.New(e.rc, ctrlclient.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	filer := v1alpha1.Party{Name: anaAgent, Person: anaEmail, Team: ourTeam, Host: anaLaptop}
+	orphan := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: "beekeeper-bumblebee", Name: "note-999"}, Spec: v1alpha1.NoteSpec{ID: 999, Filer: &filer, FiledAt: ptrTime(now), For: "bo", Kind: noteDecision, Text: "Keep the release unpublished?", Due: ptrTime(now.Add(time.Hour)), Default: ownLane}}
+	if err := c.Create(context.Background(), orphan); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := bo.run("note", "list"); code != 0 || !strings.Contains(out, "lab#999") {
+		t.Fatalf("unfinished create listing: %d %s", code, out)
+	}
+	if out, code := bo.run("guide", "queue", "--full"); code != 0 || !strings.Contains(out, "lab#999") {
+		t.Fatalf("unfinished create queue: %d %s", code, out)
+	}
+	if err := e.srv.defaultDue(context.Background(), now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.store.Read()
+	if err != nil || len(st.Defaulted) != 1 || st.Defaulted[0].ID != 999 || st.Defaulted[0].By.Person != anaEmail {
+		t.Fatalf("defaulted state: %+v %v", st, err)
+	}
+}
+
+func ptrTime(t time.Time) *metav1.Time { v := metav1.NewTime(t); return &v }
+
+// An expired central default remains distinguishable from an unknown note,
+// including through the desk's note_answer call and after its Event expires.
+func TestEnvtestCentralDefaultCloseReason(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{}
+	decisionsVia(t, e, gw)
+	m := centraltest.New(t, e.url, "beekeeper")
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, anaLaptop, anaAgent)
+	bo := newPerson(t, m, e.token(t, boEmail, "giantswarm:team-planeteers"), boEmail, piaTeam, "bo-laptop", "bo-agent")
+	id := ana.fileCentral("Which lane after expiry?", "1h")
+	if err := e.srv.defaultDue(context.Background(), e.srv.now().Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// Advance the default's late-answer window without touching production.
+	if err := e.srv.defaultDue(context.Background(), e.srv.now().Add(26*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	out, code := bo.run("note", "answer", fmt.Sprintf("lab#%d", id), "--choice", "1")
+	if code != ExitRefused || !strings.Contains(out, "closed by its default") || !strings.Contains(out, "expired") {
+		t.Fatalf("expired default answer: exit %d: %s", code, out)
+	}
+	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteDefaulted })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, fmt.Sprintf("#%d defaulted", id)) {
+		t.Fatalf("close log: %+v %v", evs, err)
 	}
 }

@@ -19,6 +19,8 @@ import (
 )
 
 type Journal struct {
+	Lease               *LeaseGrant   `json:"lease,omitempty"`
+	LeasePending        *LeaseRequest `json:"leasePending,omitempty"`
 	Completed           bool          `json:"completed,omitempty"`
 	Messages            MessageLedger `json:"messages,omitempty"`
 	ActivationAttempted bool          `json:"activationAttempted"`
@@ -139,6 +141,9 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := s.GuardProbe(); err != nil {
 		return c, err
 	}
+	if err := s.workerExecutable(); err != nil {
+		return c, err
+	}
 	h := s.Config.Harnesses[HarnessClaude]
 	if err := s.probe(ctx, h); err != nil {
 		return c, err
@@ -153,7 +158,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: map[string]string{HarnessClaude: h.Version}, Resources: resources}, nil
+	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: map[string]string{HarnessClaude: h.Version}, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -312,6 +317,7 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 		return Observation{}, err
 	}
 	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	o.Lease = j.Lease
 	o.Messages, o.MessageSequence = j.Messages.Status(), j.Messages.Sequence
 	if j.StopAcknowledged {
 		o.ProcessState = Exited
@@ -328,6 +334,13 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	case unitActive, Activating, "reloading", "deactivating":
 		o.ProcessState = Running
 	case unitInactive, Failed:
+		if j.StopRequest != nil {
+			if err := s.update(ctx, r, func(current *Journal) error { current.StopAcknowledged, current.Phase = true, Exited; return nil }); err != nil {
+				return Observation{}, err
+			}
+			o.StopAcknowledged, o.ProcessState = true, Exited
+			return o, nil
+		}
 		if j.Phase == Failed {
 			o.ProcessState = Failed
 		} else if j.Ready {

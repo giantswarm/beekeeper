@@ -77,7 +77,7 @@ echo '` + doc + `'
 	wakes := filepath.Join(dir, "wakes")
 	call := exec.Command(timeout, "2", self, gateCmdName, "--", "devctl", "release", "wait", "o/r", "v1.2.3") //nolint:gosec // this test binary's copy
 	call.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", testWakesEnv+"="+wakes, "PATH="+bin,
-		"BEEKEEPER_CONFIG="+filepath.Join(dir, "none.yaml"), "XDG_STATE_HOME="+stateHome,
+		"BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
 		"CLAUDE_CODE_SESSION_ID=s1", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME="+ownerName)
 	stderr := &lines{}
 	call.Stderr = stderr

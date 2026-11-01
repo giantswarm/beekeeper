@@ -43,39 +43,46 @@ func TestRanksOfInheritsTheNearestRankedAncestor(t *testing.T) {
 	}
 }
 
-func TestByPriorityRanksFirstThenTheOrder(t *testing.T) {
-	cand := func(ref, step, epic, parent string) Candidate {
-		return Candidate{Item: Item{Ref: ref, Parent: parent}, Step: step, Epic: epic}
+func TestStatusThenBoardOrderDecideAndPriorityOnlyAnnotates(t *testing.T) {
+	// Every step has workScope, the setting that used to gate on the
+	// priority list: it is read and ignored.
+	o, err := ResolveOrder([]config.BoardStep{
+		{Name: inProgress, Status: []string{inProgress}, WorkScope: true},
+		{Name: upNext, Status: []string{upNext}, WorkScope: true},
+		{Name: backlogStep, Status: []string{backlog}, WorkScope: true},
+	}, statuses, []string{epic})
+	if err != nil {
+		t.Fatal(err)
 	}
-	cands := []Candidate{
-		cand("o/r#10", "In Progress remainder", ref1, ref1), // epic 1, unranked
-		cand("o/r#20", "In Progress remainder", ref2, ref2), // epic 2, rank 2
-		cand("o/r#30", "Up Next", "", "o/r#33"),             // grandchild of epic 3, rank 1
-		cand("o/r#40", "Backlog", "", ""),                   // unranked
-		cand(ref3, "Up Next", "", ""),                       // epic 3 itself
-		cand("o/r#21", "Backlog", "", ref2),                 // epic 2, behind #20 in the order
+	it := func(n int, status string) Item {
+		return Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: status, Created: days(5), Updated: days(1), Parent: "o/r#99"}
 	}
-	parent := func(ref string) string {
-		return map[string]string{"o/r#33": ref3}[ref]
-	}
-	ByPriority(cands, Ranks{ref3: 1, ref2: 2}, parent)
-	var got []string
-	for _, c := range cands {
-		got = append(got, strings.TrimSpace(c.Ref+" "+c.PriorityText()))
-	}
-	want := []string{
-		"o/r#30 priority 1 of epic o/r#3",
-		"o/r#3 priority 1",
-		"o/r#20 priority 2 of epic o/r#2",
-		"o/r#21 priority 2 of epic o/r#2",
-		"o/r#10",
-		"o/r#40",
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("ordered:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-	if w := cands[0].Why(); w != "Up Next, priority 1 of epic o/r#3" {
-		t.Errorf("Why = %q", w)
+	// The board's items in its position order, the statuses mixed.
+	snap := &Snapshot{Order: o, Statuses: statuses, Items: []Item{
+		it(30, backlog), it(20, upNext), it(11, inProgress), it(31, backlog), it(21, upNext), it(10, inProgress),
+	}}
+	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", "o/r#30", "o/r#31"}
+	for _, ranks := range []Ranks{nil, {"o/r#31": 1, "o/r#99": 2}} {
+		cands := Rank(snap, config.Board{People: []string{"me"}}, now)
+		Annotate(cands, ranks, func(string) string { return "" })
+		var got []string
+		for _, c := range cands {
+			if c.Skip != "" {
+				t.Errorf("ranks %v: %s skipped: %s", ranks, c.Ref, c.Skip)
+			}
+			got = append(got, c.Ref)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("ranks %v: order %v, want %v (Status, then the board's order)", ranks, got, want)
+		}
+		if len(ranks) > 0 {
+			if p := cands[5].PriorityText(); p != "priority 1" {
+				t.Errorf("o/r#31 annotated %q, want priority 1", p)
+			}
+			if p := cands[0].PriorityText(); p != "priority 2 of epic o/r#99" {
+				t.Errorf("o/r#11 annotated %q, want its epic's rank", p)
+			}
+		}
 	}
 }
 
@@ -241,9 +248,9 @@ func TestSetPriorityInsertsAndRenumbers(t *testing.T) {
 		list      string
 		mutations []string
 	}{
-		{"a new epic at the top moves the others down", issue5, 1, 0, 1, "1 o/r#5, 2 o/r#1, 3 o/r#2, 4 o/r#3", []string{"I5=1", "I1=2", "I2=3", "I3=4"}},
+		{"a new epic at the top moves the others down", issue5, 1, 0, 1, "1 o/r#5, 2 o/r#1, 3 o/r#2, 4 o/r#3", []string{"I5=1", rankOneSecond, "I2=3", "I3=4"}},
 		{"a new epic past the end is the end", issue5, 9, 0, 4, "1 o/r#1, 2 o/r#2, 3 o/r#3, 4 o/r#5", []string{"I5=4"}},
-		{"a ranked epic moves up", ref3, 1, 3, 1, "1 o/r#3, 2 o/r#1, 3 o/r#2", []string{"I3=1", "I1=2", "I2=3"}},
+		{"a ranked epic moves up", ref3, 1, 3, 1, "1 o/r#3, 2 o/r#1, 3 o/r#2", []string{"I3=1", rankOneSecond, "I2=3"}},
 		{"its own rank writes nothing", ref2, 2, 2, 2, listOf123, nil},
 		{"unset clears it and moves the ones below up", ref1, 0, 1, 0, "1 o/r#2, 2 o/r#3", []string{"I1 cleared", "I2=1", "I3=2"}},
 		{"unset of an unranked epic writes nothing", issue5, 0, 0, 0, listOf123, nil},
@@ -286,19 +293,19 @@ func TestSetPriorityAddsAnEpicOutsideTheBoardOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.To != 1 || p.Added || p.Team != teamX || listText(p.List) != "1 teemow/lab#7, 2 o/r#1" ||
-		!slices.Equal(f.mutations, []string{"add ISSUE", "I7=t1", "I7=1", "I1=2"}) {
+		!slices.Equal(f.mutations, []string{addPriorityIssue, "I7=t1", "I7=1", rankOneSecond}) {
 		t.Errorf("SetPriority of an epic outside the owner = %+v [%s], mutations %v", p, listText(p.List), f.mutations)
 	}
 	// A new item has no Kind yet: refused as no epic, the add GitHub's own.
 	f = &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: epic, offBoard: true}
 	_, err = priorityClient(f).SetPriority(context.Background(), labIssue7, 1)
 	var r *Refusal
-	if !errors.As(err, &r) || !strings.Contains(r.Reason, "no epic") || !slices.Equal(f.mutations, []string{"add ISSUE"}) {
+	if !errors.As(err, &r) || !strings.Contains(r.Reason, "no epic") || !slices.Equal(f.mutations, []string{addPriorityIssue}) {
 		t.Errorf("SetPriority of a new item = %v, mutations %v", err, f.mutations)
 	}
 	// GitHub refusing the add is the error, nothing ranked.
 	f = &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: epic, offBoard: true, refused: true}
-	if _, err := priorityClient(f).SetPriority(context.Background(), labIssue7, 1); err == nil || !strings.Contains(err.Error(), "Resource not accessible") || !slices.Equal(f.mutations, []string{"add ISSUE"}) {
+	if _, err := priorityClient(f).SetPriority(context.Background(), labIssue7, 1); err == nil || !strings.Contains(err.Error(), "Resource not accessible") || !slices.Equal(f.mutations, []string{addPriorityIssue}) {
 		t.Errorf("SetPriority whose add GitHub refuses = %v, mutations %v", err, f.mutations)
 	}
 }
@@ -353,3 +360,8 @@ func TestSetPriorityInTurnRepairsDuplicateRanks(t *testing.T) {
 		}
 	}
 }
+
+const (
+	rankOneSecond    = "I1=2"
+	addPriorityIssue = "add ISSUE"
+)

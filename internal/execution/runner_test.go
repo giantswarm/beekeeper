@@ -3,18 +3,23 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func TestRunnerUsesOwnedConversationAndCleanEnvironment(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution runner uses a Linux user service")
 	}
 	tests := []struct {
@@ -104,7 +109,7 @@ test "$input" = 'complete the fixture task'
 }
 
 func TestCallerPreservesIdentityAcrossLoginShell(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution identity uses Linux process ancestry")
 	}
 	shell, err := exec.LookPath("sh")
@@ -149,6 +154,257 @@ func TestExecutionCallerHelper(t *testing.T) {
 	}
 	if j.Request.Name != fixtureWorker || j.Request.Coordinator != fixtureCoordinator {
 		t.Fatal("incorrect worker identity after login shell")
+	}
+}
+
+func TestRunnerPinsWorkerContractToInstalledExecutable(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	// A stale copy elsewhere on the inherited PATH must not shadow the
+	// policy-bound executable the managed worker commands resolve to.
+	shadow := t.TempDir()
+	if err := os.WriteFile(filepath.Join(shadow, "beekeeper"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // fixture executable in the test's own temporary directory
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shadow+string(filepath.ListSeparator)+"/usr/bin:/bin")
+	f := testFixture(t)
+	ctx := context.Background()
+	child := filepath.Join(t.TempDir(), "fake-harness")
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+session=''
+while [ "$#" -gt 0 ]; do
+ if [ "$1" = '--session-id' ]; then session="$2"; shift; fi
+ shift
+done
+test "$(command -v beekeeper)" = '%s'
+input=$(cat)
+test "$input" = 'complete the fixture task'
+printf '{"type":"system","subtype":"init","session_id":"%%s"}\n' "$session"
+`, f.s.Executable)
+	if err := os.WriteFile(child, []byte(script), 0o700); err != nil { //nolint:gosec // executable fake harness in the test's own temporary directory
+		t.Fatal(err)
+	}
+	h := f.s.Config.Harnesses[HarnessClaude]
+	h.Executable = child
+	f.s.Config.Harnesses[HarnessClaude] = h
+	original := f.s.Command
+	f.s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+		if bin == child {
+			bin = fixtureClaudeExecutable
+		}
+		return original(ctx, dir, env, bin, args...)
+	}
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	f.r.RegistrationReceipt = Sign(f.r, f.key, f.s.now())
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Run(ctx, f.r.Ref); err != nil {
+		t.Fatalf("worker contract could not resolve the installed executable through the harness PATH: %v", err)
+	}
+}
+
+func TestCleanEnvironmentPinsComponentDirectory(t *testing.T) {
+	t.Setenv("PATH", "/usr/local/bin:/usr/bin")
+	component := filepath.Join(t.TempDir(), "per", "user", ".local", "bin", "beekeeper")
+	env := cleanEnvironment("/srv/auth", component)
+	var path string
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = v
+		}
+	}
+	dirs := filepath.SplitList(path)
+	if len(dirs) == 0 || dirs[0] != filepath.Dir(component) {
+		t.Fatalf("component directory is not first on PATH: %q", path)
+	}
+	count := 0
+	for _, d := range dirs {
+		if d == filepath.Dir(component) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("component directory appears %d times on PATH: %q", count, path)
+	}
+	t.Setenv("PATH", "")
+	env = cleanEnvironment("", component)
+	if !slices.Contains(env, "PATH="+filepath.Dir(component)) {
+		t.Fatalf("empty PATH gained no component directory: %v", env)
+	}
+	if got := filepath.SplitList(pathWithFirst("/a", "/a:/a:/b")); len(got) != 2 || got[0] != "/a" || got[1] != "/b" {
+		t.Fatalf("pathWithFirst kept duplicates: %v", got)
+	}
+}
+
+func TestCheckRefusesUnresolvableWorkerContract(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	tr := f.transport(t, nil)
+	if _, err := tr.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(f.s.Executable, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Check(ctx); err == nil || !strings.Contains(err.Error(), "no executable beekeeper") {
+		t.Fatalf("readiness accepted a worker contract that cannot execute: %v", err)
+	}
+	if err := os.Remove(f.s.Executable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Check(ctx); err == nil {
+		t.Fatal("readiness accepted a missing installation")
+	}
+	if _, err := tr.Start(ctx, f.r); err == nil || len(f.launcher.starts) != 0 {
+		t.Fatal("start launched a worker that cannot report or park")
+	}
+}
+
+func TestCheckRefusesShadowedBoundExecutable(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	dir := filepath.Dir(f.s.Executable)
+	bound := filepath.Join(dir, "beekeeper-v2")
+	if err := os.Rename(f.s.Executable, bound); err != nil {
+		t.Fatal(err)
+	}
+	// An older sibling under the command name the worker contract invokes:
+	// the runner prepends this directory, so a bare `beekeeper` would reach
+	// it instead of the executable the prepared policy binds.
+	if err := os.WriteFile(filepath.Join(dir, "beekeeper"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // stale sibling fixture in the test's own temporary directory
+		t.Fatal(err)
+	}
+	f.s.Executable = bound
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+	tr := f.transport(t, nil)
+	tr.Host.PolicyDigest = digest
+	if _, err := tr.Check(ctx); err == nil || !strings.Contains(err.Error(), "does not resolve to the bound execution host executable") {
+		t.Fatalf("readiness accepted a differently named bound binary shadowed by a stale sibling: %v", err)
+	}
+	if _, err := tr.Start(ctx, f.r); err == nil || len(f.launcher.starts) != 0 {
+		t.Fatal("start launched a worker whose bare commands reach a different executable")
+	}
+	// With the bound binary installed under the worker command name, the
+	// same host is ready again.
+	if err := os.Remove(filepath.Join(dir, "beekeeper")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(bound, filepath.Join(dir, "beekeeper")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Check(ctx); err != nil {
+		t.Fatalf("host with the bound installation under the worker command name refused: %v", err)
+	}
+}
+
+// A lease-expiry stop (and any stop of the runner's own unit) reaches the
+// runner as SIGTERM while its harness is still streaming. The runner must
+// record the stop as an orderly exit and return success, not lose the
+// terminal journal write to "execution journal is busy" and exit 1.
+func TestRunnerStopsOrderlyWhenItsUnitIsStoppedDuringATurn(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	f := testFixture(t)
+	ctx := context.Background()
+	child := filepath.Join(t.TempDir(), "fake-harness")
+	script := `#!/bin/sh
+set -eu
+session=''
+while [ "$#" -gt 0 ]; do
+ if [ "$1" = '--session-id' ]; then session="$2"; shift; fi
+ shift
+done
+input=$(cat)
+test "$input" = 'complete the fixture task'
+printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$session"
+exec sleep 30
+`
+	if err := os.WriteFile(child, []byte(script), 0o700); err != nil { //nolint:gosec // executable fake harness in the test's own temporary directory
+		t.Fatal(err)
+	}
+	h := f.s.Config.Harnesses[HarnessClaude]
+	h.Executable = child
+	f.s.Config.Harnesses[HarnessClaude] = h
+	original := f.s.Command
+	f.s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+		if bin == child {
+			bin = fixtureClaudeExecutable
+		}
+		return original(ctx, dir, env, bin, args...)
+	}
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	f.r.RegistrationReceipt = Sign(f.r, f.key, f.s.now())
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runnerDone := make(chan error, 1)
+	go func() { runnerDone <- f.s.Run(runCtx, f.r.Ref) }()
+	readyAt := time.Now().Add(10 * time.Second)
+	for {
+		j, err := f.s.Read(f.r.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.Ready {
+			break
+		}
+		if time.Now().After(readyAt) {
+			t.Fatal("fixture harness never became ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The expiry records its stop intent durably before stopping the owned
+	// unit, exactly as maintainLease does; the SIGTERM then arrives while the
+	// harness is still streaming.
+	grant, err := IssueLease(f.r.Ref, f.r.Coordinator, nil, LeaseRequest{Nonce: uuid.NewString()}, f.key, f.s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.expireLease(ctx, f.r.Ref, &grant); err != nil {
+		t.Fatal(err)
+	}
+	cancelRun()
+	var runErr error
+	select {
+	case runErr = <-runnerDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("runner never returned after its unit was stopped")
+	}
+	if runErr != nil {
+		t.Fatalf("lease-expiry stop failed the runner: %v", runErr)
+	}
+	j, err := f.s.Read(f.r.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Phase != Exited {
+		t.Fatalf("lease-expiry stop left phase %q, want %q (lastError %q)", j.Phase, Exited, j.LastError)
+	}
+	if j.StopRequest == nil || !strings.Contains(j.LastError, "coordinator lease expired") {
+		t.Fatalf("expiry not recorded in the journal: stop=%v lastError=%q", j.StopRequest, j.LastError)
 	}
 }
 

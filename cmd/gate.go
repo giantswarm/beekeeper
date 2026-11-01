@@ -199,7 +199,7 @@ code) instead of polling GitHub a second time. Whichever command it is, its outc
 the session that started it: the caller sees the output and exit code as
 ever while it listens, and when it no longer does (a merge whose caller
 was killed, a headless turn that ended, its CLI gone, a queued merge) the
-run wakes its owner, a registered agent, with one line: "<command> exit N:
+run wakes its owner, its session on the roster or off it, with one line: "<command> exit N:
 <reason> (output in <file>)", logged as devctl.unheard. A wait ends with
 its caller instead: its shell stopped (TaskStop), killed or gone with an
 ended turn, its devctl is stopped within a second and nobody is woken,
@@ -216,8 +216,10 @@ desktop: its gate and merge-child gone, running or a queued merge's own run
 still waiting) is recorded as cut (merge.cut, the watch's MERGE CUT line)
 at the watch's next poll after the start, and its owner woken the same way,
 once.
-An owner no longer on the roster is woken by no run. The outcome is owed in
-the state before it is handed over: one whose merge-child was killed on the
+An owner off the roster is woken by its session id, as agents wake does; one
+whose session is gone (no transcript, no harness process) gets no wake and
+one devctl.unheard line, and the issues it served go back to the board. The
+outcome is owed in the state before it is handed over: one whose merge-child was killed on the
 way, whose pull request GitHub did not answer for or whose wake the service
 manager refused stays owed, and the watch hands it over once it can (a try
 a minute, GitHub's answer awaited 30 minutes, given up after a day).
@@ -311,8 +313,7 @@ type gateRun struct {
 	// call read it (a fresh promote), else it is its place's.
 	candidate     string
 	candidateRead bool
-	// pinned says the promotion names its candidate (--version): devctl
-	// promotes that one whatever is newest when its turn comes.
+	// pinned says the promotion names its candidate (--version).
 	pinned bool
 	// central says the merge's lane queues in the central instance: joined
 	// once the merge has its place there, centralWhy what it waits for
@@ -581,9 +582,9 @@ func (g *gateRun) enqueue(why string) error {
 }
 
 // outcomeTo says where the outcome of a merge that runs on outside the call
-// goes: a wake of its owner, else the log.
+// goes: a wake of its owner's session, on the roster or off it, else the log.
 func (g *gateRun) outcomeTo() string {
-	if g.me.Session != "" {
+	if wakeID(g.me) != "" {
 		return fmt.Sprintf("its outcome wakes %q", g.me.Name)
 	}
 	return "its outcome is logged (beekeeper log --verb merged)"
@@ -803,10 +804,11 @@ func (g *gateRun) step() (string, error) {
 	return why, err
 }
 
-// checkCandidate refuses an unpinned promotion whose turn came, its place
-// running, when the newest release candidate is not the one it was queued for: it
-// would promote another worker's candidate. Its place leaves the lane and
-// its owner decides again.
+// checkCandidate refuses a promotion whose turn came, its place running,
+// when the newest release candidate is not the one it was queued or pinned
+// for: an unpinned promotion would promote another worker's candidate, and a
+// pinned one would cut a stable release older than the release candidates
+// already out. Its place leaves the lane and its owner decides again.
 func (g *gateRun) checkCandidate() error {
 	var now string
 	err := g.readRetrying("the release candidate of "+g.repo, func() (err error) {
@@ -1408,7 +1410,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		return why, nil
 	}
 	g.leaveCentral(g.ctx, settled, "rolled, HelmReleases of "+g.lane.Installation+" Ready")
-	if g.pr == 0 && !g.pinned {
+	if g.pr == 0 {
 		if err := g.checkCandidate(); err != nil {
 			return "", err
 		}
@@ -1803,6 +1805,9 @@ func (g *gateRun) record(base string, run childRun) error {
 	}
 	if output != "" {
 		note += ", output in " + output
+	}
+	if g.pr != 0 {
+		note += g.answerAuthority(fmt.Sprintf("%s#%d", g.repo, g.pr), time.Now().UTC())
 	}
 	r := runOutcome{rc: rc, reason: withInfra(runFailure(doc, lastLine(base+".log"), g.handCut()), g.infra)}
 	var ok bool

@@ -159,14 +159,18 @@ const (
 
 // ungated is a blocking devctl command the gate rewrite does not reach.
 type ungated struct {
-	what  string // the command: devctl pr merge
-	where string // the script /x/m.sh, python3's code (-c), the input bash reads
-	line  int
-	text  string // the line, trimmed
-	fixed string // the line with the gate written in; "" where it has no place
+	refusal string
+	what    string // the command: devctl pr merge
+	where   string // the script /x/m.sh, python3's code (-c), the input bash reads
+	line    int
+	text    string // the line, trimmed
+	fixed   string // the line with the gate written in; "" where it has no place
 }
 
 func (u *ungated) reason() string {
+	if u.refusal != "" {
+		return u.refusal
+	}
 	s := fmt.Sprintf("Refused: a %s in %s runs outside the gate (line %d: %s). Run it as its own Bash command line",
 		u.what, u.where, u.line, u.text)
 	if u.fixed == "" {
@@ -443,6 +447,9 @@ func kindOf(shell bool) textKind {
 // textUngated finds the first blocking devctl command in text that the gate
 // does not precede, as the text's kind runs it.
 func (h Hook) textUngated(text, where string, kind textKind) *ungated {
+	if why := h.hiddenDeskMerge(text, where, kind); why != "" {
+		return &ungated{refusal: why}
+	}
 	at, fix := -1, false
 	switch kind {
 	case textShell:

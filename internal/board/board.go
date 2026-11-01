@@ -130,10 +130,13 @@ type Candidate struct {
 	Match string `json:"match,omitempty"`
 	// Skip says why it is not free, empty when it is.
 	Skip string `json:"skip,omitempty"`
-	// Priority is the rank ByPriority applied, 0 for none; PriorityOf the
+	// Priority is the rank Annotate recorded, 0 for none; PriorityOf the
 	// epic it is the rank of, the candidate itself or an ancestor.
 	Priority   int    `json:"priority,omitempty"`
 	PriorityOf string `json:"priorityOf,omitempty"`
+	// Claim is another desk's claim of a free candidate that holds no
+	// more (stale): shown, not honoured.
+	Claim string `json:"claim,omitempty"`
 }
 
 // Why says why a free candidate is picked.
@@ -147,6 +150,9 @@ func (c Candidate) Why() string {
 	}
 	if p := c.PriorityText(); p != "" {
 		s += ", " + p
+	}
+	if c.Claim != "" {
+		s += "; a claim " + c.Claim
 	}
 	return s
 }

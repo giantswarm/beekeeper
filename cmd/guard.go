@@ -25,6 +25,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
@@ -66,12 +67,20 @@ func (a *app) slotView() (dir string, n int) {
 
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag, classFlag string
+	var localFlag bool
 	c := &cobra.Command{
-		Use:   "run [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
+		Use:   "run [--local] [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
 		Short: "Run a build, test or lint command in a build slot under a memory cap",
 		Long: `run takes one of the machine's build slots and runs the command in a
 transient systemd user scope in the slot's slice under memcap.slice, both
 with MemoryMax=SIZE and MemorySwapMax=0, the scope with OOMPolicy=continue.
+With run.remote.enabled, eligible Go and Cargo builds first try a reusable
+builder Job in the configured cluster. --local keeps worktree-writing commands
+local; formatters and compound shell commands stay local automatically. Setup
+failure falls back to the ordinary local slot. Once a remote command may have
+started, stream loss reconnects to its byte journal and never reruns it locally.
+See docs/remote-builds.md for configuration and the builder image contract.
+
 A run of a Claude Code session that holds a slot already (a lab proof in
 the background, a test suite in the foreground) takes no second slot: it
 joins the session's slot at once, its scope in the same slice, and shares
@@ -206,6 +215,17 @@ machine's files stay untouched.`,
 				}
 				o.Class = guard.DefaultClass(args)
 			}
+			// Per-run local resource/wait overrides retain their existing semantics.
+			// Remote pods use the desk-configured resources and placement bound.
+			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
+				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr}
+				if handled, rc := runner.Try(cmd.Context(), args); handled {
+					if rc != 0 {
+						return &exitError{code: rc}
+					}
+					return nil
+				}
+			}
 			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {
 				return &exitError{code: rc}
@@ -214,6 +234,7 @@ machine's files stay untouched.`,
 		},
 	}
 	c.Flags().SetInterspersed(false)
+	c.Flags().BoolVar(&localFlag, "local", false, "run in the local slot even when run.remote is enabled")
 	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&classFlag, "class", "", "the run's class: build takes a build slot, benchmark and lab take none (default build, lab for agentlab)")
@@ -297,6 +318,13 @@ the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
 machine kubeconfig. A configuration that does not load refuses every Bash
 call, naming the error.
+Every gh pr merge and gh api PUT of a pull request merge requires the
+supervisor loop's durable go for this worker and exact head, current green CI
+and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
+so GitHub enforces the checked head atomically. GraphQL merges and deferred
+auto-merges are refused; expose script merges as their own tool command.
+Successful preflight checks leave a merge.authorized event (not proof that
+the merge completed). This check is shared by Claude, agy and Codex.
 Every devctl pr merge gets "<this binary> gate --" in front of it (a
 background one "gate --wait 30m --limit 0 --"), the timeout raised the same way; see
 beekeeper lanes. That is behind prefix commands (flock <lock>, nohup, setsid,
@@ -515,6 +543,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				Apps:    a.allowedApps, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
+				h.MergeGo = a.hookMergeGo
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
@@ -529,6 +558,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
 				_, _ = w.Write(h.DecideCodex(raw))

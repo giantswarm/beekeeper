@@ -49,10 +49,30 @@ BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmod
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
 
+A Note stores its filer and filing time in its initial spec as well as status. Kubernetes
+creates the object and writes its status separately; if the latter fails, the note still
+lists as open and can be answered, withdrawn or closed by its default. Older objects
+without either status or spec provenance remain visible with their namespace's team and
+creation time, without an invented filer identity. Listing does not repair status during
+another object's update. Apply the generated Note CRD before running the new server so
+Kubernetes preserves these optional spec fields.
+
+`note list` and `guide queue` show open notes. An answer removes a note from both; a
+successful filing followed by an empty listing can mean it was answered between those
+calls. Check the server's `note_add` and `note_answer` audit lines before diagnosing a lost
+note. A failed central read emits a warning on stderr and preserves the local listing;
+`note list` also returns the central read's error, while `guide queue` serves the local queue.
+
 The `run` tests (`cmd/guard_test.go`) need zsh and a user systemd: they skip in CI and run on a
 desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the hook's rewrite runs
 the build under test, and each test starts its command in a scope of its own: on a guarded machine
 `go test` itself runs in a capped scope, where `run` takes no slot.
+
+`TestWatchStopsSandboxOrphan` additionally needs bubblewrap. It starts a real PID namespace,
+enters a scratch scope through the broker, and leaves a background child adopted by the sandbox
+init. Sandboxed `Capper.Reap` leaves cleanup to the host watch: the test proves a reporting-only
+watch preserves the child and an active watch stops its scope after the orphan grace period.
+Its scope and sandbox are stopped at test cleanup; no installed configuration is changed.
 
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
@@ -305,6 +325,74 @@ timer from the running watches.
 
 ## Automatic disk reclamation
 
+### Cache policies
+
+`disk.caches` lists the caches the disk step trims. Beekeeper's own caches are
+its default entries: `go-build` (mode `go`, cap `doctor.goCacheMaxGiB`),
+`sccache` (mode `sccache`, cap `disk.sccacheMaxGiB`) and `beekeeper-tmp`
+(`stateDir/tmp`, mode `entries`, `olderThan: 1h`). An entry with a built-in's
+name changes the fields it sets (`maxGiB`, `olderThan`, `path`); `mode: off`
+drops it. Any other entry needs a `path` and a rule:
+
+```yaml
+disk:
+  caches:
+    - path: ~/.cache/some-app       # each direct child is removed whole
+      olderThan: 7d                 # when nothing in it was written for a week
+      regenerable: true             # under disk pressure: everything older than 1h
+    - path: ~/.cache/pkg-manager
+      mode: files                   # single files, least recently written first
+      maxGiB: 2                     # until the cache fits two GiB
+    - path: ~/.cache/*-dev          # a glob: each match is a cache root
+      maxGiB: 1
+    - path: ~/.cache/tool
+      mode: command                 # the tool's own cleaner, which keeps its metadata
+      command: tool cache prune     # words, no shell; runs in the cache root
+      maxGiB: 4                     # over the budget, and under disk pressure
+```
+
+`path` is absolute or `~/…` and may be a glob; each match is a cache root. In
+`entries` mode (the default) a root's direct children are the units, each
+removed whole; in `files` mode its regular files, and directories a trim
+empties go with them. A unit untouched for `olderThan` (a Go duration or whole
+days, `7d`) goes; past `maxGiB` the least recently written go until the root
+fits; a `regenerable` cache drops everything older than an hour under disk
+pressure. In `command` mode beekeeper removes nothing itself: it runs the
+tool's cleaner (at most ten minutes) once the root holds more than `maxGiB`,
+and on every pressure run (without `maxGiB`, only those); the bytes it freed
+are measured after it, and a dry run says `cleaner would run`. A root inside another policy's root is governed by its own policy
+alone: the outer one neither counts nor removes the entry holding it. Whatever
+a policy says, the step keeps:
+
+- anything written within the last hour;
+- a unit any process of the user references (cwd, open file, mapping); in
+  `files` mode one reference anywhere in the root keeps the whole root;
+- a unit holding a `.git` (a checkout, so possibly uncommitted or unpushed
+  work); in `files` mode such a root is kept whole, and a root that is itself
+  a checkout is never trimmed;
+- a root that is a symbolic link, or that holds the home, the state directory,
+  a configured checkout or a worktree root;
+- everything while some process's references are unreadable.
+
+The scan of a large cache takes a while, so before removing anything the
+step reads the processes' references again, and right before it removes an
+entry it inspects that entry again: one a process opened meanwhile, one
+written since the scan, or one that now holds a checkout stays. A file is
+removed only if unchanged since the scan. The tools' own locks are only
+known to their cleaners: a cache whose tool locks it belongs in `command`
+mode.
+
+`beekeeper disk prune` (or `--dry-run`) lists each cache root with what it
+holds and would free; `--report` adds the largest entries of the user cache
+directory no policy covers, with their last write, so the list can be
+extended. A pressure run's `DISK PRUNE` line names the caches still holding
+the most, and when the disk is still under the free-disk floor after it, the
+largest directories (100 MiB or more) of the user cache directory no policy
+covers, with their last write. The supervisor's "Disk remains low after
+pruning" note carries the same.
+
+### The disk step
+
 `disk.prune: auto` is the default. A long-running watch runs the disk step
 hourly (`disk.every`) and within five minutes of `LOW DISK` or `DISK FILLING`.
 `watch --once` reports disk pressure without deleting anything. Watches share
@@ -315,9 +403,14 @@ and the reasons for keeping it. `beekeeper disk prune` previews the step;
 
 On healthy scheduled runs, the step trims only caches over their caps:
 `doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
-to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) clears sccache
-when exceeded. A negative cap disables its scheduled cleanup. Under
-`LOW DISK` or `DISK FILLING`, both unused caches are reclaimed immediately.
+to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) trims sccache's
+local cache (`SCCACHE_DIR`, else `sccache` in the user's cache directory) the
+same way, least recently used entries first. A negative cap disables its
+scheduled cleanup. Under `LOW DISK` or `DISK FILLING`, both unused caches are
+reclaimed immediately. An idle sccache server is stopped first, through its
+own executable and server address (`sccache --stop-server`), so it counts
+the trimmed cache afresh when a build starts it again; a server that does not
+stop keeps the cache, and one that starts during the trim ends it.
 No cache is reclaimed while builds use it. New
 `beekeeper run` commands share a build-cache lock, including Rust builds and
 runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
@@ -376,9 +469,14 @@ inspected. `disk.trashDirs` adds other trash places; its default also
 includes the XDG state root's `trash` directory.
 Recent descendants, open files, working directories, executable mappings
 and build/temp environment references keep entries alive. Symbolic links
-and directories containing checkout metadata are kept. Unreadable
-dumpable user-process references, unknown process ownership or an unreadable
-process root stop the disk step. Expected kernel permission denials on
+and directories containing checkout metadata are kept. An unreadable
+process root stops the disk step. A process with unreadable dumpable
+references or unknown ownership does not: the step it gates (caches, tmp,
+one worktree, trash) keeps its candidates as `process references unknown`,
+the `DISK PRUNE` line names the process, and the next step reads the
+processes again. An exited zombie holds no references and is skipped; a
+zombie thread-group leader is read through its live threads
+(`/proc/<pid>/task/<tid>`). Expected kernel permission denials on
 non-dumpable helpers or helpers with different credentials or capabilities
 do not stop pruning; their readable references still protect data. Ownership
 of ptrace-gated child entries detects changes in dumpability even when the
@@ -389,3 +487,21 @@ process directory still has its original owner.
 on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
 freeing (`doctor.freeEvery`) and Docker reclamation remain independent
 in both modes.
+
+## Central note closure audit
+
+A central Note closes only with a recognised close event (`answer.recorded`,
+`note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
+line atomically with the outcome. Closed Notes remain as history, outside the
+open notes and the 24-hour default-answer window, for 30 days after closure.
+Note-only updates, including the periodic default tick, collect older closed
+records; unrelated object updates leave collection to that tick. Cleanup first
+preserves the note counter, so expired numbers are never issued again.
+`beekeeper log` includes the retained line even after Kubernetes Events expire
+or an Event write fails. An answer after the default-answer window explicitly
+reports that the note was closed by its default. Folding a new question into an
+open note leaves the existing note open and logs `note.folded`.
+
+The original trigger of an already missing note cannot be recovered once its
+old logs and Events have expired. Retaining the close record makes subsequent
+closures attributable without relying on that retention window.

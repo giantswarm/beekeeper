@@ -508,7 +508,6 @@ func TestSkipKind(t *testing.T) {
 		"epic in planning (Up Next), no plan pull request names it: its planning session's": kindPlanning,
 		"board fields unknown: projectItems: Resource limits for this query exceeded.":      kindUnknown,
 		"sub-issues unknown: issue.subIssues: Resource limits for this query exceeded.":     kindUnknown,
-		board.OutOfScope:                      kindScope,
 		oldBacklog:                            kindOrder,
 		"no step of board.order offers Inbox": kindOrder,
 		"blocker cleared takes items with recorded blockers, it has none": kindOrder,

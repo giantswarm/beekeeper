@@ -13,9 +13,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -80,8 +82,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
-	exclude := append(slices.Clone(o.Exclude), "agy", "omp", "codex")
-	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
+	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, o.Exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
 	if o.Harness == harnessAuto {
 		choice, err := pickAutoChoice(verdict, o.Force)
 		if err != nil {
@@ -106,7 +107,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
-	r := execution.StartRequest{Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. To merge upstream changes without a GitHub credential on this host, use `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
+	r := execution.StartRequest{LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
@@ -124,7 +126,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if len(k.Providers) > 0 && !reflect.DeepEqual(k.Providers, a.liveCapacity().Providers) {
 			return nil, refused("provider configuration changed during admission; retry")
 		}
-		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), r.Harness, r.Model)
+		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, o.Exclude, startKind(o.Review, o.ReviewOfSelfHosted), r.Harness, r.Model)
 		over, err := gateStart(v, o.Force)
 		if err != nil {
 			return nil, err
@@ -146,7 +148,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		current.Agents[len(current.Agents)-1].Execution = &ref
 		events := []state.Event{event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider)}
 		if over != "" {
-			events = append(events, event(by, "agents.start", "%s: started over %s (--force)", name, over))
+			events = append(events, event(by, verbStart, "%s: started over %s (--force)", name, over))
 		}
 		return events, nil
 	})
@@ -178,6 +180,10 @@ func (a *app) executionReadings(ctx context.Context, k config.Capacity) map[stri
 }
 
 func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k config.Capacity, host execution.Host, resources execution.Resources, readings map[string]providerReadingResult, legacy *usageView, builds bool, exclude []string, kind startFor, harness, model string) *capacityView {
+	// A host runs only the harnesses it has an adapter for: its verdict
+	// weighs those choices alone, so a choice it cannot run never shows as
+	// its room.
+	exclude = append(slices.Clone(exclude), hostUnsupportedHarnesses...)
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
@@ -186,7 +192,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
 		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now), k, readings, h, false, exclude, kind, a.now)
 	} else {
-		v = newCapacity(counts, k, h, false).withUsage(legacy, a.now)
+		v = newStartCapacity(counts, k, h, false, kind).withUsage(legacy, a.now)
 	}
 	v = v.forTarget(k, harness, model)
 	v.Builds = builds
@@ -207,6 +213,16 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 		v.Room = 0
 	}
 	return v.stopped(a, st.Stop)
+}
+
+// hostUnsupportedHarnesses are the harnesses an execution host has no
+// adapter for: a remote start runs Claude Code only. hostRunsHarness is
+// the other side, a harness a host runs ("" is Claude Code).
+var hostUnsupportedHarnesses = []string{harnessAgy, omp.Harness, codex.Harness}
+
+func hostRunsHarness(harness string) bool {
+	h := strings.TrimSpace(harness)
+	return h == "" || h == claudeComm
 }
 
 func executionReserved(st *state.State, ag state.Agent) bool {
@@ -368,7 +384,7 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		return refused("remote observation identity mismatch")
 	}
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		r, _ := executionRecord(st, ref)
+		r, i := executionRecord(st, ref)
 		if r == nil {
 			return nil, refused("execution is not registered")
 		}
@@ -397,12 +413,21 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		}
 		o.Reachability, o.ReachabilityAt = execution.Reachable, time.Now().UTC()
 		r.Observation = o
-		if o.Ready {
-			r.Phase = execution.Running
+		var evs []state.Event
+		switch r.Phase {
+		case executionPending, execution.Preparing, execution.Prepared, execution.Activating:
+			if o.Ready {
+				// The line every other harness's start leaves: the supervisor
+				// loop reads a claimed next start back from it and takes no
+				// second one after a restart. Logged once, on the first
+				// observation that confirms the run, start or recovery alike.
+				evs = append(evs, event(st.Starts[i].By, "agents.start", "%s: SSH execution %s on %s, workspace %s, %s", st.Starts[i].Name, ref.Execution, ref.Host, o.Handle.Workspace, o.ProcessState))
+				r.Phase = execution.Running
+			}
 		}
 		if o.ProcessState == execution.Exited || o.ProcessState == execution.Failed {
 			r.Phase = o.ProcessState
 		}
-		return nil, nil
+		return evs, nil
 	})
 }

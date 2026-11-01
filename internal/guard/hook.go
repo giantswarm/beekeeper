@@ -104,6 +104,9 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// MergeGo checks the durable supervisor go for this session and exact head.
+	MergeGo      func(session, repo string, pr int, head string) string
+	mergeSession string
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
 	// UnlockCommands are the person's own vault unlock helpers
@@ -113,6 +116,8 @@ type Hook struct {
 	// to the built-in SecretFiles (secret.files), globs allowed; no session
 	// reads them whole.
 	SecretFiles []string
+	// Transcripts protects private conversation stores and explicit session grants.
+	Transcripts TranscriptAccess
 	// ConfigErr is why the configuration did not load: every Bash call is
 	// refused with it, since the guards it configures cannot run.
 	ConfigErr error
@@ -280,6 +285,7 @@ func (h Hook) Decide(input []byte) []byte {
 }
 
 func (h Hook) decide(ev event) []byte {
+	h.mergeSession = ev.Session
 	if r := h.guideRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
@@ -320,6 +326,9 @@ func (h Hook) decide(ev event) []byte {
 		return h.taskStop(ev.Session, ev.ToolInput)
 	}
 	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.transcriptFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := h.secretFileRefusal(ev); r != "" {
@@ -370,11 +379,11 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.searchRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
-	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles)}).leak(cmd); l != nil {
-		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
-	}
 	if r := deleteRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
 	if r := h.goCacheRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})

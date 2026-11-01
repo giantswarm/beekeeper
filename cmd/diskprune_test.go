@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -300,5 +301,73 @@ func TestDiskPruneTmpAndTrashUseDescendantAge(t *testing.T) {
 		if exists(filepath.Join(base, "stale-disk-output")) || !exists(filepath.Join(base, "recent-disk-output")) {
 			t.Fatalf("output age policy failed: %s", r)
 		}
+	}
+}
+
+// An unreadable process keeps only the step decided while it is unreadable:
+// the run goes on, and later steps read the processes again.
+func TestDiskPruneUnknownProcessKeepsOnlyItsStep(t *testing.T) {
+	unknown := &proc.UnknownError{Processes: []proc.UnknownProcess{{PID: 42, Command: "sh", Err: errors.New("unreadable")}}}
+	for _, tc := range []struct {
+		name     string
+		unknownN int
+		kept     []string
+		pruned   func(diskMachine) []string
+	}{
+		{"every read", 99, []string{"caches: ", "caches and tmp: ", "trash: "}, func(diskMachine) []string { return nil }},
+		{"first read", 1, []string{"caches: "}, func(m diskMachine) []string {
+			return []string{filepath.Join(m.tmp[0], "dead"), filepath.Join(m.trash[0], "output")}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, m := diskFixture(t)
+			reads := 0
+			m.refresh = func() ([]string, bool, error) {
+				reads++
+				if reads <= tc.unknownN {
+					return nil, false, unknown
+				}
+				return nil, false, nil
+			}
+			r := a.pruneDisk(false, true, func() (diskMachine, error) { return m, nil })
+			if len(r.Errors) > 0 {
+				t.Fatalf("an unreadable process failed the run: %s", r)
+			}
+			for _, step := range tc.kept {
+				if r.Kept[step+keptReferencesUnknown] == 0 {
+					t.Errorf("%s kept no candidate: %s", step, r)
+				}
+			}
+			if !exists(filepath.Join(m.cache, "ab", "data")) {
+				t.Error("cache trimmed while references were unknown")
+			}
+			if !strings.Contains(r.String(), "references unknown: process 42 (sh)") {
+				t.Errorf("unreadable process not named: %s", r)
+			}
+			for _, p := range tc.pruned(m) {
+				if exists(p) {
+					t.Errorf("readable step kept %s", filepath.Base(p))
+				}
+			}
+			if tc.pruned(m) == nil && (!exists(filepath.Join(m.tmp[0], "dead")) || !exists(filepath.Join(m.trash[0], "output"))) {
+				t.Error("pruned while references were unknown")
+			}
+		})
+	}
+}
+
+func TestDiskPruneUnknownProcessKeepsRecheckedWorktree(t *testing.T) {
+	a, read, root := worktreeApp(t)
+	m, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.dirs = []string{filepath.Join(root, mergedPR)}
+	m.recheck = func() ([]string, error) {
+		return nil, &proc.UnknownError{Processes: []proc.UnknownProcess{{PID: 42, Err: errors.New("unreadable")}}}
+	}
+	r := a.pruneDisk(false, false, func() (diskMachine, error) { return diskMachine{trees: m}, nil })
+	if len(r.Errors) > 0 || !exists(m.dirs[0]) || r.trees.kept[keptReferencesUnknown] != 1 {
+		t.Fatalf("worktree of an unknown process: %s", r)
 	}
 }

@@ -3,23 +3,30 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const (
-	bgID      = "6f1c2a90-4b7e-4d21-9c0a-3e5f7a8b9c10"
-	bgShortID = "6f1c2a90"
-	bgName    = "FIX beekeeper 1670"
-	bgTask    = "Brief: start background sessions"
-	bgModel   = "opus"
+	bgDesktopFlag = "--desktop"
+	bgID          = "6f1c2a90-4b7e-4d21-9c0a-3e5f7a8b9c10"
+	bgShortID     = "6f1c2a90"
+	bgName        = "FIX beekeeper 1670"
+	bgTask        = "Brief: start background sessions"
+	bgModel       = "opus"
 )
 
 // bgCall is one claude --bg call the stub saw.
@@ -41,11 +48,22 @@ func stubBackground(t *testing.T, out string, rows ...bgSession) *[]bgCall {
 	var calls []bgCall
 	origRun, origList, origPoll := bgRun, bgList, bgPoll
 	t.Cleanup(func() { bgRun, bgList, bgPoll = origRun, origList, origPoll })
+	stopped := map[string]bool{}
 	bgRun = func(_ context.Context, dir string, env, argv []string) (string, error) {
 		calls = append(calls, bgCall{dir: dir, env: env, argv: argv})
+		if len(argv) == 3 && argv[1] == bgStopCmd {
+			stopped[argv[2]] = true
+		}
 		return out, nil
 	}
-	bgList = func(context.Context, string, []string, bool) ([]bgSession, error) { return rows, nil }
+	bgList = func(_ context.Context, _ string, _ []string, all bool) ([]bgSession, error) {
+		if all || len(stopped) == 0 {
+			return rows, nil
+		}
+		return slices.DeleteFunc(slices.Clone(rows), func(r bgSession) bool {
+			return stopped[r.ID] || (len(r.SessionID) >= 8 && stopped[r.SessionID[:8]])
+		}), nil
+	}
 	bgPoll = time.Millisecond
 	return &calls
 }
@@ -340,7 +358,7 @@ func TestBackgroundAgentAsksTheDaemon(t *testing.T) {
 func TestModeBackgroundRefusesDesktopAndOmp(t *testing.T) {
 	brief := filepath.Join(t.TempDir(), "brief.md")
 	writeFile(t, brief, "# a task\n")
-	for _, extra := range [][]string{{"--desktop"}, {"--harness", "omp"}} {
+	for _, extra := range [][]string{{bgDesktopFlag}, {"--harness", "omp"}} {
 		a, _ := stubApp(t)
 		c := a.agentStartCmd()
 		c.SetArgs(append([]string{bgName, brief, modeFlag, config.ModeBackground}, extra...))
@@ -349,6 +367,39 @@ func TestModeBackgroundRefusesDesktopAndOmp(t *testing.T) {
 		if err := c.Execute(); !errors.As(err, &ee) || ee.code != ExitUsage || !strings.Contains(ee.msg, extra[0]) {
 			t.Errorf("%v: err = %v", extra, err)
 		}
+	}
+}
+
+func TestConfiguredBackgroundRefusesDesktop(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dryRun=%t", dryRun), func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.cfg.Agents.Mode = config.ModeBackground
+			c := a.agentStartCmd()
+			args := []string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			c.SetArgs(args)
+			c.SetContext(t.Context())
+			var ee *exitError
+			if err := c.Execute(); !errors.As(err, &ee) || ee.code != ExitUsage || !strings.Contains(ee.msg, bgDesktopFlag) {
+				t.Fatalf("configured background desktop conflict: %v", err)
+			}
+		})
+	}
+}
+
+func TestDesktopModeOverridesConfiguredBackground(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.Agents.Mode = config.ModeBackground
+	c := a.agentStartCmd()
+	c.SetArgs([]string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag, modeFlag, config.ModeDesktop})
+	c.SetContext(t.Context())
+	// Reaching the brief read proves the explicit desktop mode passed
+	// validation without launching a session or consulting capacity.
+	if err := c.Execute(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("explicit desktop mode did not reach the brief read: %v", err)
 	}
 }
 
@@ -403,5 +454,266 @@ func TestAgentsRemoveStopsABackgroundStart(t *testing.T) {
 	remove(agentOne)
 	if len(*calls) != 0 || !strings.Contains(out.String(), "supervisor's or the guide's role") {
 		t.Errorf("the supervisor's session: calls %+v, output:\n%s", *calls, out)
+	}
+}
+
+// parkedResident names a parked background start whose turn ended, and
+// leaves a session in a turn, one not running, one its person started, a
+// resumable park, an agent on an execution host and the supervisor alone.
+func TestParkedResident(t *testing.T) {
+	now := time.Now()
+	idle := now.Add(-time.Hour)
+	park := &state.Park{At: idle, Waits: "the review"}
+	mk := func(n int) state.Party {
+		return state.Party{Session: fmt.Sprintf("6f1c2a90-0000-4000-8000-%012d", n), Name: fmt.Sprintf("agent %d", n)}
+	}
+	st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Name: agentOne, Session: "s1"}}}
+	var sessions []*claude.Session
+	add := func(p state.Party, bg bool, ag state.Agent, s *claude.Session) {
+		st.Starts = append(st.Starts, state.Start{Party: p, Background: bg})
+		ag.Party, ag.Task = p, bgTask
+		st.Agents = append(st.Agents, ag)
+		if s != nil {
+			s.ID, s.Name = p.Session, p.Name
+			sessions = append(sessions, s)
+		}
+	}
+	stopped := mk(1)
+	add(stopped, true, state.Agent{Park: park}, &claude.Session{LastActive: idle})
+	add(mk(2), true, state.Agent{Park: park}, &claude.Session{LastActive: now.Add(-time.Second)}) // just parked: its turn ends
+	add(mk(3), true, state.Agent{Park: park}, &claude.Session{LastActive: idle, Commands: []claude.Command{{PID: 9}}})
+	add(mk(4), true, state.Agent{Park: park}, &claude.Session{LastActive: idle, LastSubagent: now})
+	add(mk(5), true, state.Agent{Park: park}, nil) // already stopped
+	add(mk(6), false, state.Agent{Park: park}, &claude.Session{LastActive: idle})
+	add(mk(7), true, state.Agent{}, &claude.Session{LastActive: idle}) // not parked
+	add(mk(8), true, state.Agent{Park: &state.Park{At: idle, Resumable: now}}, &claude.Session{LastActive: idle})
+	add(mk(9), true, state.Agent{Park: park, Execution: &execution.Ref{}}, &claude.Session{LastActive: idle})
+	add(st.Supervisor.Party, true, state.Agent{Park: park}, &claude.Session{LastActive: idle})
+	got := parkedResident(st, sessions, &proc.Table{ByPID: map[int]*proc.Process{}}, now)
+	if len(got) != 1 || !got[0].Is(stopped) {
+		t.Errorf("parkedResident = %+v, want only %s", got, stopped.Name)
+	}
+}
+
+// argvs is the command lines of calls.
+func argvs(calls []bgCall) [][]string {
+	out := make([][]string, len(calls))
+	for i, c := range calls {
+		out[i] = c.argv
+	}
+	return out
+}
+
+// parkedBackground puts the background start p, parked on a desk review,
+// with its transcript in dir, on a's roster.
+func parkedBackground(t *testing.T, a *app, p state.Party, dir string) {
+	t.Helper()
+	// the transcript the resume continues
+	writeFile(t, filepath.Join(a.cfg.Claude.ProjectsDir, "-w", p.Session+".jsonl"), `{"type":"user","cwd":"`+dir+`"}`+"\n")
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: dir, At: time.Now(), Background: true})
+		st.Agents = append(st.Agents, state.Agent{Party: p, Task: bgTask})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := a.park(p, "", "the desk review"); err != nil || !strings.Contains(line, "The watch stops your background session once the turn ends") {
+		t.Fatalf("park: %q, %v", line, err)
+	}
+}
+
+// stubFresh makes *live the sessions a stop's last look reads.
+func stubFresh(t *testing.T, live *[]*claude.Session) {
+	t.Helper()
+	was := freshSessions
+	t.Cleanup(func() { freshSessions = was })
+	freshSessions = func(*app) ([]*claude.Session, *proc.Table, error) {
+		return *live, &proc.Table{ByPID: map[int]*proc.Process{}}, nil
+	}
+}
+
+// pollStop runs the watch's stop step on the state read now and live.
+func pollStop(t *testing.T, w *watcher, live []*claude.Session) {
+	t.Helper()
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.stopParked(t.Context(), st, live)
+}
+
+// A parked background session costs no memory: once its turn ended the
+// watch stops it (claude stop, once), and the park's resume continues it
+// from its transcript (claude --bg --resume) with what settled the wait.
+func TestParkedBackgroundSessionStopsAndResumes(t *testing.T) {
+	a, out := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	dir := t.TempDir()
+	p := state.Party{Session: bgID, Name: bgName}
+	parkedBackground(t, a, p, dir)
+	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now}}
+	stubFresh(t, &live)
+	calls := stubBackground(t, "")
+	pollStop(t, w, live) // its park's turn has not ended yet
+	if len(*calls) != 0 {
+		t.Fatalf("stopped in its turn: %q", argvs(*calls))
+	}
+	w.now = a.now.Add(time.Minute)
+	pollStop(t, w, live)
+	if len(*calls) != 1 || !slices.Equal((*calls)[0].argv[1:], []string{bgStopCmd, bgShortID}) {
+		t.Fatalf("calls %q", argvs(*calls))
+	}
+	if !strings.Contains(out.String(), `PARKED SESSION STOPPED "`+bgName+`"`) {
+		t.Errorf("output:\n%s", out)
+	}
+	if evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == parkStoppedEvent }); err != nil || len(evs) != 1 {
+		t.Errorf("events %+v, %v", evs, err)
+	}
+	*calls, live = nil, nil
+	pollStop(t, w, nil) // stopped: its CLI is gone
+	if len(*calls) != 0 {
+		t.Errorf("stopped twice: %q", argvs(*calls))
+	}
+
+	calls = stubBackground(t, "note: woke session "+bgShortID+" with its saved options.\nbackgrounded · "+bgShortID+" · "+bgName+"\n")
+	if err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, bgName); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 1 || !slices.Equal((*calls)[0].argv[1:3], []string{bgFlag, resumeFlag}) || (*calls)[0].argv[3] != bgID ||
+		!strings.Contains((*calls)[0].argv[4], "the desk review") || (*calls)[0].dir != dir {
+		t.Errorf("resume calls %q", argvs(*calls))
+	}
+}
+
+// A resume that lands between the watch's look and its stop (it ended the
+// park and sent its message to the running CLI) keeps the session running:
+// the stop looks again under the session's lock and finds no park.
+func TestParkedBackgroundStopAfterAResume(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	p := state.Party{Session: bgID, Name: bgName}
+	parkedBackground(t, a, p, t.TempDir())
+	a.now = a.now.Add(time.Minute)
+	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, PID: 4242, LastActive: a.now.Add(-time.Hour)}}
+	stubFresh(t, &live)
+	calls := stubBackground(t, "")
+	seen, err := a.store.Read() // the watch's look: parked and quiet
+	if err != nil {
+		t.Fatal(err)
+	}
+	woke := stubWakes(t) // the resume reaches the running CLI by name
+	if err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, bgName); err != nil || len(*woke) != 1 {
+		t.Fatalf("resume: %v, woke %v", err, *woke)
+	}
+	w.stopParked(t.Context(), seen, live)
+	if len(*calls) != 0 {
+		t.Errorf("the stop ended the CLI the resume woke: %q", argvs(*calls))
+	}
+	// Parked again on another wait, quiet: the look at the old park stops nothing either.
+	if _, err := a.park(p, "", "the next review"); err != nil {
+		t.Fatal(err)
+	}
+	w.stopParked(t.Context(), seen, live)
+	if len(*calls) != 0 {
+		t.Errorf("stopped on a park it did not see: %q", argvs(*calls))
+	}
+	pollStop(t, w, live)
+	if len(*calls) != 1 {
+		t.Errorf("the new park's stop: %q", argvs(*calls))
+	}
+}
+
+// A wake that comes while the stop runs waits for it, then resumes the
+// stopped session (claude --bg --resume) instead of sending to the CLI the
+// stop ends; a wake just made keeps the session running for stewardQuiet.
+func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	p := state.Party{Session: bgID, Name: bgName}
+	parkedBackground(t, a, p, t.TempDir())
+	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
+	stubFresh(t, &live)
+	stubBackground(t, "")
+	var mu sync.Mutex
+	var seq []string
+	var woken bool
+	done := make(chan error, 1)
+	bgRun = func(_ context.Context, _ string, _, argv []string) (string, error) {
+		mu.Lock()
+		seq = append(seq, argv[1])
+		mu.Unlock()
+		if argv[1] != bgStopCmd {
+			return "backgrounded · " + bgShortID + " · " + bgName + "\n", nil
+		}
+		if woken {
+			live = nil
+			return "", nil
+		}
+		woken = true
+		quiet := *a
+		quiet.out = io.Discard
+		go func() {
+			done <- quiet.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "your review", "")
+		}()
+		time.Sleep(200 * time.Millisecond) // the wake runs meanwhile, and waits
+		mu.Lock()
+		defer mu.Unlock()
+		seq = append(seq, "stopped")
+		live = nil
+		return "", nil
+	}
+	pollStop(t, w, live)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{bgStopCmd, "stopped", bgFlag}; !slices.Equal(seq, want) {
+		t.Errorf("calls %v, want %v", seq, want)
+	}
+
+	// Running again after the wake, quiet: the wake's stamp holds the stop off.
+	live = []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
+	seq = nil
+	a.now = time.Now()
+	pollStop(t, w, live)
+	if len(seq) != 0 {
+		t.Errorf("stopped just after its wake: %v", seq)
+	}
+	a.now = a.now.Add(time.Minute)
+	pollStop(t, w, live)
+	if !slices.Equal(seq, []string{bgStopCmd}) {
+		t.Errorf("calls %v", seq)
+	}
+}
+
+// A stop that fails leaves the session parked and running, says so, and is
+// tried again on the next poll.
+func TestParkedBackgroundStopFails(t *testing.T) {
+	a, out := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	p := state.Party{Session: bgID, Name: bgName}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: p, Dir: t.TempDir(), Background: true})
+		st.Agents = append(st.Agents, state.Agent{Party: p, Task: bgTask, Park: &state.Park{Waits: "x"}})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stubBackground(t, "")
+	var tries int
+	bgRun = func(context.Context, string, []string, []string) (string, error) {
+		tries++
+		return "no such session", errors.New("exit status 1")
+	}
+	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
+	stubFresh(t, &live)
+	for range 2 {
+		pollStop(t, w, live)
+	}
+	if tries != 2 || !strings.Contains(out.String(), `PARKED SESSION STAYS "`+bgName+`"`) || !strings.Contains(out.String(), "no such session") {
+		t.Errorf("tries %d, output:\n%s", tries, out)
 	}
 }

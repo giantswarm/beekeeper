@@ -565,14 +565,14 @@ func homeItem(id, project, owner string, number int, status string) string {
 }
 
 func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
-	for _, owner := range []string{"o", "personal"} {
+	for _, owner := range []string{"o", personalOwner} {
 		for _, nodes := range []string{"", homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U1", "Q", "other", 1, "Backlog") + "," + homeItem("U2", "R", "teemow", 2, "Backlog")} {
 			t.Run(owner+nodes, func(t *testing.T) {
 				f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + nodes + `]}}}}}`,
 					added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 				c := &Client{GH: f.run, Board: config.Board{Owner: owner, Project: 7, Team: "X"}}
 				mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
-				if err != nil || *mv != (Moved{Ref: labIssue7, To: inProgress, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{"add I7 to P", "I3=t1", "I3=s3"}) {
+				if err != nil || *mv != (Moved{Ref: labIssue7, To: inProgress, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{addIssue7, "I3=t1", "I3=s3"}) {
 					t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
 				}
 				if readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
@@ -584,14 +584,14 @@ func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 }
 
 func TestMoveCrossOwnerUsesGitHubPermissions(t *testing.T) {
-	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`,
+	f := &fakeGH{t: t, item: issue7OffBoard,
 		added: `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Resource not accessible by integration"}]}`}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	var refused *Refusal
 	if _, err := c.Move(context.Background(), labIssue7, "unknown"); !errors.As(err, &refused) || len(f.mutations) != 0 {
 		t.Fatalf("unknown status: %v; mutations %v", err, f.mutations)
 	}
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{"add I7 to P"}) {
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{addIssue7}) {
 		t.Fatalf("permission denied: %v; mutations %v", err, f.mutations)
 	}
 	f.mutations = nil
@@ -689,16 +689,16 @@ func TestRankAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 	// An organisation's issue on a personal account's board, and the reverse:
 	// both are added as Move adds them, GitHub deciding whether they may be.
 	for _, tc := range []struct{ owner, ref, repo string }{
-		{"personal", "org/engine#7", "org/engine"},
+		{personalOwner, "org/engine#7", "org/engine"},
 		{"o", labIssue7, labRepo},
 	} {
 		t.Run(tc.owner, func(t *testing.T) {
-			f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`, byIssue: map[string]string{"9": item9},
+			f := &fakeGH{t: t, item: issue7OffBoard, byIssue: map[string]string{"9": item9},
 				added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 			c := &Client{GH: f.run, Board: config.Board{Owner: tc.owner, Project: 7, Team: "X"}}
 			rk, err := c.Rank(context.Background(), tc.ref, Place{After: issue9})
 			if err != nil || *rk != (Ranked{Ref: tc.ref, Above: issue9, Added: true, Team: teamX}) ||
-				!slices.Equal(f.mutations, []string{"add I7 to P", "I3=t1", `I3 after "I9"`}) {
+				!slices.Equal(f.mutations, []string{addIssue7, "I3=t1", `I3 after "I9"`}) {
 				t.Fatalf("Rank = %+v, %v; mutations %v", rk, err, f.mutations)
 			}
 			if f.repos[0] != tc.repo {
@@ -707,10 +707,10 @@ func TestRankAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 		})
 	}
 	// GitHub refusing the add is the refusal, nothing else written.
-	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`, byIssue: map[string]string{"9": item9},
+	f := &fakeGH{t: t, item: issue7OffBoard, byIssue: map[string]string{"9": item9},
 		added: `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Resource not accessible by integration"}]}`}
-	c := &Client{GH: f.run, Board: config.Board{Owner: "personal", Project: 7, Team: "X"}}
-	if _, err := c.Rank(context.Background(), "org/engine#7", Place{Top: true}); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{"add I7 to P"}) {
+	c := &Client{GH: f.run, Board: config.Board{Owner: personalOwner, Project: 7, Team: "X"}}
+	if _, err := c.Rank(context.Background(), "org/engine#7", Place{Top: true}); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{addIssue7}) {
 		t.Errorf("Rank whose add GitHub refuses = %v; mutations %v", err, f.mutations)
 	}
 }
@@ -798,3 +798,9 @@ func TestClosesAsksInBatches(t *testing.T) {
 		t.Errorf("%d queries, closes %v", len(queries), got)
 	}
 }
+
+const (
+	personalOwner  = "personal"
+	addIssue7      = "add I7 to P"
+	issue7OffBoard = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`
+)

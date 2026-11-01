@@ -31,7 +31,7 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
-	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.ReviewHeadroom != 2 || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
 		t.Errorf("swap guard and capacity defaults = %s %d/%d %d %g %d", w.SwapWindow, k.Floor, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
@@ -309,7 +309,7 @@ func TestSecretFileRoots(t *testing.T) {
 	for name, raw := range map[string]string{
 		"relative": "secret: {fileRoots: [creds]}",
 		"the root": "secret: {fileRoots: [/]}",
-		"empty":    "secret: {fileRoots: [\"\"]}",
+		emptyCase:  "secret: {fileRoots: [\"\"]}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "c.yaml")
@@ -339,6 +339,9 @@ func TestParseTokens(t *testing.T) {
 const (
 	backstage = "giantswarm/backstage"
 	portal    = "portal-tools"
+	// Test case names shared by the config tests.
+	emptyCase = "empty"
+	unsetCase = "unset"
 )
 
 func TestLanes(t *testing.T) {
@@ -1014,12 +1017,206 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 		"unknown provider in choice": "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: agy, model: m}\n",
 		"choices without providers":  "capacity:\n  choices:\n    - {harness: claude, model: m}\n",
 		"missing model in choice":    "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: claude}\n",
-		"provider without command":   "capacity:\n  providers:\n    claude: {fiveHourMax: 90}\n",
+		"provider without command":   "capacity:\n  providers:\n    custom: {fiveHourMax: 90}\n",
 		"descending paceCaps":        "capacity:\n  providers:\n    claude:\n      command: [r]\n      paceCaps:\n        - {overBy: 10, ceiling: 2}\n        - {overBy: 5, ceiling: 1}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeTemp(t, bad)); err == nil {
 				t.Errorf("%s: loaded invalid config", name)
+			}
+		})
+	}
+}
+
+func TestReviewHeadroomConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+		bad   bool
+	}{
+		{"0", 0, false}, {"3", 3, false}, {"-1", 0, true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("capacity:\n  reviewHeadroom: "+tc.value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.reviewHeadroom") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Capacity.ReviewHeadroom != tc.want {
+				t.Fatalf("headroom %d, want %d", c.Capacity.ReviewHeadroom, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudeUsageDefault(t *testing.T) {
+	for _, raw := range []string{"capacity: {providers: {claude: {}}}\n", "capacity: {providers: {claude: {ceiling: 2}}}\n"} {
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers[ClaudeHarness]
+		if !slices.Equal(p.Command, DefaultClaudeUsageCommand) || !p.Enabled() || p.EffectiveEvery() != DefaultUsageEvery {
+			t.Fatalf("claude default: %+v", p)
+		}
+	}
+	c, err := Load(writeTemp(t, "capacity: {providers: {claude: {command: [custom-reader]}}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Capacity.Providers[ClaudeHarness].Command; !slices.Equal(got, []string{"custom-reader"}) {
+		t.Fatal(got)
+	}
+	c, err = Load(writeTemp(t, "{}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Capacity.Providers[ClaudeHarness]; ok {
+		t.Fatal("created an unconfigured Claude provider")
+	}
+}
+
+// A provider with only thresholds and a ceiling must receive its default
+// command before validation, just like an empty provider entry.
+func TestClaudeUsageDefaultWithThresholds(t *testing.T) {
+	const raw = `capacity:
+  floor: 5
+  ceiling: 14
+  providers:
+    claude:
+      ceiling: 10
+      fiveHourMax: 90
+      sevenDayMax: 97
+    codex:
+      ceiling: 6
+      fiveHourMax: 92
+      sevenDayMax: 97
+  choices:
+    - {harness: claude, model: claude-opus-5-5}
+    - {harness: codex, model: gpt-6.1-sol}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatalf("threshold-only provider must validate: %v", err)
+	}
+	claude := c.Capacity.Providers[ClaudeHarness]
+	if !claude.Enabled() || !slices.Equal(claude.Command, DefaultClaudeUsageCommand) {
+		t.Fatalf("threshold-only Claude provider did not use /usage default: %+v", claude)
+	}
+	if claude.Ceiling != 10 || claude.FiveHourMax != 90 || claude.SevenDayMax != 97 {
+		t.Fatalf("Claude thresholds were changed by defaulting: %+v", claude)
+	}
+	codex := c.Capacity.Providers[CodexHarness]
+	if !slices.Equal(codex.Command, DefaultCodexUsageCommand) || codex.Ceiling != 6 || codex.FiveHourMax != 92 || codex.SevenDayMax != 97 {
+		t.Fatalf("Codex defaults or thresholds: %+v", codex)
+	}
+	if c.Capacity.Floor != 5 || c.Capacity.Ceiling != 14 || len(c.Capacity.Choices) != 2 ||
+		c.Capacity.Choices[0].Harness != ClaudeHarness || c.Capacity.Choices[0].Model != "claude-opus-5-5" ||
+		c.Capacity.Choices[1].Harness != CodexHarness || c.Capacity.Choices[1].Model != "gpt-6.1-sol" {
+		t.Fatalf("capacity choices or total bounds changed: %+v", c.Capacity)
+	}
+}
+
+func TestSupervisorFillRetryEvery(t *testing.T) {
+	for _, test := range []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"supervisor: {}", 5 * time.Minute},
+		{"supervisor: {fillRetryEvery: 2m}", 2 * time.Minute},
+	} {
+		c, err := Load(writeTemp(t, test.raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Supervisor.FillRetryEvery.Duration; got != test.want {
+			t.Fatalf("fill retry %s, want %s", got, test.want)
+		}
+	}
+}
+
+// An explicit environment path must never select the default state when absent.
+func TestMissingEnvironmentConfig(t *testing.T) {
+	const missingCase = "missing"
+	for _, value := range []string{missingCase, emptyCase, unsetCase} {
+		t.Run(value, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("HOME", root)
+			t.Setenv("APPDATA", root)
+			t.Setenv("XDG_CONFIG_HOME", root)
+			t.Setenv("XDG_STATE_HOME", root)
+			missing := filepath.Join(root, "missing.yaml")
+			t.Setenv("BEEKEEPER_CONFIG", "")
+			switch value {
+			case missingCase:
+				t.Setenv("BEEKEEPER_CONFIG", missing)
+			case unsetCase:
+				if err := os.Unsetenv("BEEKEEPER_CONFIG"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path, err := Path("")
+			if value == missingCase {
+				if err == nil || !strings.Contains(err.Error(), missing) {
+					t.Fatalf("Path = %q, %v; want missing path error", path, err)
+				}
+				path = missing // Also check direct loads and a file removed after path resolution.
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if value == missingCase {
+				if err == nil || !strings.Contains(err.Error(), missing) || cfg != nil {
+					t.Fatalf("Load = %v, %v; want missing path error and no config", cfg, err)
+				}
+			} else if err != nil || cfg.StateDir != filepath.Join(root, "beekeeper") {
+				t.Fatalf("default Load = %v, %v", cfg, err)
+			}
+		})
+	}
+}
+
+// capacity.local.ceiling is the coordinator machine's own cap: unset means
+// none, 0 is honoured and a negative one is refused.
+func TestCapacityLocalCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		yaml  string
+		want  int
+		set   bool
+		bad   bool
+		label string
+	}{
+		{label: "unset", yaml: "capacity:\n  ceiling: 14\n"},
+		{label: "zero", yaml: "capacity:\n  local:\n    ceiling: 0\n", want: 0, set: true},
+		{label: "five", yaml: "capacity:\n  ceiling: 14\n  local:\n    ceiling: 5\n", want: 5, set: true},
+		{label: "negative", yaml: "capacity:\n  local:\n    ceiling: -1\n", bad: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.local.ceiling") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, ok := c.Capacity.Local.Limit(); n != tc.want || ok != tc.set {
+				t.Fatalf("local ceiling %d (set %v), want %d (set %v)", n, ok, tc.want, tc.set)
 			}
 		})
 	}

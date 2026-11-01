@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -44,9 +45,11 @@ sets an item's Status by the board's canonical names; rank sets an item's
 position on the board, which is the order next reads the items of each step
 in, under the person's priority list (beekeeper priority); block and
 unblock record and remove a hold on an item, a GitHub blocked-by
-dependency on another issue, which next reads.`,
+dependency on another issue, which next reads; tidy moves closed items to
+Done and archives them after board.archiveAfter, which the supervisor loop
+runs every board.tidyEvery.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false))
+	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
 	return c
 }
 
@@ -75,16 +78,13 @@ never offered through its sub-issues; an issue whose nearest epic among its
 parents on the board is in planning is skipped as "sub-issue of epic
 <owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
 the go: from then its open sub-issues are offered, in their order. The
-person's priority list (beekeeper priority, the board's Priority field) comes
-first: the candidates are ordered by the rank of their epic, an issue's own
-or that of its nearest ranked ancestor through the sub-issue relation, the
-unranked after the ranked, each rank in the order above; the pick prints the
-rank it applied ("priority 2 of epic <owner/repo#n>", --json priority and
-priorityOf). A step with workScope offers only the work scope: an issue
-under an epic of the priority list, an order (an item a step without
-workScope offers) and an open recorded blocker of either; an item under an
-unranked epic or under none is skipped as "not in a priority epic", not
-ordered last. A plan is
+order is the steps' alone: their Status (board.order lists In Progress, then
+Up Next, then Backlog), and within a step the board's own order of its
+items. The person's priority list (beekeeper priority, the board's Priority
+field) neither orders nor gates anything: the pick only prints the rank of
+its epic, an issue's own or that of its nearest ranked ancestor through the
+sub-issue relation ("priority 2 of epic <owner/repo#n>", --json priority and
+priorityOf). A step's workScope is read and ignored. A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
@@ -158,6 +158,22 @@ second claim while the session still serves an open item is refused with
 its record, which stays as it was; --replace takes the next item and
 replaces the record. Exit 3 when no item is free or the claim is refused.
 
+Claims of other desks: every session record is the desk's claim of its
+issue on GitHub as well (board.claims), one marker comment per issue and
+desk signed with board.claims.desk, refreshed every board.claims.refresh
+and released when the record ends (agents idle --done, sessions unserve,
+the session's end); the supervisor loop and the watch keep them in line.
+next reads the claims of each pick in turn and skips an item another desk
+claims ("claimed by desk <name> (session <id>) since <time>"), up to the
+first item no other desk claims; a claim unrefreshed for
+board.claims.staleAfter is shown on the pick and not honoured, and a read
+GitHub fails is a warning, the pick standing as if unclaimed. --claim
+publishes its claim at once (waiting for a sync that runs) and, should
+another desk's claim on the item be older (a new claim is a new comment,
+the lower id the older), gives it back and exits 3 naming it. A pull
+request carries no claim. Without board.claims.desk
+the desk publishes none and still honours the other desks'.
+
 --limit <n> lists at most n items of each list: the skipped lines above the
 pick and the free items behind it, and --json's skipped and after_pick,
 each followed by how many it left out ("… 12 more skipped above the pick",
@@ -195,8 +211,7 @@ the whole walk.`,
 			}
 			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			board.ByPriority(cands, snap.Priorities.Ranks(), snap.Parent)
-			snap.Scope(cands)
+			board.Annotate(cands, snap.Priorities.Ranks(), snap.Parent)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -219,6 +234,7 @@ the whole walk.`,
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
+			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }
@@ -228,6 +244,9 @@ the whole walk.`,
 					}
 				}
 				res, err = claimNext(a.store, cands, sc, waits, open)
+				if err == nil && res.Claimed {
+					err = a.publishClaimed(cmd.Context(), cmd.ErrOrStderr(), me, res.Pick.Ref)
+				}
 			} else {
 				res = nextFree(st, cands, sc)
 				ranks := snap.Priorities.Ranks()
@@ -583,10 +602,10 @@ const (
 	kindBlocked  = "blocked"
 	kindStale    = "stale"
 	kindLease    = "lease"
+	kindClaimed  = "claimed"
 	kindPlanning = "planning"
 	kindUnknown  = "unknown"
 	kindOrder    = "order"
-	kindScope    = "scope"
 )
 
 // skipKind names the kind of a skip reason: who holds the item, or what
@@ -603,12 +622,12 @@ func skipKind(reason string) string {
 		return kindStale
 	case strings.HasPrefix(reason, "needs lease "):
 		return kindLease
+	case strings.HasPrefix(reason, claimedPrefix):
+		return kindClaimed
 	case strings.Contains(reason, "in planning ("):
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
 		return kindUnknown
-	case reason == board.OutOfScope:
-		return kindScope
 	}
 	return kindOrder
 }
@@ -1277,4 +1296,80 @@ func rankPlace(rk *board.Ranked) string {
 	default:
 		return "before " + rk.Below
 	}
+}
+
+func (a *app) boardTidyCmd() *cobra.Command {
+	var dry bool
+	c := &cobra.Command{
+		Use:   "tidy [--dry-run]",
+		Short: "Move the board's closed items to Done and archive those closed for board.archiveAfter",
+		Long: `Keeps the board free of finished work, so no person has to set up its
+housekeeping by hand: every closed issue or pull request among the team's
+items (board.team; every item without one) whose Status is not Done is
+moved to Done, so the board never shows a closed issue as In Progress, and
+one closed for board.archiveAfter (default 336h, two weeks) or longer is
+archived (archiveProjectV2Item) after that move. A negative archiveAfter
+archives nothing; the moves to Done still happen. A board without a Done
+status has its closed items archived as they are.
+
+An archived item is not deleted: it stays searchable on the board
+(is:archived) and is restored with gh project item-archive <number> --owner
+<owner> --id <item> --undo, the item's id printed here. board next reads
+only open issues, so what it picks is unchanged.
+
+At most 100 writes per run; what is left is counted and tidied by the next
+run. The supervisor loop runs tidy every board.tidyEvery (default 1h;
+negative: never). Silent when nothing is to be done; --dry-run prints what
+would be done and writes nothing.
+
+GitHub's own project workflows cannot be enabled through its API, so this
+needs none of them. A person may still enable, in the board's Workflows
+settings, "Item closed" (Status to Done at once) and "Auto-archive items"
+(GitHub's own archiving, by its own filter); tidy then finds less to do.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			me, _ := a.caller()
+			t, err := a.boardClient().Tidy(cmd.Context(), a.now, dry)
+			if t != nil && !dry {
+				for _, it := range t.Items {
+					_ = a.store.Log(event(me, "board.tidy", "%s", tidyLine(t, it, a.cfg.Board)))
+				}
+			}
+			if err != nil {
+				return err
+			}
+			if a.json {
+				return a.printJSON(t)
+			}
+			for _, it := range t.Items {
+				line := tidyLine(t, it, a.cfg.Board)
+				if dry {
+					line = "would: " + line
+				}
+				if _, err := fmt.Fprintln(a.out, line); err != nil {
+					return err
+				}
+			}
+			if t.Left > 0 {
+				if _, err := fmt.Fprintf(a.out, "%d more closed items wait for the next tidy\n", t.Left); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&dry, "dry-run", false, "print what would be done, write nothing")
+	return c
+}
+
+// tidyLine says what tidy did to one item.
+func tidyLine(t *board.Tidy, it board.Tidied, b config.Board) string {
+	var did []string
+	if it.Done {
+		did = append(did, fmt.Sprintf("%s → %s", cmp.Or(it.From, "no Status"), t.Done))
+	}
+	if it.Archived {
+		did = append(did, fmt.Sprintf("archived (restore: gh project item-archive %d --owner %s --id %s --undo)", b.Project, b.Owner, it.Item))
+	}
+	return fmt.Sprintf("%s closed %s: %s", it.URL, it.Closed.UTC().Format(time.DateOnly), strings.Join(did, ", "))
 }

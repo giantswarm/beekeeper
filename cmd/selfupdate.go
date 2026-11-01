@@ -67,8 +67,8 @@ its owner re-arms it, told by its own feed (WATCH STALE, GUIDE WATCH
 STALE).
 
 The agent sandbox's broker (beekeeper-sandbox.service) that runs the
-replaced binary is restarted onto the new one (restart), which drops its
-vault session: the next secret step waits for the broker's sign-in. A
+replaced binary is restarted onto the new one (restart), after preparing
+its vault session handover. An unavailable handover leaves it running. A
 broker serving calls (a gate, a secret call, an agents start) is left to
 finish them, and the restart still due is named with its command (due).
 
@@ -112,13 +112,18 @@ is set. A development build (version dev) is refused.`,
 			if err == nil && res.Updated {
 				if t, terr := proc.Read(); terr == nil {
 					stale := staleBinaries(t, os.Getpid(), replacedBinary)
-					if a.loadConfig() == nil {
+					configured := a.loadConfig() == nil
+					if configured {
 						if restarted, rerr := a.restartReplaced(w, res.Path, t, false); rerr == nil {
 							stale = slices.DeleteFunc(stale, func(p *proc.Process) bool { return slices.Contains(restarted, p) })
 						}
 					}
 					_, _ = fmt.Fprint(w, leftBehind(stale, res.Current, res.Latest))
-					restartBrokerOn(cmd.Context(), w, res.Path, started, t, false)
+					if configured {
+						restartBrokerOn(cmd.Context(), w, res.Path, started, t, false, a.cfg.Secret.Session)
+					} else {
+						_, _ = fmt.Fprintln(w, "due     broker restart refused: configuration could not be read safely")
+					}
 				}
 			}
 			switch {

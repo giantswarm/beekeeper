@@ -14,12 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -73,8 +76,34 @@ func daemonRan(ctx context.Context, id string) bool {
 	return err == nil && slices.ContainsFunc(rows, func(r bgSession) bool { return r.SessionID == id && r.Kind == bgKind })
 }
 
+// daemonRunning returns the session ids the claude daemon lists as running
+// right now (claude agents --json without --all).
+func daemonRunning(ctx context.Context, config string) map[string]bool {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return nil
+	}
+	rows, err := bgList(ctx, bin, cleanEnv(os.Environ(), config), false)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if r.SessionID != "" {
+			out[r.SessionID] = true
+		}
+	}
+	return out
+}
+
 // bgKind is the kind claude agents gives a session the daemon runs.
 const bgKind = "background"
+
+// desktopMode reports whether the desk runs its sessions in the desktop
+// (agents.mode desktop, the default).
+func (a *app) desktopMode() bool {
+	return a == nil || a.cfg == nil || cmp.Or(strings.TrimSpace(a.cfg.Agents.Mode), config.ModeDesktop) == config.ModeDesktop
+}
 
 // desktopStarted reports whether p's session is one of beekeeper's starts
 // that the desktop shows: a background start has no desktop row to miss.
@@ -82,8 +111,8 @@ func desktopStarted(st *state.State, p state.Party) bool {
 	if !started(st, p) {
 		return false
 	}
-	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Session == p.Session })
-	return !st.Starts[i].Background
+	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Execution == nil && s.Session == p.Session })
+	return i >= 0 && !st.Starts[i].Background
 }
 
 // cleanEnv is environ without the caller's session and harness variables
@@ -275,7 +304,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		if reg, err = recordStart(st, s, sp.task, sp.serves, live); err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -345,13 +374,11 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
 	}
-	bin, err := exec.LookPath("claude")
-	if err != nil {
-		return fmt.Sprintf("its background session %s stays: %v", short, err), true
+	if loopInTurn(a, p) {
+		return fmt.Sprintf("its background session %s stays: its CLI is in a turn", short), true
 	}
-	// claude stop takes the daemon's short id, not the session's.
-	if out, err := bgRun(ctx, "", cleanEnv(os.Environ(), a.explicitConfig()), []string{bin, bgStopCmd, short}); err != nil {
-		return fmt.Sprintf("its background session %s stays: claude stop: %v (%s)", short, err, firstLines(out)), true
+	if err := a.bgStop(ctx, id); err != nil {
+		return fmt.Sprintf("its background session %s stays: %v", short, err), true
 	}
 	return fmt.Sprintf("stopped its background session %s (claude attach %s brings it back)", short, short), true
 }
@@ -379,4 +406,227 @@ func (a *app) reviveBackground(ctx context.Context, holder state.Party, msg stri
 		return fmt.Errorf("%s: %w", holder.Name, errNoBackground)
 	}
 	return a.resumeBackground(ctx, w, msg)
+}
+
+// parkStoppedEvent is the event of a parked background session the watch
+// stopped.
+const parkStoppedEvent = "agents.parkstop"
+
+// parkedResident is the parked agents of st whose background session,
+// started by beekeeper, still runs in sessions after its turn ended: a
+// parked session waits on what its park names and keeps nothing in memory
+// meanwhile, since its wake resumes it from its transcript (claude --bg
+// --resume). A session in a turn (a headless turn of it in t, a running
+// command, its transcript or a subagent's written within stewardQuiet of
+// now), a park already resumable (the watch resumes it), an agent on an
+// execution host and the supervisor's or the guide's session stay.
+func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time) []state.Party {
+	var out []state.Party
+	for _, ag := range st.Agents {
+		if ag.Park == nil || !ag.Park.Resumable.IsZero() || ag.Execution != nil || ag.Session == "" {
+			continue
+		}
+		if i := st.StartIndex(ag.Party); i < 0 || !st.Starts[i].Background {
+			continue
+		}
+		if roleKeeps(st, ag.Party) {
+			continue
+		}
+		live, busy := false, false
+		for _, s := range sessions {
+			if s.ID != ag.Session {
+				continue
+			}
+			live = true
+			if headlessTurn(t, s.ID) != "" || len(s.Commands) > 0 || now.Sub(s.LastActive) < stewardQuiet || now.Sub(s.LastSubagent) < stewardQuiet {
+				busy = true
+			}
+		}
+		if live && !busy {
+			out = append(out, ag.Party)
+		}
+	}
+	return out
+}
+
+// bgStop stops the background session id (claude stop, which keeps its
+// conversation for claude --bg --resume).
+func (a *app) bgStop(ctx context.Context, id string) error {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return err
+	}
+	// claude stop takes the daemon's short id, not the session's.
+	if out, err := bgRun(ctx, "", cleanEnv(os.Environ(), a.explicitConfig()), []string{bin, bgStopCmd, id[:min(8, len(id))]}); err != nil {
+		return fmt.Errorf("claude stop: %w (%s)", err, firstLines(out))
+	}
+	return nil
+}
+
+// parkStopDir holds a lock file per background session beekeeper started:
+// the watch's stop of a parked session and every wake of it hold it, so a
+// wake never lands in a CLI the stop ends. Beside it, the mtime of
+// <session>.woke is the last wake's.
+const parkStopDir = "parkstop"
+
+// wokeStamp is the file whose mtime is the last wake of session id.
+func (a *app) wokeStamp(id string) string {
+	return filepath.Join(a.cfg.StateDir, parkStopDir, filepath.Base(id)+".woke")
+}
+
+// parkStopLock is session id's lock (parkStopDir).
+func (a *app) parkStopLock(id string) (*flock.Flock, error) {
+	dir := filepath.Join(a.cfg.StateDir, parkStopDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // the state directory's own subdirectory
+		return nil, err
+	}
+	return flock.New(filepath.Join(dir, filepath.Base(id)+".lock")), nil
+}
+
+// bgExitWait bounds the look for a stopped session's CLI to exit, and
+// bgExitPoll paces it; tests shorten them.
+var (
+	bgExitWait = 15 * time.Second
+	bgExitPoll = 100 * time.Millisecond
+)
+
+// parkWakeWait bounds a wake's wait for a stop of its session in flight:
+// claude stop's own bound and its CLI's exit, with a margin.
+var parkWakeWait = bgWait + bgExitWait + 15*time.Second
+
+// lockForWake takes p's lock (parkStopLock) for a wake of p, a background
+// session beekeeper started, waiting for a stop in flight to end, and
+// returns its release, which marks the wake's time; a no-op for any other
+// session.
+func (a *app) lockForWake(ctx context.Context, st *state.State, p state.Party) (func(), error) {
+	if i := st.StartIndex(p); i < 0 || !st.Starts[i].Background || p.Session == "" {
+		return func() {}, nil
+	}
+	l, err := a.parkStopLock(p.Session)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, parkWakeWait)
+	defer cancel()
+	if ok, err := l.TryLockContext(ctx, 50*time.Millisecond); err != nil || !ok {
+		return nil, fmt.Errorf("waking %s: the stop of its parked background session holds %s: %w", p.Name, l.Path(), errors.Join(err, ctx.Err()))
+	}
+	return func() {
+		stamp, now := a.wokeStamp(p.Session), time.Now()
+		_ = os.WriteFile(stamp, nil, 0o600) //nolint:gosec // under the state directory, the session id's base name
+		_ = os.Chtimes(stamp, now, now)
+		_ = l.Unlock()
+	}, nil
+}
+
+// freshSessions reads the running sessions and the process table again for
+// a stop's last look; tests replace it.
+var freshSessions = (*app).sessions
+
+// stopParked stops the background sessions of parkedResident, each once
+// its turn ended, so a parked session costs the machine no memory; its wake
+// (agents wake, agents resume, the watch's resume or a timer's) resumes it
+// from its transcript. A stop that fails is a line, tried again next poll.
+func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*claude.Session) {
+	if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Park != nil }) {
+		return
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return // no turn is known to have ended
+	}
+	for _, p := range parkedResident(st, sessions, t, w.now) {
+		key := "park-stop-" + p.Session
+		short := p.Session[:min(8, len(p.Session))]
+		stopped, err := w.stopParkedSession(ctx, st, p)
+		if err != nil {
+			w.fail(key, "PARKED SESSION STAYS %q: its background session %s keeps its memory: %v", p.Name, short, err)
+			continue
+		}
+		w.clear(key)
+		if !stopped {
+			continue
+		}
+		_ = w.store.Record(event(watchParty, parkStoppedEvent, "%s: stopped its background session %s while it is parked; its wake resumes it", p.Name, p.Session))
+		w.emitNow("park-stop", "PARKED SESSION STOPPED %q: background session %s frees its memory while parked; its wake resumes it (claude attach %s)", p.Name, short, short)
+	}
+}
+
+// stopParkedSession stops p's background session under its lock
+// (parkStopLock), which every wake of p takes too: a wake in flight keeps
+// it running this poll, one that comes meanwhile waits for the stop and
+// then resumes the stopped session. Under the lock it looks again: p still
+// parked on the park seen in seen, not woken within stewardQuiet, and,
+// read anew, still running with its turn ended; false when it stays. The
+// lock holds until the stopped CLI exits, so the next wake finds it gone.
+func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.Party) (bool, error) {
+	defer a.recordStoppedGates(ctx)
+	l, err := a.parkStopLock(p.Session)
+	if err != nil {
+		return false, err
+	}
+	if ok, err := l.TryLock(); err != nil || !ok {
+		return false, err // a wake holds it: the next poll looks again
+	}
+	defer func() { _ = l.Unlock() }()
+	if fi, err := os.Stat(a.wokeStamp(p.Session)); err == nil && a.now.Sub(fi.ModTime()) < stewardQuiet {
+		return false, nil // woken just now: its CLI may not have written the message yet
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return false, err
+	}
+	if !samePark(seen, st, p) {
+		return false, nil
+	}
+	sessions, t, err := freshSessions(a)
+	if err != nil {
+		return false, err
+	}
+	if !slices.ContainsFunc(parkedResident(st, sessions, t, a.now), p.Is) {
+		return false, nil
+	}
+	if err := a.bgStop(ctx, p.Session); err != nil {
+		return false, err
+	}
+	var pids []int
+	for _, s := range sessions {
+		if s.ID == p.Session && s.PID > 0 {
+			pids = append(pids, s.PID)
+		}
+	}
+	return true, waitExit(ctx, pids)
+}
+
+// samePark says whether p is parked in st on the same park it was in seen.
+func samePark(seen, st *state.State, p state.Party) bool {
+	park := func(st *state.State) *state.Park {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			return st.Agents[i].Park
+		}
+		return nil
+	}
+	was, now := park(seen), park(st)
+	return was != nil && now != nil && now.At.Equal(was.At) && now.On == was.On && now.Waits == was.Waits && now.Resumable.IsZero()
+}
+
+// waitExit waits up to bgExitWait for the processes pids to exit.
+func waitExit(ctx context.Context, pids []int) error {
+	ctx, cancel := context.WithTimeout(ctx, bgExitWait)
+	defer cancel()
+	for {
+		t, err := plat.Machine.Processes()
+		if err != nil {
+			return err
+		}
+		pids = slices.DeleteFunc(pids, func(pid int) bool { return t.ByPID[pid] == nil })
+		if len(pids) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("claude stop returned, but its CLI %v still runs after %s", pids, dur(bgExitWait))
+		case <-time.After(bgExitPoll):
+		}
+	}
 }

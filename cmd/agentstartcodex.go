@@ -73,7 +73,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	if !plat.Launcher.Available() {
 		return refused("this machine has no unit launcher (systemd --user): a codex agent runs in a transient user unit")
 	}
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
@@ -123,6 +123,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		id = uuid.NewString()
 	}
 	sp.brief = fillScratchpad(sp.brief, dir, id)
+	sp.brief = projectPrompt(dir, sp.brief)
 	inbox := codex.InboxPath(a.cfg.StateDir, id)
 	logPath := codex.LogPath(a.cfg.StateDir, id)
 
@@ -143,7 +144,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: codex agent codex_%s in %s, bypass, on %s, busy with %q", sp.name, id, dir, model, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: codex agent codex_%s in %s, bypass, on %s, busy with %q", sp.name, id, dir, model, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -221,10 +222,11 @@ func (a *app) codexModel(flag string) (string, error) {
 }
 
 func (a *app) dryRunCodexStart(sp agentStart, gaps []string) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
+	sp.brief = projectPrompt(dir, sp.brief)
 	model := cmp.Or(sp.model, a.cfg.Codex.Model, "<model>")
 	argv := codex.ExecArgv(codex.Comm, model)
 	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as a codex agent on %s, bypass, no desktop import\nstart: %s\n",
@@ -336,6 +338,7 @@ func readCodexBriefStream(logPath string) (threadID string, started bool, err er
 // endCodex stops the unit of the codex agent started under id, which left the
 // roster, and removes its inbox, log and thread files, and says what it did.
 func (a *app) endCodex(ctx context.Context, id string) string {
+	defer a.recordStoppedGates(ctx)
 	var done []string
 	if unit := codexUnit(id); plat.Launcher.State(ctx, unit) == holdActive {
 		if err := plat.Launcher.Stop(ctx, unit); err != nil {
