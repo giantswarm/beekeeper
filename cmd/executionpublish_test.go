@@ -438,7 +438,7 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	normalCommit := exec.CommandContext(context.Background(), "git", "-c", "core.hooksPath="+os.DevNull, "commit", "--allow-empty", "-m", "normal worker global identity")
+	normalCommit := exec.CommandContext(context.Background(), "git", "-c", "core.hooksPath="+os.DevNull, "commit", "--allow-empty", "-m", "normal worker global identity") //nolint:gosec // fixed fixture-only commit arguments and platform null hooks path; no shell
 	normalCommit.Dir = rig.workspace
 	if err := normalCommit.Run(); err != nil {
 		t.Fatal("normal global-identity commit failed", err)
