@@ -439,7 +439,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	t.Cleanup(func() { plat = orig })
 
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgPath := emptyTestConfig(t, filepath.Join(dir, "config.yaml"))
 	t.Setenv("HOME", dir)
 	t.Setenv("BEEKEEPER_CONFIG", cfgPath)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))

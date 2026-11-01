@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -113,17 +114,7 @@ func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Du
 	defer cancel()
 	c := exec.CommandContext(ctx, command[0], command[1:]...) //nolint:gosec // the configured usage command
 	c.Dir = dir
-	if slices.Equal(command, config.DefaultClaudeUsageCommand) {
-		// The local probe is not a turn of the worker that requested it.
-		c.Env = make([]string, 0)
-		for _, entry := range os.Environ() {
-			key, _, _ := strings.Cut(entry, "=")
-			if key != claudeCodeEnv && key != "CLAUDE_CODE_ENTRYPOINT" && key != "CLAUDE_CODE_PARENT_SESSION_ID" &&
-				!strings.HasPrefix(key, "CLAUDE_CODE_SESSION_") && !strings.HasPrefix(key, "CLAUDE_CODE_HOST_SESSION_") {
-				c.Env = append(c.Env, entry)
-			}
-		}
-	}
+	c.Env = usageProbeEnv(command)
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {
@@ -138,7 +129,37 @@ func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Du
 	if slices.Equal(command, config.DefaultClaudeUsageCommand) {
 		return parseClaudeUsage(stdout.Bytes(), time.Now())
 	}
+	if slices.Equal(command, config.DefaultAgyUsageCommand) {
+		return parseAgyBuiltinUsage(stdout.Bytes())
+	}
 	return parseUsageOutput(stdout.Bytes())
+}
+
+// usageProbeEnv is the environment of a built-in usage command: a local
+// probe is not a turn of the worker that requested it, so it carries none of
+// the worker's session identity. A configured command (nil) inherits all.
+func usageProbeEnv(command []string) []string {
+	var drop func(key string) bool
+	switch {
+	case slices.Equal(command, config.DefaultClaudeUsageCommand):
+		drop = func(key string) bool {
+			return key == claudeCodeEnv || key == "CLAUDE_CODE_ENTRYPOINT" || key == "CLAUDE_CODE_PARENT_SESSION_ID" ||
+				strings.HasPrefix(key, "CLAUDE_CODE_SESSION_") || strings.HasPrefix(key, "CLAUDE_CODE_HOST_SESSION_")
+		}
+	case slices.Equal(command, config.DefaultAgyUsageCommand):
+		// Its PreInvocation hook must not take the worker's inbox.
+		drop = func(key string) bool { return key == agy.EnvAgent || key == agy.EnvName }
+	default:
+		return nil
+	}
+	env := make([]string, 0)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !drop(key) {
+			env = append(env, entry)
+		}
+	}
+	return env
 }
 
 func parseUsageOutput(raw []byte) (usageReading, error) {
@@ -365,6 +386,36 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 	return r, nil
 }
 
+// parseAgyBuiltinUsage reads the built-in `agy -p /usage` report. Each model
+// bucket maps to its 5-hour and 7-day windows; a bucket that prints only one
+// of them is left out, so a choice on it reads as not in the output and gets
+// no start, while the complete buckets still count.
+func parseAgyBuiltinUsage(raw []byte) (usageReading, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return usageReading{}, errors.New("agy /usage printed nothing")
+	}
+	r, err := parseAgyUsage(trimmed)
+	if err != nil {
+		return usageReading{}, fmt.Errorf("agy /usage: %w", err)
+	}
+	var partial []string
+	order := r.BucketOrder[:0]
+	for _, name := range r.BucketOrder {
+		if b := r.Buckets[name]; b.FiveHour == nil || b.SevenDay == nil {
+			partial = append(partial, name)
+			delete(r.Buckets, name)
+			continue
+		}
+		order = append(order, name)
+	}
+	r.BucketOrder = order
+	if len(r.Buckets) == 0 {
+		return usageReading{}, fmt.Errorf("agy /usage has no bucket with both a five-hour and a weekly window (%s)", strings.Join(partial, ", "))
+	}
+	return r, nil
+}
+
 func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 	maxAge := u.EffectiveStaleAfter()
 	if r.Stale {
@@ -559,8 +610,13 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
 		return a.readCodexUsage()
 	}
-	if slices.Equal(u.Command, config.DefaultClaudeUsageCommand) {
-		dir := filepath.Join(a.cfg.StateDir, "usage", claudeComm)
+	// A built-in local probe runs in a directory of its own under the state,
+	// never in a worktree whose project settings it could pick up.
+	for _, builtin := range [][]string{config.DefaultClaudeUsageCommand, config.DefaultAgyUsageCommand} {
+		if !slices.Equal(u.Command, builtin) {
+			continue
+		}
+		dir := filepath.Join(a.cfg.StateDir, "usage", builtin[0])
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return usageReading{}, err
 		}
