@@ -485,6 +485,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			switch req.Operation {
 			case "check":
 				value, err = s.Check(ctx)
+			case "source-chunk":
+				var chunk SourceChunk
+				err = Decode(req.Payload, &chunk)
+				if err == nil {
+					err = s.ReceiveSource(ctx, req.Ref, chunk)
+				}
+				value = struct{}{}
 			case "start":
 				var r StartRequest
 				err = Decode(req.Payload, &r)

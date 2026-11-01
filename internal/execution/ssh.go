@@ -256,6 +256,9 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 	if x.Ref != r.Ref || x.ConversationID != r.ConversationID || x.Repository != r.Repository || x.Unit != UnitName(r.Ref) || x.Workspace != path.Join(h.WorkspaceRoot, string(r.Ref.Execution), "workspace") {
 		return errors.New("start handle identity or workspace mismatch")
 	}
+	if r.SourceDigest != "" && x.Commit != r.GitRef {
+		return errors.New("start handle does not match coordinator-pinned commit")
+	}
 	if len(x.Commit) != 40 && len(x.Commit) != 64 {
 		return errors.New("invalid pinned commit")
 	}

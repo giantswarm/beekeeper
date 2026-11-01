@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- SSH workers start at the coordinator-fetched ref head even when the execution host checkout is stale or lacks GitHub credentials; preparation transfers and pins the source objects before activation ([https://github.com/giantswarm/beekeeper/issues/1929](https://github.com/giantswarm/beekeeper/issues/1929)).
+
 - `beekeeper watch` no longer flaps `EXECUTION UNCONFIRMED` and `ENDED EXECUTION UNCONFIRMED` every minute across SSH execution hosts when reconciliation hits its deadline: each operation uses the host's operation timeout (30s default) instead of a shared 5-second window across all hosts and executions, deadline-killed SSH calls report `execution host deadline exceeded` rather than `execution host unreachable`, failed host reconciliations back off (`2m`, `4m`, `8m`, `15m`) and log `execution.unconfirmed` once while unconfirmed, and terminal executions whose final state and outbox are confirmed are no longer re-reconciled on later watch ticks ([https://github.com/giantswarm/beekeeper/issues/1963](https://github.com/giantswarm/beekeeper/issues/1963)).
 - Merge independent changelog additions with Git’s union driver so queued pull requests can update their base without conflicting on top-of-section entries (https://github.com/giantswarm/beekeeper/issues/1953).
 

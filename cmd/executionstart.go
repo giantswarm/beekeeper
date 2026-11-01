@@ -308,6 +308,16 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 	}
 	r := rec.Request
 	if rec.Phase == executionPending {
+		if uploader, ok := client.(execution.SourceUploader); ok {
+			var data []byte
+			r, data, err = a.prepareExecutionSource(ctx, r)
+			if err != nil {
+				return err
+			}
+			if err := uploader.UploadSource(ctx, ref, data); err != nil {
+				return err
+			}
+		}
 		handle, err := client.Start(ctx, r)
 		if err != nil {
 			a.executionFailure(ref, err)

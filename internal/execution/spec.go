@@ -88,6 +88,7 @@ type StartRequest struct {
 	Task           string `json:"task"`
 	Repository     string `json:"repository"`
 	GitRef         string `json:"gitRef"`
+	SourceDigest   string `json:"sourceDigest,omitempty"`
 	Harness        string `json:"harness"`
 	Model          string `json:"model"`
 	Prompt         string `json:"prompt"`
@@ -114,6 +115,9 @@ func (r StartRequest) Validate() error {
 	}
 	if !ValidIdentity(r.Coordinator) || !repoPattern.MatchString(r.Repository) || !refPattern.MatchString(r.GitRef) || strings.Contains(r.GitRef, "..") || strings.HasSuffix(r.GitRef, ".lock") {
 		return errors.New("invalid coordinator, repository or Git ref")
+	}
+	if r.SourceDigest != "" && (!ValidDigest(r.SourceDigest) || !mergeHeadPattern.MatchString(r.GitRef)) {
+		return errors.New("invalid pinned execution source")
 	}
 	if !SupportedHarness(r.Harness) || !refPattern.MatchString(r.Model) || len(r.Model) > 256 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 256 || strings.ContainsAny(r.Name, "\x00\r\n") {
 		return errors.New("remote starts require harness claude or codex, an explicit model and a name")
