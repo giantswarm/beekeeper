@@ -879,6 +879,31 @@ recipient, never by listing values. beekeeper never handles the store's password
 whatever unlock prompt it shows the person, and a command answers within five minutes or fails. Its
 output stays in the broker; an error names the entry or the recipient, never a value.
 
+For credential sources, `store://<entry>[#<field>]` works alongside `op://`, `k8s://`
+and `file://` in `secret copy` (SOPS paths, multi-value copies, consumers after `--`,
+`ssh://` destinations and `--to-secret`), `secret compare` and `secret fingerprint`.
+These reads run in the broker in the agent sandbox or with `secret.session`;
+otherwise beekeeper reads in its own process, including on macOS and hosts without
+a broker. No shared vault is required. The default field is the store's secret/password. An explicit field adds
+`--attributes <field>` before the entry, replacing a configured `-a`/`--attributes`
+selector so KeePassXC returns only the requested attribute. For other adapters,
+put `{field}` in an argument of `secret.store.read`: it is replaced with the
+requested field, or `password` when omitted, and no attribute option is added.
+This substitution applies only to credential sources: age-identity reads and
+`secret.store.search` receive their configured arguments unchanged.
+The entry remains the final argument; no shell evaluates it. Store-command errors
+name the reference and suppress command output, which might contain credentials.
+Store copies return no automatic fingerprint, including SSH delivery; request one
+with `secret fingerprint` when needed. An unconfigured source is refused with
+`secret.store.read` named. A store reference
+is a source only; `secret store` continues to write into the shared vault.
+
+```bash
+beekeeper secret copy 'store://services/api#password' credentials.sops.yaml#stringData.token
+beekeeper secret compare 'store://services/api#password' credentials.sops.yaml#stringData.token
+beekeeper secret fingerprint 'store://services/api#username'
+```
+
 A `store://` reference and `secret.store` are set together, in one `beekeeper config set` call (see
 [Configuration](#configuration)). A reference whose `secret.store` is still missing leaves the
 configuration loadable: every command works, and `beekeeper secret …` warns once per such reference
@@ -3349,7 +3374,7 @@ The organisation and desk keys, and their defaults:
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in, and how long one sign-in waits for the credential store and tries again after a failure ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts; a recipient no entry names has its identity in the vault's item `sops age key <recipient>` ([Age identities](#age-identities)) |
 | `secret.ageVaults` | none | The vaults besides `secret.vault` that age identities are read from: an `op://` entry of `secret.ageIdentities` may name one, and a SOPS file at any path finds its identity in the item `<installation>.agekey` of `secret.vault` or one of them holding the identity of its recipient ([The installation's item](#the-installations-item)) |
-| `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
+| `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` credential sources and age identities ([Age identities](#age-identities)) |
 | `secret.fileRoots` | none | The directories (`~/` allowed) whose plain files a `file://<absolute path>#<path>` source reads one value of, a CLI's own credential directory for one; a file outside them, its symlinks resolved, is refused, naming them, and none configured refuses every `file://` source |
 | `secret.files` | none | Files known to hold secret values (`~/` and globs allowed) that no agent reads whole, beside the built-in list ([Secret reads](#secret-reads)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
