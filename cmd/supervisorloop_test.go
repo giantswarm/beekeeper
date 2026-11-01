@@ -2274,3 +2274,75 @@ func TestLoopParkOnKeepsExplicitAndAmbiguousWaits(t *testing.T) {
 		}
 	}
 }
+
+// https://github.com/giantswarm/beekeeper/issues/1927: a worker on an SSH
+// execution host parks on the pull request it published through the
+// coordinator; its park at the published head is a review request, and a
+// park after a new publication asks for that head's review.
+func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
+	r := newLoopRig(t)
+	ref := execution.Ref{Host: "host-a", Execution: "remote-one", Generation: 1}
+	party := state.Party{Name: loopWorker, Session: "remote-session", Host: string(ref.Host)}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Execution: &ref})
+		st.Starts = append(st.Starts, state.Start{Party: party, Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Repository: scratchRepo, Commit: loopFixed}, Request: execution.StartRequest{Ref: ref, Repository: scratchRepo}}})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	was := executionReviewGH
+	t.Cleanup(func() { executionReviewGH = was })
+	executionReviewGH = func(context.Context, ...string) ([]byte, error) {
+		return fmt.Appendf(nil, `{"head":{"ref":%q,"sha":%q,"repo":{"full_name":"o/r"}}}`, executionBranch(ref), r.pull.Head), nil
+	}
+	// A remote worker's round binds the reviewer the loop started.
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 2 && args[0] == agentsName && args[1] == agentStartName {
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: args[2], Session: "reviewer-" + args[2]}, By: loopParty, At: time.Now()})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return "", 0
+	}
+	park := func(head string) {
+		t.Helper()
+		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			_, evs, err := r.a.applyExecutionControl(context.Background(), st, party, execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: deskReviewWait, Head: head})})
+			return evs, err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	park(loopHead)
+	r.pass(t)
+	start := r.called(agentsName, agentStartName)
+	if start == nil || start[2] != loopReviewer {
+		t.Fatalf("no review of the remote worker's published head: %v\n%s", r.calls, r.out)
+	}
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	// The approval reaches the remote go (agents merge --authorization);
+	// its grant needs the reviewer's bound report, which
+	// executionmerge_review_test.go covers, and the rig has none.
+	if !strings.Contains(r.out.String(), "go "+loopPR+"@"+loopHead) {
+		t.Fatalf("the approval took no go: %v\n%s", r.calls, r.out)
+	}
+	// The worker publishes one more commit and parks again at it.
+	r.pull.Head = loopFixed
+	park(loopFixed)
+	r.pass(t)
+	start = r.called(agentsName, agentStartName)
+	if start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
+		t.Fatalf("no review of the remote worker's new head: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
+		t.Errorf("review logged as %+v", evs)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("one head got a second review: %v", c)
+	}
+}

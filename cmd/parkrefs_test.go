@@ -219,7 +219,9 @@ func TestManagedParkRecordsFailedLookupThenClassifies(t *testing.T) {
 		t.Fatalf("managed park: %v %s", err, result.Error)
 	}
 	st, _ := a.store.Read()
-	if p := st.Agents[0].Park; p == nil || p.On != refOne || p.RefKind != "" || p.ReviewHead != loopHead {
+	// The host's own review head is no proof: the coordinator reads the
+	// pull request itself, and o/r is not the execution's repository.
+	if p := st.Agents[0].Park; p == nil || p.On != refOne || p.RefKind != "" || p.ReviewHead != "" {
 		t.Fatalf("unresolved managed park %+v", p)
 	}
 	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
