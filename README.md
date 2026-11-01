@@ -40,6 +40,10 @@ With `supervisor.workerBrief` configured, each pass fills the desk to
 restart or roster loss without a done report. Each start rechecks capacity
 and stops when its gates refuse, the floor is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
+An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
+default) before retrying, unless the roster or capacity changes first.
+`supervisor loop --dry-run` previews refill intent with read-only capacity
+and board queries and starts nothing.
 
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:

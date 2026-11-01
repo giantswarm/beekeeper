@@ -8,12 +8,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const fillCapacityCommand = "capacity"
+const (
+	fillCapacityCommand = "capacity"
+	fillEmptyBoardJSON  = `{"pick":null}`
+	fillNoRoomJSON      = `{"floor":3,"room":0}`
+)
 
 // Only external commands are replaced; capacity changes after each start.
 func fillRig(t *testing.T) (*loopRig, *int) {
@@ -24,6 +29,7 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 		t.Fatal(err)
 	}
 	r.a.cfg.Supervisor.WorkerBrief = brief
+	r.a.cfg.Supervisor.FillRetryEvery.Duration = 5 * time.Minute
 	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "test-model"}}
 	busy := 0
 	r.answer = func(args []string) (string, int) {
@@ -97,7 +103,7 @@ func TestLoopFillStopsAtGatesAndEmptyBoard(t *testing.T) {
 					case "capacity refused":
 						return "pace or host pressure", ExitRefused
 					case "no room":
-						return `{"floor":3,"room":0}`, 0
+						return fillNoRoomJSON, 0
 					case "at floor":
 						return `{"floor":0,"room":5}`, 0
 					case "bad capacity":
@@ -107,7 +113,7 @@ func TestLoopFillStopsAtGatesAndEmptyBoard(t *testing.T) {
 				if args[0] == loopBoard {
 					switch name {
 					case "empty board":
-						return `{"pick":null}`, 0
+						return fillEmptyBoardJSON, 0
 					case "bad board":
 						return `{"pick":{"ref":"invalid"}}`, 0
 					}
@@ -139,7 +145,7 @@ func TestLoopFillRechecksCapacityBetweenStarts(t *testing.T) {
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
 		if args[0] == fillCapacityCommand && *busy > 0 {
-			return `{"floor":3,"room":0}`, 0
+			return fillNoRoomJSON, 0
 		}
 		return original(args)
 	}
@@ -196,5 +202,177 @@ func TestLoopFillNeverRepeatsStaleBoardItem(t *testing.T) {
 	r.pass(t)
 	if *busy != 1 {
 		t.Fatalf("repeated a stale board item: %d", *busy)
+	}
+}
+
+func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
+	for _, answer := range []struct {
+		name, body string
+		code       int
+	}{
+		{"board has no free item", fillEmptyBoardJSON, 0},
+		{"board read failure", "board unavailable", 1},
+		{"invalid ref", `{"pick":{"ref":"invalid"}}`, 0},
+		{"malformed board response", "not JSON", 0},
+	} {
+		t.Run(answer.name, func(t *testing.T) {
+			r, _ := fillRig(t)
+			original := r.answer
+			reads := 0
+			r.answer = func(args []string) (string, int) {
+				if args[0] == loopBoard {
+					reads++
+					return answer.body, answer.code
+				}
+				return original(args)
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pass := func() {
+				t.Helper()
+				if err := l.pass(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pass()
+			r.a.now = r.a.now.Add(30 * time.Second)
+			pass()
+			if reads != 1 {
+				t.Fatalf("unchanged pass read the board %d times", reads)
+			}
+			r.a.now = r.a.now.Add(r.a.cfg.Supervisor.FillRetryEvery.Duration)
+			pass()
+			if reads != 2 {
+				t.Fatalf("retry interval did not retry: %d reads", reads)
+			}
+		})
+	}
+}
+
+func TestLoopFillStateChangesInvalidateBoardBackoff(t *testing.T) {
+	for _, change := range []string{"busy count changes", "available room changes", "roster membership changes", "capacity cycles through the floor"} {
+		t.Run(change, func(t *testing.T) {
+			r, busy := fillRig(t)
+			original := r.answer
+			reads := 0
+			changedRoom := false
+			r.answer = func(args []string) (string, int) {
+				if args[0] == loopBoard {
+					reads++
+					return fillEmptyBoardJSON, 0
+				}
+				if args[0] == fillCapacityCommand && changedRoom {
+					return `{"floor":3,"room":1}`, 0
+				}
+				return original(args)
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := l.pass(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "busy count changes":
+				*busy = 1
+			case "available room changes":
+				changedRoom = true
+			case "roster membership changes":
+				r.started(t, "another worker", "another-session")
+			case "capacity cycles through the floor":
+				*busy = 3
+				if err := l.pass(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				*busy = 0
+			}
+			r.a.now = r.a.now.Add(time.Second)
+			if err := l.pass(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if reads != 2 {
+				t.Fatalf("%s did not invalidate backoff: %d reads", change, reads)
+			}
+		})
+	}
+}
+
+func TestLoopFillFailedStartClosesClaim(t *testing.T) {
+	for _, code := range []int{ExitRefused, 1} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			r, _ := fillRig(t)
+			original := r.answer
+			r.answer = func(args []string) (string, int) {
+				if args[0] == agentsName && args[1] == agentStartName {
+					return "start unavailable", code
+				}
+				return original(args)
+			}
+			r.pass(t)
+			if evs := r.logged(t, loopClaimEndVerb); len(evs) != 1 {
+				t.Fatalf("failed claim not closed: %+v", evs)
+			}
+			// A later unrelated start with the same name must not settle the
+			// failed attempt as though it had started before an interruption.
+			if err := r.a.store.Record(event(loopParty, "agents.start", "r 10: later start")); err != nil {
+				t.Fatal(err)
+			}
+			r.answer = func(args []string) (string, int) {
+				if args[0] == fillCapacityCommand {
+					return fillNoRoomJSON, 0
+				}
+				return original(args)
+			}
+			r.pass(t)
+			if evs := r.logged(t, "supervisor.next"); len(evs) != 0 {
+				t.Fatalf("false reconciliation: %+v", evs)
+			}
+		})
+	}
+}
+
+func TestLoopFillDryRunPreviewsWithoutStartingOrWriting(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprint(empty), func(t *testing.T) {
+			r, busy := fillRig(t)
+			original := r.answer
+			boardReads, capacityReads := 0, 0
+			r.answer = func(args []string) (string, int) {
+				if args[0] == fillCapacityCommand {
+					capacityReads++
+				}
+				if args[0] == loopBoard {
+					boardReads++
+					if empty {
+						return fillEmptyBoardJSON, 0
+					}
+				}
+				return original(args)
+			}
+			before, err := r.a.store.Events(0, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			after, err := r.a.store.Events(0, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 3
+			if empty {
+				count = 0
+			}
+			if !strings.Contains(r.out.String(), fmt.Sprintf("SUPERVISOR WOULD NEXT fill %d to capacity.floor", count)) {
+				t.Fatalf("no refill preview: %s", r.out)
+			}
+			if *busy != 0 || len(after) != len(before) || capacityReads != 1 || boardReads != 1 || r.called(agentsName) != nil {
+				t.Fatalf("dry run: busy %d, events %d -> %d, reads %d/%d, calls %v", *busy, len(before), len(after), capacityReads, boardReads, r.calls)
+			}
+		})
 	}
 }

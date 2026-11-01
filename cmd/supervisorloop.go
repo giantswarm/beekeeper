@@ -39,8 +39,9 @@ const loopStartVerb = "supervisor.loop"
 // loopClaimVerb logs an action the loop is about to take, before its side
 // effect; loopStageVerb a finished stage of a release.
 const (
-	loopClaimVerb = "supervisor.claim"
-	loopStageVerb = "supervisor.stage"
+	loopClaimVerb    = "supervisor.claim"
+	loopClaimEndVerb = "supervisor.unclaim"
+	loopStageVerb    = "supervisor.stage"
 )
 
 // loopEventVerbs are the events the loop's rules act on.
@@ -373,7 +374,7 @@ the log shows no line of its command (agents start, agents wake, agents
 remove, note add) since the claim. One loop runs per state: a second is
 refused. The loop acts on the events logged since its first start.
 --dry-run is one pass that prints each transition it would take as
-SUPERVISOR WOULD <KIND> and takes none: it runs no command, logs nothing,
+SUPERVISOR WOULD <KIND> and takes none: it runs read-only queries, logs nothing,
 fires no timer and takes no lock, so it can run beside the loop.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -384,7 +385,7 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 		},
 	}
 	c.Flags().BoolVar(&once, "once", false, "one pass, then exit")
-	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: no command, no log line, no timer")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: read-only capacity and board queries, no log line or timer")
 	return c
 }
 
@@ -398,6 +399,9 @@ type supervisorLoop struct {
 	releaseAt time.Time
 	// stages are the release stages finished, by key.
 	stages map[string]bool
+	// fillPause defers an unproductive board read until the roster or
+	// capacity changes, or the configured retry interval passes.
+	fillPause fillPause
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
 	// login is the login gh acts as, once read; teams the team files'
@@ -460,8 +464,8 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 const loopLockFile = "supervisor-loop.lock"
 
 // dryRunSupervisorLoop is one pass that says what it would take: it runs
-// no command, logs nothing, fires no timer and takes no lock, so it can run
-// beside the loop.
+// only read-only queries, logs nothing, fires no timer and takes no lock,
+// so it can run beside the loop.
 func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
 	l, err := a.newSupervisorLoop(true)
 	if err != nil {
@@ -550,6 +554,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case !ok:
 		case e.Verb == loopClaimVerb:
 			claims[key] = loopClaim{at: e.At, target: rest}
+		case e.Verb == loopClaimEndVerb:
+			delete(claims, key)
 		case e.Verb == loopStageVerb:
 			stages[key] = true
 		}
@@ -1104,6 +1110,14 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		return "", err
 	}
 	if _, err := l.run(ctx, args...); err != nil {
+		if strings.HasPrefix(act.Key, loopFillKey) {
+			// A returned failure is settled, rather than an interruption
+			// that a later start under the same name could reconcile.
+			closed := about(event(loopParty, loopClaimEndVerb, "[%s] start failed or refused", act.Key), act.Ref)
+			if closeErr := l.a.store.Record(closed); closeErr != nil {
+				return "", fmt.Errorf("closing failed start claim: %w", closeErr)
+			}
+		}
 		if Code(err) == ExitRefused {
 			return "", errLoopLater
 		}
