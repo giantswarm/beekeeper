@@ -1980,6 +1980,7 @@ func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
 	if err != nil {
 		return err
 	}
+	sp.brief = projectPrompt(dir, sp.brief)
 	model := cmp.Or(sp.model, a.cfg.Omp.Model, "<model>")
 	argv := ompArgv(omp.Comm, model)
 	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as an omp agent on %s, yolo, no desktop import\nstart: %s\n",
