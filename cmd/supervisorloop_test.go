@@ -73,6 +73,10 @@ type loopRig struct {
 	teams     map[string]string
 	teamsErr  error
 	teamReads int
+	// baseMerge answers whether a head only merges its base into the
+	// approved one; baseReads are the pairs asked, as approved..head.
+	baseMerge func(p superloop.Pull, approved string) (bool, error)
+	baseReads []string
 }
 
 // loopFakeBinary is the loop's binary as the rig says it.
@@ -147,10 +151,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.pulls = map[string]superloop.Pull{}
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
-	run, read, command, binary, broker, turn, login, teams := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams
+	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
+	run, read, command, binary, broker, turn, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams, readBaseMerge
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams = run, read, command, binary, broker, turn, login, teams
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, login, teams, baseMerge
 	})
+	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
+		r.baseReads = append(r.baseReads, approved+".."+p.Head)
+		return r.baseMerge(p, approved)
+	}
 	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
 	readTeams = func(context.Context, config.Ownership) (map[string]string, error) {
 		r.teamReads++
@@ -383,6 +392,99 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
 		t.Errorf("review logged as %+v", evs)
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1841: the gate's
+// --update-branch moved the approved head on by a merge of the base; the
+// worker parked on it gets the go without a second review, naming the
+// gate's command. A head with more than the base merge gets its review.
+func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Merge.DevctlOwners = []string{"o"}
+	r.pull.Base = mainBranch
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	wake := r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], "`devctl pr merge o/r 7 --update-branch`") || strings.Contains(wake[3], "--match-head-commit") {
+		t.Fatalf("no gated merge go: %v\n%s", r.calls, r.out)
+	}
+	r.pull.Head = loopFixed
+	r.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
+		return p.Base == mainBranch && approved == loopHead && p.Head == loopFixed, nil
+	}
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("a base merge started a review: %v", c)
+	}
+	wake = r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only merges main into it") {
+		t.Fatalf("no go for the base merge: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.go"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
+		t.Errorf("the go logged as %+v", evs)
+	}
+	if !slices.Equal(r.baseReads, []string{loopHead + ".." + loopFixed}) {
+		t.Errorf("base merge reads = %v", r.baseReads)
+	}
+	// A further head with a change of its own: its review, no go.
+	const own = "3333333333333333333333333333333333333333"
+	r.pull.Head = own
+	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
+	r.park(t, loopPR, time.Now().Add(2*time.Minute))
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName); c != nil {
+		t.Errorf("a head with its own change got %v", c)
+	}
+	if start := r.called(agentsName, agentStartName); start == nil {
+		t.Fatalf("no review of a head with its own change: %v\n%s", r.calls, r.out)
+	}
+}
+
+// A head that only merges main into the head a review asked changes on is
+// no fix: the worker reworks, and no go comes.
+func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
+	r := newLoopRig(t)
+	r.pull.Base = mainBranch
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n- cmd/x.go:3: wrong")
+	r.pass(t)
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("the findings were not forwarded: %v", r.calls)
+	}
+	r.pull.Head = loopFixed
+	r.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
+		return approved == loopHead && p.Head == loopFixed, nil
+	}
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	r.pass(t)
+	if evs := r.logged(t, "supervisor.go"); len(evs) != 0 {
+		t.Fatalf("a base merge of unfixed findings got the go: %+v", evs)
+	}
+	wake := r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], "only merges main into head") || !strings.Contains(wake[3], "stand unfixed") {
+		t.Fatalf("no rework for the base merge: %v\n%s", r.calls, r.out)
+	}
+}
+
+// A comparison GitHub does not answer is no base merge: the head gets its
+// review, and the failure is said.
+func TestLoopReviewsAHeadItCannotCompare(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	r.pull.Head = loopFixed
+	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, errors.New("gh: 502") }
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start == nil || !strings.Contains(r.out.String(), "cannot tell whether "+loopPR) {
+		t.Fatalf("no review after a failed comparison: %v\n%s", r.calls, r.out)
 	}
 }
 
