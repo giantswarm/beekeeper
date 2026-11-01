@@ -431,6 +431,12 @@ func (h Hook) checkGHCommand(words []string, cmdIdx int, cwd string, known bool)
 	namedRepo := repoSlug(envRepo)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if redirection.MatchString(a) {
+			if bareRedirect.MatchString(a) {
+				i++
+			}
+			continue
+		}
 		if v, ok := repoFlag(a); ok {
 			namedRepo = repoSlug(v)
 			continue

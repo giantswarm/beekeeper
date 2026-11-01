@@ -38,6 +38,7 @@ func TestMergeGoAcrossHarnesses(t *testing.T) {
 		}
 		for _, command := range []string{
 			"gh pr merge 7 --repo person/project --squash --match-head-commit " + mergeGoTestHead,
+			"gh pr merge 7 --repo person/project --squash --match-head-commit " + mergeGoTestHead + " 2>&1 | tee result.log",
 			"gh pr merge https://github.com/person/project/pull/7 --squash --match-head-commit=" + mergeGoTestHead,
 			"bash -c 'gh pr merge 7 -R person/project --match-head-commit " + mergeGoTestHead + "'",
 			"gh api --method PUT repos/person/project/pulls/7/merge -f sha=" + mergeGoTestHead,
