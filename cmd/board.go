@@ -1130,12 +1130,12 @@ Backlogs views). rank moves the issue's item to the top of the board, right
 before or right after the item of another issue (updateProjectV2ItemPosition),
 and prints the neighbours the move names. An issue without an item on the
 board is added first, as move adds it, with board.team as its Team and no
-Status; an issue of a repository outside the board's owner is never added.
+Status, whatever the owner of its repository (GitHub decides whether it may
+be added).
 The other issue must be on the board already. Only the items named are read,
 never the board's items. Every GitHub call acts on the repository of the
 issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
-exist, an issue outside the board's owner without an item, another issue
-that has no item on the board, an item placed against itself.`,
+exist, another issue that has no item on the board, an item placed against itself.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, r := range []string{args[0], at.Before, at.After} {
