@@ -35,7 +35,9 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 			continue
 		}
 		if l.dryRun {
-			fmt.Fprintf(l.a.out, "SUPERVISOR WOULD RESUME %s: restart its ended session\n", ag.Name)
+			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD RESUME %s: restart its ended session\n", ag.Name); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := l.restartPark(ctx, ag, agentRef(st, ag.Name)); err != nil {
@@ -58,7 +60,7 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 		brief, err := l.brief(l.a.cfg.Supervisor.WorkerBrief, "", "resume "+ag.Name, briefData{URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N), Repo: r.Repo, Number: r.N, Worker: ag.Name})
 		if err == nil {
 			var f *os.File
-			f, err = os.OpenFile(brief, os.O_APPEND|os.O_WRONLY, 0o600)
+			f, err = os.OpenFile(brief, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the brief just created under the state directory
 			if err == nil {
 				_, err = fmt.Fprintf(f, "\nContinue your existing task: %s\n%s\nRe-query its live state before continuing.\n", ag.Task, parkMessage(ag.Park, loopParty.Name))
 				closeErr := f.Close()

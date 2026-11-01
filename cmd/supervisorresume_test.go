@@ -10,8 +10,8 @@ import (
 )
 
 func TestLoopRecoversEndedSettledPark(t *testing.T) {
-	for _, mode := range []string{"restart", "release", "partial start"} {
-		failure := mode != "restart"
+	for _, mode := range []string{"successful recovery", "release", "partial start"} {
+		failure := mode != "successful recovery"
 		t.Run(mode, func(t *testing.T) {
 			r, _ := fillRig(t)
 			ag := state.Agent{Party: state.Party{Name: "ended worker", Session: "ended-session"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{At: r.a.now, Resumable: r.a.now, Answer: "note closed"}}
@@ -42,7 +42,7 @@ func TestLoopRecoversEndedSettledPark(t *testing.T) {
 								t.Fatal(err)
 							}
 						}
-						return "start refused", ExitRefused
+						return "recovery start denied", ExitRefused
 					}
 					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents[0].Session = "replacement"; return nil, nil }); err != nil {
 						t.Fatal(err)
@@ -67,29 +67,29 @@ func TestLoopRecoversEndedSettledPark(t *testing.T) {
 }
 
 func TestLoopRecoveryLeavesUnsettledParksAndStoppedDesk(t *testing.T) {
-	for _, mode := range []string{"unsettled", "done", "stopped", "dry run", "no task", "live"} {
+	for _, mode := range []string{"unsettled", paramDone, "desk stop", dryRunState, "no task", holderLive} {
 		t.Run(mode, func(t *testing.T) {
 			r := newLoopRig(t)
-			ag := state.Agent{Party: state.Party{Name: "ended", Session: "ended"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{At: r.a.now, Resumable: r.a.now}}
+			ag := state.Agent{Party: state.Party{Name: "sleeping worker", Session: "gone-worker"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{At: r.a.now, Resumable: r.a.now}}
 			if mode == "unsettled" {
 				ag.Park.Resumable = state.Park{}.Resumable
 			}
-			if mode == "done" {
+			if mode == paramDone {
 				ag.Done = true
 			}
 			if mode == "no task" {
 				ag.Task = ""
 			}
 			st := &state.State{Agents: []state.Agent{ag}}
-			if mode == "stopped" {
+			if mode == "desk stop" {
 				st.Stop = &state.Stop{}
 			}
 			var live []*claude.Session
-			if mode == "live" {
+			if mode == holderLive {
 				live = []*claude.Session{{ID: ag.Session, Name: ag.Name}}
 			}
 			stubFresh(t, &live)
-			l := &supervisorLoop{a: r.a, dryRun: mode == "dry run"}
+			l := &supervisorLoop{a: r.a, dryRun: mode == dryRunState}
 			if err := l.recoverParks(t.Context(), st); err != nil {
 				t.Fatal(err)
 			}
