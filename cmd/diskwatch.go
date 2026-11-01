@@ -70,9 +70,7 @@ func (w *watcher) sampleDisk(now time.Time, d machine.Disk, t *proc.Table, owner
 			perMin/1024, d.FreeMiB/1024, int(float64(d.FreeMiB)/perMin), w.disk.writersLine(now, d.FreeMiB, t, owners))
 	}
 	w.check("diskfill", filling, "%s", line)
-	if w.loopOwned {
-		w.publishDisk(filling || d.FreeMiB < th.DiskMin(d.TotalMiB), w.disk.writersLine(now, d.FreeMiB, t, owners))
-	}
+	w.publishDisk(watchDiskReading{Low: filling || d.FreeMiB < th.DiskMin(d.TotalMiB), Writers: w.disk.writersLine(now, d.FreeMiB, t, owners), FreeMiB: d.FreeMiB, MinMiB: th.DiskMin(d.TotalMiB)})
 	w.diskPrune(now, filling || d.FreeMiB < th.DiskMin(d.TotalMiB))
 }
 

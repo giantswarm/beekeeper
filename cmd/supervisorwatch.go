@@ -94,13 +94,30 @@ func (w *watcher) publishMachine() {
 type watchDiskReading struct {
 	Low     bool
 	Writers string
+	FreeMiB int
+	MinMiB  int
 }
 
-func (w *watcher) publishDisk(low bool, writers string) {
-	raw, err := json.Marshal(watchDiskReading{Low: low, Writers: writers})
+func (w *watcher) publishDisk(reading watchDiskReading) {
+	raw, err := json.Marshal(reading)
 	if err == nil && w.store != nil {
 		_ = w.store.Record(event(watchParty, "watch.disk-state", "%s", raw))
 	}
+}
+
+func (a *app) watchDisk() *watchDiskReading {
+	if a.store == nil {
+		return nil
+	}
+	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "watch.disk-state" })
+	if err != nil || len(evs) == 0 {
+		return nil
+	}
+	var reading watchDiskReading
+	if err := json.Unmarshal([]byte(evs[0].Detail), &reading); err != nil {
+		return nil
+	}
+	return &reading
 }
 
 // Watch conditions are lasting levels, reconstructed after a restart.

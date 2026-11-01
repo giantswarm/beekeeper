@@ -67,12 +67,12 @@ func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 func TestLoopWatchPrunesThenReportsPersistentLowDiskOnce(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
-	w.publishDisk(true, "test-writer")
+	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
 	r.pass(t)
 	if r.called(loopDiskKind, "prune", "--apply") == nil {
 		t.Fatal("low disk not pruned")
 	}
-	w.publishDisk(true, "test-writer")
+	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
 	r.pass(t)
 	if r.called(loopDiskKind, "prune", "--apply") != nil {
 		t.Fatal("same disk episode pruned twice")
@@ -119,6 +119,16 @@ func TestLoopWatchStaleBudgetHoldsStarts(t *testing.T) {
 	}
 	if !l.startsHeld {
 		t.Fatal("stale budget allowed new starts")
+	}
+}
+
+func TestLoopWatchDiskFeedsCapacity(t *testing.T) {
+	r := newLoopRig(t)
+	w := r.a.newWatcher(false, false)
+	w.publishDisk(watchDiskReading{Low: true, FreeMiB: 1, MinMiB: 100})
+	got := r.a.watchDisk()
+	if got == nil || !got.Low || got.FreeMiB != 1 || got.MinMiB != 100 {
+		t.Fatalf("capacity disk reading: %+v", got)
 	}
 }
 

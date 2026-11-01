@@ -187,6 +187,7 @@ func TestStandbyResumesARestartedGuide(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
 	sent := make(chan string, 2)
 	w.stand = standbyWatch{send: func(_ context.Context, to, msg string) error { sent <- to + ": " + msg; return nil }}
+	t.Cleanup(w.stand.inflight.Wait) // the delivery's watch event also writes the store
 	guide := state.Party{Session: sessionG7, HostSession: hostG7, Name: guideSeven}
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow.Add(-time.Hour)},
