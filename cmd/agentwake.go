@@ -181,6 +181,13 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if h, id, ok := harnessForHost(ag.HostSession); ok {
 		return h.Wake(a, by, ag, id, msg)
 	}
+	// A stop of the parked background session in flight ends before the
+	// wake looks whether its CLI runs (stopParkedSession).
+	release, err := a.lockForWake(ctx, st, ag.Party)
+	if err != nil {
+		return err
+	}
+	defer release()
 	sessions, _, err := a.sessions()
 	if err != nil {
 		return err

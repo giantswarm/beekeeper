@@ -70,7 +70,11 @@ func (a *app) agentParkCmd() *cobra.Command {
 		Long: `park marks the calling agent parked: it keeps its task, but agents and
 capacity count it parked, not busy, the doctor and the watch leave it
 alone, and it ends its turn instead of waiting in a sleep that holds its
-slot and its CLI's memory.
+slot and its CLI's memory. A background session beekeeper started (agents.mode
+background) costs no memory while parked either: once its turn ended, the
+watch stops it (claude stop, which keeps its conversation), and
+the wake that ends the park resumes it from its transcript (claude --bg
+--resume).
 
 --on names what settles the wait: a note (#12; on a machine with a central
 instance <context>#12 is its note, and a bare number the machine has no
@@ -178,6 +182,9 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 			back = "the watch says AGENT RESUMABLE once " + on + " settles; " + resume + " brings it back"
 		}
 		line = fmt.Sprintf("%s: %s; counted parked, not busy, and %s. End your turn now.", ag.Name, parkedText(ag.Park, a.now), back)
+		if k := st.StartIndex(me); k >= 0 && st.Starts[k].Background {
+			line += " The watch stops your background session once the turn ends, and the wake resumes it from its transcript."
+		}
 		return []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
 	})
 	return line, err
