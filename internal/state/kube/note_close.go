@@ -58,7 +58,7 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 				if err != nil {
 					return err
 				}
-				n.Status.Closure = &v1alpha1.NoteClosure{ID: id, Verb: noteDefaultedEvent, Detail: fmt.Sprintf("#%d defaulted: %s", old.Spec.ID, old.Spec.Default), By: old.Status.By, At: metav1.NewTime(timeOf(old.Spec.Due))}
+				n.Status.Closure = &v1alpha1.NoteClosure{ID: id, Verb: noteDefaultedEvent, Detail: fmt.Sprintf("#%d defaulted: %s", old.Spec.ID, old.Spec.Default), At: metav1.NewTime(timeOf(old.Spec.Due))}
 			}
 			want.notes[k] = n
 			continue

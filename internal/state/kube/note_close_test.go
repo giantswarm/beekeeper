@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+const unreleasedDefault = "Keep the release unpublished"
+
 const firstDefaulted = "#1 defaulted"
 
 var errCloseEvent = errors.New("event unavailable")
@@ -34,7 +36,7 @@ func checkNoteClose(t *testing.T, c client.Client) {
 	store := New(c)
 	now := time.Now().UTC().Truncate(time.Second)
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Notes = append(st.Notes, state.Note{ID: 1, By: ana, At: now, Kind: state.NoteDecision, Text: asked, Due: now.Add(-time.Hour), Default: "Keep the release unpublished"})
+		st.Notes = append(st.Notes, state.Note{ID: 1, By: ana, At: now, Kind: state.NoteDecision, Text: asked, Due: now.Add(-time.Hour), Default: unreleasedDefault})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -162,5 +164,25 @@ func TestNoteCloseReasons(t *testing.T) {
 				t.Fatalf("closed note listed: %+v %v", st, err)
 			}
 		})
+	}
+}
+
+// The filer is not the actor of a legacy default. Its defaulted state proves
+// the outcome, but cannot reconstruct who applied it before close auditing.
+func TestLegacyDefaultCloseReason(t *testing.T) {
+	scheme, err := Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: NoteObject(team, 1).GetName()}, Spec: v1alpha1.NoteSpec{ID: 1, Due: apiTime(now.Add(-48 * time.Hour)), Default: unreleasedDefault}, Status: v1alpha1.NoteStatus{State: noteDefaulted, By: apiParty(ana), At: metav1.NewTime(now)}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}).WithObjects(n).Build()
+	s := New(c)
+	if err := s.Update(func(st *state.State) ([]state.Event, error) { st.Defaulted = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := s.NoteClosure(1)
+	if err != nil || closed == nil || closed.Verb != noteDefaultedEvent || closed.By.Name != "" || closed.By.Person != "" {
+		t.Fatalf("legacy close attribution: %+v %v", closed, err)
 	}
 }
