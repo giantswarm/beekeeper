@@ -349,6 +349,9 @@ type Park struct {
 	RefKind string `json:"refKind,omitempty"`
 	// RefChecked is the last lookup attempt; issues and unresolved references retry every five minutes.
 	RefChecked time.Time `json:"refChecked,omitzero"`
+	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
+	// Empty (including parks written by older versions) is a plain wait.
+	ReviewHead string    `json:"reviewHead,omitempty"`
 	By         Party     `json:"by"`
 	At         time.Time `json:"at"`
 	On         string    `json:"on,omitempty"`

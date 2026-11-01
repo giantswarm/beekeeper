@@ -1019,15 +1019,30 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	sf := newSecretFiles(h.SecretFiles)
 	link := linkArgs(name, args, metadata)
 	isSymbolic := linksAllowed && sf.symbolicMetadata(link, []string{dir})
-	isMeta := metaCmds[name] || isSymbolic
-	_, helper := metadata[name]
-	if helper {
-		isMeta = isSymbolic
-	}
-	if (name == "ln" || helper) && !isSymbolic {
-		if file := sf.linkSource(args, []string{dir}); file != "" {
-			return leak{what: "a link that exposes " + file + ", a file that holds secret values", safe: fileReadSafe(file)}.reason(), ""
+	flag, helper := metadata[name]
+	// linkChecked: a link to a guarded file that passes; the Bash decision
+	// refuses what reads it (secretlinksmade.go)
+	linkChecked := false
+	if (name == "ln" || name == linkCmd || helper) && !isSymbolic {
+		g := secretGuard{unlock: h.UnlockCommands, cwd: dir, files: sf, metadata: metadata, funcs: functionBodies(cmd), vars: scanVars(sc, segs), cut: cutBySubstitution(segs[segIdx])}
+		l, checked := g.linkLeak(name, args, []string{dir}, 0)
+		if l != nil {
+			return l.reason(), ""
 		}
+		linkChecked = checked
+	}
+	// lnArgs: the ln a checked link runs, nil for a helper whose body was
+	// inlined, which keeps the refusal of a Codex home path handed to it
+	var lnArgs []string
+	switch {
+	case linkChecked && !helper:
+		lnArgs = args
+	case linkChecked && flag != "":
+		lnArgs = link
+	}
+	isMeta := metaCmds[name] || isSymbolic || linkChecked
+	if helper {
+		isMeta = isSymbolic || linkChecked
 	}
 	if name == findCmd {
 		if file := sf.findSource(args, []string{dir}, false); file != "" {
@@ -1037,7 +1052,7 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	}
 	// A function defined on the command line has an unchecked body: what it
 	// is handed may be written, so a guarded Codex home path is refused.
-	if helper && !isSymbolic {
+	if helper && !isSymbolic && lnArgs == nil {
 		for _, a := range args {
 			if a = strings.TrimPrefix(strings.TrimPrefix(a, "if="), "of="); !strings.HasPrefix(a, "-") && (isGuardedCodexHomePath(a, dir) || containsGuardedCodexHomeRef(a)) {
 				return codexHomeRefusalMsg, ""
@@ -1122,6 +1137,16 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	if isSymbolic {
 		if r := codexLinkWriteRefusal(link, dir); r != "" {
 			return r, ""
+		}
+	} else if lnArgs != nil {
+		words, ok := lnLinkWords(lnArgs, dir)
+		if !ok {
+			return codexHomeRefusalMsg, ""
+		}
+		for _, w := range words {
+			if guardedCodexPath(w, dir, false) || containsGuardedCodexHomeRef(w) {
+				return codexHomeRefusalMsg, ""
+			}
 		}
 	} else if isWriteCmd {
 		for _, a := range args {

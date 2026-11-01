@@ -35,9 +35,10 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
-	RefKind string `json:"refKind,omitempty"`
-	On      string `json:"on"`
-	Waits   string `json:"waits"`
+	RefKind    string `json:"refKind,omitempty"`
+	ReviewHead string `json:"reviewHead,omitempty"`
+	On         string `json:"on"`
+	Waits      string `json:"waits"`
 }
 type executionReport struct {
 	Finished bool     `json:"finished"`
@@ -126,6 +127,31 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			r.Lease = &grant
 			value = grant
+		case publicationTransfer:
+			var chunk publicationChunk
+			if execution.Decode(req.Payload, &chunk) != nil {
+				return nil, errors.New("invalid publication transfer")
+			}
+			result, transferErr := a.transferPublication(st, req.Ref, chunk)
+			if transferErr != nil {
+				return nil, transferErr
+			}
+			value = result
+		case executionPublish:
+			var publication executionPublication
+			if execution.Decode(req.Payload, &publication) != nil {
+				return nil, errors.New("invalid publication request")
+			}
+			publishCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
+			if publishErr != nil {
+				reply.Error = publishErr.Error()
+				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s", publication.Head))
+			} else {
+				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
+			}
+			value = result
 		case runMerge:
 			var use execution.MergeUse
 			if execution.Decode(req.Payload, &use) != nil || use.Ref != req.Ref {
@@ -287,13 +313,13 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: v.RefKind}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: v.RefKind, ReviewHead: v.ReviewHead}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)
 			}
 		}
-		return "park recorded on coordinator; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+		return "park recorded on coordinator; " + parkReviewMode(v.ReviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
 	case "report":
 		var v executionReport
 		if err := execution.Decode(c.Data, &v); err != nil {
