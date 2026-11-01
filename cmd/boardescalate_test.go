@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -17,6 +18,7 @@ const (
 	blockedName    = "Blocked / Waiting ⛔️"
 	statusHeldRef  = "o/r#15"
 	escalatedTitle = "a blocked task"
+	issueOneURL    = "https://github.com/o/r/issues/1"
 )
 
 func blockedItem(ref, status string) board.Item {
@@ -75,7 +77,7 @@ func TestEscalationsTakeEachBlockedItemOnce(t *testing.T) {
 // runs board escalate on it again after board.escalateEvery.
 func TestEscalateFilesOneNoteAndARecheckTimer(t *testing.T) {
 	r := newLoopRig(t)
-	e := escalation{Ref: refOne, URL: "https://github.com/o/r/issues/1", Title: escalatedTitle, Why: "Status " + blockedName}
+	e := escalation{Ref: refOne, URL: issueOneURL, Title: escalatedTitle, Why: "Status " + blockedName}
 	if err := r.a.escalate(context.Background(), loopParty, e, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func TestEscalateFilesOneNoteAndARecheckTimer(t *testing.T) {
 	// The timer first: a failed note is retried when it fires.
 	timer, note := r.calls[0], r.calls[1]
 	if !slices.Equal(note[:6], []string{loopNote, loopAdd, "--for", loopPerson, loopRefFlag, refOne}) ||
-		!strings.Contains(note[len(note)-1], "https://github.com/o/r/issues/1 is blocked") {
+		note[len(note)-1] != "What unblocks "+issueOneURL+"?" {
 		t.Errorf("note %q", note)
 	}
 	if !slices.Equal(timer[:4], []string{loopTimer, loopAdd, "24h0m0s", escalateWhat + refOne}) || timer[4] != "--run" ||
@@ -109,7 +111,7 @@ func TestEscalateAddsTheTimerBeforeTheNote(t *testing.T) {
 		}
 		return "", 0
 	}
-	e := escalation{Ref: refOne, URL: "https://github.com/o/r/issues/1", Title: escalatedTitle, Why: "Status " + blockedName}
+	e := escalation{Ref: refOne, URL: issueOneURL, Title: escalatedTitle, Why: "Status " + blockedName}
 	if err := r.a.escalate(context.Background(), loopParty, e, time.Hour); err == nil {
 		t.Fatal("a failed note add is no error")
 	}
@@ -125,6 +127,44 @@ func TestEscalateBoardReadsTheBlockedStatus(t *testing.T) {
 	got := escalateBoard(b)
 	if len(b.Order) != 1 || len(got.Order) != 2 || !slices.Equal(got.Order[1].Status, []string{blockedStatus}) {
 		t.Errorf("order %+v from %+v", got.Order, b.Order)
+	}
+}
+
+// The note asks one whole question, whatever the title's length, and names
+// every issue by its full URL: the guard refuses a note that asks nothing
+// or names owner/repo#n bare, and a refusal escalated nothing.
+func TestEscalateNoteAsksAndLinksEveryIssue(t *testing.T) {
+	r := newLoopRig(t)
+	e := escalation{Ref: "o/wepa#137", URL: "https://github.com/o/wepa/issues/137",
+		Title: strings.Repeat("a long title ", 20) + "waits on o/adidas#1512 and #9",
+		Why:   "held: blocked by o/x#19; 1 of 1 blockers open"}
+	if err := r.a.escalate(context.Background(), loopParty, e, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	note := r.calls[1]
+	question := note[len(note)-1]
+	if question != "What unblocks https://github.com/o/wepa/issues/137?" {
+		t.Errorf("question %q", question)
+	}
+	sq := note[slices.Index(note, "--status-quo")+1]
+	if got := post.Unlinked(question+" "+sq, ""); len(got) != 0 {
+		t.Errorf("status quo %q names issues without their URL: %v", sq, got)
+	}
+}
+
+// One item the note guard refuses never holds back the next.
+func TestEscalateAllGoesOnPastAFailure(t *testing.T) {
+	r := newLoopRig(t)
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopNote && slices.Contains(args, refOne) {
+			return "note for pat refused", 2
+		}
+		return "", 0
+	}
+	es := []escalation{{Ref: refOne, URL: issueOneURL}, {Ref: idleRef, URL: "https://github.com/o/r/issues/2"}}
+	done, err := r.a.escalateAll(context.Background(), loopParty, es, time.Hour)
+	if err == nil || len(done) != 1 || done[0].Ref != idleRef {
+		t.Errorf("escalated %+v, err %v: want o/r#2 escalated and o/r#1's failure returned", done, err)
 	}
 }
 
