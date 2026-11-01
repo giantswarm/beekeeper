@@ -180,6 +180,10 @@ func TestMissingEnvironmentConfigHooks(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", configDir)
 			t.Setenv("XDG_STATE_HOME", stateDir)
 			t.Setenv("CLAUDE_ENV_FILE", prelude)
+			defaultConfigDir, err := os.UserConfigDir()
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, broken := range []bool{false, true} {
 				t.Run(fmt.Sprint(broken), func(t *testing.T) {
 					cfg := filepath.Join(root, "missing.yaml")
@@ -216,7 +220,7 @@ func TestMissingEnvironmentConfigHooks(t *testing.T) {
 					} else if stdout.Len() != 0 {
 						t.Fatalf("want no hook response, got %q", stdout.String())
 					}
-					for _, path := range []string{stateDir, configDir, filepath.Join(root, "Library"), prelude} {
+					for _, path := range []string{stateDir, configDir, filepath.Join(defaultConfigDir, "beekeeper"), prelude} {
 						if _, err := os.Stat(path); !os.IsNotExist(err) {
 							t.Errorf("hook touched %s: %v", path, err)
 						}
