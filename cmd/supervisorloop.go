@@ -262,7 +262,7 @@ its key first in the detail):
             (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
-            capacity.choices), decided like any start; a worker on a
+            capacity.choices), using reserved review headroom; a worker on a
             self-hosted provider's model gets one on no self-hosted provider
             (--review-of-self-hosted)
   go        every check on the head green, and either the last round's

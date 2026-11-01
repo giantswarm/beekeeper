@@ -269,8 +269,9 @@ ahead of the even pace), the pick beekeeper capacity pick prints. Without
 --harness a desk with capacity.choices starts on that pick too (unless
 --model names a model none of them has: claude then), one without them on
 claude. --exclude skips matching choices (by model, harness/model, provider,
-or harness; repeatable). --review marks a review start, decided like any
-start; --review-of-self-hosted marks the review of a self-hosted model's
+or harness; repeatable). --review marks a review start, which may use
+capacity.reviewHeadroom extra subscription sessions above the worker ceiling;
+--review-of-self-hosted marks the review of a self-hosted model's
 work, which takes no choice on a self-hosted provider.`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -484,7 +485,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "", "the agent harness: claude, omp, agy, codex, or auto (default: auto with capacity.choices, else claude)")
 	c.Flags().StringArrayVar(&exclude, "exclude", nil, "exclude a choice from --harness auto (model, harness/model, provider, or harness; repeatable)")
-	c.Flags().BoolVar(&review, reviewFlag, false, "a desk review start, decided like any start")
+	c.Flags().BoolVar(&review, reviewFlag, false, "a desk review start, using reserved review headroom")
 	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the review of a self-hosted model's work: no choice on a self-hosted provider")
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")

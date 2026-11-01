@@ -1374,3 +1374,46 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 		}
 	}
 }
+
+// A pass must start the parked PR's review even with every worker slot busy.
+func TestLoopStartsReviewAtWorkerCeilingInOnePass(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Capacity.Ceiling = 2
+	r.a.cfg.Capacity.ReviewHeadroom = 2
+	r.park(t, loopPR, time.Now())
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, tasked(busyOne), tasked(busyTwo))
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			kind := forWorker
+			if slices.Contains(args, "--review") {
+				kind = forReview
+			}
+			v := newStartCapacity(countAgents(st, nil, r.a.now), r.a.cfg.Capacity, roomy(), false, kind)
+			if _, err := gateStart(v, false); err != nil {
+				return err.Error(), ExitRefused
+			}
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if evs := r.logged(t, "supervisor.review"); len(evs) != 1 {
+		t.Fatalf("no review in first pass: %v, %s", r.calls, r.out)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := newStartCapacity(countAgents(st, nil, r.a.now), r.a.cfg.Capacity, roomy(), false, forWorker)
+	if _, err := gateStart(v, false); err == nil {
+		t.Fatal("ordinary worker passed the ceiling")
+	}
+}
