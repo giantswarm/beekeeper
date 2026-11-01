@@ -372,8 +372,11 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if err != nil {
 		return c, err
 	}
-	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Version != project.Version() || c.Harnesses[claudeComm] == "" {
-		return c, refused("execution host identity, protocol, binary, harness or policy does not match")
+	// Protocol is the wire compatibility boundary. The pinned host policy
+	// still binds its own binary and rules; a coordinator-only release must
+	// not invalidate that independently prepared policy.
+	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Harnesses[claudeComm] == "" {
+		return c, refused("execution host identity, protocol, harness or policy does not match")
 	}
 	if err := c.Resources.Validate(time.Now()); err != nil {
 		return c, refused("%v", err)

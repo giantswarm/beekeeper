@@ -234,7 +234,8 @@ broken function, workaround, follow-up or problem the task met, with its
 evidence and owning repository, or --problem none. beekeeper delivers both
 itself: the supervisor's watch prints the report once (WORKER REPORT) and
 each finding as a line of its own (PROBLEM FOUND), for the supervisor to
-file; the log keeps them (agents.report, agents.problem).`,
+file; a finding filed already names its issue's URL. The log keeps them
+(agents.report, agents.problem).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			found, err := problemsFound(problems, finished)
@@ -301,6 +302,7 @@ file; the log keeps them (agents.report, agents.problem).`,
 			if err != nil {
 				return err
 			}
+			a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			if report != "" || len(found) > 0 {
 				if _, err := fmt.Fprintf(a.out, "register: the report and %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
 					return err
@@ -319,7 +321,7 @@ file; the log keeps them (agents.report, agents.problem).`,
 	}
 	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
 	idle.Flags().StringVar(&report, "report", "", `the final report for the supervisor, "-" from stdin (required with --done)`)
-	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository; "none" when there was none (required with --done)`)
+	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository, and its issue's URL once filed; "none" when there was none (required with --done)`)
 	var keepDesktop bool
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
@@ -402,7 +404,9 @@ type registration struct {
 // sessions that no longer run, and is refused a name the entry of a running
 // session holds. An open task of a dropped entry is never lost: the new
 // entry takes it over with its assignment time, and two dropped entries with
-// open tasks are refused, since one entry holds one task.
+// open tasks are refused, since one entry holds one task. A park the session
+// took off the roster ends, as a new task ends an agent's: the roster
+// entry's own task and park, if any, are what it waits on now.
 func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
 	var reg registration
 	var holder, lastTask, harness, model string
@@ -443,6 +447,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
+	st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
 	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep, Harness: harness, Model: model})
 	return reg, nil
 }

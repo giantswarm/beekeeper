@@ -32,6 +32,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/sink"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -254,7 +255,9 @@ keeps no value: the program, its subcommands and the flag names.
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
-polls once, keeps no mark and says every condition it finds; a read that
+polls once, keeps no mark and says every condition it finds; it fires no
+timer (no wake, no command, no close or re-arm), each one due a TIMER line
+marked that --once writes nothing; a read that
 fails (the state, a source, GitHub) is a line and makes it exit 1, so a
 silent --once with exit 0 means nothing changed. The notes' read is said
 on the NOTE path: NOTE REFS UNREADABLE when GitHub fails it, NOTE REFS
@@ -311,8 +314,10 @@ func (a *app) runWatcher(ctx context.Context, w *watcher, once, notifyDesktop bo
 
 type watcher struct {
 	*app
-	mu   sync.Mutex
-	last map[string]time.Time
+	// loopOwned leaves event actions to the deterministic supervisor.
+	loopOwned bool
+	mu        sync.Mutex
+	last      map[string]time.Time
 	// active are the lasting conditions said and not yet ENDED.
 	active map[string]condition
 	// markFile keeps active and reported for a restarted watch; dirty is
@@ -590,7 +595,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.timerActs.Wait()      // nor a timer's wake or command
 		return w.onceErr()
 	}
-	w.diskPruneOn = true
+	w.diskPruneOn = !w.loopOwned
 	w.goCacheOn = true
 	w.dockerOn = true
 	w.freeOn = true
@@ -760,6 +765,9 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 		case err != nil:
 			w.emit("alerts", "ALERTS baseline unusable: %v", err)
 		case !owned:
+			if base, err := store.Load(); err == nil {
+				w.publishAlerts(base.Firing(""))
+			}
 			reader.Close()
 			w.clear("alerts")
 			if owner.PID != other {
@@ -773,6 +781,9 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 				w.emitNow("alerts", "ALERTS taken over by this watch")
 			}
 			lines, noContext := w.alertCycle(ctx, store, reader)
+			if base, err := store.Load(); err == nil {
+				w.publishAlerts(base.Firing(""))
+			}
 			for _, l := range lines {
 				w.emitNow("alerts", "%s", l)
 			}
@@ -843,6 +854,9 @@ func (w *watcher) clear(key string) {
 	w.dirty = w.dirty || active
 	w.mu.Unlock()
 	if active {
+		if w.store != nil {
+			_ = w.store.Record(event(watchParty, "watch.clear", "%s", key))
+		}
 		w.emitNow("ended", "ENDED %s (since %s)", c.Label, c.Since.Local().Format("15:04"))
 	}
 }
@@ -1082,8 +1096,12 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 }
 
 // emitNow prints an event that is never folded away.
-func (w *watcher) emitNow(_ string, format string, args ...any) {
-	w.emitLine(time.Now().Format("15:04:05") + " " + fmt.Sprintf(format, args...))
+func (w *watcher) emitNow(key string, format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	if w.store != nil {
+		_ = w.store.Record(event(watchParty, "watch."+key, "%s", line))
+	}
+	w.emitLine(time.Now().Format("15:04:05") + " " + line)
 }
 
 // emitLine prints one complete line.
@@ -1170,6 +1188,9 @@ func (w *watcher) sample(ctx context.Context) {
 		}
 	}
 	w.saveMark()
+	if w.loopOwned {
+		w.publishMachine()
+	}
 }
 
 // sampleCPU says the CPU lines: HIGH LOAD over watch.loadMax (or
@@ -1550,6 +1571,10 @@ func (w *watcher) exposures() {
 // when GitHub refuses GraphQL calls, with the callers drawing on it.
 func (w *watcher) budget(ctx context.Context, now time.Time) {
 	b, err := w.probeBudget(ctx)
+	if ctx.Err() == nil {
+		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
+		w.publishBudget(held)
+	}
 	switch {
 	case err != nil && ctx.Err() != nil:
 	case err != nil:
@@ -1846,6 +1871,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	w.clear("state-read")
+	if w.chores {
+		defer w.claims(ctx)
+	}
 	st = w.syncExecutions(ctx, st)
 	w.records = st.Records
 	supervised := w.supervisorGone(ctx, st, sessions)
@@ -1868,6 +1896,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if w.chores && (u == nil || !u.High) {
 		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
 	}
+	if w.chores {
+		w.stopParked(ctx, st, sessions) // a parked session costs no memory
+	}
 	if st.Stop == nil {
 		w.stoppedAgents(st, sessions) // STOPPED names the sessions the stop ended
 	}
@@ -1886,6 +1917,11 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		over, kept = nil, nil
 	}
 	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st))
+	var settles func(state.Timer) bool // nil: a running watch settles every timer
+	if !w.chores {
+		w.wouldFireTimers(st, found)
+		settles = func(state.Timer) bool { return false }
+	}
 	var fires []timerFire
 	var defaulted, overtaken []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
@@ -1902,7 +1938,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
-		tl, te, tf, touched := settleTimers(st, found, w.now)
+		tl, te, tf, touched := settleTimersMatching(st, found, w.now, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
@@ -2126,6 +2162,9 @@ func firedNow(st *state.State, now time.Time) []dueItem {
 // It reports whether a supervisor runs (a restarting one does not: its
 // watch restarts with it).
 func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions []*claude.Session) bool {
+	if w.loopRunning() {
+		return true
+	}
 	s := st.Supervisor
 	sv := readSupervision(st, sessions, w.now, w.cfg.Supervisor.RestartGrace.Duration)
 	var key string
@@ -2258,15 +2297,19 @@ func reportLines(r state.WorkerReport) []string {
 		lines = append(lines, l+": "+truncate(r.Text, 2000))
 	}
 	for _, p := range r.Problems {
-		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; file it and hand it to a worker", r.By.Name, truncate(p, 400)))
+		next := "file it and hand it to a worker"
+		if superloop.Filed(p) {
+			next = "filed; hand it to a worker"
+		}
+		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; %s", r.By.Name, truncate(p, 400), next))
 	}
 	return lines
 }
 
 // parkOnPerson reports whether park p waits on a person's word: a note, or
 // waits that name a person's answer, review or reply, or person; waits that
-// name only the supervisor or the guide beside a lease grant, a timer or a
-// probe wait on a resource. A park on a lease never waits on a person.
+// name only the supervisor or the guide wait on an operational handoff,
+// including a gate or install chain. A park on a lease never waits on a person.
 func parkOnPerson(p *state.Park, person string) bool {
 	if _, note := parkNote(p.On); note {
 		return true
@@ -2277,8 +2320,7 @@ func parkOnPerson(p *state.Park, person string) bool {
 	if _, lease := parkLease(p.On); lease {
 		return false
 	}
-	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person) ||
-		parkedOn(p.Waits, person) != "" && !resourceWaitWords.MatchString(p.Waits)
+	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person)
 }
 
 // parkedNews says once per park which agents parked on a person (a note,

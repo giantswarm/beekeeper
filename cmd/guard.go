@@ -25,6 +25,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
@@ -66,12 +67,20 @@ func (a *app) slotView() (dir string, n int) {
 
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag, classFlag string
+	var localFlag bool
 	c := &cobra.Command{
-		Use:   "run [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
+		Use:   "run [--local] [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
 		Short: "Run a build, test or lint command in a build slot under a memory cap",
 		Long: `run takes one of the machine's build slots and runs the command in a
 transient systemd user scope in the slot's slice under memcap.slice, both
 with MemoryMax=SIZE and MemorySwapMax=0, the scope with OOMPolicy=continue.
+With run.remote.enabled, eligible Go and Cargo builds first try a reusable
+builder Job in the configured cluster. --local keeps worktree-writing commands
+local; formatters and compound shell commands stay local automatically. Setup
+failure falls back to the ordinary local slot. Once a remote command may have
+started, stream loss reconnects to its byte journal and never reruns it locally.
+See docs/remote-builds.md for configuration and the builder image contract.
+
 A run of a Claude Code session that holds a slot already (a lab proof in
 the background, a test suite in the foreground) takes no second slot: it
 joins the session's slot at once, its scope in the same slice, and shares
@@ -140,7 +149,12 @@ default half the cores) bounds the cores they use together, its CPUWeight
 (memcap.cpuWeight, default 50 against the desktop's slices' 100) their
 share while the desktop wants the cores too; run sets both at every slot it
 takes, the slots share them by equal weight, and the command starts at nice
-10. snapshot and free show the slice's budget and use.
+10. The command's own parallelism follows its slot's share of the quota:
+GOMAXPROCS and CARGO_BUILD_JOBS are the quota's whole cores over the slots,
+at least one, unless the caller sets them; no quota sets neither. A linter
+or a compile that starts a thread per core would otherwise keep every
+core's run queue full and lift the load that gates the starts. snapshot and
+free show the slice's budget and use.
 
 Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCAP_WAIT (8m, 60m with MEMCAP_BACKGROUND=1),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
@@ -201,6 +215,17 @@ machine's files stay untouched.`,
 				}
 				o.Class = guard.DefaultClass(args)
 			}
+			// Per-run local resource/wait overrides retain their existing semantics.
+			// Remote pods use the desk-configured resources and placement bound.
+			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
+				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr}
+				if handled, rc := runner.Try(cmd.Context(), args); handled {
+					if rc != 0 {
+						return &exitError{code: rc}
+					}
+					return nil
+				}
+			}
 			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {
 				return &exitError{code: rc}
@@ -209,6 +234,7 @@ machine's files stay untouched.`,
 		},
 	}
 	c.Flags().SetInterspersed(false)
+	c.Flags().BoolVar(&localFlag, "local", false, "run in the local slot even when run.remote is enabled")
 	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&classFlag, "class", "", "the run's class: build takes a build slot, benchmark and lab take none (default build, lab for agentlab)")

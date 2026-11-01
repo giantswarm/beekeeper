@@ -32,6 +32,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/notify"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
 // Browser is the resource every machine has: the one Chrome the Claude in
@@ -74,18 +75,19 @@ type Config struct {
 	// through, and its keeper.
 	Teleport Teleport `yaml:"teleport"`
 
-	GitHub   GitHub   `yaml:"github"`
-	Watch    Watch    `yaml:"watch"`
-	Disk     Disk     `yaml:"disk"`
-	Overlaps Overlaps `yaml:"overlaps"`
-	Claude   Claude   `yaml:"claude"`
-	Omp      Omp      `yaml:"omp"`
-	Agy      Agy      `yaml:"agy"`
-	Codex    Codex    `yaml:"codex"`
-	Desktop  Desktop  `yaml:"desktop"`
-	Memcap   Memcap   `yaml:"memcap"`
-	Lanes    []Lane   `yaml:"lanes"`
-	Merge    Merge    `yaml:"merge"`
+	GitHub   GitHub    `yaml:"github"`
+	Watch    Watch     `yaml:"watch"`
+	Disk     Disk      `yaml:"disk"`
+	Overlaps Overlaps  `yaml:"overlaps"`
+	Claude   Claude    `yaml:"claude"`
+	Omp      Omp       `yaml:"omp"`
+	Agy      Agy       `yaml:"agy"`
+	Codex    Codex     `yaml:"codex"`
+	Desktop  Desktop   `yaml:"desktop"`
+	Memcap   Memcap    `yaml:"memcap"`
+	Run      RunConfig `yaml:"run"`
+	Lanes    []Lane    `yaml:"lanes"`
+	Merge    Merge     `yaml:"merge"`
 	// Units configures the transient user services beekeeper starts.
 	Units  Units  `yaml:"units"`
 	Alerts Alerts `yaml:"alerts"`
@@ -387,7 +389,39 @@ type Board struct {
 	Order []BoardStep `yaml:"order"`
 	// Epics is the epic gate, whatever the order says.
 	Epics EpicGate `yaml:"epics"`
+	// ArchiveAfter is how long a closed item stays on the board before
+	// board tidy archives it (default 336h, two weeks; negative: never,
+	// closed items are still moved to Done). TidyEvery is how often the
+	// supervisor loop runs board tidy (default 1h; negative: never).
+	ArchiveAfter Duration `yaml:"archiveAfter"`
+	TidyEvery    Duration `yaml:"tidyEvery"`
+	// Claims publishes the desk's session records on their issues, for
+	// the other desks working the same repositories.
+	Claims BoardClaims `yaml:"claims"`
 }
+
+// BoardClaims is a desk's claims on GitHub: each issue a session record
+// serves carries one marker comment of the desk (Desk), which board
+// next and agents start on every other desk honour, and which the desk
+// releases when the record ends.
+type BoardClaims struct {
+	// Off publishes no claim and reads none.
+	Off bool `yaml:"off"`
+	// Desk is the name the desk signs its claims with, which other desks
+	// see on the issues: a neutral name, never a machine's (the issues may
+	// be public). Unset, the desk publishes no claim and still honours the
+	// other desks'.
+	Desk string `yaml:"desk"`
+	// Refresh is how often the desk refreshes a claim that still holds
+	// (default 6h).
+	Refresh Duration `yaml:"refresh"`
+	// StaleAfter is how long another desk's claim holds unrefreshed
+	// (default 24h): older, it is shown and not honoured.
+	StaleAfter Duration `yaml:"staleAfter"`
+}
+
+// DefaultBoardArchiveAfter is board.archiveAfter when unset: two weeks.
+const DefaultBoardArchiveAfter = 14 * 24 * time.Hour
 
 // EpicGate is the epic gate: an epic in a Planning status is in planning,
 // neither it nor any issue under it offered; moving it to Go is the go,
@@ -666,7 +700,8 @@ const (
 type Disk struct {
 	Prune string   `yaml:"prune"`
 	Every Duration `yaml:"every"`
-	// SccacheMaxGiB caps scheduled sccache cleanup; negative disables the cap.
+	// SccacheMaxGiB caps sccache's local cache: a scheduled run trims it least
+	// recently used first to three quarters of the cap; negative disables the cap.
 	SccacheMaxGiB int `yaml:"sccacheMaxGiB"`
 	// Checkouts locates main checkouts whose harness worktrees are inspected.
 	Checkouts []string `yaml:"checkouts"`
@@ -919,6 +954,9 @@ const (
 	DefaultUsageStaleAfter  = 15 * time.Minute
 	DefaultUsageHighPercent = 95.0
 )
+
+// DefaultClaudeUsageCommand reads plan windows without a model turn.
+var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--output-format", "json"}
 
 // DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
@@ -2020,10 +2058,11 @@ type Supervisor struct {
 	// Scope says what the supervisor watches, in a sentence or two; empty,
 	// the prompt names the resources, lanes and installations configured.
 	Scope string `yaml:"scope"`
-	// ReviewRounds is how many review rounds `supervisor loop` starts for
-	// a pull request (default 1): after the last round's request for
-	// changes the worker fixes them and merges on the loop's go without
-	// another review.
+	// ReviewRounds is how many review rounds asking for changes `supervisor
+	// loop` runs for a pull request (default 1): after the last one's
+	// request for changes the worker fixes them and merges on the loop's go
+	// without another review. An approved round is none of them: every new
+	// head after an approval gets its own review.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -2046,6 +2085,70 @@ type Supervisor struct {
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
 	NoteDue      Duration `yaml:"noteDue"`
+	// FillRetryEvery bounds repeated empty or failed board reads while
+	// capacity and the roster stay unchanged (5m).
+	FillRetryEvery Duration `yaml:"fillRetryEvery"`
+	// Ownership is whose pull requests the loop reviews and gives the
+	// merge go for.
+	Ownership Ownership `yaml:"ownership"`
+}
+
+// DefaultTeamFiles is supervisor.ownership.teamFiles unless the
+// configuration sets it: the team files of giantswarm/github.
+const DefaultTeamFiles = "giantswarm/github/repositories"
+
+// Ownership is a desk's team ownership: which pull requests its supervisor
+// loop reviews and gives the merge go for. Outside github.allowedOrgs it
+// never acts, whatever this says.
+type Ownership struct {
+	// Team is the desk's team as the team files name it (team-bumblebee);
+	// empty, every repository of github.allowedOrgs is the desk's.
+	Team string `yaml:"team"`
+	// TeamFiles is where the organisation declares which team owns a
+	// repository, <owner>/<repo>/<dir> (default DefaultTeamFiles, once Team
+	// is set): every <team>.yaml directly in <dir> lists that team's
+	// repositories of <owner> as `- name: <repo>` entries.
+	TeamFiles string `yaml:"teamFiles"`
+	// Review are the repositories (owner/name, path.Match patterns such as
+	// giantswarm/*-configs) the desk reviews and merges whoever owns them.
+	Review []string `yaml:"review"`
+	// Never are the repositories (patterns as Review's) the desk does no
+	// work on, whatever Review or a person's override says: a pull request
+	// in one, or whose title, head branch or a changed path names one, is
+	// left alone.
+	Never []string `yaml:"never"`
+	// Authors are the logins the desk opens its pull requests as (default:
+	// the login gh acts as): one anybody else opened is left alone.
+	Authors []string `yaml:"authors"`
+	// OwnerWait is how long a worker parked on another team's pull request
+	// waits for that team's review before the loop asks guide.person to
+	// override the ownership of that one pull request (24h).
+	OwnerWait Duration `yaml:"ownerWait"`
+}
+
+// TeamFilesRepo is TeamFiles' repository (owner/repo) and directory.
+func (o Ownership) TeamFilesRepo() (repo, dir string) {
+	owner, rest, _ := strings.Cut(o.TeamFiles, "/")
+	name, dir, _ := strings.Cut(rest, "/")
+	return owner + "/" + name, dir
+}
+
+// validate refuses a team-files place without a directory and a pattern
+// path.Match cannot read.
+func (o Ownership) validate() error {
+	if o.TeamFiles != "" {
+		if repo, dir := o.TeamFilesRepo(); dir == "" || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
+			return fmt.Errorf("teamFiles: %q is not <owner>/<repo>/<dir>", o.TeamFiles)
+		}
+	}
+	for field, patterns := range map[string][]string{"review": o.Review, "never": o.Never} {
+		for _, p := range patterns {
+			if _, err := path.Match(p, ""); err != nil || !strings.Contains(p, "/") || strings.HasSuffix(p, "/") {
+				return fmt.Errorf("%s: %q is no owner/name pattern", field, p)
+			}
+		}
+	}
+	return nil
 }
 
 // Role configures a relayed role, the supervisor's or the guide's: the
@@ -2787,6 +2890,11 @@ type Desktop struct {
 	TypingQuiet Duration `yaml:"typingQuiet"`
 }
 
+// RunConfig chooses where build commands execute.
+type RunConfig struct {
+	Remote remotebuild.Config `yaml:"remote"`
+}
+
 // Memcap locates the build slots of the memcap wrapper and caps the
 // commands `beekeeper run` runs.
 type Memcap struct {
@@ -2962,7 +3070,12 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
+	if c.Supervisor.Ownership.Team != "" {
+		setStr(&c.Supervisor.Ownership.TeamFiles, DefaultTeamFiles)
+	}
+	setDur(&c.Supervisor.Ownership.OwnerWait, 24*time.Hour)
 	c.Supervisor.ReviewBrief = homePath(home, c.Supervisor.ReviewBrief)
 	c.Supervisor.WorkerBrief = homePath(home, c.Supervisor.WorkerBrief)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
@@ -3035,6 +3148,10 @@ func (c *Config) defaults() error {
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
+	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
+	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
+	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)
@@ -3179,6 +3296,9 @@ func (c *Config) defaults() error {
 			if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
 				p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
 			}
+		}
+		if name == ClaudeHarness && len(p.Command) == 0 {
+			p.Command = slices.Clone(DefaultClaudeUsageCommand)
 		}
 		if name == AgyHarness && len(p.Command) == 0 && p.hasFields() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
@@ -3330,6 +3450,9 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	if err := c.Run.Remote.Validate(); err != nil {
+		return err
+	}
 	if c.Disk.Prune != "" && c.Disk.Prune != DiskPruneAuto && c.Disk.Prune != DiskPruneAsk {
 		return fmt.Errorf("disk.prune: want auto or ask")
 	}
@@ -3501,6 +3624,9 @@ func (c *Config) validate() error {
 	}
 	if k := c.Supervisor.ClassifierConfidence; k < 0 || k > 1 {
 		return fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k)
+	}
+	if err := c.Supervisor.Ownership.validate(); err != nil {
+		return fmt.Errorf("supervisor.ownership.%w", err)
 	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {

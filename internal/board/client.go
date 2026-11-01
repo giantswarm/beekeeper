@@ -819,12 +819,8 @@ type Moved struct {
 // stands for (see Resolve): the item the issue's projectItems name, else
 // the one addProjectV2ItemById answers, which is the issue's existing item
 // or a new one, with board.team as its Team when it has none; no read of
-// the board's items. An issue of a repository outside the board's owner
-// whose projectItems name no item of the board is never added to it: its
-// item on a project of its repository's own owner (a personal account's
-// user project) moves there by that project's Status values, Moved.Board
-// naming it, without a Team or the epic gate; with no such item, or more
-// than one, it is refused, naming the recipe. Every call acts on the
+// the board's items. Issues from any accessible repository use the configured
+// board, subject to GitHub permissions. Every call acts on the
 // issue's repository (github.ActingOn), so a gh link choosing its login by
 // the owner reaches the issue. An unknown or ambiguous status, and a
 // board.team that is none of the Team field's values, are refused with the
@@ -844,12 +840,9 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 		return nil, err
 	}
 	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
-	id, found, items, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	id, found, _, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
 		return nil, err
-	}
-	if found == nil && c.foreign(mv.Ref) != nil {
-		return c.moveHome(ctx, mv, owner, repo, n, items, in)
 	}
 	sf := m.Fields[StatusField]
 	to, err := Resolve(StatusField, sf.names(), in)
@@ -905,18 +898,20 @@ func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo strin
 	if err != nil {
 		return projectItem{}, err
 	}
+	// Rank and priority retain their existing policy for missing items.
+	if found == nil {
+		if r := c.foreign(mv.Ref); r != nil {
+			return projectItem{}, r
+		}
+	}
 	return c.ensure(ctx, m, mv, id, found)
 }
 
 // ensure is the item found, else the issue id's item addProjectV2ItemById
-// answers, as item reads it; an issue outside the board's owner is refused
-// (foreign) before anything is written.
+// answers, as item reads it. GitHub decides whether the issue may be added.
 func (c *Client) ensure(ctx context.Context, m *meta, mv *Moved, id string, found *projectItem) (projectItem, error) {
 	if found != nil {
 		return *found, nil
-	}
-	if r := c.foreign(mv.Ref); r != nil {
-		return projectItem{}, r
 	}
 	var a struct {
 		Added struct {
@@ -942,9 +937,8 @@ func (c *Client) ensure(ctx context.Context, m *meta, mv *Moved, id string, foun
 }
 
 // foreign is the refusal to add the issue ref to the board when its
-// repository's owner is not the board's: a personal account's or another
-// organisation's issue belongs on its owner's own project, never on this
-// board. nil for an issue of the board's owner.
+// repository's owner is not the board's, for rank and priority only.
+// Move allows any accessible issue on the configured board.
 func (c *Client) foreign(ref string) *Refusal {
 	owner, _, _, err := Ref(ref)
 	if err != nil || strings.EqualFold(owner, c.Board.Owner) {
@@ -954,55 +948,8 @@ func (c *Client) foreign(ref string) *Refusal {
 		ref, c.Board.Owner, c.Board.Project, c.Board.Owner, owner, owner)}
 }
 
-// moveHome moves the item of the issue ref, outside the board's owner, on
-// the project of its repository's own owner its projectItems name: the
-// Status by that project's values, no Team, no epic gate. An issue on no
-// such project, or on several, is refused with the foreign refusal and the
-// recipe: add it to one project of the owner's (gh project item-add), then
-// move it, or set the Status by item id (gh project item-edit).
-func (c *Client) moveHome(ctx context.Context, mv *Moved, owner, repo string, n int, items []projectItem, in string) (*Moved, error) {
-	var homes []projectItem
-	for _, it := range items {
-		if h := it.Home; h != nil && h.Status != nil && strings.EqualFold(h.Owner.Login, owner) {
-			homes = append(homes, it)
-		}
-	}
-	url := fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, n)
-	switch len(homes) {
-	case 0:
-		return nil, &Refusal{fmt.Sprintf("%s, and it is on no project of %s: add it to one (`gh project item-add <number> --owner %s --url %s`), then `beekeeper board move %s <status>` moves it there",
-			c.foreign(mv.Ref).Reason, owner, owner, url, mv.Ref)}
-	case 1:
-	default:
-		boards := make([]string, len(homes))
-		for i, h := range homes {
-			boards[i] = fmt.Sprintf("%s/%d (item %s)", owner, h.Home.Number, h.ID)
-		}
-		return nil, &Refusal{fmt.Sprintf("%s is on %d projects of %s, %s: set its Status on one by item id (`gh project item-edit --id <item> --project-id <project-id> --field-id <status-field-id> --single-select-option-id <option-id>`)",
-			mv.Ref, len(homes), owner, strings.Join(boards, ", "))}
-	}
-	h := homes[0]
-	sf := *h.Home.Status
-	to, err := Resolve(StatusField, sf.names(), in)
-	if err != nil {
-		return nil, &Refusal{err.Error()}
-	}
-	mv.To, mv.Board = to, fmt.Sprintf("%s/%d", owner, h.Home.Number)
-	if h.Status != nil {
-		mv.From = h.Status.Name
-	}
-	if mv.From == to {
-		return mv, nil
-	}
-	if err := c.set(ctx, h.Project.ID, h.ID, sf.ID, sf.option(to)); err != nil {
-		return nil, err
-	}
-	return mv, nil
-}
-
 // lookup reads the issue's node id and its item on the board from the
-// issue's projectItems, nil when they name none, and every item they name
-// with its project's owner, number and Status field (Home). An issue
+// issue's projectItems, nil when they name none, and every item they name. An issue
 // GitHub does not resolve is refused as no issue, ref naming it.
 func (c *Client) lookup(ctx context.Context, m *meta, ref, owner, repo string, n int) (string, *projectItem, []projectItem, error) {
 	var r struct {
@@ -1016,7 +963,7 @@ func (c *Client) lookup(ctx context.Context, m *meta, ref, owner, repo string, n
 		} `json:"repository"`
 	}
 	err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{
-`+itemFields+` `+homeFields+`}}}}}`,
+`+itemFields+`}}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
 	p, ok := partialOf(err)
 	if !ok {
@@ -1215,14 +1162,7 @@ func (c *Client) set(ctx context.Context, project, item, f, o string) error {
 		vars{"p": project, "i": item, "f": f, "v": o})
 }
 
-// homeFields is what lookup takes of an item's project beside its id: its
-// owner, number and Status field, for an issue whose board is its
-// repository's owner's own project.
-const homeFields = `home:project{number owner{...on User{login} ...on Organization{login}}
-status:field(name:"` + StatusField + `"){...on ProjectV2SingleSelectField{id options{id name}}}}`
-
-// projectItem is an issue's item on a board; Home is its project as
-// lookup reads it (homeFields), nil from any other read.
+// projectItem is an issue's item on a board.
 type projectItem struct {
 	ID      string              `json:"id"`
 	Project struct{ ID string } `json:"project"`
@@ -1232,11 +1172,6 @@ type projectItem struct {
 	} `json:"status"`
 	Kind *struct{ Name string } `json:"kind"`
 	Team *struct{ Name string } `json:"team"`
-	Home *struct {
-		Number int                    `json:"number"`
-		Owner  struct{ Login string } `json:"owner"`
-		Status *field                 `json:"status"`
-	} `json:"home"`
 }
 
 // onto marks it a board item with the board fields of p.
