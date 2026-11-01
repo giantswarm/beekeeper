@@ -64,7 +64,7 @@ func checkNoteRecovery(t *testing.T, c client.Client) {
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Defaulted = append(st.Defaulted, st.Notes...)
 		st.Notes = nil
-		return nil, nil
+		return []state.Event{{By: ana, Verb: noteDefaultedEvent, Detail: firstDefaulted}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

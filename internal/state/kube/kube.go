@@ -183,6 +183,9 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		if err != nil {
 			return false, err
 		}
+		if err := snap.closeNotes(want, events, func(at time.Time) (string, error) { return s.nextID(ctx, at) }); err != nil {
+			return false, err
+		}
 		if err := homeless(st, want.state()); err != nil {
 			return false, err
 		}
@@ -529,6 +532,23 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 			out = append(out, e)
 		}
 	}
+	// Closed Notes retain their audit line after Event TTL, including when
+	// writing the Event failed after the atomic status update.
+	notes := &v1alpha1.NoteList{}
+	if err := s.c.List(ctx, notes); err != nil {
+		return nil, err
+	}
+	for _, n := range notes.Items {
+		if c := n.Status.Closure; c != nil {
+			e := state.Event{At: c.At.Time, By: party(c.By), Verb: c.Verb, Detail: c.Detail}
+			duplicate := slices.ContainsFunc(out, func(o state.Event) bool {
+				return o.Verb == e.Verb && o.Detail == e.Detail && o.At.Unix() == e.At.Unix()
+			})
+			if !duplicate && (keep == nil || keep(e)) {
+				out = append(out, e)
+			}
+		}
+	}
 	slices.SortStableFunc(out, func(a, b state.Event) int { return a.At.Compare(b.At) })
 	if n > 0 && len(out) > n {
 		out = out[len(out)-n:]
@@ -572,6 +592,20 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 			return nil, err
 		}
 		out = append(out, fe)
+	}
+	notes := &v1alpha1.NoteList{}
+	if err := s.c.List(ctx, notes); err != nil {
+		return nil, err
+	}
+	for _, n := range notes.Items {
+		if c := n.Status.Closure; c != nil {
+			if slices.ContainsFunc(out, func(e feed.Event) bool { return e.ID == c.ID }) {
+				continue
+			}
+			by := c.By
+			actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
+			out = append(out, feed.Event{ID: c.ID, Kind: c.Verb, Subject: "Note/" + n.Name, Actor: actor, Time: c.At.UTC(), Line: feed.Line(c.Verb, actor, c.Detail)})
+		}
 	}
 	slices.SortFunc(out, func(a, b feed.Event) int { return strings.Compare(a.ID, b.ID) })
 	if n > 0 && len(out) > n {
@@ -692,9 +726,14 @@ func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) 
 	if at.IsZero() {
 		at = time.Now()
 	}
-	id, err := s.nextID(ctx, at)
-	if err != nil {
-		return fmt.Errorf("recording %s on %s: the feed id: %w", e.Verb, obj.GetName(), err)
+	var id string
+	if note, ok := obj.(*v1alpha1.Note); ok && note.Status.Closure != nil && note.Status.Closure.Verb == e.Verb && note.Status.Closure.Detail == e.Detail {
+		id = note.Status.Closure.ID
+	} else {
+		id, err = s.nextID(ctx, at)
+		if err != nil {
+			return fmt.Errorf("recording %s on %s: the feed id: %w", e.Verb, obj.GetName(), err)
+		}
 	}
 	ev := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
@@ -879,6 +918,9 @@ func (snap *snapshot) state() *state.State {
 	}
 	for _, k := range sortedKeys(snap.notes) {
 		n := snap.notes[k]
+		if n.Status.State == noteClosed || n.Status.State == noteAnswered {
+			continue
+		}
 		note := noteOf(n)
 		if n.Status.State == noteDefaulted {
 			st.Defaulted = append(st.Defaulted, note)
