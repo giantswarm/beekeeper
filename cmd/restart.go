@@ -204,7 +204,19 @@ var (
 		_, err = secret.AskVault(path, secret.VaultRequest{Op: secret.VaultPrepare})
 		return err
 	}
+	revokeBrokerHandover = func(context.Context) error {
+		path, err := secret.SocketPath()
+		if err != nil {
+			return err
+		}
+		_, err = secret.AskVault(path, secret.VaultRequest{Op: secret.VaultRevoke})
+		return err
+	}
 )
+
+func brokerHandoverRefusal(err error) error {
+	return fmt.Errorf("handover unavailable: %w; restart refused; a deliberate `systemctl --user restart %s` drops the vault session and requires a new sign-in", err, secret.BrokerUnit)
+}
 
 // brokerStep is what an install does about the broker unit.
 type brokerStep int
@@ -265,11 +277,14 @@ func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.
 		if !dry {
 			if session {
 				if err := prepareBrokerHandover(ctx); err != nil {
-					due(fmt.Sprintf("(handover unavailable: %v; restart refused)", err))
+					_, _ = fmt.Fprintf(w, "due     %s (pid %d) stays on the replaced binary: %v\n", secret.BrokerUnit, pid, brokerHandoverRefusal(err))
 					return
 				}
 			}
 			if err := restartBroker(ctx); err != nil {
+				if session {
+					err = errors.Join(err, revokeBrokerHandover(context.WithoutCancel(ctx)))
+				}
 				due(fmt.Sprintf("(%v)", err))
 				return
 			}

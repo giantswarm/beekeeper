@@ -67,8 +67,31 @@ func (k *Keeper) PrepareHandover() error {
 		return errors.New("service manager did not retain the vault handover; restart refused")
 	}
 	k.handover = f
+	// A crashed installer cannot revoke its preparation. Bound the exposure
+	// while this broker remains alive, independently of the session lifetime.
+	k.handoverEnd = time.AfterFunc(30*time.Second, func() { k.expireHandover(f) })
 	keep = true
 	return nil
+}
+
+func (k *Keeper) expireHandover(f *os.File) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.handover == f {
+		k.invalidateHandover()
+	}
+}
+
+// RevokeHandover wipes shared memory before asking systemd to drop its copy
+// of the descriptor. A failed notification cannot leave a usable snapshot.
+func (k *Keeper) RevokeHandover() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.handover == nil {
+		return nil
+	}
+	k.invalidateHandover()
+	return notifyVault("FDSTOREREMOVE=1\nFDNAME="+handoverName, -1)
 }
 
 // notifyVault waits for systemd to process the descriptor message using its
@@ -138,12 +161,22 @@ func (k *Keeper) RestoreHandover() (result error) {
 		unix.CloseOnExec(3 + i)
 	}
 	defer func() {
-		for _, f := range files {
+		for i, f := range files {
+			// Wipe even descriptors rejected before decoding (e.g. duplicates).
+			if i < len(labels) && labels[i] == handoverName {
+				if err := f.Truncate(0); err != nil {
+					result = errors.Join(result, errors.New("cannot wipe inherited vault handover"))
+				}
+			}
 			_ = f.Close()
 		}
 		if restored {
 			if err := notifyVault("FDSTOREREMOVE=1\nFDNAME="+handoverName, -1); err != nil {
-				result = err
+				if result == nil || errors.Is(result, ErrNoHandover) {
+					result = errors.Join(ErrNoHandover, result, fmt.Errorf("handover cleanup: %w", err))
+				} else {
+					result = errors.Join(result, err)
+				}
 			}
 		}
 		if result != nil {
@@ -159,6 +192,9 @@ func (k *Keeper) RestoreHandover() (result error) {
 		}
 		restored = true
 		err := k.restoreHandover(f, time.Now())
+		if wipeErr := f.Truncate(0); wipeErr != nil {
+			return errors.New("cannot wipe inherited vault handover")
+		}
 		if err != nil {
 			return err
 		}
@@ -169,11 +205,17 @@ func (k *Keeper) RestoreHandover() (result error) {
 func (k *Keeper) restoreHandover(r io.Reader, now time.Time) error {
 	var h vaultHandover
 	if err := json.NewDecoder(io.LimitReader(r, 16384)).Decode(&h); err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%w: snapshot was revoked or empty", ErrNoHandover)
+		}
 		return errors.New("invalid vault handover; vault stays locked")
 	}
 	name, token, ok := strings.Cut(h.Env, "=")
-	if !ok || !sessionName.MatchString(name) || token == "" || strings.ContainsAny(token, "\x00\n") || h.Since.IsZero() || h.Since.After(now) || !h.Until.After(now) || !h.Until.After(h.Since) {
+	if !ok || !sessionName.MatchString(name) || token == "" || strings.ContainsAny(token, "\x00\n") || h.Since.IsZero() || h.Since.After(now) || !h.Until.After(h.Since) {
 		return errors.New("invalid or expired vault handover; vault stays locked")
+	}
+	if !h.Until.After(now) {
+		return fmt.Errorf("%w: snapshot expired", ErrNoHandover)
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()

@@ -276,3 +276,70 @@ func receiveHandover(t *testing.T, received <-chan *os.File) *os.File {
 		return nil
 	}
 }
+
+func TestVaultHandoverRevokeWipesEvenWhenManagerFails(t *testing.T) {
+	received := fakeHandoverManager(t)
+	k := NewKeeper(time.Hour, nil)
+	defer k.Lock()
+	if err := k.Unlock(handoverTestName, handoverTestToken, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.PrepareHandover(); err != nil {
+		t.Fatal(err)
+	}
+	f := receiveHandover(t, received)
+	defer func() { _ = f.Close() }()
+	t.Setenv("NOTIFY_SOCKET", "")
+	if err := k.RevokeHandover(); err == nil {
+		t.Fatal("manager failure was not reported")
+	}
+	st, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != 0 {
+		t.Fatal("failed cleanup left readable session bytes")
+	}
+	if !k.State().Unlocked {
+		t.Fatal("revoking snapshot dropped the live session")
+	}
+}
+
+func TestVaultHandoverLeaseCannotRevokeLaterPreparation(t *testing.T) {
+	received := fakeHandoverManager(t)
+	k := NewKeeper(time.Hour, nil)
+	defer k.Lock()
+	if err := k.Unlock(handoverTestName, handoverTestToken, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.PrepareHandover(); err != nil {
+		t.Fatal(err)
+	}
+	old := k.handover
+	first := receiveHandover(t, received)
+	defer func() { _ = first.Close() }()
+	if err := k.PrepareHandover(); err != nil {
+		t.Fatal(err)
+	}
+	current := k.handover
+	second := receiveHandover(t, received)
+	defer func() { _ = second.Close() }()
+	// Simulate the superseded lease firing after another install prepared.
+	k.expireHandover(old)
+	st, err := second.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() == 0 {
+		t.Fatal("old lease revoked the later snapshot")
+	}
+	// The current lease expiry wipes bytes but keeps the live vault unlocked.
+	k.expireHandover(current)
+	st, err = second.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != 0 || !k.State().Unlocked {
+		t.Fatal("preparation lease failed to wipe only the snapshot")
+	}
+}

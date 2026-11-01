@@ -45,8 +45,11 @@ type Env struct {
 	Spec                                                                     platform.SetupSpec
 	// Run runs one service manager command.
 	Run func(ctx context.Context, argv []string) error
-	// BeforeRestart prepares a service for restart, or refuses before stopping it.
+	// BeforeRestart prepares a service for restart. A refusal skips only this
+	// service's restart and prints its reason, allowing the install to finish.
 	BeforeRestart func(context.Context, string) error
+	// RestartFailed revokes any prepared state when a restart command fails.
+	RestartFailed func(context.Context, string) error
 	Out           io.Writer
 	// DryRun prints every step and takes none.
 	DryRun bool
@@ -298,11 +301,31 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 		p.add("keep", name, "its definition is not beekeeper install's", nil)
 	case state != fileNew && e.Setup.Started(ctx, path):
 		if state == fileUpdated {
-			if e.BeforeRestart != nil {
-				p.add("prepare", name, "preserve running state before restart", func() error { return e.BeforeRestart(ctx, name) })
-			}
+			prepared, deferred := false, false
 			for _, argv := range e.Setup.Restart(path) {
-				p.command(ctx, e, argv)
+				if argv == nil {
+					continue
+				}
+				p.add("run", strings.Join(argv, " "), "", func() error {
+					if deferred {
+						return nil
+					}
+					if !prepared && e.BeforeRestart != nil {
+						if err := e.BeforeRestart(ctx, name); err != nil {
+							deferred = true
+							_, _ = fmt.Fprintf(e.Out, "due     %s restart deferred: %v\n", name, err)
+							return nil
+						}
+					}
+					prepared = true
+					if err := e.Run(ctx, argv); err != nil {
+						if e.RestartFailed != nil {
+							return errors.Join(err, e.RestartFailed(context.WithoutCancel(ctx), name))
+						}
+						return err
+					}
+					return nil
+				})
 			}
 		} else {
 			p.add("ok", name, "running", nil)

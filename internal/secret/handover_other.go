@@ -12,3 +12,5 @@ func (k *Keeper) PrepareHandover() error {
 }
 
 func (k *Keeper) RestoreHandover() error { return nil }
+
+func (k *Keeper) RevokeHandover() error { return nil }

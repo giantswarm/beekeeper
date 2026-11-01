@@ -185,7 +185,15 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	e.Run = runCommand
 	e.BeforeRestart = func(ctx context.Context, unit string) error {
 		if unit == secret.BrokerUnit && a.cfg.Secret.Session {
-			return prepareBrokerHandover(ctx)
+			if err := prepareBrokerHandover(ctx); err != nil {
+				return brokerHandoverRefusal(err)
+			}
+		}
+		return nil
+	}
+	e.RestartFailed = func(ctx context.Context, unit string) error {
+		if unit == secret.BrokerUnit && a.cfg.Secret.Session {
+			return revokeBrokerHandover(ctx)
 		}
 		return nil
 	}

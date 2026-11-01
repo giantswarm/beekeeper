@@ -285,6 +285,14 @@ func TestRestartBrokerRefusesUnavailableHandover(t *testing.T) {
 	if !strings.Contains(out.String(), "restart refused") {
 		t.Fatal("missing warning before restart")
 	}
+	for _, want := range []string{"systemctl --user restart beekeeper-sandbox.service", "drops the vault session", "new sign-in"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatal("missing actionable legacy remedy", want)
+		}
+	}
+	if strings.Contains(out.String(), "rerun beekeeper install") {
+		t.Fatal("suggested retry cannot update the running legacy broker")
+	}
 }
 
 func TestRestartBrokerPreparesHandoverBeforeStopping(t *testing.T) {
@@ -310,5 +318,24 @@ func TestRestartBrokerPreparesHandoverBeforeStopping(t *testing.T) {
 	restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, true)
 	if !prepared || !restarted {
 		t.Fatal("restart did not use the prepared handover")
+	}
+}
+
+func TestRestartBrokerFailureRevokesHandover(t *testing.T) {
+	prevP, prevR, prevH, prevV := brokerProcess, restartBroker, prepareBrokerHandover, revokeBrokerHandover
+	t.Cleanup(func() {
+		brokerProcess, restartBroker, prepareBrokerHandover, revokeBrokerHandover = prevP, prevR, prevH, prevV
+	})
+	brokerProcess = func() (int, string, error) { return 40, restartExe, nil }
+	prepared, revoked := false, false
+	prepareBrokerHandover = func(context.Context) error { prepared = true; return nil }
+	restartBroker = func(context.Context) error { return errors.New("restart failed") }
+	revokeBrokerHandover = func(context.Context) error { revoked = true; return nil }
+	written := time.Now()
+	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Start: written.Add(-time.Hour)}}}
+	var out bytes.Buffer
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, true)
+	if !prepared || !revoked {
+		t.Fatal("failed restart did not revoke its snapshot")
 	}
 }

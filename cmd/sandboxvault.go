@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -37,7 +38,9 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 			return nil, err
 		}
 		if err := k.RestoreHandover(); err != nil {
-			return nil, err
+			if !errors.Is(err, secret.ErrNoHandover) {
+				return nil, err
+			}
 		}
 		k.Lock()
 		return &vaultBroker{k: k}, nil
@@ -66,13 +69,19 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 	if err := secret.Protect(); err != nil {
 		return nil, fmt.Errorf("the vault keeper: %w", err)
 	}
+	var restoreReason string
 	if err := k.RestoreHandover(); err != nil {
 		st := k.State()
 		st.Error = "vault handover rejected: " + err.Error()
 		writeState(st)
-		return nil, fmt.Errorf("the vault handover: %w", err)
+		if !errors.Is(err, secret.ErrNoHandover) {
+			return nil, fmt.Errorf("the vault handover: %w", err)
+		}
+		restoreReason = st.Error
 	}
-	writeState(k.State())
+	st := k.State()
+	st.Error = restoreReason
+	writeState(st)
 	go func() {
 		if err := secret.ServeVault(ctx, path, k, a.vaultStore, a.vaultStoreItem); err != nil {
 			fmt.Fprintf(os.Stderr, "vault keeper: %v\n", err)

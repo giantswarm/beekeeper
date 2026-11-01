@@ -26,14 +26,19 @@ const Locked = "vault locked: waiting for the broker's sign-in"
 // ErrLocked is a vault the person did not unlock in time.
 var ErrLocked = errors.New("vault locked")
 
+// ErrNoHandover is an expected empty, revoked or expired handover. The broker
+// starts locked and continues serving its other operations.
+var ErrNoHandover = errors.New("no usable vault handover")
+
 // Keeper holds the vault session in memory, for its lifetime at most.
 type Keeper struct {
-	handover *os.File
-	mu       sync.Mutex
-	unlocked bool
-	env      string // OP_SESSION_<id>=<token>
-	since    time.Time
-	until    time.Time
+	handover    *os.File
+	handoverEnd *time.Timer
+	mu          sync.Mutex
+	unlocked    bool
+	env         string // OP_SESSION_<id>=<token>
+	since       time.Time
+	until       time.Time
 	// dropped is why op stopped taking the last session and when, until
 	// the next unlock.
 	dropped   string
@@ -196,6 +201,10 @@ func NeedsVault(args []string) bool {
 
 // invalidateHandover revokes the shared memory snapshot with the mutex held.
 func (k *Keeper) invalidateHandover() {
+	if k.handoverEnd != nil {
+		k.handoverEnd.Stop()
+		k.handoverEnd = nil
+	}
 	if k.handover != nil {
 		_ = k.handover.Truncate(0)
 		_ = k.handover.Close()

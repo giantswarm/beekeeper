@@ -1060,26 +1060,76 @@ func TestCodexHooksAndSkills(t *testing.T) {
 	}
 }
 
-func TestInstallRefusesRestartBeforeHandover(t *testing.T) {
+// upgradeSetup puts the broker before the services a first upgrade must finish.
+type upgradeSetup struct{ fakeSetup }
+
+func (f *upgradeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
+	var files []platform.File
+	for _, name := range []string{"beekeeper-sandbox.service", "beekeeper-supervisor-loop.service", "beekeeper-teleport.timer"} {
+		files = append(files, platform.File{Path: filepath.Join(s.ConfigDir, "units", name), Content: []byte("ExecStart=" + s.Exe + " watch\n"), Service: true})
+	}
+	return files, nil
+}
+
+func TestInstallDefersOnlyRefusedRestart(t *testing.T) {
+	f := &upgradeSetup{}
+	e, out := env(t, t.TempDir(), f, f.run)
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	e.Exe, e.Spec.Exe = replacementExe, replacementExe
+	f.ran = nil
+	e.BeforeRestart = func(_ context.Context, name string) error {
+		if name == "beekeeper-sandbox.service" {
+			return errors.New("unknown request prepare-handover")
+		}
+		return nil
+	}
+	e.DryRun = true
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ran) != 0 {
+		t.Fatal("dry run invoked service manager")
+	}
+	e.DryRun = false
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal("refusal aborted the remaining install", err)
+	}
+	if slices.Contains(f.ran, "restart beekeeper-sandbox.service") {
+		t.Fatal("refused broker was restarted")
+	}
+	for _, name := range []string{"beekeeper-supervisor-loop.service", "beekeeper-teleport.timer"} {
+		if !slices.Contains(f.ran, "restart "+name) {
+			t.Fatal("later service was skipped", name)
+		}
+	}
+	if !strings.Contains(out.String(), "restart deferred") {
+		t.Fatal("refusal was not reported")
+	}
+}
+
+func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 	f := &fakeSetup{}
 	e, _ := env(t, t.TempDir(), f, f.run)
 	if err := Install(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
 	e.Exe, e.Spec.Exe = replacementExe, replacementExe
-	f.ran = nil
-	e.BeforeRestart = func(context.Context, string) error { return errors.New("handover unavailable") }
-	e.DryRun = true
-	if err := Install(context.Background(), e); err != nil {
-		t.Fatal("dry run attempted handover", err)
-	}
-	e.DryRun = false
-	if err := Install(context.Background(), e); err == nil {
-		t.Fatal("install ignored failed preparation")
-	}
-	for _, command := range f.ran {
-		if strings.HasPrefix(command, "restart ") {
-			t.Fatal("service restarted despite failed handover")
+	prepared, revoked := false, false
+	e.BeforeRestart = func(context.Context, string) error { prepared = true; return nil }
+	e.RestartFailed = func(context.Context, string) error { revoked = true; return nil }
+	e.Run = func(ctx context.Context, args []string) error {
+		if args[0] == "restart" {
+			return errors.New("restart failed")
 		}
+		return f.run(ctx, args)
+	}
+	if err := Install(context.Background(), e); err == nil {
+		t.Fatal("restart failure ignored")
+	}
+	if !prepared || !revoked {
+		t.Fatal("failed restart left its prepared state")
 	}
 }

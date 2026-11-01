@@ -30,6 +30,7 @@ const (
 	VaultLock      = "lock"
 	VaultStatus    = "status"
 	VaultPrepare   = "prepare-handover"
+	VaultRevoke    = "revoke-handover"
 	VaultStore     = "store"
 	VaultStoreItem = "store-item"
 )
@@ -157,6 +158,10 @@ func answerVault(ctx context.Context, c net.Conn, k *Keeper, store Storer, store
 		}
 	case req.Op == VaultPrepare:
 		if err := k.PrepareHandover(); err != nil {
+			st.Error = err.Error()
+		}
+	case req.Op == VaultRevoke:
+		if err := k.RevokeHandover(); err != nil {
 			st.Error = err.Error()
 		}
 	case req.Op == VaultLock:
