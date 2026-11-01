@@ -76,6 +76,111 @@ available in the pod. CPU and memory requests equal their limits. Build
 parallelism follows the whole cores in the CPU limit, at least one. The
 workspace is limited to 30 GiB.
 
-Shared cache storage and lifecycle cleanup on worktree/PR removal are separate
-slices; this implementation keeps caches only within each warm pod. Remote
-builds require a live proof against the configured cluster before rollout.
+Lifecycle cleanup on worktree/PR removal is a separate slice. Remote builds
+require a live proof against the configured cluster before rollout. Shared
+cache storage is opt-in as described below.
+
+## Shared build cache
+
+Enable S3-compatible storage for both toolchains through `run.remote.cache`:
+
+```yaml
+run:
+  remote:
+    # The cluster, images and resource settings above still apply.
+    cache:
+      enabled: true
+      secret: build-cache
+      goHelper: cacheprog
+      goPrefix: go/v1/
+      rustPrefix: rust/v1/
+      readOnly: false
+```
+
+The Secret belongs to the configured build namespace. Its known storage keys
+are projected individually with `secretKeyRef`; no credential value goes into
+configuration, the pod spec, command arguments or the run journal. The client
+needs no permission to read Secrets. Use these keys:
+
+| Toolchain | Secret keys |
+| --- | --- |
+| Go | `CACHEPROG_S3_BUCKET`, `CACHEPROG_S3_ENDPOINT`, `CACHEPROG_S3_REGION`, `CACHEPROG_S3_ACCESS_KEY_ID`, `CACHEPROG_S3_ACCESS_KEY_SECRET` |
+| Rust | `SCCACHE_BUCKET`, `SCCACHE_ENDPOINT`, `SCCACHE_REGION`, `SCCACHE_S3_USE_SSL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optionally `AWS_REGION` and `AWS_ENDPOINT_URL_S3` |
+
+Optional `CACHEPROG_S3_SESSION_TOKEN` and `AWS_SESSION_TOKEN` support temporary
+storage credentials. Both sets point at the same S3-compatible store. Separate object prefixes keep
+Go and Rust entries apart. Go forces path-style S3 access. `readOnly: true`
+disables Go remote writes and selects sccache's `READ_ONLY` backend mode. It is
+a client setting; enforce access boundaries with storage permissions too.
+
+The Go image must include a cacheprog-compatible helper; tested with
+[`github.com/platacard/cacheprog/cmd/cacheprog@v1.3.1`](https://github.com/platacard/cacheprog/tree/v1.3.1/cmd/cacheprog).
+The Rust image must include [sccache](https://github.com/mozilla/sccache).
+Helpers are installed when building the image, never downloaded during a run.
+Missing Secret keys or helpers, or a failed 15-second startup probe, select
+the ordinary pod-local Go cache or the native Rust compiler before the command
+starts. The command is not retried. Go remote calls have five-second bounds and
+stop using the remote store after three consecutive errors; sccache uses
+`SCCACHE_IGNORE_SERVER_IO_ERROR=1` to retain compiler fallback.
+
+Each Go helper gets a disk directory beneath the run journal, passed explicitly
+with `--root-directory`. The command removes it when it finishes; interrupted
+runs do too. This avoids unbounded local growth in warm pods. Cargo's target
+and Go's native fallback cache remain warm. Shared Rust caching sets `CARGO_INCREMENTAL=0`, required by sccache; the target
+directory still stays warm. The sccache server is stopped after the command. Provider startup diagnostics are suppressed; only numeric helper
+cache counters are added to the output. Compiler/test output is still streamed.
+Changing cache configuration retires reuse of an incompatible existing Job;
+remove an idle owned Job or let its idle timeout expire before using the new
+configuration.
+
+### Connecting CI to the same store
+
+CI can share the same bucket and prefixes when its runner can reach the store.
+Keep endpoints, bucket names and credentials in CI's secret settings, and use
+an image containing the same pinned helper/toolchain. No CI provider account
+or network exposure is configured by this feature.
+
+For a trusted Go job, supply the `CACHEPROG_S3_*` keys above and set:
+
+```sh
+export CACHEPROG_REMOTE_STORAGE_TYPE=s3
+export CACHEPROG_S3_FORCE_PATH_STYLE=true
+export CACHEPROG_S3_PREFIX=go/v1/
+export CACHEPROG_DISABLE_PUT=true  # read-only CI identity
+export CACHEPROG_REMOTE_GET_TIMEOUT=5s CACHEPROG_REMOTE_PUT_TIMEOUT=5s
+export CACHEPROG_REMOTE_STORAGE_MAX_CONSECUTIVE_ERRORS=3
+export CACHEPROG_REMOTE_STORAGE_RETRY_AFTER=0s
+export CACHEPROG_MAX_BACKGROUND_WAIT=2s
+export CACHEPROG_MAX_CONCURRENT_REMOTE_GETS=4
+export CACHEPROG_MAX_CONCURRENT_REMOTE_PUTS=4
+export CACHEPROG_ROOT_DIRECTORY="$RUNNER_TEMP/go-cache"
+
+# This wrapper keeps provider diagnostics out of public CI logs.
+cat > "$RUNNER_TEMP/cacheprog-safe" <<'SH'
+#!/bin/sh
+exec cacheprog direct --root-directory "$CACHEPROG_ROOT_DIRECTORY/$$" 2>/dev/null
+SH
+chmod 700 "$RUNNER_TEMP/cacheprog-safe"
+if timeout --foreground -k 1s 15s cacheprog direct \
+    --root-directory "$CACHEPROG_ROOT_DIRECTORY" </dev/null >/dev/null 2>&1; then
+  export GOCACHEPROG="$RUNNER_TEMP/cacheprog-safe"
+else
+  unset GOCACHEPROG
+fi
+trap 'rm -rf "$CACHEPROG_ROOT_DIRECTORY"' EXIT
+go test ./...
+```
+
+For Rust, supply the `SCCACHE_*`/`AWS_*` storage keys, use the same Rust prefix,
+and set `SCCACHE_S3_RW_MODE=READ_ONLY` and
+`SCCACHE_IGNORE_SERVER_IO_ERROR=1`. Set `CARGO_INCREMENTAL=0` so Rust
+compilations are cacheable. Probe `sccache --start-server` with a bounded
+timeout and suppressed startup diagnostics before setting `RUSTC_WRAPPER`.
+Stop the server when the job ends. Do not print environment variables, debug
+credentials or enable shell tracing around credentials.
+
+Untrusted fork jobs receive no private storage credentials. If a cache is
+intentionally readable by untrusted jobs, use a separate prefix-scoped
+read-only storage identity or an anonymous read-only gateway. A client
+read-only flag cannot restrict credentials that still have write permission.
+Runners without network access or credentials keep their existing local cache.
