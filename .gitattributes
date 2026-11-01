@@ -1,0 +1,3 @@
+# Preserve independent entries when queued pull requests add to the same section.
+# Keep the union driver scoped to the append-only changelog; code uses normal merges.
+/CHANGELOG.md merge=union
