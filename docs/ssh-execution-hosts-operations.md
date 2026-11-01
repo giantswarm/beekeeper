@@ -509,3 +509,9 @@ saved commit and bundle even if the branch has advanced meanwhile. Both ends
 must support source transfer; an older host refuses preparation rather than
 starting from its stale ref. Bundles have a 64 MiB limit; oversized sources fail
 before activation and preserve the reservation for inspection.
+
+A pending reservation from before source transfer may already have a prepared
+host journal whose reply was lost. Recovery inspects that journal before
+pinning source and reuses its original request and commit. Only an explicit
+missing-journal response permits a new source pin; an unreadable journal or
+uncertain connection preserves the reservation for another recovery attempt.

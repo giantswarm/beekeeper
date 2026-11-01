@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,5 +174,24 @@ func TestWorkspaceRejectsCorruptPinnedSource(t *testing.T) {
 	}
 	if len(f.launcher.starts) != 0 {
 		t.Fatal("corrupt source launched a worker")
+	}
+}
+
+func TestSourceInspectionDistinguishesMissingAndUnreadableJournal(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	transport := f.transport(t, nil)
+	if _, err := transport.Inspect(ctx, f.r.Ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing journal: %v", err)
+	}
+	p, err := f.s.journalPath(f.r.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicFile(p, []byte("corrupt journal")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.Inspect(ctx, f.r.Ref); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("unreadable journal treated as absent: %v", err)
 	}
 }

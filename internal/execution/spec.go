@@ -44,6 +44,10 @@ const (
 	Unreachable    = "unreachable"
 )
 
+// ErrNotFound means an inspected execution has no host journal. Other inspection
+// failures never authorize creating or changing a preparation.
+var ErrNotFound = errors.New("execution journal not found")
+
 var ErrUnsupported = errors.New("message acceptance is unavailable for this SSH execution or adapter; inspect the original execution before recovery")
 
 type HostID string

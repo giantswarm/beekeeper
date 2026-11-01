@@ -218,6 +218,9 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
+		if op == "inspect" && reply.Code == "not-found" {
+			return ErrNotFound
+		}
 		if reply.Code == "unsupported" {
 			return ErrUnsupported
 		}

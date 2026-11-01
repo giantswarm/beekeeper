@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -309,13 +310,30 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 	r := rec.Request
 	if rec.Phase == executionPending {
 		if uploader, ok := client.(execution.SourceUploader); ok {
-			var data []byte
-			r, data, err = a.prepareExecutionSource(ctx, r)
-			if err != nil {
-				return err
+			// A pending coordinator may have lost a legacy preparation reply.
+			// Preserve its original request/digest whenever the host journal
+			// already exists. Only confirmed absence permits source pinning.
+			existing := false
+			if r.SourceDigest == "" {
+				_, inspectErr := client.Inspect(ctx, ref)
+				switch {
+				case inspectErr == nil:
+					existing = true
+				case errors.Is(inspectErr, execution.ErrNotFound):
+				default:
+					a.executionFailure(ref, inspectErr)
+					return fmt.Errorf("cannot reconcile pending preparation: %w", inspectErr)
+				}
 			}
-			if err := uploader.UploadSource(ctx, ref, data); err != nil {
-				return err
+			if !existing {
+				var data []byte
+				r, data, err = a.prepareExecutionSource(ctx, r)
+				if err != nil {
+					return err
+				}
+				if err := uploader.UploadSource(ctx, ref, data); err != nil {
+					return err
+				}
 			}
 		}
 		handle, err := client.Start(ctx, r)

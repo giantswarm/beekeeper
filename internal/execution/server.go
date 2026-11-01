@@ -533,6 +533,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
+				if req.Operation == "inspect" && errors.Is(err, os.ErrNotExist) {
+					reply.Code = "not-found"
+				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
 				}
