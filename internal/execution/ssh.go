@@ -46,12 +46,29 @@ type Host struct {
 	OperationTimeout string            `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
 }
 
+// Supports reports whether the operator lists harness for this host.
+func (h Host) Supports(harness string) bool {
+	for _, name := range h.Harnesses {
+		if name == harness {
+			return true
+		}
+	}
+	return false
+}
+
 func (h Host) Validate() error {
 	if err := h.Endpoint.Validate(); err != nil {
 		return err
 	}
-	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) != 1 || h.Harnesses[0] != HarnessClaude {
-		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses [claude]")
+	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) == 0 {
+		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses (claude, codex)")
+	}
+	seen := map[string]bool{}
+	for _, name := range h.Harnesses {
+		if !SupportedHarness(name) || seen[name] {
+			return errors.New("host harnesses must be distinct entries of claude and codex")
+		}
+		seen[name] = true
 	}
 	for repo, p := range h.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
