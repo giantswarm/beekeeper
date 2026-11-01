@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,7 +33,7 @@ sets its item's Status (note add --holds).
 
 Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error { return a.noteList("", false) },
+		RunE: func(cmd *cobra.Command, _ []string) error { return a.noteList(cmd.ErrOrStderr(), "", false) },
 	}
 	var forWho, due, overtaken string
 	var foldInto int
@@ -449,7 +450,8 @@ naming both. --post is the machine's notes' only.`,
 	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
 	var listFor string
 	var full bool
-	list := listCmd("List the open notes", func() error { return a.noteList(listFor, full) })
+	list := &cobra.Command{Use: "list", Short: "List the open notes", Args: cobra.NoArgs}
+	list.RunE = func(cmd *cobra.Command, _ []string) error { return a.noteList(cmd.ErrOrStderr(), listFor, full) }
 	list.Long = `List the open notes, one line each. --full prints each note's whole
 text, every line of it, followed by its default and the issues and pull
 requests it names (owner/repo#n, from its text and its --ref links; a bare
@@ -468,7 +470,7 @@ central instance unreachable, the list fails after the machine's notes.`
 
 // noteList prints the open notes, those for forWho alone with it set;
 // full prints each note's whole text and what it names.
-func (a *app) noteList(forWho string, full bool) error {
+func (a *app) noteList(stderr io.Writer, forWho string, full bool) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -477,6 +479,9 @@ func (a *app) noteList(forWho string, full bool) error {
 	// The central instance's notes follow the machine's; unreachable, the
 	// list fails after the machine's.
 	central, cerr := a.listCentralNotes()
+	if cerr != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: %v\n", cerr)
+	}
 	notes = append(notes, central...)
 	if forWho != "" {
 		notes = slices.DeleteFunc(notes, func(n state.Note) bool { return !strings.EqualFold(n.For, forWho) })
