@@ -7,6 +7,7 @@ Generated from the registered tools of `beekeeper serve` (`make tools-doc`); thr
 | `ack_messages` | write, destructive |
 | `agents_leave` | write, destructive |
 | `agents_register` | write |
+| `answer_verify` | read-only |
 | `converse` | write |
 | `hold_lift` | write, destructive |
 | `hold_list` | read-only |
@@ -123,6 +124,43 @@ A machine publishing its agents passes each one's task and whether it is done; a
     "agent",
     "host"
   ],
+  "type": "object"
+}
+```
+
+## `answer_verify`
+
+```text
+Show the person's recorded answer to a note, or the newest about an issue or pull request, and whether it is their own.
+
+Verified: through an authenticated channel (central, slack), at most 24h old and, with head, naming that commit; for the answering person, their team or its supervisor role.
+```
+
+```json
+{
+  "properties": {
+    "about": {
+      "description": "the issue or pull request, owner/repo#n",
+      "type": "string"
+    },
+    "agent": {
+      "description": "the calling agent's name (default: your email)",
+      "type": "string"
+    },
+    "head": {
+      "description": "the commit its question or words must name",
+      "type": "string"
+    },
+    "host": {
+      "description": "the machine or installation it runs on",
+      "type": "string"
+    },
+    "note": {
+      "description": "the note's number",
+      "type": "number"
+    }
+  },
+  "required": [],
   "type": "object"
 }
 ```

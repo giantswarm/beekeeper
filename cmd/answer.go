@@ -29,7 +29,9 @@ func (a *app) answerCmd() *cobra.Command {
 		Short: "Record a person's answer, word for word, for the session it concerns",
 		Long: `Record the person's words verbatim, however they came (--via cli or
 slack), about the issue or pull request they concern: answer.recorded is
-logged with the thread and the words; --note <id> closes that note
+logged with the thread, the words and the channel they came through, which
+beekeeper sets from where it runs (answer verify): one recorded from
+inside an agent session is relayed, and the session told names its relay; --note <id> closes that note
 (--choice <n> picks one of its options, 1-based, the words optional then)
 and tells the session that filed it; without a note, the sessions serving
 the thread (beekeeper sessions serve) are told. A decision its default
@@ -62,8 +64,9 @@ The hand-over's answers and note add's re-ask warning read answer.recorded
 	}
 	c.Flags().IntVar(&noteID, "note", 0, "the note the answer answers: it closes, its filer is told")
 	c.Flags().IntVar(&choice, "choice", 0, "the note's option chosen, 1-based")
-	c.Flags().StringVar(&via, "via", viaCLI, "how the answer came: cli or slack")
+	c.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack; the channel answer verify reads is set from where it runs")
 	c.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
+	c.AddCommand(a.answerVerifyCmd())
 	return c
 }
 
@@ -75,8 +78,12 @@ type recordedAnswer struct {
 	Comment string        `json:"comment,omitempty"`
 	By      string        `json:"by"`
 	Via     string        `json:"via"`
-	Answer  string        `json:"answer"`
-	Note    int           `json:"note,omitempty"`
+	// Channel is how the answer reached beekeeper (answerChannel);
+	// RelayedBy is who recorded one not the person's own.
+	Channel   string `json:"channel"`
+	RelayedBy string `json:"relayedBy,omitempty"`
+	Answer    string `json:"answer"`
+	Note      int    `json:"note,omitempty"`
 	// Replaced is the default the answer replaces, of a decision its
 	// default had closed.
 	Replaced string   `json:"replacedDefault,omitempty"`
@@ -114,6 +121,7 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		return usageErr("an answer is the person's words")
 	}
 	rec := recordedAnswer{About: about, By: a.answerer(me, n), Via: via, Answer: text, Note: noteID}
+	rec.Channel, rec.RelayedBy = a.answerChannel(me, via)
 	if post {
 		if err := a.postAnswer(ctx, &rec); err != nil {
 			return err
@@ -202,11 +210,11 @@ func (r *recordedAnswer) line(n *state.Note) string {
 	var s string
 	switch {
 	case n != nil && r.Replaced != "":
-		s = fmt.Sprintf("%s (on %s)", replacedLine(n, r.By, r.Answer), r.About)
+		s = fmt.Sprintf("%s (on %s)", replacedLine(n, r.attribution(), r.Answer), r.About)
 	case n != nil:
-		s = fmt.Sprintf("%s (on %s)", answeredLine(r.Note, r.By, r.Answer), r.About)
+		s = fmt.Sprintf("%s (on %s)", answeredLine(r.Note, r.attribution(), r.Answer), r.About)
 	default:
-		s = fmt.Sprintf("ANSWER on %s by %s: %s", r.About, r.By, r.Answer)
+		s = fmt.Sprintf("ANSWER on %s by %s: %s", r.About, r.attribution(), r.Answer)
 	}
 	if r.Comment != "" {
 		s += " posted at " + r.Comment
@@ -231,12 +239,16 @@ func (a *app) answerer(me state.Party, n *state.Note) string {
 }
 
 // answerBody is the comment recording rec for any reader of the thread:
-// who decided, the issue or pull request it concerns by its URL when the
-// comment is on another thread, and the words verbatim as a quote. It names
-// no note, session or channel: those mean something on one desk only.
+// who decided, relayed by an agent when it was, the issue or pull request
+// it concerns by its URL when the comment is on another thread, and the
+// words verbatim as a quote. It names no note, session or channel: those
+// mean something on one desk only.
 func answerBody(rec *recordedAnswer) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Decision** by %s", rec.By)
+	if rec.RelayedBy != "" {
+		b.WriteString(", relayed by an agent")
+	}
 	if t := rec.Thread; t != nil && t.Via != "" {
 		fmt.Fprintf(&b, " on %s", cmp.Or(t.AboutURL, issueURL(t.About)))
 	}
@@ -257,7 +269,8 @@ func issueURL(ref string) string {
 
 // answerEvent is the answer.recorded event of rec: parseAnswered reads it
 // back. Every field but the words is quoted or has no space, the words
-// last: nothing they say reads as another field.
+// last: nothing they say reads as another field. "via" names the channel,
+// one word, as a release before channels read it too.
 func answerEvent(by state.Party, rec *recordedAnswer, n *state.Note) state.Event {
 	at := ""
 	if rec.Comment != "" {
@@ -267,7 +280,7 @@ func answerEvent(by state.Party, rec *recordedAnswer, n *state.Note) state.Event
 	if n != nil {
 		note = fmt.Sprintf(", note #%d asked by %q: %q", n.ID, n.By.Name, n.Text)
 	}
-	return event(by, answerRecorded, "%s answered by %q via %s%s%s: %s", rec.About, rec.By, rec.Via, at, note, rec.Answer)
+	return event(by, answerRecorded, "%s answered by %q via %s%s%s: %s", rec.About, rec.By, rec.Channel, at, note, rec.Answer)
 }
 
 // tellServing tells the sessions serving about (sessions serve) line, and

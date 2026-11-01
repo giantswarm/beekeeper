@@ -114,13 +114,15 @@ func TestEnvtestCentralNotesTwoPersons(t *testing.T) {
 		!strings.Contains(out, "note "+laneRef+" answered as "+boEmail+": own") {
 		t.Fatalf("bo's answer: exit %d: %s", code, out)
 	}
+	// bo's CLI calls as his agent: the central instance cannot tell his
+	// terminal from it, so his answer reaches ana as relayed.
 	msgs, _ := e.expect(t, e.as(t, anaToken), "receive_messages", map[string]any{}, false, "")["messages"].([]any)
 	if len(msgs) != 1 {
 		t.Fatalf("ana's mailbox %+v, want the answer", msgs)
 	}
 	raw, _ := json.Marshal(msgs[0].(map[string]any)["envelope"])
 	var env mailEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil || !strings.HasPrefix(env.Message.text(), fmt.Sprintf("NOTE ANSWERED #%d by %s: own", lane, boEmail)) {
+	if err := json.Unmarshal(raw, &env); err != nil || !strings.HasPrefix(env.Message.text(), fmt.Sprintf("NOTE ANSWERED #%d by %s (relayed by bo-agent): own", lane, boEmail)) {
 		t.Fatalf("ana's delivery %+v: %v", env, err)
 	}
 
