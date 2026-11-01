@@ -217,7 +217,7 @@ func removeEntry(u unit, refs []string) error {
 		return errInUse
 	}
 	v := inspect(u.path)
-	if v.why == "unreadable" {
+	if v.why == whyUnreadable {
 		if _, err := os.Lstat(u.path); errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -227,6 +227,9 @@ func removeEntry(u unit, refs []string) error {
 	}
 	return Remove(u.path)
 }
+
+// whyUnreadable keeps what could not be inspected.
+const whyUnreadable = "unreadable"
 
 var errInUse = errors.New("in use since the scan")
 
@@ -281,7 +284,7 @@ func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
 		return nil
 	})
 	if err != nil {
-		r.Keep("unreadable")
+		r.Keep(whyUnreadable)
 		r.Errors = append(r.Errors, fmt.Errorf("cache inspection: %w", err))
 		return nil, false
 	}
@@ -299,7 +302,7 @@ func inspect(path string) unit {
 	u := unit{path: path}
 	fi, err := os.Lstat(path)
 	if err != nil {
-		u.why = "unreadable"
+		u.why = whyUnreadable
 		return u
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
@@ -337,7 +340,7 @@ func inspect(path string) unit {
 		return nil
 	})
 	if err != nil && u.why == "" {
-		u.why = "unreadable"
+		u.why = whyUnreadable
 	}
 	return u
 }

@@ -157,6 +157,12 @@ func TestUncoveredCachesListsWhatNoPolicyNames(t *testing.T) {
 	}
 }
 
+const (
+	knownCache  = "known"
+	toolCache   = "tool"
+	toolCleaner = "tool cache prune --all"
+)
+
 func TestDiskPruneStillLowNamesUncoveredCaches(t *testing.T) {
 	a, _ := diskFixture(t)
 	saved := diskHoldingMin
@@ -164,8 +170,8 @@ func TestDiskPruneStillLowNamesUncoveredCaches(t *testing.T) {
 	diskHoldingMin = 1 << 20
 	home := t.TempDir()
 	staleCache(t, filepath.Join(home, "big-app"), "a", "b")
-	staleCache(t, filepath.Join(home, "known"), "a")
-	a.cfg.Disk.Caches = []config.DiskCache{{Name: "known", Path: filepath.Join(home, "known"), OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}}}
+	staleCache(t, filepath.Join(home, knownCache), "a")
+	a.cfg.Disk.Caches = []config.DiskCache{{Name: knownCache, Path: filepath.Join(home, knownCache), OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}}}
 	m := diskMachine{caches: customCaches(a), entries: a.diskCacheEntries(), cacheHome: home}
 	read := func() (diskMachine, error) { return m, nil }
 	// The original failure: nothing frees, and the line says where the space is.
@@ -192,7 +198,7 @@ func TestDiskPruneStillLowNamesUncoveredCaches(t *testing.T) {
 
 func TestDiskCacheCommandRunsTheToolsCleaner(t *testing.T) {
 	a, _ := diskFixture(t)
-	root := filepath.Join(t.TempDir(), "tool")
+	root := filepath.Join(t.TempDir(), toolCache)
 	staleCache(t, root, "a", "b", "c")
 	var ran [][]string
 	saved := runCacheCleaner
@@ -204,7 +210,7 @@ func TestDiskCacheCommandRunsTheToolsCleaner(t *testing.T) {
 		}
 		return os.RemoveAll(filepath.Join(root, "a"))
 	}
-	a.cfg.Disk.Caches = []config.DiskCache{{Name: "tool", Path: root, Mode: config.DiskCacheCommand, Command: "tool cache prune --all", MaxGiB: 2.5 / 1024}}
+	a.cfg.Disk.Caches = []config.DiskCache{{Name: toolCache, Path: root, Mode: config.DiskCacheCommand, Command: toolCleaner, MaxGiB: 2.5 / 1024}}
 	m := diskMachine{caches: customCaches(a)}
 	read := func() (diskMachine, error) { return m, nil }
 
@@ -223,7 +229,7 @@ func TestDiskCacheCommandRunsTheToolsCleaner(t *testing.T) {
 	}
 	m.refresh = nil
 	r = a.pruneDisk(false, false, read)
-	if !slices.Equal(ran[0], []string{"tool", "cache", "prune", "--all"}) || r.Freed != 1<<20 || exists(filepath.Join(root, "a")) {
+	if !slices.Equal(ran[0], strings.Fields(toolCleaner)) || r.Freed != 1<<20 || exists(filepath.Join(root, "a")) {
 		t.Fatalf("cleaner: %s ran=%v", r, ran)
 	}
 	// Under the budget only pressure runs it.
