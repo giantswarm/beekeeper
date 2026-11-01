@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -68,8 +69,9 @@ type loopRig struct {
 	broker func() (string, error)
 	// failRecord fails the store's Record of the first event it accepts.
 	failRecord func(state.Event) bool
-	// inTurn says a session runs a turn.
-	inTurn func(state.Party) bool
+	// inTurn says a session runs a turn; sessions are the running CLIs.
+	inTurn   func(state.Party) bool
+	sessions []*claude.Session
 	// pulls are further pull requests by ref; teams the team files'
 	// answer, teamReads how often they were read.
 	pulls     map[string]superloop.Pull
@@ -173,9 +175,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
-	run, read, command, binary, broker, turn, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams, readBaseMerge
+	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, login, teams, baseMerge
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge
 	})
 	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
 		r.baseReads = append(r.baseReads, approved+".."+p.Head)
@@ -187,6 +189,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		return r.teams, r.teamsErr
 	}
 	loopInTurn = func(_ *app, p state.Party) bool { return r.inTurn(p) }
+	loopSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return r.sessions, &proc.Table{}, nil }
 	loopBinary = func() replaceable { return loopFakeBinary{r} }
 	loopBroker = func(context.Context) (string, error) { return r.broker() }
 	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
@@ -1785,7 +1788,7 @@ func TestLoopLeavesAnotherTeamsPullRequestToThatTeamUntilThePersonOverrides(t *t
 	}
 	// The person overrides it: the loop reviews it as the desk's own.
 	n := &state.Note{ID: 1, By: loopParty, Text: note[len(note)-1]}
-	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "Override", Note: 1}, n)); err != nil {
+	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Channel: channelTerminal, Answer: "Override", Note: 1}, n)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
@@ -1873,6 +1876,207 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 		if !strings.Contains(r.out.String(), want) {
 			t.Errorf("the dry run did not say %q:\n%s", want, r.out)
 		}
+	}
+}
+
+// An agent that logs agents.done is still in that turn when the event hits
+// the log: the loop waits for the turn to end before running agents remove,
+// so stopBackgroundStart does not leave its background session running.
+func TestLoopWaitsForAnIdleTurnBeforeRemovingADoneAgent(t *testing.T) {
+	const sess = "w-in-turn"
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, sess)
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	done := event(state.Party{Name: loopWorker, Session: sess}, superloop.VerbDone, "%s done: fix %s", loopWorker, loopURL)
+	report := event(state.Party{Name: loopWorker, Session: sess}, superloop.VerbReport, "%s: merged %s", loopWorker, loopURL)
+	report.At = done.At.Add(10 * time.Microsecond)
+	if err := r.a.store.Record(done, report); err != nil {
+		t.Fatal(err)
+	}
+	r.inTurn = func(p state.Party) bool { return p.Session == sess }
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove); c != nil {
+		t.Fatalf("removed while its turn still ran: %v", c)
+	}
+	if evs := r.logged(t, "supervisor.done"); len(evs) != 0 {
+		t.Fatalf("logged supervisor.done while its turn still ran: %+v", evs)
+	}
+	r.inTurn = func(state.Party) bool { return false }
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("not removed once its turn ended: %v\n%s", r.calls, r.out)
+	}
+}
+
+// agentRef finds the pull request ref from the worker's report after agents
+// idle --done cleared its task and park, and KindFile settles without
+// blocking KindDone on the following pass.
+func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
+	const task = "fix the gate"
+	r := newLoopRig(t)
+	r.a.as = loopParty.Name
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	// agents idle --done clears Task and Park, leaving LastTask without a URL
+	// while the report carries the URL.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Task, st.Agents[0].LastTask, st.Agents[0].Park, st.Agents[0].Done = "", task, nil, true
+		st.WorkerReports = []state.WorkerReport{{By: st.Agents[0].Party, At: time.Now(), Task: task, Text: "merged " + loopURL}}
+		if got := agentRef(st, loopWorker); got != loopURL {
+			t.Fatalf("agentRef = %q, want %q", got, loopURL)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: fix the gate", loopWorker)
+	problem := event(state.Party{Name: loopWorker}, superloop.VerbProblem, "%s: o/r: the gate refuses a green head", loopWorker)
+	problem.At = done.At.Add(10 * time.Microsecond)
+	if err := r.a.store.Record(done, problem); err != nil {
+		t.Fatal(err)
+	}
+	r.answer = func(args []string) (string, int) {
+		if len(args) >= 2 && args[0] == loopNote && args[1] == loopAdd {
+			var out bytes.Buffer
+			cmd := r.a.noteCmd()
+			cmd.SetArgs(args[1:])
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			if err := cmd.Execute(); err != nil {
+				return out.String() + err.Error(), Code(err)
+			}
+			return out.String(), 0
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if evs := r.logged(t, "supervisor.file"); len(evs) != 1 {
+		t.Fatalf("KindFile was refused by note add: %+v\n%s", evs, r.out)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("not taken off the roster after the file: %v\n%s", r.calls, r.out)
+	}
+}
+
+// Each pass of the supervisor loop runs the doctor's roster and archive step:
+// done workers, settled reviewers, relieved role runs and stale idle entries
+// without a CLI leave the roster and have their background sessions stopped,
+// while active role holders, in-turn sessions and sessions the person started
+// stay.
+func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Agents.Mode = config.ModeBackground
+	r.a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
+	now := r.a.now
+
+	doneWorker := state.Party{Session: "11111111-0000-4000-8000-000000000001", Name: loopWorker}
+	reviewer := state.Party{Session: "22222222-0000-4000-8000-000000000002", Name: loopReviewer}
+	guide3 := state.Party{Session: "33333333-0000-4000-8000-000000000003", Name: guideRole.runName(3)}
+	guide4 := state.Party{Session: "44444444-0000-4000-8000-000000000004", Name: guideRole.runName(4)}
+	guide5 := state.Party{Session: "55555555-0000-4000-8000-000000000005", Name: guideRole.runName(5)}
+	staleIdle := state.Party{Session: "66666666-0000-4000-8000-000000000006", Name: "stale worker"}
+	personOwn := state.Party{Session: "77777777-0000-4000-8000-000000000007", Name: "person session"}
+
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, p := range []state.Party{doneWorker, reviewer, guide3, guide4, guide5, staleIdle} {
+			st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: t.TempDir(), By: loopParty, At: now.Add(-2 * time.Hour), Background: true})
+		}
+		st.Agents = []state.Agent{
+			{Party: doneWorker, Done: true, IdleSince: now.Add(-time.Hour)},
+			// guide3 is still on the roster with its role task although relieved.
+			{Party: guide3, Task: guide3.Name},
+			{Party: guide5, Task: guide5.Name},
+			{Party: staleIdle, IdleSince: now.Add(-48 * time.Hour)},
+			{Party: personOwn, IdleSince: now.Add(-48 * time.Hour)},
+		}
+		st.SetGuideRole(state.Role{
+			Holder: &state.Supervisor{Party: guide5, Since: now.Add(-time.Hour)},
+			Run:    5,
+			Relieved: []state.Relief{
+				{Party: guide3, By: guide4, At: now.Add(-2 * time.Hour), Taken: now.Add(-2 * time.Hour)},
+				{Party: guide4, By: guide5, At: now.Add(-time.Hour), Taken: now.Add(-time.Hour)},
+			},
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := stubBackground(t, "",
+		bgSession{ID: doneWorker.Session[:8], SessionID: doneWorker.Session, Kind: bgKind},
+		bgSession{ID: reviewer.Session[:8], SessionID: reviewer.Session, Kind: bgKind},
+		bgSession{ID: guide3.Session[:8], SessionID: guide3.Session, Kind: bgKind},
+		bgSession{ID: guide4.Session[:8], SessionID: guide4.Session, Kind: bgKind},
+		bgSession{ID: guide5.Session[:8], SessionID: guide5.Session, Kind: bgKind},
+		bgSession{ID: personOwn.Session[:8], SessionID: personOwn.Session, Kind: bgKind},
+	)
+	// personOwn has a live CLI; staleIdle has no CLI.
+	r.sessions = []*claude.Session{
+		{PID: 101, ID: doneWorker.Session, Name: doneWorker.Name, Background: true},
+		{PID: 102, ID: reviewer.Session, Name: reviewer.Name, Background: true},
+		{PID: 103, ID: guide3.Session, Name: guide3.Name, Background: true},
+		{PID: 104, ID: guide4.Session, Name: guide4.Name, Background: true},
+		{PID: 105, ID: guide5.Session, Name: guide5.Name, Background: true},
+		{PID: 107, ID: personOwn.Session, Name: personOwn.Name},
+	}
+	// While doneWorker and guide4 still run a turn, neither is stopped yet.
+	r.inTurn = func(p state.Party) bool {
+		return p.Session == doneWorker.Session || p.Session == guide4.Session
+	}
+	r.pass(t)
+
+	stopped := func() []string {
+		var ids []string
+		for _, c := range *calls {
+			if len(c.argv) == 3 && c.argv[1] == bgStopCmd {
+				ids = append(ids, c.argv[2])
+			}
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	if got, want := stopped(), []string{reviewer.Session[:8], guide3.Session[:8], staleIdle.Session[:8]}; !slices.Equal(got, want) {
+		t.Fatalf("stopped on first pass = %v, want %v", got, want)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roster []string
+	for _, ag := range st.Agents {
+		roster = append(roster, ag.Name)
+	}
+	if want := []string{doneWorker.Name, guide5.Name, personOwn.Name}; !slices.Equal(roster, want) {
+		t.Fatalf("roster after first pass = %v, want %v", roster, want)
+	}
+
+	// Their turns end: doneWorker leaves the roster and both doneWorker and guide4 stop.
+	*calls = nil
+	r.sessions = []*claude.Session{
+		{PID: 101, ID: doneWorker.Session, Name: doneWorker.Name, Background: true},
+		{PID: 104, ID: guide4.Session, Name: guide4.Name, Background: true},
+		{PID: 105, ID: guide5.Session, Name: guide5.Name, Background: true},
+		{PID: 107, ID: personOwn.Session, Name: personOwn.Name},
+	}
+	r.inTurn = func(state.Party) bool { return false }
+	r.pass(t)
+	if got, want := stopped(), []string{doneWorker.Session[:8], guide4.Session[:8]}; !slices.Equal(got, want) {
+		t.Fatalf("stopped on second pass = %v, want %v", got, want)
+	}
+	st, err = r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster = nil
+	for _, ag := range st.Agents {
+		roster = append(roster, ag.Name)
+	}
+	if want := []string{guide5.Name, personOwn.Name}; !slices.Equal(roster, want) {
+		t.Fatalf("roster after second pass = %v, want %v", roster, want)
 	}
 }
 

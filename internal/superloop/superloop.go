@@ -854,6 +854,16 @@ func Plan(in Input) []Action {
 	if in.Release != "" {
 		add(Action{Key: "release " + in.Release, Kind: KindRelease, Version: in.Release})
 	}
+	// Drain pending reviews before refilling worker capacity.
+	slices.SortStableFunc(out, func(a, b Action) int {
+		if a.Kind == KindNext && b.Kind != KindNext {
+			return 1
+		}
+		if b.Kind == KindNext && a.Kind != KindNext {
+			return -1
+		}
+		return 0
+	})
 	return out
 }
 

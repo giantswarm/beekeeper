@@ -295,6 +295,9 @@ service manager to stop only its owned service and dependent build scopes. With 
 responsive service manager, the disconnected bound is 90 seconds plus the one-second
 check interval and the service's 60-second termination timeout. Service-manager
 failure remains explicitly unconfirmed; it is not a termination acknowledgement.
+A stop of its own unit is an orderly owned stop, not a crash: the runner records
+the journal as `exited` with the recorded stop reason and exits 0, so a lease-expiry
+stop leaves no failed unit to mistake for a harness crash.
 Host suspension pauses monotonic elapsed time on platforms where the OS does so;
 this bound assumes a running host and functioning user service manager.
 
@@ -368,3 +371,64 @@ head, the outcome remains unconfirmed and needs operator investigation. A failed
 consumed grant does not become reusable. Hooks cannot constrain arbitrary unhooked
 programs or an account owner changing binaries, configuration or state. Dedicated
 accounts or OS isolation are required for a stronger same-account boundary.
+
+## Publish a branch and pull request
+
+A managed Claude worker needs no GitHub write credential on the execution host.
+Commit changes in the owned workspace, then run:
+
+```sh
+beekeeper agents publish --title "fix: resolve the defect" --body-file /srv/beekeeper/workspaces/<execution>/workspace/.beekeeper-scratch/pr.md
+```
+
+The coordinator receives a Git bundle over the authenticated callback, verifies
+its HEAD and ancestry from the pinned execution commit, and pushes with its own
+GitHub login. The remote branch is always
+`beekeeper-execution/<execution-id>/<generation>` in the execution's repository;
+a worker cannot select a repository, remote, destination ref, default branch,
+force option or arbitrary GitHub API operation. The coordinator resolves the
+repository's default branch and creates the PR against it. Both PR text and
+new commit text pass the ordinary outbound rules; complete commit messages are
+scanned separately from patch content, so message bullets are never mistaken
+for patch deletions. PR text cannot ping accounts.
+
+The first publication requires a title and body file. Once a PR exists, review
+fixes need only `beekeeper agents publish`: the same branch advances by a normal
+fast-forward push and the existing PR is returned without changing its text or
+discussion. Closed PRs cannot be reused. For a lost push, create or callback reply,
+repeat the publication: Git rejects history rewrites, and the coordinator looks
+up the exact owned branch before creating a PR. A create attempt is never retried
+blindly. PR editing and commenting continue to use coordinating workflows;
+this command grants no general GitHub API authority.
+
+To bring the latest default branch into the workspace before publishing again:
+
+```sh
+beekeeper agents publish --sync-base
+```
+
+This transfers upstream commits through the same coordinator, fetches them into
+the owned workspace and merges them with hooks disabled. The merge resolves
+the worker's usual author and committer identities, including global Git identity,
+and supplies only those identity fields to the isolated Git operation. Other
+global configuration stays disabled. Resolve conflicts and
+commit locally, then publish. No source checkout is modified and no host GitHub
+credential or SSH agent is forwarded. This command creates no review or merge
+authorization; park on the returned PR and follow the independent review gate.
+
+Each transfer uses authenticated 256 KiB chunks, within the existing wire bound,
+and a SHA-256 digest over the complete bundle. A bundle is bounded to 64 MiB;
+a larger transfer is explicitly refused rather than truncated or sent with a
+credential workaround. Chunk retries verify existing bytes; partial or corrupt
+bundles cannot be published. Transfer files remain under the coordinator's
+`execution-publications/transfers` state directory for recovery and may be moved
+aside once the execution is retired. Failed staging directories remain for
+inspection; successful staging directories are removed.
+
+Every chunk and publication checks the exact execution generation, repository
+allowlist, current lease, completion, execution/global stop and GitHub hold.
+Publishing holds the coordinating state lock through a synchronous attempt of
+at most 20 seconds; it returns an explicit uncertainty on disconnect. Stops and
+holds serialize with that attempt. `agents hosts check` refuses hosts that do
+not advertise publication support; upgrade and prepare an older host before
+starting workers there. Existing raw merge and API guards remain in force.
