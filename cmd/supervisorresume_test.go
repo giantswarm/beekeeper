@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -67,7 +70,7 @@ func TestLoopRecoversEndedSettledPark(t *testing.T) {
 }
 
 func TestLoopRecoveryLeavesUnsettledParksAndStoppedDesk(t *testing.T) {
-	for _, mode := range []string{"unsettled", paramDone, "desk stop", dryRunState, "no task", holderLive} {
+	for _, mode := range []string{"unsettled", paramDone, "desk stop", dryRunState, "no task", holderLive, "managed SSH"} {
 		t.Run(mode, func(t *testing.T) {
 			r := newLoopRig(t)
 			ag := state.Agent{Party: state.Party{Name: "sleeping worker", Session: "gone-worker"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{At: r.a.now, Resumable: r.a.now}}
@@ -76,6 +79,9 @@ func TestLoopRecoveryLeavesUnsettledParksAndStoppedDesk(t *testing.T) {
 			}
 			if mode == paramDone {
 				ag.Done = true
+			}
+			if mode == "managed SSH" {
+				ag.Execution = &execution.Ref{}
 			}
 			if mode == "no task" {
 				ag.Task = ""
@@ -97,5 +103,21 @@ func TestLoopRecoveryLeavesUnsettledParksAndStoppedDesk(t *testing.T) {
 				t.Fatalf("acted: %v", r.calls)
 			}
 		})
+	}
+}
+
+func TestLoopRecoveryRequiresDiscovery(t *testing.T) {
+	r := newLoopRig(t)
+	original := freshSessions
+	t.Cleanup(func() { freshSessions = original })
+	want := errors.New("process inventory unavailable")
+	freshSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return nil, nil, want }
+	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "park inventory worker"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{Resumable: r.a.now}}}}
+	l := &supervisorLoop{a: r.a}
+	if err := l.recoverParks(t.Context(), st); !errors.Is(err, want) {
+		t.Fatalf("discovery: %v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("acted without discovery: %v", r.calls)
 	}
 }
