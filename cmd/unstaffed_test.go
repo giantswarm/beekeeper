@@ -43,7 +43,7 @@ func TestUnstaffedEpics(t *testing.T) {
 	held.Held = "blocked by " + ref(1) + "; 1 of 1 blockers open"
 	list := board.Priorities{epic(1, "One"), epic(2, "Two"), held, epic(4, "Four"), epic(5, "Five")}
 	// Epic 1 is served through a candidate, epic 4 through an item no
-	// candidate holds (a pull request ranked under it).
+	// candidate holds (an issue record ranked under it).
 	st := &state.State{Records: []state.Record{
 		{Session: worker, Issue: ref(101), At: listed.Add(-time.Hour)},
 		{Session: worker, Issue: ref(410), At: listed.Add(-time.Hour)},

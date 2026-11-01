@@ -269,6 +269,12 @@ file; a finding filed already names its issue's URL. The log keeps them
 				if m := post.Unlinked(strings.Join(append([]string{report}, found...), "\n"), agentHere(st, ag)); len(m) > 0 {
 					return nil, refused("report refused, it lacks: %s", strings.Join(m, "; "))
 				}
+				if slices.ContainsFunc(st.DeskReviews, func(round state.DeskReview) bool { return sameReviewSession(round.Reviewer, ag.Party) }) && !sameReviewSession(me, ag.Party) {
+					return nil, refused("independent review completion requires its assigned session, not --as")
+				}
+				if err := a.captureExecutionReviewReport(cmd.Context(), st, me, report, a.now, finished); err != nil {
+					return nil, err
+				}
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
@@ -283,7 +289,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 					}
 				}
 				if report != "" || len(found) > 0 {
-					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
+					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
 				}
 				if report != "" {
 					evs = append(evs, event(me, "agents.report", "%s: %s", ag.Name, report))
@@ -296,6 +302,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 			if err != nil {
 				return err
 			}
+			a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			if report != "" || len(found) > 0 {
 				if _, err := fmt.Fprintf(a.out, "register: the report and %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
 					return err
@@ -397,7 +404,9 @@ type registration struct {
 // sessions that no longer run, and is refused a name the entry of a running
 // session holds. An open task of a dropped entry is never lost: the new
 // entry takes it over with its assignment time, and two dropped entries with
-// open tasks are refused, since one entry holds one task.
+// open tasks are refused, since one entry holds one task. A park the session
+// took off the roster ends, as a new task ends an agent's: the roster
+// entry's own task and park, if any, are what it waits on now.
 func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
 	var reg registration
 	var holder, lastTask, harness, model string
@@ -438,6 +447,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
+	st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
 	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep, Harness: harness, Model: model})
 	return reg, nil
 }

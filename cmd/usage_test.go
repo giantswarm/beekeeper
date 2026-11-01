@@ -54,6 +54,12 @@ func isolateUsageTestEnv(t *testing.T) (dir, cfgPath string) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("MEMCAP_STATE", filepath.Join(dir, "memcap"))
 	t.Setenv("PATH", dir+":/bin:/usr/bin")
+	// A command-less agy provider reads with the built-in `agy -p /usage`:
+	// never the host's agy, which CI has not either. A test that wants a
+	// reading writes its own fake agy over this one or stubs readUsage.
+	if err := os.WriteFile(filepath.Join(dir, config.AgyHarness), []byte("#!/bin/sh\necho 'agy: not available in tests' >&2\nexit 127\n"), 0o700); err != nil { //nolint:gosec // executable test stub in the test-owned temporary directory
+		t.Fatal(err)
+	}
 	return dir, cfgPath
 }
 
@@ -2054,6 +2060,17 @@ func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
 
 	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+	// Both providers read with their built-in commands: agy's buckets have room.
+	a.readUsage = func(_ context.Context, command []string, _ time.Duration) (usageReading, error) {
+		if slices.Equal(command, config.DefaultAgyUsageCommand) {
+			w := func() *usageWindow { return &usageWindow{ResetsAt: t0.Add(2 * time.Hour)} }
+			return usageReading{
+				Buckets:     map[string]usageBucket{config.DefaultAgyGeminiBucket: {FiveHour: w(), SevenDay: w()}},
+				BucketOrder: []string{config.DefaultAgyGeminiBucket},
+			}, nil
+		}
+		return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+	}
 
 	// 1. scratchArgv serializes --exclude without square brackets so a brokered child
 	//    agentStartCmd excludes claude and dispatches agy.
@@ -2456,6 +2473,9 @@ func newSelfHostedApp(cfgPath string, cfg *config.Config, store state.Store, out
 		now:     now,
 		out:     out,
 		as:      usageCaller,
+		readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
+			return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+		},
 	}
 }
 
@@ -2513,7 +2533,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	if !strings.Contains(got, "provider local-model: 0 busy of ceiling 2; room for 2 starts") {
 		t.Fatalf("self-hosted provider line:\n%s", got)
 	}
-	if !strings.Contains(got, "provider claude: 0 busy of floor 1, ceiling 2; no start: ceiling 0") {
+	if !strings.Contains(got, "provider claude: 0 busy of floor 1, ceiling 2; usage 5h 0%, 7d 0%; no start: ceiling 0") {
 		t.Fatalf("subscription provider line:\n%s", got)
 	}
 	// The subscription's choice has no room, so the self-hosted one is what a

@@ -41,7 +41,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	if err := a.refuseStopped(st, "starting "+sp.name); err != nil {
 		return err
 	}
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,8 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 		return err
 	}
 	id := uuid.NewString()
-	sp.brief = "Working directory: " + dir + "\n\n" + fillScratchpad(sp.brief, dir, id)
+	sp.brief = fillScratchpad(sp.brief, dir, id)
+	sp.brief = "Working directory: " + dir + "\n\n" + projectPrompt(dir, sp.brief)
 	inbox := agy.InboxPath(a.cfg.StateDir, id)
 	stream := agy.StreamPath(a.cfg.StateDir, id)
 	s := state.Start{Party: state.Party{HostSession: agy.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: agy.Harness, Model: model}
@@ -80,7 +81,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, "agents.start", "%s: agy agent %s on %s in %s, dangerously-skip-permissions, busy with %q", sp.name, id, model, dir, reg.task)}, nil
+		return []state.Event{event(by, verbStart, "%s: agy agent %s on %s in %s, dangerously-skip-permissions, busy with %q", sp.name, id, model, dir, reg.task)}, nil
 	})
 	if err != nil {
 		return err
@@ -124,10 +125,11 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 
 // dryRunAgyStart prints how startAgyAgent would start sp and starts nothing.
 func (a *app) dryRunAgyStart(sp agentStart, gaps []string) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
+	sp.brief = "Working directory: " + dir + "\n\n" + projectPrompt(dir, sp.brief)
 	model := cmp.Or(strings.TrimSpace(sp.model), "<model>")
 	projID := agy.ProjectForDir(a.cfg.Agy.ProjectsDir, dir)
 	argv := agyArgv(agy.Comm, model, a.cfg.Agy.RemoteControl, projID)

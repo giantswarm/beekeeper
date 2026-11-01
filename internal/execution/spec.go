@@ -73,6 +73,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
 	Messaging      bool   `json:"messaging,omitempty"`
 	Builds         bool   `json:"builds"`
 	Ref            Ref    `json:"ref"`
@@ -143,17 +144,18 @@ type Handle struct {
 }
 
 type Observation struct {
-	Messages         []Delivery `json:"messages,omitempty"`
-	MessageSequence  uint64     `json:"messageSequence,omitempty"`
-	Handle           Handle     `json:"handle"`
-	ProcessState     string     `json:"processState"`
-	Reachability     string     `json:"reachability"`
-	ObservedAt       time.Time  `json:"observedAt"`
-	ReachabilityAt   time.Time  `json:"reachabilityAt"`
-	Ready            bool       `json:"ready"`
-	StopRequested    bool       `json:"stopRequested"`
-	StopAcknowledged bool       `json:"stopAcknowledged"`
-	LastError        string     `json:"lastError,omitempty"`
+	Lease            *LeaseGrant `json:"lease,omitempty"`
+	Messages         []Delivery  `json:"messages,omitempty"`
+	MessageSequence  uint64      `json:"messageSequence,omitempty"`
+	Handle           Handle      `json:"handle"`
+	ProcessState     string      `json:"processState"`
+	Reachability     string      `json:"reachability"`
+	ObservedAt       time.Time   `json:"observedAt"`
+	ReachabilityAt   time.Time   `json:"reachabilityAt"`
+	Ready            bool        `json:"ready"`
+	StopRequested    bool        `json:"stopRequested"`
+	StopAcknowledged bool        `json:"stopAcknowledged"`
+	LastError        string      `json:"lastError,omitempty"`
 }
 
 // FailedContact preserves the last process evidence. A transport failure

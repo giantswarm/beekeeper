@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -43,6 +45,7 @@ const (
 	loopClaimVerb    = "supervisor.claim"
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
+	loopFailureVerb  = "supervisor.failure"
 )
 
 // loopEventVerbs are the events the loop's rules act on.
@@ -140,11 +143,24 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
 	return parseLoopPull(ref, out)
+}
+
+// readBaseMerge reads whether p's head only merges its base into approved
+// (github.BaseMergeOnly).
+var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
+	r, ok := parseRef(p.Ref)
+	if !ok || p.Base == "" {
+		return false, fmt.Errorf("%s names no pull request with a base", p.Ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	only, _, err := github.BaseMergeOnly(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	return only, err
 }
 
 // readDeskLogin is the login gh acts as: the one the desk's agents open
@@ -183,6 +199,7 @@ type loopPullJSON struct {
 	State  string `json:"state"`
 	URL    string `json:"url"`
 	Head   string `json:"headRefOid"`
+	Base   string `json:"baseRefName"`
 	Rollup []struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
@@ -219,7 +236,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -233,7 +250,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	}
 	for _, r := range j.Reviews {
 		member := slices.Contains([]string{"MEMBER", "OWNER", "COLLABORATOR"}, r.Association)
-		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
+		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Commit: r.Commit.OID, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
 	}
 	slices.SortStableFunc(p.Reviews, func(x, y superloop.Review) int { return x.At.Compare(y.At) })
 	return p, nil
@@ -250,6 +267,20 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  alerts    consume the beside-running watch events; the watch reads
+            installations every alerts.every; unowned pages are one summary
+            (installations, counts, oldest firing). A guide.person note requires
+            blocked owned work: an active sessions serve record naming an issue
+            and --waits alert:<name>, with no routable parked worker. Notes are
+            deduplicated per installation and firing. A worker parked
+            on alert:<name> (alertname or installation/alertname) is woken;
+            an unresumable session is retired and its original task staffed
+            again, with a durable replacement intent across restarts.
+            Each worker is woken once per firing, including an already-firing
+            alert. Event wakes are held with starts: an alert that resolves
+            before the hold lifts does not wake a parked worker.
+  budget    every poll consumes watch budget readings; a low or unknown budget
+            holds new worker/reviewer starts and event wakes and says so
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
   tidy      every board.tidyEvery (1h) while a board is configured and the
@@ -258,35 +289,65 @@ its key first in the detail):
   leave     a park the desk's ownership leaves alone (below), said once with
             its reason: no reviewer, no go, no forward, no escalation, and
             a reviewer the loop started on it earlier retires
+  resume    a settled park whose non-Claude harness reports its session gone:
+            restart under
+            the same name with supervisor.workerBrief and a capacity pick,
+            continuing its open task and the wait's answer; a failed start
+            releases the ended task holder so board next can offer it again.
+            Claude transcript resumes, live sessions, managed SSH executions and a
+            stopped desk are left alone
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, for every new head the worker parked on after an
-            approval (one review per head), or after the last round's
+            approval (one review per head) but one that only merges the
+            base into the approved head (below), or after the last round's
             findings were forwarded and the worker parked again on a new
             head while a change-request round is left
             (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), decided like any start; a worker on a
-            self-hosted provider's model gets one on no self-hosted provider
-            (--review-of-self-hosted)
+            self-hosted provider's model gets one on no self-hosted
+            provider (--review-of-self-hosted). With supervisor.hosts
+            (execution hosts, agents.hosts) the start goes to the first
+            host whose own check (capacity --host) has room for its kind
+            and that maps the repository, pinned to its default branch;
+            the local machine keeps starts while it has room, unless
+            supervisor.hostsFirst, which prefers hosts always. No host
+            with room and no room locally: the start waits. A desk with
+            no capacity.choices never places remotely
   go        every check on the head green, and either the last round's
-            verdict approves that head, or no round is left, its verdict
-            asked for changes, they were forwarded and the worker parked
-            again on a new head (its fixes): the merge go for that head,
-            told to the worker (agents wake) with --match-head-commit
-            <head>. Only the verdict of the loop's own last round counts,
-            on the head it reviewed and posted after it started: an older
-            verdict or a round still running authorizes nothing
+            verdict approves that head, or the worker parked after the
+            approval on a head that only merges the base into the approved
+            one, or no round is left, its verdict asked for changes, they
+            were forwarded and the worker parked again on a new head (its
+            fixes) that is more than a merge of the base: the merge go for
+            that head, told to the worker (agents wake) with the merge
+            command of the repository's path: the gate's devctl pr merge
+            <repo> <n> --update-branch on a repository of
+            merge.devctlOwners, whose base update the go covers, else gh
+            pr merge --match-head-commit <head>. A head only merges the
+            base when the approved head is its ancestor, every commit it
+            adds is a merge, and its change against its merge base with
+            the base branch is the approved head's, file by file, hunk by
+            hunk, line by line (compare API); a file without a patch counts
+            only with the approved blob and no change of the base's to it
+            since. Anything else, or a comparison GitHub cuts short, is a
+            new head with a new review. Only the verdict of the loop's own
+            last round counts, on the head it reviewed and posted after it
+            started: an older verdict or a round still running authorizes
+            nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
-  rework    no change-request round left (supervisor.reviewRounds counts
-            the rounds that asked for changes; an approved head is none)
-            and the worker parked again after the forward on the head the
-            findings were about: the worker is told to fix them and push
-            (agents wake), once for each such park; its new green head
-            gets the merge go. Review and rework stay in the loop: no
-            merge question goes to guide.person
+  rework    the worker parked again after the forward on the head the
+            findings were about with no change-request round left
+            (supervisor.reviewRounds counts the rounds that asked for
+            changes; an approved head is none), or, rounds left or not, on
+            a head that only merges the base into it, which carries no
+            fixes: the worker is told to fix them and push (agents wake),
+            once for each such park; its new green head gets the next
+            round, or the merge go once none is left. Review and rework
+            stay in the loop: no merge question goes to guide.person
   answer    the person answered an escalation an earlier loop filed
             (beekeeper answer --note): an answer that releases it (the
             Merge option, or words to merge that refuse nothing) is the
@@ -310,14 +371,23 @@ its key first in the detail):
             once its turn ends: a reviewer once the loop acted on its
             round's verdict (a go, forward, escalation, next round or
             end), and a worker given the merge go after its post-merge
-            report or supervisor.postMergeWindow
-            without activity (default 2h). A session its person
+            report or supervisor.postMergeWindow without activity
+            (default 2h). A managed SSH execution stops (agents stop)
+            and leaves the roster only once the host acknowledged its
+            termination. A session its person
             started is never retired
   next      after a done, and every pass below capacity.floor while capacity
             has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
-            configured, none starts
+            configured, none starts. With supervisor.hosts (execution
+            hosts, agents.hosts) the start goes to the first host whose
+            check (agents hosts check, capacity --host) has room and that
+            maps the item's repository, pinned to its default branch; the
+            local machine keeps the start while it has room, unless
+            supervisor.hostsFirst, which prefers hosts always. No host
+            with room and no room locally: the start waits. Releases
+            and the loop itself stay on the coordinator
   release   a newer release, in stages a later pass resumes until the
             last holds: self-update (verified, installed) while --check
             finds it newer, the sandbox's broker on the installed binary
@@ -334,17 +404,12 @@ its key first in the detail):
             "confidence":0.9}; the event goes to the guide (note add for
             guide.person) with its class, or unclassified below
             supervisor.classifierConfidence (0.8) or without a classifier
-  file      a problem found (agents.problem) that cites no issue URL
-            (https://github.com/<owner>/<repo>/issues/<n>): a note for
-            guide.person, into the guide's queue, to file it in its owning
-            repository, no decision; a done report's together in one note,
-            before the done. One citing its issue is filed: a done report's
-            rides with the done's log line, as does a reviewer's that
-            matches the changes request the loop forwarded, and one logged
-            mid-task needs nothing. The note links the issue or pull
-            request the agent works, or none when it works none. The agent
-            keeps its task: a problem is a finding, never a decision for
-            the person
+  file      a problem found (agents.problem) that cites no issue URL:
+            the full report is logged in supervisor.file and delivered once
+            by guide watch as GUIDE PROBLEM, to file in its owning repository.
+            A done report's problems arrive together before the done settles.
+            No decision note or thread reference is needed. A problem naming
+            its issue is already filed; the agent keeps its task
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -404,7 +469,9 @@ type supervisorLoop struct {
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
-	releaseAt time.Time
+	releaseAt  time.Time
+	startsHeld bool
+	stopWatch  func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
@@ -422,6 +489,9 @@ type supervisorLoop struct {
 	teamsAt time.Time
 	// dryRun prints a pass's transitions and takes none.
 	dryRun bool
+	// baseMerges are the answers of readBaseMerge, by pull request,
+	// approved head and head: two commits' relation does not change.
+	baseMerges map[string]bool
 }
 
 // loopOutput serializes loop transitions with asynchronous timer output.
@@ -437,6 +507,8 @@ func (w *loopOutput) Write(p []byte) (int, error) {
 }
 
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	// One loop per state: a second would take each action again.
 	lock := flock.New(filepath.Join(a.store.Dir(), loopLockFile))
 	held, err := lock.TryLock()
@@ -447,6 +519,11 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	// Observers read a PID marker instead of briefly contending for this lock.
+	if err := a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+		return err
+	}
+	defer func() { _ = a.store.WriteFile("supervisor-loop-pid.json", 0) }()
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
@@ -455,6 +532,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	defer l.timerActs.Wait()
+	if !once {
+		l.stopWatch = a.startLoopWatch(ctx)
+		defer func() {
+			if l.stopWatch != nil {
+				l.stopWatch()
+			}
+		}()
+	}
 	for {
 		a.now = time.Now()
 		if err := l.pass(ctx); err != nil {
@@ -493,7 +578,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -516,8 +601,28 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.timerActs.Wait()
+		if l.stopWatch != nil {
+			l.stopWatch()
+			l.stopWatch = nil
+		}
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+			l.stopWatch = a.startLoopWatch(ctx)
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchConditions(ctx); err != nil {
+			l.startsHeld = true
+			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
+		} else {
+			delete(l.said, "watch-conditions")
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchAlerts(ctx); err != nil {
+			l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
+		} else {
+			delete(l.said, "alerts")
 		}
 	}
 	st, err := a.store.Read()
@@ -529,15 +634,26 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.tidy(ctx, st)
+		if err := a.syncClaims(ctx); err != nil {
+			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
+		}
+	}
+	if err := l.recoverParks(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
 	}
 	own := a.cfg.Supervisor.Ownership
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now, PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
-			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration}}
+			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
+		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) }}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
-			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
+			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -556,6 +672,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	claims, stages := map[string]loopClaim{}, map[string]bool{}
+	failures := map[string]loopFailure{}
 	for _, e := range taken {
 		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
 			in.Taken = append(in.Taken, t)
@@ -570,6 +687,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			delete(claims, key)
 		case e.Verb == loopStageVerb:
 			stages[key] = true
+		case e.Verb == loopFailureVerb:
+			var f loopFailure
+			if json.Unmarshal([]byte(rest), &f) == nil {
+				failures[key] = f
+			}
 		}
 	}
 	for _, t := range in.Taken {
@@ -653,10 +775,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			continue
 		}
+		if a.now.Before(failures[act.Key].RetryAt) {
+			continue
+		}
 		if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
 			// Claimed before an interruption: what the log shows of its
 			// side effect decides, never a second one.
-			what, done, err := l.reconcile(st, act, c)
+			what, done, err := l.reconcile(ctx, st, act, c)
 			if err != nil {
 				return err
 			}
@@ -669,7 +794,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		if act.Kind == superloop.KindQuestion {
 			if err := l.readdress(act); err != nil {
-				l.sayOnce(act.Key, "SUPERVISOR QUESTION FAILED %s: %v", act.Key, err)
+				if err := l.failed(act, failures[act.Key], err); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -678,7 +805,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case errors.Is(err, errLoopLater):
 			continue
 		case err != nil:
-			l.sayOnce(act.Key, "SUPERVISOR %s FAILED %s: %v", strings.ToUpper(act.Kind), act.Key, err)
+			if err := l.failed(act, failures[act.Key], err); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := l.record(act, what); err != nil {
@@ -686,6 +815,23 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	return l.fill(ctx, st, claims, in.Taken)
+}
+
+// baseMerged reports whether p's head only merges its base into approved,
+// read once per pair of heads; a read that fails is said once and counts as
+// no: the new head gets its review.
+func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
+	key := p.Ref + " " + approved + " " + p.Head
+	if ok, read := l.baseMerges[key]; read {
+		return ok
+	}
+	ok, err := readBaseMerge(ctx, p, approved)
+	if err != nil {
+		l.sayOnce("base merge "+key, "SUPERVISOR LOOP cannot tell whether %s's head only merges its base: %v", p.Ref, err)
+		return false
+	}
+	l.baseMerges[key] = ok
+	return ok
 }
 
 // ownership readies the desk's policy for a pass's reads: the logins the
@@ -752,7 +898,7 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+act.Kind, "%s", detail), act.Ref)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), detail)
+	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
 	return err
 }
 
@@ -773,7 +919,7 @@ func keyed(detail string) (key, rest string, ok bool) {
 }
 
 // keyedLine is a loop line's detail.
-var keyedLine = regexp.MustCompile(`^\[([^\]]+)\] (.*)$`)
+var keyedLine = regexp.MustCompile(`(?s)^\[([^\]]+)\] (.*)$`)
 
 // claim logs act's side effect about to happen on target, before it does:
 // a restart finds it and reconciles instead of acting twice.
@@ -784,7 +930,7 @@ func (l *supervisorLoop) claim(act superloop.Action, target string) error {
 // reconcile decides a claimed action from the log since its claim: done
 // when the command it ran left its line (agents start, agents wake, agents
 // remove, note add, all logged as the loop), else not, and it runs.
-func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
+func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
 	evs, err := l.a.store.Events(0, func(e state.Event) bool { return e.By.Name == loopParty.Name && !e.At.Before(c.at) })
 	if err != nil {
 		return "", false, err
@@ -796,17 +942,22 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged("agents.start", opens)
+		done = logged(verbStart, opens)
 	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
-	case superloop.KindEscalate, superloop.KindClassify, superloop.KindFile, superloop.KindOwnership:
+	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	}
 	if !done {
 		return "", false, nil
+	}
+	if act.Kind == superloop.KindReview {
+		if err := l.a.assignExecutionReview(ctx, act); err != nil {
+			return "", false, err
+		}
 	}
 	return fmt.Sprintf("taken before an interruption: %s, as the log shows", c.target), true, nil
 }
@@ -827,7 +978,43 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), detail)
+	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
+	return err
+}
+
+// loopFailure persists identical failures across passes and restarts. Two
+// consecutive failures defer the action for five minutes, keeping it pending.
+type loopFailure struct {
+	Message string    `json:"message"`
+	Count   int       `json:"count"`
+	RetryAt time.Time `json:"retryAt"`
+}
+
+const loopFailureBackoff = 5 * time.Minute
+
+func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
+	f := loopFailure{Message: cause.Error(), Count: 1}
+	// Compare exact messages: a changing timestamp or PID is a different
+	// failure and starts a new count, rather than hiding a new cause.
+	if f.Message == previous.Message {
+		f.Count = previous.Count + 1
+	}
+	if f.Count >= 2 {
+		f.RetryAt = l.a.now.Add(loopFailureBackoff)
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	if err := l.a.store.Record(about(event(loopParty, loopFailureVerb, "[%s] %s", act.Key, b), act.Ref)); err != nil {
+		return err
+	}
+	switch f.Count {
+	case 1:
+		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s FAILED %s: %v\n", strings.ToUpper(act.Kind), act.Key, cause)
+	case 2:
+		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR BACKOFF %s: identical failures; retry after %s\n", act.Key, f.RetryAt.UTC().Format(time.RFC3339))
+	}
 	return err
 }
 
@@ -891,10 +1078,17 @@ var newerLine = regexp.MustCompile(`(\S+) is newer than`)
 
 // The subcommands the loop runs that no other constant names.
 const (
-	loopRemove = "remove"
-	loopBoard  = "board"
-	loopAdd    = "add"
-	loopNote   = "note"
+	loopCapacity = "capacity"
+	loopRemove   = "remove"
+	loopStop     = bgStopCmd
+	loopRecover  = "recover"
+	loopBoard    = "board"
+	loopAdd      = "add"
+	loopNote     = "note"
+	// The placement flags a remote start names on its agents start line.
+	loopHostFlag = "--host"
+	loopRepoFlag = "--repo"
+	loopRefFlag  = "--ref"
 )
 
 // asFlag is the global flag that names the party a command acts as.
@@ -929,6 +1123,20 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindReview:
 		return l.startReviewer(ctx, act)
 	case superloop.KindGo:
+		for _, worker := range st.Agents {
+			if worker.Name != act.Agent || worker.Execution == nil {
+				continue
+			}
+			ref, ok := parseRef(act.Ref)
+			if !ok {
+				return "", errors.New("invalid remote merge pull request")
+			}
+			grant, err := a.issueExecutionMerge(ctx, *worker.Execution, ref.Repo, ref.N, act.Head, loopParty)
+			if err != nil {
+				return "", err
+			}
+			act.Message = fmt.Sprintf("Merge %s at reviewed head %s using: beekeeper agents merge %s %d --head %s --authorization %s. The grant expires at %s; if it expires, park for a new supervisor go.", act.URL, act.Head, ref.Repo, ref.N, act.Head, grant.ID, grant.ExpiresAt.Format(time.RFC3339))
+		}
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
 		}
@@ -975,6 +1183,16 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 			l.sayOnce("turn "+act.Key, "SUPERVISOR DONE WAITS %s: its session runs a turn", act.Agent)
 			return "", errLoopLater
 		}
+		// A managed SSH execution ends with a stop the host acknowledges:
+		// removal is refused while its reservation stands. An unreachable
+		// host fails the stop; the loop says so once and tries again.
+		if ref := st.Agents[i].Execution; ref != nil {
+			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
+				if _, err := l.run(ctx, agentsName, loopStop, act.Agent, "--reason", "supervisor loop: task done"); err != nil {
+					return "", err
+				}
+			}
+		}
 		if err := l.claim(act, act.Agent); err != nil {
 			return "", err
 		}
@@ -1014,14 +1232,14 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Worker string
-	Number, Round           int
+	URL, Repo, Head, Worker, Task string
+	Number, Round                 int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
 const defaultReviewBrief = `Review {{.URL}} at head {{.Head}}, review round {{.Round}}, the work of {{.Worker}}.
 
-Read the pull request, the issue it closes and the diff. Judge whether it does what the issue asks, and find its bugs. Post one review on the pull request (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>): its first line "Review: approved" or "Review: changes requested", its second "Head reviewed: ` + "`{{.Head}}`" + `", then every blocking finding with its file and line. Then report: beekeeper agents idle --done --report "<the verdict and the review's URL>" --problem none (or --problem "<finding, evidence, owning repo>" for each problem the review met).
+Read the pull request, the issue it closes and the diff. Judge whether it does what the issue asks, and find its bugs. Post one review on the pull request (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>): its first line "Review: approved" or "Review: changes requested", its second "Head reviewed: ` + "`{{.Head}}`" + `", then every blocking finding with its file and line. Then report: beekeeper agents idle --done --report "<the same Review: verdict line, a newline, and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>" for each problem the review met).
 `
 
 // brief renders the template in file (def when file is empty) with d into
@@ -1056,9 +1274,20 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	r, _ := parseRef(act.Ref)
 	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent})
 	if err != nil {
+		return "", err
+	}
+	place, err := l.startPlacement(ctx, r.Repo, true, act.SelfHosted)
+	if err != nil {
+		if errors.Is(err, errLoopLater) {
+			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
+			return "", errLoopLater
+		}
 		return "", err
 	}
 	name := superloop.ReviewerName(act.Ref, act.Round)
@@ -1071,15 +1300,31 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			args = append(args, "--"+reviewOfSelfHostedFlag)
 		}
 	}
+	args = append(args, place.remoteStartFlags()...)
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
 	if _, err := l.run(ctx, args...); err != nil {
 		if Code(err) == ExitRefused {
+			if place.remote() {
+				// A refusal of a placed start on a host is either room or
+				// an execution its interrupted start left reserved.
+				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+					return what, nil
+				} else if !errors.Is(rerr, errLoopLater) {
+					return "", rerr
+				}
+			}
 			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet (%v)", act.URL, err)
 			return "", errLoopLater
 		}
 		return "", err
+	}
+	if err := l.a.assignExecutionReview(ctx, act); err != nil {
+		return "", err
+	}
+	if place.remote() {
+		return fmt.Sprintf("reviewer %q started for %s at %s, round %d, on %s", name, act.URL, act.Head, act.Round, place.Selector), nil
 	}
 	return fmt.Sprintf("reviewer %q started for %s at %s, round %d", name, act.URL, act.Head, act.Round), nil
 }
@@ -1107,15 +1352,178 @@ func selfHostedModel(k config.Capacity, model string) bool {
 	return false
 }
 
+// startHost is one placement of a loop start: local with Selector "", else
+// an execution host (agents.hosts) whose repository is mapped and whose
+// ref to pin is Ref.
+type startHost struct {
+	Selector string
+	Repo     string
+	Ref      string
+}
+
+// remote reports whether the start runs on an execution host.
+func (h startHost) remote() bool { return h.Selector != "" }
+
+// roomOpen says whether a `capacity --json` answer leaves room for a
+// start. An unreadable answer leaves the room open: the start judges it
+// again itself, as before.
+func roomOpen(out string) bool {
+	var v struct {
+		Room int `json:"room"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return true
+	}
+	return v.Room > 0
+}
+
+// capacityRoom reads one `capacity [--host <selector>] … --json` verdict:
+// whether a start fits there. A run that failed or refused (a host that
+// fails its check) has no room.
+func (l *supervisorLoop) capacityRoom(ctx context.Context, args ...string) bool {
+	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, args...)...)...)
+	return err == nil && code == 0 && roomOpen(out)
+}
+
+// startFlags are the capacity flags of a start's kind: review marks a
+// review, selfHosted the review of a self-hosted model's work.
+func startFlags(review, selfHosted bool) []string {
+	args := []string{"--json"}
+	if review {
+		args = append(args, "--"+reviewFlag)
+		if selfHosted {
+			args = append(args, "--"+reviewOfSelfHostedFlag)
+		}
+	}
+	return args
+}
+
+// placesRemotely says whether the loop's starts may be placed on an
+// execution host: supervisor.hosts names one and capacity.choices gives a
+// remote start its model name. Then the local room alone never stops a
+// start; startPlacement judges each host's too.
+func (l *supervisorLoop) placesRemotely() bool {
+	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
+}
+
+// startPlacement picks where one of the loop's starts runs, judged like
+// the start itself would be (review and selfHosted mark the reviewer
+// kinds). Without supervisor.hosts, or for a desk with no capacity.choices
+// (a remote start needs a model name from the pick), it stays local (the
+// zero value). Otherwise the local verdict (capacity --json, with the
+// start kind's flags) decides first: room keeps the start local unless
+// supervisor.hostsFirst; a capacity read that did not run waits, as it
+// did before hosts existed. Then the first host whose own check (capacity
+// --host, which probes the host first) has room and that maps the
+// repository takes it, pinned to the repository's default branch; a host
+// that cannot be read, maps no repository or has no room is said once (or
+// passed quietly) and skipped. With supervisor.hostsFirst and no host with
+// room the start waits, as it does on a full machine; without the
+// preference the local machine attempts it, whose own start gate makes it
+// wait when it has none either.
+func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
+	k := l.a.cfg.Supervisor
+	if !l.placesRemotely() {
+		// Nothing to place remotely: the local machine does what it did
+		// before, and the start's own gate makes it wait when it has no
+		// room.
+		return startHost{}, nil
+	}
+	flags := startFlags(review, selfHosted)
+	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
+	if err != nil || code != 0 {
+		return startHost{}, errLoopLater
+	}
+	if roomOpen(out) && !k.HostsFirst {
+		return startHost{}, nil
+	}
+	for _, selector := range k.Hosts {
+		h, err := l.a.executionHost(selector)
+		if err != nil {
+			l.sayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
+			continue
+		}
+		if _, mapped := h.Repositories[repo]; !mapped {
+			l.sayOnce("host "+selector+" "+repo, "SUPERVISOR HOST WAITS: %s maps no %s", selector, repo)
+			continue
+		}
+		if !l.capacityRoom(ctx, append([]string{"--host", selector}, flags...)...) {
+			continue
+		}
+		ref, err := ghDefaultBranch(ctx, repo)
+		if err != nil || ref == "" {
+			l.sayOnce("branch "+repo, "SUPERVISOR HOST WAITS: %s: no default branch of %s to pin a remote start (%v)", selector, repo, err)
+			continue
+		}
+		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
+	}
+	if k.HostsFirst {
+		return startHost{}, errLoopLater
+	}
+	return startHost{}, nil
+}
+
+// remoteStartFlags are what a placed start names on its agents start line:
+// the host, the mapped repository and the ref to pin.
+func (h startHost) remoteStartFlags() []string {
+	if !h.remote() {
+		return nil
+	}
+	return []string{loopHostFlag, h.Selector, loopRepoFlag, h.Repo, loopRefFlag, h.Ref}
+}
+
+// ghDefaultBranch reads a repository's default branch.
+var ghDefaultBranch = func(ctx context.Context, repo string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	out, err := github.RunGH(ctx, "api", "repos/"+repo, "--jq", ".default_branch")
+	return strings.TrimSpace(string(out)), err
+}
+
+// remoteStartRefused decides a refused placed start on a host: an
+// interruption between the reservation and first-task acceptance leaves
+// the managed execution reserved, and every later agents start then refuses
+// the name; the loop recovers the recorded execution (agents recover), the
+// way a hand start's operator would, and reports its result as the start's.
+// A start a host refused for room, with nothing reserved, waits for a
+// later pass as before.
+func (l *supervisorLoop) remoteStartRefused(ctx context.Context, name string) (string, error) {
+	st, err := l.a.store.Read()
+	if err != nil {
+		return "", err
+	}
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) && ag.Execution != nil })
+	if i < 0 {
+		return "", errLoopLater
+	}
+	if rec, _ := executionRecord(st, *st.Agents[i].Execution); rec != nil && rec.Terminal() {
+		return "", errLoopLater
+	}
+	out, err := l.run(ctx, agentsName, loopRecover, name)
+	if err != nil {
+		l.sayOnce("recover "+name, "SUPERVISOR RECOVER FAILED %s: %v", name, err)
+		return "", errLoopLater
+	}
+	return fmt.Sprintf("%q recovered the execution its interrupted start reserved: %s", name, oneLine(out)), nil
+}
+
 // startNext starts the next ranked item with the worker brief, when
-// capacity has room.
+// capacity has room — on an execution host when supervisor.hosts names one
+// with room (and the board item's repository is mapped there), else on the
+// coordinator's own machine.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	k := l.a.cfg.Supervisor
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
 	}
-	if _, code, err := beekeeperRun(ctx, l.as("capacity")...); err != nil || code != 0 {
-		return "", errLoopLater
+	if !l.placesRemotely() {
+		// The room check as before: a machine with no room reads no board.
+		if _, code, err := beekeeperRun(ctx, l.as(loopCapacity)...); err != nil || code != 0 {
+			return "", errLoopLater
+		}
 	}
 	next, err := l.nextItem(ctx)
 	if err != nil {
@@ -1155,6 +1563,14 @@ type loopBoardItem struct {
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
+	place, err := l.startPlacement(ctx, r.Repo, false, false)
+	if err != nil {
+		if errors.Is(err, errLoopLater) {
+			l.sayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet on any host", next.URL)
+			return "", errLoopLater
+		}
+		return "", err
+	}
 	brief, err := l.brief(k.WorkerBrief, "", "next "+next.Ref, briefData{URL: next.URL, Repo: r.Repo, Number: r.N})
 	if err != nil {
 		return "", err
@@ -1166,10 +1582,31 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		// reviewer's does.
 		args = append(args, "--harness", harnessAuto)
 	}
+	if place.remote() {
+		// A remote start needs its mapped repository and a ref to pin; the
+		// host's start judges its own capacity, so --harness auto's pick
+		// comes from that host's decision.
+		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
 	if _, err := l.run(ctx, args...); err != nil {
+		if Code(err) == ExitRefused && place.remote() {
+			// A refusal of a placed start on a host is either room or
+			// an execution its interrupted start left reserved. The
+			// recovery, when it succeeds, is the start taken after all:
+			// it is decided before any failure closes the claim, so a
+			// recovered execution is reconciled from the claim even
+			// when the pass dies before the taken line.
+			what, rerr := l.remoteStartRefused(ctx, name)
+			if rerr == nil {
+				return what, nil
+			}
+			if !errors.Is(rerr, errLoopLater) {
+				err = rerr
+			}
+		}
 		if strings.HasPrefix(act.Key, loopFillKey) {
 			// A returned failure is settled, rather than an interruption
 			// that a later start under the same name could reconcile.
@@ -1182,6 +1619,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			return "", errLoopLater
 		}
 		return "", err
+	}
+	if place.remote() {
+		return fmt.Sprintf("%q started on %s on %s at %s", name, next.URL, place.Selector, place.Ref), nil
 	}
 	return fmt.Sprintf("%q started on %s", name, next.URL), nil
 }
@@ -1238,6 +1678,27 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 	return strings.Join(append(what, "the latest"), ", "), nil
 }
 
+// loopParkOn preserves explicit wait owners. Older workers sometimes omit
+// --on and name the pull request in their wait instead. Only an unambiguous
+// pull URL supplies that missing owner; issue URLs and prose do not.
+func loopParkOn(p *state.Park) string {
+	if p.On != "" {
+		return p.On
+	}
+	matches := loopParkPull.FindAllStringSubmatch(p.Waits, -1)
+	on := ""
+	for _, m := range matches {
+		ref := m[1] + "#" + m[2]
+		if on != "" && on != ref {
+			return ""
+		}
+		on = ref
+	}
+	return on
+}
+
+var loopParkPull = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/pull/([0-9]+)\b`)
+
 // classification is the classifier's answer.
 type classification struct {
 	Class      string  `json:"class"`
@@ -1291,48 +1752,15 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 	return fmt.Sprintf("%s to the guide (%s) on %s", e.Verb, label, ref), nil
 }
 
-// toFile puts the problems found and filed nowhere in the guide's queue,
-// no decision: the supervisor files a worker's problems found, and no
-// supervisor session reads the watch's PROBLEM FOUND lines beside the loop.
-// A done report's wait for it in its done; one logged mid-task leaves the
-// agent at its task.
-func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	e := *act.Event
-	found := strings.Split(act.Message, "\n")
-	if e.Verb == superloop.VerbProblem {
-		ref := agentRef(st, e.Agent)
-		if ref == "" {
-			ref = refURL.FindString(act.Message)
-		}
-		q := fmt.Sprintf("File in its owning repository what %s found (1 problem, no decision)", e.Agent)
-		if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s logged at %s, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), act.Message),
-			"the supervisor files a worker's problems found (worker-rules), and the problem names no issue; the agent keeps its task",
-			"the guide files it in its owning repository and closes this note"); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("%s's problem to the guide's queue to file%s", e.Agent, onRef(ref)), nil
-	}
-	ref := agentRef(st, e.Agent)
-	if ref == "" {
-		if m := refURL.FindString(e.Detail + " " + act.Message); m != "" {
-			ref = m
-		}
-	}
-	q := fmt.Sprintf("File in its owning repository what %s found (%d problem(s), no decision)", e.Agent, len(found))
-	if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s's done report at %s names, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), strings.Join(found, "; ")),
-		"the supervisor files a worker's problems found (worker-rules), and the report names no issue for these",
-		"the guide files each in its owning repository and closes this note"); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file%s", len(found), e.Agent, onRef(ref)), nil
-}
+// fileReportSeparator identifies reports stored in the event itself. Older
+// file transitions only summarized delivery to a note and must not be replayed.
+const fileReportSeparator = "; file in the owning repositories:\n"
 
-// onRef names the issue or pull request a note was filed on, if any.
-func onRef(ref string) string {
-	if ref == "" {
-		return ""
-	}
-	return ", on " + ref
+// toFile leaves the full finding in the settled transition's event. The
+// guide's feed reads that event once; no decision or thread is needed.
+func (l *supervisorLoop) toFile(_ context.Context, _ *state.State, act superloop.Action) (string, error) {
+	e := *act.Event
+	return fmt.Sprintf("%s reported at %s%s%s", e.Agent, e.At.UTC().Format(time.RFC3339), fileReportSeparator, act.Message), nil
 }
 
 // agentRef is the issue or pull request the agent works: what it is
@@ -1359,9 +1787,7 @@ func agentRef(st *state.State, name string) string {
 	return ""
 }
 
-// toGuide files a decision for the guide's person on ref (note add). A
-// finding to file needs no thread of its own: with ref "" the note links
-// none, and the guide closes it once it is filed.
+// toGuide files a decision for the guide's person on ref (note add).
 func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string, options ...string) error {
 	person := l.a.cfg.Guide.Person
 	if person == "" {
