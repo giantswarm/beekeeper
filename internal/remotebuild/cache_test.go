@@ -33,7 +33,7 @@ func TestCacheSecretProjection(t *testing.T) {
 			}
 		}
 	}
-	if refs != 15 || values["CACHEPROG_DISABLE_PUT"] != "true" || values["SCCACHE_S3_RW_MODE"] != "READ_ONLY" || values["CACHEPROG_S3_PREFIX"] == values["SCCACHE_S3_KEY_PREFIX"] {
+	if refs != 15 || values["CARGO_INCREMENTAL"] != "0" || values["CACHEPROG_DISABLE_PUT"] != "true" || values["SCCACHE_S3_RW_MODE"] != "READ_ONLY" || values["CACHEPROG_S3_PREFIX"] == values["SCCACHE_S3_KEY_PREFIX"] {
 		t.Fatalf("cache env policy: refs=%d", refs)
 	}
 	if len(pod.Containers[0].EnvFrom) != 0 {
@@ -145,7 +145,7 @@ esac
 			hits := "Go cache hits 7"
 			if tool == "cargo" {
 				command = `[ "$RUSTC_WRAPPER" = sccache ] || exit 3; printf BUILD_COMPLETED; exit 37`
-				hits = "Rust cache hits 5"
+				hits = "Rust Cache hits 5"
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

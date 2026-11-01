@@ -126,9 +126,9 @@ stop using the remote store after an error; sccache uses
 Each Go helper gets a disk directory beneath the run journal, passed explicitly
 with `--root-directory`. The command removes it when it finishes; interrupted
 runs do too. This avoids unbounded local growth in warm pods. Cargo's target
-and Go's native fallback cache remain warm. The sccache server is stopped after
-the command. Provider startup diagnostics are suppressed; only numeric helper
-hit counts are added to the output. Compiler/test output is still streamed.
+and Go's native fallback cache remain warm. Shared Rust caching sets `CARGO_INCREMENTAL=0`, required by sccache; the target
+directory still stays warm. The sccache server is stopped after the command. Provider startup diagnostics are suppressed; only numeric helper
+cache counters are added to the output. Compiler/test output is still streamed.
 Changing cache configuration retires reuse of an incompatible existing Job;
 remove an idle owned Job or let its idle timeout expire before using the new
 configuration.
@@ -173,7 +173,8 @@ go test ./...
 
 For Rust, supply the `SCCACHE_*`/`AWS_*` storage keys, use the same Rust prefix,
 and set `SCCACHE_S3_RW_MODE=READ_ONLY` and
-`SCCACHE_IGNORE_SERVER_IO_ERROR=1`. Probe `sccache --start-server` with a bounded
+`SCCACHE_IGNORE_SERVER_IO_ERROR=1`. Set `CARGO_INCREMENTAL=0` so Rust
+compilations are cacheable. Probe `sccache --start-server` with a bounded
 timeout and suppressed startup diagnostics before setting `RUSTC_WRAPPER`.
 Stop the server when the job ends. Do not print environment variables, debug
 credentials or enable shell tracing around credentials.

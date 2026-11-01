@@ -84,6 +84,7 @@ func (c Cache) env() []corev1.EnvVar {
 		{Name: "CACHEPROG_MAX_BACKGROUND_WAIT", Value: cacheTimeout},
 		{Name: "CACHEPROG_MAX_CONCURRENT_REMOTE_GETS", Value: "4"},
 		{Name: "CACHEPROG_MAX_CONCURRENT_REMOTE_PUTS", Value: "4"},
+		{Name: "CARGO_INCREMENTAL", Value: "0"},
 		{Name: "SCCACHE_S3_KEY_PREFIX", Value: c.RustPrefix},
 		{Name: "SCCACHE_S3_RW_MODE", Value: mode},
 		{Name: "SCCACHE_IGNORE_SERVER_IO_ERROR", Value: "1"},
@@ -148,10 +149,13 @@ fi
 `
 
 const cacheFinish = `if [ "${cache_rust_started:-0}" = 2 ]; then
- timeout --foreground -k 1s 5s sccache --show-stats 2>/dev/null | while read -r a b n rest; do
-  if [ "$a $b" = 'Cache hits' ] && [[ "$n" =~ ^[0-9]+$ ]]; then
-   printf 'beekeeper run: Rust cache hits %s\n' "$n" >> "$r/log"
-  fi
+ timeout --foreground -k 1s 5s sccache --show-stats 2>/dev/null | while read -r a b n d rest; do
+  case "$a $b" in
+   'Cache hits'|'Cache misses'|'Cache writes'|'Non-cacheable calls')
+    if [[ "$n" =~ ^[0-9]+$ ]]; then printf 'beekeeper run: Rust %s %s %s\n' "$a" "$b" "$n" >> "$r/log"; fi;;
+   'Cache write')
+    if [ "$n" = errors ] && [[ "$d" =~ ^[0-9]+$ ]]; then printf 'beekeeper run: Rust cache write errors %s\n' "$d" >> "$r/log"; fi;;
+  esac
  done
 fi
 if [ "${cache_rust_started:-0}" != 0 ]; then
