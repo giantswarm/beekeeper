@@ -85,8 +85,44 @@ func referencesWith(root string, pid int, protected bool, files referenceIO) ([]
 // general process table cannot read. Unknown ownership fails closed. Kernel
 // EACCES on helpers protected by dumpability, credentials or capabilities
 // is expected; other errors on live user processes remain failures.
+//
+// A process whose references cannot be read does not end the scan: the
+// readable processes' references are returned with an *UnknownError naming
+// the unreadable ones, so a caller can keep what they could reference while
+// still deciding with the rest. An error on the process table itself is
+// returned alone.
 func UserReferences(uid int) ([]string, []string, error) {
 	return userReferencesAt(procRoot, uid, referenceFiles())
+}
+
+// UnknownProcess is a process whose references could not be read.
+type UnknownProcess struct {
+	PID     int
+	Command string
+	Err     error
+}
+
+// UnknownError lists the processes whose references are unknown.
+type UnknownError struct{ Processes []UnknownProcess }
+
+func (e *UnknownError) Error() string {
+	parts := make([]string, 0, len(e.Processes))
+	for _, p := range e.Processes {
+		name := strconv.Itoa(p.PID)
+		if p.Command != "" {
+			name += " (" + p.Command + ")"
+		}
+		parts = append(parts, "process "+name+": "+p.Err.Error())
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (e *UnknownError) Unwrap() []error {
+	errs := make([]error, 0, len(e.Processes))
+	for _, p := range e.Processes {
+		errs = append(errs, p.Err)
+	}
+	return errs
 }
 
 func userReferencesAt(root string, uid int, files referenceIO) ([]string, []string, error) {
@@ -95,71 +131,134 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		return nil, nil, err
 	}
 	var refs, commands []string
+	var unknown []UnknownProcess
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue
 		}
-		dir := filepath.Join(root, e.Name())
-		raw, err := files.readFile(filepath.Join(dir, "status"))
-		if errors.Is(err, os.ErrNotExist) {
+		paths, comm, ok, err := processReferences(root, pid, uid, files)
+		if err != nil {
+			unknown = append(unknown, UnknownProcess{PID: pid, Command: comm, Err: err})
 			continue
 		}
-		if err != nil {
-			return nil, nil, err
+		if ok {
+			refs = append(refs, paths...)
+			commands = append(commands, comm)
 		}
-		owner, protected, err := referenceOwner(raw)
-		if err != nil {
-			return nil, nil, err
-		}
-		if owner != uid {
-			continue
-		}
-		exited, err := referenceZombie(raw)
-		if err != nil {
-			return nil, nil, err
-		}
-		if exited {
-			continue
-		}
-		// A cached directory inode may retain its original owner after a
-		// process becomes non-dumpable. Ptrace-gated children reflect the
-		// current protection, including when status omits Dumpable.
-		gone := false
-		for _, path := range []string{dir, filepath.Join(dir, "environ")} {
-			info, err := files.stat(path)
-			if errors.Is(err, os.ErrNotExist) {
-				gone = true
-				break
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			protected = protected || ownerUID(info) != uid
-		}
-		if gone {
-			continue
-		}
-		paths, err := referencesWith(root, pid, protected, files)
-		if err != nil {
-			return nil, nil, err
-		}
-		comm, err := files.readFile(filepath.Join(dir, "comm"))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-		refs = append(refs, paths...)
-		commands = append(commands, strings.TrimSpace(string(comm)))
+	}
+	if len(unknown) > 0 {
+		return refs, commands, &UnknownError{Processes: unknown}
 	}
 	return refs, commands, nil
 }
 
-// A zombie leader can still have live threads holding references. Only a
-// zombie with a known thread count of zero or one is confirmed exited.
-func referenceZombie(status []byte) (bool, error) {
+// processReferences reads one process. ok is false for a process that is
+// gone, exited or another user's.
+func processReferences(root string, pid, uid int, files referenceIO) ([]string, string, bool, error) {
+	dir := filepath.Join(root, strconv.Itoa(pid))
+	raw, err := files.readFile(filepath.Join(dir, "comm"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, "", false, nil
+	}
+	commErr := err
+	comm := strings.TrimSpace(string(raw))
+	raw, err = files.readFile(filepath.Join(dir, "status"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, comm, false, err
+	}
+	owner, protected, err := referenceOwner(raw)
+	if err != nil {
+		return nil, comm, false, err
+	}
+	if owner != uid {
+		return nil, "", false, nil
+	}
+	zombie, threads := referenceState(raw)
+	if zombie && threads >= 0 && threads <= 1 {
+		return nil, "", false, nil
+	}
+	// A cached directory inode may retain its original owner after a
+	// process becomes non-dumpable. Ptrace-gated children reflect the
+	// current protection, including when status omits Dumpable.
+	for _, path := range []string{dir, filepath.Join(dir, "environ")} {
+		info, err := files.stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, "", false, nil
+		}
+		if err != nil {
+			return nil, comm, false, err
+		}
+		protected = protected || ownerUID(info) != uid
+	}
+	var paths []string
+	if zombie {
+		var live bool
+		paths, live, err = zombieThreadReferences(dir, pid, protected, files)
+		if err != nil {
+			return nil, comm, false, err
+		}
+		if !live {
+			return nil, "", false, nil
+		}
+	} else {
+		paths, err = referencesWith(root, pid, protected, files)
+		if err != nil {
+			return nil, comm, false, err
+		}
+	}
+	if commErr != nil {
+		return nil, comm, false, commErr
+	}
+	return paths, comm, true, nil
+}
+
+// zombieThreadReferences reads a zombie thread-group leader through its
+// other threads: the leader released its files and memory, while a live
+// thread still holds the group's descriptors, mappings and directory.
+// live is false when no thread but exited ones remain.
+func zombieThreadReferences(dir string, pid int, protected bool, files referenceIO) ([]string, bool, error) {
+	tasks := filepath.Join(dir, "task")
+	entries, err := files.readDir(tasks)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var paths []string
+	live := false
+	for _, e := range entries {
+		tid, err := strconv.Atoi(e.Name())
+		if err != nil || tid == pid {
+			continue
+		}
+		raw, err := files.readFile(filepath.Join(tasks, e.Name(), "status"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if zombie, _ := referenceState(raw); zombie {
+			continue
+		}
+		got, err := referencesWith(tasks, tid, protected, files)
+		if err != nil {
+			return nil, false, err
+		}
+		paths = append(paths, got...)
+		live = true
+	}
+	return paths, live, nil
+}
+
+// referenceState reads whether a process is a zombie and its thread count,
+// -1 when unknown. A zombie leader with more threads may have live ones.
+func referenceState(status []byte) (bool, int) {
 	zombie := false
 	threads := -1
 	for line := range strings.Lines(string(status)) {
@@ -169,19 +268,12 @@ func referenceZombie(status []byte) (bool, error) {
 			fields := strings.Fields(value)
 			zombie = len(fields) > 0 && fields[0] == "Z"
 		case "Threads":
-			n, err := strconv.Atoi(strings.TrimSpace(value))
-			if err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && n >= 0 {
 				threads = n
 			}
 		}
 	}
-	if !zombie {
-		return false, nil
-	}
-	if threads < 0 || threads > 1 {
-		return false, errors.New("zombie leader may have live threads: references unavailable")
-	}
-	return true, nil
+	return zombie, threads
 }
 
 func referenceOwner(status []byte) (int, bool, error) {

@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -153,6 +154,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	cfg.Supervisor.LoopInterval.Duration = time.Second
 	cfg.Supervisor.ReleaseEvery.Duration = time.Hour
 	cfg.Supervisor.NoteDue.Duration = 24 * time.Hour
+	previousRefs := refStates
+	t.Cleanup(func() { refStates = previousRefs })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, ref := range refs {
+			out[ref] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+		}
+		return out, nil
+	}
 	oldAlerts, oldResume := readLoopAlerts, loopResumable
 	t.Cleanup(func() { readLoopAlerts, loopResumable = oldAlerts, oldResume })
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
@@ -1794,7 +1804,7 @@ func TestLoopLeavesAnotherTeamsPullRequestToThatTeamUntilThePersonOverrides(t *t
 	}
 	// The person overrides it: the loop reviews it as the desk's own.
 	n := &state.Note{ID: 1, By: loopParty, Text: note[len(note)-1]}
-	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "Override", Note: 1}, n)); err != nil {
+	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Channel: channelTerminal, Answer: "Override", Note: 1}, n)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)

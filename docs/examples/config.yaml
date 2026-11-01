@@ -244,6 +244,7 @@ agents:                     # the hand-over of registered agents
     path: [~/.local/share/devctl/agent-bin]   # directories first on PATH, in this order: the agent's own programs (a gh link to devctl acts with the App's short-lived token); default: none
 capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY LOW / FULL)
   floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start (0: never)
+  reviewHeadroom: 2         # extra subscription sessions reserved for reviews; 0 disables
   ceiling: 10               # CAPACITY FULL at this many; no start past it (0: no unforced start, suppresses CAPACITY LOW / FULL; unset: 5 and 10)
   availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
   swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
@@ -353,6 +354,7 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepDepth: 5
 
 hooks:
+  transcriptGrants: {}      # supervisor-granted exact own-transcript files or fixture directories, by receiving session ID; no globs
   scope:                    # where the Claude Code hooks act; unset, in every session
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
   personFolders: [~, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
