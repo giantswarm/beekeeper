@@ -322,10 +322,11 @@ work, which takes no choice on a self-hosted provider.`,
 					return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
 				}
 			}
-			if _, err := a.startMode(mode); err != nil {
+			resolvedMode, err := a.startMode(mode)
+			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(mode) == config.ModeBackground && desktop {
+			if resolvedMode == config.ModeBackground && desktop {
 				return usageErr("--mode background and --desktop: a background session has no desktop turn")
 			}
 			if harness != harnessAuto {
@@ -543,7 +544,7 @@ func forwardBrokeredChoice(cmd *cobra.Command, harness, model string, choiceLine
 func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir string) error {
 	switch harness {
 	case harnessAgy:
-		resolvedDir, err := a.agentDir(dir)
+		resolvedDir, err := a.agentDir(dir, "")
 		if err != nil {
 			return err
 		}
@@ -571,7 +572,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		_, err = a.ompCredentials(m)
 		return err
 	case codex.Harness:
-		resolvedDir, err := a.agentDir(dir)
+		resolvedDir, err := a.agentDir(dir, "")
 		if err != nil {
 			return err
 		}
@@ -584,7 +585,7 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		_, err = exec.LookPath(codex.Comm)
 		return err
 	default:
-		resolvedDir, err := a.agentDir(dir)
+		resolvedDir, err := a.agentDir(dir, "")
 		if err != nil {
 			return err
 		}
@@ -706,7 +707,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err := a.refuseStopped(st, "starting "+sp.name); err != nil {
 		return startedAgent{}, err
 	}
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -1962,7 +1963,7 @@ func (a *app) dryRunStart(ctx context.Context, sp agentStart, gaps []string) err
 }
 
 func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
@@ -1983,7 +1984,7 @@ func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
 
 // dryRunTurn prints the profile and the first turn's command line of sp.
 func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}

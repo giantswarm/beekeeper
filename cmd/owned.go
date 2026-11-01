@@ -131,7 +131,7 @@ func (a *app) yieldToMerges(ctx context.Context, argv []string) error {
 }
 
 // ownerOf says where the outcome of a wait that runs on outside the call
-// goes: a wake of its owner, a registered agent (tellOwner).
+// goes: a wake of its owner, on the roster or off it (tellOwner).
 func ownerOf(me state.Party) string {
 	if me.Session == "" && me.HostSession == "" {
 		return "its outcome reaches nobody, the caller has no session"
@@ -343,7 +343,7 @@ func handOver(base string, r childRun, cli int) {
 // tellOwner hands a finished run's outcome to its owner unless the run's gate
 // handed it to a caller still listening: once the gate is gone without its
 // heard marker (a headless turn that ended, a caller killed, its CLI gone),
-// it logs devctl.unheard and wakes the owner, a registered agent, with the
+// it logs devctl.unheard and wakes the owner, on the roster or off it, with the
 // outcome in one line (agents wake: by name when its CLI runs, else a
 // headless turn). The outcome is owed in the state first (owe), so a
 // merge-child stopped or killed on the way leaves it to the watch, and a

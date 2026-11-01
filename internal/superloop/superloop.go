@@ -93,6 +93,8 @@ type Pull struct {
 	URL   string
 	State string
 	Head  string
+	// Base is the branch it merges into.
+	Base string
 	// Green is every check on Head concluded successfully (none is not
 	// green: they have not reported yet).
 	Green   bool
@@ -212,6 +214,31 @@ type Input struct {
 	// Desk is whose pull requests the loop acts on; Now is the pass's time.
 	Desk Desk
 	Now  time.Time
+	// DevctlOwners is merge.devctlOwners: a go on their repositories names
+	// the gate's devctl pr merge --update-branch, on any other gh pr merge
+	// --match-head-commit.
+	DevctlOwners []string
+	// BaseMerged reports whether p's head only merges its base into
+	// approved, an earlier head the loop's go covers (github.BaseMergeOnly);
+	// nil: never, every new head is a new review.
+	BaseMerged func(p Pull, approved string) bool
+}
+
+// baseMerged reports whether p's head moved past approved by base merges
+// alone.
+func (in Input) baseMerged(p Pull, approved string) bool {
+	return in.BaseMerged != nil && approved != "" && !sameHead(approved, p.Head) && in.BaseMerged(p, approved)
+}
+
+// gated reports whether the gate's devctl pr merge serves repo.
+func (in Input) gated(repo string) bool {
+	return slices.ContainsFunc(in.DevctlOwners, func(o string) bool { return strings.EqualFold(o, ownerOf(repo)) })
+}
+
+// ownerOf is owner/repo's owner.
+func ownerOf(repo string) string {
+	owner, _, _ := strings.Cut(repo, "/")
+	return owner
 }
 
 // Action is one transition to take.
@@ -566,12 +593,17 @@ func Plan(in Input) []Action {
 			// the escalation named; any other answer goes to the worker,
 			// and the pull request's review rounds go on from there.
 			// A release of a head the worker moved past goes on as the
-			// rounds say of the new head.
+			// rounds say of the new head, unless the new head only merges
+			// the base into the released one.
 			an := esc.answer
 			released := Releases(an.Text)
-			if released && sameHead(esc.head, p.Head) {
+			if released && (sameHead(esc.head, p.Head) || p.Green && in.baseMerged(p, esc.head)) {
 				if p.Green {
-					add(goAction(base, fmt.Sprintf("%s released it, answering note #%d: %s", an.By, an.Note, oneLine(an.Text))))
+					why := fmt.Sprintf("%s released it, answering note #%d: %s", an.By, an.Note, oneLine(an.Text))
+					if !sameHead(esc.head, p.Head) {
+						why += fmt.Sprintf("; head %s only merges %s into the released head %s", short(p.Head), baseName(p), short(esc.head))
+					}
+					add(goAction(in, base, why))
 				}
 				continue
 			}
@@ -613,14 +645,21 @@ func Plan(in Input) []Action {
 		case Approved:
 			if sameHead(last.head, p.Head) {
 				if p.Green {
-					add(goAction(base, fmt.Sprintf("review round %d approved head %s", len(rs), short(p.Head))))
+					add(goAction(in, base, fmt.Sprintf("review round %d approved head %s", len(rs), short(p.Head))))
 				}
 				continue
 			}
 			// The head moved past the approval: one review per head, a
-			// new head is a new review. The cap counts change-request
-			// rounds only, so an approval never escalates.
+			// new head is a new review, except one that only merges the
+			// base into the approved head (the gate's --update-branch, or
+			// the worker's merge of the base), which the approval covers.
+			// The cap counts change-request rounds only, so an approval
+			// never escalates.
 			if !p.Green || !isParked || !w.ParkedAt.After(v.At) {
+				continue
+			}
+			if in.baseMerged(p, last.head) {
+				add(goAction(in, base, fmt.Sprintf("review round %d approved head %s; head %s only merges %s into it", len(rs), short(last.head), short(p.Head), baseName(p))))
 				continue
 			}
 			review()
@@ -637,16 +676,19 @@ func Plan(in Input) []Action {
 			if !isParked || !w.ParkedAt.After(l.keys[fk].At) {
 				continue
 			}
-			if sameHead(p.Head, last.head) {
-				// No round left and the findings stand unfixed: the worker
-				// reworks, once for each park on the unchanged head. Review
-				// and rework are the loop's; no merge question goes to the
-				// person, and an answered escalation of this head is
-				// handled above.
-				if !left && (!escalated || !sameHead(esc.head, p.Head)) {
+			// A head that only merges the base into the head the findings
+			// were about carries no fixes: it is that head, never a go.
+			merged := p.Green && in.baseMerged(p, last.head)
+			if sameHead(p.Head, last.head) || merged {
+				// The findings stand unfixed: with no round left, or on a
+				// base merge, the worker reworks, once for each such park.
+				// Review and rework are the loop's; no merge question goes
+				// to the person, and an answered escalation of this head
+				// is handled above.
+				if (!left || merged) && (!escalated || !sameHead(esc.head, p.Head)) {
 					a := base
 					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-					a.Message = reworkMessage(p, cycles, rounds)
+					a.Message = reworkMessage(p, last.head, cycles, rounds)
 					add(a)
 				}
 				continue
@@ -658,7 +700,7 @@ func Plan(in Input) []Action {
 				review()
 				continue
 			}
-			add(goAction(base, fmt.Sprintf("%d of %d change-request round(s) used; head %s carries the fixes of the last round's findings on %s", cycles, rounds, short(p.Head), short(last.head))))
+			add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used; head %s carries the fixes of the last round's findings on %s", cycles, rounds, short(p.Head), short(last.head))))
 		}
 	}
 	// A reviewer leaves once the loop acted on its round's verdict.
@@ -717,10 +759,10 @@ func Plan(in Input) []Action {
 	// waiting is a park on nothing that still waits on something: a timer
 	// that wakes the agent, a note its wait names, or a note it asked
 	// that is open. One whose agent is no longer parked on nothing has
-	// nothing left to decide.
+	// nothing left to decide. An event from a replaced park is settled too.
 	waiting := func(e Event) bool {
 		w, ok := workers[e.Agent]
-		if !ok || w.ParkedAt.IsZero() || w.ParkedOn != "" {
+		if !ok || w.ParkedAt.IsZero() || w.ParkedOn != "" || e.At.Before(w.ParkedAt) {
 			return true
 		}
 		if _, waits := ParkedOn(e.Detail); w.Waking || noteRef.MatchString(waits) {
@@ -916,12 +958,29 @@ func EventAgent(verb, detail, by string) string {
 	return by
 }
 
-// goAction is the merge go for base's head.
-func goAction(base Action, why string) Action {
+// goAction is the merge go for base's head, naming the merge command of
+// its repository's path: the gate's devctl pr merge --update-branch where
+// devctl serves it, whose base update the go covers, else gh pr merge
+// --match-head-commit.
+func goAction(in Input, base Action, why string) Action {
 	a := base
 	a.Key, a.Kind = goKey(base.Ref, base.Head), KindGo
-	a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now with --match-head-commit %s, then report.", base.URL, base.Head, why, base.Head)
+	repo, n, _ := strings.Cut(base.Ref, "#")
+	if in.gated(repo) {
+		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s --update-branch`, once `gh pr view` shows head %s. This go covers a head the gate's --update-branch moves on by merging the base alone: let that merge run to its end, then report.",
+			base.URL, base.Head, why, repo, n, short(base.Head))
+		return a
+	}
+	a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now with `gh pr merge %s --repo %s --squash --match-head-commit %s`, then report.", base.URL, base.Head, why, n, repo, base.Head)
 	return a
+}
+
+// baseName is p's base branch, "the base" when unknown.
+func baseName(p Pull) string {
+	if p.Base == "" {
+		return "the base"
+	}
+	return p.Base
 }
 
 // escalationPrefix opens every escalation's question: an answer to a note
@@ -965,11 +1024,20 @@ func answerMessage(p Pull, head string, an Answer) string {
 	return fmt.Sprintf("%s answered the escalation of %s at head %s (note #%d), word for word: %s\n\nThe loop does not read it as releasing the merge: rework as it says, push, and park on the pull request again once CI is green on the new head.", an.By, p.URL, short(head), an.Note, an.Text)
 }
 
-// reworkMessage tells the worker of p, parked again on the head its last
-// review asked changes on with no change-request round left, to fix them.
-func reworkMessage(p Pull, cycles, rounds int) string {
-	return fmt.Sprintf("You parked on %s again at head %s, the head its last review asked for changes on: those findings stand unfixed, and %d of %d change-request round(s) are used, so no further review runs and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and park on the pull request again once CI is green on the new head: the merge go for the new head follows.",
-		p.URL, short(p.Head), cycles, rounds)
+// reworkMessage tells the worker of p, parked again on reviewed, the head
+// its last review asked changes on, or on a head that only merges the base
+// into it, to fix them.
+func reworkMessage(p Pull, reviewed string, cycles, rounds int) string {
+	at := fmt.Sprintf("at head %s, the head its last review asked for changes on", short(p.Head))
+	if !sameHead(p.Head, reviewed) {
+		at = fmt.Sprintf("at head %s, which only merges %s into head %s, the head its last review asked for changes on", short(p.Head), baseName(p), short(reviewed))
+	}
+	next := "the merge go for the new head follows"
+	if cycles < rounds {
+		next = "the next review round starts then"
+	}
+	return fmt.Sprintf("You parked on %s again %s: those findings stand unfixed, %d of %d change-request round(s) are used, and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and park on the pull request again once CI is green on the new head: %s.",
+		p.URL, at, cycles, rounds, next)
 }
 
 // oneLine is s on one line.

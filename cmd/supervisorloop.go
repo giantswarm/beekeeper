@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -139,11 +141,24 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
 	return parseLoopPull(ref, out)
+}
+
+// readBaseMerge reads whether p's head only merges its base into approved
+// (github.BaseMergeOnly).
+var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
+	r, ok := parseRef(p.Ref)
+	if !ok || p.Base == "" {
+		return false, fmt.Errorf("%s names no pull request with a base", p.Ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	only, _, err := github.BaseMergeOnly(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	return only, err
 }
 
 // readDeskLogin is the login gh acts as: the one the desk's agents open
@@ -179,6 +194,7 @@ type loopPullJSON struct {
 	State  string `json:"state"`
 	URL    string `json:"url"`
 	Head   string `json:"headRefOid"`
+	Base   string `json:"baseRefName"`
 	Rollup []struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
@@ -215,7 +231,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -246,6 +262,17 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  alerts    consume the beside-running watch events; the watch reads
+            installations every alerts.every; firing unowned alerts at alerts.pageSeverity
+            become notes for guide.person once per firing. A worker parked
+            on alert:<name> (alertname or installation/alertname) is woken;
+            an unresumable session is retired and its original task staffed
+            again, with a durable replacement intent across restarts.
+            Each worker is woken once per firing, including an already-firing
+            alert. Event wakes are held with starts: an alert that resolves
+            before the hold lifts does not wake a parked worker.
+  budget    every poll consumes watch budget readings; a low or unknown budget
+            holds new worker/reviewer starts and event wakes and says so
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
   tidy      every board.tidyEvery (1h) while a board is configured and the
@@ -254,10 +281,18 @@ its key first in the detail):
   leave     a park the desk's ownership leaves alone (below), said once with
             its reason: no reviewer, no go, no forward, no escalation, and
             a reviewer the loop started on it earlier retires
+  resume    a settled park whose non-Claude harness reports its session gone:
+            restart under
+            the same name with supervisor.workerBrief and a capacity pick,
+            continuing its open task and the wait's answer; a failed start
+            releases the ended task holder so board next can offer it again.
+            Claude transcript resumes, live sessions, managed SSH executions and a
+            stopped desk are left alone
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, for every new head the worker parked on after an
-            approval (one review per head), or after the last round's
+            approval (one review per head) but one that only merges the
+            base into the approved head (below), or after the last round's
             findings were forwarded and the worker parked again on a new
             head while a change-request round is left
             (supervisor.reviewRounds, default 1): a reviewer starts
@@ -267,22 +302,37 @@ its key first in the detail):
             self-hosted provider's model gets one on no self-hosted provider
             (--review-of-self-hosted)
   go        every check on the head green, and either the last round's
-            verdict approves that head, or no round is left, its verdict
-            asked for changes, they were forwarded and the worker parked
-            again on a new head (its fixes): the merge go for that head,
-            told to the worker (agents wake) with --match-head-commit
-            <head>. Only the verdict of the loop's own last round counts,
-            on the head it reviewed and posted after it started: an older
-            verdict or a round still running authorizes nothing
+            verdict approves that head, or the worker parked after the
+            approval on a head that only merges the base into the approved
+            one, or no round is left, its verdict asked for changes, they
+            were forwarded and the worker parked again on a new head (its
+            fixes) that is more than a merge of the base: the merge go for
+            that head, told to the worker (agents wake) with the merge
+            command of the repository's path: the gate's devctl pr merge
+            <repo> <n> --update-branch on a repository of
+            merge.devctlOwners, whose base update the go covers, else gh
+            pr merge --match-head-commit <head>. A head only merges the
+            base when the approved head is its ancestor, every commit it
+            adds is a merge, and its change against its merge base with
+            the base branch is the approved head's, file by file, hunk by
+            hunk, line by line (compare API); a file without a patch counts
+            only with the approved blob and no change of the base's to it
+            since. Anything else, or a comparison GitHub cuts short, is a
+            new head with a new review. Only the verdict of the loop's own
+            last round counts, on the head it reviewed and posted after it
+            started: an older verdict or a round still running authorizes
+            nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
-  rework    no change-request round left (supervisor.reviewRounds counts
-            the rounds that asked for changes; an approved head is none)
-            and the worker parked again after the forward on the head the
-            findings were about: the worker is told to fix them and push
-            (agents wake), once for each such park; its new green head
-            gets the merge go. Review and rework stay in the loop: no
-            merge question goes to guide.person
+  rework    the worker parked again after the forward on the head the
+            findings were about with no change-request round left
+            (supervisor.reviewRounds counts the rounds that asked for
+            changes; an approved head is none), or, rounds left or not, on
+            a head that only merges the base into it, which carries no
+            fixes: the worker is told to fix them and push (agents wake),
+            once for each such park; its new green head gets the next
+            round, or the merge go once none is left. Review and rework
+            stay in the loop: no merge question goes to guide.person
   answer    the person answered an escalation an earlier loop filed
             (beekeeper answer --note): an answer that releases it (the
             Merge option, or words to merge that refuse nothing) is the
@@ -399,7 +449,9 @@ type supervisorLoop struct {
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
-	releaseAt time.Time
+	releaseAt  time.Time
+	startsHeld bool
+	stopWatch  func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
@@ -416,6 +468,9 @@ type supervisorLoop struct {
 	teamsAt time.Time
 	// dryRun prints a pass's transitions and takes none.
 	dryRun bool
+	// baseMerges are the answers of readBaseMerge, by pull request,
+	// approved head and head: two commits' relation does not change.
+	baseMerges map[string]bool
 }
 
 // loopOutput serializes loop transitions with asynchronous timer output.
@@ -431,6 +486,8 @@ func (w *loopOutput) Write(p []byte) (int, error) {
 }
 
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	// One loop per state: a second would take each action again.
 	lock := flock.New(filepath.Join(a.store.Dir(), loopLockFile))
 	held, err := lock.TryLock()
@@ -441,6 +498,11 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	// Observers read a PID marker instead of briefly contending for this lock.
+	if err := a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+		return err
+	}
+	defer func() { _ = a.store.WriteFile("supervisor-loop-pid.json", 0) }()
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
@@ -449,6 +511,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	defer l.timerActs.Wait()
+	if !once {
+		l.stopWatch = a.startLoopWatch(ctx)
+		defer func() {
+			if l.stopWatch != nil {
+				l.stopWatch()
+			}
+		}()
+	}
 	for {
 		a.now = time.Now()
 		if err := l.pass(ctx); err != nil {
@@ -487,7 +557,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -510,8 +580,28 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.timerActs.Wait()
+		if l.stopWatch != nil {
+			l.stopWatch()
+			l.stopWatch = nil
+		}
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+			l.stopWatch = a.startLoopWatch(ctx)
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchConditions(ctx); err != nil {
+			l.startsHeld = true
+			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
+		} else {
+			delete(l.said, "watch-conditions")
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchAlerts(ctx); err != nil {
+			l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
+		} else {
+			delete(l.said, "alerts")
 		}
 	}
 	st, err := a.store.Read()
@@ -524,14 +614,22 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		l.tidy(ctx, st)
 	}
+	if err := l.recoverParks(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
 	own := a.cfg.Supervisor.Ownership
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
-			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration}}
+			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
+		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) }}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
-			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
+			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -658,6 +756,23 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	return l.fill(ctx, st, claims, in.Taken)
+}
+
+// baseMerged reports whether p's head only merges its base into approved,
+// read once per pair of heads; a read that fails is said once and counts as
+// no: the new head gets its review.
+func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
+	key := p.Ref + " " + approved + " " + p.Head
+	if ok, read := l.baseMerges[key]; read {
+		return ok
+	}
+	ok, err := readBaseMerge(ctx, p, approved)
+	if err != nil {
+		l.sayOnce("base merge "+key, "SUPERVISOR LOOP cannot tell whether %s's head only merges its base: %v", p.Ref, err)
+		return false
+	}
+	l.baseMerges[key] = ok
+	return ok
 }
 
 // ownership readies the desk's policy for a pass's reads: the logins the
@@ -986,8 +1101,8 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Worker string
-	Number, Round           int
+	URL, Repo, Head, Worker, Task string
+	Number, Round                 int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
@@ -1028,6 +1143,9 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	r, _ := parseRef(act.Ref)
 	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent})
 	if err != nil {
@@ -1082,6 +1200,9 @@ func selfHostedModel(k config.Capacity, model string) bool {
 // startNext starts the next ranked item with the worker brief, when
 // capacity has room.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	k := l.a.cfg.Supervisor
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
@@ -1206,6 +1327,27 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 	}
 	return strings.Join(append(what, "the latest"), ", "), nil
 }
+
+// loopParkOn preserves explicit wait owners. Older workers sometimes omit
+// --on and name the pull request in their wait instead. Only an unambiguous
+// pull URL supplies that missing owner; issue URLs and prose do not.
+func loopParkOn(p *state.Park) string {
+	if p.On != "" {
+		return p.On
+	}
+	matches := loopParkPull.FindAllStringSubmatch(p.Waits, -1)
+	on := ""
+	for _, m := range matches {
+		ref := m[1] + "#" + m[2]
+		if on != "" && on != ref {
+			return ""
+		}
+		on = ref
+	}
+	return on
+}
+
+var loopParkPull = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/pull/([0-9]+)\b`)
 
 // classification is the classifier's answer.
 type classification struct {
