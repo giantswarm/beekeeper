@@ -619,12 +619,14 @@ func (g secretGuard) bindHelper(name string, args []string, depth int) (string, 
 				good = false
 				continue
 			}
+			binds[a.Name.Value] = append(binds[a.Name.Value], strings.Join(shellWords(b.String()), " "))
 			if runsCommand(a.Value) {
-				// a value that runs a command keeps its text: the scan of
-				// the bound body judges the command with the arguments bound
+				// a value that runs a command keeps its text, so the scan of
+				// the bound body judges the command with the arguments bound;
+				// its binding keeps the substitution, so a link destination
+				// built from it cannot be named and keeps the refusal
 				continue
 			}
-			binds[a.Name.Value] = append(binds[a.Name.Value], strings.Join(shellWords(b.String()), " "))
 			a.Value, a.Naked = nil, true
 		}
 	}
