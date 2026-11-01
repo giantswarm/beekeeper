@@ -202,7 +202,7 @@ func TestMinus(t *testing.T) {
 }
 
 func TestUsageExitCode(t *testing.T) {
-	t.Setenv("BEEKEEPER_CONFIG", t.TempDir()+"/none.yaml")
+	t.Setenv("BEEKEEPER_CONFIG", emptyTestConfig(t, t.TempDir()+"/config.yaml"))
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	for _, args := range [][]string{{"lease", "claim"}, {"frobnicate"}, {"hold", "frob"}, {"sessions", "extra"}, {"--nope"}} {
 		root := New()

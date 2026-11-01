@@ -3232,9 +3232,12 @@ exit 69 and queues nothing.
 ## Configuration
 
 `$XDG_CONFIG_HOME/beekeeper/config.yaml` (or `--config`, or `$BEEKEEPER_CONFIG`). Every field is
-optional, and an empty configuration works: `watch`, `snapshot`, `free`, the hook and the
-coordination commands run with neutral defaults. Memory and disk thresholds default to fractions of
-what the machine has, and every organisation or desk choice is unset until configured.
+optional. A non-empty `$BEEKEEPER_CONFIG` must name an existing file; a missing file is an error
+before any state is opened. Pre-tool hooks report the failure as a deny decision. An unset or
+empty variable selects the default path, where a missing file still uses defaults. An empty
+configuration works: `watch`, `snapshot`, `free`, the hook and the coordination commands run
+with neutral defaults. Memory and disk thresholds default to fractions of what the machine
+has, and every organisation or desk choice is unset until configured.
 [`docs/examples/config.yaml`](docs/examples/config.yaml) is a complete desk's configuration, every
 key annotated with what it guards and its default.
 
