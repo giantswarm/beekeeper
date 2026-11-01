@@ -439,7 +439,11 @@ its key first in the detail):
             acted on its round's verdict (a go, forward, escalation, next
             round or end), and a worker given the merge go after its post-merge
             report or supervisor.postMergeWindow without activity
-            (default 2h). A managed SSH
+            (default 2h). A worker that still serves other open work, the
+            open issue its sessions serve record names or another open pull
+            request it is parked on, stays: a leave line says so once, and it
+            goes at its own done, once that work closed, or after
+            agents.staleAfter (24h) quiet with no park or wake timer. A managed SSH
             execution stops (agents stop) and leaves the roster only once
             the host acknowledged its termination. Each pass also runs the
             doctor's roster and archive step (removing finished, relieved
@@ -575,6 +579,64 @@ type supervisorLoop struct {
 	// baseMerges are the answers of readBaseMerge, by pull request,
 	// approved head and head: two commits' relation does not change.
 	baseMerges map[string]bool
+	// opens are the answers of refStates, by issue or pull request,
+	// each kept for loopOpenEvery.
+	opens map[string]loopOpen
+	// merged are the merged pull requests read, by reference.
+	merged map[string]superloop.Pull
+}
+
+// loopOpen is whether an issue or pull request was open when read at at.
+type loopOpen struct {
+	open bool
+	at   time.Time
+}
+
+// loopOpenEvery is how long the loop keeps a read of whether an issue or
+// pull request is open: a kept worker's served issue is not read every pass.
+const loopOpenEvery = 10 * time.Minute
+
+// open reports whether the issue or pull request ref is open, read at most
+// every loopOpenEvery; one it cannot read counts as open, said once, so no
+// worker is retired on a failed read.
+func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
+	if o, ok := l.opens[ref]; ok && l.a.now.Sub(o.at) < loopOpenEvery {
+		return o.open
+	}
+	r, ok := parseRef(ref)
+	if !ok {
+		return true
+	}
+	states, err := refStates(ctx, []github.PR{r})
+	st, read := states[r]
+	if err != nil || !read {
+		l.sayOnce("open "+ref, "SUPERVISOR LOOP cannot tell whether %s is open (%v): its worker stays", ref, err)
+		return true
+	}
+	open := st.State == github.Open
+	if l.opens == nil {
+		l.opens = map[string]loopOpen{}
+	}
+	l.opens[ref] = loopOpen{open: open, at: l.a.now}
+	return open
+}
+
+// loopServes is the issue ag's active sessions serve record names, as
+// owner/repo#n: "" without one, once its session ended or once it waits
+// for "done".
+func loopServes(st *state.State, ag state.Agent) string {
+	i := slices.IndexFunc(st.Records, func(r state.Record) bool { return r.Session.Is(ag.Party) })
+	if i < 0 {
+		return ""
+	}
+	r := st.Records[i]
+	if !r.Ended.IsZero() || strings.HasPrefix(strings.ToLower(r.Waits), "done") {
+		return ""
+	}
+	if ref, ok := parseRef(r.Issue); ok {
+		return refName(ref)
+	}
+	return ""
 }
 
 // loopOutput serializes loop transitions with asynchronous timer output.
@@ -733,7 +795,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now, PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
-		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) }}
+		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
+		Open: func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
@@ -742,6 +805,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			w.ParkedHead = ag.Park.ReviewHead
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
+		w.Serves = loopServes(st, ag)
 		in.Workers = append(in.Workers, w)
 	}
 	for _, n := range st.Notes {
@@ -814,6 +878,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
 		}
+		// A merged pull request stays merged: a worker kept for the open
+		// work it serves does not have it read again every pass.
+		if p, ok := l.merged[ref]; ok {
+			in.Pulls[ref] = p
+			continue
+		}
 		p, err := readLoopPull(ctx, ref)
 		if err != nil {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
@@ -823,6 +893,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
 		in.Pulls[ref] = p
+		if p.State == superloop.Merged {
+			if l.merged == nil {
+				l.merged = map[string]superloop.Pull{}
+			}
+			l.merged[ref] = p
+		}
 	}
 	l.postMerge = superloop.ReleaseWorkers(in)
 	if len(l.postMerge) > 0 {

@@ -970,3 +970,91 @@ func TestAReplacedParkIsNoDecision(t *testing.T) {
 		t.Fatalf("replaced park became a decision: %+v", got)
 	}
 }
+
+// TestAMultiPullWorkerStaysWhileItServesOpenWork: a merged pull request's
+// tracking ends, but its worker stays while it serves an open issue or is
+// parked on another open pull request; its done, the close of that work or
+// a day's quiet with no park or wake timer retires it.
+func TestAMultiPullWorkerStaysWhileItServesOpenWork(t *testing.T) {
+	const issue, next = "o/r#70", "o/r#90"
+	open := map[string]bool{issue: true, next: true}
+	w := parked(t0)
+	w[0].Started = true
+	w[0].Serves = issue
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	tk = append(tk, taken(t, t1, Action{Key: goKey(pr, head1), Kind: KindGo, Ref: pr, Agent: worker})...)
+	merged := map[string]Pull{pr: {Ref: pr, URL: prURL, State: Merged, Head: head1, MergeCommit: head2}}
+	in := Input{Workers: w, Pulls: merged, Taken: tk, Now: t1, Open: func(ref string) bool { return open[ref] }}
+	end := only(t, Plan(in), KindEnd)
+	in.Taken = append(in.Taken, taken(t, t1, end)...)
+	in.Now = t1.Add(3 * time.Hour)
+
+	// Its first pull request merged; it parks on its second, still open.
+	in.Workers[0].ParkedOn, in.Workers[0].ParkedAt = next, t1
+	keep := only(t, Plan(in), KindLeave)
+	if keep.Agent != worker || !strings.Contains(keep.Message, next) {
+		t.Fatalf("keep = %+v", keep)
+	}
+	in.Taken = append(in.Taken, taken(t, in.Now, keep)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("kept worker: %+v", got)
+	}
+	// Plain waits on its open issue keep it too.
+	in.Workers[0].ParkedOn = "#12"
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("worker serving an open issue: %+v", got)
+	}
+	// Quiet a day with no park or wake timer: it goes.
+	in.Workers[0].ParkedOn, in.Workers[0].ParkedAt = "", time.Time{}
+	in.Now = t1.Add(25 * time.Hour)
+	if d := only(t, Plan(in), KindDone); d.Agent != worker {
+		t.Fatalf("stale worker: %+v", d)
+	}
+	in.Workers[0].Waking = true
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("worker with a wake timer: %+v", got)
+	}
+	in.Workers[0].Waking = false
+	in.StaleAfter = 48 * time.Hour
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("agents.staleAfter ignored: %+v", got)
+	}
+	// Its served issue closes, its second pull request merged: it goes.
+	in.Workers[0].ParkedOn, in.Workers[0].ParkedAt = next, t1
+	open[issue], open[next] = false, false
+	if d := only(t, Plan(in), KindDone); d.Agent != worker || !strings.Contains(d.Message, "no report after merge") {
+		t.Fatalf("served work closed: %+v", d)
+	}
+	// Its done report retires it at once, whatever it serves.
+	open[issue], open[next] = true, true
+	in.Events = []Event{{At: in.Now, Verb: VerbDone, Agent: worker, Detail: worker + " done: proven"}}
+	if d := only(t, Plan(in), KindDone); d.Event == nil {
+		t.Fatalf("done report: %+v", d)
+	}
+	in.Events = nil
+
+	// A single-pull-request worker serves nothing else: retired as before,
+	// a serve record naming its own pull request included.
+	for _, serves := range []string{"", pr} {
+		in.Workers[0].Serves, in.Workers[0].ParkedOn = serves, pr
+		if d := only(t, Plan(in), KindDone); d.Agent != worker {
+			t.Fatalf("single pull request worker serving %q: %+v", serves, d)
+		}
+	}
+}
+
+// TestAReviewerIsRetiredWhateverItsWorkerServes: a reviewer the loop
+// started for one round goes once its verdict is acted on.
+func TestAReviewerIsRetiredWhateverItsWorkerServes(t *testing.T) {
+	reviewer := ReviewerName(pr, 1)
+	workers := append(parked(t0), Worker{Name: reviewer, Started: true, Serves: "o/r#70", ParkedOn: "o/r#90"})
+	workers[0].Serves = "o/r#70"
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	in := Input{Workers: workers, Pulls: pull(head1, true, Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}), Rounds: 2, Taken: tk,
+		Open: func(string) bool { return true }}
+	f := only(t, Plan(in), KindForward)
+	in.Taken = append(in.Taken, taken(t, t1, f)...)
+	if d := only(t, Plan(in), KindDone); d.Agent != reviewer {
+		t.Errorf("done = %+v", d)
+	}
+}

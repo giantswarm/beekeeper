@@ -62,7 +62,11 @@ and board queries and starts nothing.
 A worker whose reviewed pull request merges stays reachable for its release proof
 and final `agents idle --done` report. The loop retires an unreported worker only
 after `supervisor.postMergeWindow` (default `2h`) without activity, once its turn
-ends; the log names its merged pull request and missing report. A completed
+ends; the log names its merged pull request and missing report. A worker whose
+task spans several pull requests stays while it still serves an open issue
+(`sessions serve`) or is parked on another open pull request; it is retired at
+its own done report, once that work closed, or after `agents.staleAfter`
+without activity, park or wake timer. A completed
 self-update wakes retained workers whose merge commit the installed release
 contains, after the broker and post-install steps finish. Stopping or retiring
 a worker immediately reconciles any gate run that ended with it; a runner

@@ -2560,3 +2560,71 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 		t.Errorf("one head got a second review: %v", c)
 	}
 }
+
+// TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses: a worker, here a
+// managed SSH execution, whose first pull request merged stays on the
+// roster while it serves an open issue and parks on its next open pull
+// request; once both closed it is stopped and removed.
+func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
+	const issue, next = "o/r#5", "o/r#8"
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-session")
+	r.pass(t)
+	reviewer := r.called(agentsName, agentStartName)[2]
+	r.started(t, reviewer, "reviewer-session")
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
+	}
+	ref := execution.Ref{Host: execution.HostID(sshTestSelector), Execution: execution.ExecutionID("11112222-3333-4444-5555-666677778888"), Generation: 1}
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+		st.Agents[i].Execution = &ref
+		st.Agents[i].Park = &state.Park{On: next, At: time.Now(), Waits: "desk review of the next pull request"}
+		st.Records = append(st.Records, state.Record{Session: st.Agents[i].Party, Issue: "https://github.com/o/r/issues/5", By: st.Agents[i].Party, At: time.Now()})
+		st.Starts = append(st.Starts, state.Start{Party: st.Agents[i].Party, By: loopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := map[string]bool{issue: true, next: true}
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, p := range refs {
+			s := github.Closed
+			if open[refName(p)] {
+				s = github.Open
+			}
+			out[p] = github.RefState{Kind: github.RefPullRequest, State: s}
+		}
+		return out, nil
+	}
+	r.pull.State = superloop.Merged
+	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
+	for range 2 {
+		r.pass(t)
+		for _, verb := range []string{loopStop, loopRemove} {
+			if c := r.called(agentsName, verb, loopWorker); c != nil {
+				t.Fatalf("retired while it serves open work: %v\n%s", c, r.out)
+			}
+		}
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "stays on the roster") || !strings.Contains(evs[0].Detail, next) {
+		t.Fatalf("logged %+v", evs)
+	}
+	if evs := r.logged(t, "supervisor.done"); slices.ContainsFunc(evs, func(e state.Event) bool { return strings.Contains(e.Detail, loopWorker) }) {
+		t.Fatalf("done logged: %+v", evs)
+	}
+	// Its served issue and its next pull request close: it goes.
+	open[issue], open[next] = false, false
+	r.pass(t)
+	if c := r.called(agentsName, loopStop, loopWorker); c == nil {
+		t.Fatalf("the remote worker was not stopped: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("the remote worker stays: %v\n%s", r.calls, r.out)
+	}
+}
