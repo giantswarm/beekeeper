@@ -188,6 +188,9 @@ type secretGuard struct {
 	linkAllowance    linkAllowance
 	noLinks          bool
 	standaloneScript string
+	// feeds: the simple command's output is piped on or substituted, so a
+	// path a metadata command prints is read by the command consuming it.
+	feeds bool
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -214,7 +217,11 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	// every directory the command line changes to.
 	dirs := []string{g.cwd}
 	for _, m := range cdArg.FindAllStringSubmatch(sc.plain, -1) {
-		dirs = append(dirs, within(g.cwd, m[1]))
+		d := wordPath(strings.Trim(m[1], `'"`), g.cwd)
+		if d == "" {
+			d = within(g.cwd, m[1])
+		}
+		dirs = append(dirs, d)
 	}
 	vars := scanVars(sc, segs)
 	g.metadata = metadataFunctions(cmd)
@@ -231,6 +238,7 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 			if l := g.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
 				return l
 			}
+			g.feeds = feedsOutput(sc, segs, i)
 			l := g.sourceLeak(exp, pipelineBefore(sc.plain, segs, i), aliases, dirs, copied)
 			if l == nil || flowsSafely(sc, segs, i, l) {
 				continue

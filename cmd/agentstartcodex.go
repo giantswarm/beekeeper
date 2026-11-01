@@ -123,6 +123,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		id = uuid.NewString()
 	}
 	sp.brief = fillScratchpad(sp.brief, dir, id)
+	sp.brief = projectPrompt(dir, sp.brief)
 	inbox := codex.InboxPath(a.cfg.StateDir, id)
 	logPath := codex.LogPath(a.cfg.StateDir, id)
 
@@ -225,6 +226,7 @@ func (a *app) dryRunCodexStart(sp agentStart, gaps []string) error {
 	if err != nil {
 		return err
 	}
+	sp.brief = projectPrompt(dir, sp.brief)
 	model := cmp.Or(sp.model, a.cfg.Codex.Model, "<model>")
 	argv := codex.ExecArgv(codex.Comm, model)
 	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as a codex agent on %s, bypass, no desktop import\nstart: %s\n",

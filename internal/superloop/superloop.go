@@ -115,6 +115,8 @@ type Pull struct {
 type Review struct {
 	ID     string
 	Author string
+	URL    string
+	Commit string
 	// Member is a review by a member or collaborator of the repository's
 	// owner: only such a review is the owning team's.
 	Member  bool

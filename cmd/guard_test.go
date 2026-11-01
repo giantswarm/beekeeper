@@ -142,6 +142,12 @@ func runIsolated(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(root) }()
 	isolatedRoot = root
+	if err := os.MkdirAll(filepath.Join(root, "config", "beekeeper"), 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "beekeeper", "config.yaml"), nil, 0o600); err != nil {
+		panic(err)
+	}
 	for k, v := range map[string]string{
 		"BEEKEEPER_CONFIG": filepath.Join(root, "config", "beekeeper", "config.yaml"),
 		"XDG_CONFIG_HOME":  filepath.Join(root, "config"),
@@ -219,7 +225,7 @@ func capped(t *testing.T) (state string, env []string) {
 		_ = os.Unsetenv(k)
 	}
 	state = t.TempDir()
-	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(state, "none.yaml"),
+	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(state, "config.yaml")),
 		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s", "MEMCAP_TEST=1",
 		"CLAUDE_CODE_SESSION_ID=test-session", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME=capped test")
 }
@@ -708,4 +714,13 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 	if len(okRes) != 0 {
 		t.Errorf("ordinary command: got %v, want {}", okRes)
 	}
+}
+
+// emptyTestConfig creates the file an isolated command explicitly selects.
+func emptyTestConfig(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
