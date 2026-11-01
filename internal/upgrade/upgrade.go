@@ -17,6 +17,13 @@
 // True, or a Cluster whose own RollingOut condition is True. A cluster on an
 // older release than another is not upgrading: only a
 // change of its own release begins an upgrade.
+//
+// An upgrade is over, whatever cluster-api-events' mark says, once its
+// cluster reports the release cluster-api-events recorded and has rolled out
+// for RolloutGrace since the upgrade began, or has rolled without finishing
+// for StallAfter: a mark that outlives its upgrade (one cluster-api-events
+// never clears, on a managed control plane for one) or a stalled rollout
+// holds no installation for good.
 package upgrade
 
 import (
@@ -46,6 +53,19 @@ const (
 	kindControlPlane  = "KubeadmControlPlane"
 	kindMachinePool   = "MachinePool"
 	kindMachineDeploy = "MachineDeployment"
+	lastKnownTime     = "giantswarm.io/last-known-cluster-upgrade-timestamp"
+)
+
+const (
+	// RolloutGrace is how long a cluster that reports its upgrade's release
+	// and has rolled out still upgrades: its control plane and node pools
+	// may not have begun their rollout yet.
+	RolloutGrace = time.Hour
+	// StallAfter is how long after it began a cluster that reports its
+	// upgrade's release upgrades at most: a rollout that has not finished by
+	// then has stalled and is no upgrade. An upgrade hold older than that is
+	// stale.
+	StallAfter = 24 * time.Hour
 )
 
 // Kinds are the lists read per installation, one each per reading, at the
@@ -156,6 +176,9 @@ func Detect(objs []Object, now time.Time, held func(cluster string) bool) []Upgr
 			continue
 		}
 		p := part(o.Metadata.Namespace, o.Metadata.Name)
+		if over(o, now, p.rolledOut && !p.clusterRoll) {
+			continue
+		}
 		u := Upgrade{Cluster: o.Metadata.Name, Namespace: o.Metadata.Namespace, ControlPlane: p.cp, NodePools: p.pools}
 		if !begun(o, now, &u) {
 			if !held(u.Cluster) || (p.rolledOut && !p.clusterRoll) {
@@ -180,13 +203,50 @@ func begun(o Object, now time.Time, u *Upgrade) bool {
 	case a[upgradingMark] == "true":
 		u.To = label
 	default:
-		t, err := time.Parse(time.RFC3339, a[scheduleTime])
-		if target := a[scheduleRelease]; err != nil || target == "" || target == label || now.Before(t) {
+		target, t, ok := due(a, label, now)
+		if !ok {
 			return false
 		}
-		u.From, u.To, u.Since = label, a[scheduleRelease], t
+		u.From, u.To, u.Since = label, target, t
 	}
 	return true
+}
+
+// due is the cluster's scheduled upgrade whose time has come: its target
+// release and time.
+func due(a map[string]string, label string, now time.Time) (string, time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, a[scheduleTime])
+	target := a[scheduleRelease]
+	return target, t, err == nil && target != "" && target != label && !now.Before(t)
+}
+
+// over reports whether the cluster's upgrade is over although
+// cluster-api-events may still mark it: the cluster reports the release
+// cluster-api-events recorded, no scheduled upgrade is due, and it has
+// rolled out (settled) for RolloutGrace since the upgrade began, or it began
+// StallAfter ago. The upgrade began at the later of cluster-api-events'
+// record of the release and its start time; a cluster with neither is not
+// judged.
+func over(o Object, now time.Time, settled bool) bool {
+	a := o.Metadata.Annotations
+	label := o.Metadata.Labels[releaseLabel]
+	if label == "" || label != a[lastKnownRelease] {
+		return false
+	}
+	if _, _, ok := due(a, label, now); ok {
+		return false
+	}
+	var began time.Time
+	for _, k := range []string{lastKnownTime, upgradeStartTime} {
+		if t, err := time.Parse(time.RFC3339, a[k]); err == nil && t.After(began) {
+			began = t
+		}
+	}
+	if began.IsZero() {
+		return false
+	}
+	age := now.Sub(began)
+	return age >= StallAfter || settled && age >= RolloutGrace
 }
 
 // rolled reports whether a control plane or node pool has rolled out.
@@ -241,6 +301,10 @@ func EndLine(h state.Hold) string {
 
 // Is reports whether a hold is an upgrade's automatic hold.
 func Is(h state.Hold) bool { return strings.HasPrefix(h.Target, HoldPrefix) }
+
+// Stale reports whether an upgrade hold has stood for StallAfter: no upgrade
+// the watch reads runs that long, so its installation has gone unread.
+func Stale(h state.Hold, now time.Time) bool { return Is(h) && now.Sub(h.At) >= StallAfter }
 
 // Held returns an active upgrade hold of the installation.
 func Held(st *state.State, installation string, now time.Time) (state.Hold, bool) {

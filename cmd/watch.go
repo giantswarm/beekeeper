@@ -128,7 +128,9 @@ reading again. A
 cluster whose release changes begins an upgrade: its release label differs
 from the one cluster-api-events recorded, cluster-api-events marks it
 upgrading, or its scheduled upgrade is due. It ends once none of that holds
-and its control plane and node pools have rolled. While it runs, the
+and its control plane and node pools have rolled, or once the cluster
+reports the release cluster-api-events recorded and has rolled out for an
+hour, or rolled without finishing for a day. While it runs, the
 installation is held (hold upgrade:<installation>/<cluster>): the gate
 refuses the merges of its lanes and lease claims of its name are refused.
 "UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and
