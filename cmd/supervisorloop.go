@@ -39,8 +39,9 @@ const loopStartVerb = "supervisor.loop"
 // loopClaimVerb logs an action the loop is about to take, before its side
 // effect; loopStageVerb a finished stage of a release.
 const (
-	loopClaimVerb = "supervisor.claim"
-	loopStageVerb = "supervisor.stage"
+	loopClaimVerb    = "supervisor.claim"
+	loopClaimEndVerb = "supervisor.unclaim"
+	loopStageVerb    = "supervisor.stage"
 )
 
 // loopEventVerbs are the events the loop's rules act on.
@@ -247,6 +248,9 @@ its key first in the detail):
 
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
+  tidy      every board.tidyEvery (1h) while a board is configured and the
+            GitHub budget is above its floor: board tidy, its lines printed
+            as SUPERVISOR BOARD <line>; a dry run tidies nothing
   leave     a park the desk's ownership leaves alone (below), said once with
             its reason: no reviewer, no go, no forward, no escalation, and
             a reviewer the loop started on it earlier retires
@@ -304,7 +308,8 @@ its key first in the detail):
             end), and the worker of a pull request the loop gave the go
             for once it merged, reported or not. A session its person
             started is never retired
-  next      after a done, while capacity has room: the next item of board
+  next      after a done, and every pass below capacity.floor while capacity
+            has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
             configured, none starts
@@ -372,7 +377,7 @@ the log shows no line of its command (agents start, agents wake, agents
 remove, note add) since the claim. One loop runs per state: a second is
 refused. The loop acts on the events logged since its first start.
 --dry-run is one pass that prints each transition it would take as
-SUPERVISOR WOULD <KIND> and takes none: it runs no command, logs nothing,
+SUPERVISOR WOULD <KIND> and takes none: it runs read-only queries, logs nothing,
 fires no timer and takes no lock, so it can run beside the loop.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -383,7 +388,7 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 		},
 	}
 	c.Flags().BoolVar(&once, "once", false, "one pass, then exit")
-	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: no command, no log line, no timer")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "one pass that prints the transitions it would take and takes none: read-only capacity and board queries, no log line or timer")
 	return c
 }
 
@@ -395,8 +400,13 @@ type supervisorLoop struct {
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
 	releaseAt time.Time
+	// tidyAt is when the loop last ran board tidy.
+	tidyAt time.Time
 	// stages are the release stages finished, by key.
 	stages map[string]bool
+	// fillPause defers an unproductive board read until the roster or
+	// capacity changes, or the configured retry interval passes.
+	fillPause fillPause
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
 	// login is the login gh acts as, once read; teams the team files'
@@ -459,8 +469,8 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 const loopLockFile = "supervisor-loop.lock"
 
 // dryRunSupervisorLoop is one pass that says what it would take: it runs
-// no command, logs nothing, fires no timer and takes no lock, so it can run
-// beside the loop.
+// only read-only queries, logs nothing, fires no timer and takes no lock,
+// so it can run beside the loop.
 func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
 	l, err := a.newSupervisorLoop(true)
 	if err != nil {
@@ -512,6 +522,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
+		l.tidy(ctx, st)
 	}
 	own := a.cfg.Supervisor.Ownership
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now,
@@ -549,6 +560,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case !ok:
 		case e.Verb == loopClaimVerb:
 			claims[key] = loopClaim{at: e.At, target: rest}
+		case e.Verb == loopClaimEndVerb:
+			delete(claims, key)
 		case e.Verb == loopStageVerb:
 			stages[key] = true
 		}
@@ -644,7 +657,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return l.fill(ctx, st, claims, in.Taken)
 }
 
 // ownership readies the desk's policy for a pass's reads: the logins the
@@ -815,6 +828,32 @@ func (l *supervisorLoop) newerRelease(ctx context.Context) string {
 	}
 	return ""
 }
+
+// tidy runs board tidy every board.tidyEvery while a board is configured
+// and the GitHub budget is above its floor, and says what it did.
+func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
+	a := l.a
+	b := a.cfg.Board
+	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.now.Sub(l.tidyAt) < b.TidyEvery.Duration ||
+		lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		return
+	}
+	l.tidyAt = a.now
+	out, err := l.run(ctx, loopBoard, boardTidyName)
+	if err != nil {
+		l.sayOnce("board tidy", "SUPERVISOR BOARD TIDY FAILED: %v", err)
+		return
+	}
+	delete(l.said, "board tidy")
+	for line := range strings.Lines(out) {
+		if line = strings.TrimSpace(line); line != "" {
+			_, _ = fmt.Fprintln(a.out, "SUPERVISOR BOARD "+line)
+		}
+	}
+}
+
+// boardTidyName is the board tidy subcommand.
+const boardTidyName = "tidy"
 
 // selfUpdateCheck is the look for a newer release.
 var selfUpdateCheck = []string{selfUpdateCmdName, "--check"}
@@ -1050,25 +1089,45 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 	if _, code, err := beekeeperRun(ctx, l.as("capacity")...); err != nil || code != 0 {
 		return "", errLoopLater
 	}
-	out, err := l.run(ctx, loopBoard, "next", "--json")
+	next, err := l.nextItem(ctx)
 	if err != nil {
 		return "", err
 	}
-	var next struct {
-		Pick *struct {
-			Ref   string `json:"ref"`
-			URL   string `json:"url"`
-			Title string `json:"title"`
-		} `json:"pick"`
-	}
-	if err := json.Unmarshal([]byte(out), &next); err != nil {
-		return "", fmt.Errorf("board next --json: %w", err)
-	}
-	if next.Pick == nil {
+	if next == nil {
 		return "the board offers nothing: no worker starts", nil
 	}
-	r, _ := parseRef(next.Pick.Ref)
-	brief, err := l.brief(k.WorkerBrief, "", "next "+next.Pick.Ref, briefData{URL: next.Pick.URL, Repo: r.Repo, Number: r.N})
+	return l.startItem(ctx, act, *next)
+}
+
+// nextItem is the board's first free ranked item, or nil when none is free.
+func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
+	out, err := l.run(ctx, loopBoard, "next", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var next struct {
+		Pick *loopBoardItem `json:"pick"`
+	}
+	if err := json.Unmarshal([]byte(out), &next); err != nil {
+		return nil, fmt.Errorf("board next --json: %w", err)
+	}
+	if next.Pick != nil {
+		if _, ok := parseRef(next.Pick.Ref); !ok {
+			return nil, fmt.Errorf("board next: invalid item ref %q", next.Pick.Ref)
+		}
+	}
+	return next.Pick, nil
+}
+
+type loopBoardItem struct {
+	Ref string `json:"ref"`
+	URL string `json:"url"`
+}
+
+func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	k := l.a.cfg.Supervisor
+	r, _ := parseRef(next.Ref)
+	brief, err := l.brief(k.WorkerBrief, "", "next "+next.Ref, briefData{URL: next.URL, Repo: r.Repo, Number: r.N})
 	if err != nil {
 		return "", err
 	}
@@ -1083,12 +1142,20 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 		return "", err
 	}
 	if _, err := l.run(ctx, args...); err != nil {
+		if strings.HasPrefix(act.Key, loopFillKey) {
+			// A returned failure is settled, rather than an interruption
+			// that a later start under the same name could reconcile.
+			closed := about(event(loopParty, loopClaimEndVerb, "[%s] start failed or refused", act.Key), act.Ref)
+			if closeErr := l.a.store.Record(closed); closeErr != nil {
+				return "", fmt.Errorf("closing failed start claim: %w", closeErr)
+			}
+		}
 		if Code(err) == ExitRefused {
 			return "", errLoopLater
 		}
 		return "", err
 	}
-	return fmt.Sprintf("%q started on %s", name, next.Pick.URL), nil
+	return fmt.Sprintf("%q started on %s", name, next.URL), nil
 }
 
 // install takes release act.Version through its stages, each resumed on a

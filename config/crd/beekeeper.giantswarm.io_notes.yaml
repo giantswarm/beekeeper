@@ -65,6 +65,37 @@ spec:
               environment:
                 description: Environment is the Environment the note concerns.
                 type: string
+              filedAt:
+                format: date-time
+                type: string
+              filer:
+                description: |-
+                  Filer and FiledAt survive a failed initial status write. Status remains
+                  authoritative once initialized; these fields travel with the create.
+                properties:
+                  host:
+                    description: Host is the machine or installation the party runs
+                      on.
+                    type: string
+                  hostSession:
+                    description: HostSession is the desktop app's id for the session.
+                    type: string
+                  name:
+                    description: Name is the session's name, or the person's.
+                    type: string
+                  person:
+                    description: Person is the verified email of the person whose
+                      agent the party is.
+                    type: string
+                  session:
+                    description: Session is the Claude Code session id.
+                    type: string
+                  team:
+                    description: Team is the person's team.
+                    type: string
+                required:
+                - name
+                type: object
               for:
                 description: For is the person or team the note asks.
                 type: string
