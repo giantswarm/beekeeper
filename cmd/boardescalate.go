@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -34,12 +35,14 @@ type escalation struct {
 // escalations are the open board items in the blocked Status, refs the
 // ones named (all when empty), that have no open re-check timer: each is
 // escalated once, and again when its timer fires while it stays blocked.
-// An item whose recorded blockers all closed is left out: the order's
-// blocker-cleared step offers it as work.
+// An item whose recorded blockers all closed is left out when the order's
+// blocker-cleared step offers it as work: its Status was set before the
+// last of them closed. One whose Status was set after is held by it
+// (HeldByStatus), offered by no step, and escalated.
 func escalations(items []board.Item, blocked string, timers []state.Timer, refs []string) []escalation {
 	var out []escalation
 	for _, it := range items {
-		if !strings.EqualFold(it.Status, blocked) || (it.Blockers > 0 && it.OpenBlockers == 0) {
+		if !strings.EqualFold(it.Status, blocked) || (it.Blockers > 0 && it.OpenBlockers == 0 && !it.HeldByStatus()) {
 			continue
 		}
 		if len(refs) > 0 && !slices.ContainsFunc(refs, func(r string) bool { return strings.EqualFold(r, it.Ref) }) {
@@ -109,10 +112,12 @@ func (a *app) escalate(ctx context.Context, me state.Party, e escalation, every 
 		"--checked", "beekeeper board escalate: the board's Status",
 		question)
 	timer := as(loopTimer, loopAdd, every.String(), escalateWhat+e.Ref, "--run", run)
+	// The timer first: a note that fails after it is retried once its
+	// timer fires, never on every tidy.
 	for _, step := range []struct {
 		name string
 		args []string
-	}{{"note add", note}, {"timer add", timer}} {
+	}{{"timer add", timer}, {"note add", note}} {
 		out, code, err := beekeeperRun(ctx, step.args...)
 		if err != nil {
 			return err
@@ -122,6 +127,14 @@ func (a *app) escalate(ctx context.Context, me state.Party, e escalation, every 
 		}
 	}
 	return nil
+}
+
+// escalateBoard is b read for board escalate: its order with a step of the
+// blocked Status, so the read takes the blocked items whatever board.order
+// names. The step only widens the read; escalate picks nothing by it.
+func escalateBoard(b config.Board) config.Board {
+	b.Order = append(slices.Clone(b.Order), config.BoardStep{Name: boardEscalateName, Status: []string{blockedStatus}})
+	return b
 }
 
 // boardEscalateName is the board escalate subcommand.
@@ -137,8 +150,10 @@ to the person: one note for guide.person naming the item and what holds it
 escalate on it again after board.escalateEvery (default 24h). While an
 item's timer is open it is not escalated again; when the timer fires and the
 item is still blocked, it gets a new note and a new timer, and once it left
-Blocked nothing happens. An item whose recorded blockers all closed is left
-out: the order's blocker-cleared step offers it as work. With refs, only
+Blocked nothing happens. An item whose recorded blockers all closed before
+its Status was set is left out: the order's blocker-cleared step offers it
+as work; one whose Status was set after is held by it and escalated. The
+read takes the Blocked items whatever board.order names. With refs, only
 those items are looked at.
 
 The supervisor loop runs it every board.tidyEvery after board tidy; a
@@ -152,6 +167,7 @@ Prints one line per escalation.`,
 			}
 			me, _ := a.caller()
 			cl := a.boardClient()
+			cl.Board = escalateBoard(cl.Board)
 			snap, err := cl.Read(cmd.Context(), a.now)
 			if err != nil {
 				return err
