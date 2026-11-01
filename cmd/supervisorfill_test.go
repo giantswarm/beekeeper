@@ -636,3 +636,162 @@ func TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim(t *testing.T)
 		t.Fatalf("the recovery is not the start taken: %+v", evs)
 	}
 }
+
+// boardNothingFree is what board next --json prints with nothing free: its
+// document on stdout, the refusal on stderr, and exit 3.
+const boardNothingFree = `{"pick":null,"skipped":[{"ref":"o/r#4","skip":"held"}]}` + "\n" +
+	"beekeeper: no free board item: the order offered 1, all skipped\n"
+
+// nothingFreeRig is the refill rig whose board answers as board next does
+// with nothing free, counting the reads, with doneN agents done.
+func nothingFreeRig(t *testing.T, doneN int) (*loopRig, *supervisorLoop, *int) {
+	t.Helper()
+	r, _ := fillRig(t)
+	original := r.answer
+	reads := 0
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopBoard {
+			reads++
+			return boardNothingFree, ExitRefused
+		}
+		return original(args)
+	}
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evs []state.Event
+	for i := range doneN {
+		name := fmt.Sprintf("worker %d", i+1)
+		e := event(state.Party{Name: name}, "agents.done", "%s done: fix it", name)
+		e.At = e.At.Add(time.Duration(i) * time.Microsecond)
+		evs = append(evs, e)
+	}
+	if err := r.a.store.Record(evs...); err != nil {
+		t.Fatal(err)
+	}
+	return r, l, &reads
+}
+
+func (r *loopRig) loopPass(t *testing.T, l *supervisorLoop) {
+	t.Helper()
+	r.a.now = r.a.now.Add(30 * time.Second)
+	// The watch keeps publishing: its budget reading never goes stale.
+	w := event(watchParty, "watch.budget-state", "false")
+	w.At = r.a.now
+	if err := r.a.store.Record(w); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoopSettlesDoneEventsWhenNothingIsFree(t *testing.T) {
+	const n = 5
+	r, l, reads := nothingFreeRig(t, n)
+	r.loopPass(t, l) // the done events take their agents off the roster
+	if got := len(r.logged(t, "supervisor.done")); got != n {
+		t.Fatalf("%d of %d done events settled:\n%s", got, n, r.out)
+	}
+	before := *reads
+	r.loopPass(t, l) // each done event's next start asks the board
+	if got := *reads - before; got != 1 {
+		t.Fatalf("%d done events read the board %d times in one pass, want 1", n, got)
+	}
+	if got := len(r.logged(t, "supervisor.next")); got != n {
+		t.Fatalf("%d of %d next starts settled:\n%s", got, n, r.out)
+	}
+	for _, e := range r.logged(t, "supervisor.next") {
+		if !strings.Contains(e.Detail, "the board offers nothing") {
+			t.Errorf("next start settled as %q", e.Detail)
+		}
+	}
+	// Within the refill's pause (supervisor.fillRetryEvery) nothing reads.
+	for range 8 {
+		r.loopPass(t, l)
+	}
+	if fs := r.logged(t, loopFailureVerb); len(fs) != 0 {
+		t.Fatalf("nothing free recorded as failures: %+v", fs)
+	}
+	if got := *reads - before; got != 1 {
+		t.Fatalf("the settled done events or the paused refill read the board again: %d reads", got)
+	}
+}
+
+func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
+	for _, name := range []string{"graphql under floor", "graphql refused", "rest under floor"} {
+		t.Run(name, func(t *testing.T) {
+			r, l, reads := nothingFreeRig(t, 2)
+			r.a.cfg.GitHub.Floor = 2500
+			r.loopPass(t, l)
+			setBudget := func(low bool) {
+				t.Helper()
+				err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					now := r.a.now
+					b := &state.Budget{Remaining: 4000, Limit: 5000, Reset: now.Add(time.Hour), At: now,
+						GraphQL: &state.GraphQL{Remaining: 4000, Limit: 5000, At: now}}
+					switch {
+					case !low:
+					case name == "graphql under floor":
+						b.GraphQL.Remaining = 100
+					case name == "graphql refused":
+						b.GraphQL.Remaining, b.GraphQL.Refused = 0, "API rate limit exceeded"
+					case name == "rest under floor":
+						b.Remaining = 100
+					}
+					st.Budget = b
+					return nil, nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			setBudget(true)
+			before := *reads
+			for range 3 {
+				r.loopPass(t, l)
+			}
+			if *reads != before {
+				t.Fatalf("read the board %d times under the floor", *reads-before)
+			}
+			if fs := r.logged(t, loopFailureVerb); len(fs) != 0 {
+				t.Fatalf("a held read recorded as failures: %+v", fs)
+			}
+			if got := len(r.logged(t, "supervisor.next")); got != 0 {
+				t.Fatalf("next starts settled without a board read: %d", got)
+			}
+			if !strings.Contains(r.out.String(), "SUPERVISOR NEXT HELD") {
+				t.Errorf("the hold is not said:\n%s", r.out)
+			}
+			setBudget(false)
+			r.loopPass(t, l)
+			if *reads != before+1 || len(r.logged(t, "supervisor.next")) != 2 {
+				t.Fatalf("after recovery: %d reads, %d settled", *reads-before, len(r.logged(t, "supervisor.next")))
+			}
+		})
+	}
+}
+
+func TestLoopBoardNextRefusalWithoutNothingFreeFails(t *testing.T) {
+	for _, body := range []string{
+		"beekeeper: configuration refused\n",
+		`{"pick":{"ref":"o/r#9","url":"https://github.com/o/r/issues/9"}}` + "\nbeekeeper: no claim\n",
+		`{"skipped":[]}` + "\n",
+	} {
+		r, _ := fillRig(t)
+		r.answer = func(args []string) (string, int) {
+			if args[0] == loopBoard {
+				return body, ExitRefused
+			}
+			return "", 0
+		}
+		l, err := r.a.newSupervisorLoop(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next, err := l.readNextItem(t.Context()); next != nil || err == nil {
+			t.Errorf("refusal %q read as %v, %v", body, next, err)
+		}
+	}
+}

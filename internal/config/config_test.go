@@ -339,6 +339,9 @@ func TestParseTokens(t *testing.T) {
 const (
 	backstage = "giantswarm/backstage"
 	portal    = "portal-tools"
+	// Test case names shared by the config tests.
+	emptyCase = "empty"
+	unsetCase = "unset"
 )
 
 func TestLanes(t *testing.T) {
@@ -1110,12 +1113,6 @@ func TestSupervisorFillRetryEvery(t *testing.T) {
 		}
 	}
 }
-
-// The names of the empty and unset cases of the table tests.
-const (
-	emptyCase = "empty"
-	unsetCase = "unset"
-)
 
 // An explicit environment path must never select the default state when absent.
 func TestMissingEnvironmentConfig(t *testing.T) {

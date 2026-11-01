@@ -345,10 +345,13 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
-	By    Party     `json:"by"`
-	At    time.Time `json:"at"`
-	On    string    `json:"on,omitempty"`
-	Waits string    `json:"waits"`
+	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
+	// Empty (including parks written by older versions) is a plain wait.
+	ReviewHead string    `json:"reviewHead,omitempty"`
+	By         Party     `json:"by"`
+	At         time.Time `json:"at"`
+	On         string    `json:"on,omitempty"`
+	Waits      string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
