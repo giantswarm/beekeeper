@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -107,6 +108,50 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				return nil, errors.New("live coordinator activation refused")
 			}
 			value = execution.ActivationDecision{Allowed: true}
+		case "renew-lease":
+			if !r.Request.LeaseRequired || r.StopRequest != nil || r.Terminal() || st.Stop != nil || r.Request.Coordinator != a.cfg.Identity.Host {
+				return nil, errors.New("coordinator lease renewal revoked")
+			}
+			var request execution.LeaseRequest
+			if execution.Decode(req.Payload, &request) != nil {
+				return nil, errors.New("invalid lease request")
+			}
+			key, keyErr := execution.SigningKey(filepath.Join(a.cfg.StateDir, "execution-coordinator"))
+			if keyErr != nil {
+				return nil, keyErr
+			}
+			grant, grantErr := execution.IssueLease(req.Ref, r.Request.Coordinator, r.Lease, request, key, time.Now())
+			if grantErr != nil {
+				return nil, grantErr
+			}
+			r.Lease = &grant
+			value = grant
+		case runMerge:
+			var use execution.MergeUse
+			if execution.Decode(req.Payload, &use) != nil || use.Ref != req.Ref {
+				return nil, errors.New("invalid merge execution identity")
+			}
+			mergeCtx, stopMerge := context.WithTimeout(ctx, 20*time.Second)
+			defer stopMerge()
+			var result execution.MergeResult
+			var mergeErr error
+			previous, readErr := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID)
+			if readErr == nil && previous.Consumed {
+				result, mergeErr = a.reconcileExecutionMerge(mergeCtx, use)
+			} else {
+				result, mergeErr = execution.UseMerge(mergeCtx, a.mergeAuthorityRoot(), use, time.Now(), func(ctx context.Context) error { return a.executionMergeLive(ctx, st, use) }, func(ctx context.Context) error { return runExecutionMerge(ctx, use) })
+			}
+			if grant, readErr := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID); readErr == nil && grant.Consumed && grant.Ref == use.Ref && grant.Repository == use.Repository && grant.PR == use.PR && grant.Head == use.Head {
+				a.recordExecutionMergeLane(st, use, result.Outcome, st.Starts[i].Party)
+			}
+			if mergeErr != nil {
+				// Keep denial auditing committed even for a refused request.
+				reply.Error = mergeErr.Error()
+				events = append(events, event(st.Starts[i].Party, "execution.merge-denied", "%s", use.ID))
+			} else {
+				events = append(events, event(st.Starts[i].Party, "execution.merge-result", "%s: %s", use.ID, result.Outcome))
+			}
+			value = result
 		case "guard":
 			authority := executionAuthority{Stopped: st.Stop != nil || r.StopRequest != nil || r.Terminal()}
 			for _, hold := range st.Holds {
@@ -142,7 +187,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			ledger := execution.ControlLedger{Sequence: r.ControlSequence, Results: r.ControlResults}
 			result, applyErr := ledger.Apply(req.Ref, control, func() (string, error) {
-				text, evs, err := a.applyExecutionControl(st, st.Starts[i].Party, control)
+				text, evs, err := a.applyExecutionControl(ctx, st, st.Starts[i].Party, control)
 				if err == nil {
 					events = evs
 				}
@@ -165,7 +210,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 	return json.NewEncoder(output).Encode(reply)
 }
 
-func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution.ControlRequest) (string, []state.Event, error) {
+func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me state.Party, c execution.ControlRequest) (string, []state.Event, error) {
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
 	if i < 0 {
 		return "", nil, refused("worker registration is missing")
@@ -260,6 +305,9 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 		if m := post.Unlinked(strings.Join(append([]string{v.Text}, problems...), "\n"), agentHere(st, ag)); len(m) > 0 {
 			return "", nil, refused("report refused: %s", strings.Join(m, "; "))
 		}
+		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {
+			return "", nil, err
+		}
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished
@@ -274,7 +322,7 @@ func (a *app) applyExecutionControl(st *state.State, me state.Party, c execution
 			clearRecords(st, me)
 		}
 		events := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
-		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems})
+		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: v.Finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems})
 		if v.Text != "" {
 			events = append(events, event(me, "agents.report", "%s: %s", ag.Name, v.Text))
 		}

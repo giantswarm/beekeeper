@@ -162,6 +162,14 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 		as:    supervisorName,
 	}
 
+	projectRules := filepath.Join(root, ".claude", "rules")
+	if err := os.MkdirAll(projectRules, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRules, "merge.md"), []byte("project-specific squash rule"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	sp := agentStart{
 		id:     startID,
 		name:   "beekeeper#1708: codex",
@@ -174,6 +182,10 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	}
 	if err := a.startCodexAgent(context.Background(), sp); err != nil {
 		t.Fatalf("startCodexAgent: %v", err)
+	}
+
+	if !strings.Contains(deliveredMsg, "project-specific squash rule") || !strings.HasSuffix(deliveredMsg, sp.brief) {
+		t.Fatalf("first inbox message lacks project rules before task: %q", deliveredMsg)
 	}
 
 	if len(hl.started) != 1 {

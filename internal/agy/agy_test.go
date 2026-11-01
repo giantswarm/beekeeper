@@ -1,6 +1,7 @@
 package agy
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -259,6 +260,40 @@ func TestProjectForDirAndParseModels(t *testing.T) {
 	models := ParseModelsOutput(raw)
 	if len(models) != 2 || models[0] != "gemini-4-argon-medium" || models[1] != "claude-opus-5-5-high" {
 		t.Errorf("ParseModelsOutput = %v", models)
+	}
+}
+
+func TestReadHeadLargeFirstPrompt(t *testing.T) {
+	for _, size := range []int{86 << 10, (256 << 10) + (64 << 10)} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+			brainDir := t.TempDir()
+			const convID = "large-first-prompt"
+			path := TranscriptPath(brainDir, convID)
+			content := "<USER_REQUEST>\nWorking directory: " + testRepoDir + "\n\n" +
+				strings.Repeat("project rule\n", size/13+1) +
+				"\n--- beekeeper brief ---\nShip the agy harness\n--- end beekeeper brief ---\n</USER_REQUEST>"
+			first, err := json.Marshal(step{Type: stepUserInput, Content: content, CreatedAt: now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := json.Marshal(step{Model: testOpusModel})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, path, string(first)+"\n"+string(second)+"\n")
+			h, err := readHead(path, convID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.cwd != testRepoDir || h.title != "Ship the agy harness" || h.model != testOpusModel || !h.created.Equal(now) {
+				t.Fatalf("head = %+v", h)
+			}
+			ended := Ended(brainDir, nil, now.Add(-time.Hour))
+			if len(ended) != 1 || ended[0].Cwd != testRepoDir || ended[0].Name != h.title || ended[0].Model != testOpusModel {
+				t.Fatalf("Ended = %+v", ended)
+			}
+		})
 	}
 }
 
