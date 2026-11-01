@@ -248,7 +248,7 @@ func TestPublishedParkHead(t *testing.T) {
 		want                                                               string
 	}{
 		{name: "published branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, want: loopHead},
-		{name: "other branch same commit", localBranch: branch, remoteBranch: "other", localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
+		{name: "other branch same commit", localBranch: branch, remoteBranch: "another-feature", localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
 		{name: "unpushed head", localBranch: branch, remoteBranch: branch, localHead: loopFixed, remoteHead: loopHead, remoteRepo: repo},
 		{name: "fork same branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: "other/r"},
 		{name: "detached", remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
