@@ -35,7 +35,7 @@ func TestLogKeepsAgentsStartsForTheWindow(t *testing.T) {
 	}
 	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	start := func(at time.Time, detail string) state.Event {
-		return state.Event{At: at, By: state.Party{Name: supervisorName}, Verb: "agents.start", Detail: detail}
+		return state.Event{At: at, By: state.Party{Name: supervisorName}, Verb: verbStart, Detail: detail}
 	}
 	evs := []state.Event{start(now.AddDate(0, 0, -400), "a year back")}
 	for i := range 60 {

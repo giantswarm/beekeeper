@@ -115,6 +115,8 @@ type Pull struct {
 type Review struct {
 	ID     string
 	Author string
+	URL    string
+	Commit string
 	// Member is a review by a member or collaborator of the repository's
 	// owner: only such a review is the owning team's.
 	Member  bool
@@ -142,7 +144,9 @@ func (p Pull) verdict(rd round) *Review {
 
 // Worker is an agent on the roster.
 type Worker struct {
-	Name string
+	// ReviewRequested distinguishes a proven published branch from a plain wait.
+	ReviewRequested bool
+	Name            string
 	// SelfHosted is a worker whose model a self-hosted provider serves:
 	// its reviewer runs on none of them.
 	SelfHosted bool
@@ -395,7 +399,7 @@ func (l ledger) workerDue(ref string, workers []Worker) bool {
 	agent := l.goAgent[ref]
 	return agent != "" && !l.has(retireKey(ref, retiredWorker)) &&
 		slices.ContainsFunc(workers, func(w Worker) bool {
-			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref)
+			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref && w.ReviewRequested)
 		})
 }
 
@@ -433,11 +437,11 @@ var prRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#\d+$`)
 // IsPull reports whether a park's On names an issue or pull request.
 func IsPull(on string) bool { return prRef.MatchString(on) }
 
-// Tracked are the pull requests a pass reads: every one an agent is parked
-// on, every one the loop started a review of that it has not seen merged
-// or closed, and every ended one whose worker waits for its retirement.
-// An escalation an earlier loop filed holds none of them: their review
-// rounds are the loop's. None outside the
+// Tracked are the pull requests a pass reads: every verified review request
+// an agent is parked on, every one the loop started a review of that it
+// has not seen merged or closed, and every ended one whose worker waits
+// for its retirement. An escalation an earlier loop filed holds none of
+// them: their review rounds are the loop's. None outside the
 // desk's organisations or in its never list is read, nor one whose park
 // is from before the loop's first start.
 func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []string {
@@ -477,7 +481,7 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 func parks(workers []Worker, desk Desk) (fresh, stale map[string]bool) {
 	fresh, stale = map[string]bool{}, map[string]bool{}
 	for _, w := range workers {
-		if !IsPull(w.ParkedOn) {
+		if !IsPull(w.ParkedOn) || !w.ReviewRequested {
 			continue
 		}
 		if early, _ := desk.early(w.ParkedAt); early {
@@ -503,9 +507,9 @@ func Plan(in Input) []Action {
 	parked := map[string]Worker{}
 	started := map[string]bool{}
 	for _, w := range in.Workers {
-		// Of two workers parked on one pull request, the later park is its
-		// request.
-		if cur, ok := parked[w.ParkedOn]; IsPull(w.ParkedOn) && (!ok || !w.ParkedAt.Before(cur.ParkedAt)) {
+		// Of two verified review requests on one pull request, the later
+		// park is its request. A plain waiter cannot take its place.
+		if cur, ok := parked[w.ParkedOn]; IsPull(w.ParkedOn) && w.ReviewRequested && (!ok || !w.ParkedAt.Before(cur.ParkedAt)) {
 			parked[w.ParkedOn] = w
 		}
 		started[w.Name] = w.Started
@@ -526,7 +530,7 @@ func Plan(in Input) []Action {
 	// A park the loop leaves alone without reading its pull request.
 	fresh, _ := parks(in.Workers, in.Desk)
 	for _, w := range in.Workers {
-		if !IsPull(w.ParkedOn) {
+		if !IsPull(w.ParkedOn) || !w.ReviewRequested {
 			continue
 		}
 		if reason, why := in.Desk.unread(w.ParkedOn); reason != "" {
@@ -560,6 +564,9 @@ func Plan(in Input) []Action {
 			continue
 		}
 		w, isParked := parked[ref]
+		if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.Name == l.reviewer[ref] && w.ParkedOn == ref && !w.ReviewRequested }) {
+			continue
+		}
 		if early, _ := in.Desk.early(w.ParkedAt); isParked && early {
 			continue
 		}
@@ -1021,7 +1028,7 @@ func Releases(answer string) bool {
 // answerMessage tells the worker of p the person's answer an to the
 // escalation of head.
 func answerMessage(p Pull, head string, an Answer) string {
-	return fmt.Sprintf("%s answered the escalation of %s at head %s (note #%d), word for word: %s\n\nThe loop does not read it as releasing the merge: rework as it says, push, and park on the pull request again once CI is green on the new head.", an.By, p.URL, short(head), an.Note, an.Text)
+	return fmt.Sprintf("%s answered the escalation of %s at head %s (note #%d), word for word: %s\n\nThe loop does not read it as releasing the merge: rework as it says, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree.", an.By, p.URL, short(head), an.Note, an.Text)
 }
 
 // reworkMessage tells the worker of p, parked again on reviewed, the head
@@ -1036,7 +1043,7 @@ func reworkMessage(p Pull, reviewed string, cycles, rounds int) string {
 	if cycles < rounds {
 		next = "the next review round starts then"
 	}
-	return fmt.Sprintf("You parked on %s again %s: those findings stand unfixed, %d of %d change-request round(s) are used, and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and park on the pull request again once CI is green on the new head: %s.",
+	return fmt.Sprintf("You parked on %s again %s: those findings stand unfixed, %d of %d change-request round(s) are used, and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: %s.",
 		p.URL, at, cycles, rounds, next)
 }
 
@@ -1045,9 +1052,9 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // forwardMessage forwards review r of p word for word.
 func forwardMessage(p Pull, r Review, again bool) string {
-	next := "Fix every finding, push, and park on the pull request again once CI is green on the new head: the next review round starts then."
+	next := "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: the next review round starts then."
 	if !again {
-		next = "Fix every finding, push, and park on the pull request again once CI is green on the new head: no further review runs, the merge go for the new head follows."
+		next = "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: no further review runs, the merge go for the new head follows."
 	}
 	return fmt.Sprintf("The review of %s asks for changes on head %s. %s The review, word for word:\n\n%s", p.URL, r.Head, next, r.Body)
 }

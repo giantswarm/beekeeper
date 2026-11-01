@@ -122,7 +122,7 @@ func (a *app) reopenGone(arg, id string) (why string, urgent bool) {
 		return "", false
 	}
 	if st.Agents[i].Done {
-		return "it reported its work done", false
+		return whyReportedDone, false
 	}
 	return "", !st.Agents[i].DesktopTurn.IsZero()
 }

@@ -22,6 +22,11 @@ const (
 	printfCommand = "printf"
 	statCommand   = "stat"
 	testCommand   = "test"
+	ompCommand    = "omp"
+	fileCommand   = "file"
+	dirnameCmd    = "dirname"
+	readlinkCmd   = "readlink"
+	formatFlag    = "--format"
 	falseWord     = "false"
 )
 
@@ -56,10 +61,10 @@ var (
 	plainKey = regexp.MustCompile(`^[A-Za-z_]\w*$`)
 	// metaCmds print a file's metadata or move it, never its content.
 	metaCmds = map[string]bool{
-		"ls": true, statCommand: true, "file": true, "wc": true, "du": true, testCommand: true, "[": true, "[[": true,
-		"realpath": true, "readlink": true, "dirname": true, "basename": true, "touch": true, "chmod": true,
+		"ls": true, statCommand: true, fileCommand: true, "wc": true, "du": true, testCommand: true, "[": true, "[[": true,
+		"realpath": true, readlinkCmd: true, dirnameCmd: true, "basename": true, "touch": true, "chmod": true,
 		"chown": true, findCmd: true, "lsof": true, "fuser": true, "namei": true, "getfacl": true, "mv": true,
-		"rm": true, "trash": true, "trash-put": true, "omp": true, selfCmd: true,
+		"rm": true, "trash": true, "trash-put": true, ompCommand: true, selfCmd: true,
 	}
 	grepCmds = map[string]bool{"grep": true, "egrep": true, "fgrep": true, "rg": true, "ugrep": true, "ug": true, "ag": true, "zgrep": true}
 	// grepQuiet: a grep option that prints counts, file names or nothing.
@@ -191,6 +196,19 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 	}
 	if !g.noLinks && g.linkAllowance.allowed && g.files.symbolicMetadata(linkArgs(name, args, g.metadata), dirs) {
 		isMeta = true
+	} else if _, helper := g.metadata[name]; name == "ln" || helper {
+		if file := g.files.linkSource(args, dirs); file != "" {
+			return &leak{what: "a link that exposes " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
+		}
+	}
+	if name == findCmd {
+		if file := g.files.findSource(args, dirs, g.feeds); file != "" {
+			return &leak{what: "a find that runs a reader on " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
+		}
+		isMeta = isMeta && !findReads(args)
+	}
+	if g.feeds && printsPaths(name, args) {
+		isMeta = false // a printed path the consuming command reads
 	}
 	isGrep := grepCmds[name]
 	recursive := !isMeta && (name == "rg" || name == "ag" || isGrep && slices.ContainsFunc(args, grepRecursive.MatchString))
