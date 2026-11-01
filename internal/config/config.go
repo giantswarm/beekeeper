@@ -721,11 +721,12 @@ type Disk struct {
 }
 
 // Cache modes of the disk step. Entries removes a root's direct children
-// whole, files its single files; go and sccache are the built-in Go build
+// whole, files its single files, command runs the tool's own cleaner; go and sccache are the built-in Go build
 // cache and sccache trims; off drops an entry.
 const (
 	DiskCacheEntries = "entries"
 	DiskCacheFiles   = "files"
+	DiskCacheCommand = "command"
 	DiskCacheModeGo  = "go"
 	DiskCacheModeSc  = "sccache"
 	DiskCacheOff     = "off"
@@ -753,6 +754,11 @@ type DiskCache struct {
 	OlderThan   Duration `yaml:"olderThan"`
 	MaxGiB      float64  `yaml:"maxGiB"`
 	Regenerable bool     `yaml:"regenerable"`
+	// Command is mode command's cleaner, the tool's own ("uv cache prune"):
+	// split into words and run without a shell in the cache root, once the
+	// root holds more than MaxGiB and under disk pressure (no MaxGiB: under
+	// pressure only), never while a process references the root.
+	Command string `yaml:"command"`
 }
 
 // MaxBytes is the size budget in bytes; 0 is none.
@@ -3527,12 +3533,19 @@ func validateDiskCaches(caches []DiskCache) error {
 		builtin := e.Builtin(e.Name)
 		switch e.Mode {
 		case "", DiskCacheEntries, DiskCacheFiles, DiskCacheOff:
+		case DiskCacheCommand:
+			if strings.TrimSpace(e.Command) == "" {
+				return fmt.Errorf("disk.caches %s: mode command needs a command", e.Name)
+			}
 		case DiskCacheModeGo, DiskCacheModeSc:
 			if (e.Mode == DiskCacheModeGo) != (e.Name == DiskCacheGo) || (e.Mode == DiskCacheModeSc) != (e.Name == DiskCacheSccache) {
 				return fmt.Errorf("disk.caches %s: mode %s belongs to the built-in entry of that cache alone", e.Name, e.Mode)
 			}
 		default:
-			return fmt.Errorf("disk.caches %s: mode %q is none of entries, files, off", e.Name, e.Mode)
+			return fmt.Errorf("disk.caches %s: mode %q is none of entries, files, command, off", e.Name, e.Mode)
+		}
+		if e.Command != "" && e.Mode != DiskCacheCommand {
+			return fmt.Errorf("disk.caches %s: command needs mode command", e.Name)
 		}
 		if e.OlderThan.Duration < 0 || e.MaxGiB < 0 {
 			return fmt.Errorf("disk.caches %s: olderThan and maxGiB take no negative value", e.Name)
@@ -3549,7 +3562,7 @@ func validateDiskCaches(caches []DiskCache) error {
 		if _, err := filepath.Match(e.Path, ""); err != nil {
 			return fmt.Errorf("disk.caches %s: path: %w", e.Name, err)
 		}
-		if !builtin && e.Mode != DiskCacheOff && e.OlderThan.Duration == 0 && e.MaxGiB == 0 && !e.Regenerable {
+		if !builtin && e.Mode != DiskCacheOff && e.Mode != DiskCacheCommand && e.OlderThan.Duration == 0 && e.MaxGiB == 0 && !e.Regenerable {
 			return fmt.Errorf("disk.caches %s: set olderThan, maxGiB or regenerable", e.Name)
 		}
 	}

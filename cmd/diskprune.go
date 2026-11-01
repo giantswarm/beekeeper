@@ -24,6 +24,18 @@ import (
 const diskPruneFile = "disk-prune.json"
 const diskPruneLock = "disk-prune.lock"
 
+// diskHoldingFile records what a pressure run left holding the space, for
+// the low-disk note that follows it.
+const diskHoldingFile = "disk-holding.json"
+
+// diskHoldingMin is the smallest uncovered directory a pressure run names.
+var diskHoldingMin int64 = 100 << 20
+
+type diskHolding struct {
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
+}
+
 // keptReferencesUnknown keeps a candidate decided while some process's
 // references could not be read.
 const keptReferencesUnknown = "process references unknown"
@@ -47,8 +59,14 @@ type diskMachine struct {
 	// cache root may hold (the home, beekeeper's state, checkout roots).
 	caches  []diskCache
 	protect []string
-	trees   worktreeMachine
-	refresh func() ([]string, bool, error)
+	// entries are the policies, cacheHome the user cache directory: a
+	// pressure run that leaves the disk low (stillLow; nil, it stays low)
+	// names what there no policy covers.
+	entries   []config.DiskCache
+	cacheHome string
+	stillLow  func() bool
+	trees     worktreeMachine
+	refresh   func() ([]string, bool, error)
 	// unknown is the read's unreadable processes; without refresh, every
 	// step keeps its candidates while it is set.
 	unknown error
@@ -82,6 +100,12 @@ func (a *app) diskMachine() (diskMachine, error) {
 	home, _ := os.UserHomeDir()
 	m.protect = append([]string{home, a.cfg.StateDir, a.store.Dir()}, a.cfg.Disk.Checkouts...)
 	m.protect = append(m.protect, a.cfg.Doctor.WorktreeRoots...)
+	m.entries = entries
+	m.cacheHome, _ = os.UserCacheDir()
+	m.stillLow = func() bool {
+		d, err := machine.ReadDisk(a.cfg.StateDir)
+		return err != nil || d.FreeMiB < a.cfg.Watch.DiskMin(d.TotalMiB)
+	}
 	if d, err := machine.ReadDisk(a.cfg.StateDir); err == nil {
 		m.pressure = d.FreeMiB < a.cfg.Watch.DiskMin(d.TotalMiB)
 	}
@@ -130,8 +154,9 @@ type diskRun struct {
 	locked bool
 	dry    bool
 	// pressure runs name what still holds the space.
-	pressure bool
-	caches   []cacheReport
+	pressure  bool
+	caches    []cacheReport
+	uncovered []cacheReport
 	// unknown names the processes whose references kept candidates.
 	unknown error
 }
@@ -154,6 +179,9 @@ func (r diskRun) String() string {
 	}
 	if h := r.holding(3); r.pressure && h != "" {
 		parts = append(parts, "caches holding most: "+h)
+	}
+	if u := r.uncoveredText(); u != "" {
+		parts = append(parts, "still low; not covered by disk.caches: "+u)
 	}
 	if r.unknown != nil {
 		parts = append(parts, "references unknown: "+r.unknown.Error())
@@ -232,8 +260,14 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	if len(r.trees.failed) > 0 {
 		r.Errors = append(r.Errors, fmt.Errorf("%d worktree actions failed", len(r.trees.failed)))
 	}
+	if pressure && m.cacheHome != "" && (m.stillLow == nil || m.stillLow()) {
+		r.uncovered = uncoveredCaches(m.cacheHome, m.entries, diskHoldingMin, 5)
+	}
 	if !dry {
 		_ = a.store.Log(event(watchParty, "disk.prune", "%s", r))
+		if pressure {
+			_ = a.store.WriteFile(diskHoldingFile, diskHolding{At: a.now, Text: r.holdingText()})
+		}
 	}
 	return r
 }

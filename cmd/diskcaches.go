@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"cmp"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,12 +13,32 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/diskprune"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // diskCache is one resolved cache root of a disk.caches policy.
 type diskCache struct {
 	name   string
 	policy diskprune.Policy
+	// command is mode command's cleaner, its words; empty for the others.
+	command []string
+}
+
+// cacheCleanerTimeout bounds one tool's cleaner.
+const cacheCleanerTimeout = 10 * time.Minute
+
+// runCacheCleaner runs a cleaner in its cache root; tests replace it.
+var runCacheCleaner = func(ctx context.Context, dir string, argv []string) error {
+	exe, err := proc.LookPath(argv[0])
+	if err != nil {
+		return err
+	}
+	c := proc.Command(ctx, exe, argv[1:]...)
+	c.Dir = dir
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w: %s", strings.Join(argv, " "), err, oneLine(string(out)))
+	}
+	return nil
 }
 
 // cacheReport is one cache root's outcome in the dry run's listing.
@@ -82,7 +104,7 @@ func resolveDiskCaches(entries []config.DiskCache) []diskCache {
 	var out []diskCache
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if e.Path == "" || e.Mode != "" && e.Mode != config.DiskCacheEntries && e.Mode != config.DiskCacheFiles {
+		if e.Path == "" || e.Mode != "" && e.Mode != config.DiskCacheEntries && e.Mode != config.DiskCacheFiles && e.Mode != config.DiskCacheCommand {
 			continue
 		}
 		roots := []string{e.Path}
@@ -94,7 +116,11 @@ func resolveDiskCaches(entries []config.DiskCache) []diskCache {
 				continue
 			}
 			seen[root] = true
-			out = append(out, diskCache{name: e.Name, policy: diskprune.Policy{Root: root, Files: e.Mode == config.DiskCacheFiles, OlderThan: e.OlderThan.Duration, MaxBytes: e.MaxBytes(), Regenerable: e.Regenerable}})
+			c := diskCache{name: e.Name, policy: diskprune.Policy{Root: root, Files: e.Mode == config.DiskCacheFiles, OlderThan: e.OlderThan.Duration, MaxBytes: e.MaxBytes(), Regenerable: e.Regenerable}}
+			if e.Mode == config.DiskCacheCommand {
+				c.command = strings.Fields(e.Command)
+			}
+			out = append(out, c)
 		}
 	}
 	for i := range out {
@@ -113,11 +139,82 @@ func (a *app) pruneCacheRoots(r *diskRun, m diskMachine, pressure bool) {
 	for _, d := range m.tmp {
 		caches = append(caches, diskCache{name: config.DiskCacheTmp, policy: diskprune.Policy{Root: d, OlderThan: time.Hour}})
 	}
+	var recheck func() ([]string, error)
+	if m.refresh != nil {
+		recheck = func() ([]string, error) { refs, _, err := m.refresh(); return refs, err }
+	}
 	for _, c := range caches {
-		res := diskprune.Cache(c.policy, a.now, pressure, m.refs, m.protect, r.dry)
+		var res diskprune.CacheResult
+		if len(c.command) > 0 {
+			res = cleanCache(c, pressure, m.refs, m.protect, recheck, r.dry)
+		} else {
+			c.policy.Recheck = recheck
+			res = diskprune.Cache(c.policy, a.now, pressure, m.refs, m.protect, r.dry)
+		}
 		r.Add(res.Result)
 		r.caches = append(r.caches, cacheReport{name: c.name, root: c.policy.Root, CacheResult: res})
 	}
+}
+
+// cleanCache runs a command policy's cleaner: once its root holds more than
+// the budget, and under disk pressure; never on a root that is a symbolic
+// link, holds protected state or that a process references, read again
+// right before the run. A dry run says it would run; what that frees is the
+// tool's to decide, so it counts nothing.
+func cleanCache(c diskCache, pressure bool, refs, protect []string, recheck func() ([]string, error), dry bool) diskprune.CacheResult {
+	var r diskprune.CacheResult
+	root := c.policy.Root
+	fi, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return r
+	}
+	if err != nil {
+		r.Errors = append(r.Errors, err)
+		return r
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		r.Keep("not a directory")
+		return r
+	}
+	for _, q := range protect {
+		if q != "" && diskprune.InUse(root, []string{q}) {
+			r.Keep("holds protected state")
+			return r
+		}
+	}
+	r.Held, r.Newest = diskprune.Measure(root)
+	if !pressure && (c.policy.MaxBytes == 0 || r.Held <= c.policy.MaxBytes) {
+		return r
+	}
+	if diskprune.InUse(root, refs) {
+		r.Keep("in use")
+		return r
+	}
+	if dry {
+		r.Keep("cleaner would run")
+		return r
+	}
+	if recheck != nil {
+		if refs, err = recheck(); err != nil {
+			r.Keep("process references unknown")
+			return r
+		}
+		if diskprune.InUse(root, refs) {
+			r.Keep("in use")
+			return r
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cacheCleanerTimeout)
+	defer cancel()
+	if err := runCacheCleaner(ctx, root, c.command); err != nil {
+		r.Errors = append(r.Errors, fmt.Errorf("cache cleaner: %w", err))
+	}
+	after, _ := diskprune.Measure(root)
+	if after < r.Held {
+		r.Freed = r.Held - after
+	}
+	r.Removed++
+	return r
 }
 
 // holding names the caches that still hold the most, for a pressure line
@@ -215,4 +312,27 @@ func freedVerb(dry bool) string {
 		return "would free"
 	}
 	return "freed"
+}
+
+// uncoveredText names the uncovered directories of a pressure run, by their
+// name in the user cache directory, with size and last write.
+func (r diskRun) uncoveredText() string {
+	var parts []string
+	for _, c := range r.uncovered {
+		parts = append(parts, fmt.Sprintf("%s %s (last write %s)", c.name, sizeStr(c.Held), c.Newest.Format(time.DateOnly)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// holdingText is what a pressure run left holding the space: the caches
+// holding the most and the uncovered directories.
+func (r diskRun) holdingText() string {
+	var parts []string
+	if h := r.holding(3); h != "" {
+		parts = append(parts, "caches "+h)
+	}
+	if u := r.uncoveredText(); u != "" {
+		parts = append(parts, "not covered by disk.caches in the user cache directory: "+u)
+	}
+	return strings.Join(parts, "; ")
 }

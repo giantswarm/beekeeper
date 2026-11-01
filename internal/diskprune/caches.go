@@ -29,6 +29,10 @@ type Policy struct {
 	// Nested are other policies' roots inside this one: each governs its
 	// own subtree, which this policy neither counts nor removes.
 	Nested []string
+	// Recheck reads the processes' references again once the scan is done
+	// and before anything is removed; an error keeps the whole root. Nil
+	// keeps the references the call was given.
+	Recheck func() ([]string, error)
 }
 
 // CacheResult is one root's outcome: Held is what it held before, Newest
@@ -122,6 +126,18 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 		cutoff = floor
 	}
 	slices.SortFunc(units, func(a, b unit) int { return a.newest.Compare(b.newest) })
+	if !dry && p.Recheck != nil {
+		// The scan of a large cache takes a while: whatever a process
+		// opened meanwhile is in use now.
+		if refs, err = p.Recheck(); err != nil {
+			r.Keep("process references unknown")
+			return r
+		}
+		if p.Files && InUse(p.Root, refs) {
+			r.Keep("in use")
+			return r
+		}
+	}
 	left := r.Held
 	emptied := map[string]bool{}
 	var root *os.Root
@@ -154,13 +170,20 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 				}
 				err = removeFile(root, p.Root, u)
 			} else {
-				err = Remove(u.path)
+				err = removeEntry(u, refs)
 			}
 			if errors.Is(err, errChanged) {
 				r.Keep("written during the prune")
 				continue
 			}
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, errInUse) {
+				r.Keep("in use")
+				continue
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				continue // gone already: nothing freed by this run
+			}
+			if err != nil {
 				r.Errors = append(r.Errors, fmt.Errorf("cache removal: %w", err))
 				continue
 			}
@@ -185,6 +208,27 @@ func nestedIn(path string, roots []string) bool {
 	}
 	return false
 }
+
+// removeEntry removes one entry whole once it still qualifies: inspected
+// again right before, it must be unreferenced, hold no checkout and have no
+// write newer than the scan saw. A writer that started meanwhile keeps it.
+func removeEntry(u unit, refs []string) error {
+	if InUse(u.path, refs) {
+		return errInUse
+	}
+	v := inspect(u.path)
+	if v.why == "unreadable" {
+		if _, err := os.Lstat(u.path); errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if v.why != "" || v.newest.After(u.newest) {
+		return errChanged
+	}
+	return Remove(u.path)
+}
+
+var errInUse = errors.New("in use since the scan")
 
 var errChanged = errors.New("written since the scan")
 

@@ -345,6 +345,10 @@ disk:
       maxGiB: 2                     # until the cache fits two GiB
     - path: ~/.cache/*-dev          # a glob: each match is a cache root
       maxGiB: 1
+    - path: ~/.cache/tool
+      mode: command                 # the tool's own cleaner, which keeps its metadata
+      command: tool cache prune     # words, no shell; runs in the cache root
+      maxGiB: 4                     # over the budget, and under disk pressure
 ```
 
 `path` is absolute or `~/…` and may be a glob; each match is a cache root. In
@@ -353,7 +357,10 @@ removed whole; in `files` mode its regular files, and directories a trim
 empties go with them. A unit untouched for `olderThan` (a Go duration or whole
 days, `7d`) goes; past `maxGiB` the least recently written go until the root
 fits; a `regenerable` cache drops everything older than an hour under disk
-pressure. A root inside another policy's root is governed by its own policy
+pressure. In `command` mode beekeeper removes nothing itself: it runs the
+tool's cleaner (at most ten minutes) once the root holds more than `maxGiB`,
+and on every pressure run (without `maxGiB`, only those); the bytes it freed
+are measured after it, and a dry run says `cleaner would run`. A root inside another policy's root is governed by its own policy
 alone: the outer one neither counts nor removes the entry holding it. Whatever
 a policy says, the step keeps:
 
@@ -367,11 +374,22 @@ a policy says, the step keeps:
   a configured checkout or a worktree root;
 - everything while some process's references are unreadable.
 
+The scan of a large cache takes a while, so before removing anything the
+step reads the processes' references again, and right before it removes an
+entry it inspects that entry again: one a process opened meanwhile, one
+written since the scan, or one that now holds a checkout stays. A file is
+removed only if unchanged since the scan. The tools' own locks are only
+known to their cleaners: a cache whose tool locks it belongs in `command`
+mode.
+
 `beekeeper disk prune` (or `--dry-run`) lists each cache root with what it
 holds and would free; `--report` adds the largest entries of the user cache
 directory no policy covers, with their last write, so the list can be
 extended. A pressure run's `DISK PRUNE` line names the caches still holding
-the most.
+the most, and when the disk is still under the free-disk floor after it, the
+largest directories (100 MiB or more) of the user cache directory no policy
+covers, with their last write. The supervisor's "Disk remains low after
+pruning" note carries the same.
 
 ### The disk step
 

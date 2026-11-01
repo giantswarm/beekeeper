@@ -169,3 +169,42 @@ func TestCacheNestedPolicyGovernsItsSubtree(t *testing.T) {
 		t.Fatalf("outer files: %+v", r)
 	}
 }
+
+func TestCacheEntriesRecheckBeforeRemoval(t *testing.T) {
+	root := t.TempDir()
+	cacheFile(t, root, "written/f", 1000, 10*day)
+	cacheFile(t, root, "opened/f", 1000, 10*day)
+	cacheFile(t, root, "idle/f", 1000, 10*day)
+	opened := filepath.Join(root, "opened", "f")
+	p := Policy{Root: root, OlderThan: 7 * day, Recheck: func() ([]string, error) {
+		// A writer and a reader started while the cache was scanned.
+		if err := os.WriteFile(filepath.Join(root, "written", "new"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return []string{opened}, nil
+	}}
+	r := Cache(p, time.Now(), false, nil, nil, false)
+	if r.Freed != 1000 || exists(filepath.Join(root, "idle")) || !exists(filepath.Join(root, "written", "new")) || !exists(opened) {
+		t.Fatalf("recheck: %+v", r)
+	}
+	if r.Kept["written during the prune"] != 1 || r.Kept["in use"] != 1 {
+		t.Fatalf("kept: %v", r.Kept)
+	}
+	p.Recheck = func() ([]string, error) { return nil, os.ErrPermission }
+	cacheFile(t, root, "idle/f", 1000, 10*day)
+	if r := Cache(p, time.Now(), false, nil, nil, false); r.Freed != 0 || r.Kept["process references unknown"] != 1 || !exists(filepath.Join(root, "idle")) {
+		t.Fatalf("unknown references: %+v", r)
+	}
+	if r := Cache(p, time.Now(), false, nil, nil, true); r.Freed != 2000 {
+		t.Fatalf("a dry run rereads nothing: %+v", r)
+	}
+}
+
+func TestCacheFilesRecheckKeepsARootOpenedDuringTheScan(t *testing.T) {
+	root := t.TempDir()
+	old := cacheFile(t, root, "a/f", 1000, 10*day)
+	p := Policy{Root: root, Files: true, OlderThan: 7 * day, Recheck: func() ([]string, error) { return []string{old}, nil }}
+	if r := Cache(p, time.Now(), false, nil, nil, false); r.Freed != 0 || !exists(old) || r.Kept["in use"] != 1 {
+		t.Fatalf("files recheck: %+v", r)
+	}
+}

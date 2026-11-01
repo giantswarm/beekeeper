@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -153,5 +154,83 @@ func TestUncoveredCachesListsWhatNoPolicyNames(t *testing.T) {
 	}
 	if got := uncoveredCaches(base, entries, 2<<20, 10); len(got) != 1 {
 		t.Fatalf("min size: %+v", got)
+	}
+}
+
+func TestDiskPruneStillLowNamesUncoveredCaches(t *testing.T) {
+	a, _ := diskFixture(t)
+	saved := diskHoldingMin
+	t.Cleanup(func() { diskHoldingMin = saved })
+	diskHoldingMin = 1 << 20
+	home := t.TempDir()
+	staleCache(t, filepath.Join(home, "big-app"), "a", "b")
+	staleCache(t, filepath.Join(home, "known"), "a")
+	a.cfg.Disk.Caches = []config.DiskCache{{Name: "known", Path: filepath.Join(home, "known"), OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}}}
+	m := diskMachine{caches: customCaches(a), entries: a.diskCacheEntries(), cacheHome: home}
+	read := func() (diskMachine, error) { return m, nil }
+	// The original failure: nothing frees, and the line says where the space is.
+	r := a.pruneDisk(false, true, read)
+	if r.Freed != 0 || len(r.uncovered) != 1 || r.uncovered[0].name != "big-app" {
+		t.Fatalf("run: %s", r)
+	}
+	line := r.String()
+	if !strings.Contains(line, "still low; not covered by disk.caches: big-app 2 MiB (last write ") || !strings.Contains(line, "caches holding most: known 1 MiB") {
+		t.Fatalf("line=%s", line)
+	}
+	var h diskHolding
+	if found, err := a.store.ReadFile(diskHoldingFile, &h); err != nil || !found || !strings.Contains(h.Text, "big-app 2 MiB") || !strings.Contains(h.Text, "caches known 1 MiB") {
+		t.Fatalf("holding=%+v found=%t err=%v", h, found, err)
+	}
+	m.stillLow = func() bool { return false }
+	if r := a.pruneDisk(true, true, read); len(r.uncovered) != 0 || strings.Contains(r.String(), "not covered") {
+		t.Fatalf("recovered disk still searched: %s", r)
+	}
+	if r := a.pruneDisk(true, false, read); len(r.uncovered) != 0 {
+		t.Fatalf("scheduled run searched: %s", r)
+	}
+}
+
+func TestDiskCacheCommandRunsTheToolsCleaner(t *testing.T) {
+	a, _ := diskFixture(t)
+	root := filepath.Join(t.TempDir(), "tool")
+	staleCache(t, root, "a", "b", "c")
+	var ran [][]string
+	saved := runCacheCleaner
+	t.Cleanup(func() { runCacheCleaner = saved })
+	runCacheCleaner = func(_ context.Context, dir string, argv []string) error {
+		ran = append(ran, argv)
+		if dir != root {
+			t.Errorf("cleaner ran in %s", dir)
+		}
+		return os.RemoveAll(filepath.Join(root, "a"))
+	}
+	a.cfg.Disk.Caches = []config.DiskCache{{Name: "tool", Path: root, Mode: config.DiskCacheCommand, Command: "tool cache prune --all", MaxGiB: 2.5 / 1024}}
+	m := diskMachine{caches: customCaches(a)}
+	read := func() (diskMachine, error) { return m, nil }
+
+	r := a.pruneDisk(true, false, read)
+	if len(ran) != 0 || r.Kept["cleaner would run"] != 1 || r.Freed != 0 {
+		t.Fatalf("dry run: %s ran=%v", r, ran)
+	}
+	m.refs = []string{filepath.Join(root, "b", "variant")}
+	if r := a.pruneDisk(false, false, read); len(ran) != 0 || r.Kept["in use"] != 1 {
+		t.Fatalf("referenced root cleaned: %s", r)
+	}
+	m.refs = nil
+	m.refresh = func() ([]string, bool, error) { return []string{root}, false, nil }
+	if r := a.pruneDisk(false, false, read); len(ran) != 0 || r.Kept["in use"] < 1 {
+		t.Fatalf("root opened before the run cleaned: %s", r)
+	}
+	m.refresh = nil
+	r = a.pruneDisk(false, false, read)
+	if !slices.Equal(ran[0], []string{"tool", "cache", "prune", "--all"}) || r.Freed != 1<<20 || exists(filepath.Join(root, "a")) {
+		t.Fatalf("cleaner: %s ran=%v", r, ran)
+	}
+	// Under the budget only pressure runs it.
+	if r := a.pruneDisk(false, false, read); len(ran) != 1 {
+		t.Fatalf("under budget ran: %s", r)
+	}
+	if a.pruneDisk(false, true, read); len(ran) != 2 {
+		t.Fatal("pressure did not run the cleaner")
 	}
 }

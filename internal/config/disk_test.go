@@ -43,6 +43,9 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		{"disk: {caches: [{path: /cache/app, olderThan: 1h, mode: wipe}]}", false},
 		{"disk: {caches: [{path: /cache/app, maxGiB: -1}]}", false},
 		{"disk: {caches: [{name: app}]}", false},
+		{"disk: {caches: [{path: ~/.cache/uv, mode: command, command: uv cache prune, maxGiB: 2}]}", true},
+		{"disk: {caches: [{path: /cache/tool, mode: command}]}", false},
+		{"disk: {caches: [{path: /cache/tool, olderThan: 1h, command: tool clean}]}", false},
 		{"disk: {caches: [{path: /cache/a, olderThan: 1h}, {path: /cache/a, maxGiB: 1}]}", false},
 	} {
 		if err := os.WriteFile(p, []byte(tc.raw), 0600); err != nil {
