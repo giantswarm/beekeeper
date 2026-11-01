@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const claudeUsageSessionReset = "2026-11-01T02:29:00Z"
+
 const claudeUsageSample = `You are currently using your subscription to power your Claude Code usage
 
 Current session: 18% used · resets Nov 1, 3:29am (Europe/Berlin)
@@ -44,7 +46,7 @@ func TestParseClaudeUsage(t *testing.T) {
 	if r.FiveHour.UsedPercent != 18 || r.SevenDay.UsedPercent != 19 || r.Buckets["Fable"].SevenDay.UsedPercent != 1 {
 		t.Fatalf("windows: %+v", r)
 	}
-	if got := r.FiveHour.ResetsAt.Format(time.RFC3339); got != "2026-11-01T02:29:00Z" {
+	if got := r.FiveHour.ResetsAt.Format(time.RFC3339); got != claudeUsageSessionReset {
 		t.Fatal(got)
 	}
 	if got := r.SevenDay.ResetsAt.Format(time.RFC3339); got != "2026-11-01T14:00:00Z" {
@@ -87,10 +89,10 @@ func TestClaudeWindowResets(t *testing.T) {
 
 func TestClaudeWindowRecentlyPassedReset(t *testing.T) {
 	for _, tc := range []struct{ name, now, stamp, want string }{
-		{"dated-seconds", "2026-11-01T02:29:30Z", "Nov 1, 3:29am", "2026-11-01T02:29:00Z"},
-		{"time-seconds", "2026-11-01T02:29:30Z", "3:29am", "2026-11-01T02:29:00Z"},
-		{"dated-lag", "2026-11-01T02:31:00Z", "Nov 1, 3:29am", "2026-11-01T02:29:00Z"},
-		{"time-lag", "2026-11-01T02:31:00Z", "3:29am", "2026-11-01T02:29:00Z"},
+		{"dated-seconds", "2026-11-01T02:29:30Z", "Nov 1, 3:29am", claudeUsageSessionReset},
+		{"time-seconds", "2026-11-01T02:29:30Z", "3:29am", claudeUsageSessionReset},
+		{"dated-lag", "2026-11-01T02:31:00Z", "Nov 1, 3:29am", claudeUsageSessionReset},
+		{"time-lag", "2026-11-01T02:31:00Z", "3:29am", claudeUsageSessionReset},
 		{"previous-year", "2026-12-31T23:00:30Z", "Dec 31, 11:59pm", "2026-12-31T22:59:00Z"},
 		{"previous-day", "2026-11-01T23:00:30Z", "11:59pm", "2026-11-01T22:59:00Z"},
 	} {
