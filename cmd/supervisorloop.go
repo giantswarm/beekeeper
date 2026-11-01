@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -42,6 +44,7 @@ const (
 	loopClaimVerb    = "supervisor.claim"
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
+	loopFailureVerb  = "supervisor.failure"
 )
 
 // loopEventVerbs are the events the loop's rules act on.
@@ -139,11 +142,24 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
 	return parseLoopPull(ref, out)
+}
+
+// readBaseMerge reads whether p's head only merges its base into approved
+// (github.BaseMergeOnly).
+var readBaseMerge = func(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
+	r, ok := parseRef(p.Ref)
+	if !ok || p.Base == "" {
+		return false, fmt.Errorf("%s names no pull request with a base", p.Ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	only, _, err := github.BaseMergeOnly(ctx, github.RunGH, r.Repo, p.Base, approved, p.Head)
+	return only, err
 }
 
 // readDeskLogin is the login gh acts as: the one the desk's agents open
@@ -179,6 +195,7 @@ type loopPullJSON struct {
 	State  string `json:"state"`
 	URL    string `json:"url"`
 	Head   string `json:"headRefOid"`
+	Base   string `json:"baseRefName"`
 	Rollup []struct {
 		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
@@ -215,7 +232,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -246,6 +263,20 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  alerts    consume the beside-running watch events; the watch reads
+            installations every alerts.every; unowned pages are one summary
+            (installations, counts, oldest firing). A guide.person note requires
+            blocked owned work: an active sessions serve record naming an issue
+            and --waits alert:<name>, with no routable parked worker. Notes are
+            deduplicated per installation and firing. A worker parked
+            on alert:<name> (alertname or installation/alertname) is woken;
+            an unresumable session is retired and its original task staffed
+            again, with a durable replacement intent across restarts.
+            Each worker is woken once per firing, including an already-firing
+            alert. Event wakes are held with starts: an alert that resolves
+            before the hold lifts does not wake a parked worker.
+  budget    every poll consumes watch budget readings; a low or unknown budget
+            holds new worker/reviewer starts and event wakes and says so
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
   tidy      every board.tidyEvery (1h) while a board is configured and the
@@ -254,10 +285,18 @@ its key first in the detail):
   leave     a park the desk's ownership leaves alone (below), said once with
             its reason: no reviewer, no go, no forward, no escalation, and
             a reviewer the loop started on it earlier retires
+  resume    a settled park whose non-Claude harness reports its session gone:
+            restart under
+            the same name with supervisor.workerBrief and a capacity pick,
+            continuing its open task and the wait's answer; a failed start
+            releases the ended task holder so board next can offer it again.
+            Claude transcript resumes, live sessions, managed SSH executions and a
+            stopped desk are left alone
   review    an agent parked on its pull request (agents park --on
             owner/repo#n) with every check on the head green, for the
             first round, for every new head the worker parked on after an
-            approval (one review per head), or after the last round's
+            approval (one review per head) but one that only merges the
+            base into the approved head (below), or after the last round's
             findings were forwarded and the worker parked again on a new
             head while a change-request round is left
             (supervisor.reviewRounds, default 1): a reviewer starts
@@ -267,22 +306,37 @@ its key first in the detail):
             self-hosted provider's model gets one on no self-hosted provider
             (--review-of-self-hosted)
   go        every check on the head green, and either the last round's
-            verdict approves that head, or no round is left, its verdict
-            asked for changes, they were forwarded and the worker parked
-            again on a new head (its fixes): the merge go for that head,
-            told to the worker (agents wake) with --match-head-commit
-            <head>. Only the verdict of the loop's own last round counts,
-            on the head it reviewed and posted after it started: an older
-            verdict or a round still running authorizes nothing
+            verdict approves that head, or the worker parked after the
+            approval on a head that only merges the base into the approved
+            one, or no round is left, its verdict asked for changes, they
+            were forwarded and the worker parked again on a new head (its
+            fixes) that is more than a merge of the base: the merge go for
+            that head, told to the worker (agents wake) with the merge
+            command of the repository's path: the gate's devctl pr merge
+            <repo> <n> --update-branch on a repository of
+            merge.devctlOwners, whose base update the go covers, else gh
+            pr merge --match-head-commit <head>. A head only merges the
+            base when the approved head is its ancestor, every commit it
+            adds is a merge, and its change against its merge base with
+            the base branch is the approved head's, file by file, hunk by
+            hunk, line by line (compare API); a file without a patch counts
+            only with the approved blob and no change of the base's to it
+            since. Anything else, or a comparison GitHub cuts short, is a
+            new head with a new review. Only the verdict of the loop's own
+            last round counts, on the head it reviewed and posted after it
+            started: an older verdict or a round still running authorizes
+            nothing
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
-  rework    no change-request round left (supervisor.reviewRounds counts
-            the rounds that asked for changes; an approved head is none)
-            and the worker parked again after the forward on the head the
-            findings were about: the worker is told to fix them and push
-            (agents wake), once for each such park; its new green head
-            gets the merge go. Review and rework stay in the loop: no
-            merge question goes to guide.person
+  rework    the worker parked again after the forward on the head the
+            findings were about with no change-request round left
+            (supervisor.reviewRounds counts the rounds that asked for
+            changes; an approved head is none), or, rounds left or not, on
+            a head that only merges the base into it, which carries no
+            fixes: the worker is told to fix them and push (agents wake),
+            once for each such park; its new green head gets the next
+            round, or the merge go once none is left. Review and rework
+            stay in the loop: no merge question goes to guide.person
   answer    the person answered an escalation an earlier loop filed
             (beekeeper answer --note): an answer that releases it (the
             Merge option, or words to merge that refuse nothing) is the
@@ -329,17 +383,12 @@ its key first in the detail):
             "confidence":0.9}; the event goes to the guide (note add for
             guide.person) with its class, or unclassified below
             supervisor.classifierConfidence (0.8) or without a classifier
-  file      a problem found (agents.problem) that cites no issue URL
-            (https://github.com/<owner>/<repo>/issues/<n>): a note for
-            guide.person, into the guide's queue, to file it in its owning
-            repository, no decision; a done report's together in one note,
-            before the done. One citing its issue is filed: a done report's
-            rides with the done's log line, as does a reviewer's that
-            matches the changes request the loop forwarded, and one logged
-            mid-task needs nothing. The note links the issue or pull
-            request the agent works, or none when it works none. The agent
-            keeps its task: a problem is a finding, never a decision for
-            the person
+  file      a problem found (agents.problem) that cites no issue URL:
+            the full report is logged in supervisor.file and delivered once
+            by guide watch as GUIDE PROBLEM, to file in its owning repository.
+            A done report's problems arrive together before the done settles.
+            No decision note or thread reference is needed. A problem naming
+            its issue is already filed; the agent keeps its task
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -399,7 +448,9 @@ type supervisorLoop struct {
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
-	releaseAt time.Time
+	releaseAt  time.Time
+	startsHeld bool
+	stopWatch  func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
@@ -416,6 +467,9 @@ type supervisorLoop struct {
 	teamsAt time.Time
 	// dryRun prints a pass's transitions and takes none.
 	dryRun bool
+	// baseMerges are the answers of readBaseMerge, by pull request,
+	// approved head and head: two commits' relation does not change.
+	baseMerges map[string]bool
 }
 
 // loopOutput serializes loop transitions with asynchronous timer output.
@@ -431,6 +485,8 @@ func (w *loopOutput) Write(p []byte) (int, error) {
 }
 
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	// One loop per state: a second would take each action again.
 	lock := flock.New(filepath.Join(a.store.Dir(), loopLockFile))
 	held, err := lock.TryLock()
@@ -441,6 +497,11 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	// Observers read a PID marker instead of briefly contending for this lock.
+	if err := a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+		return err
+	}
+	defer func() { _ = a.store.WriteFile("supervisor-loop-pid.json", 0) }()
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
@@ -449,6 +510,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	defer l.timerActs.Wait()
+	if !once {
+		l.stopWatch = a.startLoopWatch(ctx)
+		defer func() {
+			if l.stopWatch != nil {
+				l.stopWatch()
+			}
+		}()
+	}
 	for {
 		a.now = time.Now()
 		if err := l.pass(ctx); err != nil {
@@ -487,7 +556,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -510,8 +579,28 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.timerActs.Wait()
+		if l.stopWatch != nil {
+			l.stopWatch()
+			l.stopWatch = nil
+		}
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+			l.stopWatch = a.startLoopWatch(ctx)
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchConditions(ctx); err != nil {
+			l.startsHeld = true
+			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
+		} else {
+			delete(l.said, "watch-conditions")
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchAlerts(ctx); err != nil {
+			l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
+		} else {
+			delete(l.said, "alerts")
 		}
 	}
 	st, err := a.store.Read()
@@ -523,15 +612,26 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.tidy(ctx, st)
+		if err := a.syncClaims(ctx); err != nil {
+			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
+		}
+	}
+	if err := l.recoverParks(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
 	}
 	own := a.cfg.Supervisor.Ownership
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
-			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration}}
+			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
+		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) }}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
-			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
+			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -550,6 +650,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	claims, stages := map[string]loopClaim{}, map[string]bool{}
+	failures := map[string]loopFailure{}
 	for _, e := range taken {
 		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
 			in.Taken = append(in.Taken, t)
@@ -564,6 +665,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			delete(claims, key)
 		case e.Verb == loopStageVerb:
 			stages[key] = true
+		case e.Verb == loopFailureVerb:
+			var f loopFailure
+			if json.Unmarshal([]byte(rest), &f) == nil {
+				failures[key] = f
+			}
 		}
 	}
 	for _, t := range in.Taken {
@@ -625,6 +731,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			continue
 		}
+		if a.now.Before(failures[act.Key].RetryAt) {
+			continue
+		}
 		if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
 			// Claimed before an interruption: what the log shows of its
 			// side effect decides, never a second one.
@@ -641,7 +750,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		if act.Kind == superloop.KindQuestion {
 			if err := l.readdress(act); err != nil {
-				l.sayOnce(act.Key, "SUPERVISOR QUESTION FAILED %s: %v", act.Key, err)
+				if err := l.failed(act, failures[act.Key], err); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -650,7 +761,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case errors.Is(err, errLoopLater):
 			continue
 		case err != nil:
-			l.sayOnce(act.Key, "SUPERVISOR %s FAILED %s: %v", strings.ToUpper(act.Kind), act.Key, err)
+			if err := l.failed(act, failures[act.Key], err); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := l.record(act, what); err != nil {
@@ -658,6 +771,23 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	return l.fill(ctx, st, claims, in.Taken)
+}
+
+// baseMerged reports whether p's head only merges its base into approved,
+// read once per pair of heads; a read that fails is said once and counts as
+// no: the new head gets its review.
+func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
+	key := p.Ref + " " + approved + " " + p.Head
+	if ok, read := l.baseMerges[key]; read {
+		return ok
+	}
+	ok, err := readBaseMerge(ctx, p, approved)
+	if err != nil {
+		l.sayOnce("base merge "+key, "SUPERVISOR LOOP cannot tell whether %s's head only merges its base: %v", p.Ref, err)
+		return false
+	}
+	l.baseMerges[key] = ok
+	return ok
 }
 
 // ownership readies the desk's policy for a pass's reads: the logins the
@@ -724,7 +854,7 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+act.Kind, "%s", detail), act.Ref)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), detail)
+	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
 	return err
 }
 
@@ -745,7 +875,7 @@ func keyed(detail string) (key, rest string, ok bool) {
 }
 
 // keyedLine is a loop line's detail.
-var keyedLine = regexp.MustCompile(`^\[([^\]]+)\] (.*)$`)
+var keyedLine = regexp.MustCompile(`(?s)^\[([^\]]+)\] (.*)$`)
 
 // claim logs act's side effect about to happen on target, before it does:
 // a restart finds it and reconciles instead of acting twice.
@@ -768,13 +898,13 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	var done bool
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
-		done = logged("agents.start", opens)
+		done = logged(verbStart, opens)
 	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay:
 		done = logged("agents.wake", opens)
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
-	case superloop.KindEscalate, superloop.KindClassify, superloop.KindFile, superloop.KindOwnership:
+	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	}
 	if !done {
@@ -799,7 +929,43 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), detail)
+	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
+	return err
+}
+
+// loopFailure persists identical failures across passes and restarts. Two
+// consecutive failures defer the action for five minutes, keeping it pending.
+type loopFailure struct {
+	Message string    `json:"message"`
+	Count   int       `json:"count"`
+	RetryAt time.Time `json:"retryAt"`
+}
+
+const loopFailureBackoff = 5 * time.Minute
+
+func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
+	f := loopFailure{Message: cause.Error(), Count: 1}
+	// Compare exact messages: a changing timestamp or PID is a different
+	// failure and starts a new count, rather than hiding a new cause.
+	if f.Message == previous.Message {
+		f.Count = previous.Count + 1
+	}
+	if f.Count >= 2 {
+		f.RetryAt = l.a.now.Add(loopFailureBackoff)
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	if err := l.a.store.Record(about(event(loopParty, loopFailureVerb, "[%s] %s", act.Key, b), act.Ref)); err != nil {
+		return err
+	}
+	switch f.Count {
+	case 1:
+		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR %s FAILED %s: %v\n", strings.ToUpper(act.Kind), act.Key, cause)
+	case 2:
+		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR BACKOFF %s: identical failures; retry after %s\n", act.Key, f.RetryAt.UTC().Format(time.RFC3339))
+	}
 	return err
 }
 
@@ -986,8 +1152,8 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Worker string
-	Number, Round           int
+	URL, Repo, Head, Worker, Task string
+	Number, Round                 int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
@@ -1028,6 +1194,9 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	r, _ := parseRef(act.Ref)
 	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent})
 	if err != nil {
@@ -1082,6 +1251,9 @@ func selfHostedModel(k config.Capacity, model string) bool {
 // startNext starts the next ranked item with the worker brief, when
 // capacity has room.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	k := l.a.cfg.Supervisor
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
@@ -1207,6 +1379,27 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 	return strings.Join(append(what, "the latest"), ", "), nil
 }
 
+// loopParkOn preserves explicit wait owners. Older workers sometimes omit
+// --on and name the pull request in their wait instead. Only an unambiguous
+// pull URL supplies that missing owner; issue URLs and prose do not.
+func loopParkOn(p *state.Park) string {
+	if p.On != "" {
+		return p.On
+	}
+	matches := loopParkPull.FindAllStringSubmatch(p.Waits, -1)
+	on := ""
+	for _, m := range matches {
+		ref := m[1] + "#" + m[2]
+		if on != "" && on != ref {
+			return ""
+		}
+		on = ref
+	}
+	return on
+}
+
+var loopParkPull = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/pull/([0-9]+)\b`)
+
 // classification is the classifier's answer.
 type classification struct {
 	Class      string  `json:"class"`
@@ -1260,48 +1453,15 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 	return fmt.Sprintf("%s to the guide (%s) on %s", e.Verb, label, ref), nil
 }
 
-// toFile puts the problems found and filed nowhere in the guide's queue,
-// no decision: the supervisor files a worker's problems found, and no
-// supervisor session reads the watch's PROBLEM FOUND lines beside the loop.
-// A done report's wait for it in its done; one logged mid-task leaves the
-// agent at its task.
-func (l *supervisorLoop) toFile(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	e := *act.Event
-	found := strings.Split(act.Message, "\n")
-	if e.Verb == superloop.VerbProblem {
-		ref := agentRef(st, e.Agent)
-		if ref == "" {
-			ref = refURL.FindString(act.Message)
-		}
-		q := fmt.Sprintf("File in its owning repository what %s found (1 problem, no decision)", e.Agent)
-		if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s logged at %s, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), act.Message),
-			"the supervisor files a worker's problems found (worker-rules), and the problem names no issue; the agent keeps its task",
-			"the guide files it in its owning repository and closes this note"); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("%s's problem to the guide's queue to file%s", e.Agent, onRef(ref)), nil
-	}
-	ref := agentRef(st, e.Agent)
-	if ref == "" {
-		if m := refURL.FindString(e.Detail + " " + act.Message); m != "" {
-			ref = m
-		}
-	}
-	q := fmt.Sprintf("File in its owning repository what %s found (%d problem(s), no decision)", e.Agent, len(found))
-	if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s's done report at %s names, filed nowhere: %s", e.Agent, e.At.UTC().Format(time.RFC3339), strings.Join(found, "; ")),
-		"the supervisor files a worker's problems found (worker-rules), and the report names no issue for these",
-		"the guide files each in its owning repository and closes this note"); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%d problem(s) of %s's done report to the guide's queue to file%s", len(found), e.Agent, onRef(ref)), nil
-}
+// fileReportSeparator identifies reports stored in the event itself. Older
+// file transitions only summarized delivery to a note and must not be replayed.
+const fileReportSeparator = "; file in the owning repositories:\n"
 
-// onRef names the issue or pull request a note was filed on, if any.
-func onRef(ref string) string {
-	if ref == "" {
-		return ""
-	}
-	return ", on " + ref
+// toFile leaves the full finding in the settled transition's event. The
+// guide's feed reads that event once; no decision or thread is needed.
+func (l *supervisorLoop) toFile(_ context.Context, _ *state.State, act superloop.Action) (string, error) {
+	e := *act.Event
+	return fmt.Sprintf("%s reported at %s%s%s", e.Agent, e.At.UTC().Format(time.RFC3339), fileReportSeparator, act.Message), nil
 }
 
 // agentRef is the issue or pull request the agent works: what it is
@@ -1328,9 +1488,7 @@ func agentRef(st *state.State, name string) string {
 	return ""
 }
 
-// toGuide files a decision for the guide's person on ref (note add). A
-// finding to file needs no thread of its own: with ref "" the note links
-// none, and the guide closes it once it is filed.
+// toGuide files a decision for the guide's person on ref (note add).
 func (l *supervisorLoop) toGuide(ctx context.Context, act superloop.Action, ref, question, statusQuo, why, dflt string, options ...string) error {
 	person := l.a.cfg.Guide.Person
 	if person == "" {

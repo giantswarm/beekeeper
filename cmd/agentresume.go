@@ -35,10 +35,6 @@ var parkedWords = regexp.MustCompile(`(?i)\b(?:note|person|supervisor|guide|answ
 // a review, a reply, a decision.
 var personWaitWords = regexp.MustCompile(`(?i)\b(?:notes?|persons?|answers?|reviews?|approvals?|decisions?|repl(?:y|ies))\b`)
 
-// resourceWaitWords name a wait on a resource the supervisor hands out (a
-// lease, its grant) or on a timer or probe: nobody has anything to decide.
-var resourceWaitWords = regexp.MustCompile(`(?i)\b(?:leases?|grants?|timers?|probes?)\b`)
-
 // parkedOn is what a serve record says the agent waits on when that is a
 // person (guide.person, a note, the supervisor's answer); "" otherwise.
 func parkedOn(waits, person string) string {
