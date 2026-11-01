@@ -643,9 +643,13 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 				if done && r.called(agentsName, loopRemove, loopWorker) == nil {
 					t.Fatal("done did not settle")
 				}
-                if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: already filed https://github.com/o/r/issues/9", loopWorker)); err != nil { t.Fatal(err) }
-                r.pass(t)
-                if len(r.logged(t, "supervisor.file")) != 1 || len(r.stdin) != 0 { t.Fatal("filed finding rerouted or classifier called") }
+				if err := r.a.store.Record(event(state.Party{Name: loopWorker}, "agents.problem", "%s: already filed https://github.com/o/r/issues/9", loopWorker)); err != nil {
+					t.Fatal(err)
+				}
+				r.pass(t)
+				if len(r.logged(t, "supervisor.file")) != 1 || len(r.stdin) != 0 {
+					t.Fatal("filed finding rerouted or classifier called")
+				}
 
 				a, _ := stubApp(t)
 				plat.Machine = tableMachine{plat.Machine}
