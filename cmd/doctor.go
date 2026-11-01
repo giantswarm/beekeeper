@@ -110,7 +110,7 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 		switch {
 		case ag.Done:
 			if !busy(ag.Party) {
-				out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: "it reported its work done"})
+				out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: whyReportedDone})
 			}
 			continue
 		case keepsRole(st, ag.Party):
@@ -469,6 +469,8 @@ func (a *app) owedArchives(sessions []*claude.Session, record func(host string) 
 	return run, err
 }
 
+const whyReportedDone = "it reported its work done"
+
 // stoppedExecutionWhy is why the doctor takes a managed SSH execution
 // off the roster, "" while its reservation or run continues. An
 // execution has no local desktop session to archive or retitle.
@@ -479,7 +481,7 @@ func stoppedExecutionWhy(st *state.State, ag state.Agent) string {
 	r, _ := executionRecord(st, *ag.Execution)
 	switch {
 	case ag.Done && !executionReserved(st, ag):
-		return "it reported its work done"
+		return whyReportedDone
 	case r != nil && r.Observation.StopAcknowledged:
 		return "its SSH execution was stopped"
 	}

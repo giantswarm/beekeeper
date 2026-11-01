@@ -388,7 +388,7 @@ func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
 	plat.Machine = tableMachine{plat.Machine}
 	plat.Opener = &recordingOpener{}
 	now := a.now
-	sshRef := execution.Ref{Host: "builder", Execution: "ssh00001", Generation: 1}
+	sshRef := execution.Ref{Host: "exec-host-row", Execution: "ssh00001", Generation: 1}
 	sshParty := state.Party{Session: "ssh00001", Name: "ssh worker"}
 	st := &state.State{
 		Starts: []state.Start{{

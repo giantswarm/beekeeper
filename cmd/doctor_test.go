@@ -84,7 +84,7 @@ func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
 	a, _ := stubApp(t)
 	now := a.now
 	ref := func(id string) execution.Ref {
-		return execution.Ref{Host: "builder", Execution: execution.ExecutionID(id), Generation: 1}
+		return execution.Ref{Host: "exec-host-doctor", Execution: execution.ExecutionID(id), Generation: 1}
 	}
 	runningRef, unackedRef, stoppedRef, doneRunningRef, doneExitedRef := ref("run-1"), ref("stop-unacked"), ref("stop-acked"), ref("done-running"), ref("done-exited")
 	mkAgent := func(name string, r execution.Ref, task string, done bool) state.Agent {
