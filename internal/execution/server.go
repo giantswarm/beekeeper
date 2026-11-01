@@ -139,6 +139,9 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := s.GuardProbe(); err != nil {
 		return c, err
 	}
+	if err := s.workerExecutable(); err != nil {
+		return c, err
+	}
 	h := s.Config.Harnesses[HarnessClaude]
 	if err := s.probe(ctx, h); err != nil {
 		return c, err
