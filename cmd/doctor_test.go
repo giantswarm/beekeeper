@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -73,6 +74,91 @@ func TestPlanChores(t *testing.T) {
 	}
 	if c := planChores(st, sessions, record, busy, 0, now); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
 		t.Errorf("staleAfter 0 takes no stale agent off: %v", c)
+	}
+}
+
+// A managed SSH execution is never removed for local CLI staleness or
+// archived in the desktop; once its stop is acknowledged (or it reported
+// done and its execution is terminal), the doctor takes it off the roster.
+func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
+	a, _ := stubApp(t)
+	now := a.now
+	ref := func(id string) execution.Ref {
+		return execution.Ref{Host: "builder", Execution: execution.ExecutionID(id), Generation: 1}
+	}
+	runningRef, unackedRef, stoppedRef, doneRunningRef, doneExitedRef := ref("run-1"), ref("stop-unacked"), ref("stop-acked"), ref("done-running"), ref("done-exited")
+	mkAgent := func(name string, r execution.Ref, task string, done bool) state.Agent {
+		return state.Agent{
+			Party:      state.Party{Session: string(r.Execution), Name: name},
+			Execution:  &r,
+			Task:       task,
+			Done:       done,
+			Registered: now.Add(-48 * time.Hour),
+			IdleSince:  now.Add(-48 * time.Hour),
+		}
+	}
+	mkStart := func(name string, r execution.Ref, rec *state.ExecutionRecord) state.Start {
+		rec.Handle = execution.Handle{Ref: r, ConversationID: string(r.Execution)}
+		return state.Start{
+			Party:     state.Party{Session: string(r.Execution), Name: name},
+			Execution: rec,
+			Dir:       "/remote/" + string(r.Execution),
+			At:        now.Add(-48 * time.Hour),
+			Harness:   claudeComm,
+		}
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{
+			mkAgent("ssh-running", runningRef, "active task", false),
+			mkAgent("ssh-stop-unacked", unackedRef, "stopping task", false),
+			mkAgent("ssh-stopped", stoppedRef, "stopped task", false),
+			mkAgent("ssh-done-running", doneRunningRef, "", true),
+			mkAgent("ssh-done-exited", doneExitedRef, "", true),
+		}
+		st.Starts = []state.Start{
+			mkStart("ssh-running", runningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart("ssh-stop-unacked", unackedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s1"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart("ssh-stopped", stoppedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s2"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopRequested: true, StopAcknowledged: true}}),
+			mkStart("ssh-done-running", doneRunningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Running}}),
+			mkStart("ssh-done-exited", doneExitedRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, now)
+	var got []string
+	for _, c := range chores {
+		got = append(got, c.String())
+	}
+	want := []string{
+		`take "ssh-stopped" off the roster (its SSH execution was stopped)`,
+		`take "ssh-done-exited" off the roster (it reported its work done)`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("planChores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	removed, err := a.removeAgents(chores, watchParty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed = %+v, want 2", removed)
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remaining []string
+	for _, ag := range st.Agents {
+		remaining = append(remaining, ag.Name)
+	}
+	if !slices.Equal(remaining, []string{"ssh-running", "ssh-stop-unacked", "ssh-done-running"}) {
+		t.Fatalf("remaining agents = %v", remaining)
 	}
 }
 
