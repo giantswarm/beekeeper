@@ -1303,7 +1303,7 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 	r.park(t, loopPR, time.Now())
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker two"}, Task: "upstream",
-			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge"}})
+			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge", ReviewHead: loopHead}})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
