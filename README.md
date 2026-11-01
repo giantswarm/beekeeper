@@ -2748,7 +2748,9 @@ which `claude agents`, `claude attach` and Remote Control show:
   and the roster entry, busy with `--task`, before it returns. No `agents assign` follows. The
   session's first turn starts as `claude --bg` returns, a moment before the start is recorded
   (within `claude agents`' listing, a minute at most): a beekeeper command of that first moment
-  can find the session off the roster, and a brief does not open with one.
+  can find the session off the roster, so a worker's brief does not open with one.
+  A role successor's opening `beekeeper <role> start` is the exception: the relay
+  matches its run name until the daemon's session id is recorded.
 - **Wakes by messaging.** `agents wake`, and every wake beekeeper sends itself (a note's answer, a
   timer, the gate's word, a parked agent's resume, `agents resume`), sends a running background session the
   message by name. A session counts as a background one when beekeeper started it so, or, under
