@@ -146,6 +146,30 @@ cat "$D/auth.json"`, both, true},
 		{"helper_reads", `link() { ln -s "$1" "$2"; cat "$2"; }; link "$HOME/.codex/auth.json" new.json`, both, true},
 		{"helper_reads_source", `link() { local src="$1"; ln -s "$src" "$2"; head "$src"; }; link "$HOME/.codex/auth.json" new.json`, both, true},
 		{"helper_prints_args_to_reader", `link() { ln -s "$1" "$2"; printf '%s\n' "$@" | xargs cat; }; link "$HOME/.codex/auth.json" new.json`, both, true},
+		{"helper_local_substitution_read", `helper() {
+    local value="$(cat "$1")"
+    printf '%s' "$value"
+    ln -s "$1" "$2"
+}
+helper "$HOME/.codex/auth.json" new.json`, both, true},
+		{"helper_plain_substitution_read", `helper() {
+    value="$(cat "$1")"
+    printf '%s' "$value"
+    ln -s "$1" "$2"
+}
+helper "$HOME/.codex/auth.json" new.json`, both, true},
+		{"helper_backtick_read", "helper() { local value=`head \"$1\"`; ln -s \"$1\" \"$2\"; }; helper \"$HOME/.codex/auth.json\" new.json", both, true},
+		{"helper_default_substitution_read", `helper() { local value="${X:-$(base64 "$1")}"; ln -s "$1" "$2"; }; helper "$HOME/.codex/auth.json" new.json`, both, true},
+		{"helper_substitution_reads_link", `helper() {
+    ln -s "$1" "$2"
+    local value="$(cat "$2")"
+    printf '%s' "$value"
+}
+helper "$HOME/.codex/auth.json" new.json`, both, true},
+		{"helper_plain_substitution_reads_link", `helper() { ln -s "$1" "$2"; value=$(jq . "$2"); echo "$value"; }; helper "$HOME/.codex/auth.json" new.json`, both, true},
+		// a metadata path a substitution assigns may be read later: refused, as
+		// x="$(dirname <credential file>)" is
+		{"helper_assigned_metadata_substitution", `helper() { local dir="$(dirname "$2")"; mkdir -p "$dir"; ln -s "$1" "$2"; }; helper "$HOME/.codex/auth.json" "$HOME/.local/state/tool/links/auth.json"`, []string{bashCmd}, true},
 		{"helper_recursive", `link() { link "$1" "$2"; }; link "$HOME/.codex/auth.json" new.json`, both, true},
 		{"helper_shadowed_ln", `ln() { cat "$2"; }; link() { ln -s "$1" "$2"; }; link "$HOME/.codex/auth.json" new.json`, both, true},
 

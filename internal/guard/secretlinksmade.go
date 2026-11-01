@@ -539,7 +539,8 @@ func functionBodies(cmd string) map[string]string {
 // parameters replaced by args, and the bindings of its assignments: a
 // declaration (local src="$1") or plain assignment keeps only its name in the
 // text, so naming a guarded file there is no read, and its value is bound for
-// the scan that judges what the call does. ok is false when the call cannot
+// the scan that judges what the call does. A value that runs a command
+// (local v="$(cat "$1")") keeps its text, so that scan judges the command. ok is false when the call cannot
 // be inlined: too deep, ln shadowed, an argument that is no plain word, or a
 // body that uses its parameters in a way the text does not carry ($@, $#,
 // ${1:-x}, shift, set, a declaration with options or arrays).
@@ -618,6 +619,11 @@ func (g secretGuard) bindHelper(name string, args []string, depth int) (string, 
 				good = false
 				continue
 			}
+			if runsCommand(a.Value) {
+				// a value that runs a command keeps its text: the scan of
+				// the bound body judges the command with the arguments bound
+				continue
+			}
 			binds[a.Name.Value] = append(binds[a.Name.Value], strings.Join(shellWords(b.String()), " "))
 			a.Value, a.Naked = nil, true
 		}
@@ -638,6 +644,20 @@ func (g secretGuard) bindHelper(name string, args []string, depth int) (string, 
 		return "", nil, false
 	}
 	return b.String(), binds, true
+}
+
+// runsCommand reports whether word w runs a command when it expands: a command or
+// process substitution anywhere in it, also inside a parameter's default.
+func runsCommand(w *syntax.Word) bool {
+	found := false
+	syntax.Walk(w, func(n syntax.Node) bool {
+		switch n.(type) {
+		case *syntax.CmdSubst, *syntax.ProcSubst:
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // sameGuarded returns the guarded file that c is a hard link of, "" for
