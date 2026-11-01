@@ -1404,8 +1404,9 @@ func TestLoopOwnsPullRequestWaitsWithoutOn(t *testing.T) {
 }
 
 func TestLoopParkOnKeepsExplicitAndAmbiguousWaits(t *testing.T) {
+	const noteOn = "#1234"
 	for _, tc := range []struct{ on, waits, want string }{
-		{"#12", "CI pending " + loopURL, "#12"},
+		{noteOn, "CI pending " + loopURL, noteOn},
 		{"", "desk review " + loopURL, loopPR},
 		{"", "CI pending " + loopURL + " and " + loopURL, loopPR},
 		{"", "waiting https://github.com/o/r/issues/7", ""},
