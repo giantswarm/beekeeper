@@ -160,7 +160,8 @@ func TestStopSccacheServersStopsARealServer(t *testing.T) {
 	t.Setenv("SCCACHE_DIR", filepath.Join(t.TempDir(), "sccache"))
 	t.Setenv("SCCACHE_SERVER_PORT", "42291")
 	t.Setenv("SCCACHE_IDLE_TIMEOUT", "120")
-	if out, err := exec.Command(bin, "--start-server").CombinedOutput(); err != nil {
+	start := exec.Command(bin, "--start-server") // #nosec G204 -- the installed sccache
+	if out, err := start.CombinedOutput(); err != nil {
 		t.Fatalf("start: %v: %s", err, out)
 	}
 	var mine []int
