@@ -80,11 +80,14 @@ the wake that ends the park resumes it from its transcript (claude --bg
 instance <context>#12 is its note, and a bare number the machine has no
 note of is the central instance's), an issue or pull request
 (owner/repo#n) or a hold (hold:<target>, the one a gate's exit 77 names);
-lease claim --park parks on a lease. Once the note is closed (answered,
-defaulted, done or overtaken), the pull request merged or closed or given
-a review or comment by anyone but its author since the park (a review
-posted under the author's own login, as a desk whose sessions share one
-login posts its own, settles nothing), the hold
+alert:<name> waits for a firing alert (a bare alertname or installation/alertname);
+lease claim --park parks on a lease. The supervisor loop wakes alert waits
+and replaces a parked session that cannot be resumed, keeping its task.
+
+Once the note is closed (answered, defaulted, done or overtaken), the pull
+request merged or closed or given a review or comment by anyone but its
+author since the park (a review posted under the author's own login settles
+nothing), the hold
 lifted or ended, or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
@@ -101,6 +104,7 @@ again once the supervisor's next message re-tasks it, by SendMessage or
 agents wake: its task is that message's first line.`,
 		Example: `  beekeeper agents park --on 41 "Timo's answer on the rollout window"
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
+  beekeeper agents park --on alert:WorkloadDown "the workload alert firing again"
   beekeeper agents park --on hold:merges "the devctl release window my merge was refused on"
   beekeeper agents park "the supervisor's go"`,
 		Args: cobra.ExactArgs(1),
@@ -118,6 +122,11 @@ agents wake: its task is that message's first line.`,
 					return usageErr("--on %s names no hold: hold:<target>, as beekeeper hold lists it", on)
 				}
 				on = holdParkOn(target)
+			} else if name, isAlert := strings.CutPrefix(on, alertParkPrefix); isAlert {
+				if strings.TrimSpace(name) == "" {
+					return usageErr("--on alert:<name> needs an alert name")
+				}
+				on = alertParkPrefix + strings.TrimSpace(name)
 			} else if _, isNote := parkNote(on); on != "" && !isNote {
 				if _, _, central := parkCentralNote(on); !central {
 					r, ok := parseRef(on)
@@ -138,7 +147,7 @@ agents wake: its task is that message's first line.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n) or a hold (hold:<target>)")
+	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n), a hold (hold:<target>) or an alert (alert:<name>)")
 	return c
 }
 
@@ -194,6 +203,8 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		}
 		back := resume + " brings it back"
 		switch {
+		case strings.HasPrefix(on, alertParkPrefix):
+			back = "the supervisor loop wakes it when the alert fires"
 		case on != "" && a.cfg.Agents.AutoResume:
 			back = "the watch resumes it with what settles " + on
 		case on != "":

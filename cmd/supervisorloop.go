@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -260,6 +262,17 @@ every supervisor.loopInterval (30s; --once: one pass), as the party
 one line per transition (supervisor.<kind>, the pull request its subject,
 its key first in the detail):
 
+  alerts    consume the beside-running watch events; the watch reads
+            installations every alerts.every; firing unowned alerts at alerts.pageSeverity
+            become notes for guide.person once per firing. A worker parked
+            on alert:<name> (alertname or installation/alertname) is woken;
+            an unresumable session is retired and its original task staffed
+            again, with a durable replacement intent across restarts.
+            Each worker is woken once per firing, including an already-firing
+            alert. Event wakes are held with starts: an alert that resolves
+            before the hold lifts does not wake a parked worker.
+  budget    every poll consumes watch budget readings; a low or unknown budget
+            holds new worker/reviewer starts and event wakes and says so
   timers    due wall-clock and conditional timers send their wakes or run
             their commands, as in watch; line-only reminders stay with watch
   tidy      every board.tidyEvery (1h) while a board is configured and the
@@ -436,7 +449,9 @@ type supervisorLoop struct {
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
-	releaseAt time.Time
+	releaseAt  time.Time
+	startsHeld bool
+	stopWatch  func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
@@ -471,6 +486,8 @@ func (w *loopOutput) Write(p []byte) (int, error) {
 }
 
 func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	// One loop per state: a second would take each action again.
 	lock := flock.New(filepath.Join(a.store.Dir(), loopLockFile))
 	held, err := lock.TryLock()
@@ -481,6 +498,11 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	// Observers read a PID marker instead of briefly contending for this lock.
+	if err := a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+		return err
+	}
+	defer func() { _ = a.store.WriteFile("supervisor-loop-pid.json", 0) }()
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
@@ -489,6 +511,14 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	defer l.timerActs.Wait()
+	if !once {
+		l.stopWatch = a.startLoopWatch(ctx)
+		defer func() {
+			if l.stopWatch != nil {
+				l.stopWatch()
+			}
+		}()
+	}
 	for {
 		a.now = time.Now()
 		if err := l.pass(ctx); err != nil {
@@ -550,8 +580,28 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.timerActs.Wait()
+		if l.stopWatch != nil {
+			l.stopWatch()
+			l.stopWatch = nil
+		}
 		if err := b.Exec(); err != nil {
 			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+			l.stopWatch = a.startLoopWatch(ctx)
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchConditions(ctx); err != nil {
+			l.startsHeld = true
+			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
+		} else {
+			delete(l.said, "watch-conditions")
+		}
+	}
+	if !l.dryRun {
+		if err := l.watchAlerts(ctx); err != nil {
+			l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
+		} else {
+			delete(l.said, "alerts")
 		}
 	}
 	st, err := a.store.Read()
@@ -1051,8 +1101,8 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Worker string
-	Number, Round           int
+	URL, Repo, Head, Worker, Task string
+	Number, Round                 int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
@@ -1093,6 +1143,9 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	r, _ := parseRef(act.Ref)
 	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent})
 	if err != nil {
@@ -1147,6 +1200,9 @@ func selfHostedModel(k config.Capacity, model string) bool {
 // startNext starts the next ranked item with the worker brief, when
 // capacity has room.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
+	if l.startsHeld {
+		return "", errLoopLater
+	}
 	k := l.a.cfg.Supervisor
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil

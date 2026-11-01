@@ -14,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -104,6 +105,17 @@ func (s rigStore) Record(events ...state.Event) error {
 	return s.Store.Record(events...)
 }
 
+func (s rigStore) Update(fn func(*state.State) ([]state.Event, error)) error {
+	return s.Store.Update(func(st *state.State) ([]state.Event, error) {
+		evs, err := fn(st)
+		if err == nil && s.r.failRecord != nil && slices.ContainsFunc(evs, s.r.failRecord) {
+			s.r.failRecord = nil
+			return nil, errors.New("disk full")
+		}
+		return evs, err
+	})
+}
+
 // logs is the line the real command logs as the loop for args, which a
 // claim's reconciliation reads.
 func logs(args []string) (state.Event, bool) {
@@ -136,8 +148,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	cfg.Supervisor.LoopInterval.Duration = time.Second
 	cfg.Supervisor.ReleaseEvery.Duration = time.Hour
 	cfg.Supervisor.NoteDue.Duration = 24 * time.Hour
+	oldAlerts, oldResume := readLoopAlerts, loopResumable
+	t.Cleanup(func() { readLoopAlerts, loopResumable = oldAlerts, oldResume })
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
+	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
+	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
+		t.Fatal(err)
+	}
 	// The loop first started a minute ago: the rig's parks are requests
 	// for its review, not parks from before it.
 	first := event(loopParty, loopStartVerb, "started")
@@ -810,8 +829,8 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 	r := newLoopRig(t)
 	r.pass(t)
 	r.pass(t)
-	// The release look is the one call an idle pass makes.
-	if r.out.Len() != 0 || len(r.calls) != 1 || !slices.Equal(r.calls[0], selfUpdateCheck) {
+	// An idle pass probes the budget and looks for a release, silently.
+	if r.out.Len() != 0 || len(r.calls) != 1 || r.called(selfUpdateCheck...) == nil {
 		t.Errorf("an idle loop said %q and ran %v", r.out, r.calls)
 	}
 }
