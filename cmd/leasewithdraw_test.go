@@ -88,11 +88,12 @@ func TestLeaseReleaseWithoutAGrantIsRefused(t *testing.T) {
 }
 
 // A session revokes only its own grant; another session's grant is the
-// supervisor's to revoke, and stays queued when the session tries.
+// supervisor loop's or a person's to revoke, and stays queued when the
+// session tries.
 func TestLeaseRevokeOfAnotherSessionsGrantIsRefused(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimFirst, 2*time.Minute), claimGrant(labOne, claimMe, time.Minute))
 	_, err := runLease(a, "revoke", labOne, "first")
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `granted to "Agent first", not to you: only the supervisor "Supervisor" revokes`) {
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `granted to "Agent first", not to you: only the supervisor loop or a person revokes`) {
 		t.Errorf("revoke of another session's grant: %v, exit %d", err, Code(err))
 	}
 	out, err := runLease(a, "revoke", labOne, "me")
@@ -104,7 +105,7 @@ func TestLeaseRevokeOfAnotherSessionsGrantIsRefused(t *testing.T) {
 	}
 }
 
-// The supervisor revokes a parked grantee's grant while another session
+// The supervisor loop revokes a parked grantee's grant while another session
 // holds the lease: the watch resumes the grantee at once with the words to
 // ask again, instead of leaving it parked until the lease is free.
 func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
@@ -115,15 +116,15 @@ func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
 	if out, err := runLease(a, "claim", labOne, "-p", "my proof", "--park"); Code(err) != ExitRefused || !strings.Contains(out, "parked on lease agentlab-1") {
 		t.Fatalf("a parked claim: %q, exit %d", out, Code(err))
 	}
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-sup")
-	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimSupervisor)
+	asSupervisor(a)
 	if out, err := runLease(a, "revoke", labOne, "me"); err != nil || out != "revoked 1 grant(s) of agentlab-1\n" {
-		t.Fatalf("the supervisor's revoke: %q, %v", out, err)
+		t.Fatalf("the supervisor loop's revoke: %q, %v", out, err)
 	}
+	a.as = ""
 	settleParks(t, a)
 	settleParks(t, a)
 	want := watchParty.Name + " → " + claimMe.Name + ": Your park on lease agentlab-1 (the lease agentlab-1: my proof) is over: agentlab-1 is held by \"Agent other\" " +
-		"and no grant of it to you is left: ask the supervisor `need agentlab-1` again. Re-query the live state of your task and continue it."
+		"and no grant of it to you is left: `beekeeper lease grant agentlab-1 \"Agent me\"` queues you again. Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q\nwant %q", *woke, want)
 	}

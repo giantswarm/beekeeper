@@ -44,16 +44,16 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
 - **The owning session** of a decision is named in the queue. `beekeeper tail <session>` gives its
   last turns, `ListAgents` its messaging address.
-- **The supervisor** is another session (`/supervise`). It files decisions as `beekeeper note add
-  --for <person>` and never presents them itself; it schedules the work from the board and starts
-  the planning sessions for epics without a plan.
+- **The supervisor** is the supervisor loop (`beekeeper supervisor loop`), a service no session
+  holds. It files decisions as `beekeeper note add --for <person>` and never presents them itself;
+  it schedules the work from the board, reviews and gives the go to merge.
 
 ## Constraints
 
-- **Never in the supervisor's session.** The two roles always run in two sessions: `guide start` in
-  the supervisor's session is refused, and a guide never runs `supervisor start`. The operational
-  side — grants, holds, merges, sessions colliding, the machine — is the supervisor's; what the
-  guide learns about it, and any work, research or proof it meets, goes there in one line.
+- **Not the supervisor.** The supervisor is the supervisor loop, no session: the operational side —
+  holds, merges, sessions colliding, the machine — is the loop's, and a guide never runs it. What
+  the guide learns about it, and any work, research or proof it meets, it files as an issue in its
+  owning repository or hands to the board, in one line.
 - **One decision at a time, only what matters.** The queue is worked in order of what blocks work
   and what falls due first. A decision whose default is right and reversible, one that a decided
   direction or a standing rule already settles, or one that is not the person's to make, is not put

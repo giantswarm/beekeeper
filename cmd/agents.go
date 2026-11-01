@@ -328,7 +328,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 		Short: "Take an agent off the roster and archive or stop the session beekeeper started for it",
 		Long: `Takes an agent off the roster. When beekeeper started the agent's session,
 its desktop session is archived too (the desktop's Archived list brings it
-back), unless it runs a turn or holds the supervisor's or the guide's role: an idle desktop CLI of a session beekeeper started is asked to
+back), unless it runs a turn or holds the guide's role: an idle desktop CLI of a session beekeeper started is asked to
 archive it. A background session beekeeper started is stopped (claude stop;
 claude attach brings it back), unless it runs a turn. A session its person
 started is never archived nor stopped.`,

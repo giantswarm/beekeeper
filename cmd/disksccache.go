@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -39,6 +40,7 @@ func pruneSccache(r *diskRun, m diskMachine, capBytes int64, pressure bool) {
 		r.Errors = append(r.Errors, fmt.Errorf("sccache: %w", err))
 		return
 	}
+	defer recordBuiltin(r, config.DiskCacheSccache, m.sccache, u, r.Freed)
 	target, trim := diskCacheTarget(u.Bytes, capBytes, pressure)
 	if !trim || len(u.Entries) == 0 {
 		r.Keep("sccache under cap")

@@ -47,7 +47,7 @@ func (w *watcher) loopRunning() bool {
 		return true
 	}
 	var pid int
-	found, err := w.store.ReadFile("supervisor-loop-pid.json", &pid)
+	found, err := w.store.ReadFile(loopPIDFile, &pid)
 	return err == nil && found && pid > 0 && proc.Alive(pid)
 }
 
@@ -252,6 +252,10 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			} else if err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.NextNote++
 				text := "Disk remains low after pruning; starts are held. Writers: " + disk.Writers
+				var holding diskHolding
+				if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.now.Sub(holding.At) < time.Hour {
+					text += ". Holding the space: " + holding.Text
+				}
 				st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: l.a.cfg.Guide.Person, By: loopParty, At: l.a.now, Text: text, Kind: noteDecision, Question: "Investigate remaining disk writers (no decision)", StatusQuo: text, Default: "the guide investigates the writers and reclaims disposable data; keep starts held until the watch reports disk recovery"})
 				return []state.Event{event(loopParty, "note.add", "#%d %s", st.NextNote, text), event(loopParty, "supervisor.disk", "%s", superloop.Detail(act, "noted"))}, nil
 			}); err != nil {

@@ -66,14 +66,14 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 		skipped = append(skipped, "teleport keeper: not available on "+Name())
 	}
 	files := []File{{Path: path, Content: plist, Service: true}}
-	if s.SupervisorLoop {
-		const label = "com.giantswarm.beekeeper.supervisor-loop"
-		args := ""
-		if s.ConfigPath != "" {
-			args = "<string>--config</string><string>" + escapeXML(s.ConfigPath) + "</string>"
-		}
-		log := escapeXML(filepath.Join(s.Home, "Library", "Logs", "beekeeper-supervisor-loop.log"))
-		loop := fmt.Appendf(nil, `<?xml version="1.0" encoding="UTF-8"?>
+	// The supervisor is the supervisor loop: its service is always installed.
+	const label = "com.giantswarm.beekeeper.supervisor-loop"
+	loopArgs := ""
+	if s.ConfigPath != "" {
+		loopArgs = "<string>--config</string><string>" + escapeXML(s.ConfigPath) + "</string>"
+	}
+	log := escapeXML(filepath.Join(s.Home, "Library", "Logs", "beekeeper-supervisor-loop.log"))
+	loop := fmt.Appendf(nil, `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>%s</string>
@@ -85,9 +85,8 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 <key>StandardOutPath</key><string>%s</string>
 <key>StandardErrorPath</key><string>%s</string>
 </dict></plist>
-`, label, escapeXML(s.Exe), args, escapeXML(s.toolPath()), log, log)
-		files = append(files, File{Path: filepath.Join(s.Home, "Library", "LaunchAgents", label+".plist"), Content: loop, Service: true})
-	}
+`, label, escapeXML(s.Exe), loopArgs, escapeXML(s.toolPath()), log, log)
+	files = append(files, File{Path: filepath.Join(s.Home, "Library", "LaunchAgents", label+".plist"), Content: loop, Service: true})
 	return files, skipped
 }
 

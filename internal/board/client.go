@@ -890,19 +890,15 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 // item is the issue's item on the board, read from the issue's
 // projectItems, else answered by addProjectV2ItemById: the issue's
 // existing item, or a new one, which marks mv added. An issue GitHub does
-// not resolve is refused as no issue; one of a repository outside the
-// board's owner without an item its projectItems name is refused (foreign)
-// before anything is written: nothing is ever added to the board for it.
+// not resolve is refused as no issue. Rank and priority add an issue of any
+// accessible repository as Move does, whatever its owner: GitHub decides
+// whether it may be added. An item added outside beekeeper that the issue's
+// projectItems do not list (GitHub lists an item of another owner's project
+// under none) is the one the add answers.
 func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo string, n int) (projectItem, error) {
 	id, found, _, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
 		return projectItem{}, err
-	}
-	// Rank and priority retain their existing policy for missing items.
-	if found == nil {
-		if r := c.foreign(mv.Ref); r != nil {
-			return projectItem{}, r
-		}
 	}
 	return c.ensure(ctx, m, mv, id, found)
 }
@@ -934,18 +930,6 @@ func (c *Client) ensure(ctx context.Context, m *meta, mv *Moved, id string, foun
 	// An item that existed carries its fields; a new one none.
 	mv.Added = it.Status == nil && it.Team == nil
 	return it, nil
-}
-
-// foreign is the refusal to add the issue ref to the board when its
-// repository's owner is not the board's, for rank and priority only.
-// Move allows any accessible issue on the configured board.
-func (c *Client) foreign(ref string) *Refusal {
-	owner, _, _, err := Ref(ref)
-	if err != nil || strings.EqualFold(owner, c.Board.Owner) {
-		return nil
-	}
-	return &Refusal{fmt.Sprintf("%s is not on the board %s/%d and is never added to it: its repository is outside %s; an issue of %s goes on a project of %s's own",
-		ref, c.Board.Owner, c.Board.Project, c.Board.Owner, owner, owner)}
 }
 
 // lookup reads the issue's node id and its item on the board from the

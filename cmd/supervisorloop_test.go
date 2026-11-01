@@ -17,8 +17,10 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -38,6 +40,7 @@ const (
 	loopQwen        = "qwen"
 	loopPostInstall = "restart-things"
 	loopClassifier  = "classify"
+	loopNewRelease  = "v2.0.0 is newer than v1.0.0"
 	// loopDesk is the login the desk opens its pull requests as, loopTeamB
 	// another team, loopReviewer the reviewer of the rig's first round.
 	loopDesk     = "desk"
@@ -152,6 +155,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	cfg.Supervisor.LoopInterval.Duration = time.Second
 	cfg.Supervisor.ReleaseEvery.Duration = time.Hour
 	cfg.Supervisor.NoteDue.Duration = 24 * time.Hour
+	previousRefs := refStates
+	t.Cleanup(func() { refStates = previousRefs })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, ref := range refs {
+			out[ref] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+		}
+		return out, nil
+	}
 	oldAlerts, oldResume := readLoopAlerts, loopResumable
 	t.Cleanup(func() { readLoopAlerts, loopResumable = oldAlerts, oldResume })
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
@@ -392,8 +404,9 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 	}
 }
 
-// A new head after an approval gets its own review round, whatever
-// supervisor.reviewRounds says: no escalation, no note.
+// A new head after an approval with a change of its own gets the second
+// review, whatever supervisor.reviewRounds says; a third need is one
+// decision for the person.
 func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -416,6 +429,26 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
 		t.Errorf("review logged as %+v", evs)
+	}
+	// The second review approves, and the worker pushes a change of its
+	// own once more: no third reviewer, one decision for the person.
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
+	const own = "3333333333333333333333333333333333333333"
+	r.pull.Head = own
+	r.park(t, loopPR, time.Now().Add(2*time.Minute))
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a third review started: %v", start)
+	}
+	note := r.called("note", loopAdd)
+	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.EscalationQuestion(loopURL, own) ||
+		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
+		t.Fatalf("no decision for the person: %v\n%s", r.calls, r.out)
+	}
+	r.pass(t)
+	if c := r.called("note", loopAdd); c != nil {
+		t.Errorf("asked twice: %v", c)
 	}
 }
 
@@ -445,7 +478,7 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 		t.Errorf("a base merge started a review: %v", c)
 	}
 	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only merges main into it") {
+	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only brings main into it") {
 		t.Fatalf("no go for the base merge: %v\n%s", r.calls, r.out)
 	}
 	if evs := r.logged(t, "supervisor.go"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
@@ -490,7 +523,7 @@ func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
 		t.Fatalf("a base merge of unfixed findings got the go: %+v", evs)
 	}
 	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "only merges main into head") || !strings.Contains(wake[3], "stand unfixed") {
+	if wake == nil || !strings.Contains(wake[3], "only brings main into head") || !strings.Contains(wake[3], "stand unfixed") {
 		t.Fatalf("no rework for the base merge: %v\n%s", r.calls, r.out)
 	}
 }
@@ -768,42 +801,62 @@ func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
 	}
 }
 
-// TestLoopReviewersFollowTheHostPreference covers the review half: with no
-// room on the coordinator's machine, the reviewer starts on the host that
-// maps the pull request's repository.
-func TestLoopReviewersFollowTheHostPreference(t *testing.T) {
-	r := newLoopRig(t)
-	r.sshLoopHost(t, true)
-	pr := sshTestRepository + "#7"
-	r.park(t, pr, time.Now())
-	r.pulls[pr] = superloop.Pull{Ref: pr, URL: "https://github.com/" + sshTestRepository + "/pull/7", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
-	run, branch := beekeeperRun, ghDefaultBranch
-	t.Cleanup(func() { beekeeperRun, ghDefaultBranch = run, branch })
-	ghDefaultBranch = func(context.Context, string) (string, error) { return "trunk", nil }
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
-		args = splitAs(args)
-		r.calls = append(r.calls, args)
-		if args[0] == loopCapacity {
-			if slices.Contains(args, loopHostFlag) {
-				return loopRoomJSON, 0, nil
+// Reviews need the coordinator's GitHub read and public review path, even
+// when hostsFirst prefers a host and the host has room.
+func TestLoopReviewersStayOnCoordinator(t *testing.T) {
+	for _, first := range []bool{false, true} {
+		for _, room := range []bool{false, true} {
+			for _, selfHosted := range []bool{false, true} {
+				t.Run(fmt.Sprintf("first=%t/room=%t/selfHosted=%t", first, room, selfHosted), func(t *testing.T) {
+					r := newLoopRig(t)
+					r.sshLoopHost(t, true)
+					r.a.cfg.Supervisor.HostsFirst = first
+					r.answer = func(args []string) (string, int) {
+						if args[0] == loopCapacity {
+							if slices.Contains(args, loopHostFlag) {
+								t.Fatal("review placement probed an execution host")
+							}
+							if !slices.Contains(args, "--review") {
+								t.Fatal("review capacity lost its start kind")
+							}
+							if slices.Contains(args, "--"+reviewOfSelfHostedFlag) != selfHosted {
+								t.Fatal("review capacity lost self-hosted provenance")
+							}
+							if room {
+								return loopRoomJSON, 0
+							}
+							return loopNoRoomJSON, 0
+						}
+						return "", 0
+					}
+					act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "local-review", SelfHosted: selfHosted}
+					_, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act)
+					if !room {
+						if !errors.Is(err, errLoopLater) {
+							t.Fatalf("full coordinator: %v", err)
+						}
+						if start := r.called(agentsName, agentStartName); start != nil {
+							t.Fatalf("full coordinator started %v", start)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					start := r.called(agentsName, agentStartName)
+					if start == nil {
+						t.Fatal("no local reviewer started")
+					}
+					for _, flag := range []string{loopHostFlag, loopRepoFlag, loopRefFlag, "--" + excludeFlag} {
+						if slices.Contains(start, flag) {
+							t.Errorf("local review has placement flag %s: %v", flag, start)
+						}
+					}
+					if !slices.Contains(start, "--review") || !slices.Contains(start, harnessAuto) || slices.Contains(start, "--"+reviewOfSelfHostedFlag) != selfHosted {
+						t.Fatalf("review start lost capacity flags: %v", start)
+					}
+				})
 			}
-			return loopNoRoomJSON, 0, nil
-		}
-		if e, ok := logs(args); ok {
-			if err := r.a.store.Record(e); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return "", 0, nil
-	}
-	r.pass(t)
-	start := r.called(agentsName, agentStartName)
-	if start == nil {
-		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
-	}
-	for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, "trunk", "--review"} {
-		if !slices.Contains(start, want) {
-			t.Errorf("the remote reviewer names no %q: %v", want, start)
 		}
 	}
 }
@@ -878,7 +931,7 @@ func (r *loopRig) started(t *testing.T, name, session string) {
 	}
 }
 
-func TestLoopRetiresTheReviewerAndTheMergedWorker(t *testing.T) {
+func TestLoopRetiresTheReviewerAndRetainsTheMergedWorker(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.started(t, loopWorker, "worker-session")
@@ -904,13 +957,18 @@ func TestLoopRetiresTheReviewerAndTheMergedWorker(t *testing.T) {
 	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
 		t.Errorf("the worker left before its merge: %v", c)
 	}
-	// The worker merges and never reports.
+	// The worker merges and stays reachable until its inactivity window.
 	r.pull.State = superloop.Merged
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c != nil {
+		t.Fatalf("removed at merge: %v", c)
+	}
+	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
 	r.pass(t)
 	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
 		t.Fatalf("the merged worker stays: %v\n%s", r.calls, r.out)
 	}
-	if evs := r.logged(t, "supervisor.done"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "merged after the merge go") {
+	if evs := r.logged(t, "supervisor.done"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "no report after merge") {
 		t.Errorf("logged %+v", evs)
 	}
 	r.pass(t)
@@ -1219,7 +1277,7 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 }
 
 func TestParseLoopPull(t *testing.T) {
-	green := `{"state":"OPEN","url":"` + loopURL + `","headRefOid":"` + loopHead + `",
+	green := `{"state":"OPEN","url":"` + loopURL + `","headRefOid":"` + loopHead + `","mergeCommit":{"oid":"` + loopFixed + `"},
 	  "statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"state":"SUCCESS"},{"status":"COMPLETED","conclusion":"SKIPPED"}],
 	  "author":{"login":"` + loopDesk + `"},"title":"fix: x","headRefName":"fix/x","files":[{"path":"a.go"}],"changedFiles":2,
 	  "reviews":[{"id":"R2","state":"COMMENTED","author":{"login":"` + loopDesk + `"},"authorAssociation":"OWNER","body":"Review: approved\nHead reviewed: ` + "`1111111`" + `","submittedAt":"2026-10-30T10:00:00Z","commit":{"oid":"abc"}},
@@ -1228,7 +1286,7 @@ func TestParseLoopPull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.Green || len(p.Reviews) != 2 || p.Reviews[0].ID != "R1" || p.Reviews[1].Verdict != superloop.Approved || p.Reviews[1].Head != "1111111" {
+	if p.MergeCommit != loopFixed || !p.Green || len(p.Reviews) != 2 || p.Reviews[0].ID != "R1" || p.Reviews[1].Verdict != superloop.Approved || p.Reviews[1].Head != "1111111" {
 		t.Errorf("pull = %+v", p)
 	}
 	if p.Author != loopDesk || p.Title != "fix: x" || p.Branch != "fix/x" || !slices.Equal(p.Files, []string{"a.go"}) || p.ChangedFiles != 2 ||
@@ -1366,7 +1424,7 @@ func TestLoopResumesAReleaseWhosePostInstallFailed(t *testing.T) {
 	installed := false
 	r.answer = func(args []string) (string, int) {
 		if slices.Equal(args, selfUpdateCheck) && !installed {
-			return "v2.0.0 is newer than v1.0.0", ExitOutdated
+			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
 			installed = true
@@ -1398,7 +1456,7 @@ func TestLoopReleaseWaitsForTheBroker(t *testing.T) {
 	installed := false
 	r.answer = func(args []string) (string, int) {
 		if slices.Equal(args, selfUpdateCheck) && !installed {
-			return "v2.0.0 is newer than v1.0.0", ExitOutdated
+			return loopNewRelease, ExitOutdated
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
 			installed = true
@@ -1593,7 +1651,7 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 			}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Timers = []state.Timer{timer, {ID: 2, Due: timer.Due, Wake: loopWorker, What: "wake worker"}}
-				st.Supervisor = &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}
+				st.Guide = &state.Role{Holder: &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -1628,33 +1686,41 @@ func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Board = config.Board{Owner: "o", Project: 7, TidyEvery: config.Duration{Duration: time.Hour}}
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, []string{loopBoard, boardTidyName}) {
+		switch {
+		case slices.Equal(args, []string{loopBoard, boardTidyName}):
 			return "https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done\n", 0
+		case slices.Equal(args, []string{loopBoard, boardEscalateName}):
+			return "escalated https://github.com/o/r/issues/2 (Status Blocked): re-checked in 24h0m0s\n", 0
 		}
 		return "", 0
 	}
 	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
 	st := &state.State{}
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 1 || !strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") {
+	// Each tidy escalates the board's blocked items after it.
+	if len(r.calls) != 2 || !slices.Equal(r.calls[1], []string{loopBoard, boardEscalateName}) ||
+		!strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") ||
+		!strings.Contains(r.out.String(), "SUPERVISOR BOARD escalated https://github.com/o/r/issues/2") {
 		t.Fatalf("calls %v, out %q", r.calls, r.out)
 	}
 	// Within tidyEvery: no second run.
 	r.a.now = r.a.now.Add(30 * time.Minute)
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 1 {
+	if len(r.calls) != 2 {
 		t.Fatalf("tidied again within tidyEvery: %v", r.calls)
 	}
 	// The GitHub budget under its floor: none.
 	r.a.now = r.a.now.Add(time.Hour)
 	r.a.cfg.GitHub.Floor = 100
 	l.tidy(context.Background(), &state.State{Budget: &state.Budget{Remaining: 10, Reset: r.a.now.Add(time.Hour)}})
-	if len(r.calls) != 1 {
+	if len(r.calls) != 2 {
 		t.Fatalf("tidied on a low budget: %v", r.calls)
 	}
+	// A negative escalateEvery tidies and escalates nothing.
+	r.a.cfg.Board.EscalateEvery.Duration = -1
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 2 {
-		t.Fatalf("no tidy past tidyEvery: %v", r.calls)
+	if len(r.calls) != 3 || !slices.Equal(r.calls[2], []string{loopBoard, boardTidyName}) {
+		t.Fatalf("no tidy past tidyEvery, or an escalation with escalating off: %v", r.calls)
 	}
 	// A negative tidyEvery, or no board: never.
 	r.a.now = r.a.now.Add(2 * time.Hour)
@@ -1662,7 +1728,7 @@ func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
 	l.tidy(context.Background(), st)
 	r.a.cfg.Board = config.Board{TidyEvery: config.Duration{Duration: time.Hour}}
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 2 {
+	if len(r.calls) != 3 {
 		t.Fatalf("tidied without a board or with tidying off: %v", r.calls)
 	}
 }
@@ -1876,6 +1942,110 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 		if !strings.Contains(r.out.String(), want) {
 			t.Errorf("the dry run did not say %q:\n%s", want, r.out)
 		}
+	}
+}
+
+func TestLoopWakesRetainedWorkerAfterInstalledReleaseAndRetiresOnReport(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "post-merge-session")
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	r.pull.State, r.pull.MergeCommit = superloop.Merged, loopFixed
+	r.pass(t)
+	// A new loop instance reconstructs the retained worker from the log.
+	contains := loopReleaseContains
+	t.Cleanup(func() { loopReleaseContains = contains })
+	carried := false
+	loopReleaseContains = func(_ context.Context, ref, commit, version string) (bool, error) {
+		if ref != loopPR || commit != loopFixed || version != "v2.0.0" {
+			t.Fatalf("containment: %s %s %s", ref, commit, version)
+		}
+		return carried, nil
+	}
+	installed := false
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && !installed {
+			return loopNewRelease, ExitOutdated
+		}
+		if slices.Equal(args, []string{selfUpdateCmdName}) {
+			installed = true
+		}
+		return "", 0
+	}
+	// Failed post-install blocks the wake. A failed containment lookup retries.
+	r.a.cfg.Supervisor.PostInstall = []string{loopPostInstall}
+	r.command = func([]string) (string, int) { return "", 1 }
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+		t.Fatalf("wake before ready: %v", c)
+	}
+	r.command = func([]string) (string, int) { return "", 0 }
+	loopReleaseContains = func(context.Context, string, string, string) (bool, error) { return false, errors.New("offline") }
+	r.pass(t)
+	if len(r.logged(t, "supervisor.release")) != 0 {
+		t.Fatal("lost failed containment retry")
+	}
+	loopReleaseContains = func(context.Context, string, string, string) (bool, error) { return carried, nil }
+	carried = true
+	r.pass(t)
+	c := r.called(agentsName, agentWakeName, loopWorker)
+	if c == nil || !strings.Contains(c[3], "v2.0.0 is installed") || !strings.Contains(c[3], loopFixed) {
+		t.Fatalf("missing installed wake: %v", r.calls)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+		t.Fatalf("duplicate wake: %v", c)
+	}
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: release proven", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("reported worker retained: %v", r.calls)
+	}
+}
+
+func TestLoopReleaseWakeSkipsReleasesWithoutTheMergeAndSurvivesRestart(t *testing.T) {
+	r := newLoopRig(t)
+	old := loopReleaseContains
+	t.Cleanup(func() { loopReleaseContains = old })
+	checks := 0
+	loopReleaseContains = func(_ context.Context, _, _, version string) (bool, error) { checks++; return version == "v2.0.1", nil }
+	l := &supervisorLoop{a: r.a, stages: map[string]bool{}, postMerge: []superloop.Action{{Ref: loopPR, URL: loopURL, Agent: loopWorker, Head: loopFixed}}}
+	ctx := context.Background()
+	v := superloop.Action{Key: "release v2.0.0", Version: "v2.0.0"}
+	if err := l.wakeReleased(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.wakeReleased(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 1 || r.called(agentsName, agentWakeName) != nil {
+		t.Fatalf("absent merge: %d %v", checks, r.calls)
+	}
+	v = superloop.Action{Key: "release v2.0.1", Version: "v2.0.1"}
+	if err := l.wakeReleased(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatal("no wake for containing release")
+	}
+	// Stages are reconstructed from the durable event log after re-exec.
+	l.stages = map[string]bool{}
+	for _, e := range r.logged(t, loopStageVerb) {
+		key, _, ok := keyed(e.Detail)
+		if ok {
+			l.stages[key] = true
+		}
+	}
+	r.calls = nil
+	if err := l.wakeReleased(ctx, superloop.Action{Key: "release v2.0.2", Version: "v2.0.2"}); err != nil {
+		t.Fatal(err)
+	}
+	if r.called(agentsName, agentWakeName) != nil || checks != 2 {
+		t.Fatalf("wake repeated after restart: %d %v", checks, r.calls)
 	}
 }
 
@@ -2152,5 +2322,329 @@ func TestLoopParkOnKeepsExplicitAndAmbiguousWaits(t *testing.T) {
 		if got := loopParkOn(&state.Park{On: tc.on, Waits: tc.waits}); got != tc.want {
 			t.Errorf("%+v: got %q", tc, got)
 		}
+	}
+}
+
+// hostsFirstRig is a loop under supervisor.hostsFirst whose next item, on
+// the host's mapped repository, is due: choices are capacity.choices, and
+// answer the capacity verdicts, local (with the --exclude flags it names)
+// and the host's.
+func hostsFirstRig(t *testing.T, choices []config.Choice, answer func(host bool, exclude []string) string) *loopRig {
+	t.Helper()
+	r := newLoopRig(t)
+	nextBrief(t, r)
+	r.a.cfg.Supervisor.HostsFirst = true
+	r.sshLoopHost(t, true)
+	r.a.cfg.Capacity.Choices = choices
+	r.park(t, loopPR, time.Now())
+	r.pull.State = superloop.Merged
+	r.pass(t)
+	loopNextDone(t, r)
+	branch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	r.answer = func(args []string) (string, int) {
+		switch args[0] {
+		case loopCapacity:
+			var exclude []string
+			for i, a := range args {
+				if a == "--"+excludeFlag && i+1 < len(args) {
+					exclude = append(exclude, args[i+1])
+				}
+			}
+			return answer(slices.Contains(args, loopHostFlag), exclude), 0
+		case loopBoard:
+			return loopNextPickJSON, 0
+		}
+		return "", 0
+	}
+	return r
+}
+
+// mixedChoices is a desk with a Claude choice a host runs and a codex one
+// no host has an adapter for.
+var mixedChoices = []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: "gpt-fixture"}}
+
+// The mixed queue under hostsFirst: no host has room, so the Claude choice
+// waits for one, but the codex choice no host can run starts locally, the
+// host-run choice excluded from the local start.
+func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
+	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
+		if host {
+			return loopNoRoomJSON
+		}
+		return loopRoomJSON
+	})
+	r.pass(t)
+	r.pass(t)
+	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	if start == nil {
+		t.Fatalf("the codex-eligible start waited for a Claude-only host: %v\n%s", r.calls, r.out)
+	}
+	if slices.Contains(start, loopHostFlag) {
+		t.Errorf("a full host took the start: %v", start)
+	}
+	if i := slices.Index(start, "--"+excludeFlag); i < 0 || i+1 >= len(start) || start[i+1] != claudeComm+"/"+bgModel {
+		t.Errorf("the local start does not leave the Claude choice to the hosts: %v", start)
+	}
+	if !slices.Contains(start, harnessAuto) {
+		t.Errorf("the local start loses capacity's pick: %v", start)
+	}
+}
+
+// The same mixed queue with a host that has room: the start goes there, as
+// hostsFirst prefers, and names no exclusion.
+func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
+	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string { return loopRoomJSON })
+	r.pass(t)
+	r.pass(t)
+	start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	if start == nil || !slices.Contains(start, loopHostFlag) {
+		t.Fatalf("a host with room did not take the start: %v\n%s", start, r.out)
+	}
+	if slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("a remote start excludes choices: %v", start)
+	}
+}
+
+// With the local machine full for the local-only kinds (capacity.local.
+// ceiling, or no eligible codex choice), the mixed queue waits like a
+// Claude-only one.
+func TestLoopHostsFirstWaitsWithoutLocalRoomForLocalOnlyKinds(t *testing.T) {
+	r := hostsFirstRig(t, mixedChoices, func(host bool, exclude []string) string {
+		if host || len(exclude) > 0 {
+			return loopNoRoomJSON
+		}
+		return loopRoomJSON
+	})
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("a start with no local room for codex and no host room started %v", c)
+	}
+}
+
+// A desk whose every choice a host runs keeps hostsFirst as it was: no
+// host room, the start waits even with local room.
+func TestLoopHostsFirstWaitsForAHostWhenEveryKindRunsThere(t *testing.T) {
+	r := hostsFirstRig(t, []config.Choice{{Harness: claudeComm, Model: bgModel}}, func(host bool, exclude []string) string {
+		if host {
+			return loopNoRoomJSON
+		}
+		return loopRoomJSON
+	})
+	r.pass(t)
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("hostsFirst started %v locally while a host could run it", c)
+	}
+}
+
+// A repository no host maps: no host can run it, so hostsFirst starts it
+// locally within the local room, a Claude choice included, and waits
+// only while the local machine has none.
+func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
+	for _, room := range []bool{true, false} {
+		r := hostsFirstRig(t, []config.Choice{{Harness: claudeComm, Model: bgModel}}, func(host bool, exclude []string) string {
+			if host {
+				return loopRoomJSON
+			}
+			if room {
+				return loopRoomJSON
+			}
+			return loopNoRoomJSON
+		})
+		h := r.a.cfg.Agents.Hosts[sshTestSelector]
+		h.Repositories = map[string]string{"example/elsewhere": "/srv/elsewhere"}
+		r.a.cfg.Agents.Hosts[sshTestSelector] = h
+		r.pass(t)
+		r.pass(t)
+		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+		if !room {
+			if start != nil {
+				t.Errorf("no local room: started %v", start)
+			}
+			continue
+		}
+		if start == nil {
+			t.Fatalf("the unmapped repository waited for a host: %v\n%s", r.calls, r.out)
+		}
+		if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+			t.Errorf("the unmapped repository's start = %v, want a plain local start", start)
+		}
+	}
+}
+
+// Reviewers of a mixed queue retain every eligible local choice; hostsFirst
+// must not reserve the host-supported choices for remote reviews.
+func TestLoopHostsFirstReviewerKeepsAllLocalChoices(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.HostsFirst = true
+	r.sshLoopHost(t, true)
+	r.a.cfg.Capacity.Choices = mixedChoices
+	pr := sshTestRepository + "#7"
+	r.park(t, pr, time.Now())
+	r.pulls[pr] = superloop.Pull{Ref: pr, URL: "https://github.com/" + sshTestRepository + "/pull/7", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity && slices.Contains(args, loopHostFlag) {
+			return loopNoRoomJSON, 0
+		}
+		if args[0] == loopCapacity {
+			return loopRoomJSON, 0
+		}
+		return "", 0
+	}
+	r.pass(t)
+	var start []string
+	for _, c := range r.calls {
+		if len(c) > 2 && c[0] == agentsName && c[1] == agentStartName && slices.Contains(c, "--"+reviewFlag) {
+			start = c
+		}
+	}
+	if start == nil {
+		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
+	}
+	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("the reviewer start = %v, want local without exclusions", start)
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1927: a worker on an SSH
+// execution host parks on the pull request it published through the
+// coordinator; its park at the published head is a review request, and a
+// park after a new publication asks for that head's review.
+func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
+	r := newLoopRig(t)
+	ref := execution.Ref{Host: "host-a", Execution: "remote-one", Generation: 1}
+	party := state.Party{Name: loopWorker, Session: "remote-session", Host: string(ref.Host)}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Execution: &ref})
+		st.Starts = append(st.Starts, state.Start{Party: party, Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Repository: scratchRepo, Commit: loopFixed}, Request: execution.StartRequest{Ref: ref, Repository: scratchRepo}}})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	was := executionReviewGH
+	t.Cleanup(func() { executionReviewGH = was })
+	executionReviewGH = func(context.Context, ...string) ([]byte, error) {
+		return fmt.Appendf(nil, `{"head":{"ref":%q,"sha":%q,"repo":{"full_name":"o/r"}}}`, executionBranch(ref), r.pull.Head), nil
+	}
+	// A remote worker's round binds the reviewer the loop started.
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 2 && args[0] == agentsName && args[1] == agentStartName {
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: args[2], Session: "reviewer-" + args[2]}, By: loopParty, At: time.Now()})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return "", 0
+	}
+	park := func(head string) {
+		t.Helper()
+		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			_, evs, err := r.a.applyExecutionControl(context.Background(), st, party, execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: deskReviewWait, Head: head})})
+			return evs, err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	park(loopHead)
+	r.pass(t)
+	start := r.called(agentsName, agentStartName)
+	if start == nil || start[2] != loopReviewer {
+		t.Fatalf("no review of the remote worker's published head: %v\n%s", r.calls, r.out)
+	}
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	// The approval reaches the remote go (agents merge --authorization);
+	// its grant needs the reviewer's bound report, which
+	// executionmerge_review_test.go covers, and the rig has none.
+	if !strings.Contains(r.out.String(), "go "+loopPR+"@"+loopHead) {
+		t.Fatalf("the approval took no go: %v\n%s", r.calls, r.out)
+	}
+	// The worker publishes one more commit and parks again at it.
+	r.pull.Head = loopFixed
+	park(loopFixed)
+	r.pass(t)
+	start = r.called(agentsName, agentStartName)
+	if start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
+		t.Fatalf("no review of the remote worker's new head: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
+		t.Errorf("review logged as %+v", evs)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("one head got a second review: %v", c)
+	}
+}
+
+// TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses: a worker, here a
+// managed SSH execution, whose first pull request merged stays on the
+// roster while it serves an open issue and parks on its next open pull
+// request; once both closed it is stopped and removed.
+func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
+	const issue, next = "o/r#5", "o/r#8"
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-session")
+	r.pass(t)
+	reviewer := r.called(agentsName, agentStartName)[2]
+	r.started(t, reviewer, "reviewer-session")
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
+	}
+	ref := execution.Ref{Host: execution.HostID(sshTestSelector), Execution: execution.ExecutionID("11112222-3333-4444-5555-666677778888"), Generation: 1}
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+		st.Agents[i].Execution = &ref
+		st.Agents[i].Park = &state.Park{On: next, At: time.Now(), Waits: "desk review of the next pull request"}
+		st.Records = append(st.Records, state.Record{Session: st.Agents[i].Party, Issue: "https://github.com/o/r/issues/5", By: st.Agents[i].Party, At: time.Now()})
+		st.Starts = append(st.Starts, state.Start{Party: st.Agents[i].Party, By: loopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := map[string]bool{issue: true, next: true}
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, p := range refs {
+			s := github.Closed
+			if open[refName(p)] {
+				s = github.Open
+			}
+			out[p] = github.RefState{Kind: github.RefPullRequest, State: s}
+		}
+		return out, nil
+	}
+	r.pull.State = superloop.Merged
+	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
+	for range 2 {
+		r.pass(t)
+		for _, verb := range []string{loopStop, loopRemove} {
+			if c := r.called(agentsName, verb, loopWorker); c != nil {
+				t.Fatalf("retired while it serves open work: %v\n%s", c, r.out)
+			}
+		}
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "stays on the roster") || !strings.Contains(evs[0].Detail, next) {
+		t.Fatalf("logged %+v", evs)
+	}
+	if evs := r.logged(t, "supervisor.done"); slices.ContainsFunc(evs, func(e state.Event) bool { return strings.Contains(e.Detail, loopWorker) }) {
+		t.Fatalf("done logged: %+v", evs)
+	}
+	// Its served issue and its next pull request close: it goes.
+	open[issue], open[next] = false, false
+	r.pass(t)
+	if c := r.called(agentsName, loopStop, loopWorker); c == nil {
+		t.Fatalf("the remote worker was not stopped: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("the remote worker stays: %v\n%s", r.calls, r.out)
 	}
 }

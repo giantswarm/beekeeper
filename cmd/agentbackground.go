@@ -360,7 +360,7 @@ func (a *app) wakeBackground(ctx context.Context, by state.Party, w wakeTarget, 
 // stopBackgroundStart stops p's background session when beekeeper started
 // it as one (claude stop, which keeps its conversation) and says what it
 // did; false for any other session. One that runs a turn, or holds or held
-// the supervisor's or the guide's role, stays.
+// the guide's role, stays.
 func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.Party) (string, bool) {
 	i := st.StartIndex(p)
 	if i < 0 || !st.Starts[i].Background {
@@ -369,7 +369,7 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	id := st.Starts[i].Session
 	short := id[:min(8, len(id))]
 	if roleKeeps(st, p) {
-		return fmt.Sprintf("its background session %s stays: it holds or held the supervisor's or the guide's role, and no relay relieved it", short), true
+		return fmt.Sprintf("its background session %s stays: it holds or held the guide's role, and no relay relieved it", short), true
 	}
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
@@ -419,7 +419,7 @@ const parkStoppedEvent = "agents.parkstop"
 // --resume). A session in a turn (a headless turn of it in t, a running
 // command, its transcript or a subagent's written within stewardQuiet of
 // now), a park already resumable (the watch resumes it), an agent on an
-// execution host and the supervisor's or the guide's session stay.
+// execution host and the guide's session stay.
 func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time) []state.Party {
 	var out []state.Party
 	for _, ag := range st.Agents {
@@ -560,6 +560,7 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 // read anew, still running with its turn ended; false when it stays. The
 // lock holds until the stopped CLI exits, so the next wake finds it gone.
 func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.Party) (bool, error) {
+	defer a.recordStoppedGates(ctx)
 	l, err := a.parkStopLock(p.Session)
 	if err != nil {
 		return false, err

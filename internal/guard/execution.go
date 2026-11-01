@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -72,7 +73,7 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 		if bg, _ := ev.ToolInput["run_in_background"].(bool); bg {
 			return ExecutionDeny("remote background tool calls are unavailable in this slice; use foreground commands and component parks")
 		}
-		if err := executionShell(command, workspace, protected, 0); err != nil {
+		if err := executionShell(command, workspace, ev.CWD, protected, 0); err != nil {
 			return ExecutionDeny(err.Error())
 		}
 	case readTool, writeTool, editTool, grepTool, globTool:
@@ -102,6 +103,107 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 	return h.Decide(raw)
 }
 
+// codexWorkdirKey is the shell tools' working-directory argument.
+const codexWorkdirKey = "workdir"
+
+// ExecutionDenyCodex is ExecutionDeny in codex's PreToolUse format, which a
+// codex hook needs: codex treats a non-JSON answer or an error exit as a pass.
+func ExecutionDenyCodex(reason string) []byte { return DenyCodex(reason) }
+
+// DecideExecutionCodex is DecideExecution for the remote codex adapter. The
+// session is the codex thread the runner recorded. Shell commands, patch
+// targets and image reads stay inside the owned workspace and pass the same
+// remote command guard before the full codex guard runs; every other codex
+// tool is refused.
+func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protected []string) (out []byte) {
+	defer func() {
+		if recover() != nil {
+			out = ExecutionDenyCodex("execution guard failed; tool call denied")
+		}
+	}()
+	if reason := ValidateCodexInput(raw); reason != "" {
+		return ExecutionDenyCodex(reason)
+	}
+	var ev event
+	if json.Unmarshal(raw, &ev) != nil || ev.Session != session || session == "" || !filepath.IsAbs(workspace) {
+		return ExecutionDenyCodex("invalid managed execution tool event")
+	}
+	if h.ConfigErr != nil {
+		return ExecutionDenyCodex("execution guard configuration is unavailable")
+	}
+	if ev.CWD == "" {
+		ev.CWD = workspace
+	}
+	if !filepath.IsAbs(ev.CWD) || !executionWithin(workspace, ev.CWD) {
+		return ExecutionDenyCodex("tool working directory is outside its owned workspace")
+	}
+	target := func(p string) bool {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(ev.CWD, p)
+		}
+		return executionWithin(workspace, p)
+	}
+	switch {
+	case isCodexShellTool(ev.ToolName):
+		command, _, _ := extractCodexShellCommand(ev.ToolInput)
+		if strings.TrimSpace(command) == "" {
+			return ExecutionDenyCodex("invalid execution command")
+		}
+		cwd := ev.CWD
+		if dir, ok := ev.ToolInput[codexWorkdirKey].(string); ok && dir != "" {
+			if !target(dir) {
+				return ExecutionDenyCodex("tool working directory is outside its owned workspace")
+			}
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(ev.CWD, dir)
+			}
+			cwd = filepath.Clean(dir)
+		}
+		// The full guard below reads the same effective directory.
+		if cwd != ev.CWD {
+			var top map[string]any
+			if json.Unmarshal(raw, &top) != nil {
+				return ExecutionDenyCodex("invalid managed execution tool event")
+			}
+			top["cwd"] = cwd
+			b, err := json.Marshal(top)
+			if err != nil {
+				return ExecutionDenyCodex("invalid managed execution tool event")
+			}
+			raw = b
+		}
+		if err := executionShell(command, workspace, cwd, protected, 0); err != nil {
+			return ExecutionDenyCodex(err.Error())
+		}
+	case ev.ToolName == codexApplyPatchTool:
+		patch, _ := extractCodexPatch(ev.ToolInput)
+		headers, reason := parseCodexPatchHeaders(patch)
+		if reason != "" {
+			return ExecutionDenyCodex(reason)
+		}
+		for _, hdr := range headers {
+			if !target(hdr.target) {
+				return ExecutionDenyCodex("patch target is outside its owned workspace")
+			}
+		}
+	case ev.ToolName == codexWriteStdinTool:
+		// An empty write only polls a running command; typed input would be
+		// a shell command the guard never inspected.
+		if chars, _ := ev.ToolInput[codexCharsKey].(string); chars != "" {
+			return ExecutionDenyCodex("uninspected shell input is not supported remotely; run a guarded command directly")
+		}
+	case ev.ToolName == codexViewImageTool:
+		if p, _ := ev.ToolInput[pathKey].(string); !target(p) {
+			return ExecutionDenyCodex("file tool target is outside its owned workspace")
+		}
+	case ev.ToolName == codexUpdatePlanTool:
+	default:
+		return ExecutionDenyCodex("tool is not supported by the managed remote adapter; use component commands for notes and reports")
+	}
+	h.Transcripts.Managed = func(string) (bool, error) { return true, nil }
+	return h.DecideCodex(raw)
+}
+
 func executionWithin(root, p string) bool {
 	root, p = filepath.Clean(root), filepath.Clean(p)
 	r, err := filepath.Rel(root, p)
@@ -126,10 +228,19 @@ func executionLiteral(w *syntax.Word) (string, error) {
 	return expand.Literal(&expand.Config{Env: expand.ListEnviron(os.Environ()...)}, w)
 }
 
-func executionShell(command, workspace string, protected []string, depth int) error {
+// executionShell guards one remote command run in cwd, inside workspace.
+// Relative operands are checked against every directory the command can be
+// in: cwd and each literal cd or pushd target it names, since a subshell's
+// change of directory may or may not outlast it. A dynamic change of
+// directory cannot be followed and is refused.
+func executionShell(command, workspace, cwd string, protected []string, depth int) error {
 	if depth > 4 {
 		return errors.New("nested execution commands exceed the guard limit")
 	}
+	if !filepath.IsAbs(cwd) {
+		cwd = workspace
+	}
+	dirs := []string{filepath.Clean(cwd)}
 	f, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil {
 		return errors.New("remote command syntax cannot be guarded; use a direct shell command")
@@ -159,17 +270,9 @@ func executionShell(command, workspace string, protected []string, depth int) er
 				if strings.HasPrefix(p, "-C/") {
 					p = p[2:]
 				}
-				if !strings.ContainsAny(p, " \t\n") {
-					if !filepath.IsAbs(p) {
-						p = filepath.Join(workspace, p)
-					}
-					real := executionResolve(p)
-					for _, root := range protected {
-						if (executionLexicalWithin(root, p) || executionLexicalWithin(root, real)) && !executionWithin(workspace, p) {
-							refusal = errors.New("execution policy, credentials and other workspaces are protected")
-							return false
-						}
-					}
+				if !strings.ContainsAny(p, " \t\n") && executionProtectedTarget(p, workspace, dirs, protected) {
+					refusal = errors.New("execution policy, credentials and other workspaces are protected")
+					return false
 				}
 			}
 		}
@@ -204,6 +307,27 @@ func executionShell(command, workspace string, protected []string, depth int) er
 			return true
 		}
 		name := filepath.Base(words[0])
+		if name == "cd" || name == "pushd" {
+			if slices.Contains(words[1:], "") {
+				refusal = errors.New("dynamic directory change is not supported by the remote guard")
+				return false
+			}
+			for _, target := range words[1:] {
+				if target == "--" || strings.HasPrefix(target, "-") {
+					continue
+				}
+				for _, d := range slices.Clone(dirs) {
+					next := target
+					if !filepath.IsAbs(next) {
+						next = filepath.Join(d, next)
+					}
+					if next = filepath.Clean(next); !slices.Contains(dirs, next) {
+						dirs = append(dirs, next)
+					}
+				}
+				break
+			}
+		}
 		switch name {
 		case selfCmd:
 			for _, word := range words[1:] {
@@ -243,7 +367,7 @@ func executionShell(command, workspace string, protected []string, depth int) er
 					for i, word := range target {
 						quoted[i] = ShellQuote(word)
 					}
-					refusal = executionShell(strings.Join(quoted, " "), workspace, protected, depth+1)
+					refusal = executionShell(strings.Join(quoted, " "), workspace, cwd, protected, depth+1)
 				}
 			}
 		case unsetCmd:
@@ -291,7 +415,7 @@ func executionShell(command, workspace string, protected []string, depth int) er
 				}
 			}
 			if script != "" {
-				refusal = executionShell(script, workspace, protected, depth+1)
+				refusal = executionShell(script, workspace, cwd, protected, depth+1)
 			} else {
 				refusal = errors.New("uninspected shell input is not supported remotely; run a guarded command directly")
 			}
@@ -299,6 +423,27 @@ func executionShell(command, workspace string, protected []string, depth int) er
 		return refusal == nil
 	})
 	return refusal
+}
+
+// executionProtectedTarget says whether path word p, resolved from any of
+// dirs, reaches a protected root outside the owned workspace.
+func executionProtectedTarget(p, workspace string, dirs, protected []string) bool {
+	candidates := []string{p}
+	if !filepath.IsAbs(p) {
+		candidates = candidates[:0]
+		for _, d := range dirs {
+			candidates = append(candidates, filepath.Join(d, p))
+		}
+	}
+	for _, c := range candidates {
+		real := executionResolve(c)
+		for _, root := range protected {
+			if (executionLexicalWithin(root, c) || executionLexicalWithin(root, real)) && !executionWithin(workspace, c) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func executionResolve(p string) string {

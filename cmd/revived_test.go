@@ -165,7 +165,7 @@ func TestTheWatchStopsARelievedRunPastItsGrace(t *testing.T) {
 	succ := state.Party{Session: "sup-82", HostSession: "local_sup-82", Name: "Supervisor run 82"}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = []state.Start{{Party: out, At: taken.Add(-time.Hour)}, {Party: succ, At: taken.Add(-time.Minute)}}
-		supervisorRole.set(st, state.Role{
+		guideRole.set(st, state.Role{
 			Holder:   &state.Supervisor{Party: succ, Since: taken},
 			Relay:    &state.Relay{From: out, To: succ, At: taken.Add(-time.Minute), Expires: taken.Add(time.Hour), Taken: taken},
 			Relieved: []state.Relief{{Party: out, By: succ, At: taken.Add(-time.Minute), Taken: taken}},

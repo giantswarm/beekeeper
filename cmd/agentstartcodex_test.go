@@ -88,6 +88,7 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 		testWorkerName = "codex-worker"
 		startID        = "abcdef12-3456-4000-8000-000000000000"
 	)
+	stubIssuePark(t, testIssueRef)
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	leaseDir := filepath.Join(root, "leases")

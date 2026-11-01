@@ -101,11 +101,10 @@ type Config struct {
 	// Lemonade is the host's Lemonade Server, a second model server under
 	// the same model-server lease and ollama's budgets.
 	Lemonade Lemonade `yaml:"lemonade"`
-	// Supervisor is what `handover --prompt` tells a successor supervisor,
-	// how long a relay to it stays open and at what context it is due.
+	// Supervisor configures the supervisor loop.
 	Supervisor Supervisor `yaml:"supervisor"`
 	// Guide is the role that walks the person through the decisions
-	// waiting on them, never in the supervisor's session.
+	// waiting on them.
 	Guide Guide `yaml:"guide"`
 	// Agents configures how a registered agent near its context limit is
 	// handed over to a fresh session.
@@ -396,6 +395,10 @@ type Board struct {
 	// supervisor loop runs board tidy (default 1h; negative: never).
 	ArchiveAfter Duration `yaml:"archiveAfter"`
 	TidyEvery    Duration `yaml:"tidyEvery"`
+	// EscalateEvery is how long board escalate waits before it checks an
+	// escalated blocked item again and, while it stays blocked, escalates
+	// it to the person once more (default 24h; negative: never escalate).
+	EscalateEvery Duration `yaml:"escalateEvery"`
 	// Claims publishes the desk's session records on their issues, for
 	// the other desks working the same repositories.
 	Claims BoardClaims `yaml:"claims"`
@@ -463,10 +466,8 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
-	// WorkScope offers only the work scope: an issue under an epic of the
-	// priority list, an order (an item of a step without WorkScope) and an
-	// open recorded blocker of either; anything else is skipped as "not in
-	// a priority epic".
+	// WorkScope is read and ignored, so an existing configuration loads:
+	// the priority list no longer gates what a step offers.
 	WorkScope bool `yaml:"workScope"`
 }
 
@@ -714,6 +715,59 @@ type Disk struct {
 	BuildDirs []string `yaml:"buildDirs"`
 	// BuildOutputs associates external build output with its owning worktree.
 	BuildOutputs []BuildOutput `yaml:"buildOutputs"`
+	// Caches are the disk step's cache policies. Beekeeper's own caches are
+	// its default entries (DiskCacheGo, DiskCacheSccache, DiskCacheTmp): an
+	// entry of the same name changes them, mode off drops them.
+	Caches []DiskCache `yaml:"caches"`
+}
+
+// Cache modes of the disk step. Entries removes a root's direct children
+// whole, files its single files, command runs the tool's own cleaner; go and sccache are the built-in Go build
+// cache and sccache trims; off drops an entry.
+const (
+	DiskCacheEntries = "entries"
+	DiskCacheFiles   = "files"
+	DiskCacheCommand = "command"
+	DiskCacheModeGo  = "go"
+	DiskCacheModeSc  = "sccache"
+	DiskCacheOff     = "off"
+)
+
+// Names of the built-in cache entries.
+const (
+	DiskCacheGo      = "go-build"
+	DiskCacheSccache = "sccache"
+	DiskCacheTmp     = "beekeeper-tmp"
+)
+
+// DiskCache is one cache policy of the disk step. Path is absolute (or
+// ~/...) and may be a glob: each match is a cache root. In entries mode a
+// root's direct children are the units, in files mode its files. A unit
+// untouched for OlderThan goes; past MaxGiB the least recently written go
+// until the root fits; under disk pressure a Regenerable cache keeps only
+// what was written within the hour. Nothing written within the hour, nothing
+// a process uses and nothing holding a git checkout is ever removed.
+type DiskCache struct {
+	// Name names the entry in reports (default its path).
+	Name        string   `yaml:"name"`
+	Path        string   `yaml:"path"`
+	Mode        string   `yaml:"mode"`
+	OlderThan   Duration `yaml:"olderThan"`
+	MaxGiB      float64  `yaml:"maxGiB"`
+	Regenerable bool     `yaml:"regenerable"`
+	// Command is mode command's cleaner, the tool's own ("uv cache prune"):
+	// split into words and run without a shell in the cache root, once the
+	// root holds more than MaxGiB and under disk pressure (no MaxGiB: under
+	// pressure only), never while a process references the root.
+	Command string `yaml:"command"`
+}
+
+// MaxBytes is the size budget in bytes; 0 is none.
+func (d DiskCache) MaxBytes() int64 { return int64(d.MaxGiB * (1 << 30)) }
+
+// Builtin reports whether name is one of beekeeper's own cache entries.
+func (DiskCache) Builtin(name string) bool {
+	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp
 }
 
 // BuildOutput is explicitly disposable output of the task in Worktree.
@@ -817,7 +871,7 @@ type Agents struct {
 	Hosts     map[string]ExecutionHost `yaml:"hosts,omitempty"`
 	Execution *execution.HostConfig    `yaml:"execution,omitempty"`
 	// RelayAt is an agent's session context, in tokens, at which the watch
-	// says its hand-over due (default: supervisor.relayAt).
+	// says its hand-over due (default 400k).
 	RelayAt Tokens `yaml:"relayAt"`
 	// LastStepGrace is how long the watch holds the hand-over of an agent
 	// over RelayAt whose task is in its last step (its sessions serve record
@@ -954,7 +1008,7 @@ const (
 const (
 	DefaultUsageEvery       = 5 * time.Minute
 	DefaultUsageReportEvery = 30 * time.Minute
-	DefaultUsageTimeout     = 15 * time.Second
+	DefaultUsageTimeout     = 90 * time.Second
 	DefaultUsageStaleAfter  = 15 * time.Minute
 	DefaultUsageHighPercent = 95.0
 )
@@ -1070,6 +1124,31 @@ type Capacity struct {
 	// ReviewSkipPace is read and ignored: a review is decided exactly like
 	// a worker's start, with no pace exception.
 	ReviewSkipPace bool `yaml:"reviewSkipPace"`
+	// Local bounds the busy agents the coordinator's own machine runs,
+	// apart from Ceiling, which bounds the subscriptions across the desk
+	// and its execution hosts.
+	Local LocalCapacity `yaml:"local"`
+}
+
+// LocalCapacity is capacity.local: the coordinator machine's own cap.
+type LocalCapacity struct {
+	// Ceiling is the most busy agents this machine runs (capacity.local.
+	// ceiling): every local start, the loop's and one by hand, worker,
+	// reviewer and resume alike, is refused at it. Every busy agent whose
+	// session runs here counts, a self-hosted provider's included; an
+	// agent on an execution host counts against that host's maxBusy and
+	// never against it. Unset: no local cap, capacity.ceiling and the
+	// machine guards alone bound a local start. 0 refuses every unforced
+	// local start.
+	Ceiling *int `yaml:"ceiling"`
+}
+
+// Limit is capacity.local.ceiling and whether it is set.
+func (l LocalCapacity) Limit() (int, bool) {
+	if l.Ceiling == nil {
+		return 0, false
+	}
+	return *l.Ceiling, true
 }
 
 // Provider configures one provider (such as claude, agy or codex): its own
@@ -1316,7 +1395,7 @@ type Usage struct {
 	// runs Command again (default 5m; a window past its resetsAt re-reads
 	// at once).
 	Every Duration `yaml:"every"`
-	// Timeout bounds one run of Command (default 15s).
+	// Timeout bounds one run of Command (default 90s).
 	Timeout Duration `yaml:"timeout"`
 	// StaleAfter is how old a usage reading may grow before it counts as
 	// stale, yielding ceiling 0 and room 0 for that provider (default 15m).
@@ -2059,20 +2138,19 @@ type Guide struct {
 	WaitingTTL Duration `yaml:"waitingTTL"`
 }
 
-// Supervisor configures the supervisor: its role and the scope it
-// supervises.
+// Supervisor configures the supervisor, which is the supervisor loop: the
+// user service beekeeper install always installs. No session holds a
+// supervisor role.
 type Supervisor struct {
-	// Loop installs the persistent supervisor loop user service (opt-in).
-	Loop bool `yaml:"loop"`
-	Role `yaml:",inline"`
-	// Scope says what the supervisor watches, in a sentence or two; empty,
-	// the prompt names the resources, lanes and installations configured.
-	Scope string `yaml:"scope"`
 	// ReviewRounds is how many review rounds asking for changes `supervisor
 	// loop` runs for a pull request (default 1): after the last one's
 	// request for changes the worker fixes them and merges on the loop's go
-	// without another review. An approved round is none of them: every new
-	// head after an approval gets its own review.
+	// without another review. An approved round is none of them: a new head
+	// after an approval gets its own review only for a change the approval
+	// does not cover (more than a merge of the base, its conflicts'
+	// resolution or a rebase). Never more than two reviews start for one
+	// pull request, whatever this says: a third need is a decision for
+	// guide.person.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -2081,15 +2159,19 @@ type Supervisor struct {
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
 	// Hosts are execution host selectors (agents.hosts) the loop's worker
-	// and reviewer starts may be placed on, in order of preference: when
+	// starts may be placed on, in order of preference: when
 	// the local machine leaves no room for the start, or always with
 	// HostsFirst. A host must map the item's repository and pass its own
 	// check (capacity --host); the start is pinned to the repository's
-	// default branch. Releases and the loop itself stay on the coordinator.
+	// default branch. Reviewers, releases and the loop stay on the coordinator.
 	Hosts []string `yaml:"hosts"`
-	// HostsFirst places every placed start on the first host of Hosts
-	// with room, whatever the local machine's room is; without room on
-	// any host the loop waits, as it does on a full machine.
+	// HostsFirst places a start on the first host of Hosts with room,
+	// whatever the local machine's room is, for what a host can run: a
+	// start a mapped host could run waits without room on any host, as it
+	// does on a full machine; a repository no host maps, or a choice of a
+	// harness no host has an adapter for (every harness but Claude Code),
+	// starts locally within the local room (capacity.local.ceiling among
+	// its guards).
 	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
@@ -2105,7 +2187,9 @@ type Supervisor struct {
 	// files for the guide's person (24h).
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
-	NoteDue      Duration `yaml:"noteDue"`
+	// PostMergeWindow bounds inactivity while awaiting a post-merge report (2h).
+	PostMergeWindow Duration `yaml:"postMergeWindow"`
+	NoteDue         Duration `yaml:"noteDue"`
 	// FillRetryEvery bounds repeated empty or failed board reads while
 	// capacity's floor and ceiling stay unchanged and no agent is done or
 	// removed (5m).
@@ -2173,18 +2257,17 @@ func (o Ownership) validate() error {
 	return nil
 }
 
-// Role configures a relayed role, the supervisor's or the guide's: the
+// Role configures a relayed role, the guide's: the
 // successor's session prompt (the instructions it follows, a skill or a
 // file, not both) and the relay.
 type Role struct {
-	// Skill is the name of the skill the successor runs (supervise, guide).
+	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
 	// instead.
 	Instructions string `yaml:"instructions"`
 	// RelayAt is the role's session context, in tokens, at which the watch
-	// reports the relay due ("400k"; the guide's default is 150k, the
-	// supervisor's 400k).
+	// reports the relay due ("400k"; the guide's default is 150k).
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
@@ -2193,8 +2276,8 @@ type Role struct {
 	RelayGrace Duration `yaml:"relayGrace"`
 	// RestartGrace is how long beekeeper waits after it first saw the
 	// role's CLI gone: a CLI back under the same session within it is a
-	// restart and keeps the role; past it, the watch says the supervisor
-	// is gone and notifies. The grant rule holds throughout.
+	// restart and keeps the role; past it, the watch says the holder is
+	// gone and starts its successor.
 	RestartGrace Duration `yaml:"restartGrace"`
 	// Dir is the folder a successor starts in (~/ allowed; default: the
 	// folder its predecessor's desktop session started from, not the
@@ -2943,11 +3026,17 @@ type Memcap struct {
 // Duration is a time.Duration written as "30s", "10m" in YAML.
 type Duration struct{ time.Duration }
 
-// UnmarshalYAML parses a Go duration string.
+// UnmarshalYAML parses a Go duration string, or whole days as "7d".
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err != nil {
 		return err
+	}
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n >= 0 {
+			d.Duration = time.Duration(n) * 24 * time.Hour
+			return nil
+		}
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
@@ -3077,6 +3166,14 @@ func (c *Config) defaults() error {
 	for i, p := range c.Disk.Checkouts {
 		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
 	}
+	for i, e := range c.Disk.Caches {
+		if e.Path != "" {
+			c.Disk.Caches[i].Path = filepath.Clean(homePath(home, e.Path))
+		}
+		if e.Name == "" {
+			c.Disk.Caches[i].Name = c.Disk.Caches[i].Path
+		}
+	}
 	for i, o := range c.Disk.BuildOutputs {
 		c.Disk.BuildOutputs[i] = BuildOutput{Path: filepath.Clean(homePath(home, o.Path)), Worktree: filepath.Clean(homePath(home, o.Worktree))}
 	}
@@ -3087,10 +3184,6 @@ func (c *Config) defaults() error {
 			c.Identity.Host, _, _ = strings.Cut(h, ".")
 		}
 	}
-	// The desktop app never restarts a crashed CLI by itself: the grace only
-	// debounces a supervisor someone woke.
-	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
-	c.Supervisor.defaults(home)
 	if c.Supervisor.ReviewRounds == 0 {
 		c.Supervisor.ReviewRounds = 1
 	}
@@ -3099,6 +3192,7 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.PostMergeWindow, 2*time.Hour)
 	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
 	if c.Supervisor.Ownership.Team != "" {
@@ -3123,7 +3217,7 @@ func (c *Config) defaults() error {
 	c.Guide.defaults(home)
 	setDur(&c.Guide.WaitingTTL, 2*time.Hour)
 	if c.Agents.RelayAt == 0 {
-		c.Agents.RelayAt = c.Supervisor.RelayAt
+		c.Agents.RelayAt = defaultRelayAt
 	}
 	setDur(&c.Agents.LastStepGrace, 30*time.Minute)
 	if c.Agents.LastStepCeiling == 0 {
@@ -3179,6 +3273,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
 	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.EscalateEvery, 24*time.Hour)
 	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
 	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 
@@ -3379,12 +3474,16 @@ func (c *Config) defaults() error {
 	return nil
 }
 
+// defaultRelayAt is the context, in tokens, at which a role's holder or an
+// agent is relayed unless configured.
+const defaultRelayAt = 400_000
+
 func (r *Role) defaults(home string) {
 	setDur(&r.RelayTTL, 15*time.Minute)
 	setDur(&r.RelayGrace, 30*time.Minute)
 	setDur(&r.RestartGrace, time.Minute)
 	if r.RelayAt == 0 {
-		r.RelayAt = 400_000
+		r.RelayAt = defaultRelayAt
 	}
 	r.Instructions = homePath(home, r.Instructions)
 	r.Dir = homePath(home, r.Dir)
@@ -3454,6 +3553,54 @@ func (s *Sandbox) defaults(home string) {
 }
 
 // homePath is p with a leading ~/ resolved against home.
+// validateDiskCaches refuses a cache policy that could reach beyond a cache:
+// a relative path or filesystem root, a bad glob, a rule-less custom entry.
+func validateDiskCaches(caches []DiskCache) error {
+	names := map[string]bool{}
+	for _, e := range caches {
+		if e.Name == "" || names[e.Name] {
+			return fmt.Errorf("disk.caches: each entry needs a path or a unique name (%q)", e.Name)
+		}
+		names[e.Name] = true
+		builtin := e.Builtin(e.Name)
+		switch e.Mode {
+		case "", DiskCacheEntries, DiskCacheFiles, DiskCacheOff:
+		case DiskCacheCommand:
+			if strings.TrimSpace(e.Command) == "" {
+				return fmt.Errorf("disk.caches %s: mode command needs a command", e.Name)
+			}
+		case DiskCacheModeGo, DiskCacheModeSc:
+			if (e.Mode == DiskCacheModeGo) != (e.Name == DiskCacheGo) || (e.Mode == DiskCacheModeSc) != (e.Name == DiskCacheSccache) {
+				return fmt.Errorf("disk.caches %s: mode %s belongs to the built-in entry of that cache alone", e.Name, e.Mode)
+			}
+		default:
+			return fmt.Errorf("disk.caches %s: mode %q is none of entries, files, command, off", e.Name, e.Mode)
+		}
+		if e.Command != "" && e.Mode != DiskCacheCommand {
+			return fmt.Errorf("disk.caches %s: command needs mode command", e.Name)
+		}
+		if e.OlderThan.Duration < 0 || e.MaxGiB < 0 {
+			return fmt.Errorf("disk.caches %s: olderThan and maxGiB take no negative value", e.Name)
+		}
+		if e.Path == "" {
+			if !builtin {
+				return fmt.Errorf("disk.caches %s: path is required", e.Name)
+			}
+			continue
+		}
+		if !filepath.IsAbs(e.Path) || filepath.Dir(e.Path) == e.Path {
+			return fmt.Errorf("disk.caches %s: path must be absolute and not a filesystem root", e.Name)
+		}
+		if _, err := filepath.Match(e.Path, ""); err != nil {
+			return fmt.Errorf("disk.caches %s: path: %w", e.Name, err)
+		}
+		if !builtin && e.Mode != DiskCacheOff && e.Mode != DiskCacheCommand && e.OlderThan.Duration == 0 && e.MaxGiB == 0 && !e.Regenerable {
+			return fmt.Errorf("disk.caches %s: set olderThan, maxGiB or regenerable", e.Name)
+		}
+	}
+	return nil
+}
+
 func homePath(home, p string) string {
 	if rest, ok := strings.CutPrefix(p, "~/"); ok {
 		return filepath.Join(home, rest)
@@ -3498,6 +3645,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("disk.buildDirs: invalid directory %q", n)
 		}
 	}
+	if err := validateDiskCaches(c.Disk.Caches); err != nil {
+		return err
+	}
 	for _, o := range c.Disk.BuildOutputs {
 		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
 			return fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths")
@@ -3523,7 +3673,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name)
 		}
 	}
-	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "supervisor.profile": c.Supervisor.Profile, "guide.profile": c.Guide.Profile} {
+	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "guide.profile": c.Guide.Profile} {
 		if _, ok := c.Agents.ProfileFor(name); name != "" && !ok {
 			return fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile)
 		}
@@ -3668,10 +3818,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector)
 		}
 	}
-	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
-		if r.Skill != "" && r.Instructions != "" {
-			return fmt.Errorf("%s: set skill or instructions, not both", name)
-		}
+	if r := c.Guide.Role; r.Skill != "" && r.Instructions != "" {
+		return errors.New("guide: set skill or instructions, not both")
 	}
 	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
 		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)
@@ -3717,6 +3865,9 @@ func (c *Config) validate() error {
 	}
 	if c.Capacity.ReviewHeadroom < 0 {
 		return fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom)
+	}
+	if n, ok := c.Capacity.Local.Limit(); ok && n < 0 {
+		return fmt.Errorf("capacity.local.ceiling: %d is negative", n)
 	}
 	if c.Capacity.SwapPSIMax < 0 {
 		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
