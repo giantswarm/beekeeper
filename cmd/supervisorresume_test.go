@@ -12,12 +12,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const recoveryTask = "Work https://github.com/o/r/issues/12"
+
 func TestLoopRecoversEndedSettledPark(t *testing.T) {
 	for _, mode := range []string{"successful recovery", "release", "partial start"} {
 		failure := mode != "successful recovery"
 		t.Run(mode, func(t *testing.T) {
 			r, _ := fillRig(t)
-			ag := state.Agent{Party: state.Party{Name: "ended worker", Session: "ended-session"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{At: r.a.now, Resumable: r.a.now, Answer: "note closed"}}
+			ag := state.Agent{Party: state.Party{Name: "ended worker", Session: "ended-session"}, Task: recoveryTask, Park: &state.Park{At: r.a.now, Resumable: r.a.now, Answer: "note closed"}}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = append(st.Agents, ag); return nil, nil }); err != nil {
 				t.Fatal(err)
 			}
@@ -73,7 +75,7 @@ func TestLoopRecoveryLeavesUnsettledParksAndStoppedDesk(t *testing.T) {
 	for _, mode := range []string{"unsettled", paramDone, "desk stop", dryRunState, "no task", holderLive, "managed SSH"} {
 		t.Run(mode, func(t *testing.T) {
 			r := newLoopRig(t)
-			ag := state.Agent{Party: state.Party{Name: "sleeping worker", Session: "gone-worker"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{At: r.a.now, Resumable: r.a.now}}
+			ag := state.Agent{Party: state.Party{Name: "sleeping worker", Session: "gone-worker"}, Task: recoveryTask, Park: &state.Park{At: r.a.now, Resumable: r.a.now}}
 			if mode == "unsettled" {
 				ag.Park.Resumable = state.Park{}.Resumable
 			}
@@ -112,7 +114,7 @@ func TestLoopRecoveryRequiresDiscovery(t *testing.T) {
 	t.Cleanup(func() { freshSessions = original })
 	want := errors.New("process inventory unavailable")
 	freshSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return nil, nil, want }
-	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "park inventory worker"}, Task: "Work https://github.com/o/r/issues/12", Park: &state.Park{Resumable: r.a.now}}}}
+	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "park inventory worker"}, Task: recoveryTask, Park: &state.Park{Resumable: r.a.now}}}}
 	l := &supervisorLoop{a: r.a}
 	if err := l.recoverParks(t.Context(), st); !errors.Is(err, want) {
 		t.Fatalf("discovery: %v", err)
