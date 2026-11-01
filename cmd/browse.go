@@ -1691,7 +1691,7 @@ func browseEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
-		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == stageRootEnv || k == guard.SharedEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") ||
+		if k == claudeCodeEnv || k == "CLAUDE_PID" || k == stageRootEnv || k == guard.SharedEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") ||
 			k == omp.EnvAgent || k == omp.EnvName || k == omp.EnvCredentials ||
 			k == agy.EnvAgent || k == agy.EnvName ||
 			k == codex.EnvAgent || k == codex.EnvName ||
