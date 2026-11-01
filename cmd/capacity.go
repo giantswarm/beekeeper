@@ -61,6 +61,85 @@ type capacityView struct {
 	Notes []string `json:"notes,omitempty"`
 	// Stopped says the standing beekeeper stop, which no --force passes.
 	Stopped string `json:"stopped,omitempty"`
+	// Local is capacity.local.ceiling against the busy agents this machine
+	// runs; nil while it is unset or the verdict is an execution host's.
+	Local *localView `json:"local,omitempty"`
+}
+
+// localView is the coordinator machine's own cap (capacity.local.ceiling):
+// the busy agents whose sessions run here, a self-hosted provider's
+// included, and the room the cap leaves a local start. An agent on an
+// execution host counts against that host's maxBusy, never here.
+type localView struct {
+	Busy    []string `json:"busy"`
+	Ceiling int      `json:"ceiling"`
+	Room    int      `json:"room"`
+}
+
+// line is the local cap's line in capacity's text.
+func (l *localView) line() string {
+	s := fmt.Sprintf("%d busy of ceiling %d", len(l.Busy), l.Ceiling)
+	if len(l.Busy) > 0 {
+		s += ": " + strings.Join(l.Busy, ", ")
+	}
+	return s
+}
+
+// block is what the local cap says when it refuses a start.
+func (l *localView) block() string {
+	if l.Ceiling == 0 {
+		return "capacity.local.ceiling 0"
+	}
+	return fmt.Sprintf("%d busy locally at capacity.local.ceiling %d", len(l.Busy), l.Ceiling)
+}
+
+// localBusy is the busy agents of busy whose sessions run on this machine:
+// an agent with a managed execution runs on its host and is left out.
+func localBusy(st *state.State, busy []string) []string {
+	remote := map[string]bool{}
+	for _, ag := range st.Agents {
+		if ag.Execution != nil {
+			remote[strings.ToLower(ag.Name)] = true
+		}
+	}
+	out := []string{}
+	for _, n := range busy {
+		if !remote[strings.ToLower(n)] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// withLocal bounds a local start's verdict by capacity.local.ceiling, when
+// set: the busy agents running here against it, apart from capacity.ceiling
+// and the hosts' own maxBusy.
+func (v *capacityView) withLocal(st *state.State, k config.Capacity) *capacityView {
+	n, ok := k.Local.Limit()
+	if v == nil || !ok {
+		return v
+	}
+	busy := localBusy(st, v.Busy)
+	v.Local = &localView{Busy: busy, Ceiling: n, Room: max(0, n-len(busy))}
+	return v.capLocal()
+}
+
+// capLocal applies the local cap v carries to its room and blocks: room
+// for no more starts than it leaves, and its block first when it leaves
+// none. It holds again after forTarget narrows the room to one target.
+func (v *capacityView) capLocal() *capacityView {
+	if v == nil || v.Local == nil {
+		return v
+	}
+	if v.Local.Room > 0 {
+		v.Room = min(v.Room, v.Local.Room)
+		return v
+	}
+	v.Room = 0
+	if b := v.Local.block(); !slices.Contains(v.Blocks, b) {
+		v.Blocks = append([]string{b}, v.Blocks...)
+	}
+	return v
 }
 
 // bucketView is one usage bucket's windows and derived target within a
@@ -85,6 +164,7 @@ func (b *bucketView) windowsLine(now time.Time) string {
 // providerView is one provider's busy agents, usage windows, derived target
 // and capacity verdict.
 type providerView struct {
+	Fallback    string                 `json:"fallback,omitempty"`
 	Name        string                 `json:"name"`
 	Busy        []string               `json:"busy"`
 	Floor       int                    `json:"floor"`
@@ -131,7 +211,12 @@ func (p *providerView) findBucket(name string) *bucketView {
 	return nil
 }
 
-func (p *providerView) windowsSummary(now time.Time) string {
+func (p *providerView) windowsSummary(now time.Time) (summary string) {
+	defer func() {
+		if p.Fallback != "" {
+			summary += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(p.At)), truncate(p.Fallback, 120))
+		}
+	}()
 	if p.Kind == config.KindSelfHosted {
 		if p.ServingModeError != "" {
 			return "serving mode unknown (" + truncate(p.ServingModeError, 120) + ")"
@@ -336,7 +421,7 @@ const waitQuiet = 5 * time.Minute
 // their person or in a wait of their own (none known without them).
 func countAgents(st *state.State, sessions []*claude.Session, now time.Time) agentCount {
 	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}}
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
 			if executionReserved(st, ag) {
@@ -347,7 +432,7 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 			continue
 		}
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if ag.Task == "" || ag.Done {
@@ -385,7 +470,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 	for _, name := range k.ProviderNames() {
 		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
 	}
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
 			if !executionReserved(st, ag) {
@@ -418,7 +503,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 			continue
 		}
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if ag.Task == "" || ag.Done || keptBy(st, ag, now) != "" {
@@ -853,6 +938,7 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		}
 		r := res.reading
 		pv.At = r.At
+		pv.Fallback = r.Fallback
 		if r.NoPlanWindows {
 			pv.NoPlanWindows = true
 			pv.Blocks = []string{claudeNoPlanWindows}
@@ -1736,6 +1822,17 @@ its ceiling; existing agents finish, and new starts wait for room. Re-read
 capacity before starting replacement work.
 The supervisor, the guide and a role's successor are not counted.
 
+capacity.local.ceiling, when set, caps the busy agents this machine runs
+apart from capacity.ceiling, which bounds the subscriptions across the
+desk and its execution hosts: every busy agent whose session runs here
+counts, a self-hosted provider's included, while an agent on an execution
+host counts against that host's maxBusy and never here. Every local start
+is refused at it ("no start: N busy locally at capacity.local.ceiling N"),
+the supervisor loop's and one by hand, worker, reviewer and resume alike;
+the "local:" line shows it. Unset, there is no local cap; 0 refuses every
+unforced local start. --host verdicts weigh only the choices a host can
+run (Claude Code).
+
 The headroom bounds a start: the watch's free disk reading against
 watch.diskMinMiB, MemAvailable against capacity.availMinMiB,
 disk swap's growth over the watch's readings of watch.swapWindow against
@@ -1790,13 +1887,13 @@ nothing; it makes no GitHub call.`,
 				if len(k.Providers) == 0 {
 					k, legacy = a.resolveUsage(cmd.Context(), k)
 				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, exclude, startKind(review, ofSelfHosted), harnessAuto, "")
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, "")
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted)).stopped(a, st.Stop)
+				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted)).withLocal(st, liveCap).stopped(a, st.Stop)
 			} else {
 				c := countAgents(st, sessions, a.now)
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
-				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).stopped(a, st.Stop)
+				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop)
 			}
 			if a.json {
 				return a.printJSON(struct {
@@ -1811,6 +1908,9 @@ nothing; it makes no GitHub call.`,
 			}
 			p("capacity: %s", capLine)
 			p("review headroom: %d of %d used above worker ceiling %d (reviews only)", v.ReviewHeadroomUsed, v.ReviewHeadroom, v.WorkerCeiling)
+			if v.Local != nil {
+				p("local: %s", v.Local.line())
+			}
 			for _, name := range liveCap.ProviderNames() {
 				if pv := v.Providers[name]; pv != nil {
 					p("provider %s: %s", name, pv.line(a.now))
@@ -1995,8 +2095,13 @@ func (a *app) effectiveStartModel(harness, model string) string {
 }
 
 // forTarget narrows v's Room and Blocks to the resolved provider and bucket
-// when an explicit harness (not auto) is given.
+// when an explicit harness (not auto) is given; a local cap v carries
+// (capacity.local.ceiling) still bounds the narrowed room.
 func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capacityView {
+	return v.forPoolTarget(k, harness, model).capLocal()
+}
+
+func (v *capacityView) forPoolTarget(k config.Capacity, harness, model string) *capacityView {
 	if v == nil || v.Stopped != "" || v.reviewLimitReached || harness == harnessAuto || len(v.Providers) == 0 {
 		return v
 	}
@@ -2152,11 +2257,11 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	}
 	liveCap := a.liveCapacity()
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).stopped(a, st.Stop), nil
+		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st.Stop), nil
 	}
 	c := countAgents(st, sessions, a.now)
 	k, u := a.resolveUsage(ctx, liveCap)
-	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).stopped(a, st.Stop), nil
+	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop), nil
 }
 
 func choicesHaveModel(choices []config.Choice, model string) bool {

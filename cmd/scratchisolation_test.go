@@ -1,9 +1,7 @@
 package cmd
 
 import (
-	"bytes"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -44,22 +42,5 @@ func TestADevBuildsUnitIsNoInstalledBeekeeper(t *testing.T) {
 func TestAScratchConfigurationLeavesThePluginsAlone(t *testing.T) {
 	if !syncsUnder("") || syncsUnder("/tmp/scratch/config.yaml") {
 		t.Error("syncsUnder")
-	}
-}
-
-// supervisor start under a scratch configuration tells nobody: its roster
-// can name live sessions, so it starts no broadcast unit and names the
-// command instead.
-func TestAScratchConfigurationStartsNoBroadcast(t *testing.T) {
-	l := &startedUnits{}
-	useLauncher(t, l)
-	var out bytes.Buffer
-	a := quietApp(t, &out)
-	a.cfgPath = "scratch.yaml"
-	if got := a.announce("Supervisor run 1"); !strings.HasPrefix(got, "a scratch configuration starts no unit: run `beekeeper --as \"Supervisor run 1\" agents broadcast") {
-		t.Errorf("announce: %q", got)
-	}
-	if len(l.started) != 0 {
-		t.Errorf("started %+v", l.started)
 	}
 }

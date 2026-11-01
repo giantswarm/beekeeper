@@ -130,7 +130,7 @@ type Candidate struct {
 	Match string `json:"match,omitempty"`
 	// Skip says why it is not free, empty when it is.
 	Skip string `json:"skip,omitempty"`
-	// Priority is the rank ByPriority applied, 0 for none; PriorityOf the
+	// Priority is the rank Annotate recorded, 0 for none; PriorityOf the
 	// epic it is the rank of, the candidate itself or an ancestor.
 	Priority   int    `json:"priority,omitempty"`
 	PriorityOf string `json:"priorityOf,omitempty"`

@@ -80,7 +80,7 @@ func (p Party) Is(o Party) bool {
 	return false
 }
 
-// Supervisor is the session holding the watch.
+// Supervisor is the session holding a relayed role (the guide's).
 type Supervisor struct {
 	Party
 	Since time.Time `json:"since"`
@@ -88,9 +88,9 @@ type Supervisor struct {
 	rest rest
 }
 
-// Relay is the supervisor naming its successor: the successor's
-// `supervisor start` takes the role and the grants until Expires; the
-// outgoing supervisor keeps both meanwhile.
+// Relay is a role's holder (the guide) naming its successor: the
+// successor's start takes the role until Expires; the outgoing holder keeps
+// it meanwhile.
 type Relay struct {
 	From    Party     `json:"from"`
 	To      Party     `json:"to"`
@@ -171,8 +171,7 @@ func (r *RelayDue) At(sup *Supervisor, relayAt int64) bool {
 
 // Role is a relayed role's record: its holder and term, its last relay,
 // the holders relays relieved, what beekeeper saw of its CLI and the relay
-// due the watch reported. The supervisor's lives in State's own fields
-// (SupervisorRole), the guide's in Guide.
+// due the watch reported: the guide's, in Guide.
 type Role struct {
 	Holder   *Supervisor `json:"holder,omitempty"`
 	Relay    *Relay      `json:"relay,omitempty"`
@@ -192,16 +191,6 @@ type Role struct {
 	AskingFrom string `json:"askingFrom,omitempty"`
 
 	rest rest
-}
-
-// SupervisorRole is the supervisor's record.
-func (st *State) SupervisorRole() Role {
-	return Role{Holder: st.Supervisor, Relay: st.Relay, Relieved: st.Relieved, CLI: st.SupervisorCLI, RelayDue: st.RelayDue, Run: st.SupervisorRun}
-}
-
-// SetSupervisorRole stores the supervisor's record.
-func (st *State) SetSupervisorRole(r Role) {
-	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue, st.SupervisorRun = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue, r.Run
 }
 
 // LocalAsking is the machine's own note the guide asks now, 0 when it
@@ -345,6 +334,10 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
+	// RefKind caches GitHub's Issue or PullRequest type for this park.
+	RefKind string `json:"refKind,omitempty"`
+	// RefChecked is the last lookup attempt; issues and unresolved references retry every five minutes.
+	RefChecked time.Time `json:"refChecked,omitzero"`
 	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
 	// Empty (including parks written by older versions) is a plain wait.
 	ReviewHead string    `json:"reviewHead,omitempty"`
@@ -805,6 +798,7 @@ type Start struct {
 type ExecutionRecord struct {
 	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
+	Settled         bool                               `json:"settled,omitempty"`
 	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
 	Handle          execution.Handle                   `json:"handle"`
 	Request         execution.StartRequest             `json:"request"`
@@ -818,7 +812,19 @@ type ExecutionRecord struct {
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
-	rest            rest
+	// Published is the execution's last publication (agents publish): its
+	// owned branch, the head it pushed and its pull request. Handle.Commit
+	// stays the commit the execution started from.
+	Published *ExecutionPublication `json:"published,omitempty"`
+	rest      rest
+}
+
+// ExecutionPublication is one publication of an SSH execution's branch.
+type ExecutionPublication struct {
+	At     time.Time `json:"at"`
+	Branch string    `json:"branch"`
+	Head   string    `json:"head"`
+	URL    string    `json:"url,omitempty"`
 }
 
 type ExecutionMessage struct {
@@ -961,7 +967,7 @@ func (s Start) of(p Party) bool {
 }
 
 // Knows reports whether p is a session beekeeper started (any mode), holds
-// the supervisor's or the guide's role, or is an agent on the roster: the
+// the guide's role, or is an agent on the roster: the
 // sessions the hooks act in wherever they run.
 func (st *State) Knows(p Party) bool {
 	if p.Session == "" && p.HostSession == "" {
@@ -972,10 +978,8 @@ func (st *State) Knows(p Party) bool {
 			return true
 		}
 	}
-	for _, h := range []*Supervisor{st.Supervisor, st.GuideRole().Holder} {
-		if h != nil && h.Is(p) {
-			return true
-		}
+	if h := st.GuideRole().Holder; h != nil && h.Is(p) {
+		return true
 	}
 	for _, a := range st.Agents {
 		if a.Is(p) {
@@ -987,19 +991,8 @@ func (st *State) Knows(p Party) bool {
 
 // State is the whole document.
 type State struct {
-	Supervisor *Supervisor `json:"supervisor,omitempty"`
-	// Relay is the supervisor's last relay: open, taken or expired.
-	Relay *Relay `json:"relay,omitempty"`
-	// Relieved are the supervisors relays relieved, one per party.
-	Relieved []Relief `json:"relieved,omitempty"`
-	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
-	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
-	// SupervisorRun is the highest supervisor run numbered.
-	SupervisorRun int `json:"supervisorRun,omitempty"`
-	// RelayDue is the relay due the watch reported to the supervisor.
-	RelayDue *RelayDue `json:"relayDue,omitempty"`
-	// Guide is the guide's role, the supervisor's counterpart for the
-	// person's decisions.
+	// Guide is the guide's role: the person's decisions. The supervisor is
+	// the supervisor loop, which holds no role record.
 	Guide *Role `json:"guide,omitempty"`
 	// Grants are queued per resource in the order given.
 	Grants []Grant `json:"grants,omitempty"`
@@ -1416,6 +1409,12 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteHistory is the optional history of a store that retains central note
+// closures beyond the late-answer window. File-backed stores need not implement it.
+type NoteHistory interface {
+	NoteClosure(int) (*Event, error)
 }
 
 // Store is the seam every command reads and changes the state through.

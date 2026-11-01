@@ -3,8 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,11 +19,9 @@ func (a *app) agentBroadcastCmd() *cobra.Command {
 		Use:   broadcastName + " <message>",
 		Short: "Message every registered agent whose CLI runs, by name, one after the other",
 		Long: `broadcast sends one message by name to every registered agent whose CLI
-runs, the supervisor and the caller left out, as SendMessage by name does:
+runs, the caller left out, as SendMessage by name does:
 it runs at the agent's next tool call or as its next turn. A stopped agent
-is not resumed for it. One agents.broadcast event logs whom it reached.
-` + "`beekeeper supervisor start`" + ` runs it when a new holder takes the role, so
-every agent learns the name to report to.`,
+is not resumed for it. One agents.broadcast event logs whom it reached.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			msg := strings.TrimSpace(args[0])
@@ -45,9 +41,6 @@ every agent learns the name to report to.`,
 				return err
 			}
 			skip := []state.Party{by}
-			if st.Supervisor != nil {
-				skip = append(skip, st.Supervisor.Party)
-			}
 			told, missed := broadcast(cmd.Context(), st.Agents, sessions, skip, func(ctx context.Context, name string) error {
 				return a.peerSend(ctx, name, msg)
 			})
@@ -97,31 +90,4 @@ func skipped(p state.Party, skip []state.Party) bool {
 		}
 	}
 	return false
-}
-
-// unitChars are what a unit name of a role's run keeps.
-var unitChars = regexp.MustCompile(`[^a-z0-9]+`)
-
-// announce has a transient unit tell every running agent that name answers
-// now; the start does not wait for the sends. The line says where it runs,
-// or what to run where no unit can start or the configuration is a scratch
-// one (explicitConfig).
-func (a *app) announce(name string) string {
-	msg := fmt.Sprintf("%q answers now as the supervisor: report to it and ask it as \"the supervisor\", which reaches whoever holds the role whatever its desktop titles it, or by that name (`beekeeper supervisor status` names the holder).", name)
-	by := fmt.Sprintf("run `beekeeper --as %q agents %s %q` to tell the agents", name, broadcastName, msg)
-	if !plat.Launcher.Available() {
-		return "no unit can start here: " + by
-	}
-	if a.explicitConfig() != "" {
-		// a scratch roster can name live sessions: nothing tells them unasked
-		return "a scratch configuration starts no unit: " + by
-	}
-	self, err := os.Executable()
-	if err == nil {
-		unit := "beekeeper-broadcast-" + strings.Trim(unitChars.ReplaceAllString(strings.ToLower(name), "-"), "-") + "-" + a.now.Format("150405")
-		if err = launch(unit, a.cfg.StateDir, a.explicitConfig(), nil, []string{self, "--as", name, agentsName, broadcastName, msg}); err == nil {
-			return fmt.Sprintf("telling every running agent that %q answers now (journalctl --user -u %s; beekeeper log --verb agents.%s)", name, unit, broadcastName)
-		}
-	}
-	return fmt.Sprintf("the broadcast did not start (%v): %s", err, by)
 }

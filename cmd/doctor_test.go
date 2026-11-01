@@ -39,8 +39,7 @@ func TestPlanChores(t *testing.T) {
 	st := &state.State{
 		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
 			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0), doneTask},
-		Supervisor: &state.Supervisor{Party: state.Party{Session: "holder"}},
-		Relieved:   []state.Relief{{Party: state.Party{Session: "relieved"}}},
+		Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "holder"}}, Relieved: []state.Relief{{Party: state.Party{Session: "relieved"}}}},
 	}
 	for _, id := range []string{"untitled", "titled", "archived", "holder"} {
 		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})

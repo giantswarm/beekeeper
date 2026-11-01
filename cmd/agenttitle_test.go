@@ -169,9 +169,9 @@ func TestPickSteward(t *testing.T) {
 			st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "a"}}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
-		{desc: "a relieved supervisor", st: func() *state.State {
+		{desc: "a relieved guide", st: func() *state.State {
 			st := started("a")
-			st.Relieved = []state.Relief{{Party: state.Party{Session: "a"}}}
+			st.Guide = &state.Role{Relieved: []state.Relief{{Party: state.Party{Session: "a"}}}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "a headless CLI", st: started("a"), sessions: []*claude.Session{session(1, "a", quiet)}, table: func(t *proc.Table) {
@@ -223,11 +223,11 @@ func TestArchiveDesktopKeeps(t *testing.T) {
 	if got := archive(&state.State{}, ag); !strings.Contains(got, "did not start it") {
 		t.Errorf("not started: %q", got)
 	}
-	st := &state.State{Starts: []state.Start{{Party: ag}}, Supervisor: &state.Supervisor{Party: ag}}
+	st := &state.State{Starts: []state.Start{{Party: ag}}, Guide: &state.Role{Holder: &state.Supervisor{Party: ag}}}
 	if got := archive(st, ag); !strings.Contains(got, "role") {
-		t.Errorf("supervisor: %q", got)
+		t.Errorf("guide: %q", got)
 	}
-	run := state.Party{Session: "r", Name: "Supervisor run 7"}
+	run := state.Party{Session: "r", Name: "Guide run 7"}
 	if got := archive(&state.State{Starts: []state.Start{{Party: run}}}, run); !strings.Contains(got, "role") {
 		t.Errorf("a role's run, its relief forgotten: %q", got)
 	}

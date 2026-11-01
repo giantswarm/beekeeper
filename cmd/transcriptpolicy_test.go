@@ -77,7 +77,6 @@ func TestTranscriptSessionProvenance(t *testing.T) {
 	}
 	seed(t, a, func(s *state.State) {
 		s.Starts = []state.Start{{Party: state.Party{Session: transcriptGranted}, Mode: transcriptEditingMode}}
-		s.Supervisor = &state.Supervisor{Party: state.Party{Session: "transcript-supervisor"}}
 		s.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "transcript-guide"}}}
 		s.Agents = []state.Agent{{Party: state.Party{Session: "transcript-person"}}}
 	})
@@ -85,7 +84,7 @@ func TestTranscriptSessionProvenance(t *testing.T) {
 		session string
 		managed bool
 	}{
-		{transcriptGranted, true}, {"transcript-supervisor", true}, {"transcript-guide", true}, {"transcript-person", false}, {"", false},
+		{transcriptGranted, true}, {"transcript-supervisor", false}, {"transcript-guide", true}, {"transcript-person", false}, {"", false},
 	} {
 		got, err := a.managedTranscriptSession(tc.session)
 		if err != nil || got != tc.managed {

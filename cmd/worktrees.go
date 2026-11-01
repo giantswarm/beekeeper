@@ -212,10 +212,7 @@ func (r worktreeRun) String() string {
 	case r.err != nil && !r.acted():
 		return fmt.Sprintf("worktrees: %v", r.err)
 	}
-	verb, of := r.verb(false), "freed"
-	if r.dryRun {
-		of = "would free"
-	}
+	verb, of := r.verb(false), freedVerb(r.dryRun)
 	var parts []string
 	tier := func(outs []worktreeOutcome, what string) {
 		if len(outs) > 0 {

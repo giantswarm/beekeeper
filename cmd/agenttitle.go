@@ -462,7 +462,7 @@ func handedOver(st *state.State, start state.Start) bool {
 		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return other(ag.Party) })
 }
 
-// keepsRole reports whether p holds or held the supervisor's or the guide's
+// keepsRole reports whether p holds or held the guide's
 // role: a relieved supervisor still follows its role's rules. A session
 // named as a role's run held it, also once its relief is forgotten.
 func keepsRole(st *state.State, p state.Party) bool {
@@ -596,6 +596,7 @@ const stewardDeclineFor = 24 * time.Hour
 // declined is asked for no archive for stewardDeclineFor. It returns an
 // outcome per agent.
 func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
+	defer a.recordStoppedGates(ctx)
 	out := make([]archiveOutcome, len(agents))
 	var hosts []string
 	at := map[string]int{}
@@ -857,6 +858,7 @@ func (a *app) recordDeclines(asked []stewardAnswer) {
 // roster, and removes its inbox, and says what it did: nothing resumes an
 // omp agent, so a process left running would only hold its model.
 func (a *app) endOmp(ctx context.Context, id string) string {
+	defer a.recordStoppedGates(ctx)
 	var done []string
 	if unit := ompUnit(id); plat.Launcher.State(ctx, unit) == "active" {
 		if err := plat.Launcher.Stop(ctx, unit); err != nil {
@@ -901,7 +903,7 @@ func (a *app) archivableRecord(st *state.State, ag state.Party) (host, why strin
 		return "", "its desktop session stays: beekeeper did not start it"
 	}
 	if roleKeeps(st, ag) {
-		return "", "its desktop session stays: it holds or held the supervisor's or the guide's role, and no relay relieved it"
+		return "", "its desktop session stays: it holds or held the guide's role, and no relay relieved it"
 	}
 	host = st.Starts[i].HostSession
 	switch r, ok := claude.ReadRecord(a.cfg, host); {

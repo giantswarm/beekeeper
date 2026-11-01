@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,15 +69,18 @@ func executionReviewRound(st *state.State, use execution.MergeUse) *state.DeskRe
 }
 
 // The public API supplies the stable node ID, author and exact commit for the
-// review URL acknowledged by the authenticated reviewer session.
-var readDeskReview = func(ctx context.Context, repository, id string) (superloop.Review, error) {
-	raw, err := github.RunGH(ctx, "api", fmt.Sprintf("repos/%s/pulls/reviews/%s", repository, id))
+// review URL acknowledged by the authenticated reviewer session. A review is
+// addressed under its pull request (repos/<owner>/<repo>/pulls/<n>/reviews/<id>),
+// and the answer must name that same pull request.
+var readDeskReview = func(ctx context.Context, repository string, pr int, id string) (superloop.Review, error) {
+	raw, err := github.RunGH(ctx, "api", fmt.Sprintf("repos/%s/pulls/%d/reviews/%s", repository, pr, id))
 	if err != nil {
 		return superloop.Review{}, err
 	}
 	var r struct {
 		ID     string    `json:"node_id"`
 		URL    string    `json:"html_url"`
+		Pull   string    `json:"pull_request_url"`
 		Body   string    `json:"body"`
 		State  string    `json:"state"`
 		Commit string    `json:"commit_id"`
@@ -87,6 +91,9 @@ var readDeskReview = func(ctx context.Context, repository, id string) (superloop
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return superloop.Review{}, err
+	}
+	if want := fmt.Sprintf("/repos/%s/pulls/%d", repository, pr); !strings.HasSuffix(r.Pull, want) {
+		return superloop.Review{}, refused("review %s belongs to %q, not %s#%d", id, r.Pull, repository, pr)
 	}
 	return superloop.Review{ID: r.ID, URL: r.URL, Author: r.User.Login, Head: superloop.ReviewedHead(r.Body, r.Commit), Commit: r.Commit, Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At}, nil
 }
@@ -152,7 +159,7 @@ func (a *app) captureExecutionReviewReport(ctx context.Context, st *state.State,
 		}
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		review, err := readDeskReview(ctx, ref.Repo, links[0][1])
+		review, err := readDeskReview(ctx, ref.Repo, ref.N, links[0][1])
 		if err != nil {
 			return err
 		}

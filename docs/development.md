@@ -180,21 +180,11 @@ beekeeper takes that session as its parent and ignores the host id. A copy of `s
 `CLAUDE_CODE_SESSION_ID` (`env -u CLAUDE_CODE_SESSION_ID`, since every tool shell has it),
 stands in for a session that ends when the sleep does, so `sessions serve` and the `SESSION ENDED` line can be tried against
 scratch state. The live supervisor's watch sees it too: give it a name that reads as a test and a
-short life. Two such stand-ins play a supervisor hand-over: each runs `supervisor start`,
-`supervisor relay` or `supervisor status` with its own `CLAUDE_CODE_SESSION_ID`,
-`CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME` in the environment; a short
-a small `supervisor.relayAt` and a short `supervisor.relayTTL` in the scratch configuration,
-a supervisor stand-in started with `--session-id <id>` whose transcript (a real one with its
-content stripped, as `<claude.projectsDir>/<project>/<id>.jsonl`) reports a context above it,
-and a settling merge written into the scratch `state.json` show `RELAY DUE` held back and then
-said once by `watch --once`. A supervisor stand-in killed by its PID and started again with the same
-`--resume <id>` within `supervisor.restartGrace` is a CLI restart: a claim loop from a third
-identity stays refused throughout and `watch --once` says `SUPERVISOR RESTARTED`; one not started
-again keeps the claim loop refused past the grace, until a successor's `supervisor start`. A
-scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`, with
-`dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, says `SUPERVISOR
-GONE` once past the grace and `SUPERVISOR BACK` once a successor stand-in starts; a stand-in
-that ran `supervisor stop` before its kill gives neither and leaves claims ungated. The spare's keep-awake and the crash hand-over need desktop sessions, never the live ones:
+short life. A scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`,
+with `dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, restarts the
+scratch configuration's supervisor loop service once it stopped and says `SUPERVISOR LOOP DOWN`
+once it stayed down past two minutes, then `SUPERVISOR LOOP BACK` once `supervisor loop` runs again;
+no session is ever started for the supervisor. The spare's keep-awake and the crash hand-over need desktop sessions, never the live ones:
 throwaway sessions titled `test: …` on the smallest model, made with `claude -p --session-id <id>`
 in a scratch folder and imported with `claude://resume?session=<id>` (then
 `claude://code/continue?session=<previous>` puts the window back). A `.claude/settings.local.json`
@@ -203,11 +193,9 @@ so their commands never touch the live state. `BEEKEEPER_PEER_TEST=<title> go te
 ./internal/peer/` sends one message to such a session from the command line and checks that an
 absent name is unreachable. A scratch `watch --standby` with the spare in the scratch state keeps
 one session awake past 35 idle minutes while an untouched one is dropped at 30; a stand-in
-supervisor killed by its CLI's PID shows `SUPERVISOR GONE` naming the spare, the `HANDOVER` line
-and the spare's `supervisor start`, with claims refused until then. `supervisor reopen` against a
-scratch state whose supervisor is a stopped throwaway session starts its CLI through the deep
-link. Archive the sessions afterwards. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
-directories into the scratch configuration) shows what a successor would get.
+guide killed by its CLI's PID shows `GUIDE GONE` naming the spare and the spare's `guide start`.
+Archive the sessions afterwards. `guide handover --prompt` on a copy of the live state (`cp -r` of
+the state and lease directories into the scratch configuration) shows what a successor would get.
 
 The roster is tried with real `claude --bg` workers against scratch state: started through
 `systemd-run --user` with the session variables cleared and `BEEKEEPER_CONFIG` naming the
@@ -325,6 +313,74 @@ timer from the running watches.
 
 ## Automatic disk reclamation
 
+### Cache policies
+
+`disk.caches` lists the caches the disk step trims. Beekeeper's own caches are
+its default entries: `go-build` (mode `go`, cap `doctor.goCacheMaxGiB`),
+`sccache` (mode `sccache`, cap `disk.sccacheMaxGiB`) and `beekeeper-tmp`
+(`stateDir/tmp`, mode `entries`, `olderThan: 1h`). An entry with a built-in's
+name changes the fields it sets (`maxGiB`, `olderThan`, `path`); `mode: off`
+drops it. Any other entry needs a `path` and a rule:
+
+```yaml
+disk:
+  caches:
+    - path: ~/.cache/some-app       # each direct child is removed whole
+      olderThan: 7d                 # when nothing in it was written for a week
+      regenerable: true             # under disk pressure: everything older than 1h
+    - path: ~/.cache/pkg-manager
+      mode: files                   # single files, least recently written first
+      maxGiB: 2                     # until the cache fits two GiB
+    - path: ~/.cache/*-dev          # a glob: each match is a cache root
+      maxGiB: 1
+    - path: ~/.cache/tool
+      mode: command                 # the tool's own cleaner, which keeps its metadata
+      command: tool cache prune     # words, no shell; runs in the cache root
+      maxGiB: 4                     # over the budget, and under disk pressure
+```
+
+`path` is absolute or `~/…` and may be a glob; each match is a cache root. In
+`entries` mode (the default) a root's direct children are the units, each
+removed whole; in `files` mode its regular files, and directories a trim
+empties go with them. A unit untouched for `olderThan` (a Go duration or whole
+days, `7d`) goes; past `maxGiB` the least recently written go until the root
+fits; a `regenerable` cache drops everything older than an hour under disk
+pressure. In `command` mode beekeeper removes nothing itself: it runs the
+tool's cleaner (at most ten minutes) once the root holds more than `maxGiB`,
+and on every pressure run (without `maxGiB`, only those); the bytes it freed
+are measured after it, and a dry run says `cleaner would run`. A root inside another policy's root is governed by its own policy
+alone: the outer one neither counts nor removes the entry holding it. Whatever
+a policy says, the step keeps:
+
+- anything written within the last hour;
+- a unit any process of the user references (cwd, open file, mapping); in
+  `files` mode one reference anywhere in the root keeps the whole root;
+- a unit holding a `.git` (a checkout, so possibly uncommitted or unpushed
+  work); in `files` mode such a root is kept whole, and a root that is itself
+  a checkout is never trimmed;
+- a root that is a symbolic link, or that holds the home, the state directory,
+  a configured checkout or a worktree root;
+- everything while some process's references are unreadable.
+
+The scan of a large cache takes a while, so before removing anything the
+step reads the processes' references again, and right before it removes an
+entry it inspects that entry again: one a process opened meanwhile, one
+written since the scan, or one that now holds a checkout stays. A file is
+removed only if unchanged since the scan. The tools' own locks are only
+known to their cleaners: a cache whose tool locks it belongs in `command`
+mode.
+
+`beekeeper disk prune` (or `--dry-run`) lists each cache root with what it
+holds and would free; `--report` adds the largest entries of the user cache
+directory no policy covers, with their last write, so the list can be
+extended. A pressure run's `DISK PRUNE` line names the caches still holding
+the most, and when the disk is still under the free-disk floor after it, the
+largest directories (100 MiB or more) of the user cache directory no policy
+covers, with their last write. The supervisor's "Disk remains low after
+pruning" note carries the same.
+
+### The disk step
+
 `disk.prune: auto` is the default. A long-running watch runs the disk step
 hourly (`disk.every`) and within five minutes of `LOW DISK` or `DISK FILLING`.
 `watch --once` reports disk pressure without deleting anything. Watches share
@@ -419,3 +475,21 @@ process directory still has its original owner.
 on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
 freeing (`doctor.freeEvery`) and Docker reclamation remain independent
 in both modes.
+
+## Central note closure audit
+
+A central Note closes only with a recognised close event (`answer.recorded`,
+`note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
+line atomically with the outcome. Closed Notes remain as history, outside the
+open notes and the 24-hour default-answer window, for 30 days after closure.
+Note-only updates, including the periodic default tick, collect older closed
+records; unrelated object updates leave collection to that tick. Cleanup first
+preserves the note counter, so expired numbers are never issued again.
+`beekeeper log` includes the retained line even after Kubernetes Events expire
+or an Event write fails. An answer after the default-answer window explicitly
+reports that the note was closed by its default. Folding a new question into an
+open note leaves the existing note open and logs `note.folded`.
+
+The original trigger of an already missing note cannot be recovered once its
+old logs and Events have expired. Retaining the close record makes subsequent
+closures attributable without relying on that retention window.

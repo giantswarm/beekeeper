@@ -32,7 +32,7 @@ func TestSupervisorLoopServiceFindsToolsOutsideManagerPATH(t *testing.T) {
 	if _, err := exec.LookPath("gh"); err == nil {
 		t.Fatal("restricted manager PATH unexpectedly contains gh")
 	}
-	raw, err := json.Marshal(map[string]any{"Home": root, "ConfigDir": root, "Exe": "/opt/bin/beekeeper", "SupervisorLoop": true, "ToolPath": tools + ":.:relative::" + tools})
+	raw, err := json.Marshal(map[string]any{"Home": root, "ConfigDir": root, "Exe": "/opt/bin/beekeeper", "ToolPath": tools + ":.:relative::" + tools})
 	if err != nil {
 		t.Fatal(err)
 	}

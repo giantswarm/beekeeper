@@ -53,10 +53,10 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(true, false)
-	if err := r.a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+	if err := r.a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
-	if !w.supervisorGone(context.Background(), &state.State{}, nil) {
+	if !w.checkLoop(context.Background(), &state.State{}) {
 		t.Fatal("standby ignored running loop")
 	}
 }
@@ -69,13 +69,17 @@ func TestLoopWatchPrunesThenReportsPersistentLowDiskOnce(t *testing.T) {
 	if r.called(loopDiskKind, "prune", "--apply") == nil {
 		t.Fatal("low disk not pruned")
 	}
+	// The prune's pressure run recorded what still holds the space.
+	if err := r.a.store.WriteFile(diskHoldingFile, diskHolding{At: r.a.now, Text: "caches app 9 GiB (last write 2026-10-27)"}); err != nil {
+		t.Fatal(err)
+	}
 	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
 	r.pass(t)
 	if r.called(loopDiskKind, "prune", "--apply") != nil {
 		t.Fatal("same disk episode pruned twice")
 	}
 	st, _ := r.a.store.Read()
-	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, "test-writer") {
+	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, "test-writer") || !strings.Contains(st.Notes[0].Text, "Holding the space: caches app 9 GiB") {
 		t.Fatalf("persistent low disk note: %+v", st.Notes)
 	}
 	r.pass(t)

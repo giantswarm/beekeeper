@@ -52,6 +52,10 @@ The conditions of --when, each one read of its reference per check, shared
 by every timer on it; a GitHub one waits while the budget is under the
 floor:
   pr-merged owner/repo#n
+  pr-checks owner/repo#n   (the head's checks settled: every one green,
+                           or any red: failed, cancelled, timed out;
+                           merged or closed; the woken agent reads which,
+                           with each red check's name and URL)
   issue-closed owner/repo#n
   helmrelease-ready context/namespace/name [version]   (Ready and, given a
                                          version, running it: the newest
@@ -59,8 +63,11 @@ floor:
   controlplane-ready context/namespace/name   (every replica ready and updated)
 --probe takes any shell command that exits 0 once the condition holds. A
 rollout is helmrelease-ready with its version: current Flux leaves a
-HelmRelease's applied revision empty, so a probe of it never holds.`,
+HelmRelease's applied revision empty, so a probe of it never holds. CI is
+pr-checks: a probe of gh pr checks exits non-zero both while checks run
+and once one failed, so it never fires on red.`,
 		Example: `  beekeeper timer add 5m "PR 243 merged: rebase and merge yours" --when "pr-merged giantswarm/beekeeper#243" --wake "BK 229" --until 2h
+  beekeeper timer add 2m "CI of PR 244 settled: park for review, or fix" --when "pr-checks giantswarm/beekeeper#244" --wake "BK 230" --until 2h
   beekeeper timer add 10m "backstage 2.67.0 rolled: prove it" --when "helmrelease-ready admin@mc/flux-giantswarm/backstage 2.67.0" --wake "BK 737" --until 3h
   beekeeper timer add 23:00 "swap flat again" --probe "test $(awk '/SwapFree/{print $2}' /proc/meminfo) -gt 8000000" --until 06:00 --expire
   beekeeper timer add 11:01 "budget reset" --run "beekeeper agents wake 'BK 228' 'the budget is back'"
@@ -97,7 +104,7 @@ HelmRelease's applied revision empty, so a probe of it never holds.`,
 		},
 	}
 	f := add.Flags()
-	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
+	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, pr-checks (green or red), issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
 	f.StringVar(&spec.probe, "probe", "", "a shell command to wait on from the time: it exits 0 once the condition holds")
 	f.DurationVar(&spec.every, "every", 0, "how often the condition is checked (default 5m)")
 	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now: the timer fires as timed out")

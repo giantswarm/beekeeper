@@ -19,6 +19,7 @@ import (
 
 const (
 	HarnessClaude  = "claude"
+	HarnessCodex   = "codex"
 	Preparing      = "preparing"
 	Activating     = "activating"
 	Applied        = "applied"
@@ -57,6 +58,10 @@ type Ref struct {
 var identityPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var repoPattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$`)
 var refPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_./-]*$`)
+
+// SupportedHarness names the harnesses with a remote adapter. Every other
+// harness starts on the coordinating machine only.
+func SupportedHarness(h string) bool { return h == HarnessClaude || h == HarnessCodex }
 
 func ValidIdentity(s string) bool { return identityPattern.MatchString(s) && s != "." && s != ".." }
 
@@ -110,8 +115,8 @@ func (r StartRequest) Validate() error {
 	if !ValidIdentity(r.Coordinator) || !repoPattern.MatchString(r.Repository) || !refPattern.MatchString(r.GitRef) || strings.Contains(r.GitRef, "..") || strings.HasSuffix(r.GitRef, ".lock") {
 		return errors.New("invalid coordinator, repository or Git ref")
 	}
-	if r.Harness != HarnessClaude || !refPattern.MatchString(r.Model) || len(r.Model) > 256 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 256 || strings.ContainsAny(r.Name, "\x00\r\n") {
-		return errors.New("remote starts require harness claude, an explicit model and a name")
+	if !SupportedHarness(r.Harness) || !refPattern.MatchString(r.Model) || len(r.Model) > 256 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 256 || strings.ContainsAny(r.Name, "\x00\r\n") {
+		return errors.New("remote starts require harness claude or codex, an explicit model and a name")
 	}
 	if strings.TrimSpace(r.Prompt) == "" || len(r.Prompt) > 256<<10 || len(r.Task) > 1024 || !ValidDigest(r.PolicyDigest) {
 		return errors.New("invalid prompt, task or policy digest")
@@ -267,7 +272,10 @@ type Capabilities struct {
 	Version      string            `json:"version"`
 	PolicyDigest string            `json:"policyDigest"`
 	Harnesses    map[string]string `json:"harnesses"`
-	Resources    Resources         `json:"resources"`
+	// Unavailable names each configured harness that failed its version,
+	// login or guard probe. The host advertises only the passing ones.
+	Unavailable map[string]string `json:"unavailable,omitempty"`
+	Resources   Resources         `json:"resources"`
 }
 
 // ControlRequest is a host-to-coordinator mutation. Its sequence and receipt
@@ -301,6 +309,9 @@ type UnreachableError struct {
 }
 
 func (e *UnreachableError) Error() string {
+	if errors.Is(e.Cause, context.DeadlineExceeded) {
+		return fmt.Sprintf("execution host deadline exceeded during %s: %v", e.Operation, e.Cause)
+	}
 	return fmt.Sprintf("execution host unreachable during %s: %v", e.Operation, e.Cause)
 }
 func (e *UnreachableError) Unwrap() error { return e.Cause }

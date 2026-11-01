@@ -243,8 +243,8 @@ func TestDecisionAddressee(t *testing.T) {
 // it as before.
 func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	const (
-		ended   = "Supervisor run 5"
-		current = "Supervisor run 6"
+		ended   = "Guide run 5"
+		current = "Guide run 6"
 	)
 	a, out := noteApp(t)
 	woke := stubWakes(t)
@@ -252,7 +252,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		for i, by := range []state.Party{{Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "w1", Name: "agent-x"}} {
 			st.Notes = append(st.Notes, state.Note{ID: i + 1, Kind: noteDecision, By: by, Text: fmt.Sprintf("question %d", i+1), Refs: []string{privateThread}})
 		}
-		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -268,28 +268,28 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 
 	got := answer("1")
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], "→ s6: NOTE ANSWERED #1") {
-		t.Fatalf("woke %q, want the current supervisor told", *woke)
+		t.Fatalf("woke %q, want the current guide told", *woke)
 	}
-	if want := fmt.Sprintf("%q, which filed it, no longer holds the supervisor's role: told the supervisor, %q", ended, current); !strings.Contains(got, want) {
+	if want := fmt.Sprintf("%q, which filed it, no longer holds the guide's role: told the guide, %q", ended, current); !strings.Contains(got, want) {
 		t.Errorf("output %q lacks %q", got, want)
 	}
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = nil
+		st.Guide = nil
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	got = answer("2")
 	if len(*woke) != 1 {
-		t.Fatalf("woke %q with no supervisor", *woke)
+		t.Fatalf("woke %q with no guide", *woke)
 	}
-	if want := "no session holds the supervisor's role: the answer waits for its next start"; !strings.Contains(got, want) {
+	if want := "no session holds the guide's role: the answer waits for its next start"; !strings.Contains(got, want) {
 		t.Errorf("output %q lacks %q", got, want)
 	}
 
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -300,7 +300,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	}
 	got = answer("3")
 	wakeOwner = was
-	if want := fmt.Sprintf("the supervisor, %q, cannot be told (its CLI does not run): the answer waits", current); !strings.Contains(got, want) {
+	if want := fmt.Sprintf("the guide, %q, cannot be told (its CLI does not run): the answer waits", current); !strings.Contains(got, want) {
 		t.Errorf("output %q lacks %q", got, want)
 	}
 
@@ -318,13 +318,13 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	if an, _ := a.answeredSince(time.Time{}); len(an) != 4 {
 		t.Fatalf("recorded answers %+v, want 4", an)
 	}
-	st.RoleLines = append(st.RoleLines, state.RoleLine{Role: guideRole.name, Line: "for the guide"})
-	lines := takeRoleLines(st, supervisorRole)
+	st.RoleLines = append(st.RoleLines, state.RoleLine{Role: "retired role", Line: "for a retired role"})
+	lines := takeRoleLines(st, guideRole)
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "NOTE ANSWERED #2") || !strings.HasPrefix(lines[1], "NOTE ANSWERED #3") {
 		t.Fatalf("waiting lines %q", lines)
 	}
-	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != guideRole.name {
-		t.Fatalf("left %+v, want the guide's line", st.RoleLines)
+	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != "retired role" {
+		t.Fatalf("left %+v, want the other role's line", st.RoleLines)
 	}
 }
 

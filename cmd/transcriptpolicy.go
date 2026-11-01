@@ -50,10 +50,8 @@ func (a *app) managedTranscriptSession(session string) (bool, error) {
 		if st.StartIndex(p) >= 0 {
 			return true, nil
 		}
-		for _, holder := range []*state.Supervisor{st.Supervisor, st.GuideRole().Holder} {
-			if holder != nil && (p.Session != "" || p.HostSession != "") && holder.Is(p) {
-				return true, nil
-			}
+		if holder := st.GuideRole().Holder; holder != nil && (p.Session != "" || p.HostSession != "") && holder.Is(p) {
+			return true, nil
 		}
 	}
 	return false, nil
