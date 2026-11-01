@@ -42,6 +42,7 @@ var (
 	newValidator   = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
+	currentCommit  = project.GitSHA
 )
 
 // Result is what a check or an update found and did.

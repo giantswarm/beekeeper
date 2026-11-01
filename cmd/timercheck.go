@@ -42,16 +42,22 @@ var (
 // always is the judge of a condition whose reference adds nothing to it.
 func always(j judge) func([]string) judge { return func([]string) judge { return j } }
 
+// ghRefForm is how a GitHub condition names its reference.
+const ghRefForm = "owner/repo#n"
+
 // prNotMerged is why a pr-merged condition does not hold yet.
 const prNotMerged = "not merged"
 
 // timerConditions are the typed conditions by kind. Each is one read of one
 // reference, so the timers on the same reference share it.
 var timerConditions = map[string]timerCondition{
-	"pr-merged": {"owner/repo#n", ghRef, true, func(m []string) string {
+	"pr-merged": {ghRefForm, ghRef, true, func(m []string) string {
 		return fmt.Sprintf("gh api repos/%s/pulls/%s --jq .merged", m[1], m[2])
 	}, always(outputIs("true", prNotMerged))},
-	"issue-closed": {"owner/repo#n", ghRef, true, func(m []string) string {
+	"pr-checks": {ghRefForm, ghRef, true, func(m []string) string {
+		return fmt.Sprintf("gh pr view %s --repo %s --json state,headRefOid,statusCheckRollup", m[2], m[1])
+	}, func(m []string) judge { return prChecksSettled(m[1] + "#" + m[2]) }},
+	"issue-closed": {ghRefForm, ghRef, true, func(m []string) string {
 		return fmt.Sprintf("gh api repos/%s/issues/%s --jq .state", m[1], m[2])
 	}, always(outputIs("closed", "open"))},
 	"helmrelease-ready": {"context/namespace/name [version]", hrRef, false, func(m []string) string {
@@ -150,6 +156,53 @@ func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
 		return out, fmt.Errorf("%v: %s", err, truncate(last, 200))
 	}
 	return out, err
+}
+
+// prChecksSettled holds once the checks on a pull request's head reached a
+// terminal state, green or red, and says which in its reason, which the
+// woken agent reads: every check concluded successfully, or one concluded
+// red (failure, cancelled, timed out, startup failure, action required; a
+// commit status's failure or error) while the others may still run, named
+// with its URL. A pull request merged or closed holds too. No check yet, or
+// checks still running with none red, does not hold.
+func prChecksSettled(ref string) judge {
+	return func(out []byte) (bool, string, error) {
+		p, err := parseLoopPull(ref, out)
+		if err != nil {
+			return false, "", err
+		}
+		if p.Head == "" || p.State == "" {
+			return false, "", errors.New("no pull request in the answer")
+		}
+		var j loopPullJSON
+		if err := json.Unmarshal(out, &j); err != nil {
+			return false, "", err
+		}
+		running := 0
+		for _, c := range j.Rollup {
+			if !c.concluded() {
+				running++
+			}
+		}
+		head := p.Head[:min(len(p.Head), 9)]
+		switch {
+		case p.State != "OPEN":
+			return true, fmt.Sprintf("%s is %s at head %s", ref, strings.ToLower(p.State), head), nil
+		case len(p.Red) > 0:
+			var red []string
+			for _, c := range p.Red {
+				red = append(red, strings.TrimSpace(c.Name+" "+c.URL))
+			}
+			return true, fmt.Sprintf("CI red on head %s: %s", head, strings.Join(red, "; ")), nil
+		case p.Green:
+			return true, fmt.Sprintf("CI green on head %s: every check passed", head), nil
+		case len(j.Rollup) == 0:
+			return false, "no check on head " + head + " yet", nil
+		case running == 0:
+			return false, fmt.Sprintf("the checks on head %s concluded neither green nor red", head), nil
+		}
+		return false, fmt.Sprintf("%d of %d checks on head %s still running", running, len(j.Rollup), head), nil
+	}
 }
 
 // outputIs judges an output of one line: want holds, anything else is why

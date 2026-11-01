@@ -155,8 +155,19 @@ host's physical guards. A host does not create another subscription budget.
 `supervisor.hosts` naming execution hosts (in order of preference), a start
 whose repository a host maps, and for which `capacity --host <selector>` has
 room, runs there pinned to the repository's default branch — while the
-coordinator is out of room, or always with `supervisor.hostsFirst`. A desk
-without `capacity.choices` never places remotely. A retired remote worker is
+coordinator is out of room, or always with `supervisor.hostsFirst`. A host's
+check weighs only the choices it can run (Claude Code). `hostsFirst` prefers
+hosts only for what a host can run: without room on any host a Claude start
+waits, while a repository no host maps, or a choice of a harness no host has
+an adapter for (agy, omp, codex), starts on the coordinator within its local
+room; for the latter the local start excludes the choices a host runs. A desk
+without `capacity.choices` never places remotely.
+
+`capacity.local.ceiling` caps the busy agents the coordinator itself runs,
+apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
+too sets it to the coordinator's own share. Remote agents count against
+their host's `maxBusy`, never against it; local self-hosted sessions count.
+Every local start, the loop's and one by hand, is refused at it. A retired remote worker is
 stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable

@@ -331,7 +331,7 @@ func TestDiskPruneUnknownProcessKeepsOnlyItsStep(t *testing.T) {
 		kept     []string
 		pruned   func(diskMachine) []string
 	}{
-		{"every read", 99, []string{"caches: ", "tmp: ", "trash: "}, func(diskMachine) []string { return nil }},
+		{"every read", 99, []string{"caches: ", "caches and tmp: ", "trash: "}, func(diskMachine) []string { return nil }},
 		{"first read", 1, []string{"caches: "}, func(m diskMachine) []string {
 			return []string{filepath.Join(m.tmp[0], "dead"), filepath.Join(m.trash[0], "output")}
 		}},

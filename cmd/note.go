@@ -385,7 +385,7 @@ notes' only.`,
 						if why != "" {
 							evs = append(evs, overtakenEvent(me, n, why))
 						} else {
-							evs = append(evs, event(me, noteDone, "#%d %s", n.ID, n.Text))
+							evs = append(evs, event(me, noteDone, "#%d withdrawn: %s", n.ID, n.Text))
 						}
 						return true
 					}
@@ -465,6 +465,15 @@ naming both. --post is the machine's notes' only.`,
 				return a.answerCentral(cmd.Context(), ids[0].ID, choice, via, strings.Join(args[1:], " "), post)
 			}
 			if n == nil {
+				if history, ok := a.store.(state.NoteHistory); ok {
+					closed, err := history.NoteClosure(ids[0].ID)
+					if err != nil {
+						return err
+					}
+					if closed != nil && closed.Verb == noteDefaulted {
+						return refused("note #%d was closed by its default; the %s late-answer window has expired", ids[0].ID, shortDur(defaultedKeep))
+					}
+				}
 				return refused("note #%d is not open, nor closed by its default within %s", ids[0].ID, shortDur(defaultedKeep))
 			}
 			if len(n.Refs) == 0 {
