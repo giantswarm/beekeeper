@@ -448,57 +448,63 @@ func TestAForwardedVerdictRetiresItsReviewer(t *testing.T) {
 	}
 }
 
-func TestAMergedWorkerLeavesWhetherItReportedOrNot(t *testing.T) {
+func TestAMergedWorkerWaitsForItsReportOrInactivityWindow(t *testing.T) {
 	w := parked(t0)
 	w[0].Started = true
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
 	tk = append(tk, taken(t, t1, Action{Key: goKey(pr, head1), Kind: KindGo, Ref: pr, Agent: worker})...)
-	merged := map[string]Pull{pr: {Ref: pr, URL: prURL, State: Merged, Head: head1}}
-	in := Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk}
-	acts := Plan(in)
-	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone })
-	if len(acts) != 2 || i < 0 || acts[i].Agent != worker || acts[i].Ref != pr {
-		t.Fatalf("want the end and the worker's done, got %+v", acts)
+	merged := map[string]Pull{pr: {Ref: pr, URL: prURL, State: Merged, Head: head1, MergeCommit: head2}}
+	in := Input{Workers: w, Pulls: merged, Taken: tk, Now: t1}
+	end := only(t, Plan(in), KindEnd)
+	in.Taken = append(in.Taken, taken(t, t1, end)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("retired at merge: %+v", got)
 	}
-	// Its turn ran on past the end: the merged pull request stays read
-	// until the worker left.
-	in.Taken = append(in.Taken, taken(t, t1, acts[1-i])...)
-	if got := Tracked(w, in.Taken, nil, Desk{}); len(got) != 1 || got[0] != pr {
-		t.Fatalf("tracked after the end = %v", got)
+	for _, park := range []string{pr, "", "release v1.2.3", "#12"} {
+		in.Workers[0].ParkedOn = park
+		if got := Tracked(in.Workers, in.Taken, nil, Desk{}); len(got) != 1 {
+			t.Fatalf("lost retained worker on %q: %v", park, got)
+		}
+		if got := ReleaseWorkers(in); len(got) != 1 || got[0].Head != head2 {
+			t.Fatalf("no release recipient: %+v", got)
+		}
 	}
+	in.Now = t1.Add(2*time.Hour - time.Second)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("retired before window: %+v", got)
+	}
+	in.Now = t1.Add(2 * time.Hour)
 	d := only(t, Plan(in), KindDone)
-	in.Taken = append(in.Taken, taken(t, t1, d)...)
-	if got := Tracked(w, in.Taken, nil, Desk{}); len(got) != 0 {
-		t.Errorf("tracked after the worker left = %v", got)
+	if !strings.Contains(d.Message, "no report after merge") || !strings.Contains(d.Message, prURL) {
+		t.Fatalf("missing evidence: %+v", d)
 	}
-	// A worker its person started stays; one that reported done leaves by
-	// its own done.
-	if got := Plan(Input{Workers: parked(t0), Pulls: merged, Rounds: 1, Taken: tk}); len(got) != 1 || got[0].Kind != KindEnd {
-		t.Errorf("a person's worker: %+v", got)
+	// Activity extends the window, including across loop restarts.
+	in.Workers[0].LastActive = t1.Add(time.Hour)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("retired active worker: %+v", got)
 	}
-	done := Event{At: t1, Verb: VerbDone, Agent: worker, Detail: worker + " done: merged"}
-	acts = Plan(Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk, Events: []Event{done}})
-	if n := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone && a.Event == nil }); n >= 0 {
-		t.Errorf("a reported worker was retired too: %+v", acts)
+	in.PostMergeWindow = 30 * time.Minute
+	only(t, Plan(in), KindDone)
+	// A done report retires immediately through the normal report path.
+	in.Events = []Event{{At: in.Now, Verb: VerbDone, Agent: worker, Detail: worker + " done: proven"}}
+	d = only(t, Plan(in), KindDone)
+	if d.Event == nil {
+		t.Fatal("ignored worker report")
 	}
-	// A worker parked on anything but its pull request still works (its
-	// release, a timer); one parked on the pull request is done.
-	busy := parked(t0)
-	busy[0].Started, busy[0].ParkedOn = true, "release v1.2.3"
-	if got := Plan(Input{Workers: busy, Pulls: merged, Rounds: 1, Taken: tk}); len(got) != 1 || got[0].Kind != KindEnd {
-		t.Errorf("a worker parked on its release: %+v", got)
+	if got := ReleaseWorkers(in); len(got) != 0 {
+		t.Fatalf("wake after done: %+v", got)
 	}
-	if got := Tracked(busy, append(tk, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr})...), nil, Desk{}); len(got) != 0 {
-		t.Errorf("tracked for a worker parked on its release = %v", got)
+	in.Events = nil
+	in.Taken = append(in.Taken, taken(t, in.Now, Action{Key: retireKey(pr, retiredWorker), Kind: KindDone, Ref: pr, Agent: worker})...)
+	if got := Tracked(in.Workers, in.Taken, nil, Desk{}); len(got) != 0 {
+		t.Fatalf("tracked retired worker: %v", got)
 	}
-	free := parked(t0)
-	free[0].Started, free[0].ParkedOn = true, ""
-	if d := Plan(Input{Workers: free, Pulls: merged, Rounds: 1, Taken: tk}); !slices.ContainsFunc(d, func(a Action) bool { return a.Kind == KindDone && a.Agent == worker }) {
-		t.Errorf("an idle worker stays: %+v", d)
+	// No merge go and no beekeeper start mean no automatic retirement.
+	if got := Plan(Input{Workers: parked(t0), Pulls: merged, Taken: tk, Now: in.Now}); len(got) != 1 || got[0].Kind != KindEnd {
+		t.Fatalf("person's worker: %+v", got)
 	}
-	// No go, no retirement.
-	if got := Plan(Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk[:1]}); len(got) != 1 || got[0].Kind != KindEnd {
-		t.Errorf("without the go: %+v", got)
+	if got := Plan(Input{Workers: w, Pulls: merged, Taken: tk[:1], Now: in.Now}); len(got) != 1 || got[0].Kind != KindEnd {
+		t.Fatalf("no merge go: %+v", got)
 	}
 }
 
