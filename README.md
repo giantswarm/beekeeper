@@ -50,7 +50,8 @@ when run from that pull request's worktree branch at its published HEAD. The
 command records and prints the verified head. Other parks, including older parks
 without this evidence, are plain waits: no reviewer, merge go or findings
 forwarded; the watch resumes them when the pull request merges or closes. If
-publication could not be verified, re-run the park from the published worktree.
+publication could not be verified, request review in one shell call:
+`cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`.
 
 
 Download the binary for your OS and architecture from the latest release into any directory on
