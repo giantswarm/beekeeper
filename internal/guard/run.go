@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -469,11 +470,15 @@ func Run(o Options, argv []string) int {
 	}
 	o.record(VerbStart, fmt.Sprintf("%s.scope %s max %s: %s", unit, how, o.Max, head))
 	start := time.Now()
-	rc := scope(capper, unit, o, slot, argv, env, logf)
+	rc, drain := scope(capper, unit, o, slot, argv, env, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
 	if left := reap(capper, unit, slot, logf); left != "" {
 		end += ", " + left
 	}
+	// The output's copy into the terminal and the tail ring ends once the
+	// pipes close; reap stopped what in the scope still held them, so this
+	// returns at once, and only then is the tail complete for the record.
+	drain()
 	if rc != 0 {
 		if kills := victims(unit, start, rc); len(kills) > 0 {
 			what, advice, detail := killReport(o, unit, slot, shared, kills)
@@ -782,13 +787,34 @@ func writeHolder(o Options, slot int, argv []string) {
 		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME")})
 }
 
+// drainWait bounds the wait for the last bytes of a run's output after the
+// scope was reaped: a process the reap cannot stop (none on a capped run,
+// whose scope holds every one of the command's processes) would otherwise
+// hold the run, its slot and its record open forever. A tail cut this way
+// lost its last bytes to a stray process, not to a truncation.
+const drainWait = 10 * time.Second
+
 // scope runs argv in the capped scope unit, in the slot's slice, with env
-// over this process's environment.
-func scope(capper platform.Capper, unit string, o Options, slot int, argv, env []string, logf func(string, ...any)) int {
+// over this process's environment. It answers the exit code and the drain
+// that ends the output's copy into the terminal and the tail ring; the
+// drain must run after the scope's reap, which stops what still holds the
+// pipes open.
+//
+// With a tail the output runs through pipes beekeeper owns, not through
+// os/exec's: exec's Wait waits for its own copy goroutines to see EOF, and
+// a command that leaves a long-lived child behind (a test's envtest
+// kube-apiserver) inherits the pipe ends, so the wait would outlive the
+// command, hold the slot, and delay the tail and the end event for as long
+// as that child runs. Here Wait returns when the process exits, reap kills
+// what is left in the scope and with it the last holders of the pipes, and
+// only then does the drain join the copy: the tail is complete when the
+// record is written.
+func scope(capper platform.Capper, unit string, o Options, slot int, argv, env []string, logf func(string, ...any)) (int, func()) {
+	noop := func() {}
 	c, err := capper.Command(unit, o.cap(slot), argv)
 	if err != nil {
 		logf("%v", err)
-		return ExitNotFound
+		return ExitNotFound, noop
 	}
 	if len(env) > 0 {
 		if c.Env == nil {
@@ -797,8 +823,22 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv, env [
 		c.Env = append(c.Env, env...)
 	}
 	c.Stdin = os.Stdin
+	var outR, errR, outW, errW *os.File
 	if o.Tail != nil {
-		c.Stdout, c.Stderr = teeWriter{os.Stdout, o.Tail}, teeWriter{os.Stderr, o.Tail}
+		if outR, outW, err = os.Pipe(); err != nil {
+			logf("stdout pipe: %v", err)
+			return ExitNotFound, noop
+		}
+		if errR, errW, err = os.Pipe(); err != nil {
+			_ = outR.Close()
+			_ = outW.Close()
+			logf("stderr pipe: %v", err)
+			return ExitNotFound, noop
+		}
+		// The child gets the write ends; beekeeper keeps the read ends and
+		// closes its own copies of the write ends at the start, so EOF
+		// comes with the last process holding them.
+		c.Stdout, c.Stderr = outW, errW
 	} else {
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 	}
@@ -806,24 +846,58 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv, env [
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
 	if err := c.Start(); err != nil {
+		if o.Tail != nil {
+			_ = outR.Close()
+			_ = errR.Close()
+			_ = outW.Close()
+			_ = errW.Close()
+		}
 		logf("%v", err)
-		return ExitNotFound
+		return ExitNotFound, noop
 	}
 	go func() {
 		for s := range sig {
 			_ = c.Process.Signal(s)
 		}
 	}()
+	drain := noop
+	if o.Tail != nil {
+		var copies sync.WaitGroup
+		copies.Add(2)
+		go func() { defer copies.Done(); teeLoop(outR, os.Stdout, o.Tail) }()
+		go func() { defer copies.Done(); teeLoop(errR, os.Stderr, o.Tail) }()
+		_ = outW.Close()
+		_ = errW.Close()
+		drain = func() {
+			done := make(chan struct{})
+			go func() { copies.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(drainWait):
+				logf("the last %s of the command's output waited on a process the scope's reap did not stop", drainWait)
+			}
+			_ = outR.Close()
+			_ = errR.Close()
+		}
+	}
 	err = c.Wait()
 	var ee *exec.ExitError
 	if err != nil && !errors.As(err, &ee) {
 		logf("%v", err)
-		return 1
+		return 1, drain
 	}
 	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return 128 + int(ws.Signal())
+		return 128 + int(ws.Signal()), drain
 	}
-	return c.ProcessState.ExitCode()
+	return c.ProcessState.ExitCode(), drain
+}
+
+// teeLoop copies a run's stream to the terminal and into the tail ring
+// until the pipe closes; a short write to the terminal ends the copy, the
+// run keeps going regardless.
+func teeLoop(r *os.File, w io.Writer, t *Tail) {
+	_, _ = io.Copy(teeWriter{w, t}, r)
+	_ = r.Close()
 }
 
 // reap stops the run's scope once the command has exited and left
