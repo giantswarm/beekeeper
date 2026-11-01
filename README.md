@@ -2359,7 +2359,15 @@ A worker that waits on a person, a merge lane or a release parks instead of slee
 that holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|<context>#note|owner/repo#n>]
 "<what it waits for>"` (`<context>#note` a central instance's note) keeps its task, shows it parked in `agents` (KEPT) and `capacity`, not busy,
 and it ends its turn; an agent without a task is refused. `lease claim <resource> --park` parks it
-on the lease its queued claim waits for. Once the note is closed (answered,
+on the lease its queued claim waits for. A GitHub target is resolved once when parking;
+a confirmed missing reference is refused. A failed read still records the park with
+an unresolved type, classified later with retries at most every five minutes.
+A pull request enters the usual review flow.
+An issue is a plain wait, checked at most every five minutes, and never read as a pull
+request by the supervisor; existing parks are classified on their first read and keep that
+type across restarts. When a worker parks on an issue it serves, an open pull request linked
+to it under the same GitHub identity is suggested for desk review when available.
+Once the note is closed (answered,
 defaulted, done or overtaken), the issue or pull request merged or closed, or the lease free and
 the agent's to claim (a grant to another session first keeps it parked), the watch says one
 `AGENT RESUMABLE "<agent>"` line with what settled it, a person's answer word for word. With

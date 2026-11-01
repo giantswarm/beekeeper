@@ -41,7 +41,7 @@ func overtakingWatch(t *testing.T, refs map[string]string) (*watcher, *bytes.Buf
 		for _, r := range rs {
 			if s, ok := refs[refName(r)]; ok {
 				at, closer, _ := strings.Cut(s, " by ")
-				m[r] = github.RefState{State: at, Closer: closer}
+				m[r] = github.RefState{Kind: github.RefPullRequest, State: at, Closer: closer}
 			}
 		}
 		return m, nil
