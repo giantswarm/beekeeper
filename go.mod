@@ -34,7 +34,7 @@ require (
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
-	k8s.io/utils v0.0.0-20260626114624-be93311217bd
+	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab
 	mvdan.cc/sh/v3 v3.14.1
 	sigs.k8s.io/controller-runtime v0.25.2
 )
