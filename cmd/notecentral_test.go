@@ -117,9 +117,10 @@ func TestNoteAddFilesLocallyWhileCentralIsUnreachable(t *testing.T) {
 }
 
 // A failed central read prints a warning even when the caller suppresses
-// Cobra's error printing, while the local notes and JSON remain available.
+// Cobra's error printing, while the local notes remain available.
 func TestCentralNoteListWarns(t *testing.T) {
-	for _, args := range [][]string{{"list"}, {"list", "--full"}, {}} {
+	const listVerb = "list"
+	for _, args := range [][]string{{listVerb}, {listVerb, "--full"}, {}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			a, out, m := centralNoteApp(t, &noteAddStandIn{})
 			m.Down(true)
