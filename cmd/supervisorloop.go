@@ -194,24 +194,14 @@ const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
-	State  string `json:"state"`
-	URL    string `json:"url"`
-	Head   string `json:"headRefOid"`
-	Base   string `json:"baseRefName"`
-	Rollup []struct {
-		Status     string `json:"status"`
-		Conclusion string `json:"conclusion"`
-		State      string `json:"state"`
-		// A check run's name and details URL, a commit status's context
-		// and target URL.
-		Name       string `json:"name"`
-		DetailsURL string `json:"detailsUrl"`
-		Context    string `json:"context"`
-		TargetURL  string `json:"targetUrl"`
-	} `json:"statusCheckRollup"`
-	Author loopLogin `json:"author"`
-	Title  string    `json:"title"`
-	Branch string    `json:"headRefName"`
+	State  string      `json:"state"`
+	URL    string      `json:"url"`
+	Head   string      `json:"headRefOid"`
+	Base   string      `json:"baseRefName"`
+	Rollup []loopCheck `json:"statusCheckRollup"`
+	Author loopLogin   `json:"author"`
+	Title  string      `json:"title"`
+	Branch string      `json:"headRefName"`
 	Files  []struct {
 		Path string `json:"path"`
 	} `json:"files"`
@@ -234,9 +224,50 @@ type loopLogin struct {
 	Login string `json:"login"`
 }
 
+// loopCheck is one entry of a pull request's check rollup: a check run
+// reports a status and a conclusion, a commit status a state.
+type loopCheck struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+	// A check run's name and details URL, a commit status's context and
+	// target URL.
+	Name       string `json:"name"`
+	DetailsURL string `json:"detailsUrl"`
+	Context    string `json:"context"`
+	TargetURL  string `json:"targetUrl"`
+}
+
+// The states of a check run and a commit status the loop reads.
+const (
+	checkCompleted = "COMPLETED"
+	checkSuccess   = "SUCCESS"
+	checkFailure   = "FAILURE"
+	checkError     = "ERROR"
+)
+
 // loopRedConclusions are the conclusions of a check run that are red: a
 // terminal state that never turns green by itself.
-var loopRedConclusions = []string{"FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+var loopRedConclusions = []string{checkFailure, "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+
+// green reports whether the check concluded successfully.
+func (c loopCheck) green() bool {
+	return c.State == checkSuccess || c.Status == checkCompleted && slices.Contains([]string{checkSuccess, "NEUTRAL", "SKIPPED"}, c.Conclusion)
+}
+
+// red reports whether the check concluded red: a run that failed, or a
+// status that failed or errored. One queued, running or pending is not.
+func (c loopCheck) red() bool {
+	return c.Status == checkCompleted && slices.Contains(loopRedConclusions, c.Conclusion) || slices.Contains([]string{checkFailure, checkError}, c.State)
+}
+
+// concluded reports whether the check reached a terminal state.
+func (c loopCheck) concluded() bool {
+	if c.Status != "" {
+		return c.Status == checkCompleted
+	}
+	return slices.Contains([]string{checkSuccess, checkFailure, checkError}, c.State)
+}
 
 // parseLoopPull reads gh pr view's JSON of ref.
 func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
@@ -249,16 +280,10 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		p.Files = append(p.Files, f.Path)
 	}
 	for _, c := range j.Rollup {
-		// A check run reports a status and a conclusion, a commit status
-		// a state.
-		ok := c.State == "SUCCESS" || c.Status == "COMPLETED" && slices.Contains([]string{"SUCCESS", "NEUTRAL", "SKIPPED"}, c.Conclusion)
-		if !ok {
+		if !c.green() {
 			p.Green = false
 		}
-		// A red check: a run that concluded and failed, or a status that
-		// failed or errored. One queued, running or pending is not.
-		red := c.Status == "COMPLETED" && slices.Contains(loopRedConclusions, c.Conclusion) || slices.Contains([]string{"FAILURE", "ERROR"}, c.State)
-		if red {
+		if c.red() {
 			p.Red = append(p.Red, superloop.Check{Name: cmp.Or(c.Name, c.Context), URL: cmp.Or(c.DetailsURL, c.TargetURL)})
 		}
 	}
