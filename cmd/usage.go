@@ -134,9 +134,9 @@ func parseUsageOutput(raw []byte) (usageReading, error) {
 
 func parseUsageJSON(raw []byte) (usageReading, error) {
 	type rawWindow struct {
-		UsedPercent *float64 `json:"usedPercent"`
-		ResetsAt    string   `json:"resetsAt"`
-		Pace        *float64 `json:"pace"`
+		UsedPercent json.RawMessage `json:"usedPercent"`
+		ResetsAt    json.RawMessage `json:"resetsAt"`
+		Pace        *float64        `json:"pace"`
 	}
 	type rawBucket struct {
 		FiveHour *rawWindow `json:"fiveHour"`
@@ -158,15 +158,35 @@ func parseUsageJSON(raw []byte) (usageReading, error) {
 		if w == nil {
 			return nil, nil
 		}
-		if w.UsedPercent == nil {
+		// Only an explicit pair of nulls denotes an unopened 5-hour window.
+		// Omitted fields and unknown weekly usage still fail closed.
+		idle := (name == "fiveHour" || strings.HasSuffix(name, ".fiveHour")) &&
+			bytes.Equal(bytes.TrimSpace(w.UsedPercent), []byte("null")) &&
+			bytes.Equal(bytes.TrimSpace(w.ResetsAt), []byte("null"))
+		var used *float64
+		if len(w.UsedPercent) > 0 {
+			if err := json.Unmarshal(w.UsedPercent, &used); err != nil {
+				return nil, fmt.Errorf("%s.usedPercent: %w", name, err)
+			}
+		}
+		if used == nil && !idle {
 			return nil, fmt.Errorf("%s.usedPercent is missing", name)
 		}
-		v := *w.UsedPercent
+		var v float64
+		if used != nil {
+			v = *used
+		}
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 			return nil, fmt.Errorf("%s.usedPercent %g is invalid", name, v)
 		}
 		var reset time.Time
-		if s := strings.TrimSpace(w.ResetsAt); s != "" {
+		var resetsAt string
+		if len(w.ResetsAt) > 0 {
+			if err := json.Unmarshal(w.ResetsAt, &resetsAt); err != nil {
+				return nil, fmt.Errorf("%s.resetsAt: %w", name, err)
+			}
+		}
+		if s := strings.TrimSpace(resetsAt); s != "" {
 			var err error
 			reset, err = time.Parse(time.RFC3339Nano, s)
 			if err != nil {
