@@ -140,10 +140,7 @@ func (r diskRun) String() string {
 	if r.locked {
 		return "disk: kept everything (another disk prune runs)"
 	}
-	verb := "freed"
-	if r.dry {
-		verb = "would free"
-	}
+	verb := freedVerb(r.dry)
 	parts := []string{fmt.Sprintf("disk: %s %s in %d cache/output/tmp/trash entries", verb, sizeStr(r.Freed+r.trees.freed()), r.Removed)}
 	if r.trees.kept != nil {
 		parts = append(parts, r.trees.String())

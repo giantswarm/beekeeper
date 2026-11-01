@@ -87,7 +87,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 		}
 		for _, e := range entries {
 			if e.Name() == checkoutMetadata {
-				r.Keep("contains a checkout")
+				r.Keep(whyCheckout)
 				return r
 			}
 		}
@@ -223,7 +223,7 @@ func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
 			return err
 		}
 		if d.Name() == checkoutMetadata {
-			why = "contains a checkout"
+			why = whyCheckout
 			return fs.SkipAll
 		}
 		if !d.Type().IsRegular() {
@@ -275,7 +275,7 @@ func inspect(path string) unit {
 			return err
 		}
 		if d.Name() == checkoutMetadata {
-			u.why = "contains a checkout"
+			u.why = whyCheckout
 			if d.IsDir() {
 				return fs.SkipDir
 			}

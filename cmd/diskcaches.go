@@ -140,10 +140,7 @@ func (r diskRun) holding(n int) string {
 // listing is the command's per-cache detail: each root, what it holds, what
 // the run freed or would free, and why it kept the rest.
 func (r diskRun) listing() string {
-	verb := "freed"
-	if r.dry {
-		verb = "would free"
-	}
+	verb := freedVerb(r.dry)
 	var b strings.Builder
 	for _, c := range r.caches {
 		if c.Held == 0 && c.Freed == 0 && len(c.Kept) == 0 && len(c.Errors) == 0 {
@@ -210,4 +207,12 @@ func uncoveredCaches(base string, entries []config.DiskCache, minBytes int64, n 
 		out = out[:n]
 	}
 	return out
+}
+
+// freedVerb says what a run did with the bytes it counts.
+func freedVerb(dry bool) string {
+	if dry {
+		return "would free"
+	}
+	return "freed"
 }

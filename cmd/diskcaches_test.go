@@ -25,6 +25,8 @@ func staleCache(t *testing.T, dir string, entries ...string) {
 	}
 }
 
+const testAppCache = "app"
+
 func customCaches(a *app) []diskCache {
 	return slices.DeleteFunc(resolveDiskCaches(a.diskCacheEntries()), func(c diskCache) bool { return c.name == config.DiskCacheTmp })
 }
@@ -32,7 +34,7 @@ func customCaches(a *app) []diskCache {
 func TestDiskPruneFreesZeroUntilACachePolicyNamesTheCache(t *testing.T) {
 	a, _ := diskFixture(t)
 	base := t.TempDir()
-	app := filepath.Join(base, "app")
+	app := filepath.Join(base, testAppCache)
 	staleCache(t, app, "a", "b")
 	m := diskMachine{}
 	read := func() (diskMachine, error) { return m, nil }
@@ -42,16 +44,16 @@ func TestDiskPruneFreesZeroUntilACachePolicyNamesTheCache(t *testing.T) {
 		t.Fatalf("freed without a policy: %s", r)
 	}
 
-	a.cfg.Disk.Caches = []config.DiskCache{{Name: "app", Path: app, OlderThan: config.Duration{Duration: 7 * 24 * time.Hour}}}
+	a.cfg.Disk.Caches = []config.DiskCache{{Name: testAppCache, Path: app, OlderThan: config.Duration{Duration: 7 * 24 * time.Hour}}}
 	m.caches = customCaches(a)
 	r := a.pruneDisk(true, false, read)
 	if r.Freed != 2<<20 || r.Removed != 2 || !exists(filepath.Join(app, "a")) {
 		t.Fatalf("dry run: %s", r)
 	}
-	if l := r.listing(); !strings.Contains(l, "app "+app+": holds 2 MiB, would free 2 MiB in 2 entries") {
+	if l := r.listing(); !strings.Contains(l, testAppCache+" "+app+": holds 2 MiB, would free 2 MiB in 2 entries") {
 		t.Fatalf("listing=%q", l)
 	}
-	if roots := resolveDiskCaches([]config.DiskCache{{Name: "outer", Path: base}, {Name: "app", Path: app}}); !slices.Equal(roots[0].policy.Nested, []string{app}) || roots[1].policy.Nested != nil {
+	if roots := resolveDiskCaches([]config.DiskCache{{Name: "outer", Path: base}, {Name: testAppCache, Path: app}}); !slices.Equal(roots[0].policy.Nested, []string{app}) || roots[1].policy.Nested != nil {
 		t.Fatalf("nested roots: %+v", roots)
 	}
 	r = a.pruneDisk(false, false, read)
@@ -81,9 +83,9 @@ func TestDiskCachePoliciesGlobBudgetAndReferences(t *testing.T) {
 
 func TestDiskCacheUnknownReferencesKeepPolicies(t *testing.T) {
 	a, _ := diskFixture(t)
-	app := filepath.Join(t.TempDir(), "app")
+	app := filepath.Join(t.TempDir(), testAppCache)
 	staleCache(t, app, "a")
-	a.cfg.Disk.Caches = []config.DiskCache{{Name: "app", Path: app, Regenerable: true}}
+	a.cfg.Disk.Caches = []config.DiskCache{{Name: testAppCache, Path: app, Regenerable: true}}
 	m := diskMachine{caches: customCaches(a), unknown: &proc.UnknownError{Processes: []proc.UnknownProcess{{PID: 1, Err: os.ErrPermission}}}}
 	r := a.pruneDisk(false, true, func() (diskMachine, error) { return m, nil })
 	if r.Freed != 0 || !exists(filepath.Join(app, "a")) || r.Kept["caches and tmp: "+keptReferencesUnknown] != 1 {
@@ -128,9 +130,9 @@ func TestDiskCacheBuiltinsAreDefaultEntries(t *testing.T) {
 
 func TestDiskPrunePressureNamesWhatHoldsTheSpace(t *testing.T) {
 	a, _ := diskFixture(t)
-	app := filepath.Join(t.TempDir(), "app")
+	app := filepath.Join(t.TempDir(), testAppCache)
 	staleCache(t, app, "a")
-	a.cfg.Disk.Caches = []config.DiskCache{{Name: "app", Path: app, OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}}}
+	a.cfg.Disk.Caches = []config.DiskCache{{Name: testAppCache, Path: app, OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}}}
 	m := diskMachine{caches: customCaches(a)}
 	r := a.pruneDisk(true, true, func() (diskMachine, error) { return m, nil })
 	if r.Freed != 0 || !strings.Contains(r.String(), "caches holding most: app 1 MiB (last write ") {
