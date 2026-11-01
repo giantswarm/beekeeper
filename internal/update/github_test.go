@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -54,6 +55,10 @@ func TestGitHubLookupBeyondAnonymousReleaseLimit(t *testing.T) {
 func stubGitHub(t *testing.T, current string, respond func(*http.Request) (int, string, http.Header)) *int {
 	t.Helper()
 	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	oldToken := githubToken
+	githubToken = func(context.Context) (string, error) { return "", errors.New("no login") }
+	t.Cleanup(func() { githubToken = oldToken })
 	oldTransport, oldVersion, oldCommit := http.DefaultTransport, currentVersion, currentCommit
 	t.Cleanup(func() { http.DefaultTransport, currentVersion, currentCommit = oldTransport, oldVersion, oldCommit })
 	currentVersion = func() string { return current }
@@ -361,5 +366,60 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 	res, err := Run(context.Background(), io.Discard, true)
 	if err != nil || res.Newer || res.Latest != runningTag {
 		t.Fatalf("result=%+v err=%v; want Latest=%s Newer=false", res, err, runningTag)
+	}
+}
+
+func TestGitHubLookupAuthentication(t *testing.T) {
+	const (
+		loginToken     = "test-login"
+		githubEnvToken = "test-github"
+		ghEnvToken     = "test-gh"
+	)
+	for _, tc := range []struct{ name, gh, github, login, want string }{
+		{name: "login", login: loginToken, want: loginToken},
+		{name: "gh environment", gh: ghEnvToken, github: githubEnvToken, login: loginToken, want: ghEnvToken},
+		{name: "github environment", github: githubEnvToken, login: loginToken, want: githubEnvToken},
+		{name: "anonymous"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubGitHub(t, githubRunningRC, func(r *http.Request) (int, string, http.Header) { return 200, "[]", nil })
+			t.Setenv("GH_TOKEN", tc.gh)
+			t.Setenv("GITHUB_TOKEN", tc.github)
+			githubToken = func(context.Context) (string, error) {
+				if tc.login == "" {
+					return "", errors.New("gh unavailable")
+				}
+				return tc.login, nil
+			}
+			requests := 0
+			http.DefaultTransport = releaseTransport(func(r *http.Request) (*http.Response, error) {
+				requests++
+				want := ""
+				if tc.want != "" {
+					want = "Bearer " + tc.want
+				}
+				if r.Header.Get("Authorization") != want {
+					t.Error("unexpected authentication source")
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("[]")), Request: r}, nil
+			})
+			_, _ = Run(context.Background(), io.Discard, true)
+			if requests != emptyRefAttempts {
+				t.Fatalf("got %d requests, want %d", requests, emptyRefAttempts)
+			}
+		})
+	}
+}
+
+func TestGitHubLookupRateLimitReset(t *testing.T) {
+	reset := time.Now().Add(time.Hour).Truncate(time.Second)
+	stubGitHub(t, githubRunningRC, func(r *http.Request) (int, string, http.Header) {
+		return 403, `{"message":"API rate limit exceeded"}`, http.Header{
+			"X-Ratelimit-Limit": {"60"}, "X-Ratelimit-Remaining": {"0"}, "X-Ratelimit-Reset": {fmt.Sprint(reset.Unix())},
+		}
+	})
+	_, err := Run(context.Background(), io.Discard, true)
+	if err == nil || !strings.Contains(err.Error(), "rate limit") || !strings.Contains(err.Error(), reset.UTC().Format(time.RFC3339)) || strings.Contains(err.Error(), "online?") {
+		t.Fatalf("expected rate limit and reset time, got %v", err)
 	}
 }

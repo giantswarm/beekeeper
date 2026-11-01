@@ -309,6 +309,9 @@ type UnreachableError struct {
 }
 
 func (e *UnreachableError) Error() string {
+	if errors.Is(e.Cause, context.DeadlineExceeded) {
+		return fmt.Sprintf("execution host deadline exceeded during %s: %v", e.Operation, e.Cause)
+	}
 	return fmt.Sprintf("execution host unreachable during %s: %v", e.Operation, e.Cause)
 }
 func (e *UnreachableError) Unwrap() error { return e.Cause }

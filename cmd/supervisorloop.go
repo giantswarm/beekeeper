@@ -1701,9 +1701,9 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement picks where one of the loop's starts runs, judged like
-// the start itself would be (review and selfHosted mark the reviewer
-// kinds). Without supervisor.hosts, or for a desk with no capacity.choices
+// startPlacement keeps reviewers on the coordinator, judged with their
+// review capacity flags. Workers use the placement rules below.
+// Without supervisor.hosts, or for a desk with no capacity.choices
 // (a remote start needs a model name from the pick), it stays local (the
 // zero value). Otherwise the local verdict (capacity --json, with the
 // start kind's flags) decides first: room keeps the start local unless
@@ -1721,6 +1721,14 @@ func (l *supervisorLoop) placesRemotely() bool {
 // hostsFirstLocal). Without the preference the local machine attempts it,
 // whose own start gate makes it wait when it has none either.
 func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
+	// Execution hosts have no relayed GitHub read-and-review path. Keep
+	// reviewers on the coordinator, without reserving any choices for hosts.
+	if review {
+		if !l.capacityRoom(ctx, startFlags(review, selfHosted)...) {
+			return startHost{}, errLoopLater
+		}
+		return startHost{}, nil
+	}
 	k := l.a.cfg.Supervisor
 	if !l.placesRemotely() {
 		// Nothing to place remotely: the local machine does what it did

@@ -19,11 +19,12 @@ starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
 stops. Remote wakes and resumes use durable ordered message receipts; inspect
 them with `agents messages` and reconcile with `agents hosts sync`. With
-`supervisor.hosts`, `supervisor loop` places its worker and reviewer starts
+`supervisor.hosts`, `supervisor loop` places its worker starts
 on these hosts when the coordinator is out of room (or always with
 `supervisor.hostsFirst`, for what a host can run: a repository no host maps
 and a choice of a harness no host has an adapter for start locally within
-`capacity.local.ceiling`).
+`capacity.local.ceiling`). Reviewers stay on the coordinator, where they can
+read GitHub and post the public review required for merge authorization.
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
@@ -1447,6 +1448,22 @@ Claimed by beekeeper desk platform-desk for session "0b5c1d2e-…" since 2026-11
   `board.claims.off` publishes and reads none.
 - Reads go through REST with each thread's ETag cached in the state folder: an unchanged thread costs no
   rate limit.
+
+## Work from repositories of different owners
+
+One configured project can hold native issue items from accessible repositories of
+several owners. Add an issue with `beekeeper board move <issue-url> "Up Next"`,
+then place it with `beekeeper board rank <issue-url> --top` (or `--before` /
+`--after`). GitHub's project permissions decide whether it can be added; a
+refused add returns the permission error without setting fields or ranking it.
+No second project or draft tracking item is needed.
+
+`board next` reads those native items together. Status order comes first, then
+position within each status, regardless of repository owner. The priority list
+still records and annotates epic ranks across owners; it does not override that
+status order. An unstaffed foreign epic in In Progress offers its open sub-issues
+through the same epic gate as any other epic. The supervisor loop starts the
+selected issue using the existing capacity verdict and harness choice.
 
 ## The priority list
 
