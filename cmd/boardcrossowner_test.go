@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const (
@@ -134,5 +136,121 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 				t.Fatalf("lost capacity model choice: %v", calls)
 			}
 		})
+	}
+}
+
+func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.T) {
+	r, busy := fillRig(t)
+	r.a.cfg.Board = config.Board{Owner: "personal", Project: 1}
+	snap := crossOwnerSnapshot(t, r.a.now)
+	// Place crossHome (priority 1) at the top of the board and crossBacklog
+	// (unranked) at the bottom, where an unranked backlog item sits.
+	snap.Items = []board.Item{snap.Items[1], snap.Items[2], snap.Items[3], snap.Items[0]}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{
+			Party: state.Party{Name: "worker-1", Session: "s-worker-1"},
+			Task:  crossHome,
+		}}
+		st.Records = []state.Record{
+			{Session: state.Party{Name: "worker-1", Session: "s-worker-1"}, Issue: crossHome, At: r.a.now},
+			{Session: state.Party{Name: "worker-epic", Session: "s-epic"}, Issue: crossChild, At: r.a.now},
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Worker-1, serving crossHome (priority 1), reports done and files a
+	// blocking/follow-up issue in another owner's repository (org/engine#88).
+	const filedRef = "org/engine#88"
+	const filedURL = "https://github.com/org/engine/issues/88"
+	now := r.a.now.UTC()
+	if err := r.a.store.Record(
+		event(state.Party{Name: "worker-1"}, superloop.VerbDone, "worker-1 done: finished %s", crossHome),
+		event(state.Party{Name: "worker-1"}, superloop.VerbProblem, "worker-1: filed %s to unblock %s", filedURL, crossHome),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	wasAnchor := readIntakeAnchor
+	readIntakeAnchor = func(_ context.Context, _ *app, ref, from string) (string, error) {
+		if ref == filedRef && from == crossHome {
+			return crossHome, nil
+		}
+		return crossEpic, nil
+	}
+	t.Cleanup(func() { readIntakeAnchor = wasAnchor })
+
+	original := r.answer
+	var dispatched []string
+	r.answer = func(args []string) (string, int) {
+		switch {
+		case args[0] == fillCapacityCommand && *busy > 0:
+			return fillNoRoomJSON, 0
+		case slices.Equal(args, []string{loopBoard, "move", filedRef, "backlog", "--intake"}):
+			// GitHub adds a new item at the very bottom of the board in Backlog
+			// (after crossBacklog).
+			snap.Items = append(snap.Items, board.Item{
+				Ref: filedRef, URL: filedURL, OnBoard: true, Status: "Backlog", Created: now, Updated: now,
+			})
+			return "added org/engine#88 to the board personal/1, Team X: → Backlog\n", 0
+		case len(args) == 5 && args[0] == loopBoard && args[1] == "rank" && args[2] == filedRef && args[3] == "--after":
+			anchor := args[4]
+			// Move filedRef right after anchor in snap.Items (as updateProjectV2ItemPosition does).
+			idx := slices.IndexFunc(snap.Items, func(it board.Item) bool { return it.Ref == filedRef })
+			if idx >= 0 {
+				it := snap.Items[idx]
+				snap.Items = slices.Delete(snap.Items, idx, idx+1)
+				aIdx := slices.IndexFunc(snap.Items, func(x board.Item) bool { return x.Ref == anchor })
+				if aIdx >= 0 {
+					snap.Items = slices.Insert(snap.Items, aIdx+1, it)
+				} else {
+					snap.Items = append(snap.Items, it)
+				}
+			}
+			return "ranked org/engine#88 on the board personal/1: after " + anchor + "\n", 0
+		case args[0] == loopBoard && args[1] == "next":
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Mark crossHome and crossForeign as served so Backlog is reached:
+			// because org/engine#88 was ranked right after crossHome (above
+			// crossBacklog at the bottom), board next offers org/engine#88 first!
+			sc := pickScope{
+				listed: r.a.now,
+				alive:  func(p state.Party) bool { return p.Session == "s-epic" || p.Session == "s-home" || p.Session == "s-foreign" },
+			}
+			st.Records = append(st.Records,
+				state.Record{Session: state.Party{Name: "worker-home", Session: "s-home"}, Issue: crossHome, At: r.a.now},
+				state.Record{Session: state.Party{Name: "worker-foreign", Session: "s-foreign"}, Issue: crossForeign, At: r.a.now},
+			)
+			res := nextFree(st, crossOwnerCandidates(snap, r.a.now), sc)
+			out, err := json.Marshal(res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(out), 0
+		case args[0] == agentsName && args[1] == agentStartName:
+			brief, err := os.ReadFile(args[3])
+			if err != nil {
+				t.Fatal(err)
+			}
+			dispatched = append(dispatched, string(brief))
+		}
+		return original(args)
+	}
+
+	r.pass(t)
+	if r.called(loopBoard, "move", filedRef, "backlog", "--intake") == nil {
+		t.Fatalf("loop did not intake %s onto the board: calls %v\n%s", filedRef, r.calls, r.out)
+	}
+	if r.called(loopBoard, "rank", filedRef, "--after", crossHome) == nil {
+		t.Fatalf("loop did not rank %s after %s: calls %v\n%s", filedRef, crossHome, r.calls, r.out)
+	}
+	if r.called("note", loopAdd) != nil {
+		t.Fatalf("person was asked about filed issue: calls %v", r.calls)
+	}
+	if *busy != 1 || len(dispatched) != 1 || !strings.Contains(dispatched[0], filedURL) {
+		t.Fatalf("board next did not offer ranked cross-owner issue %s ahead of bottom backlog: busy %d, briefs %v\n%s", filedURL, *busy, dispatched, r.out)
 	}
 }

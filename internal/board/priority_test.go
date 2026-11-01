@@ -365,3 +365,52 @@ const (
 	rankOneSecond    = "I1=2"
 	addPriorityIssue = "add ISSUE"
 )
+
+func TestAnnotateInheritsRankFromBlockedCandidate(t *testing.T) {
+	cands := []Candidate{
+		{Item: Item{Ref: "personal/tasks#1", OpenBlockedBy: []string{"org/engine#99"}}},
+		{Item: Item{Ref: "org/engine#99"}},
+	}
+	Annotate(cands, Ranks{"personal/tasks#1": 1}, func(string) string { return "" })
+	if cands[1].Priority != 1 || cands[1].PriorityOf != "personal/tasks#1" {
+		t.Fatalf("blocker candidate priority = %d of %q, want 1 of personal/tasks#1", cands[1].Priority, cands[1].PriorityOf)
+	}
+}
+
+func TestRankAnchorPlacesBlockingOrFollowUpIssueAfterHighRankedItem(t *testing.T) {
+	ctx := context.Background()
+	c := &Client{Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	c.GH = func(_ context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		switch {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(priorityMetaJSON), nil
+		case strings.Contains(q, "items(first:100"):
+			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[
+				{"id":"I1","priority":{"number":1},"status":{"name":"In Progress ⛏️"},"team":{"name":"X 🐝"},"content":{"number":1,"url":"https://github.com/o/r/issues/1","title":"epic 1","state":"OPEN","repository":{"nameWithOwner":"o/r"},"blockedBy":{"nodes":[{"number":50,"state":"OPEN","repository":{"nameWithOwner":"org/engine"}}]}}},{"id":"I2","priority":{"number":2},"status":{"name":"Up Next ➡️"},"team":{"name":"X 🐝"},"content":{"number":2,"url":"https://github.com/o/r/issues/2","title":"epic 2","state":"OPEN","repository":{"nameWithOwner":"o/r"}}}]}}}}}`), nil
+		case strings.Contains(q, "projectItems"):
+			if slices.Contains(args, "n=11") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB11","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[{"id":"IS11","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			return []byte(`{"data":{"repository":{"issue":{"id":"NEW","body":"","projectItems":{"nodes":[]}}}}}`), nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", q)
+	}
+
+	// 1. An issue that blocks epic 1 (priority 1) anchors right after epic 1.
+	if got, err := c.RankAnchor(ctx, "org/engine#50", ""); err != nil || got != "o/r#1" {
+		t.Fatalf("RankAnchor(blocker of epic 1) = %q, %v; want o/r#1", got, err)
+	}
+
+	// 2. An issue filed from o/r#11 (a sub-issue on the board under epic 1)
+	// anchors right after o/r#11.
+	if got, err := c.RankAnchor(ctx, "org/engine#51", "o/r#11"); err != nil || got != "o/r#11" {
+		t.Fatalf("RankAnchor(filed from o/r#11) = %q, %v; want o/r#11", got, err)
+	}
+
+	// 3. A general issue not tied to a higher-ranked item anchors after the
+	// last ranked epic (o/r#2) instead of at the bottom of the board.
+	if got, err := c.RankAnchor(ctx, "org/engine#52", ""); err != nil || got != "o/r#2" {
+		t.Fatalf("RankAnchor(general issue) = %q, %v; want o/r#2", got, err)
+	}
+}

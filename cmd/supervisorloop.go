@@ -493,6 +493,13 @@ its key first in the detail):
             A done report's problems arrive together before the done settles.
             No decision note or thread reference is needed. A problem naming
             its issue is already filed; the agent keeps its task
+  intake    an issue the desk filed (a problem report's issue URL, a
+            follow-up named in a report, an issue a session created with gh
+            issue create): put on the configured board in Backlog (board
+            move --intake), unless it already sits on another board where it
+            is being worked, and ranked from the priority list (board rank
+            --after) right after the high-ranked epic or item it blocks or
+            follows from
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -805,7 +812,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
 		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
-		Open: func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration}
+		Open: func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
+		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
+	if in.Board {
+		in.Filed = l.filedIssues(st)
+	}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
@@ -1069,6 +1080,8 @@ func would(act superloop.Action) string {
 		return "install " + act.Version
 	case superloop.KindClassify:
 		return fmt.Sprintf("send its %s to the guide", act.Event.Verb)
+	case superloop.KindIntake:
+		return fmt.Sprintf("put %s on the board in Backlog and rank it", act.URL)
 	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
@@ -1133,6 +1146,8 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 			logged("agents.remove", func(d string) bool { return d == c.target })
 	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
+	case superloop.KindIntake:
+		done = logged("board.move", opens) || logged("board.rank", opens)
 	}
 	if !done {
 		return "", false, nil
@@ -1424,6 +1439,8 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.classify(ctx, st, act)
 	case superloop.KindFile:
 		return l.toFile(ctx, st, act)
+	case superloop.KindIntake:
+		return l.intakeIssue(ctx, st, act)
 	}
 	return "", fmt.Errorf("no transition for %s", act.Kind)
 }
@@ -2169,9 +2186,107 @@ const fileReportSeparator = "; file in the owning repositories:\n"
 
 // toFile leaves the full finding in the settled transition's event. The
 // guide's feed reads that event once; no decision or thread is needed.
-func (l *supervisorLoop) toFile(_ context.Context, _ *state.State, act superloop.Action) (string, error) {
+func (l *supervisorLoop) toFile(_ context.Context, st *state.State, act superloop.Action) (string, error) {
 	e := *act.Event
-	return fmt.Sprintf("%s reported at %s%s%s", e.Agent, e.At.UTC().Format(time.RFC3339), fileReportSeparator, act.Message), nil
+	from := ""
+	if ref := agentRef(st, e.Agent); ref != "" && !strings.Contains(act.Message, ref) {
+		from = " (from " + ref + ")"
+	}
+	return fmt.Sprintf("%s reported at %s%s%s%s", e.Agent, e.At.UTC().Format(time.RFC3339), from, fileReportSeparator, act.Message), nil
+}
+
+// readIntakeAnchor resolves the board item that ref should be ranked right
+// after (Client.RankAnchor).
+var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (string, error) {
+	return a.boardClient().RankAnchor(ctx, ref, from)
+}
+
+// filedIssues reads the issues created by sessions active since the loop
+// started (Work.Created), with the item or pull request each session was
+// working on when it filed the issue.
+func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
+	sessions, _, err := loopSessions(l.a)
+	if err != nil || len(sessions) == 0 {
+		return nil
+	}
+	var out []superloop.FiledIssue
+	for _, s := range sessions {
+		if !s.LastActive.IsZero() && s.LastActive.Before(l.since) {
+			continue
+		}
+		w, _ := harnessForSession(s).ReadTranscript(l.a, s, l.a.now)
+		if len(w.Created) == 0 {
+			continue
+		}
+		p := s.Party()
+		agent := p.Name
+		from := ""
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			agent = st.Agents[i].Name
+			from = agentRef(st, agent)
+		} else if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(p) {
+			agent = "guide"
+		}
+		if from == "" {
+			for _, list := range [][]string{w.Refs, w.Mentioned} {
+				for _, r := range list {
+					if !slices.ContainsFunc(w.Created, func(c string) bool { return strings.EqualFold(c, r) }) {
+						from = r
+						break
+					}
+				}
+				if from != "" {
+					break
+				}
+			}
+		}
+		for _, c := range w.Created {
+			r, ok := parseRef(c)
+			if !ok {
+				continue
+			}
+			ref := refName(r)
+			url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
+			out = append(out, superloop.FiledIssue{Ref: ref, URL: url, Agent: agent, From: from})
+		}
+	}
+	return out
+}
+
+// intakeIssue puts act.Ref onto the configured board in Backlog, unless it
+// already sits on another board where it is being worked, and ranks it from
+// the priority list right after the high-ranked epic or item it blocks or
+// follows from.
+func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if lowBudget(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+		return "", errLoopLater
+	}
+	if err := l.claim(act, act.Ref); err != nil {
+		return "", err
+	}
+	out, err := l.run(ctx, loopBoard, "move", act.Ref, "backlog", "--intake")
+	if err != nil {
+		return "", err
+	}
+	l.boardNone = nil
+	l.fillPause = fillPause{}
+	moveLine := oneLine(out)
+	if strings.HasPrefix(moveLine, "left ") {
+		return moveLine, nil
+	}
+	from := cmp.Or(act.Message, agentRef(st, act.Agent))
+	anchor, err := readIntakeAnchor(ctx, l.a, act.Ref, from)
+	if (err != nil || anchor == "") && from != "" {
+		if r, ok := parseRef(from); ok && !strings.EqualFold(refName(r), act.Ref) {
+			anchor = refName(r)
+		}
+	}
+	if anchor != "" && !strings.EqualFold(anchor, act.Ref) {
+		if rankOut, rankErr := l.run(ctx, loopBoard, "rank", act.Ref, "--after", anchor); rankErr == nil {
+			return fmt.Sprintf("%s; %s", moveLine, oneLine(rankOut)), nil
+		}
+	}
+	return moveLine, nil
 }
 
 // agentRef is the issue or pull request the agent works: what it is

@@ -545,11 +545,12 @@ type tokenUsage struct {
 }
 
 type streamItem struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Command  string `json:"command"`
-	ExitCode *int   `json:"exit_code"`
+	ID               string `json:"id"`
+	Type             string `json:"type"`
+	Text             string `json:"text"`
+	Command          string `json:"command"`
+	AggregatedOutput string `json:"aggregated_output"`
+	ExitCode         *int   `json:"exit_code"`
 }
 
 func readHead(path string) (head, error) {
@@ -983,6 +984,9 @@ func ReadTranscript(path string, now time.Time, sessionModel ...string) (claude.
 			if json.Unmarshal(l.Item, &si) == nil && si.Type == "command_execution" {
 				argsJSON, _ := json.Marshal(map[string]string{keyCommand: si.Command})
 				acts.Call(si.ID, toolBash, argsJSON, cwd)
+				if si.AggregatedOutput != "" {
+					acts.Result(si.ID, si.AggregatedOutput)
+				}
 				isGH := claude.InvokesGitHub(si.Command)
 				isErr := si.ExitCode != nil && *si.ExitCode != 0
 				for _, c := range counts {

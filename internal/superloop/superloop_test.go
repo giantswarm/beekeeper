@@ -1058,3 +1058,44 @@ func TestAReviewerIsRetiredWhateverItsWorkerServes(t *testing.T) {
 		t.Errorf("done = %+v", d)
 	}
 }
+
+func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
+	in := Input{
+		Board: true,
+		Desk:  Desk{Orgs: []string{"personal", "org"}},
+		Workers: []Worker{
+			{Name: worker, Started: true, Serves: "personal/tasks#1"},
+		},
+		Events: []Event{
+			{At: t1, Verb: VerbDone, Agent: worker, Detail: worker + " done: finished"},
+			{At: t1, Verb: VerbProblem, Agent: worker, Detail: worker + ": filed https://github.com/org/engine/issues/42 for the blocker"},
+		},
+		Filed: []FiledIssue{
+			{Ref: "org/engine#43", URL: "https://github.com/org/engine/issues/43", Agent: "guide", From: "personal/tasks#1"},
+			{Ref: "stranger/repo#9", URL: "https://github.com/stranger/repo/issues/9", Agent: "guide"},
+		},
+	}
+	acts := Plan(in)
+	var kinds, keys, origins []string
+	for _, a := range acts {
+		if a.Kind == KindIntake {
+			kinds = append(kinds, a.Kind)
+			keys = append(keys, a.Key)
+			origins = append(origins, a.Message)
+		}
+	}
+	if !slices.Equal(keys, []string{"intake org/engine#42", "intake org/engine#43"}) ||
+		!slices.Equal(origins, []string{"personal/tasks#1", "personal/tasks#1"}) {
+		t.Fatalf("intake actions = %+v", acts)
+	}
+	// Once done is taken, intake still precedes KindNext in the pass.
+	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone })
+	if i < 0 {
+		t.Fatalf("no done action in %+v", acts)
+	}
+	in.Taken = taken(t, t1, acts[i])
+	acts = Plan(in)
+	if len(acts) < 3 || acts[0].Kind != KindIntake || acts[1].Kind != KindIntake || acts[2].Kind != KindNext {
+		t.Fatalf("order = %+v, want intake actions before next", acts)
+	}
+}

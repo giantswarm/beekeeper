@@ -18,16 +18,25 @@ import (
 // issues and pull requests it creates come back as. Text it reads or writes
 // is no act: a ref it only quotes is a mention.
 type Acts struct {
-	n        int
-	refs     map[string]int
-	repos    map[string]int
-	creates  map[string]bool
-	checkout map[string]string
+	n            int
+	refs         map[string]int
+	repos        map[string]int
+	creates      map[string]bool
+	createIssues map[string]bool
+	created      map[string]int
+	checkout     map[string]string
 }
 
 // NewActs starts an empty collection.
 func NewActs() *Acts {
-	return &Acts{refs: map[string]int{}, repos: map[string]int{}, creates: map[string]bool{}, checkout: map[string]string{}}
+	return &Acts{
+		refs:         map[string]int{},
+		repos:        map[string]int{},
+		creates:      map[string]bool{},
+		createIssues: map[string]bool{},
+		created:      map[string]int{},
+		checkout:     map[string]string{},
+	}
 }
 
 func (a *Acts) repo(repo string) {
@@ -70,12 +79,46 @@ func (a *Acts) Result(id, text string) {
 	if a.creates[id] {
 		a.refsIn(text)
 	}
+	if a.createIssues[id] {
+		for _, r := range createdIssuesIn(text) {
+			repo, num, _ := strings.Cut(r, "#")
+			a.ref(repo, num)
+			a.created[repo+"#"+num] = a.n
+		}
+	}
+}
+
+func createdIssuesIn(text string) []string {
+	var out []string
+	for i := 0; ; {
+		j := strings.Index(text[i:], "github.com")
+		if j < 0 {
+			break
+		}
+		at := i + j
+		i = at + len("github.com")
+		if i >= len(text) || (text[i] != '/' && text[i] != ':') {
+			continue
+		}
+		repo, n := ownerRepo(text[i+1:])
+		if repo == "" {
+			continue
+		}
+		rest := text[i+1+n:]
+		if num := leadingDigits(strings.TrimPrefix(rest, "/issues/")); strings.HasPrefix(rest, "/issues/") && num != "" {
+			ref := repo + "#" + num
+			if !slices.Contains(out, ref) {
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
 }
 
 // Work is what the session acted on, with the refs window mentions besides
 // as Mentioned.
 func (a *Acts) Work(window string) Work {
-	w := Work{Repos: byRecency(a.repos), Refs: byRecency(a.refs)}
+	w := Work{Repos: byRecency(a.repos), Refs: byRecency(a.refs), Created: byRecency(a.created)}
 	for _, r := range scanWork(window).Refs {
 		if _, ok := a.refs[r]; !ok {
 			w.Mentioned = append(w.Mentioned, r)
@@ -119,9 +162,12 @@ func (a *Acts) tool(id, name string, in map[string]any) {
 		}
 	}
 	method, _ := in["method"].(string)
-	if strings.HasSuffix(name, "create_pull_request") || strings.HasSuffix(name, "create_issue") ||
-		strings.HasSuffix(name, "issue_write") && method == "create" {
+	isIssue := strings.HasSuffix(name, "create_issue") || strings.HasSuffix(name, "issue_write") && method == "create"
+	if strings.HasSuffix(name, "create_pull_request") || isIssue {
 		a.creates[id] = true
+		if isIssue {
+			a.createIssues[id] = true
+		}
 	}
 }
 
@@ -232,6 +278,9 @@ func (a *Acts) cli(id string, w []string, dir string) {
 	switch {
 	case tool == "gh" && (sub == "pr" || sub == "issue") && verb == "create":
 		a.creates[id] = true
+		if sub == "issue" {
+			a.createIssues[id] = true
+		}
 	case tool == "gh" && (sub == "pr" || sub == "issue") && verb != "list" && verb != "status":
 		nums = nums[:min(1, len(nums))]
 	case tool == devctlComm && sub == "pr", pr != "":
