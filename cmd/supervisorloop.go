@@ -617,7 +617,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if len(l.postMerge) > 0 {
 		sessions, _, sessionErr := a.sessions()
 		for i, ag := range st.Agents {
-			if sessionErr != nil {
+			if sessionErr != nil && !platform.Missing(sessionErr) {
 				in.Workers[i].LastActive = a.now // never retire on a failed observation
 			} else if s, ok := claude.Live(sessions, ag.Party); ok {
 				in.Workers[i].LastActive = s.LastActive
