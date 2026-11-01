@@ -67,7 +67,7 @@ plain file (the Codex CLI's auth.json, for one) is read in beekeeper's
 process, the file under a directory of secret.fileRoots and never written,
 moved or deleted. A credential-store source (store://<entry>[#<field>]) is
 read by the broker with secret.store.read, even without secret.session; the
-default field is the secret/password, an explicit field adds --attribute
+default field is the secret/password, an explicit field adds --attributes
 <field> before the entry. A {field} argument template in secret.store.read
 selects it for other adapters instead (password when omitted). These
 sources work with copy, compare and fingerprint. A SOPS

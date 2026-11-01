@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	storeUsernameAttribute = "username"
+	storeAttributeOption   = "--attributes"
 	storeDatabase          = "database"
 	storeEntry             = "applications/service"
 	credentialStoreRef     = "store://" + storeEntry //nolint:gosec // a reference, no credential
@@ -45,7 +47,9 @@ func TestStoreSourcesCopyCompareFingerprint(t *testing.T) {
 		want  []string
 	}{
 		{"", []string{storeReader, storeDatabase}, []string{storeDatabase, storeEntry}},
-		{"username", []string{storeReader, storeDatabase}, []string{storeDatabase, "--attribute", "username", storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, storeDatabase}, []string{storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, "-a", storePasswordAttribute, storeDatabase}, []string{storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
+		{storeUsernameAttribute, []string{storeReader, "--attributes=password", storeDatabase}, []string{storeDatabase, storeAttributeOption, storeUsernameAttribute, storeEntry}},
 		{"custom attribute", []string{storeReader, "-a", "{field}", storeDatabase}, []string{"-a", "custom attribute", storeDatabase, storeEntry}},
 		{"", []string{storeReader, "-a", "{field}"}, []string{"-a", storePasswordAttribute, storeEntry}},
 	} {

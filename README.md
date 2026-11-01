@@ -803,7 +803,8 @@ and `file://` in `secret copy` (SOPS paths, multi-value copies, consumers after 
 `ssh://` destinations and `--to-secret`), `secret compare` and `secret fingerprint`.
 These reads always run in the broker, even without `secret.session` or a shared
 vault. The default field is the store's secret/password. An explicit field adds
-`--attribute <field>` before the entry, as KeePassXC accepts. For other adapters,
+`--attributes <field>` before the entry, replacing a configured `-a`/`--attributes`
+selector so KeePassXC returns only the requested attribute. For other adapters,
 put `{field}` in an argument of `secret.store.read`: it is replaced with the
 requested field, or `password` when omitted, and no attribute option is added.
 The entry remains the final argument; no shell evaluates it. Store-command errors

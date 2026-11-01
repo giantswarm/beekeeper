@@ -39,7 +39,7 @@ func NeedsStore(args []string) bool {
 
 // readStore never returns the store command's diagnostics: even an error can
 // carry an attribute's value. A field template supports arbitrary adapters;
-// without one an explicit field uses KeePassXC's --attribute option.
+// without one an explicit field uses KeePassXC's --attributes option.
 func (o *Ops) readStore(ctx context.Context, r Ref) (string, error) {
 	if len(o.Store.Read) == 0 {
 		return "", fmt.Errorf("%s: configure secret.store.read to read the person's credential store", r)
@@ -57,7 +57,20 @@ func (o *Ops) readStore(ctx context.Context, r Ref) (string, error) {
 		}
 	}
 	if r.Path != "" && !template {
-		argv = append(argv, "--attribute", field)
+		// KeePassXC permits repeated attributes and prints every one. Replace
+		// a configured selector so the default password is not copied as well.
+		args := []string{argv[0]}
+		for i := 1; i < len(argv); i++ {
+			if argv[i] == "-a" || argv[i] == "--attributes" {
+				i++
+				continue
+			}
+			if strings.HasPrefix(argv[i], "--attributes=") || strings.HasPrefix(argv[i], "-a=") {
+				continue
+			}
+			args = append(args, argv[i])
+		}
+		argv = append(args, "--attributes", field)
 	}
 	raw, err := o.storeRun(ctx, argv, r.Store)
 	if err != nil {
