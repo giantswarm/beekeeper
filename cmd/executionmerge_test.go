@@ -150,12 +150,16 @@ func TestExecutionMergeGrantRequiresSupervisorAndReviewRound(t *testing.T) {
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{approved}}, nil
 	}
-	for _, p := range []state.Party{{Name: r.Name}, session} {
+	for _, p := range []state.Party{{Session: "s-worker", Name: r.Name}, session} {
 		if _, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, p); err == nil {
 			t.Fatalf("%q impersonated the supervisor loop", p.Name)
 		}
 	}
-	grant, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, loopParty)
+	// The loop's own --as call as caller() builds it: the configured person,
+	// team and host stamped on its name.
+	stamped := loopParty
+	stamped.Person, stamped.Team, stamped.Host = "Pat", ourTeam, "desk-host"
+	grant, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, stamped)
 	if err != nil {
 		t.Fatal(err)
 	}

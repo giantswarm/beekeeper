@@ -109,8 +109,8 @@ func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, reposi
 		return grant, err
 	}
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		if issuer != loopParty {
-			return nil, refused("only the supervisor loop can issue merge authority")
+		if !supervising(issuer) {
+			return nil, refused("only the supervisor loop or a person (--as) issues merge authority, never a session")
 		}
 		if err := a.executionMergeLive(ctx, st, use); err != nil {
 			return nil, err
@@ -157,8 +157,8 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 			}
 			var grant execution.MergeAuthorization
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if me != loopParty {
-					return nil, refused("only the supervisor loop controls merge authorizations")
+				if !supervising(me) {
+					return nil, refused("only the supervisor loop or a person (--as) controls merge authorizations, never a session")
 				}
 				grant, err = execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), args[0])
 				if err != nil {

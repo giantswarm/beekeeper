@@ -93,8 +93,8 @@ RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
 by hand, also for a park without --on. A new task or agents idle ends the
-park. A session off the roster parks too (a supervisor started by hand, any
-session that never registered): its park is kept apart from the roster,
+park. A session off the roster parks too (any session that never
+registered): its park is kept apart from the roster,
 settles the same way and resumes it by its session id; one whose session
 is gone by then gets no wake and one line, and the issues it served go
 back to the board. A roster agent without a task is refused: it has

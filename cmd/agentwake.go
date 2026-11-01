@@ -36,7 +36,7 @@ route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
 
 A session off the roster is reached the same way: a role's holder by its
-name or ids (a supervisor started by hand), or any session by its own id (a
+name or ids, or any session by its own id (a
 CLI session id, a desktop local_ id, an omp_/agy_/codex_ id). This is how
 the outcome of a gated wait or a settled park reaches a waiter that never
 registered. A session that no longer exists (no transcript to resume, no

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -18,8 +19,9 @@ func (a *app) supervisorCmd() *cobra.Command {
 		Long: `The supervisor is the supervisor loop (` + "`beekeeper supervisor loop`" + `), which
 the beekeeper-supervisor-loop user service runs: beekeeper install always
 installs it. No session holds the supervisor's role and nothing starts or
-relays one: while the loop is down the standby watch restarts its service,
-or says SUPERVISOR LOOP DOWN and notifies until it runs again.
+relays one: while the loop is down the standby watch restarts its systemd
+service (Linux; on macOS launchd restarts a failed loop itself), and says
+SUPERVISOR LOOP DOWN and notifies until it runs again.
 
 Without a subcommand, shows whether the loop runs (exit 3 when it does not).`,
 		Args: cobra.NoArgs,
@@ -45,6 +47,18 @@ func (a *app) loopPID() int {
 	return pid
 }
 
+// loopServiceHint is the command that shows the loop's user service on
+// this platform.
+func loopServiceHint() string {
+	if runtime.GOOS == "darwin" {
+		return "`launchctl list " + loopLaunchdLabel + "`"
+	}
+	return "`systemctl --user status " + loopUnit + "`"
+}
+
+// loopLaunchdLabel is the loop's launchd agent on macOS.
+const loopLaunchdLabel = "com.giantswarm.beekeeper.supervisor-loop"
+
 // supervisorView is the supervisor's status for --json.
 type supervisorView struct {
 	Loop bool `json:"loop"`
@@ -58,7 +72,7 @@ func (a *app) supervisorStatus() error {
 		_ = a.printJSON(supervisorView{Loop: pid > 0, PID: pid})
 	}
 	if pid == 0 {
-		return refused("the supervisor loop does not run: the standby watch restarts the %s service (`systemctl --user status %s`)", loopUnit, loopUnit)
+		return refused("the supervisor loop does not run (%s)", loopServiceHint())
 	}
 	if a.json {
 		return nil

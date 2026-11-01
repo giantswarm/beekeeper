@@ -61,6 +61,7 @@ notify:
   quietHours: "22:00-07:00"
   urgency: {due: critical}
 guide: {relayAt: 1.5M}
+# retired supervisor-session keys: an older config still loads, they are ignored
 supervisor: {loop: true, relayAt: 1.5M, skill: beekeeper:supervise, restartGrace: 30s}
 `
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {

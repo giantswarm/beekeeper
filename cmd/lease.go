@@ -111,8 +111,7 @@ func (a *app) servedNode(res string) bool {
 // claimGateOpen says whether the claim of res would pass the lease's gate
 // right now, read without holding the state's lock: the machine's model
 // drains and switches for a claim only once its gate stands, so a caller
-// queued behind an earlier grant, behind the supervisor's gate or under an
-// upgrade hold never takes the model down for a lease it will not get. The
+// queued behind an earlier grant or under an upgrade hold never takes the model down for a lease it will not get. The
 // claim's own pass repeats the gate under the lock; a caller that stands
 // open here and falls there is refused before any lease record is written.
 func (a *app) claimGateOpen(res string, me state.Party, sessions []*claude.Session) bool {
@@ -283,8 +282,7 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 	dir := lease.Dir(a.cfg.LeaseDir)
 	// A node a self-hosted mode occupies is a constraint. The claim's gate
 	// runs first, on a read-only pass: a caller that stands queued behind
-	// an earlier grant, behind the supervisor's gate or under an upgrade
-	// hold, and a caller whose node another party holds, never lower the
+	// an earlier grant or under an upgrade hold, and a caller whose node another party holds, never lower the
 	// model's ceiling, never drain it and never take it down for a lease
 	// they will not get. Only with the gate standing does the model drain
 	// and the platform's own switch run; the claim's own pass re-checks
@@ -296,8 +294,7 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		// The node's constraint runs up to and past the lease's own gate:
 		// a holder of the node stands behind the drain its constraint
 		// asked for (prepare says the very refusal), and a caller queued
-		// behind an earlier grant, behind the supervisor's gate or under
-		// an upgrade hold drains nothing — the gate open check reads the
+		// behind an earlier grant or under an upgrade hold drains nothing — the gate open check reads the
 		// grants without the state's lock, so the model's reader and the
 		// platform's switch command never run under it. The claim's own
 		// pass repeats the gate and the holder check under the lock.
@@ -431,9 +428,12 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 	return msg, err
 }
 
-// supervising says whether me may order the grant queue: the supervisor
-// loop, or a person (no session), never a session.
-func supervising(me state.Party) bool { return me == loopParty || me.Session == "" }
+// supervising says whether me acts with the supervisor's authority (the
+// grant queue, merge authorizations): a caller with no session, that is the
+// supervisor loop or a person (--as), never a session. caller() stamps the
+// configured person, team and host on every party, so the loop's own
+// --as calls are matched by that, not by equality with loopParty.
+func supervising(me state.Party) bool { return me.Session == "" && me.HostSession == "" }
 
 // claimBudget is the GiB a claim of res carries: set only on the model
 // server, within its maximum.

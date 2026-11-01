@@ -40,7 +40,7 @@ func (a *app) wakeParty(st *state.State, q string) (state.Agent, bool, error) {
 }
 
 // offRosterParty is the session off the roster q addresses: a role's holder
-// by its name or ids (a supervisor started by hand), a session parked off the
+// by its name or ids, a session parked off the
 // roster, or a session by its own id (a CLI session id, a desktop local_ id,
 // a harness's omp_/agy_/codex_ id), which the caller of a gated wait or a
 // park recorded as its owner.

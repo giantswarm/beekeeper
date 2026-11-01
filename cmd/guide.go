@@ -490,7 +490,8 @@ relay and the queue. --prompt prints the successor's session prompt instead:
 the configured instructions (guide.skill's bare slash command, "/guide you
 take over …", or guide.instructions), the
 priorities and holds read from GitHub and the epics with their plans (as
-beekeeper handover --prompt shows them; a failed read is shown as not read),
+beekeeper handover --section priorities shows them; a failed read is shown
+as not read),
 the queue, an open relay and the commands that read the live values; no
 other live value. Both carry the desk's standing
 instructions in full: standing.md in the state directory. A caller that has read

@@ -139,8 +139,8 @@ and are named once per watch in one line each for UPGRADES and ALERTS.
 
 The supervisor is the supervisor loop, no session. Once the loop has not
 run for two minutes every watch says SUPERVISOR LOOP DOWN once, and
-SUPERVISOR LOOP BACK when it runs again; the standby watch restarts its
-service meanwhile (see --standby).
+SUPERVISOR LOOP BACK when it runs again; on Linux the standby watch
+restarts its systemd service meanwhile (see --standby).
 
 Every poll but --once's runs beekeeper doctor in the background (its last
 run still going, the poll skips it): one DOCTOR line per agent it took off
@@ -201,8 +201,9 @@ again by the next poll.
 beekeeper-notify user unit): while the loop runs it leaves the notes,
 timers, session records and relays to the loop's watch, and it never reads
 the alerts, so it takes nothing from the loop's view. While the loop does
-not run, it starts the beekeeper-supervisor-loop service again, at most
-once a minute and never during a stop (SUPERVISOR LOOP RESTARTED); it never
+not run, it starts the beekeeper-supervisor-loop systemd service again
+(Linux only: on macOS launchd restarts a failed loop itself), at most once
+a minute and never during a stop (SUPERVISOR LOOP RESTARTED); it never
 starts a session for the supervisor. A scratch configuration's watch
 restarts no service. It reads the upgrades and sets and lifts their holds
 only while no loop's watch has begun an upgrade cycle within five
@@ -2183,8 +2184,8 @@ func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 		return false
 	}
 	key := "loop@" + w.stand.loopSince.UTC().Format(time.RFC3339)
-	l := fmt.Sprintf("SUPERVISOR LOOP DOWN: the supervisor loop does not run since %s; no pull request is reviewed or merged on its go and no worker starts until it runs (`systemctl --user status %s`)%s",
-		clock(w.now, w.stand.loopSince), loopUnit, restart)
+	l := fmt.Sprintf("SUPERVISOR LOOP DOWN: the supervisor loop does not run since %s; no pull request is reviewed or merged on its go and no worker starts until it runs (%s)%s",
+		clock(w.now, w.stand.loopSince), loopServiceHint(), restart)
 	if !w.stand.loopDown {
 		w.stand.loopDown = true
 		w.emitNow("supervisor", "%s", l)
@@ -2199,7 +2200,7 @@ func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 func (w *watcher) restartLoop(ctx context.Context) string {
 	unit := w.stand.loopUnit
 	if unit == nil {
-		return "; this machine has no unit launcher to restart it"
+		return "; this watch restarts no service here (only the standby, on Linux with systemd)"
 	}
 	switch unit.state(ctx) {
 	case unitActive, "activating", "reloading":

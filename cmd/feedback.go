@@ -67,7 +67,7 @@ func (w *watcher) tendFeedback(ctx context.Context) {
 
 // readFeedback delivers the replies of each report's author in its thread
 // that came since the last delivered one, oldest first: to the agent a
-// reply names, else to the supervisor. A delivered reply gets the
+// reply names, else to the guide. A delivered reply gets the
 // feedbackEmoji reaction; one not delivered is read again next time.
 // Threads older than feedback.window are dropped. It runs beside the poll on
 // a, the watch's app as of its start with its output discarded.

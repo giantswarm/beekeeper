@@ -239,7 +239,7 @@ func (a *app) printSupervisor(v *view) {
 		_, _ = fmt.Fprintf(a.out, "Supervisor: the supervisor loop runs (PID %d).\n", v.SupervisorLoop)
 		return
 	}
-	_, _ = fmt.Fprintf(a.out, "Supervisor: the supervisor loop does not run (`systemctl --user status %s`).\n", loopUnit)
+	_, _ = fmt.Fprintf(a.out, "Supervisor: the supervisor loop does not run (%s).\n", loopServiceHint())
 }
 
 // eventText is one event of the log in a line.

@@ -11,9 +11,10 @@ const SendMessageTool = "SendMessage"
 // desktop routes (and caps) itself.
 const desktopPrefix = "local_"
 
-// sendMessage decides a SendMessage call. A message to a role ("the
-// supervisor", "the guide") goes to the session holding the role now: Role
-// names it, so no brief has to name a run that a relay makes stale. A
+// sendMessage decides a SendMessage call. A message to "the guide" goes to
+// the session holding the role now: Role names it, so no brief has to name
+// a run that a relay makes stale. One to "the supervisor" is refused by
+// Role: the supervisor is the supervisor loop, which no session holds. A
 // message by a name the holder carries or carried on the roster (Holds) goes
 // the same way, whatever its desktop titles the session now. A
 // message to a desktop session id (local_…) goes through Claude Desktop,

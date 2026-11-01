@@ -308,7 +308,8 @@ an acknowledged explicit stop; recovery does not silently upgrade their contract
 
 ## Live merge authorizations
 
-Only the coordinating supervisor issues or revokes authorizations. A green exact
+Only the supervisor loop, or a person on the coordinator (`--as <person>`), issues or
+revokes authorizations; a session never does. A green exact
 head and an authenticated independent desk review result are prerequisites. The
 component records the exact reviewer session when the supervisor starts the round.
 That session must complete with the same `Review: approved` or
@@ -322,12 +323,12 @@ approval comment alone grants nothing; `--as` cannot submit the reviewer's resul
 Issuance and live use require that same persisted result, and grants pin the
 round ID, review ID and authenticated body digest. Edited reviews and new rounds invalidate old grants. Older
 rounds without component-recorded reviewer provenance need a fresh review. The supervisor loop issues a two-minute grant when it gives a
-remote worker merge go; a supervisor can also issue or revoke it explicitly:
+remote worker merge go; a person can also issue or revoke it explicitly:
 
 ```sh
-beekeeper agents authorizations grant worker example/repository 42 --head <reviewed-head>
-beekeeper agents authorizations inspect <authorization-id>
-beekeeper agents authorizations revoke <authorization-id>
+beekeeper --as <person> agents authorizations grant worker example/repository 42 --head <reviewed-head>
+beekeeper --as <person> agents authorizations inspect <authorization-id>
+beekeeper --as <person> agents authorizations revoke <authorization-id>
 ```
 
 The remote worker uses the component command supplied with its go:
@@ -356,11 +357,11 @@ never retries a merge mutation. A moved head needs a fresh review and go. A cach
 grant provides no authority without this live service. Both host and coordinator
 retain the authorization ID in their audit evidence.
 
-A lost reply is an uncertain outcome, not permission to retry a merge. The supervisor
-queries the result and retains the consumed authorization:
+A lost reply is an uncertain outcome, not permission to retry a merge. A person on the
+coordinator queries the result and retains the consumed authorization:
 
 ```sh
-beekeeper agents authorizations reconcile <authorization-id>
+beekeeper --as <person> agents authorizations reconcile <authorization-id>
 ```
 
 Reconciliation never issues another merge. If GitHub cannot confirm the exact merged

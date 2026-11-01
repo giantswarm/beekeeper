@@ -88,9 +88,9 @@ type Supervisor struct {
 	rest rest
 }
 
-// Relay is the supervisor naming its successor: the successor's
-// `supervisor start` takes the role and the grants until Expires; the
-// outgoing supervisor keeps both meanwhile.
+// Relay is a role's holder (the guide) naming its successor: the
+// successor's start takes the role until Expires; the outgoing holder keeps
+// it meanwhile.
 type Relay struct {
 	From    Party     `json:"from"`
 	To      Party     `json:"to"`
