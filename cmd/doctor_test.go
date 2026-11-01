@@ -303,6 +303,32 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 	}
 }
 
+// Operational handoffs are not news for the person; explicit human waits are.
+func TestParkOnPersonOperationalHandoffs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		on, waits string
+		want      bool
+	}{
+		"supervisor ready": {"", "rollout ready; waiting for the supervisor", false},
+		"supervisor go":    {"", "awaiting the supervisor's go", false},
+		"guide handoff":    {"", "the guide handoff ready", false},
+		"gate":             {"", "the supervisor's gate", false},
+		"install chain":    {"", "the supervisor's install chain", false},
+		"local note":       {"#787", "install chain ready", true},
+		"central note":     {"central#12", "gate ready", true},
+		"named person":     {"", "operator's go on the install chain", true},
+		"answer":           {"", "awaiting the person's answer", true},
+		"colleague review": {"example/tool#12", "a colleague's review", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := &state.Park{On: tc.on, Waits: tc.waits}
+			if got := parkOnPerson(p, "operator"); got != tc.want {
+				t.Errorf("parkOnPerson(%+v) = %v, want %v", p, got, tc.want)
+			}
+		})
+	}
+}
+
 // The stale binaries are the other beekeeper processes whose file was
 // replaced, by pid; the doctor leaves the watches to WATCH STALE.
 func TestStaleBinaries(t *testing.T) {

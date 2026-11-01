@@ -134,6 +134,9 @@ type Candidate struct {
 	// epic it is the rank of, the candidate itself or an ancestor.
 	Priority   int    `json:"priority,omitempty"`
 	PriorityOf string `json:"priorityOf,omitempty"`
+	// Claim is another desk's claim of a free candidate that holds no
+	// more (stale): shown, not honoured.
+	Claim string `json:"claim,omitempty"`
 }
 
 // Why says why a free candidate is picked.
@@ -147,6 +150,9 @@ func (c Candidate) Why() string {
 	}
 	if p := c.PriorityText(); p != "" {
 		s += ", " + p
+	}
+	if c.Claim != "" {
+		s += "; a claim " + c.Claim
 	}
 	return s
 }

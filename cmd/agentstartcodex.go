@@ -143,7 +143,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: codex agent codex_%s in %s, bypass, on %s, busy with %q", sp.name, id, dir, model, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: codex agent codex_%s in %s, bypass, on %s, busy with %q", sp.name, id, dir, model, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {

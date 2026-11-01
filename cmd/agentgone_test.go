@@ -286,3 +286,23 @@ func TestGoneFailedWakeRestoresAge(t *testing.T) {
 		t.Fatal("failed wake kept a dead task busy")
 	}
 }
+
+// The retirement reservation applies only to roster entries: a session off
+// the roster must still be reachable through the normal wake route.
+func TestGoneProtectionAllowsWakeOffTheRoster(t *testing.T) {
+	a, launcher, _ := wakeTwinSetup(t, offID, false)
+	dir := t.TempDir()
+	path := filepath.Join(a.cfg.Claude.ProjectsDir, "off-roster-proof", offID+".jsonl")
+	writeFile(t, path, `{"type":"user","cwd":"`+filepath.ToSlash(dir)+`"}`+"\n")
+	seed(t, a, func(st *state.State) { st.Supervisor = nil; st.Agents = nil })
+	if err := a.wakeAgent(t.Context(), waker, offID, "continue", ""); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.units) != 1 || len(st.Agents) != 0 {
+		t.Fatalf("off-roster wake: units=%d agents=%+v", len(launcher.units), st.Agents)
+	}
+}

@@ -92,7 +92,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, "agents.start", "%s: omp agent %s on %s in %s, yolo%s, busy with %q", sp.name, id, model, dir, credentialsText(creds), reg.task)}, nil
+		return []state.Event{event(by, verbStart, "%s: omp agent %s on %s in %s, yolo%s, busy with %q", sp.name, id, model, dir, credentialsText(creds), reg.task)}, nil
 	})
 	if err != nil {
 		return err

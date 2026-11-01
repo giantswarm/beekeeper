@@ -281,6 +281,9 @@ func TestExecutionAdmissionServeModeCeiling(t *testing.T) {
 	}
 	a.cfgPath = cfgPath
 	a.cfg.Capacity = cfg2.Capacity
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+	}
 	modeReads := 0
 	a.readServeMode = func(context.Context, []string, time.Duration) (config.ServeModeReading, error) {
 		modeReads++

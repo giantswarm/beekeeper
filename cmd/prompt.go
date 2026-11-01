@@ -409,3 +409,9 @@ func lastRead(now time.Time, b *alerts.Installation) string {
 
 // oneLine folds a text onto one line.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// escapedLine keeps a report on one physical output line without losing
+// whitespace in its event. Backslashes are escaped so the text is reversible.
+func escapedLine(s string) string {
+	return strings.NewReplacer("\\", "\\\\", "\r", "\\r", "\n", "\\n").Replace(s)
+}
