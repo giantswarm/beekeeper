@@ -677,7 +677,8 @@ const (
 type Disk struct {
 	Prune string   `yaml:"prune"`
 	Every Duration `yaml:"every"`
-	// SccacheMaxGiB caps scheduled sccache cleanup; negative disables the cap.
+	// SccacheMaxGiB caps sccache's local cache: a scheduled run trims it least
+	// recently used first to three quarters of the cap; negative disables the cap.
 	SccacheMaxGiB int `yaml:"sccacheMaxGiB"`
 	// Checkouts locates main checkouts whose harness worktrees are inspected.
 	Checkouts []string `yaml:"checkouts"`
