@@ -21,6 +21,12 @@ const loopAlertVerb = "supervisor." + loopAlertKind
 // readLoopAlerts consumes the watch's durable snapshot. Only watch reads
 // installations; a loop restart can still route a page it has not handled.
 var readLoopAlerts = func(_ context.Context, a *app) ([]alerts.Firing, error) {
+	var current []alerts.Firing
+	if at, err := a.readWatchLevel("alert-state", &current); err != nil {
+		return nil, err
+	} else if !at.IsZero() {
+		return current, nil
+	}
 	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "watch.alert-state" })
 	if err != nil || len(evs) == 0 {
 		return nil, err
@@ -133,7 +139,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 				continue
 			}
 			waiting = true
-			key := "alert wake " + f.Installation + "/" + f.Key + " " + ag.Name + " " + ag.Park.At.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+			key := "alert wake " + f.Installation + "/" + f.Key + " " + ag.Name
 			if done[key] || pendingKeys[key] || l.startsHeld {
 				continue
 			}

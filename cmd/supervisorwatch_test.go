@@ -2,12 +2,11 @@ package cmd
 
 import (
 	"context"
-	"path/filepath"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -54,11 +53,9 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(true, false)
-	lock := flock.New(filepath.Join(r.a.store.Dir(), loopLockFile))
-	if err := lock.Lock(); err != nil {
+	if err := r.a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = lock.Unlock() }()
 	if !w.supervisorGone(context.Background(), &state.State{}, nil) {
 		t.Fatal("standby ignored running loop")
 	}
@@ -147,5 +144,108 @@ func TestLoopWatchFreshMachineReadingClearsPreviousWatchPressure(t *testing.T) {
 	}
 	if l.startsHeld {
 		t.Fatal("fresh healthy watch did not clear old pressure")
+	}
+}
+
+func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
+	for _, missingGuide := range []bool{false, true} {
+		t.Run(fmt.Sprint(missingGuide), func(t *testing.T) {
+			r := newLoopRig(t)
+			if missingGuide {
+				r.a.cfg.Guide.Person = ""
+			}
+			prunes := 0
+			r.answer = func(args []string) (string, int) {
+				if len(args) > 1 && args[0] == loopDiskKind && args[1] == "prune" {
+					prunes++
+					if !missingGuide {
+						return "partial prune failed", 1
+					}
+				}
+				return "", 0
+			}
+			w := r.a.newWatcher(false, false)
+			w.publishDisk(watchDiskReading{Low: true, Writers: "fixture"})
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 3 {
+				if err := l.pass(context.Background()); err != nil {
+					t.Fatalf("maintenance stopped pass: %v", err)
+				}
+				if !l.startsHeld {
+					t.Fatal("low disk allowed starts")
+				}
+				w.publishDisk(watchDiskReading{Low: true, Writers: "fixture"})
+			}
+			restarted, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := restarted.pass(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !restarted.startsHeld {
+				t.Fatal("restart lost disk hold")
+			}
+			if prunes != 1 {
+				t.Fatalf("prune attempts = %d, want 1", prunes)
+			}
+			if !strings.Contains(r.out.String(), "SUPERVISOR DISK") {
+				t.Fatal("maintenance failure not reported")
+			}
+		})
+	}
+}
+
+func TestLoopWatchLevelsOnlyLogTransitions(t *testing.T) {
+	r := newLoopRig(t)
+	w := r.a.newWatcher(false, false)
+	for i := range 10 {
+		w.publishBudget(false)
+		w.publishMachine()
+		w.publishAlerts(nil)
+		w.publishDisk(watchDiskReading{Low: true, FreeMiB: i, MinMiB: 100})
+	}
+	evs, err := r.a.store.Events(0, func(e state.Event) bool { return strings.HasSuffix(e.Verb, "-state") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One legacy budget seed from the rig, then four initial transitions.
+	if len(evs) != 5 {
+		t.Fatalf("repeated levels appended %d events, want 5", len(evs))
+	}
+	if got := r.a.watchDisk(); got == nil || got.FreeMiB != 9 {
+		t.Fatalf("latest level missing: %+v", got)
+	}
+}
+
+func TestLoopWatchDiskNoteFailureKeepsPassAlive(t *testing.T) {
+	r := newLoopRig(t)
+	w := r.a.newWatcher(false, false)
+	w.publishDisk(watchDiskReading{Low: true})
+	r.pass(t)
+	w.publishDisk(watchDiskReading{Low: true})
+	r.failRecord = func(e state.Event) bool { return e.Verb == "note.add" }
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !l.startsHeld {
+		t.Fatal("failed note cleared hold")
+	}
+	if !strings.Contains(r.out.String(), "note failed") {
+		t.Fatal("note failure not reported")
+	}
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := r.a.store.Read()
+	if len(st.Notes) != 1 {
+		t.Fatalf("note retry: %+v", st.Notes)
 	}
 }

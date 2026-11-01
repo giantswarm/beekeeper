@@ -253,7 +253,10 @@ its key first in the detail):
             become notes for guide.person once per firing. A worker parked
             on alert:<name> (alertname or installation/alertname) is woken;
             an unresumable session is retired and its original task staffed
-            again, with a durable replacement intent across restarts
+            again, with a durable replacement intent across restarts.
+            Each worker is woken once per firing, including an already-firing
+            alert. Event wakes are held with starts: an alert that resolves
+            before the hold lifts does not wake a parked worker.
   budget    every poll consumes watch budget readings; a low or unknown budget
             holds new worker/reviewer starts and event wakes and says so
   timers    due wall-clock and conditional timers send their wakes or run
@@ -462,6 +465,11 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return refused("another supervisor loop runs on this state (%s is locked)", lock.Path())
 	}
 	defer func() { _ = lock.Unlock() }()
+	// Observers read a PID marker instead of briefly contending for this lock.
+	if err := a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+		return err
+	}
+	defer func() { _ = a.store.WriteFile("supervisor-loop-pid.json", 0) }()
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
@@ -550,7 +558,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	if !l.dryRun {
 		if err := l.watchConditions(ctx); err != nil {
-			return err
+			l.startsHeld = true
+			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
+		} else {
+			delete(l.said, "watch-conditions")
 		}
 	}
 	if !l.dryRun {

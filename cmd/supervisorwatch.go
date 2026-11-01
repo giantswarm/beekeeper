@@ -1,17 +1,16 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/gofrs/flock"
-
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -47,35 +46,66 @@ func (w *watcher) loopRunning() bool {
 	if w.loopOwned {
 		return true
 	}
-	lock := flock.New(filepath.Join(w.store.Dir(), loopLockFile))
-	held, err := lock.TryLock()
+	var pid int
+	found, err := w.store.ReadFile("supervisor-loop-pid.json", &pid)
+	return err == nil && found && pid > 0 && proc.Alive(pid)
+}
+
+// Current levels live in bounded side files; only changes enter the audit log.
+// Keep event reads as a migration fallback for watches from older binaries.
+type watchLevel struct {
+	At    time.Time
+	Value json.RawMessage
+}
+
+func (w *watcher) publishLevel(kind string, value any) {
+	if w.store == nil {
+		return
+	}
+	raw, err := json.Marshal(value)
 	if err != nil {
-		return false
+		return
 	}
-	if held {
-		_ = lock.Unlock()
+	name := "watch-" + kind + ".json"
+	var old watchLevel
+	found, err := w.store.ReadFile(name, &old)
+	if err != nil {
+		return
 	}
-	return !held
+	next := watchLevel{At: time.Now(), Value: raw}
+	if err := w.store.WriteFile(name, next); err != nil {
+		return
+	}
+	changed := !bytes.Equal(old.Value, raw)
+	if kind == "disk-state" && found {
+		var before, after watchDiskReading
+		if json.Unmarshal(old.Value, &before) == nil && json.Unmarshal(raw, &after) == nil {
+			changed = before.Low != after.Low
+		}
+	}
+	if !found || changed {
+		_ = w.store.Record(event(watchParty, "watch."+kind, "%s", raw))
+	}
+}
+
+func (a *app) readWatchLevel(kind string, value any) (time.Time, error) {
+	var level watchLevel
+	found, err := a.store.ReadFile("watch-"+kind+".json", &level)
+	if err != nil || !found {
+		return time.Time{}, err
+	}
+	return level.At, json.Unmarshal(level.Value, value)
 }
 
 func (w *watcher) publishAlerts(firing []alerts.Firing) {
 	rules := w.alertRules()
 	rules.InPlay = w.inPlay(time.Now())
 	firing = slices.DeleteFunc(slices.Clone(firing), func(f alerts.Firing) bool { return !rules.Wakes(f.Installation, f.Alert) })
-	raw, err := json.Marshal(firing)
-	if err == nil && w.store != nil {
-		_ = w.store.Record(event(watchParty, "watch.alert-state", "%s", raw))
-	}
+	w.publishLevel("alert-state", firing)
 }
 
-func (w *watcher) publishBudget(held bool) {
-	if w.store != nil {
-		_ = w.store.Record(event(watchParty, "watch.budget-state", "%t", held))
-	}
-}
+func (w *watcher) publishBudget(held bool) { w.publishLevel("budget-state", held) }
 
-// A fresh level also clears conditions left by a previous watch whose
-// caller had a different mark file. Transition-only replay cannot do that.
 func (w *watcher) publishMachine() {
 	w.mu.Lock()
 	active := map[string]string{}
@@ -85,10 +115,7 @@ func (w *watcher) publishMachine() {
 		}
 	}
 	w.mu.Unlock()
-	raw, err := json.Marshal(active)
-	if err == nil && w.store != nil {
-		_ = w.store.Record(event(watchParty, "watch.machine-state", "%s", raw))
-	}
+	w.publishLevel("machine-state", active)
 }
 
 type watchDiskReading struct {
@@ -98,16 +125,15 @@ type watchDiskReading struct {
 	MinMiB  int
 }
 
-func (w *watcher) publishDisk(reading watchDiskReading) {
-	raw, err := json.Marshal(reading)
-	if err == nil && w.store != nil {
-		_ = w.store.Record(event(watchParty, "watch.disk-state", "%s", raw))
-	}
-}
+func (w *watcher) publishDisk(reading watchDiskReading) { w.publishLevel("disk-state", reading) }
 
 func (a *app) watchDisk() *watchDiskReading {
 	if a.store == nil {
 		return nil
+	}
+	var current watchDiskReading
+	if at, err := a.readWatchLevel("disk-state", &current); err == nil && !at.IsZero() {
+		return &current
 	}
 	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "watch.disk-state" })
 	if err != nil || len(evs) == 0 {
@@ -131,7 +157,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 		return err
 	}
 	active := map[string]string{}
-	var budgetAt time.Time
+	var budgetAt, machineAt time.Time
 	budgetHeld := true
 	var disk watchDiskReading
 	var diskKey string
@@ -169,17 +195,42 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 		case "watch.budget-state":
 			budgetAt, budgetHeld = e.At, e.Detail != "false"
 		case "watch.machine-state":
+			machineAt = e.At
 			active = map[string]string{}
 			if err := json.Unmarshal([]byte(e.Detail), &active); err != nil {
 				return err
 			}
 		case "watch.clear":
+			machineAt = e.At
 			delete(active, e.Detail)
 		case "watch.disk", "watch.diskfull", "watch.diskfill", "watch.load", "watch.cpupsi", "watch.avail", "watch.psi", "watch.swap", "watch.oomd":
+			machineAt = e.At
 			active[e.Verb[6:]] = e.Detail
 		}
 	}
+	// Prefer fresh levels without replaying identical samples into events.jsonl.
+	var freshBudget bool
+	if at, err := l.a.readWatchLevel("budget-state", &freshBudget); err != nil {
+		return err
+	} else if at.After(budgetAt) {
+		budgetAt, budgetHeld = at, freshBudget
+	}
+	var freshMachine map[string]string
+	if at, err := l.a.readWatchLevel("machine-state", &freshMachine); err != nil {
+		return err
+	} else if at.After(machineAt) {
+		active = freshMachine
+	}
+	var freshDisk watchDiskReading
+	if at, err := l.a.readWatchLevel("disk-state", &freshDisk); err != nil {
+		return err
+	} else if at.After(diskAt) {
+		diskAt, disk = at, freshDisk
+	}
+	// Maintenance must never take the loop (and its watch) down. Establish
+	// the hold before attempting any disk action, including failed writes.
 	if disk.Low {
+		l.startsHeld = true
 		active[loopDiskKind] = disk.Writers
 		act := superloop.Action{Kind: loopDiskKind, Key: diskKey}
 		if at, ok := pruned[diskKey]; !ok {
@@ -189,7 +240,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 					return err
 				}
 				if _, err := l.run(ctx, loopDiskKind, "prune", "--apply"); err != nil {
-					return err
+					l.sayOnce(diskKey+" prune", "SUPERVISOR DISK prune failed; starts remain held: %v", err)
 				}
 			}
 			if err := l.record(act, "pruned"); err != nil {
@@ -197,15 +248,14 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			}
 		} else if diskAt.After(at) && !noted[diskKey] {
 			if l.a.cfg.Guide.Person == "" {
-				return fmt.Errorf("guide.person is unset: cannot report low disk")
-			}
-			if err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				l.sayOnce(diskKey+" note", "SUPERVISOR DISK guide.person is unset: cannot report low disk; starts remain held")
+			} else if err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.NextNote++
 				text := "Disk remains low after pruning; starts are held. Writers: " + disk.Writers
 				st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: l.a.cfg.Guide.Person, By: loopParty, At: l.a.now, Text: text, Kind: noteDecision, Question: "Investigate remaining disk writers (no decision)", StatusQuo: text, Default: "the guide investigates the writers and reclaims disposable data; keep starts held until the watch reports disk recovery"})
 				return []state.Event{event(loopParty, "note.add", "#%d %s", st.NextNote, text), event(loopParty, "supervisor.disk", "%s", superloop.Detail(act, "noted"))}, nil
 			}); err != nil {
-				return err
+				l.sayOnce(diskKey+" note", "SUPERVISOR DISK note failed; starts remain held: %v", err)
 			}
 		}
 	}

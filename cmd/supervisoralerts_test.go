@@ -270,3 +270,24 @@ func TestLoopAlertFailedWakeDoesNotHideAnotherPage(t *testing.T) {
 		t.Fatalf("failed wake hid unrelated alert: %+v", st.Notes)
 	}
 }
+
+func TestLoopAlertReparkWaitsForNewFiring(t *testing.T) {
+	r := newLoopRig(t)
+	f := loopFiring()
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
+	r.park(t, alertParkPrefix+f.Alertname, time.Now())
+	r.pass(t)
+	if r.called(agentsName, agentWakeName) == nil {
+		t.Fatal("initial firing not delivered")
+	}
+	r.park(t, alertParkPrefix+f.Alertname, time.Now().Add(time.Second))
+	r.pass(t)
+	if r.called(agentsName, agentWakeName) != nil {
+		t.Fatal("same firing woke reparked worker")
+	}
+	f.Key += "-refired"
+	r.pass(t)
+	if r.called(agentsName, agentWakeName) == nil {
+		t.Fatal("new firing not delivered")
+	}
+}
