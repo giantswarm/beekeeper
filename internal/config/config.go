@@ -2081,6 +2081,9 @@ type Supervisor struct {
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
 	NoteDue      Duration `yaml:"noteDue"`
+	// FillRetryEvery bounds repeated empty or failed board reads while
+	// capacity and the roster stay unchanged (5m).
+	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
 	Ownership Ownership `yaml:"ownership"`
@@ -3063,6 +3066,7 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
 	if c.Supervisor.Ownership.Team != "" {
 		setStr(&c.Supervisor.Ownership.TeamFiles, DefaultTeamFiles)
