@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -426,12 +427,18 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	const fixtureName = "Global Publication Fixture"
+	const fixtureEmail = "publication-global@example.invalid"
 	globalPath := filepath.Join(root, "global.gitconfig")
-	if err := os.WriteFile(globalPath, []byte("[user]\n name = Global Publication Fixture\n email = publication-global@example.invalid\n"), 0o600); err != nil {
+	if err := os.WriteFile(globalPath, []byte(fmt.Sprintf("[user]\n name = %s\n email = %s\n", fixtureName, fixtureEmail)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", globalPath)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// The shared test harness supplies user.* through environment config.
+	// Remove those overrides so this fixture exercises global configuration.
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
 	for _, key := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
@@ -443,6 +450,11 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if err := normalCommit.Run(); err != nil {
 		t.Fatal("normal global-identity commit failed", err)
 	}
+	normalName, normalNameErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%cn")
+	normalEmail, normalEmailErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%ce")
+	if normalNameErr != nil || normalEmailErr != nil || normalName != fixtureName || normalEmail != fixtureEmail {
+		t.Fatal("normal fixture commit must use the configured global identity")
+	}
 	command = rig.a.executionPublishCmd()
 	command.SetArgs([]string{"--sync-base"})
 	command.SetOut(&bytes.Buffer{})
@@ -453,9 +465,10 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if err != nil || len(strings.Fields(parents)) != 3 {
 		t.Fatal("base synchronization did not create a divergent merge", err)
 	}
-	committer, err := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%cn <%ce>")
-	if err != nil || committer != "Global Publication Fixture <publication-global@example.invalid>" {
-		t.Fatal("merge lost global commit identity", err)
+	name, nameErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%cn")
+	email, emailErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%ce")
+	if nameErr != nil || emailErr != nil || name != fixtureName || email != fixtureEmail {
+		t.Fatalf("merge lost fixture identity: nameMatches=%t emailMatches=%t nameLength=%d emailLength=%d errors=%v/%v", name == fixtureName, email == fixtureEmail, len(name), len(email), nameErr, emailErr)
 	}
 	// A command in an unrelated service cannot impersonate this execution.
 	s.OwnUnit = func() string { return "unrelated.service" }
