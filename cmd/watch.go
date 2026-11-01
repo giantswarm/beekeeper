@@ -1871,6 +1871,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if w.chores && (u == nil || !u.High) {
 		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
 	}
+	if w.chores {
+		w.stopParked(ctx, st, sessions) // a parked session costs no memory
+	}
 	if st.Stop == nil {
 		w.stoppedAgents(st, sessions) // STOPPED names the sessions the stop ended
 	}
