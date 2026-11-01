@@ -426,7 +426,8 @@ func (h Hook) checkGHCommand(words []string, cmdIdx int, cwd string, known bool)
 		}
 		envRepo = getenv("GH_REPO")
 	}
-	args := words[cmdIdx+1:]
+	args := stripRedirects(words[cmdIdx+1:])
+	commandIdx := -1
 	var pos []string
 	namedRepo := repoSlug(envRepo)
 	for i := 0; i < len(args); i++ {
@@ -440,11 +441,14 @@ func (h Hook) checkGHCommand(words []string, cmdIdx int, cwd string, known bool)
 			i++
 			continue
 		}
-		if ghValued[a] {
+		if ghValued[a] || ghAPIValued[a] {
 			i++
 			continue
 		}
 		if !strings.HasPrefix(a, "-") {
+			if len(pos) == 0 {
+				commandIdx = i
+			}
 			pos = append(pos, a)
 		}
 	}
@@ -472,7 +476,14 @@ func (h Hook) checkGHCommand(words []string, cmdIdx int, cwd string, known bool)
 			}
 		}
 	}
-	return ""
+
+	// gh accepts flags before its API subcommand. Present every downstream
+	// reader with the same redirect-free, command-first argv.
+	if len(pos) > 0 && pos[0] == ghAPISub && commandIdx > 0 {
+		normalized := append([]string{ghAPISub}, args[:commandIdx]...)
+		args = append(normalized, args[commandIdx+1:]...)
+	}
+	return h.ghMergeGo(args, pos, namedRepo, cwd, known)
 }
 
 // walkSegments walks the segments of sc and computes the directory each segment
