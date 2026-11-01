@@ -47,9 +47,9 @@ func TestStatusThenBoardOrderDecideAndPriorityOnlyAnnotates(t *testing.T) {
 	// Every step has workScope, the setting that used to gate on the
 	// priority list: it is read and ignored.
 	o, err := ResolveOrder([]config.BoardStep{
-		{Name: "In Progress", Status: []string{"in progress"}, WorkScope: true},
-		{Name: "Up Next", Status: []string{"up next"}, WorkScope: true},
-		{Name: "Backlog", Status: []string{"backlog"}, WorkScope: true},
+		{Name: inProgress, Status: []string{inProgress}, WorkScope: true},
+		{Name: upNext, Status: []string{upNext}, WorkScope: true},
+		{Name: backlogStep, Status: []string{backlog}, WorkScope: true},
 	}, statuses, []string{epic})
 	if err != nil {
 		t.Fatal(err)

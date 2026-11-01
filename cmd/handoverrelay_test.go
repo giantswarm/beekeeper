@@ -225,7 +225,9 @@ func TestARelayKeepsThePrioritiesAndHoldsWithoutANote(t *testing.T) {
 	if afterNext != beforeNext {
 		t.Errorf("the successor's board next differs:\nbefore:\n%s\nafter:\n%s", beforeNext, afterNext)
 	}
-	for _, want := range []string{"skipped o/r#2: held: blocked by o/r#9; 1 of 1 blockers open", refOne, "priority 2"} {
+	// The priority list orders nothing: o/r#1 is first on the board, the
+	// held o/r#2 after it, counted with the skips.
+	for _, want := range []string{"skipped: 1 in all: blocked 1", refOne, "priority 2"} {
 		if !strings.Contains(afterNext, want) {
 			t.Errorf("the successor's board next lacks %q:\n%s", want, afterNext)
 		}

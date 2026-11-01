@@ -1057,6 +1057,22 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 		return
 	}
 	delete(l.said, "board tidy")
+	sayBoard(a, out)
+	// The board's blocked items reach the person, once each, and again
+	// on their re-check timers while they stay blocked.
+	if b.EscalateEvery.Duration < 0 {
+		return
+	}
+	if out, err = l.run(ctx, loopBoard, boardEscalateName); err != nil {
+		l.sayOnce("board escalate", "SUPERVISOR BOARD ESCALATE FAILED: %v", err)
+		return
+	}
+	delete(l.said, "board escalate")
+	sayBoard(a, out)
+}
+
+// sayBoard prints each line of a board command's output as the loop's.
+func sayBoard(a *app, out string) {
 	for line := range strings.Lines(out) {
 		if line = strings.TrimSpace(line); line != "" {
 			_, _ = fmt.Fprintln(a.out, "SUPERVISOR BOARD "+line)
@@ -1080,6 +1096,7 @@ const (
 	loopStop     = bgStopCmd
 	loopRecover  = "recover"
 	loopBoard    = "board"
+	loopTimer    = "timer"
 	loopAdd      = "add"
 	loopNote     = "note"
 	// The placement flags a remote start names on its agents start line.
