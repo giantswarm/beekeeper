@@ -26,7 +26,7 @@ var (
 )
 
 func parked(at time.Time) []Worker {
-	return []Worker{{Name: worker, ParkedOn: pr, ParkedAt: at}}
+	return []Worker{{Name: worker, ReviewRequested: true, ParkedOn: pr, ParkedAt: at}}
 }
 
 func pull(head string, green bool, reviews ...Review) map[string]Pull {
@@ -671,5 +671,40 @@ func TestAnEscalationWithoutAHeadIsOnTheLastRoundsHead(t *testing.T) {
 	in.Workers = parked(t0.Add(5 * time.Hour))
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("the same head after the answer got %+v", got)
+	}
+}
+
+// Two desks may share the same GitHub author. A park without publication
+// evidence is a wait even with green CI or an old round in this desk's log.
+func TestPlainPullWaitNeverReviewsOrForwards(t *testing.T) {
+	w := parked(t0)
+	w[0].ReviewRequested = false
+	in := Input{Workers: w, Pulls: pull(head1, true), Rounds: 1}
+	if got := Tracked(w, nil, nil, Desk{}); len(got) != 0 {
+		t.Fatalf("plain wait tracked: %v", got)
+	}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("plain wait: %+v", got)
+	}
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	in.Taken = taken(t, t0, started)
+	for _, verdict := range []string{Approved, ChangesRequested} {
+		in.Pulls = pull(head1, true, Review{ID: "R1", Head: head1, Verdict: verdict, At: t1})
+		if got := Plan(in); len(got) != 0 {
+			t.Fatalf("plain wait with prior %s: %+v", verdict, got)
+		}
+	}
+}
+
+func TestPlainWaiterCannotTakeAnotherWorkersReview(t *testing.T) {
+	in := Input{Workers: append(parked(t0), Worker{Name: "waiter", ParkedOn: pr, ParkedAt: t1}), Pulls: pull(head1, true)}
+	a := only(t, Plan(in), KindReview)
+	if a.Agent != worker {
+		t.Fatalf("review routed to %+v", a)
+	}
+	in.Taken = taken(t, t0, a)
+	in.Pulls = pull(head1, true, Review{ID: "R1", Head: head1, Verdict: Approved, At: t1})
+	if a := only(t, Plan(in), KindGo); a.Agent != worker {
+		t.Fatalf("go routed to %+v", a)
 	}
 }

@@ -35,6 +35,13 @@ a replaced binary is re-executed at the loop's next quiet pass, after
 pending timer actions finish. `beekeeper uninstall` removes the service
 recorded in `install.json`. The service is off by default.
 
+A park on a pull request requests the supervisor loop's independent review only
+when run from that pull request's worktree branch at its published HEAD. The
+command records and prints the verified head. Other parks, including older parks
+without this evidence, are plain waits: no reviewer, merge go or findings
+forwarded; the watch resumes them when the pull request merges or closes. If
+publication could not be verified, re-run the park from the published worktree.
+
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
 

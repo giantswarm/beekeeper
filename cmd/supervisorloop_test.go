@@ -199,7 +199,7 @@ func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopWorker}, Task: "fix " + loopURL})
 			i = len(st.Agents) - 1
 		}
-		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: "desk review"}
+		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: "desk review", ReviewHead: loopHead}
 		return nil, nil
 	})
 	if err != nil {
@@ -1261,5 +1261,24 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 		if !strings.Contains(r.out.String(), want) {
 			t.Errorf("the dry run did not say %q:\n%s", want, r.out)
 		}
+	}
+}
+
+func TestSupervisorLoopPlainWaitReadsNoPullAndStartsNoReview(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.ReviewHead = ""
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		t.Fatal("plain wait read for review")
+		return superloop.Pull{}, nil
+	}
+	r.pass(t)
+	if slices.ContainsFunc(r.calls, func(args []string) bool { return len(args) > 0 && args[0] == agentsName }) || strings.Contains(r.out.String(), "SUPERVISOR WOULD") {
+		t.Fatalf("plain wait acted: %s %v", r.out, r.calls)
 	}
 }

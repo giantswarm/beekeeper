@@ -250,8 +250,9 @@ its key first in the detail):
   leave     a park the desk's ownership leaves alone (below), said once with
             its reason: no reviewer, no go, no forward, no escalation, and
             a reviewer the loop started on it earlier retires
-  review    an agent parked on its pull request (agents park --on
-            owner/repo#n) with every check on the head green, for the
+  review    an agent parked from its pull request's worktree at its
+            published HEAD (agents park --on owner/repo#n), with every
+            check on the head green, for the
             first round, for every new head the worker parked on after an
             approval (one review per head), or after the last round's
             findings were forwarded and the worker parked again on a new
@@ -358,7 +359,9 @@ overridden pull requests.
 
 The briefs are Go templates over .URL, .Repo, .Number, .Head, .Round and
 .Worker. A pull request is read (one gh pr view) only while an agent is
-parked on it or the loop reviews it. Every transition happens once: a
+parked on a verified review request or the loop reviews it. A plain wait
+starts no review and receives no go or forwarded findings; the watch
+resumes it when the pull request merges or closes. Every transition happens once: a
 restarted loop reads its own log lines back and takes no key twice; a
 failed one is tried again next pass, its failure printed once. An action
 with a side effect is claimed in the log first (supervisor.claim): one
@@ -516,6 +519,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
+			w.ReviewRequested = ag.Park.ReviewHead != ""
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)

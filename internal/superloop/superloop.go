@@ -132,7 +132,9 @@ func (p Pull) verdict(rd round) *Review {
 
 // Worker is an agent on the roster.
 type Worker struct {
-	Name string
+	// ReviewRequested distinguishes a proven published branch from a plain wait.
+	ReviewRequested bool
+	Name            string
 	// SelfHosted is a worker whose model a self-hosted provider serves:
 	// its reviewer runs on none of them.
 	SelfHosted bool
@@ -360,7 +362,7 @@ func (l ledger) workerDue(ref string, workers []Worker) bool {
 	agent := l.goAgent[ref]
 	return agent != "" && !l.has(retireKey(ref, retiredWorker)) &&
 		slices.ContainsFunc(workers, func(w Worker) bool {
-			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref)
+			return w.Name == agent && w.Started && (w.ParkedOn == "" || w.ParkedOn == ref && w.ReviewRequested)
 		})
 }
 
@@ -395,8 +397,8 @@ var prRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#\d+$`)
 // IsPull reports whether a park's On names an issue or pull request.
 func IsPull(on string) bool { return prRef.MatchString(on) }
 
-// Tracked are the pull requests a pass reads: every one an agent is parked
-// on, every one the loop started a review of that it has not seen merged
+// Tracked are the pull requests a pass reads: every verified review request
+// an agent is parked on, every one the loop started a review of that it has not seen merged
 // or closed, nor escalated without the person's answer, and
 // every ended one whose worker waits for its retirement. None outside the
 // desk's organisations or in its never list is read, nor one whose park
@@ -440,7 +442,7 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 func parks(workers []Worker, desk Desk) (fresh, stale map[string]bool) {
 	fresh, stale = map[string]bool{}, map[string]bool{}
 	for _, w := range workers {
-		if !IsPull(w.ParkedOn) {
+		if !IsPull(w.ParkedOn) || !w.ReviewRequested {
 			continue
 		}
 		if early, _ := desk.early(w.ParkedAt); early {
@@ -466,9 +468,9 @@ func Plan(in Input) []Action {
 	parked := map[string]Worker{}
 	started := map[string]bool{}
 	for _, w := range in.Workers {
-		// Of two workers parked on one pull request, the later park is its
-		// request.
-		if cur, ok := parked[w.ParkedOn]; IsPull(w.ParkedOn) && (!ok || !w.ParkedAt.Before(cur.ParkedAt)) {
+		// Of two verified review requests on one pull request, the later
+		// park is its request. A plain waiter cannot take its place.
+		if cur, ok := parked[w.ParkedOn]; IsPull(w.ParkedOn) && w.ReviewRequested && (!ok || !w.ParkedAt.Before(cur.ParkedAt)) {
 			parked[w.ParkedOn] = w
 		}
 		started[w.Name] = w.Started
@@ -489,7 +491,7 @@ func Plan(in Input) []Action {
 	// A park the loop leaves alone without reading its pull request.
 	fresh, _ := parks(in.Workers, in.Desk)
 	for _, w := range in.Workers {
-		if !IsPull(w.ParkedOn) {
+		if !IsPull(w.ParkedOn) || !w.ReviewRequested {
 			continue
 		}
 		if reason, why := in.Desk.unread(w.ParkedOn); reason != "" {
@@ -523,6 +525,9 @@ func Plan(in Input) []Action {
 			continue
 		}
 		w, isParked := parked[ref]
+		if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.ParkedOn == ref && !w.ReviewRequested }) {
+			continue
+		}
 		if early, _ := in.Desk.early(w.ParkedAt); isParked && early {
 			continue
 		}
