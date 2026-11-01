@@ -647,27 +647,32 @@ refusal names the read that passes, built from the key names the file holds (nev
 and so do `omp` and `beekeeper`, which read the file without printing it. A file that is no YAML or
 JSON document has no key-stripped read.
 
-One symbolic-link operation (`ln -s`, `ln -sf`, `ln -sfn`) with two literal paths passes, together
-with metadata checks (`readlink`, `test -L`, `test -e`, `test -h`, `[ -e ]`, `stat`). Path variables
-must each be assigned a literal value once, before the operation. A standalone installer invoked
-as `bash <script>` or `sh <script>` (optionally followed by `--check`) may wrap it in a helper
-whose entire body is one such `ln` with `"$1" "$2"` or `"$@"` called with exactly two operands.
-The invocation must contain no other command, assignment or redirection. Codex also checks the
-script's link destinations against its protected home. Globs, reassignment, branches, loops,
-additional helper commands and nested shell code get no link exemption. A command or script that
-also reads or copies the credential file is refused, including a read through the new link.
+A link to a credential file reads none of it, so `ln`, `ln -s` (any options, `-t` included) and
+`link` with the file as the link's source pass wherever they stand: on the command line, in a script
+it runs (`bash scripts/install.sh --pull`) or in a helper function it calls. A helper whose body is
+more than one `ln` is judged by its body with the call's arguments in place of `"$1"`… and of its
+`local` assignments; one whose body uses `$@`, `$*`, `$#`, a parameter operator (`${1:-x}`),
+`shift` or `set`, a helper more than three helper calls deep, and any helper while `ln` itself is a
+function keep the refusal. What reads the link stays refused: on the command line that makes it,
+before the link exists, a read of its destination (the path, the word as written, a glob over it,
+a recursive search above it, a link to it or to a directory above it, the path in an
+interpreter's code or another shell's), as a read of the file itself is, with no key-stripped
+exception; once it exists, a symbolic link resolves to the credential file and a hard link shares
+its inode, both read as the file itself. A source that is a directory holding a credential file or
+a glob, and a destination that is an option or comes from a substitution, keep the refusal.
 
 The same holds for a link to a directory that holds a credential file (the home directory and `/`
 included), and for a relative link source, resolved from the link's own directory as well as the
-working directory. Outside that one-link exemption, `ln` or a helper defined on the command line
-that links such a directory is refused like a link to the file itself. A `find` whose `-exec`,
+working directory. `ln` or a helper defined on the command line that links such a directory is
+refused like a read of the file itself. A `find` whose `-exec`,
 `-execdir`, `-ok` or `-okdir` runs anything but a metadata command (or `shred`, `unlink`, `rmdir`,
 `echo`, `printf`) on a start path holding a credential file its `-name`/`-iname` tests accept is a
 read of it. A command that prints a credential file's path (`readlink`, `realpath`, `find`, `ls`,
 `stat` with its path in the format, …) is a read too when its output is piped into a stage that may
-open it or substituted into a command other than `echo`, `printf`, `test`, `[`, `basename` or
-`dirname` (`readlink -f link | xargs cat`, `cat "$(readlink -f link)"`); `| wc -l`, `>/dev/null`,
-`[ -n "$(ls …)" ]` and `stat -c %s` stay metadata. Codex refuses these in the same way, and in
+open it or substituted into a command other than `echo`, `printf`, `test`, `[`, `[[`, `basename`,
+`dirname` or `mkdir` (`readlink -f link | xargs cat`, `cat "$(readlink -f link)"`); `| wc -l`,
+`>/dev/null`, `[ -n "$(ls …)" ]`, `[[ "$(readlink -f "$dst")" == "$(readlink -f "$src")" ]]` and
+`stat -c %s` stay metadata, and the operands of a `[[ … ]]` after its `&&` or `||` are the test's. Codex refuses these in the same way, and in
 addition refuses a helper defined on the command line that is handed a path in its protected home,
 since its body (parameter operators, `$*`, `printf -v`, `mkdir`) may write it.
 
@@ -676,14 +681,11 @@ Static checks such as `bash -n scripts/install.sh`, `sh -n scripts/install.sh` a
 The guard still checks command substitutions and refuses a credential file supplied directly
 as the check's input. Shell no-execution options must precede the script operand.
 
-For an installer that also updates a checkout, keep credential linking in a separate,
-link-only setup script and invoke that script as `bash <script>` before running the update.
-Create the consumer's private destination directory separately, then use the symbolic-link
-operation described above. Do not add update flags such as `--pull` to the setup invocation:
-the narrow allowance is intentional. An installer that needs to copy a value instead uses
+An installer that links a credential file needs no separate setup script: its other commands are
+checked as executable code as before, and only a read of the credential file or of the new link is
+refused. An installer that needs to copy a value instead uses
 `beekeeper secret copy <ref> <file#path>`; see `beekeeper secret copy --help` for supported
-sources and destinations. Neither route prints the credential. Running a general installer
-is still checked as executable code.
+sources and destinations. Neither route prints the credential.
 
 Refused unless their output ends in an allowed form:
 
@@ -878,6 +880,31 @@ file's recipients, and reads the entries it names, one per line: an identity is 
 recipient, never by listing values. beekeeper never handles the store's password; the store shows
 whatever unlock prompt it shows the person, and a command answers within five minutes or fails. Its
 output stays in the broker; an error names the entry or the recipient, never a value.
+
+For credential sources, `store://<entry>[#<field>]` works alongside `op://`, `k8s://`
+and `file://` in `secret copy` (SOPS paths, multi-value copies, consumers after `--`,
+`ssh://` destinations and `--to-secret`), `secret compare` and `secret fingerprint`.
+These reads run in the broker in the agent sandbox or with `secret.session`;
+otherwise beekeeper reads in its own process, including on macOS and hosts without
+a broker. No shared vault is required. The default field is the store's secret/password. An explicit field adds
+`--attributes <field>` before the entry, replacing a configured `-a`/`--attributes`
+selector so KeePassXC returns only the requested attribute. For other adapters,
+put `{field}` in an argument of `secret.store.read`: it is replaced with the
+requested field, or `password` when omitted, and no attribute option is added.
+This substitution applies only to credential sources: age-identity reads and
+`secret.store.search` receive their configured arguments unchanged.
+The entry remains the final argument; no shell evaluates it. Store-command errors
+name the reference and suppress command output, which might contain credentials.
+Store copies return no automatic fingerprint, including SSH delivery; request one
+with `secret fingerprint` when needed. An unconfigured source is refused with
+`secret.store.read` named. A store reference
+is a source only; `secret store` continues to write into the shared vault.
+
+```bash
+beekeeper secret copy 'store://services/api#password' credentials.sops.yaml#stringData.token
+beekeeper secret compare 'store://services/api#password' credentials.sops.yaml#stringData.token
+beekeeper secret fingerprint 'store://services/api#username'
+```
 
 A `store://` reference and `secret.store` are set together, in one `beekeeper config set` call (see
 [Configuration](#configuration)). A reference whose `secret.store` is still missing leaves the
@@ -3349,7 +3376,7 @@ The organisation and desk keys, and their defaults:
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in, and how long one sign-in waits for the credential store and tries again after a failure ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts; a recipient no entry names has its identity in the vault's item `sops age key <recipient>` ([Age identities](#age-identities)) |
 | `secret.ageVaults` | none | The vaults besides `secret.vault` that age identities are read from: an `op://` entry of `secret.ageIdentities` may name one, and a SOPS file at any path finds its identity in the item `<installation>.agekey` of `secret.vault` or one of them holding the identity of its recipient ([The installation's item](#the-installations-item)) |
-| `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
+| `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` credential sources and age identities ([Age identities](#age-identities)) |
 | `secret.fileRoots` | none | The directories (`~/` allowed) whose plain files a `file://<absolute path>#<path>` source reads one value of, a CLI's own credential directory for one; a file outside them, its symlinks resolved, is refused, naming them, and none configured refuses every `file://` source |
 | `secret.files` | none | Files known to hold secret values (`~/` and globs allowed) that no agent reads whole, beside the built-in list ([Secret reads](#secret-reads)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
@@ -3377,5 +3404,9 @@ has held the lock. The desktop import freezes a session's headless turns only wh
 holds the lock, so a frozen turn never holds it.
 
 ## Development
+
+Workers read Dependabot alert states with `beekeeper security alert <owner/repo> <number>`
+through their existing GitHub identity. The [security-scans rule and App setup](docs/security-scans.md)
+describe the read-only permission and how to handle inaccessible alerts.
 
 See [docs/development.md](docs/development.md).

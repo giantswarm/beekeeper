@@ -261,6 +261,7 @@ func (r Resources) Validate(now time.Time) error {
 }
 
 type Capabilities struct {
+	Publication  bool              `json:"publication"`
 	Protocol     int               `json:"protocol"`
 	Identity     HostID            `json:"identity"`
 	Version      string            `json:"version"`

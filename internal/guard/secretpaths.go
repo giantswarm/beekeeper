@@ -69,19 +69,24 @@ func (f secretFiles) holdsNamed(p string, named func(string) bool) string {
 	return ""
 }
 
-// linkSource returns the guarded file a link made by ln's args exposes: a
-// source that is a guarded file or a directory holding one, resolved from
-// every working directory and, as the link itself resolves it, from the
-// directory the link is created in.
-func (f secretFiles) linkSource(args, dirs []string) string {
+// lnOperands splits ln's args into its sources and its destination; into
+// reports a destination that is a directory the links are made in (-t,
+// --target-directory). ok is false for an option ln's grammar does not give
+// an operand, such as a -t without one.
+func lnOperands(args []string) (sources []string, dest string, into, ok bool) {
 	var operands []string
 	target, options := "", true
+	ok = true
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case options && a == "--":
 			options = false
-		case options && (a == "-t" || a == "--target-directory") && i+1 < len(args):
+		case options && (a == "-t" || a == "--target-directory"):
+			if i+1 >= len(args) {
+				ok = false
+				break
+			}
 			target = args[i+1]
 			i++
 		case options && strings.HasPrefix(a, "--target-directory="):
@@ -95,19 +100,35 @@ func (f secretFiles) linkSource(args, dirs []string) string {
 			} else if i+1 < len(args) {
 				target = args[i+1]
 				i++
+			} else {
+				ok = false
 			}
 		case options && strings.HasPrefix(a, "-") && a != "-":
 		default:
 			operands = append(operands, a)
+			ok = ok && a != ""
 		}
 	}
-	sources, dest := operands, ""
+	if target != "" && strings.HasPrefix(target, "-") {
+		ok = false
+	}
+	sources = operands
 	switch {
 	case target != "":
-		dest = target + "/"
+		dest, into = target+"/", true
 	case len(operands) > 1:
 		sources, dest = operands[:len(operands)-1], operands[len(operands)-1]
+		into = len(sources) > 1
 	}
+	return sources, dest, into, ok && len(sources) > 0
+}
+
+// linkSource returns the guarded file a link made by ln's args exposes: a
+// source that is a guarded file or a directory holding one, resolved from
+// every working directory and, as the link itself resolves it, from the
+// directory the link is created in.
+func (f secretFiles) linkSource(args, dirs []string) string {
+	sources, dest, _, _ := lnOperands(args)
 	for _, d := range dirs {
 		linkDir := d
 		if dest != "" {
@@ -339,7 +360,30 @@ func printsPaths(name string, args []string) bool {
 }
 
 // pathConsumers take a substituted path as an argument without opening it.
-var pathConsumers = map[string]bool{echoCommand: true, printfCommand: true, testCommand: true, "[": true, "[[": true, "basename": true, dirnameCmd: true}
+var pathConsumers = map[string]bool{echoCommand: true, printfCommand: true, testCommand: true, "[": true, "[[": true, "basename": true, dirnameCmd: true, "mkdir": true}
+
+// inTestExpr reports whether the masked text before a substitution ends
+// inside a [[ … ]] expression, which segments split at its && and || so
+// that the substitution's own segment no longer follows the [[.
+func inTestExpr(before string) bool {
+	open := strings.LastIndex(before, "[[ ")
+	if open < 0 || strings.Contains(before[open:], "]]") {
+		return false
+	}
+	// the substitution stands in the expression itself, not in another
+	// substitution that hands its output to a command
+	expr := strings.TrimSuffix(strings.TrimSuffix(before[open:], "$("), "`")
+	if strings.Count(expr, "$(") != strings.Count(expr, ")") || strings.Count(expr, "`")%2 != 0 || strings.Contains(expr, "<(") {
+		return false
+	}
+	// the [[ starts a command: after an operator or a reserved word
+	fields := strings.Fields(before[:open])
+	if len(fields) == 0 {
+		return true
+	}
+	last := fields[len(fields)-1]
+	return compoundWords[last] || strings.ContainsAny(last[len(last)-1:], ";&|({")
+}
 
 // feedsOutput reports whether segment i's output reaches a command that may
 // open the paths it prints: a later pipeline stage (whose safe sinks the
@@ -353,6 +397,9 @@ func feedsOutput(sc shellScan, segs []segment, i int) bool {
 	case "$(", "`":
 		if i == 0 {
 			return true
+		}
+		if inTestExpr(sc.masked[:sg.start]) {
+			return sg.after == "|"
 		}
 		words := shellWords(sc.plain[segs[i-1].start:segs[i-1].end])
 		k := commandAt(words)
