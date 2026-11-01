@@ -8,11 +8,17 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	"github.com/google/go-github/v93/github"
+
+	deskgithub "github.com/giantswarm/beekeeper/internal/github"
 )
+
+// githubToken uses the shared gh login resolver; tests replace it without credentials.
+var githubToken = deskgithub.Token
 
 // Bound candidate reads when tags have no published, signed binary. A normal
 // lookup uses two small requests, independent of the release history's size.
@@ -53,13 +59,22 @@ type candidateSet struct {
 }
 
 func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
+	var opts []github.ClientOptionsFunc
+	token := os.Getenv("GH_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		token, _ = githubToken(ctx)
+		cancel()
+	}
+	if token != "" {
+		opts = append(opts, github.WithAuthToken(token))
+	}
+	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{APIToken: token})
 	if err != nil {
 		return nil, err
-	}
-	var opts []github.ClientOptionsFunc
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		opts = append(opts, github.WithAuthToken(token))
 	}
 	client, err := github.NewClient(opts...)
 	if err != nil {
