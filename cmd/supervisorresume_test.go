@@ -19,6 +19,8 @@ func TestLoopRecoversEndedSettledPark(t *testing.T) {
 		failure := mode != "successful recovery"
 		t.Run(mode, func(t *testing.T) {
 			r, _ := fillRig(t)
+			var live []*claude.Session
+			stubFresh(t, &live)
 			ag := state.Agent{Party: state.Party{Name: "ended worker", Session: "ended-session"}, Task: recoveryTask, Park: &state.Park{At: r.a.now, Resumable: r.a.now, Answer: "note closed"}}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = append(st.Agents, ag); return nil, nil }); err != nil {
 				t.Fatal(err)
