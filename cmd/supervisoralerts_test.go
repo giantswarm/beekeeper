@@ -60,17 +60,26 @@ func TestLoopAlertOwnedDoesNotPage(t *testing.T) {
 
 // With alerts.team set only the team's own alerts are relevant: another
 // team's page, blocking work or not, gets neither a note nor a summary line.
+// The teams and Alertmanager label names of the relevance tests.
+const (
+	loopDeskTeam   = "desk-team"
+	loopOtherTeam  = "another-team"
+	labelAlertname = "alertname"
+	labelSeverity  = "severity"
+	labelTeam      = "team"
+)
+
 func TestLoopAlertIgnoresOtherTeamsPages(t *testing.T) {
 	read := readLoopAlerts
 	r := newLoopRig(t)
 	readLoopAlerts = read
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
-	r.a.cfg.Alerts.Team = "desk-team"
+	r.a.cfg.Alerts.Team = loopDeskTeam
 	f := loopFiring()
 	blockLoopAlert(t, r, f)
-	f.Team = "another-team"
+	f.Team = loopOtherTeam
 	unowned := loopFiring()
-	unowned.Installation, unowned.Team = "unowned-fixture", "another-team"
+	unowned.Installation, unowned.Team = "unowned-fixture", loopOtherTeam
 	w := r.a.newWatcher(false, false)
 	w.publishAlerts([]alerts.Firing{f, unowned})
 	r.pass(t)
@@ -91,19 +100,20 @@ func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
 	r := newLoopRig(t)
 	readLoopAlerts = read
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
-	r.a.cfg.Alerts.Team = "desk-team"
-	hours := alerts.Raw{Fingerprint: "wh", Labels: map[string]string{"alertname": alerts.WorkingHours, "severity": "none"}, StartsAt: "2026-01-01T00:00:00Z"}
-	labels := map[string]string{"alertname": "WorkloadDown", "severity": alerts.Page, "team": "desk-team",
-		"namespace": "ns", "deployment": "app", "cancel_if_outside_working_hours": "true"}
-	page := alerts.Raw{Fingerprint: "fp", Labels: labels, StartsAt: "2026-01-01T00:00:00Z", Status: alerts.Status{InhibitedBy: []string{"wh"}}}
-	other := alerts.Raw{Fingerprint: "ot", Labels: map[string]string{"alertname": "WorkloadDown", "severity": alerts.Page, "team": "another-team"},
-		StartsAt: "2026-01-01T00:00:00Z", Status: alerts.Status{InhibitedBy: []string{"wh"}}}
-	rules := alerts.Rules{Team: "desk-team", Ignore: []string{alerts.WorkingHours}}
+	r.a.cfg.Alerts.Team = loopDeskTeam
+	since := loopFiring().Since
+	hours := alerts.Raw{Fingerprint: "wh", Labels: map[string]string{labelAlertname: alerts.WorkingHours}, StartsAt: since}
+	inhibited := func(fp, team string) alerts.Raw {
+		labels := map[string]string{labelAlertname: "WorkloadDown", labelSeverity: alerts.Page, labelTeam: team, "namespace": "ns", "deployment": "app"}
+		return alerts.Raw{Fingerprint: fp, Labels: labels, StartsAt: since, Status: alerts.Status{InhibitedBy: []string{"wh"}}}
+	}
+	page, other := inhibited("fp", loopDeskTeam), inhibited("ot", loopOtherTeam)
+	rules := alerts.Rules{Team: loopDeskTeam, Ignore: []string{alerts.WorkingHours}}
 	var firing []alerts.Firing
 	for fp, al := range rules.Normalize([]alerts.Raw{hours, page, other}, "loop-fixture") {
 		firing = append(firing, alerts.Firing{Installation: "loop-fixture", Key: alerts.Key(fp, al), Alert: al})
 	}
-	if len(firing) != 1 || firing[0].Team != "desk-team" {
+	if len(firing) != 1 || firing[0].Team != loopDeskTeam {
 		t.Fatalf("read alerts: %+v", firing)
 	}
 	blockLoopAlert(t, r, firing[0])
