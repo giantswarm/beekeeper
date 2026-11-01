@@ -3525,6 +3525,9 @@ func (c *Config) validate() error {
 	if r := c.Disk.Holders.Root; r != "" && (!filepath.IsAbs(r) || filepath.Clean(r) == string(filepath.Separator)) {
 		return fmt.Errorf("disk.holders.root: must be an absolute directory, not a filesystem root")
 	}
+	if h := c.Disk.Holders; h.StaleAfter.Duration < 0 || h.AsideRetention.Duration < 0 || h.Every.Duration < 0 {
+		return fmt.Errorf("disk.holders: staleAfter, asideRetention and every take no negative duration")
+	}
 	for _, n := range append(slices.Clone(c.Disk.Holders.AsideDirs), c.Disk.Holders.Keep...) {
 		if n == "" || n == "." || strings.ContainsRune(n, filepath.Separator) || strings.Contains(n, "..") {
 			return fmt.Errorf("disk.holders: %q is no entry name of the root", n)

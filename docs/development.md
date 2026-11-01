@@ -440,8 +440,13 @@ weights, say).
 Nothing is removed: the listing tells a person or a worker what to
 reclaim. Every `disk.holders.every` (6h) one watch lists the holders and
 says `STATE HOLDERS` with the largest eligible ones while the eligible
-holders take `disk.holders.warnGiB` (10) or more; a negative value turns
-the look off.
+holders take `disk.holders.warnGiB` (10) or more; one that holds a
+checkout is only counted there, its work to be checked first. While a
+process cannot be read, no holder is judged eligible and the watch says
+`STATE HOLDERS unknown` with the reason. A negative `warnGiB` turns the
+look off; a negative duration is refused. "Unused" means not written: a
+reader that never writes (a model server reading its weights) does not
+count, so such data goes into `disk.holders.keep`.
 
 ```yaml
 disk:

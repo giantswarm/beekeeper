@@ -36,6 +36,10 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		{"disk: {buildOutputs: [{path: relative, worktree: /scratch/worktree}]}", false},
 		{"disk: {holders: {keep: [hf-cache], asideDirs: [aside], warnGiB: -1}}", true},
 		{"disk: {holders: {root: /}}", false},
+		{"disk: {holders: {staleAfter: -1h}}", false},
+		{"disk: {holders: {asideRetention: -1h}}", false},
+		{"disk: {holders: {every: -1h}}", false},
+		{"disk: {holders: {every: 0s}}", true},
 		{"disk: {holders: {root: relative}}", false},
 		{"disk: {holders: {keep: [a/b]}}", false},
 		{"disk: {holders: {asideDirs: [..]}}", false},
@@ -47,6 +51,9 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		got, err := Load(p)
 		if (err == nil) != tc.valid {
 			t.Errorf("config %s: %v", tc.raw, err)
+		}
+		if err == nil && tc.raw == "disk: {holders: {every: 0s}}" && got.Disk.Holders.Every.Duration != 6*time.Hour {
+			t.Fatalf("every 0s = %s, want the 6h default", got.Disk.Holders.Every.Duration)
 		}
 		if err == nil && tc.raw == "disk: {prune: ask}" && got.Disk.Auto() {
 			t.Fatal("ask became auto")

@@ -12,7 +12,7 @@ import (
 )
 
 // unusedFor starts the verdict of an eligible holder.
-const unusedFor = "unused for"
+const unusedFor = "not written for"
 
 // holdersFixture is a state home with one holder of each kind, all last
 // written eight days ago unless a test touches them.
@@ -114,7 +114,8 @@ func TestListHoldersOwnersAndEligibility(t *testing.T) {
 			t.Fatalf("listing removed %s", p)
 		}
 	}
-	if s := r.summary(); !strings.Contains(s, "6 holders under "+root+" eligible for removal") || !strings.Contains(s, "nothing removed") {
+	if s := r.summary(); !strings.HasPrefix(s, "STATE HOLDERS: 6 holders under "+root+" eligible for removal") || !strings.Contains(s, "nothing removed") ||
+		strings.Contains(s, "backstage-3125-second") || !strings.Contains(s, "1 hold a checkout, whose work is checked first") {
 		t.Errorf("summary=%s", s)
 	}
 }
@@ -160,10 +161,27 @@ func TestStateHoldersWatchSaysEligibleSpaceOnce(t *testing.T) {
 	if calls != 2 || w.isActive("stateholders") {
 		t.Fatalf("under threshold: calls=%d active=%v", calls, w.isActive("stateholders"))
 	}
-	a.cfg.Disk.Holders.WarnGiB = -1
+	// Unable to read a process, it says the holders are unknown, and the
+	// shared listing keeps saying so.
+	m.refsErr = errors.New("readlink /proc/1/cwd: permission denied")
 	w.stateHolders(a.now.Add(14 * time.Hour))
 	w.bg.Wait()
-	if calls != 2 {
+	if calls != 3 || !w.isActive("stateholders") {
+		t.Fatalf("unknown: calls=%d active=%v", calls, w.isActive("stateholders"))
+	}
+	if _, err := a.store.ReadFile(stateHoldersFile, &mark); err != nil || !mark.On || !strings.HasPrefix(mark.Line, "STATE HOLDERS unknown:") || !strings.Contains(mark.Line, "permission denied") {
+		t.Fatalf("unknown mark=%+v err=%v", mark, err)
+	}
+	third := &watcher{app: a, holdersOn: true, last: map[string]time.Time{}}
+	third.stateHolders(a.now.Add(14*time.Hour + time.Minute))
+	third.bg.Wait()
+	if calls != 3 || !third.isActive("stateholders") {
+		t.Fatalf("shared unknown: calls=%d active=%v", calls, third.isActive("stateholders"))
+	}
+	a.cfg.Disk.Holders.WarnGiB = -1
+	w.stateHolders(a.now.Add(21 * time.Hour))
+	w.bg.Wait()
+	if calls != 3 {
 		t.Fatal("a negative warnGiB still listed the holders")
 	}
 }
@@ -180,7 +198,7 @@ func TestDiskHoldersCommandListsWithoutRemoving(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{root + ":", "eligible for removal: 6", "OWNER", "ao1011", "AO 1011 (giantswarm/agent-platform#1011)", "yes: unused for", "no: its task is open"} {
+	for _, want := range []string{root + ":", "eligible for removal: 6", "OWNER", "ao1011", "AO 1011 (giantswarm/agent-platform#1011)", "yes: not written for", "no: its task is open"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("output lacks %q:\n%s", want, text)
 		}

@@ -54,6 +54,8 @@ type holder struct {
 	Task     string `json:"task,omitempty"`
 	TaskOpen bool   `json:"taskOpen,omitempty"`
 	Aside    bool   `json:"aside,omitempty"`
+	// Checkout says it holds a git checkout: its work is checked first.
+	Checkout bool   `json:"checkout,omitempty"`
 	Eligible bool   `json:"eligible"`
 	Why      string `json:"why"`
 }
@@ -96,18 +98,33 @@ func (r holdersRun) eligible() []holder {
 	return slices.DeleteFunc(slices.Clone(r.Holders), func(h holder) bool { return !h.Eligible })
 }
 
-// summary says the eligible holders in one line, the largest by name.
+// summary says the eligible holders in one line, the largest by name; one
+// that holds a checkout is only counted, its work to be checked first.
 func (r holdersRun) summary() string {
 	el := r.eligible()
-	line := fmt.Sprintf("%d holders under %s eligible for removal, %s of %s (nothing removed)", len(el), r.Root, gibStr(r.Eligible), gibStr(r.Bytes))
+	line := fmt.Sprintf("STATE HOLDERS: %d holders under %s eligible for removal, %s of %s (nothing removed)", len(el), r.Root, gibStr(r.Eligible), gibStr(r.Bytes))
 	parts := make([]string, 0, stateHoldersShown)
-	for _, h := range el[:min(stateHoldersShown, len(el))] {
-		parts = append(parts, fmt.Sprintf("%s %s (%s, %s)", h.Name, sizeStr(h.Bytes), h.Owner, h.Why))
+	checkouts := 0
+	for _, h := range el {
+		switch {
+		case h.Checkout:
+			checkouts++
+		case len(parts) < stateHoldersShown:
+			parts = append(parts, fmt.Sprintf("%s %s (%s, %s)", h.Name, sizeStr(h.Bytes), h.Owner, h.Why))
+		}
 	}
 	if len(parts) > 0 {
 		line += ": " + strings.Join(parts, ", ")
 	}
+	if checkouts > 0 {
+		line += fmt.Sprintf("; %d hold a checkout, whose work is checked first", checkouts)
+	}
 	return line + "; beekeeper disk holders lists them all"
+}
+
+// unknown says that the listing could not judge the holders.
+func (r holdersRun) unknown() string {
+	return fmt.Sprintf("STATE HOLDERS unknown: %d holders under %s, %s, none judged eligible: %v", len(r.Holders), r.Root, gibStr(r.Bytes), r.err)
 }
 
 // listHolders reads every holder of the state home, largest first.
@@ -158,7 +175,7 @@ func (a *app) inspectHolder(m holderMachine, name, path string, aside bool) hold
 	if u.Written.After(a.now) {
 		u.Written = a.now
 	}
-	h := holder{Name: name, Path: path, Bytes: u.Bytes, Written: u.Written, Aside: aside}
+	h := holder{Name: name, Path: path, Bytes: u.Bytes, Written: u.Written, Aside: aside, Checkout: u.Checkout}
 	h.Owner, h.Task, h.TaskOpen = holderOwner(filepath.Base(path), m.st)
 	window := cfg.StaleAfter.Duration
 	if aside {
@@ -183,7 +200,7 @@ func (a *app) inspectHolder(m holderMachine, name, path string, aside bool) hold
 		h.Why = "written " + ago(a.now, u.Written) + " ago"
 	default:
 		h.Eligible = true
-		h.Why = "unused for " + ago(a.now, u.Written)
+		h.Why = "not written for " + ago(a.now, u.Written)
 		if u.Checkout {
 			h.Why += ", holds a checkout: check its work first"
 		}
@@ -246,8 +263,10 @@ type stateHoldersMark struct {
 
 // stateHolders lists the state home every disk.holders.every, in the
 // background, and says STATE HOLDERS while the eligible holders take
-// disk.holders.warnGiB or more. A watch that finds a fresh listing another
-// watch made says that listing's condition instead of walking again.
+// disk.holders.warnGiB or more, and STATE HOLDERS unknown while it cannot
+// judge them (a process it cannot read). A watch that finds a fresh listing
+// another watch made says that listing's condition instead of walking
+// again.
 func (w *watcher) stateHolders(now time.Time) {
 	cfg := w.cfg.Disk.Holders
 	if !w.holdersOn || cfg.WarnGiB < 0 || !w.holdering.CompareAndSwap(false, true) {
@@ -266,7 +285,7 @@ func (w *watcher) stateHolders(now time.Time) {
 		var m stateHoldersMark
 		if _, _ = w.store.ReadFile(stateHoldersFile, &m); now.Sub(m.At) < cfg.Every.Duration {
 			w.holdersNext = m.At.Add(cfg.Every.Duration)
-			w.check("stateholders", m.On, "STATE HOLDERS: %s", m.Line)
+			w.check("stateholders", m.On, "%s", m.Line)
 			return
 		}
 		lock := flock.New(filepath.Join(w.store.Dir(), stateHoldersLock))
@@ -279,12 +298,16 @@ func (w *watcher) stateHolders(now time.Time) {
 		if r.err != nil && len(r.Holders) == 0 {
 			// Unread, the holders are unknown: the next look tries again.
 			w.holdersNext = now.Add(goCacheRetry)
+			w.check("stateholders", true, "STATE HOLDERS unknown: %s unread: %v", r.Root, r.err)
 			return
 		}
 		w.holdersNext = now.Add(cfg.Every.Duration)
 		m = stateHoldersMark{At: now, On: r.Eligible >= int64(cfg.WarnGiB)<<30, Line: r.summary()}
+		if r.err != nil {
+			m.On, m.Line = true, r.unknown()
+		}
 		_ = w.store.WriteFile(stateHoldersFile, m)
-		w.check("stateholders", m.On, "STATE HOLDERS: %s", m.Line)
+		w.check("stateholders", m.On, "%s", m.Line)
 	}()
 }
 
