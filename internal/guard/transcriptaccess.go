@@ -11,16 +11,48 @@ import (
 // Grants are exact files or directories, keyed by the receiving session ID.
 // A hook event's transcript_path never authorizes a read.
 type TranscriptAccess struct {
-	Roots  []string
-	Grants map[string][]string
+	Roots []string
+	// ClaudeProjects and AgyBrains also describe layouts whose per-session
+	// artifact subtrees belong to the receiving session without a grant.
+	ClaudeProjects, AgyBrains []string
+	Grants                    map[string][]string
+	// Managed distinguishes recorded starts/roles from the person's own sessions.
+	// A lookup error fails closed; nil leaves this policy off.
+	Managed func(session string) (bool, error)
 }
 
 type transcriptAccess struct {
 	roots, grants []string
 	failed        bool
+	session       string
+	own           []transcriptOwnRoot
+}
+
+type transcriptOwnRoot struct {
+	path  string
+	depth int
 }
 
 func (h Hook) transcriptAccess(session string) transcriptAccess {
+	managed := false
+	if h.Transcripts.Managed != nil {
+		var err error
+		managed, err = h.Transcripts.Managed(session)
+		if err != nil {
+			return transcriptAccess{failed: true}
+		}
+	}
+	if !managed {
+		return transcriptAccess{}
+	}
+	claudeRoots := append([]string{"~/.claude/projects"}, h.Transcripts.ClaudeProjects...)
+	if home := os.Getenv(transcriptClaudeConfig); home != "" {
+		claudeRoots = append(claudeRoots, filepath.Join(home, "projects"))
+	}
+	agyRoots := append([]string{"~/.gemini/antigravity-cli/brain"}, h.Transcripts.AgyBrains...)
+	if home := os.Getenv(transcriptGeminiHome); home != "" {
+		agyRoots = append(agyRoots, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
+	}
 	roots := []string{
 		"~/.claude/projects", "~/.claude/history.jsonl",
 		"~/.codex/sessions", "~/.codex/archived_sessions", "~/.codex/history.jsonl",
@@ -32,8 +64,8 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 		stores []string
 	}{
 		{"CODEX_HOME", []string{transcriptSessions, "archived_sessions", "history.jsonl"}},
-		{"CLAUDE_CONFIG_DIR", []string{"projects", "history.jsonl"}},
-		{"GEMINI_CLI_HOME", []string{".gemini"}},
+		{transcriptClaudeConfig, []string{"projects", "history.jsonl"}},
+		{transcriptGeminiHome, []string{".gemini"}},
 		{"PI_CODING_AGENT_DIR", []string{transcriptSessions, "agent.db"}},
 		{"OMP_CONFIG_DIR", []string{transcriptSessions, "agent.db"}},
 	} {
@@ -44,6 +76,8 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 		}
 	}
 	roots = append(roots, h.Transcripts.Roots...)
+	roots = append(roots, claudeRoots...)
+	roots = append(roots, agyRoots...)
 	a := transcriptAccess{}
 	if home, err := os.UserHomeDir(); err != nil || !filepath.IsAbs(home) {
 		a.failed = true
@@ -51,6 +85,19 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 	for _, root := range roots {
 		if p := wordPath(root, ""); filepath.IsAbs(p) {
 			a.roots = append(a.roots, p)
+		}
+	}
+	if session != "" && session != "." && session != ".." && !strings.ContainsAny(session, "/\\*?[") {
+		a.session = session
+		for _, layout := range []struct {
+			roots []string
+			depth int
+		}{{claudeRoots, 2}, {agyRoots, 1}} {
+			for _, root := range layout.roots {
+				if p := wordPath(root, ""); filepath.IsAbs(p) {
+					a.own = append(a.own, transcriptOwnRoot{p, layout.depth})
+				}
+			}
 		}
 	}
 	if session != "" {
@@ -119,6 +166,11 @@ func (a transcriptAccess) denied(p string, recursive bool) bool {
 		return false
 	}
 	if glob < 0 {
+		for _, own := range a.own {
+			if a.owns(own.path, p, own.depth) && a.owns(transcriptReal(own.path), real, own.depth) {
+				return false
+			}
+		}
 		for _, grant := range a.grants {
 			// A link in a fixture directory must not grant another conversation.
 			if hasDirPrefix(p, grant) && hasDirPrefix(real, transcriptReal(grant)) {
@@ -129,14 +181,27 @@ func (a transcriptAccess) denied(p string, recursive bool) bool {
 	return true
 }
 
+// The session component must be a complete directory name in the known
+// layout. Neither a filename substring nor transcript_path confers ownership.
+func (a transcriptAccess) owns(root, p string, depth int) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	return len(parts) >= depth && parts[depth-1] == a.session
+}
+
 const (
-	transcriptTouch    = "touch"
-	transcriptChmod    = "chmod"
-	transcriptReadlink = "readlink"
-	transcriptSessions = "sessions"
+	transcriptClaudeConfig = "CLAUDE_CONFIG_DIR"
+	transcriptGeminiHome   = "GEMINI_CLI_HOME"
+	transcriptTouch        = "touch"
+	transcriptChmod        = "chmod"
+	transcriptReadlink     = "readlink"
+	transcriptSessions     = "sessions"
 )
 
-const transcriptRefusal = "Refused: this call may read another session's private harness transcripts. Use synthetic fixtures for event shapes, or ask the supervisor to grant this session its own transcript or an explicit fixture directory through hooks.transcriptGrants. Counts, key filters, copies and redirects do not authorize a read."
+const transcriptRefusal = "Refused: this call may read another session's private harness transcripts. Use synthetic fixtures for event shapes, or ask the supervisor to grant this session its own transcript or an explicit fixture directory through hooks.transcriptGrants. Narrow broad searches to the task directory. Counts, key filters, copies and redirects do not authorize a read."
 
 // Include literal paths embedded in interpreter code, not just shell words.
 var transcriptHomeComponent = regexp.MustCompile(`['"]\.(?:codex|claude|gemini|omp|agy)['"]`)
@@ -205,7 +270,7 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 			}
 		}
 		for _, candidate := range candidates {
-			for _, env := range []string{"CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
+			for _, env := range []string{"CODEX_HOME", transcriptClaudeConfig, transcriptGeminiHome, "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
 				if home := os.Getenv(env); home != "" {
 					candidate = strings.ReplaceAll(candidate, "${"+env+"}", home)
 					candidate = strings.ReplaceAll(candidate, "$"+env, home)

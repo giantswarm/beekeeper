@@ -33,7 +33,7 @@ func fakeHome(t *testing.T) (string, Hook) {
 			t.Fatal(err)
 		}
 	}
-	h := hook()
+	h := transcriptHook()
 	h.SecretFiles = []string{"~/app/creds.*"}
 	return home, h
 }

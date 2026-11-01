@@ -18,11 +18,17 @@ const (
 	transcriptAbsolutePath    = "AbsolutePath"
 )
 
+func transcriptHook() Hook {
+	h := hook()
+	h.Transcripts.Managed = func(string) (bool, error) { return true, nil }
+	return h
+}
+
 func TestTranscriptReads(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, "worker-codex"))
-	h := hook()
+	h := transcriptHook()
 	paths := []string{
 		"~/.codex/sessions/2026/rollout-other.jsonl", "~/.codex/archived_sessions/other.jsonl", "~/.codex/history.jsonl",
 		"$CODEX_HOME/sessions/other.jsonl", "${CODEX_HOME}/archived_sessions/other.jsonl",
@@ -77,7 +83,7 @@ func TestTranscriptFileToolsAndGrants(t *testing.T) {
 	own := filepath.Join(root, "own.jsonl")
 	other := filepath.Join(root, "other.jsonl")
 	fixture := filepath.Join(root, "fixture")
-	h := hook()
+	h := transcriptHook()
 	h.Transcripts.Grants = map[string][]string{transcriptOwner: {own, fixture}}
 	for _, tc := range []struct {
 		session, tool, p string
@@ -113,7 +119,7 @@ func TestTranscriptLinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, transcriptOther), filepath.Join(fixture, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	h := hook()
+	h := transcriptHook()
 	h.Transcripts.Grants = map[string][]string{transcriptOwner: {fixture}}
 	for _, p := range []string{filepath.Join(home, "alias", "missing.jsonl"), filepath.Join(fixture, "escape", "missing.jsonl")} {
 		if d := transcriptDecision(t, h, transcriptOwner, readTool, p); d == nil || d.PermissionDecision != decisionDeny {
@@ -126,7 +132,7 @@ func TestTranscriptHarnessFormats(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	p := filepath.Join(home, ".codex", "sessions", "other.jsonl")
-	h := hook()
+	h := transcriptHook()
 	cases := []struct {
 		format  string
 		payload map[string]any
@@ -158,7 +164,7 @@ func TestTranscriptShellGrants(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	p := filepath.Join(home, ".omp", "agent", "sessions", "own.jsonl")
-	h := hook()
+	h := transcriptHook()
 	h.Transcripts.Grants = map[string][]string{transcriptOwner: {p}}
 	for _, session := range []string{transcriptOwner, transcriptOther, ""} {
 		ev := toolEvent(bashTool, map[string]any{commandKey: "cat " + p})
@@ -180,7 +186,7 @@ func TestTranscriptShellGrants(t *testing.T) {
 func TestTranscriptAmbiguousReaders(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	h := hook()
+	h := transcriptHook()
 	for _, command := range []string{
 		`python3 -c 'from pathlib import Path; print((Path.home()/".codex"/"sessions").rglob("*"))'`,
 		`echo(){ cat "$1"; }; echo ~/.codex/sessions/other.jsonl`,
@@ -198,5 +204,87 @@ EOF`,
 	t.Setenv("HOME", "")
 	if d := transcriptDecision(t, h, transcriptOwner, readTool, "/unknown"); d == nil || d.PermissionDecision != decisionDeny {
 		t.Fatal("missing home passed")
+	}
+}
+
+func TestTranscriptOwnArtifacts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	customClaude := filepath.Join(home, "custom-projects")
+	customBrain := filepath.Join(home, "custom-brain")
+	h.Transcripts.ClaudeProjects = []string{customClaude}
+	h.Transcripts.AgyBrains = []string{customBrain}
+	for _, root := range []string{filepath.Join(home, ".claude", "projects"), customClaude} {
+		own := filepath.Join(root, "project", transcriptOwner, "tool-results", "result.txt")
+		other := filepath.Join(root, "project", transcriptOther, "tool-results", "result.txt")
+		for _, tool := range []string{readTool, editTool, multiEditTool, writeTool, grepTool, globTool} {
+			if d := transcriptDecision(t, h, transcriptOwner, tool, own); d != nil && d.PermissionDecision == decisionDeny {
+				t.Errorf("own spill refused by %s: %+v", tool, d)
+			}
+			if d := transcriptDecision(t, h, transcriptOwner, tool, other); d == nil || d.PermissionDecision != decisionDeny {
+				t.Errorf("foreign spill passed by %s", tool)
+			}
+		}
+		ev := toolEvent(bashTool, map[string]any{commandKey: "cat " + own})
+		ev[sessionKey] = transcriptOwner
+		if d := decideEvent(t, h, ev); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("own spill shell read refused: %+v", d)
+		}
+		// Ownership cannot be conferred by a symlink in the session directory.
+		if err := os.MkdirAll(filepath.Dir(own), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		alias := filepath.Join(filepath.Dir(own), "foreign.txt")
+		if err := os.Symlink(other, alias); err != nil {
+			t.Fatal(err)
+		}
+		if d := transcriptDecision(t, h, transcriptOwner, readTool, alias); d == nil || d.PermissionDecision != decisionDeny {
+			t.Fatal("own spill symlink escaped")
+		}
+		for _, id := range []string{"", "../" + transcriptOwner, transcriptOther} {
+			if d := transcriptDecision(t, h, id, readTool, own); d == nil || d.PermissionDecision != decisionDeny {
+				t.Errorf("invalid/foreign session %q owns spill", id)
+			}
+		}
+	}
+	for _, root := range []string{filepath.Join(home, ".gemini", "antigravity-cli", "brain"), customBrain} {
+		own := filepath.Join(root, transcriptOwner, "task.md")
+		other := filepath.Join(root, transcriptOther, "task.md")
+		for _, tool := range []string{readTool, writeTool, editTool, multiEditTool} {
+			if d := transcriptDecision(t, h, transcriptOwner, tool, own); d != nil && d.PermissionDecision == decisionDeny {
+				t.Errorf("own agy artifact refused by %s", tool)
+			}
+			if d := transcriptDecision(t, h, transcriptOwner, tool, other); d == nil || d.PermissionDecision != decisionDeny {
+				t.Errorf("foreign agy artifact passed by %s", tool)
+			}
+		}
+		patch := "*** Begin Patch\n*** Update File: " + own + "\n@@\n-old\n+new\n*** End Patch\n"
+		if reason, _ := h.checkCodexApplyPatch(event{Session: transcriptOwner}, patch, home); reason != "" {
+			t.Errorf("own artifact patch refused: %s", reason)
+		}
+	}
+}
+
+func TestTranscriptManagedScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	p := filepath.Join(home, ".codex", "sessions", "foreign.jsonl")
+	for _, managed := range []bool{false, true} {
+		h := hook()
+		h.Transcripts.Managed = func(string) (bool, error) { return managed, nil }
+		if d := transcriptDecision(t, h, transcriptOwner, readTool, p); (d != nil && d.PermissionDecision == decisionDeny) != managed {
+			t.Errorf("file managed=%v: %+v", managed, d)
+		}
+		ev := toolEvent(bashTool, map[string]any{commandKey: "cat " + p})
+		ev[sessionKey] = transcriptOwner
+		if d := decideEvent(t, h, ev); (d != nil && d.PermissionDecision == decisionDeny) != managed {
+			t.Errorf("shell managed=%v: %+v", managed, d)
+		}
+	}
+	h := hook()
+	h.Transcripts.Managed = func(string) (bool, error) { return false, errors.New("unreadable starts") }
+	if d := transcriptDecision(t, h, transcriptOwner, readTool, p); d == nil || d.PermissionDecision != decisionDeny {
+		t.Fatal("unreadable starts passed")
 	}
 }
