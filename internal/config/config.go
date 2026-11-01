@@ -4,8 +4,9 @@
 //
 // The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
 // $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
-// defaults. The defaults are neutral: memory thresholds are fractions of the
-// machine's RAM, swap or filesystem, and every organisation or desk choice
+// defaults unless explicitly named by $BEEKEEPER_CONFIG. The defaults are
+// neutral: memory thresholds are fractions of the machine's RAM, swap or
+// filesystem, and every organisation or desk choice
 // (the production installation, the installations, the lanes, the role
 // names) is unset until configured. docs/examples/config.yaml is a complete
 // desk's configuration.
@@ -2947,6 +2948,9 @@ func Path(flag string) (string, error) {
 		return flag, nil
 	}
 	if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" {
+		if _, err := os.Stat(filepath.Clean(env)); err != nil { //nolint:gosec // the configuration file explicitly selected by the caller
+			return "", err
+		}
 		return env, nil
 	}
 	dir, err := os.UserConfigDir()
@@ -2957,11 +2961,15 @@ func Path(flag string) (string, error) {
 }
 
 // Load reads the file at path and applies the defaults. A configuration
-// that is only incomplete loads: Incomplete names what is missing.
+// that is only incomplete loads: Incomplete names what is missing. A missing
+// file explicitly named by BEEKEEPER_CONFIG is an error, never defaults.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Clean(path))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" && filepath.Clean(env) == filepath.Clean(path) {
+			return nil, err
+		}
 		raw = nil
 	case err != nil:
 		return nil, err

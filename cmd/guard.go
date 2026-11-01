@@ -301,7 +301,8 @@ that does not load keeps the guards on.`,
 			// a hook runs on the host for a sandboxed session too, where the
 			// policy's environment stays its session's
 			a.hook = true
-			return nil
+			_, err := config.Path(a.cfgPath)
+			return err
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
