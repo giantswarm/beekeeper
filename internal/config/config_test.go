@@ -1051,3 +1051,44 @@ func TestClaudeUsageDefault(t *testing.T) {
 		t.Fatal("created an unconfigured Claude provider")
 	}
 }
+
+// A provider with only thresholds and a ceiling must receive its default
+// command before validation, just like an empty provider entry.
+func TestClaudeUsageDefaultWithThresholds(t *testing.T) {
+	const raw = `capacity:
+  floor: 5
+  ceiling: 14
+  providers:
+    claude:
+      ceiling: 10
+      fiveHourMax: 90
+      sevenDayMax: 97
+    codex:
+      ceiling: 6
+      fiveHourMax: 92
+      sevenDayMax: 97
+  choices:
+    - {harness: claude, model: claude-opus-5-5}
+    - {harness: codex, model: gpt-6.1-sol}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatalf("threshold-only provider must validate: %v", err)
+	}
+	claude := c.Capacity.Providers[ClaudeHarness]
+	if !claude.Enabled() || !slices.Equal(claude.Command, DefaultClaudeUsageCommand) {
+		t.Fatalf("threshold-only Claude provider did not use /usage default: %+v", claude)
+	}
+	if claude.Ceiling != 10 || claude.FiveHourMax != 90 || claude.SevenDayMax != 97 {
+		t.Fatalf("Claude thresholds were changed by defaulting: %+v", claude)
+	}
+	codex := c.Capacity.Providers[CodexHarness]
+	if !slices.Equal(codex.Command, DefaultCodexUsageCommand) || codex.Ceiling != 6 || codex.FiveHourMax != 92 || codex.SevenDayMax != 97 {
+		t.Fatalf("Codex defaults or thresholds: %+v", codex)
+	}
+	if c.Capacity.Floor != 5 || c.Capacity.Ceiling != 14 || len(c.Capacity.Choices) != 2 ||
+		c.Capacity.Choices[0].Harness != ClaudeHarness || c.Capacity.Choices[0].Model != "claude-opus-5-5" ||
+		c.Capacity.Choices[1].Harness != CodexHarness || c.Capacity.Choices[1].Model != "gpt-6.1-sol" {
+		t.Fatalf("capacity choices or total bounds changed: %+v", c.Capacity)
+	}
+}
