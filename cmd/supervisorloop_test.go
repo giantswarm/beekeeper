@@ -587,6 +587,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 			t.Run(fmt.Sprintf("done=%v/thread=%v", done, thread), func(t *testing.T) {
 				r := newLoopRig(t)
 				r.a.cfg.Supervisor.Classifier = []string{loopClassifier}
+				r.a.as = loopParty.Name // the real note command must not inherit a developer session
 				r.park(t, "", time.Now())
 				if !thread {
 					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
