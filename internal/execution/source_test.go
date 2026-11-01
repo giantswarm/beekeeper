@@ -36,7 +36,7 @@ func TestWorkspaceStartsAtCoordinatorHeadWithStaleHost(t *testing.T) {
 	git(upstream, "update-ref", "refs/heads/execution-source", head)
 	bundle := filepath.Join(t.TempDir(), "source.bundle")
 	git(upstream, "bundle", "create", bundle, "refs/heads/execution-source")
-	data, err := os.ReadFile(bundle)
+	data, err := readRegular(bundle, MaxSourceBundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestWorkspaceStartsAtCoordinatorHeadWithStaleHost(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(source), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(source, data, 0600); err != nil {
+	if err := atomicFile(source, data); err != nil {
 		t.Fatal(err)
 	}
 	// JSON keeps this regression executable against the pre-fix request type.
@@ -146,7 +146,7 @@ func TestSourceTransferRejectsSymlink(t *testing.T) {
 	if err := f.s.ReceiveSource(context.Background(), f.r.Ref, SourceChunk{Total: 1, Data: []byte("x")}); err == nil {
 		t.Fatal("symlink source accepted")
 	}
-	data, err := os.ReadFile(target)
+	data, err := readRegular(target, MaxWire)
 	if err != nil || string(data) != "untouched" {
 		t.Fatal("symlink target changed")
 	}
