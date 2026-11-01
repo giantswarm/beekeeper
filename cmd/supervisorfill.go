@@ -16,17 +16,18 @@ import (
 const loopFillKey = "next capacity "
 
 // fillPause holds the refill's board reads after an unproductive one: the
-// capacity it saw and the agents then live (on the roster, not done).
+// capacity limits it saw and the agents then live (on the roster, not done).
 type fillPause struct {
 	capacity string
 	live     []string
 	until    time.Time
 }
 
-// fillCapacityKey is what of capacity can change the refill's answer:
-// floor, ceiling, room and the number of busy agents.
+// fillCapacityKey is the configured floor and ceiling. Room and the busy
+// count move with every park, resume and wait; none of them can turn an
+// empty board answer into a pick, and no room already stops a read.
 func fillCapacityKey(cap *capacityView) string {
-	return fmt.Sprintf("%d/%d/%d/%d", cap.Floor, cap.Ceiling, cap.Room, len(cap.Busy))
+	return fmt.Sprintf("%d/%d", cap.Floor, cap.Ceiling)
 }
 
 // fillLive is the names of the roster's agents not done. A park, a resume,

@@ -253,20 +253,38 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 	}
 }
 
-func TestLoopFillStateChangesInvalidateBoardBackoff(t *testing.T) {
-	for _, change := range []string{"busy count changes", "available room changes", "an agent is removed", fillAgentDone, "capacity cycles through the floor"} {
+func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
+	for _, tc := range []struct {
+		change string
+		reads  int
+	}{
+		{"the floor changes", 2},
+		{"the ceiling changes", 2},
+		{"an agent is removed", 2},
+		{fillAgentDone, 2},
+		// A park or resume moves an agent in or out of busy and room with
+		// it; neither can make an empty board offer an item.
+		{"busy count changes", 1},
+		{"available room changes", 1},
+		{"capacity cycles through the floor", 1},
+	} {
+		change := tc.change
 		t.Run(change, func(t *testing.T) {
 			r, busy := fillRig(t)
 			original := r.answer
 			reads := 0
-			changedRoom := false
+			changedRoom, floor, ceiling := false, 3, 5
 			r.answer = func(args []string) (string, int) {
 				if args[0] == loopBoard {
 					reads++
 					return fillEmptyBoardJSON, 0
 				}
-				if args[0] == fillCapacityCommand && changedRoom {
-					return `{"floor":3,"room":1}`, 0
+				if args[0] == fillCapacityCommand {
+					room := ceiling - *busy
+					if changedRoom {
+						room = 1
+					}
+					return fmt.Sprintf(`{"floor":%d,"ceiling":%d,"room":%d,"busy":%s}`, floor, ceiling, room, busyJSON(*busy)), 0
 				}
 				return original(args)
 			}
@@ -279,6 +297,10 @@ func TestLoopFillStateChangesInvalidateBoardBackoff(t *testing.T) {
 				t.Fatal(err)
 			}
 			switch change {
+			case "the floor changes":
+				floor = 4
+			case "the ceiling changes":
+				ceiling = 6
 			case "busy count changes":
 				*busy = 1
 			case "available room changes":
@@ -306,11 +328,17 @@ func TestLoopFillStateChangesInvalidateBoardBackoff(t *testing.T) {
 			if err := l.pass(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if reads != 2 {
-				t.Fatalf("%s did not invalidate backoff: %d reads", change, reads)
+			if reads != tc.reads {
+				t.Fatalf("%s: %d board reads, want %d", change, reads, tc.reads)
 			}
 		})
 	}
+}
+
+// busyJSON is a capacity read's busy list of n agents.
+func busyJSON(n int) string {
+	b, _ := json.Marshal(make([]string, n))
+	return string(b)
 }
 
 // emptyBoardFill is a refill rig whose board offers nothing, counting reads.
@@ -335,6 +363,24 @@ func emptyBoardFill(t *testing.T) (*loopRig, *supervisorLoop, *int) {
 
 func TestLoopFillPauseHoldsThroughRosterChurn(t *testing.T) {
 	r, l, reads := emptyBoardFill(t)
+	// Capacity counts the stored roster as the capacity command does: a
+	// park moves its agent out of busy and gives room back.
+	board := r.answer
+	r.answer = func(args []string) (string, int) {
+		if args[0] != fillCapacityCommand {
+			return board(args)
+		}
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := countAgents(st, nil, r.a.now)
+		out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: 5 - len(c.Busy), agentCount: c})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), 0
+	}
 	r.started(t, "a worker", "a-session")
 	retry := r.a.cfg.Supervisor.FillRetryEvery.Duration
 	start := r.a.now
