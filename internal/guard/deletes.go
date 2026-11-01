@@ -193,7 +193,7 @@ func deleteTargets(name string, args []string) []string {
 			if i+1 < len(args) {
 				next = path.Base(strings.Join(shellWords(args[i+1]), ""))
 			}
-			if a == "-delete" || (a == "-exec" || a == "-execdir" || a == "-ok" || a == "-okdir") &&
+			if a == "-delete" || (a == findExecFlag || a == findExecDirFlag || a == findOKFlag || a == findOKDirFlag) &&
 				(next == rmCmd || next == shredCmd || next == unlinkCmd) {
 				deletes = true
 			}
