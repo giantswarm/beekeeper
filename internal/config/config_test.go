@@ -19,7 +19,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.StateDir != "/state/beekeeper" || c.LeaseDir != "/state/beekeeper/leases" || c.GitHub.Floor != 2500 ||
-		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Supervisor.RelayAt != 400_000 || c.Guide.RelayAt != 150_000 {
+		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Agents.RelayAt != 400_000 || c.Guide.RelayAt != 150_000 {
 		t.Errorf("defaults = %+v", c)
 	}
 	if len(c.Notify.Kinds) != 5 || c.Notify.Policy().Quiet != nil {
@@ -31,14 +31,14 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
-	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.ReviewHeadroom != 2 || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
 		t.Errorf("swap guard and capacity defaults = %s %d/%d %d %g %d", w.SwapWindow, k.Floor, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
 		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
 	}
 	if c.Kube.Production != "" || c.Kube.ContextTemplate != "" || len(c.Kube.Kubeconfig) != 0 || c.Kube.Context("alpha") != "" || len(c.Lanes) != 0 || len(c.Merge.DevctlOwners) != 0 ||
-		c.Guide.Skill != "" || c.Guide.Person != "" || c.Supervisor.Skill != "" || c.Ollama.URL != "" || c.Lemonade.URL != "" {
+		c.Guide.Skill != "" || c.Guide.Person != "" || c.Ollama.URL != "" || c.Lemonade.URL != "" {
 		t.Errorf("organisation and desk defaults are set: %+v", c)
 	}
 	if !c.IsLeasable(Browser) || c.IsLeasable("kind-1") {
@@ -60,7 +60,9 @@ notify:
   kinds: [due, budget]
   quietHours: "22:00-07:00"
   urgency: {due: critical}
-supervisor: {relayAt: 1.5M}
+guide: {relayAt: 1.5M}
+# retired supervisor-session keys: an older config still loads, they are ignored
+supervisor: {loop: true, relayAt: 1.5M, skill: beekeeper:supervise, restartGrace: 30s}
 `
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -70,7 +72,7 @@ supervisor: {relayAt: 1.5M}
 		t.Fatal(err)
 	}
 	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
-		c.Watch.Interval.Duration != time.Minute || c.Supervisor.RelayAt != 1_500_000 {
+		c.Watch.Interval.Duration != time.Minute || c.Guide.RelayAt != 1_500_000 {
 		t.Errorf("config = %+v", c)
 	}
 	if n := c.Notify; len(n.Kinds) != 2 || n.Repeat.Duration != 30*time.Minute || n.Policy().Quiet == nil || n.Urgency["due"] != "critical" {
@@ -173,7 +175,7 @@ func TestLoadRejects(t *testing.T) {
 		"sink repo not owner/repo":    "sink: {repo: site, workflow: refresh.yaml}",
 		"sink without a workflow":     "sink: {repo: o/site}",
 		"sink of an unknown verb":     "sink: {repo: o/site, workflow: refresh.yaml, verbs: [note.add]}",
-		"skill and file":              "supervisor: {skill: supervise, instructions: /x.md}",
+		"skill and file":              "guide: {skill: guide, instructions: /x.md}",
 		"unknown worker profile":      "agents: {profile: lean}",
 		"profile name as a path":      "agents: {profiles: {../x: {tools: [Read]}}}",
 		"unknown role profile":        "guide: {profile: lean}\nagents: {profiles: {slim: {tools: [Bash]}}}",
@@ -183,13 +185,13 @@ func TestLoadRejects(t *testing.T) {
 		"unknown urgency":             "notify: {urgency: {due: urgent}}",
 		"urgency of no kind":          "notify: {urgency: {sessions: low}}",
 		"bad quiet hours":             "notify: {quietHours: 22-7}",
-		"bad relayAt":                 "supervisor: {relayAt: 400kb}",
+		"bad relayAt":                 "guide: {relayAt: 400kb}",
 		"team files without a dir":    "supervisor: {ownership: {team: t, teamFiles: o/github}}",
 		"bad review pattern":          "supervisor: {ownership: {review: [\"o/[\"]}}",
 		"review without an owner":     "supervisor: {ownership: {review: [shared-configs]}}",
 		"never without an owner":      "supervisor: {ownership: {never: [tool]}}",
 		"never without a name":        "supervisor: {ownership: {never: [o/]}}",
-		"negative relayAt":            "supervisor: {relayAt: -1}",
+		"negative relayAt":            "guide: {relayAt: -1}",
 		"bad store glob":              "outbound: {storeDeny: [{vault: \"[\"}]}",
 		"bad outbound path":           "outbound: {paths: [\"[\"]}",
 		"age without match":           "secret: {ageIdentities: [{ref: op://V/i/f}]}",
@@ -505,7 +507,7 @@ func TestExampleConfig(t *testing.T) {
 			t.Errorf("threshold %d, want %d", got, want)
 		}
 	}
-	if c.Supervisor.Skill != "beekeeper:supervise" || c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
+	if c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
 		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
 		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 ||
 		c.Board.Project != 12 || len(c.Board.Order) != 7 || !c.Board.Order[1].SubIssues || c.Board.Epics.Go != "in progress" || len(c.Board.Epics.Planning) != 1 || c.Board.StaleAfter.Hours() != 8760 {
@@ -699,7 +701,7 @@ func TestIncompleteStoreRef(t *testing.T) {
 
 func TestProfileFor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.yaml")
-	raw := "agents:\n  profile: minimal\n  profiles:\n    lean: {tools: [Read, Grep], plugins: [beekeeper, base], mcpServers: [pro]}\nsupervisor: {profile: lean}\n"
+	raw := "agents:\n  profile: minimal\n  profiles:\n    lean: {tools: [Read, Grep], plugins: [beekeeper, base], mcpServers: [pro]}\nguide: {profile: lean}\n"
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -711,10 +713,10 @@ func TestProfileFor(t *testing.T) {
 		slices.Contains(p.Tools, "AskUserQuestion") || slices.Contains(p.Tools, "Agent") {
 		t.Errorf("built-in minimal = %+v %v", p, ok)
 	}
-	if p, ok := c.Agents.ProfileFor(c.Supervisor.Profile); !ok || !slices.Equal(p.Tools, []string{"Read", "Grep"}) || !slices.Equal(p.MCPServers, []string{"pro"}) {
+	if p, ok := c.Agents.ProfileFor(c.Guide.Profile); !ok || !slices.Equal(p.Tools, []string{"Read", "Grep"}) || !slices.Equal(p.MCPServers, []string{"pro"}) {
 		t.Errorf("desk profile lean = %+v %v", p, ok)
 	}
-	if _, ok := c.Agents.ProfileFor(c.Guide.Profile); ok {
+	if _, ok := c.Agents.ProfileFor(""); ok {
 		t.Error("a role without a profile resolved one")
 	}
 	c.Agents.Profiles[MinimalProfile] = Profile{Tools: []string{"Glob"}}
@@ -1028,6 +1030,36 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 	}
 }
 
+func TestReviewHeadroomConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+		bad   bool
+	}{
+		{"0", 0, false}, {"3", 3, false}, {"-1", 0, true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("capacity:\n  reviewHeadroom: "+tc.value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.reviewHeadroom") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Capacity.ReviewHeadroom != tc.want {
+				t.Fatalf("headroom %d, want %d", c.Capacity.ReviewHeadroom, tc.want)
+			}
+		})
+	}
+}
+
 func TestClaudeUsageDefault(t *testing.T) {
 	for _, raw := range []string{"capacity: {providers: {claude: {}}}\n", "capacity: {providers: {claude: {ceiling: 2}}}\n"} {
 		c, err := Load(writeTemp(t, raw))
@@ -1114,12 +1146,6 @@ func TestSupervisorFillRetryEvery(t *testing.T) {
 	}
 }
 
-// The names of the empty and unset cases of the table tests.
-const (
-	emptyCase = "empty"
-	unsetCase = "unset"
-)
-
 // An explicit environment path must never select the default state when absent.
 func TestMissingEnvironmentConfig(t *testing.T) {
 	const missingCase = "missing"
@@ -1156,6 +1182,43 @@ func TestMissingEnvironmentConfig(t *testing.T) {
 				}
 			} else if err != nil || cfg.StateDir != filepath.Join(root, "beekeeper") {
 				t.Fatalf("default Load = %v, %v", cfg, err)
+			}
+		})
+	}
+}
+
+// capacity.local.ceiling is the coordinator machine's own cap: unset means
+// none, 0 is honoured and a negative one is refused.
+func TestCapacityLocalCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		yaml  string
+		want  int
+		set   bool
+		bad   bool
+		label string
+	}{
+		{label: "unset", yaml: "capacity:\n  ceiling: 14\n"},
+		{label: "zero", yaml: "capacity:\n  local:\n    ceiling: 0\n", want: 0, set: true},
+		{label: "five", yaml: "capacity:\n  ceiling: 14\n  local:\n    ceiling: 5\n", want: 5, set: true},
+		{label: "negative", yaml: "capacity:\n  local:\n    ceiling: -1\n", bad: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.local.ceiling") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, ok := c.Capacity.Local.Limit(); n != tc.want || ok != tc.set {
+				t.Fatalf("local ceiling %d (set %v), want %d (set %v)", n, ok, tc.want, tc.set)
 			}
 		})
 	}

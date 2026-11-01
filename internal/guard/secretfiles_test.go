@@ -33,7 +33,7 @@ func fakeHome(t *testing.T) (string, Hook) {
 			t.Fatal(err)
 		}
 	}
-	h := hook()
+	h := transcriptHook()
 	h.SecretFiles = []string{"~/app/creds.*"}
 	return home, h
 }
@@ -64,8 +64,8 @@ func TestSecretFileBashReads(t *testing.T) {
 		{"yq 'del(.. | .apiKey?)' ~/.omp/agent/models.yml", stripForm},
 		{`yq 'del(.. | .apiKey?, ."X-Auth-Token"?) | input' ~/.omp/agent/models.yml`, stripForm},
 		{"grep apiKey ~/.omp/agent/models.yml", grepForm},
-		{"grep -r apiKey ~/.omp", grepForm},
-		{"rg Key ~/.omp/agent", grepForm},
+		{"grep -r apiKey ~/.omp", transcriptReasonName},
+		{"rg Key ~/.omp/agent", transcriptReasonName},
 		{"cat ~/.omp/agent/models.yml | grep apiKey", stripForm},
 		{"cp ~/.omp/agent/models.yml /tmp/m.yml", stripForm},
 		{"sqlite3 ~/.omp/agent/agent.db .dump", "no YAML or JSON file"},
@@ -83,9 +83,9 @@ func TestSecretFileBashReads(t *testing.T) {
 		{`jq 'del(.. | .apiKey?, ."X-Auth-Token"?) | .providers' ~/.omp/agent/models.yml`, ""},
 		{`cat ~/.omp/agent/models.yml | yq -y 'del(.. | .apiKey?, ."X-Auth-Token"?)'`, ""},
 		{"cat ~/.omp/agent/models.yml | wc -l", ""},
-		{"cat ~/.omp/agent/sessions/s.jsonl", ""},
+		{"cat ~/.omp/agent/sessions/s.jsonl", transcriptReasonName},
 		{"cat ~/app/notes.txt", ""},
-		{"grep -r apiKey " + home, ""},
+		{"grep -r apiKey " + home, transcriptReasonName},
 		{"echo hi > ~/.omp/agent/models.yml.bak", ""},
 	} {
 		d := decide(t, h, home, tc.cmd, nil)
@@ -114,13 +114,13 @@ func TestSecretFileTools(t *testing.T) {
 		{readTool, map[string]any{filePathKey: models}, true},
 		{readTool, map[string]any{filePathKey: filepath.Join(home, "app", "creds.json")}, true},
 		{readTool, map[string]any{filePathKey: filepath.Join(home, "app", "notes.txt")}, false},
-		{readTool, map[string]any{filePathKey: filepath.Join(home, ".omp", "agent", "sessions", "s.jsonl")}, false},
+		{readTool, map[string]any{filePathKey: filepath.Join(home, ".omp", "agent", "sessions", "s.jsonl")}, true},
 		{grepTool, map[string]any{patternKey: credKey, pathKey: models, outputModeKey: contentKey}, true},
 		{grepTool, map[string]any{patternKey: credKey, pathKey: filepath.Join(home, ".omp"), outputModeKey: contentKey}, true},
-		{grepTool, map[string]any{patternKey: credKey, pathKey: filepath.Join(home, ".omp"), outputModeKey: contentKey, "glob": "*.jsonl"}, false},
+		{grepTool, map[string]any{patternKey: credKey, pathKey: filepath.Join(home, ".omp"), outputModeKey: contentKey, "glob": "*.jsonl"}, true},
 		{grepTool, map[string]any{patternKey: credKey, pathKey: models}, false},
 		{grepTool, map[string]any{patternKey: credKey, pathKey: models, outputModeKey: "count"}, false},
-		{grepTool, map[string]any{patternKey: credKey, pathKey: home, outputModeKey: contentKey}, false},
+		{grepTool, map[string]any{patternKey: credKey, pathKey: home, outputModeKey: contentKey}, true},
 	} {
 		ev := toolEvent(tc.tool, tc.input)
 		ev["cwd"] = home
@@ -129,7 +129,7 @@ func TestSecretFileTools(t *testing.T) {
 		if denied != tc.refuse {
 			t.Errorf("%s %v: refused %v, want %v", tc.tool, tc.input, denied, tc.refuse)
 		}
-		if denied && (!strings.Contains(d.Reason, "beekeeper secret") || !strings.Contains(d.Reason, stripForm)) {
+		if denied && !strings.Contains(d.Reason, transcriptReasonName) && (!strings.Contains(d.Reason, "beekeeper secret") || !strings.Contains(d.Reason, stripForm)) {
 			t.Errorf("%s %v: refusal names no alternative:\n%s", tc.tool, tc.input, d.Reason)
 		}
 	}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -178,6 +179,55 @@ func (a *app) executionLogsCmd() *cobra.Command {
 	return c
 }
 
+const (
+	defaultExecutionOperationTimeout = 30 * time.Second
+	executionSyncInterval            = time.Minute
+	executionSyncHostPrefix          = "execution-host-sync:"
+	executionSyncEmitPrefix          = "execution-sync-"
+)
+
+var executionSyncBackoffs = []time.Duration{
+	2 * time.Minute,
+	4 * time.Minute,
+	8 * time.Minute,
+	15 * time.Minute,
+}
+
+func executionSyncBackoff(failures int) time.Duration {
+	if failures <= 0 {
+		return executionSyncInterval
+	}
+	return executionSyncBackoffs[min(failures, len(executionSyncBackoffs))-1]
+}
+
+func executionOperationTimeout(h execution.Host) time.Duration {
+	if d, err := time.ParseDuration(h.OperationTimeout); err == nil && d > 0 {
+		return d
+	}
+	return defaultExecutionOperationTimeout
+}
+
+func activeExecution(st *state.State, ref execution.Ref) bool {
+	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Execution != nil && *ag.Execution == ref
+	})
+}
+
+func executionNeedsSync(st *state.State, r *state.ExecutionRecord) bool {
+	if r == nil {
+		return false
+	}
+	if !r.Terminal() || r.Observation.Reachability != execution.Reachable {
+		return true
+	}
+	return !r.Settled && !r.Completed && !r.Observation.StopAcknowledged && activeExecution(st, r.Handle.Ref)
+}
+
+func isUnreachable(err error) bool {
+	var down *execution.UnreachableError
+	return errors.As(err, &down)
+}
+
 func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	h, err := a.executionHost(selector)
 	if err != nil {
@@ -187,39 +237,107 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	if err != nil {
 		return err
 	}
-	var failures []string
-	for _, s := range st.Starts {
-		r := s.Execution
-		if r == nil || r.Selector != selector {
-			continue
+	syncer, ok := a.executionClient(h).(execution.ControlSyncer)
+	if !ok {
+		return refused("execution transport cannot reconcile its control outbox")
+	}
+	timeout := executionOperationTimeout(h)
+	withTimeout := func(parent context.Context) (context.Context, context.CancelFunc) {
+		return context.WithTimeout(parent, timeout)
+	}
+	var indices []int
+	for i, s := range st.Starts {
+		if r := s.Execution; r != nil && r.Selector == selector && executionNeedsSync(st, r) {
+			indices = append(indices, i)
 		}
+	}
+	// Reconcile unconfirmed executions first so a persistent deadline or
+	// transport failure on one execution does not flip healthy peers on the
+	// same host between Reachable and Unreachable across retries.
+	slices.SortStableFunc(indices, func(i, j int) int {
+		ui := st.Starts[i].Execution.Observation.Reachability == execution.Unreachable
+		uj := st.Starts[j].Execution.Observation.Reachability == execution.Unreachable
+		if ui == uj {
+			return 0
+		}
+		if ui {
+			return -1
+		}
+		return 1
+	})
+	var failures []string
+	for _, idx := range indices {
+		if ctx.Err() != nil {
+			failures = append(failures, ctx.Err().Error())
+			break
+		}
+		r := st.Starts[idx].Execution
 		ref := r.Handle.Ref
 		if st.Stop != nil && !r.Terminal() && r.StopRequest == nil {
-			if err := a.stopExecution(ctx, ref, st.Stop.Reason); err != nil {
-				failures = append(failures, err.Error())
+			opCtx, cancel := withTimeout(ctx)
+			stopErr := a.stopExecution(opCtx, ref, st.Stop.Reason)
+			cancel()
+			if stopErr != nil {
+				failures = append(failures, stopErr.Error())
+				if isUnreachable(stopErr) || ctx.Err() != nil {
+					break
+				}
 			}
 		}
-		syncer, ok := a.executionClient(h).(execution.ControlSyncer)
-		if !ok {
-			return refused("execution transport cannot reconcile its control outbox")
+		opCtx, cancel := withTimeout(ctx)
+		_, syncErr := syncer.SyncControl(opCtx, ref)
+		cancel()
+		if syncErr != nil {
+			a.executionFailure(ref, syncErr)
+			failures = append(failures, syncErr.Error())
+			if isUnreachable(syncErr) || ctx.Err() != nil {
+				break
+			}
 		}
-		if _, err := syncer.SyncControl(ctx, ref); err != nil {
-			a.executionFailure(ref, err)
-			failures = append(failures, err.Error())
-		}
+		var obs execution.Observation
 		if r.StopRequest != nil && !r.Observation.StopAcknowledged {
-			err = a.stopExecution(ctx, ref, r.StopRequest.Reason)
+			opCtx, cancel = withTimeout(ctx)
+			err = a.stopExecution(opCtx, ref, r.StopRequest.Reason)
+			cancel()
 		} else {
-			_, err = a.inspectExecution(ctx, ref)
+			wasTerminal := r.Terminal()
+			opCtx, cancel = withTimeout(ctx)
+			obs, err = a.inspectExecution(opCtx, ref)
+			cancel()
+			if err == nil && !wasTerminal && (obs.ProcessState == execution.Exited || obs.ProcessState == execution.Failed) {
+				opCtx, cancel = withTimeout(ctx)
+				_, postErr := syncer.SyncControl(opCtx, ref)
+				cancel()
+				if postErr != nil {
+					a.executionFailure(ref, postErr)
+					err = postErr
+				}
+			}
 		}
 		if err != nil {
 			failures = append(failures, err.Error())
+			if isUnreachable(err) || ctx.Err() != nil {
+				break
+			}
+		} else if syncErr == nil {
+			_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+				if rec, _ := executionRecord(current, ref); rec != nil && rec.Terminal() {
+					rec.Settled = true
+				}
+				return nil, nil
+			})
 		}
 		// Delivery failure must never starve controls or process observations.
 		// The delivery helper re-reads the fresh terminal/completed state.
 		if st.Stop == nil && r.StopRequest == nil {
-			if err := a.syncExecutionMessages(ctx, ref); err != nil {
-				failures = append(failures, err.Error())
+			opCtx, cancel = withTimeout(ctx)
+			msgErr := a.syncExecutionMessages(opCtx, ref)
+			cancel()
+			if msgErr != nil {
+				failures = append(failures, msgErr.Error())
+				if isUnreachable(msgErr) || ctx.Err() != nil {
+					break
+				}
 			}
 		}
 	}
@@ -229,39 +347,67 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	return nil
 }
 
-// syncExecutions uses one bounded window per minute. Rotating the first
+// syncExecutions reconciles each host on its own schedule and backs off
+// hosts whose reconciliation failed or hit its deadline. Rotating the first
 // host prevents an unreachable endpoint monopolizing reconciliation.
 func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.State {
 	selectors := []string{}
+	active := map[string]bool{}
 	for _, s := range st.Starts {
-		if r := s.Execution; r != nil && !slices.Contains(selectors, r.Selector) {
-			selectors = append(selectors, r.Selector)
+		if r := s.Execution; r != nil && executionNeedsSync(st, r) {
+			if !slices.Contains(selectors, r.Selector) {
+				selectors = append(selectors, r.Selector)
+			}
+			active[executionSyncEmitPrefix+r.Selector] = true
 		}
 	}
+	w.clearMissing(executionSyncEmitPrefix, active)
 	if len(selectors) == 0 {
 		return st
 	}
-	w.mu.Lock()
-	if w.last == nil {
-		w.last = map[string]time.Time{}
-	}
-	if last := w.last["execution-sync"]; !last.IsZero() && w.now.Sub(last) < time.Minute {
-		w.mu.Unlock()
-		return st
-	}
-	w.last["execution-sync"] = w.now
-	w.mu.Unlock()
 	slices.Sort(selectors)
-	start := int((w.now.Unix() / 60) % int64(len(selectors)))
-	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	now := w.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	start := int((now.Unix() / 60) % int64(len(selectors)))
+	ran := false
 	for i := range selectors {
-		selector := selectors[(start+i)%len(selectors)]
-		if err := w.syncExecutionHost(bounded, selector); err != nil {
-			w.emit("execution-sync-"+selector, "EXECUTION UNCONFIRMED: %s: %v", selector, err)
-		} else {
-			w.clear("execution-sync-" + selector)
+		if ctx.Err() != nil {
+			break
 		}
+		selector := selectors[(start+i)%len(selectors)]
+		key := executionSyncHostPrefix + selector
+		w.mu.Lock()
+		if w.last == nil {
+			w.last = map[string]time.Time{}
+		}
+		if w.executionSyncFailures == nil {
+			w.executionSyncFailures = map[string]int{}
+		}
+		last := w.last[key]
+		wait := executionSyncBackoff(w.executionSyncFailures[selector])
+		if !last.IsZero() && now.Sub(last) < wait {
+			w.mu.Unlock()
+			continue
+		}
+		w.last[key] = now
+		w.mu.Unlock()
+		ran = true
+		if err := w.syncExecutionHost(ctx, selector); err != nil {
+			w.mu.Lock()
+			w.executionSyncFailures[selector]++
+			w.mu.Unlock()
+			w.emit(executionSyncEmitPrefix+selector, "EXECUTION UNCONFIRMED: %s: %v", selector, err)
+		} else {
+			w.mu.Lock()
+			delete(w.executionSyncFailures, selector)
+			w.mu.Unlock()
+			w.clear(executionSyncEmitPrefix + selector)
+		}
+	}
+	if !ran {
+		return st
 	}
 	updated, err := w.store.Read()
 	if err != nil {

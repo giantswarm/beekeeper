@@ -57,8 +57,8 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 	since := now.Add(-2 * time.Hour)
 	agent := state.Party{Session: "gone-agent", Name: uiAgentName}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: sup, Since: since}
-		st.SupervisorCLI = &state.CLI{Supervisor: sup, Since: since, Gone: now.Add(-2 * time.Hour)}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup, Since: since}}
+		st.Guide.CLI = &state.CLI{Supervisor: sup, Since: since, Gone: now.Add(-2 * time.Hour)}
 		st.Holds = []state.Hold{{Target: uiRepo, Reason: "the release window", By: sup, At: now.Add(-time.Hour)}}
 		st.Notes = []state.Note{{ID: 7, Kind: noteDecision, For: pat, Text: uiNoteText, Due: now.Add(-30 * time.Minute), By: sup, At: now.Add(-time.Hour)}}
 		st.Timers = []state.Timer{{ID: 3, Due: now.Add(-3 * time.Minute), What: "check", By: sup, At: now.Add(-time.Hour)}}
@@ -102,20 +102,20 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 	if d.At.IsZero() {
 		t.Error("the refresh says nothing about when it was taken")
 	}
-	if d.Status.Supervisor != uiSupName || d.Status.SupervisorLive || !d.Status.SupervisorGone {
-		t.Errorf("supervisor = %+v, want Sam gone", d.Status)
+	if d.Status.SupervisorLoop {
+		t.Errorf("supervisor = %+v, want the loop down", d.Status)
 	}
 	if d.Status.LeaseCount != 2 || d.Status.HoldCount != 1 || d.Status.Due != 2 {
 		t.Errorf("counts = %+v, want 2 leases, 1 hold, 2 due", d.Status)
 	}
 	var supRole bool
 	for _, r := range d.Roles {
-		if r.Name == supervisorRole.name {
+		if r.Name == guideRole.name {
 			supRole = r.Holder == uiSupName && !r.Live && !r.Gone.IsZero()
 		}
 	}
 	if !supRole {
-		t.Errorf("the supervisor's role is not read as gone: %+v", d.Roles)
+		t.Errorf("the guide's role is not read as gone: %+v", d.Roles)
 	}
 	if len(d.Holds) != 1 || d.Holds[0].Target != uiRepo || d.Holds[0].Reason != "the release window" {
 		t.Errorf("holds = %+v", d.Holds)

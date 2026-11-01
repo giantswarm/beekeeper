@@ -13,6 +13,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
+	"github.com/google/go-github/v93/github"
 	"golang.org/x/mod/module"
 
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -31,17 +32,18 @@ const lookupTimeout = 15 * time.Second
 // ErrOutdated is what a check returns when a newer release exists.
 var ErrOutdated = errors.New("a newer beekeeper release is available")
 
-// Seams the tests replace: where releases come from (nil is public GitHub,
-// anonymous unless GITHUB_TOKEN is set; go-selfupdate asks an empty release
-// list again and adds the latest release), what a download must verify against
+// Seams the tests replace: where releases come from (public GitHub,
+// authenticated with the environment or gh login when available; empty tag responses are retried),
+// what a download must verify against
 // (the shared cosign validator: a CircleCI build of Repository, against the
 // Sigstore public-good trust root), the file the update replaces and the
 // running version.
 var (
-	newSource      = func() selfupdate.Source { return nil }
+	newSource      = newGitHubSource
 	newValidator   = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
+	currentCommit  = project.GitSHA
 )
 
 // Result is what a check or an update found and did.
@@ -74,7 +76,11 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases or with go install %s@latest", res.Current, project.Source, project.Module)
 	}
 
-	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: newValidator(), Prerelease: prerelease(res.Current)})
+	source, err := newSource(prerelease(res.Current))
+	if err != nil {
+		return res, fmt.Errorf("creating release source: %w", err)
+	}
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: source, Validator: newValidator(), Prerelease: prerelease(res.Current)})
 	if err != nil {
 		return res, err
 	}
@@ -86,6 +92,10 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		// Nothing has been downloaded.
 		return res, fmt.Errorf("the latest release of %s has no signature bundle for this platform's binary; refusing to install it: %w", Repository, err)
 	case err != nil:
+		var limited *github.RateLimitError
+		if errors.As(err, &limited) {
+			return res, fmt.Errorf("GitHub release lookup rate limit exceeded; resets at %s: %w", limited.Rate.Reset.UTC().Format(time.RFC3339), err)
+		}
 		return res, fmt.Errorf("looking up the latest release of %s (is this machine online?): %w", Repository, err)
 	case !found:
 		return res, fmt.Errorf("GitHub answered no release of %s that carries a binary for %s/%s", Repository, runtime.GOOS, runtime.GOARCH)

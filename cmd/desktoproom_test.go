@@ -45,7 +45,7 @@ func TestRoomFor(t *testing.T) {
 		{Party: state.Party{Session: "tasked"}, Task: "its own task"},
 		{Party: state.Party{Session: onhold}, Task: "its parked task", Park: &state.Park{}},
 	}
-	st.Supervisor = &state.Supervisor{Party: state.Party{Session: "watcher", HostSession: "local_watcher"}, Since: now.Add(-time.Hour)}
+	st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "watcher", HostSession: "local_watcher"}, Since: now.Add(-time.Hour)}}
 	const stale, fresh, waiting = "local_stale", "local_fresh", "local_onhold"
 	if got := roomFor(st, sessions, tbl, now, nil, false); got == nil || got.HostID != stale {
 		t.Fatalf("ends %v, want beekeeper's finished worker idle longest, %s", got, stale)
@@ -82,7 +82,7 @@ func TestRoomFor(t *testing.T) {
 // Neither the holder nor a run still active within stewardQuiet is ended.
 func TestRoomForRelievedRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 13, 4, 0, 0, time.UTC)
-	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: "Guide run 12"}
+	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: guideRole.runName(12)}
 	succ := state.Party{Session: "successor", HostSession: "local_successor", Name: "Guide run 13"}
 	sessions := []*claude.Session{
 		{PID: 1, ID: old.Session, HostID: old.HostSession, Name: old.Name, LastActive: now.Add(-3 * time.Minute)},

@@ -598,3 +598,16 @@ func flagValue(args []string, flag string) (string, bool) {
 	}
 	return "", false
 }
+
+// PublicationRefusal applies the ordinary outbound and mention rules to the
+// coordinator's delegated GitHub write. commits contains messages and added
+// lines only; removed lines do not disclose new text.
+func (o Outbound) PublicationRefusal(text, commits string) string {
+	if len(mentions(text)) > 0 {
+		return "publication text must not mention GitHub accounts"
+	}
+	if hits := o.hits(text + "\n" + commits); len(hits) > 0 {
+		return "publication refused by outbound rules: " + strings.Join(hits, ", ")
+	}
+	return ""
+}

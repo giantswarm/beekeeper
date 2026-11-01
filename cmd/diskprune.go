@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
@@ -23,6 +24,29 @@ import (
 const diskPruneFile = "disk-prune.json"
 const diskPruneLock = "disk-prune.lock"
 
+// diskHoldingFile records what a pressure run left holding the space, for
+// the low-disk note that follows it.
+const diskHoldingFile = "disk-holding.json"
+
+// diskHoldingMin is the smallest uncovered directory a pressure run names.
+var diskHoldingMin int64 = 100 << 20
+
+type diskHolding struct {
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
+}
+
+// keptReferencesUnknown keeps a candidate decided while some process's
+// references could not be read.
+const keptReferencesUnknown = "process references unknown"
+
+// unknownReferences reports a scan that read every process but some: its
+// references are known for all but those, so only the step it gates keeps.
+func unknownReferences(err error) bool {
+	var unknown *proc.UnknownError
+	return errors.As(err, &unknown)
+}
+
 // diskMachine is a snapshot of live references and disposable disk places.
 // Tests replace the reader, so automatic pruning never reaches real data.
 type diskMachine struct {
@@ -31,8 +55,21 @@ type diskMachine struct {
 	pressure       bool
 	cache, sccache string
 	tmp, trash     []string
-	trees          worktreeMachine
-	refresh        func() ([]string, bool, error)
+	// caches are the disk.caches policies' roots; protect are the paths no
+	// cache root may hold (the home, beekeeper's state, checkout roots).
+	caches  []diskCache
+	protect []string
+	// entries are the policies, cacheHome the user cache directory: a
+	// pressure run that leaves the disk low (stillLow; nil, it stays low)
+	// names what there no policy covers.
+	entries   []config.DiskCache
+	cacheHome string
+	stillLow  func() bool
+	trees     worktreeMachine
+	refresh   func() ([]string, bool, error)
+	// unknown is the read's unreadable processes; without refresh, every
+	// step keeps its candidates while it is set.
+	unknown error
 	// sccacheServers lists the user's sccache processes; stopSccache stops
 	// them before a trim. Nil, no server runs.
 	sccacheServers func() []int
@@ -43,7 +80,7 @@ var liveDisk = (*app).diskMachine
 
 func diskReferences() ([]string, bool, error) {
 	refs, commands, err := proc.UserReferences(os.Getuid())
-	if err != nil {
+	if err != nil && !unknownReferences(err) {
 		return nil, false, err
 	}
 	builds := false
@@ -54,24 +91,30 @@ func diskReferences() ([]string, bool, error) {
 	}
 	slices.Sort(refs)
 	refs = slices.Compact(refs)
-	return refs, builds, nil
+	return refs, builds, err
 }
 
 func (a *app) diskMachine() (diskMachine, error) {
-	m := diskMachine{refresh: diskReferences, sccacheServers: sccacheServers, stopSccache: stopSccacheServers, cache: goCacheDir(), tmp: []string{filepath.Join(a.cfg.StateDir, "tmp")}, trash: a.cfg.Disk.TrashDirs}
+	entries := a.diskCacheEntries()
+	m := diskMachine{refresh: diskReferences, sccacheServers: sccacheServers, stopSccache: stopSccacheServers, cache: a.builtinCache(config.DiskCacheGo, config.DiskCacheModeGo).Path, sccache: a.builtinCache(config.DiskCacheSccache, config.DiskCacheModeSc).Path, caches: resolveDiskCaches(entries), trash: a.cfg.Disk.TrashDirs}
+	home, _ := os.UserHomeDir()
+	m.protect = append([]string{home, a.cfg.StateDir, a.store.Dir()}, a.cfg.Disk.Checkouts...)
+	m.protect = append(m.protect, a.cfg.Doctor.WorktreeRoots...)
+	m.entries = entries
+	m.cacheHome, _ = os.UserCacheDir()
+	m.stillLow = func() bool {
+		d, err := machine.ReadDisk(a.cfg.StateDir)
+		return err != nil || d.FreeMiB < a.cfg.Watch.DiskMin(d.TotalMiB)
+	}
 	if d, err := machine.ReadDisk(a.cfg.StateDir); err == nil {
 		m.pressure = d.FreeMiB < a.cfg.Watch.DiskMin(d.TotalMiB)
 	}
 	var err error
 	m.refs, m.builds, err = diskReferences()
-	if err != nil {
+	if unknownReferences(err) {
+		m.unknown = err
+	} else if err != nil {
 		return m, fmt.Errorf("disk pruning kept everything: process references unavailable: %w", err)
-	}
-	m.sccache = os.Getenv("SCCACHE_DIR")
-	if m.sccache == "" {
-		if cache, err := os.UserCacheDir(); err == nil {
-			m.sccache = filepath.Join(cache, "sccache")
-		}
 	}
 	m.trees, err = liveWorktrees(a)
 	if err != nil {
@@ -101,6 +144,7 @@ func (a *app) diskMachine() (diskMachine, error) {
 	m.trees.automatic, m.trees.buildDirs, m.trees.outputs, m.trees.refs = true, a.cfg.Disk.BuildDirs, a.cfg.Disk.BuildOutputs, m.refs
 	m.trees.live = append(m.trees.live, m.refs...)
 	m.trees.recheck = func() ([]string, error) { refs, _, err := diskReferences(); return refs, err }
+	m.trees.unknown = m.unknown
 	return m, nil
 }
 
@@ -109,16 +153,19 @@ type diskRun struct {
 	trees  worktreeRun
 	locked bool
 	dry    bool
+	// pressure runs name what still holds the space.
+	pressure  bool
+	caches    []cacheReport
+	uncovered []cacheReport
+	// unknown names the processes whose references kept candidates.
+	unknown error
 }
 
 func (r diskRun) String() string {
 	if r.locked {
 		return "disk: kept everything (another disk prune runs)"
 	}
-	verb := "freed"
-	if r.dry {
-		verb = "would free"
-	}
+	verb := freedVerb(r.dry)
 	parts := []string{fmt.Sprintf("disk: %s %s in %d cache/output/tmp/trash entries", verb, sizeStr(r.Freed+r.trees.freed()), r.Removed)}
 	if r.trees.kept != nil {
 		parts = append(parts, r.trees.String())
@@ -129,6 +176,15 @@ func (r diskRun) String() string {
 	}
 	if len(keeps) > 0 {
 		parts = append(parts, "kept: "+strings.Join(keeps, ", "))
+	}
+	if h := r.holding(3); r.pressure && h != "" {
+		parts = append(parts, "caches holding most: "+h)
+	}
+	if u := r.uncoveredText(); u != "" {
+		parts = append(parts, "still low; not covered by disk.caches: "+u)
+	}
+	if r.unknown != nil {
+		parts = append(parts, "references unknown: "+r.unknown.Error())
 	}
 	if err := errors.Join(r.Errors...); err != nil {
 		parts = append(parts, "failed: "+err.Error())
@@ -165,38 +221,38 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 		return r
 	}
 	pressure = pressure || m.pressure
+	r.pressure = pressure
 	a.pruneDiskCaches(&r, m, pressure)
-	if m.refresh != nil {
-		refs, _, err := m.refresh()
-		if err != nil {
-			r.Errors = append(r.Errors, err)
-			return r
-		}
-		m.refs = refs
+	known, ok := rereadDisk(&r, &m)
+	if !ok {
+		return r
 	}
-	for _, d := range m.tmp {
-		r.Add(diskprune.Children(d, a.now.Add(-time.Hour), m.refs, dry))
+	if known {
+		a.pruneCacheRoots(&r, m, pressure)
+	} else {
+		r.Keep("caches and tmp: " + keptReferencesUnknown)
 	}
 	m.trees.automatic = true
 	m.trees.refs = m.refs
+	m.trees.unknown = m.unknown
 	m.trees.trash = filepath.Join(a.store.Dir(), "trash")
 	r.trees = a.trimWorktrees(dry, func() (worktreeMachine, error) { return m.trees, nil })
-	if m.refresh != nil {
-		refs, _, err := m.refresh()
-		if err != nil {
-			r.Errors = append(r.Errors, err)
-			return r
+	known, ok = rereadDisk(&r, &m)
+	if !ok {
+		return r
+	}
+	if known {
+		cutoff := a.now.Add(-time.Hour)
+		if pressure {
+			cutoff = time.Time{}
 		}
-		m.refs = refs
-	}
-	cutoff := a.now.Add(-time.Hour)
-	if pressure {
-		cutoff = time.Time{}
-	}
-	trash := append(slices.Clone(m.trash), m.trees.trash)
-	slices.Sort(trash)
-	for _, d := range slices.Compact(trash) {
-		r.Add(diskprune.Children(d, cutoff, m.refs, dry))
+		trash := append(slices.Clone(m.trash), m.trees.trash)
+		slices.Sort(trash)
+		for _, d := range slices.Compact(trash) {
+			r.Add(diskprune.Children(d, cutoff, m.refs, dry))
+		}
+	} else {
+		r.Keep("trash: " + keptReferencesUnknown)
 	}
 	if r.trees.err != nil {
 		r.Errors = append(r.Errors, r.trees.err)
@@ -204,10 +260,39 @@ func (a *app) pruneDisk(dry, pressure bool, read func() (diskMachine, error)) di
 	if len(r.trees.failed) > 0 {
 		r.Errors = append(r.Errors, fmt.Errorf("%d worktree actions failed", len(r.trees.failed)))
 	}
+	if pressure && m.cacheHome != "" && (m.stillLow == nil || m.stillLow()) {
+		r.uncovered = uncoveredCaches(m.cacheHome, m.entries, diskHoldingMin, 5)
+	}
 	if !dry {
 		_ = a.store.Log(event(watchParty, "disk.prune", "%s", r))
+		if pressure {
+			_ = a.store.WriteFile(diskHoldingFile, diskHolding{At: a.now, Text: r.holdingText()})
+		}
 	}
 	return r
+}
+
+// rereadDisk refreshes m's references before a step. known is false while
+// a process's references are unknown: that step keeps its candidates and
+// the next step reads again. ok is false when the process table itself is
+// unreadable, which ends the run.
+func rereadDisk(r *diskRun, m *diskMachine) (known, ok bool) {
+	if m.refresh == nil {
+		if m.unknown != nil {
+			r.unknown = m.unknown
+		}
+		return m.unknown == nil, true
+	}
+	refs, builds, err := m.refresh()
+	if err != nil && !unknownReferences(err) {
+		r.Errors = append(r.Errors, err)
+		return false, false
+	}
+	m.refs, m.builds, m.unknown = refs, builds, err
+	if err != nil {
+		r.unknown = err
+	}
+	return err == nil, true
 }
 
 func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
@@ -225,17 +310,17 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 		return
 	}
 	defer release()
-	if m.refresh != nil {
-		refs, builds, err := m.refresh()
-		if err != nil {
-			r.Errors = append(r.Errors, err)
-			return
-		}
-		if builds {
-			r.Keep("caches: builds running")
-			return
-		}
-		m.refs = refs
+	known, ok := rereadDisk(r, &m)
+	if !ok {
+		return
+	}
+	if m.builds {
+		r.Keep("caches: builds running")
+		return
+	}
+	if !known {
+		r.Keep("caches: " + keptReferencesUnknown)
+		return
 	}
 	// Also honor use locks held by older runs and manual cache clear go.
 	if m.cache != "" {
@@ -253,9 +338,10 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 			r.Keep("Go cache in use")
 		} else {
 			u, err := gocache.Scan(m.cache)
+			before := r.Freed
 			if err != nil {
 				r.Errors = append(r.Errors, err)
-			} else if target, trim := diskCacheTarget(u.Bytes, a.cfg.Doctor.GoCacheMax(), pressure); !trim {
+			} else if target, trim := diskCacheTarget(u.Bytes, a.builtinCache(config.DiskCacheGo, config.DiskCacheModeGo).MaxBytes(), pressure); !trim {
 				r.Keep("Go cache under cap")
 			} else if r.dry {
 				dryTrim(r, u, target)
@@ -267,9 +353,12 @@ func (a *app) pruneDiskCaches(r *diskRun, m diskMachine, pressure bool) {
 					r.Errors = append(r.Errors, err)
 				}
 			}
+			if err == nil {
+				recordBuiltin(r, config.DiskCacheGo, m.cache, u, before)
+			}
 		}
 	}
-	pruneSccache(r, m, int64(max(0, a.cfg.Disk.SccacheMaxGiB))<<30, pressure)
+	pruneSccache(r, m, a.builtinCache(config.DiskCacheSccache, config.DiskCacheModeSc).MaxBytes(), pressure)
 }
 
 // diskCacheTarget preserves warm caches on healthy scheduled runs.
@@ -335,14 +424,52 @@ func (w *watcher) diskPrune(now time.Time, pressure bool) {
 
 func (a *app) diskCmd() *cobra.Command {
 	c := &cobra.Command{Use: "disk", Short: "Reclaim unused caches, finished worktrees and stale run output"}
-	var apply bool
+	var apply, dry, report bool
 	p := &cobra.Command{Use: "prune", Short: "Show reclaimable disk data; --apply reclaims it", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		if apply && dry {
+			return errors.New("--apply and --dry-run exclude each other")
+		}
 		a.now = time.Now()
 		r := a.pruneDisk(!apply, false, func() (diskMachine, error) { return liveDisk(a) })
-		_, err := fmt.Fprintln(a.out, r)
+		_, err := fmt.Fprint(a.out, r.String()+"\n"+r.listing())
+		if report {
+			err = errors.Join(err, a.reportUncovered())
+		}
 		return errors.Join(err, errors.Join(r.Errors...))
 	}}
 	p.Flags().BoolVar(&apply, "apply", false, "reclaim disposable data after checking live processes and work")
+	p.Flags().BoolVar(&dry, "dry-run", false, "only list what each cache would free, with sizes (the default)")
+	p.Flags().BoolVar(&report, "report", false, "also list the user cache directory's largest entries no disk.caches policy covers")
 	c.AddCommand(p)
 	return c
+}
+
+// recordBuiltin adds a built-in cache's line to the listing: what it held
+// and what this run freed from it since before.
+func recordBuiltin(r *diskRun, name, root string, u gocache.Usage, before int64) {
+	c := cacheReport{name: name, root: root, CacheResult: diskprune.CacheResult{Held: u.Bytes}}
+	if n := len(u.Entries); n > 0 {
+		c.Newest = u.Entries[n-1].Used
+	}
+	c.Freed = r.Freed - before
+	r.caches = append(r.caches, c)
+}
+
+// reportUncovered lists what of the user cache directory no policy covers,
+// so disk.caches can be extended.
+func (a *app) reportUncovered() error {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return err
+	}
+	list := uncoveredCaches(base, a.diskCacheEntries(), 100<<20, 15)
+	if _, err := fmt.Fprintf(a.out, "not covered by disk.caches under %s (100 MiB or more):\n", base); err != nil {
+		return err
+	}
+	for _, c := range list {
+		if _, err := fmt.Fprintf(a.out, "  %s: %s, last write %s\n", c.root, sizeStr(c.Held), c.Newest.Format(time.DateOnly)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

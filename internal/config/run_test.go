@@ -31,3 +31,24 @@ func TestRemoteRunConfig(t *testing.T) {
 		t.Fatal("enabled remote run without cluster accepted")
 	}
 }
+
+// run.tail sizes the failure tail: unset is the default, a size loads, off
+// keeps nothing, anything else refuses the configuration.
+func TestRunTailConfig(t *testing.T) {
+	c, err := parse("/config/test.yaml", []byte("run:\n  tail: 1M\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Run.Tail != "1M" {
+		t.Fatalf("run.tail = %q", c.Run.Tail)
+	}
+	if c, err = parse("/config/test.yaml", nil); err != nil || c.Run.Tail != DefaultRunTail {
+		t.Fatalf("default run.tail = %q (%v), want %s", c.Run.Tail, err, DefaultRunTail)
+	}
+	if c, err = parse("/config/test.yaml", []byte("run:\n  tail: off\n")); err != nil || c.Run.Tail != "off" {
+		t.Fatalf("off: %q (%v)", c.Run.Tail, err)
+	}
+	if _, err := parse("/config/test.yaml", []byte("run:\n  tail: lots\n")); err == nil {
+		t.Fatal("a size beekeeper cannot parse was accepted")
+	}
+}

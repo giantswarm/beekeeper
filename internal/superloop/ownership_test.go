@@ -48,7 +48,7 @@ func left(t *testing.T, acts []Action, reason string) Action {
 }
 
 func TestAParkOutsideTheDesksOrgsIsLeftAloneUnread(t *testing.T) {
-	w := []Worker{{Name: worker, ParkedOn: upstream, ParkedAt: t0}}
+	w := []Worker{{Name: worker, ReviewRequested: true, ParkedOn: upstream, ParkedAt: t0}}
 	if got := Tracked(w, nil, nil, desk()); len(got) != 0 {
 		t.Errorf("an upstream pull request is read: %v", got)
 	}
@@ -77,7 +77,7 @@ func TestAParkOutsideTheDesksOrgsIsLeftAloneUnread(t *testing.T) {
 func TestANeverRepositoryIsLeftAloneWhateverElseSays(t *testing.T) {
 	d := desk()
 	d.Review = append(d.Review, "o/*")
-	w := []Worker{{Name: worker, ParkedOn: tool + "#1", ParkedAt: t0}}
+	w := []Worker{{Name: worker, ReviewRequested: true, ParkedOn: tool + "#1", ParkedAt: t0}}
 	if got := Tracked(w, nil, nil, d); len(got) != 0 {
 		t.Errorf("a never repository is read: %v", got)
 	}
@@ -117,7 +117,7 @@ func TestAWildcardNeverRepositoryNamesNothing(t *testing.T) {
 	d.Orgs = append(d.Orgs, "x")
 	d.Never = []string{"x/*", "x/?"}
 	only(t, Plan(Input{Workers: parked(t0), Pulls: owned(ourTeam), Rounds: 1, Desk: d, Now: t0}), KindReview)
-	w := []Worker{{Name: worker, ParkedOn: "x/anything#2", ParkedAt: t0}}
+	w := []Worker{{Name: worker, ReviewRequested: true, ParkedOn: "x/anything#2", ParkedAt: t0}}
 	left(t, Plan(Input{Workers: w, Rounds: 1, Desk: d, Now: t0}), leftNever)
 }
 
@@ -134,7 +134,7 @@ func TestUnreadTeamFilesLeaveOnlyTheReviewListAndOverrides(t *testing.T) {
 	const shared = "o/x-configs#3"
 	p := owned(ourTeam)[pr]
 	p.Ref = shared
-	w := []Worker{{Name: worker, ParkedOn: shared, ParkedAt: t0}}
+	w := []Worker{{Name: worker, ReviewRequested: true, ParkedOn: shared, ParkedAt: t0}}
 	only(t, Plan(Input{Workers: w, Pulls: map[string]Pull{shared: p}, Rounds: 1, Desk: d, Now: t0}), KindReview)
 }
 
@@ -160,7 +160,7 @@ func TestAParkFromBeforeTheLoopsFirstStartIsLeftAlone(t *testing.T) {
 	only(t, Plan(Input{Workers: parked(t0.Add(time.Minute)), Pulls: owned(ourTeam), Rounds: 1, Desk: d, Now: t1}), KindReview)
 	// So is one a second worker made since, beside an early one: the
 	// later park is the request.
-	both := append(early, Worker{Name: "worker two", ParkedOn: pr, ParkedAt: t0.Add(time.Minute)})
+	both := append(early, Worker{Name: "worker two", ReviewRequested: true, ParkedOn: pr, ParkedAt: t0.Add(time.Minute)})
 	if got := Tracked(both, nil, nil, d); len(got) != 1 {
 		t.Errorf("a pull request parked on since is not read: %v", got)
 	}
@@ -193,7 +193,7 @@ func TestTheDesksOwnAndSharedRepositoriesAreReviewedAsToday(t *testing.T) {
 	const shared = "o/x-configs#3"
 	p := owned(teamB)[pr]
 	p.Ref = shared
-	w := []Worker{{Name: worker, ParkedOn: shared, ParkedAt: t0}}
+	w := []Worker{{Name: worker, ReviewRequested: true, ParkedOn: shared, ParkedAt: t0}}
 	a := only(t, Plan(Input{Workers: w, Pulls: map[string]Pull{shared: p}, Rounds: 1, Desk: desk(), Now: t0}), KindReview)
 	if a.Ref != shared {
 		t.Errorf("review = %+v", a)

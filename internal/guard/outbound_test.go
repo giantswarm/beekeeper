@@ -94,7 +94,7 @@ func TestOutboundPassesOrdinaryCommands(t *testing.T) {
 		"git log --oneline -3",
 		"curl -sf -H 'Authorization: Bearer " + fakeJWT + "' -d '{\"q\":1}' https://example.com/api",
 	} {
-		passed(t, decide(t, outboundHook(fakeOutside), "/", cmd, nil), cmd)
+		passed(t, decide(t, outboundHook(fakeOutside), t.TempDir(), cmd, nil), cmd)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,10 @@ type Journal struct {
 	StopRequest         *StopRequest  `json:"stopRequest,omitempty"`
 	StopAcknowledged    bool          `json:"stopAcknowledged"`
 	LastError           string        `json:"lastError,omitempty"`
+	// Thread is the codex thread the first turn created; every later turn
+	// resumes it and the codex guard binds tool calls to it. Claude's
+	// conversation is the request's own identity and leaves it empty.
+	Thread string `json:"thread,omitempty"`
 }
 
 // Server operates only on journals it created. It never discovers or adopts
@@ -44,6 +49,7 @@ type Server struct {
 	Rules                                                 []byte
 	Launcher                                              platform.Launcher
 	Command                                               HostCommand
+	Combined                                              HostCommand
 	Resources                                             func(context.Context) (Resources, error)
 	GuardProbe                                            func() error
 	Authorize                                             func(context.Context, StartRequest) error
@@ -144,9 +150,24 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := s.workerExecutable(); err != nil {
 		return c, err
 	}
-	h := s.Config.Harnesses[HarnessClaude]
-	if err := s.probe(ctx, h); err != nil {
-		return c, err
+	harnesses, unavailable := map[string]string{}, map[string]string{}
+	for name, h := range s.Config.Harnesses {
+		if err := s.probe(ctx, name, h); err != nil {
+			unavailable[name] = err.Error()
+			continue
+		}
+		harnesses[name] = h.Version
+	}
+	if len(harnesses) == 0 {
+		var reasons []string
+		for name, reason := range unavailable {
+			reasons = append(reasons, name+": "+reason)
+		}
+		slices.Sort(reasons)
+		return c, errors.New(strings.Join(reasons, "; "))
+	}
+	if len(unavailable) == 0 {
+		unavailable = nil
 	}
 	if s.Resources == nil {
 		return c, errors.New("execution host resource observation is unavailable")
@@ -158,7 +179,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: map[string]string{HarnessClaude: h.Version}, Resources: resources}, nil
+	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -210,6 +231,9 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 	}
 	if caps.PolicyDigest != r.PolicyDigest {
 		return Handle{}, errors.New("execution policy digest mismatch")
+	}
+	if caps.Harnesses[r.Harness] == "" {
+		return Handle{}, errors.New("execution host does not offer harness " + r.Harness + ": " + caps.Unavailable[r.Harness])
 	}
 	blocks := caps.Resources.Blocks
 	if r.Builds {

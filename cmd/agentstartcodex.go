@@ -338,6 +338,7 @@ func readCodexBriefStream(logPath string) (threadID string, started bool, err er
 // endCodex stops the unit of the codex agent started under id, which left the
 // roster, and removes its inbox, log and thread files, and says what it did.
 func (a *app) endCodex(ctx context.Context, id string) string {
+	defer a.recordStoppedGates(ctx)
 	var done []string
 	if unit := codexUnit(id); plat.Launcher.State(ctx, unit) == holdActive {
 		if err := plat.Launcher.Stop(ctx, unit); err != nil {

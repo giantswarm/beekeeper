@@ -144,6 +144,14 @@ later (snapshot, watch) names them after the run has ended. Logging never
 fails or delays the run: an event the log cannot take within a second is
 dropped.
 
+A run whose command fails keeps the tail of its output — the "--- FAIL"
+lines a truncated screen lost — masked like every output leaving the run,
+in <stateDir>/run-tails/<scope>.log (a remote run's: remote-<id>.log), and
+prints it again at the end of the run: the failing test can be named
+without rerunning the suite. run.tail sizes the kept tail (default 256K,
+capped at 1M, off keeps nothing); beekeeper run tail lists the kept tails
+and prints one.
+
 The runs share memcap.slice's CPU budget: its CPUQuota (memcap.cpuQuota,
 default half the cores) bounds the cores they use together, its CPUWeight
 (memcap.cpuWeight, default 50 against the desktop's slices' 100) their
@@ -177,7 +185,8 @@ machine's files stay untouched.`,
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
 				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1",
-				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache")}
+				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache"),
+				Tail: a.runTail(), TailDir: a.runTailsDir(), Redact: a.redactOutput}
 			var err error
 			if err := a.executionRunOptions(cmd.Context(), &o); err != nil {
 				return err
@@ -218,7 +227,9 @@ machine's files stay untouched.`,
 			// Per-run local resource/wait overrides retain their existing semantics.
 			// Remote pods use the desk-configured resources and placement bound.
 			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
-				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr}
+				head := guard.CommandHead(args)
+				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr,
+					Tail: o.Tail, KeepFailure: func(runID string, exit int) { o.KeepFailureTail("remote-"+runID, head, exit) }}
 				if handled, rc := runner.Try(cmd.Context(), args); handled {
 					if rc != 0 {
 						return &exitError{code: rc}
@@ -239,6 +250,7 @@ machine's files stay untouched.`,
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&classFlag, "class", "", "the run's class: build takes a build slot, benchmark and lab take none (default build, lab for agentlab)")
 	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT, else 8m, 60m in a background call)")
+	c.AddCommand(a.runTailCmd())
 	return c
 }
 
@@ -289,7 +301,7 @@ func (a *app) hookCmd() *cobra.Command {
 		Short: "Claude Code hooks",
 		Long: `The Claude Code hooks beekeeper install registers user-wide. They act
 only in the desk's scope: a session beekeeper started or knows (an agents
-start, the supervisor's or the guide's holder, an agent on the roster), or
+start, the guide's holder, an agent on the roster), or
 one whose working directory or project ($CLAUDE_PROJECT_DIR) lies under one
 of hooks.scope.dirs. Every other session, a person's own project, gets
 nothing from them: no refusal, no rewrite, no redaction, no prelude, no
@@ -347,16 +359,11 @@ refused, naming them. A send to a session with no running CLI passes: the
 desktop starts it. A send by name to an agent on the roster whose CLI does
 not run (its headless turn ended, its import into the desktop waits) is
 refused, saying so and whether an import is pending.
-A SendMessage to "the supervisor" or "the guide" (any case, "the" optional)
-goes to the session holding that role now: its running CLI by name, else
-its desktop session. A brief names the role, so a relay never makes it
+A SendMessage to "the guide" (any case, "the" optional) goes to the session
+holding that role now: its running CLI by name, else its desktop session.
+One to "the supervisor" is refused: the supervisor is the supervisor loop,
+which no session holds. A brief names the role, so a relay never makes it
 stale; with nobody holding the role the send is refused.
-A SendMessage from the session holding the supervisor role whose message
-says "yours <resource>", "<resource> yours" or "<resource> is yours" for a
-leasable resource records the grant of the resource to the message's
-target, as beekeeper lease grant does, and the sender reads what was
-recorded, or why nothing was with the command that records it, as
-additional context. A worker's "yours" records nothing.
 Anything else, malformed input included, passes unchanged.
 
 What leaves the machine is scanned for secret values: the command line
@@ -535,7 +542,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Yours: a.yoursGrant,
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
@@ -558,6 +565,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
 				_, _ = w.Write(h.DecideCodex(raw))

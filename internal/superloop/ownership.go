@@ -284,7 +284,7 @@ func relayMessage(p Pull, r Review, team string) string {
 	if verdict == "" {
 		verdict = "commented"
 	}
-	return fmt.Sprintf("%s reviewed %s for %s, its owning team: %s, on head %s. The review, word for word:\n\n%s\n\nIt is %s's review, not the desk's: an approval lets your gated merge run, which still judges its reviews and checks; answer changes or questions, push, and park on the pull request again.",
+	return fmt.Sprintf("%s reviewed %s for %s, its owning team: %s, on head %s. The review, word for word:\n\n%s\n\nIt is %s's review, not the desk's: an approval lets your gated merge run, which still judges its reviews and checks; answer changes or questions, push, and once CI is green, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree.",
 		r.Author, p.URL, teamName(team), verdict, short(r.Head), r.Body, teamName(team))
 }
 

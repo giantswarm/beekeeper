@@ -65,6 +65,9 @@ type worktreeMachine struct {
 	trash     string
 	refs      []string
 	recheck   func() ([]string, error)
+	// unknown is set when refs miss an unreadable process's references:
+	// nothing is moved on refs alone then.
+	unknown error
 }
 
 // liveWorktrees reads the machine the trim acts on. Tests replace it
@@ -209,10 +212,7 @@ func (r worktreeRun) String() string {
 	case r.err != nil && !r.acted():
 		return fmt.Sprintf("worktrees: %v", r.err)
 	}
-	verb, of := r.verb(false), "freed"
-	if r.dryRun {
-		of = "would free"
-	}
+	verb, of := r.verb(false), freedVerb(r.dryRun)
 	var parts []string
 	tier := func(outs []worktreeOutcome, what string) {
 		if len(outs) > 0 {
@@ -342,6 +342,10 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 			continue
 		}
 		if worktrees.Dangling(d) {
+			if m.automatic && m.unknown != nil {
+				r.kept[keptReferencesUnknown]++
+				continue
+			}
 			o := worktreeOutcome{dir: d, why: "its gitfile names a missing repository", bytes: worktrees.Size(d)}
 			if !r.dryRun {
 				o.err = moveAside(d, m.roots, m.now)
@@ -401,6 +405,10 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 		if m.automatic && (v.Action == worktrees.Remove || v.Action == worktrees.Clean) {
 			if m.recheck != nil {
 				refs, err := m.recheck()
+				if unknownReferences(err) {
+					r.kept[keptReferencesUnknown]++
+					continue
+				}
 				if err != nil {
 					errs = append(errs, err)
 					r.kept["process references unavailable"]++
