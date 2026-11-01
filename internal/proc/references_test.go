@@ -18,6 +18,7 @@ const (
 	fixtureStatus      = "status"
 	fixtureEnvironment = "environ"
 	fixtureMappings    = "maps"
+	fixtureStat        = "stat"
 )
 
 func TestReferencesReadsOpenFilesMappingsAndBuildDirectories(t *testing.T) {
@@ -154,6 +155,43 @@ func TestUserReferencesFailsClosedWithoutProcessRootOrOwnership(t *testing.T) {
 	}
 }
 
+func TestUserReferencesSkipsOnlyConfirmedZombies(t *testing.T) {
+	for _, state := range []string{"Z (zombie)", "S (sleeping)", "Zebra", ""} {
+		t.Run(state, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "42")
+			if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			uid := os.Getuid()
+			status := fmt.Sprintf("State:\t%s\nUid:\t%d %d %d %d\n", state, uid, uid, uid, uid)
+			if err := os.WriteFile(filepath.Join(dir, fixtureStatus), []byte(status), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, fixtureEnvironment), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			files := referenceFiles()
+			inspected := false
+			files.readFile = func(path string) ([]byte, error) {
+				if filepath.Base(path) == fixtureEnvironment {
+					inspected = true
+					return nil, &os.PathError{Op: "read", Path: path, Err: os.ErrPermission}
+				}
+				return os.ReadFile(filepath.Clean(path))
+			}
+			refs, commands, err := userReferencesAt(root, uid, files)
+			if state == "Z (zombie)" {
+				if err != nil || inspected || len(refs) != 0 || len(commands) != 0 {
+					t.Fatalf("zombie did not count as exited: refs=%v commands=%v inspected=%v err=%v", refs, commands, inspected, err)
+				}
+			} else if !inspected || !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("unconfirmed zombie did not fail closed: inspected=%v err=%v", inspected, err)
+			}
+		})
+	}
+}
+
 // Exercise real proc entries, including zombies when present, without
 // depending on the readability of unrelated live processes.
 func TestUserReferencesAgainstLiveProc(t *testing.T) {
@@ -218,7 +256,7 @@ func TestReferenceOwnerRejectsMalformedProtectionMetadata(t *testing.T) {
 // Exiting and zombie processes can yield ESRCH at any point in a scan;
 // an actual I/O failure must still stop pruning.
 func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
-	for _, target := range []string{"status", "stat", "environ", "maps", "fd", fixtureCWD, "exe", fixtureCommand} {
+	for _, target := range []string{"status", fixtureStat, "environ", "maps", "fd", fixtureCWD, "exe", fixtureCommand} {
 		for _, gone := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/gone=%v", target, gone), func(t *testing.T) {
 				root := t.TempDir()
@@ -256,7 +294,7 @@ func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 					return "/scratch/held", nil
 				}
 				files.stat = func(path string) (os.FileInfo, error) {
-					if target == "stat" {
+					if target == fixtureStat {
 						return nil, failure
 					}
 					return os.Stat(path)

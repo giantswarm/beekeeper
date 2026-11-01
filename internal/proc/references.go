@@ -109,6 +109,11 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		if err != nil {
 			return nil, nil, err
 		}
+		// A confirmed zombie has exited and cannot hold references, even
+		// while its parent keeps the process entry around until wait(2).
+		if referenceZombie(raw) {
+			continue
+		}
 		owner, protected, err := referenceOwner(raw)
 		if err != nil {
 			return nil, nil, err
@@ -149,6 +154,17 @@ func userReferencesAt(root string, uid int, files referenceIO) ([]string, []stri
 		commands = append(commands, strings.TrimSpace(string(comm)))
 	}
 	return refs, commands, nil
+}
+
+func referenceZombie(status []byte) bool {
+	for line := range strings.Lines(string(status)) {
+		key, value, _ := strings.Cut(line, ":")
+		if key == "State" {
+			fields := strings.Fields(value)
+			return len(fields) > 0 && fields[0] == "Z"
+		}
+	}
+	return false
 }
 
 func referenceOwner(status []byte) (int, bool, error) {
