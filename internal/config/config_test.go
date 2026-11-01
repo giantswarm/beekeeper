@@ -184,6 +184,11 @@ func TestLoadRejects(t *testing.T) {
 		"urgency of no kind":          "notify: {urgency: {sessions: low}}",
 		"bad quiet hours":             "notify: {quietHours: 22-7}",
 		"bad relayAt":                 "supervisor: {relayAt: 400kb}",
+		"team files without a dir":    "supervisor: {ownership: {team: t, teamFiles: o/github}}",
+		"bad review pattern":          "supervisor: {ownership: {review: [\"o/[\"]}}",
+		"review without an owner":     "supervisor: {ownership: {review: [shared-configs]}}",
+		"never without an owner":      "supervisor: {ownership: {never: [tool]}}",
+		"never without a name":        "supervisor: {ownership: {never: [o/]}}",
 		"negative relayAt":            "supervisor: {relayAt: -1}",
 		"bad store glob":              "outbound: {storeDeny: [{vault: \"[\"}]}",
 		"bad outbound path":           "outbound: {paths: [\"[\"]}",
@@ -558,6 +563,25 @@ func TestThresholdsDefaultToFractions(t *testing.T) {
 	}
 	if want := []string{filepath.Join(home, ".local", "state", "beekeeper", "kube", "teleport.yaml")}; !slices.Equal(kc.Alerts.Kubeconfig, want) {
 		t.Errorf("alerts.kubeconfig = %q, want %q", kc.Alerts.Kubeconfig, want)
+	}
+}
+
+func TestSupervisorOwnership(t *testing.T) {
+	c, err := Load(writeTemp(t, "supervisor: {ownership: {review: [\"o/*-configs\"]}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without a team, no team files to read.
+	if o := c.Supervisor.Ownership; o.TeamFiles != "" || o.OwnerWait.Duration != 24*time.Hour {
+		t.Errorf("ownership without a team = %+v", o)
+	}
+	c, err = Load(writeTemp(t, "supervisor: {ownership: {team: team-a, ownerWait: 2h}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Supervisor.Ownership
+	if repo, dir := o.TeamFilesRepo(); o.TeamFiles != DefaultTeamFiles || repo != "giantswarm/github" || dir != "repositories" || o.OwnerWait.Duration != 2*time.Hour {
+		t.Errorf("ownership = %+v (%s, %s)", o, repo, dir)
 	}
 }
 

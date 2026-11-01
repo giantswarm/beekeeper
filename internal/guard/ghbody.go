@@ -515,7 +515,7 @@ func sliceTokenAfter(tok ghToken, prefixLen int) ghToken {
 
 func uninspectableGHBodyReason(what, detail string) string {
 	return "Refused: the guard cannot inspect the body of `" + what + "` (" + detail + ") to check its issue and pull request URLs: " +
-		"supply an existing readable file with `--body-file <file>` or pass a literal `--body`."
+		"write the file in an earlier tool call, then supply that existing readable file with `--body-file <file>`, or pass a literal `--body`."
 }
 
 func (st *ghBodyState) resolveBodyFileToken(segIdx int, ft ghToken, redirs []ghToken, dir string, known bool, segVars map[string]ghValue) (content, why string) {
