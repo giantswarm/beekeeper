@@ -163,7 +163,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 				break
 			}
 		}
-		if owned || waiting || staffed || done[key] || f.Severity != a.cfg.Alerts.PageSeverity {
+		if owned || waiting || staffed || done[key] || f.Severity != a.cfg.Alerts.PageSeverity || !teamAlert(a.cfg.Alerts.Team, f) {
 			continue
 		}
 		refs := blockedAlertRefs(st, f)
@@ -203,6 +203,14 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 	}
 	return nil
 }
+
+// teamAlert reports whether a firing alert is relevant to the loop: with
+// alerts.team set, only the team's own alerts are, at any hour (the reader
+// keeps the team's alerts that only the working hours inhibit); another
+// team's or a team-less alert gets no note and no summary line. A worker
+// parked on an alert is woken by it whoever's it is: it asked for that event.
+// Without alerts.team every alert is the desk's.
+func teamAlert(team string, f alerts.Firing) bool { return team == "" || f.Team == team }
 
 // A configured installation, a lease or an unrelated task is not evidence
 // of blocked work. An active session record must name its issue and explicitly

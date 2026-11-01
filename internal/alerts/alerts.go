@@ -50,9 +50,10 @@ type Raw struct {
 }
 
 // Status is an alert's state; InhibitedBy are the fingerprints of the alerts
-// that inhibit it.
+// that inhibit it, SilencedBy the ids of the silences that mute it.
 type Status struct {
 	InhibitedBy []string `json:"inhibitedBy,omitempty"`
+	SilencedBy  []string `json:"silencedBy,omitempty"`
 }
 
 // WorkingHours is the alert that inhibits the alerts labelled
@@ -214,10 +215,17 @@ func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 	return out, order
 }
 
-// visible reports whether an alert is read: an uninhibited one, and the
-// team's alerts that only the working hours inhibit (an inhibitor missing
-// from the answer is not the working hours).
+// visible reports whether an alert is read: an unsilenced one that is
+// uninhibited, or the team's that only the working hours inhibit (an
+// inhibitor missing from the answer is not the working hours). A silenced
+// alert is never read, the team's included: beekeeper creates no silence, so
+// every silence is another person's or team's decision that the alert needs
+// nobody here. The query already asks for unsilenced alerts; this holds for
+// an Alertmanager that answers with silenced ones all the same.
 func (r Rules) visible(a Raw, names map[string]string) bool {
+	if len(a.Status.SilencedBy) > 0 {
+		return false
+	}
 	by := a.Status.InhibitedBy
 	if len(by) == 0 {
 		return true
