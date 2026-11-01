@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // releaseVerb is the lease subcommand the flag cases run.
@@ -213,5 +215,70 @@ func TestLabClaimWithoutConfig(t *testing.T) {
 	}
 	if out, err := runLease(a, "release", labOne); err != nil || out != "released agentlab-1\n" {
 		t.Errorf("release: %q, %v", out, err)
+	}
+}
+
+// A claim and a restoring release keep the lab's link to its canonical
+// configuration, so the next claim reads the same file as agentlab.
+func TestLabSymlinkClaimRestoreReclaim(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		t.Run(fmt.Sprintf("relative=%t", relative), func(t *testing.T) {
+			a := claimApp(t, claimGrant(labOne, claimMe, time.Minute))
+			path := labConfigPath(t, a, labOne)
+			target := filepath.Join(t.TempDir(), labConfigFileName)
+			if err := os.Rename(path, target); err != nil {
+				t.Fatal(err)
+			}
+			link := target
+			if relative {
+				var err error
+				link, err = filepath.Rel(filepath.Dir(path), target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(link, path); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			check := func() {
+				t.Helper()
+				if got, err := os.Readlink(path); err != nil || got != link {
+					t.Fatalf("config link = %q, %v; want %q", got, err, link)
+				}
+				same, err := os.Stat(path)
+				canonical, err2 := os.Stat(target)
+				if err != nil || err2 != nil || !os.SameFile(same, canonical) {
+					t.Fatalf("lab and canonical configs differ: %v, %v", err, err2)
+				}
+				if raw, err := os.ReadFile(target); err != nil || string(raw) != labYAML {
+					t.Fatalf("canonical config = %q, %v", raw, err)
+				}
+			}
+			if out, err := runLease(a, "claim", labOne, "-p", "symlink proof"); err != nil {
+				t.Fatalf("claim: %q, %v", out, err)
+			}
+			check()
+			overlay(t, path)
+			if out, err := runLease(a, "release", labOne, "--restore"); err != nil {
+				t.Fatalf("restore: %q, %v", out, err)
+			}
+			check()
+			if raw, err := os.ReadFile(path + ".released"); err != nil || !strings.Contains(string(raw), "overlay-857-freshdb.yaml") {
+				t.Fatalf("released config = %q, %v", raw, err)
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Grants = append(st.Grants, claimGrant(labOne, claimMe, time.Minute))
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := runLease(a, "claim", labOne, "-p", "next proof"); err != nil {
+				t.Fatalf("reclaim: %q, %v", out, err)
+			}
+			check()
+			if out, err := runLease(a, "release", labOne); err != nil {
+				t.Fatalf("release: %q, %v", out, err)
+			}
+		})
 	}
 }
