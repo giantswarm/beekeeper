@@ -50,7 +50,9 @@ and final `agents idle --done` report. The loop retires an unreported worker onl
 after `supervisor.postMergeWindow` (default `2h`) without activity, once its turn
 ends; the log names its merged pull request and missing report. A completed
 self-update wakes retained workers whose merge commit the installed release
-contains, after the broker and post-install steps finish.
+contains, after the broker and post-install steps finish. Stopping or retiring
+a worker immediately reconciles any gate run that ended with it; a runner
+still alive outside the worker continues under the gate.
 
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:

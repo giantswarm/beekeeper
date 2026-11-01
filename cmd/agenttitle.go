@@ -596,6 +596,7 @@ const stewardDeclineFor = 24 * time.Hour
 // declined is asked for no archive for stewardDeclineFor. It returns an
 // outcome per agent.
 func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
+	defer a.recordStoppedGates(ctx)
 	out := make([]archiveOutcome, len(agents))
 	var hosts []string
 	at := map[string]int{}
@@ -853,6 +854,7 @@ func (a *app) recordDeclines(asked []stewardAnswer) {
 // roster, and removes its inbox, and says what it did: nothing resumes an
 // omp agent, so a process left running would only hold its model.
 func (a *app) endOmp(ctx context.Context, id string) string {
+	defer a.recordStoppedGates(ctx)
 	var done []string
 	if unit := ompUnit(id); plat.Launcher.State(ctx, unit) == "active" {
 		if err := plat.Launcher.Stop(ctx, unit); err != nil {
