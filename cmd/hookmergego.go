@@ -24,15 +24,34 @@ func recordedMergeGo(events []state.Event, worker state.Party, ref, head string)
 		if !ok {
 			continue
 		}
-		_, target, ok := strings.Cut(key, " ")
-		if !ok || !strings.HasPrefix(target, ref+"@") {
-			continue
-		}
+
 		switch e.Verb {
 		case "supervisor.go":
-			allowed = key == "go "+ref+"@"+head && strings.HasPrefix(rest, worker.Name+": ")
-		case "supervisor.review", "supervisor.forward", "supervisor.rework", "supervisor.escalate", "supervisor.done":
-			allowed = false
+			if strings.HasPrefix(key, "go "+ref+"@") {
+				allowed = key == "go "+ref+"@"+head && strings.HasPrefix(rest, worker.Name+": ")
+			}
+		case "supervisor.review", "supervisor.rework", "supervisor.escalate":
+			kind := strings.TrimPrefix(e.Verb, "supervisor.")
+			if strings.HasPrefix(key, kind+" "+ref+"@") {
+				allowed = false
+			}
+		case "supervisor.forward":
+			if strings.HasPrefix(key, "forward "+ref+" ") {
+				allowed = false
+			}
+		case "supervisor.end":
+			if key == "end "+ref {
+				allowed = false
+			}
+		case "supervisor.done":
+			if key == "done "+ref+" "+workerRole {
+				allowed = false
+			}
+			if target, ok := strings.CutPrefix(key, "done "+superloop.VerbDone+"@"); ok {
+				if _, agent, ok := strings.Cut(target, " "); ok && agent == worker.Name {
+					allowed = false
+				}
+			}
 		}
 	}
 	return allowed

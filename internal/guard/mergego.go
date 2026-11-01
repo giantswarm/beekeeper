@@ -60,7 +60,10 @@ func (h Hook) ghMergeGo(args, pos []string, repo, cwd string, known bool) string
 		return ""
 	}
 	words := append([]string{"gh"}, args...)
-	endpoint := ghAPIEndpoint(words)
+	endpoint := ""
+	if len(pos) > 1 {
+		endpoint = pos[1]
+	}
 	if endpoint == executionGraphQL {
 		if strings.Contains(strings.Join(args, " ")+ghAPIBodies(words, cwd), "mergePullRequest") {
 			return "Refused: use gh pr merge with --match-head-commit so the supervisor go can be checked by repository, pull request and head."
@@ -110,13 +113,16 @@ var looseDeskMerge = regexp.MustCompile(`\bgh` + sep + `(?:pr` + sep + `merge\b|
 
 func (h Hook) hiddenDeskMerge(text, where string, kind textKind) string {
 	if kind == textShell {
-		if why := h.pushRefusal(text, ""); why != "" {
+		// Use the same shell parser as direct commands, including leading API
+		// flags. Only executable calls reach MergeGo; prose never does.
+		scriptHook := h
+		scriptHook.MergeGo = func(string, string, int, string) string {
+			return "run the script's merge as its own command with --match-head-commit"
+		}
+		if why := scriptHook.pushRefusal(text, ""); why != "" {
 			return why + " (in " + where + ")"
 		}
-		// Even a pinned merge in a file should run as its own hook-visible call.
-		if !looseDeskMerge.MatchString(text) {
-			return ""
-		}
+		return ""
 	} else if kind == textCode {
 		found := false
 		literals := stringLiterals(text)

@@ -25,7 +25,7 @@ func TestRecordedMergeGoRequiresExactLoopAction(t *testing.T) {
 		"changed head":       {event(loopParty, goEvent.Verb, "[go %s@%s] worker: merge go", ref, strings.Repeat("b", 40))},
 		"other worker":       {event(loopParty, goEvent.Verb, "[go %s@%s] other: merge go", ref, head)},
 		"new review":         {goEvent, event(loopParty, "supervisor.review", "[review %s@%s round 2] worker: review", ref, head)},
-		"findings forwarded": {goEvent, event(loopParty, "supervisor.forward", "[forward %s@%s] worker: changes", ref, head)},
+		"findings forwarded": {goEvent, event(loopParty, "supervisor.forward", "[forward %s review-id] worker: changes", ref)},
 	} {
 		if recordedMergeGo(events, worker, ref, head) {
 			t.Errorf("%s admitted", name)
@@ -105,5 +105,32 @@ func TestHookMergeGoUsesHarnessRosterIdentity(t *testing.T) {
 				t.Fatal(why)
 			}
 		})
+	}
+}
+
+func TestReviewMergeGoRevocations(t *testing.T) {
+	worker := state.Party{Name: workerRole, Session: "worker-session"}
+	ref, head := "person/project#7", strings.Repeat("a", 40)
+	grant := event(loopParty, "supervisor.go", "[go %s@%s] worker: merge go", ref, head)
+	for _, revoke := range []state.Event{
+		event(loopParty, "supervisor.forward", "[forward %s review-id] worker: changes requested", ref),
+		event(loopParty, "supervisor.done", "[done %s worker] worker: retired", ref),
+		event(loopParty, "supervisor.done", "[done agents.done@2026-11-01T00:00:00Z worker] worker: retired"),
+		event(loopParty, "supervisor.end", "[end %s] closed", ref),
+	} {
+		if recordedMergeGo([]state.Event{grant, revoke}, worker, ref, head) {
+			t.Errorf("go survived %s %s", revoke.Verb, revoke.Detail)
+		}
+	}
+
+	for _, neutral := range []state.Event{
+		event(loopParty, "supervisor.forward", "[forward person/project#70 review-id] worker: changes requested"),
+		event(loopParty, "supervisor.done", "[done %s reviewer] reviewer: retired", ref),
+		event(loopParty, "supervisor.done", "[done agents.done@2026-11-01T00:00:00Z reviewer] reviewer: retired"),
+		event(loopParty, "supervisor.end", "[end person/project#70] closed"),
+	} {
+		if !recordedMergeGo([]state.Event{grant, neutral}, worker, ref, head) {
+			t.Errorf("unrelated event revoked go: %s", neutral.Detail)
+		}
 	}
 }
