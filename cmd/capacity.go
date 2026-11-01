@@ -1226,7 +1226,7 @@ func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config
 			}
 		}
 	}
-	return v.withReviewHeadroom(k.ReviewHeadroom, baseCeiling, subscriptionBusy, kind)
+	return v.withReviewHeadroom(k.ReviewHeadroom, baseCeiling, max(subscriptionBusy, unassignedBusy), kind)
 }
 
 // totalCeilingBlock is the block naming the total a start hit. With a

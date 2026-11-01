@@ -145,3 +145,24 @@ func TestReviewHeadroomProviderAdmission(t *testing.T) {
 		t.Fatalf("pace admission: %+v, %v", v, err)
 	}
 }
+
+// A subscription harness on a desk with only a self-hosted provider uses
+// the unassigned pool; its refusal must name the exhausted review reserve.
+func TestReviewHeadroomUnassignedTarget(t *testing.T) {
+	k := config.Capacity{Ceiling: 2, ReviewHeadroom: 2, Providers: map[string]config.Provider{
+		loopLocal: {Kind: config.KindSelfHosted, Ceiling: 1},
+	}}
+	for _, busy := range []int{2, 4} {
+		c := agentCount{}
+		for i := range busy {
+			c.Busy = append(c.Busy, fmt.Sprintf("worker-%d", i))
+		}
+		v := buildProvidersCapacity(c, nil, k, nil, roomy(), false, nil, forReview, keepNow).forTarget(k, claudeComm, pickOpus)
+		if busy == 2 && v.Room != 2 {
+			t.Fatalf("no reserve for unassigned target: %s", v.verdict())
+		}
+		if busy == 4 && (v.Room != 0 || !strings.Contains(v.verdict(), "review headroom exhausted")) {
+			t.Fatal(v.verdict())
+		}
+	}
+}
