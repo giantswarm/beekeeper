@@ -23,6 +23,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -303,7 +304,7 @@ its key first in the detail):
             (supervisor.reviewRounds, default 1): a reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
-            capacity.choices), decided like any start; a worker on a
+            capacity.choices), using reserved review headroom; a worker on a
             self-hosted provider's model gets one on no self-hosted
             provider (--review-of-self-hosted). With supervisor.hosts
             (execution hosts, agents.hosts) the start goes to the first
@@ -363,15 +364,19 @@ its key first in the detail):
             given the go as its own team's; any other answer goes to the
             worker word for word
   end       a reviewed pull request merged or closed: its tracking ends
-  done      agents.done: the agent leaves the roster (agents remove);
-            the loop retires a session beekeeper started the same way,
-            once its turn ends: a reviewer once the loop acted on its
-            round's verdict (a go, forward, escalation, next round or
-            end), and the worker of a pull request the loop gave the go
-            for once it merged, reported or not. A managed SSH execution
-            stops (agents stop) and leaves the roster only once the host
-            acknowledged its termination. A session its person
-            started is never retired
+  done      agents.done: once its turn ends, the agent leaves the roster
+            (agents remove); the loop retires a session beekeeper started
+            the same way, once its turn ends: a reviewer once the loop
+            acted on its round's verdict (a go, forward, escalation, next
+            round or end), and the worker of a pull request the loop gave
+            the go for once it merged, reported or not. A managed SSH
+            execution stops (agents stop) and leaves the roster only once
+            the host acknowledged its termination. Each pass also runs the
+            doctor's roster and archive step (removing finished, relieved
+            and stale entries with no CLI, archiving owed desktop sessions
+            under agents.archiveAgreement and stopping finished or relieved
+            background sessions). A session its person started is never
+            retired
   next      after a done, and every pass below capacity.floor while capacity
             has room: the next item of board
             next starts (agents start, --harness auto with
@@ -383,7 +388,10 @@ its key first in the detail):
             local machine keeps the start while it has room, unless
             supervisor.hostsFirst, which prefers hosts always. No host
             with room and no room locally: the start waits. Releases
-            and the loop itself stay on the coordinator
+            and the loop itself stay on the coordinator. One board read
+            answers a pass; nothing free (board next's exit 3 with no
+            pick) settles a done's start, never a failure, and no read
+            runs while the GitHub budget is under github.floor
   release   a newer release, in stages a later pass resumes until the
             last holds: self-update (verified, installed) while --check
             finds it newer, the sandbox's broker on the installed binary
@@ -748,7 +756,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.releaseAt = a.now
 		in.Release = l.newerRelease(ctx)
 	}
+	planned := map[string]bool{}
 	for _, act := range superloop.Plan(in) {
+		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
+			planned[act.Agent] = true
+		}
 		if l.dryRun {
 			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
 				return err
@@ -791,6 +803,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			continue
 		}
 		if err := l.record(act, what); err != nil {
+			return err
+		}
+	}
+	if !l.dryRun {
+		if err := l.roster(ctx, planned); err != nil {
 			return err
 		}
 	}
@@ -1157,9 +1174,10 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		if i < 0 {
 			return "already off the roster", nil
 		}
-		// A retirement waits for the session's turn to end: its last
-		// report is not cut off.
-		if act.Event == nil && loopInTurn(a, st.Agents[i].Party) {
+		// A removal or retirement waits for the session's turn to end:
+		// its last report is not cut off, and its session can be archived
+		// or stopped.
+		if loopInTurn(a, st.Agents[i].Party) {
 			l.sayOnce("turn "+act.Key, "SUPERVISOR DONE WAITS %s: its session runs a turn", act.Agent)
 			return "", errLoopLater
 		}
@@ -1199,6 +1217,49 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 var loopInTurn = func(a *app, p state.Party) bool {
 	_, ok := a.runningTurn(p)
 	return ok
+}
+
+// loopSessions reads the running Claude sessions and process table for a pass.
+var loopSessions = func(a *app) ([]*claude.Session, *proc.Table, error) {
+	return a.sessions()
+}
+
+// roster runs the doctor's roster and archive step for a pass: it stops left
+// sleeping waits, takes off the roster any finished agent (done, relieved or
+// stale with no CLI) that superloop.Plan is not still handling in planned, and
+// archives or stops owed desktop and background sessions once their turns end.
+func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) error {
+	a := l.a
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	sessions, t, err := loopSessions(a)
+	if err != nil {
+		return nil //nolint:nilerr // process or session read failure does not fail the loop pass
+	}
+	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
+	inFlight := func(p state.Party) bool { return mergeInFlight(st, p, proc.Alive) }
+	waits := sleepingWaits(st, sessions, t, inFlight, a.now)
+	for _, w := range waits {
+		stopProcesses(w.pids())
+		line := "stopped " + w.String()
+		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+			return []state.Event{event(loopParty, "agents.stop", "%s", line)}, nil
+		})
+	}
+	busy := func(p state.Party) bool {
+		if slices.ContainsFunc(waits, func(w leftWait) bool { return w.agent.Is(p) }) {
+			return false
+		}
+		_, turn := turnRunning(sessions, t, p, a.now)
+		return turn || loopInTurn(a, p) || inFlight(p)
+	}
+	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now), func(c chore) bool {
+		return c.kind != choreRemove || planned[c.agent.Name]
+	})
+	_, _, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
+	return err
 }
 
 // wake tells act's worker its message (agents wake), claimed first.
@@ -1522,10 +1583,22 @@ type loopBoardNone struct{ err error }
 // nextItem is the board's first free ranked item, or nil when none is free.
 // A walk costs a large share of the GraphQL budget: an empty or failed one
 // answers the rest of the pass.
+// No walk runs while the GitHub budget is under github.floor: the pass
+// answers errLoopLater, so a done event waits unsettled and costs nothing.
 func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	if l.boardNone != nil {
 		return nil, l.boardNone.err
 	}
+	st, err := l.a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+		l.boardNone = &loopBoardNone{err: errLoopLater}
+		l.sayOnce("board budget", "SUPERVISOR NEXT HELD: the GitHub budget is under github.floor (%d), no board walk until it recovers", l.a.cfg.GitHub.Floor)
+		return nil, errLoopLater
+	}
+	delete(l.said, "board budget")
 	next, err := l.readNextItem(ctx)
 	if next == nil {
 		l.boardNone = &loopBoardNone{err: err}
@@ -1533,23 +1606,64 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	return next, err
 }
 
+// boardBudgetLow reports whether a board walk, which costs a large share of
+// the GraphQL budget, must wait: the REST budget is under floor until its
+// reset, GraphQL refuses, or the last GraphQL reading, taken within its
+// hourly window, is under floor.
+func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
+	if lowBudget(b, floor, now) {
+		return true
+	}
+	if b == nil || b.GraphQL == nil {
+		return false
+	}
+	g := b.GraphQL
+	return g.Blocks(now) || (g.Remaining < floor && now.Sub(g.At) < time.Hour)
+}
+
+// readNextItem reads board next --json. With nothing free board next exits
+// 3 after printing its document with no pick: that is the board's answer,
+// nothing free, never a failure to retry.
 func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
-	out, err := l.run(ctx, loopBoard, "next", "--json")
+	out, code, err := beekeeperRun(ctx, l.as(loopBoard, "next", "--json")...)
 	if err != nil {
 		return nil, err
 	}
-	var next struct {
-		Pick *loopBoardItem `json:"pick"`
+	failed := func() error {
+		return &exitError{code: code, msg: fmt.Sprintf("beekeeper %s next: exit %d: %s", loopBoard, code, oneLine(out))}
 	}
-	if err := json.Unmarshal([]byte(out), &next); err != nil {
+	if code != 0 && code != ExitRefused {
+		return nil, failed()
+	}
+	// The output is stdout and then stderr: the document is its first value.
+	var next struct {
+		Pick json.RawMessage `json:"pick"`
+	}
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&next); err != nil {
+		if code != 0 {
+			return nil, failed()
+		}
 		return nil, fmt.Errorf("board next --json: %w", err)
 	}
-	if next.Pick != nil {
-		if _, ok := parseRef(next.Pick.Ref); !ok {
-			return nil, fmt.Errorf("board next: invalid item ref %q", next.Pick.Ref)
+	none := string(next.Pick) == "null"
+	if code != 0 {
+		// Only a document that says no pick settles a refusal.
+		if !none {
+			return nil, failed()
 		}
+		return nil, nil
 	}
-	return next.Pick, nil
+	if none || len(next.Pick) == 0 {
+		return nil, nil
+	}
+	var pick loopBoardItem
+	if err := json.Unmarshal(next.Pick, &pick); err != nil {
+		return nil, fmt.Errorf("board next --json: %w", err)
+	}
+	if _, ok := parseRef(pick.Ref); !ok {
+		return nil, fmt.Errorf("board next: invalid item ref %q", pick.Ref)
+	}
+	return &pick, nil
 }
 
 type loopBoardItem struct {
@@ -1774,6 +1888,20 @@ func agentRef(st *state.State, name string) string {
 		}
 		for _, task := range []string{ag.Task, ag.LastTask} {
 			if m := refURL.FindString(task); m != "" {
+				return m
+			}
+		}
+		for i := len(st.WorkerReports) - 1; i >= 0; i-- {
+			if r := st.WorkerReports[i]; r.By.Is(ag.Party) || r.By.Name == name {
+				if m := refURL.FindString(r.Task + " " + r.Text); m != "" {
+					return m
+				}
+			}
+		}
+	}
+	for i := len(st.WorkerReports) - 1; i >= 0; i-- {
+		if r := st.WorkerReports[i]; r.By.Name == name {
+			if m := refURL.FindString(r.Task + " " + r.Text); m != "" {
 				return m
 			}
 		}

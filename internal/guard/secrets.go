@@ -52,6 +52,7 @@ const (
 // A leak names the command that would expose secret values and the safe forms.
 type leak struct {
 	what, safe string
+	transcript bool
 	// at is the command of the line that exposes them.
 	at string
 	// never: no sink makes the command safe (sops, op, a hash of a secret file).
@@ -80,6 +81,9 @@ const secretOps = "Equality, the one comparison an agent runs: `beekeeper secret
 	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."
 
 func (l leak) reason() string {
+	if l.transcript {
+		return transcriptRefusal
+	}
 	at := strings.Join(strings.Fields(l.at), " ")
 	if len(at) > 200 {
 		at = at[:200] + "…"
@@ -181,16 +185,39 @@ type secretGuard struct {
 	// cwd is the session's working directory; empty, no script is read.
 	cwd string
 	// files are the files known to hold secret values (secretfiles.go).
-	files secretFiles
+	files       secretFiles
+	transcripts transcriptAccess
 	// metadata holds helpers whose complete bodies have been checked. An empty
 	// entry shadows a utility and must not inherit its metadata exemption.
 	metadata         map[string]string
 	linkAllowance    linkAllowance
 	noLinks          bool
 	standaloneScript string
+	// funcs are the bodies of the functions the command line defines, which
+	// a helper call is inlined from (secretlinksmade.go).
+	funcs map[string]string
+	// made are the links to guarded files the command line and the command
+	// lines around it create; opaque the helpers whose calls make one and
+	// could not be inlined.
+	made   []madeLink
+	sink   *[]madeLink
+	opaque map[string]string
+	// vars are the bindings of the command line being scanned; bound marks
+	// the scan of an inlined helper body, which inherits them, its caller's
+	// functions and depth.
+	vars    map[string][]string
+	bound   bool
+	depth   int
+	inlines int
 	// feeds: the simple command's output is piped on or substituted, so a
 	// path a metadata command prints is read by the command consuming it.
 	feeds bool
+	// inTest: the simple command is the rest of a [[ … ]] expression that
+	// its && or || split off, operands of the test.
+	inTest bool
+	// cut: the simple command's words continue past a substitution, so the
+	// last of them are not its words.
+	cut bool
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -198,14 +225,34 @@ const maxScript = 64 << 10
 
 // leak returns the leak cmd would expose, nil when it exposes none.
 func (g secretGuard) leak(cmd string) *leak {
+	// A link made in a nested command line (a script, bash -c, eval) is read
+	// by the command lines around it, before or after it in the text: a
+	// second scan knows every link the first one found.
+	g.sink = &[]madeLink{}
+	if l := g.scan(cmd, 0); l != nil || len(*g.sink) == 0 {
+		return l
+	}
+	g.made, g.sink = slices.Clone(*g.sink), &[]madeLink{}
 	return g.scan(cmd, 0)
 }
 
 func (g secretGuard) scan(cmd string, depth int) *leak {
-	if depth > 4 {
+	if depth > maxScanDepth {
 		return nil
 	}
 	sc := scanShell(cmd)
+	if len(g.transcripts.roots) > 0 {
+		for _, doc := range sc.heredocs {
+			if doc.quoted {
+				continue
+			}
+			for _, sub := range heredocSubstitutions(cmd[doc.start:doc.end]) {
+				if l := g.scan(sub, depth+1); l != nil && l.transcript {
+					return l
+				}
+			}
+		}
+	}
 	segs := sc.segments()
 	aliases := map[string]bool{kubectlCmd: true}
 	for _, re := range []*regexp.Regexp{kubectlFunc, kubectlVar} {
@@ -224,7 +271,18 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		dirs = append(dirs, d)
 	}
 	vars := scanVars(sc, segs)
-	g.metadata = metadataFunctions(cmd)
+	metadata, funcs := metadataFunctions(cmd), functionBodies(cmd)
+	if g.bound {
+		vars = mergeVars(g.vars, vars)
+		metadata, funcs = mergeFuncs(g.metadata, metadata), mergeFuncs(g.funcs, funcs)
+		g.bound = false
+	}
+	g.metadata, g.funcs, g.vars, g.depth = metadata, funcs, vars, depth
+	made, opaque := g.linksMade(cmd, vars, dirs, depth)
+	g.made, g.opaque = slices.Concat(g.made, made), opaque
+	if g.sink != nil {
+		*g.sink = append(*g.sink, made...)
+	}
 	g.linkAllowance = simpleLinkAllowance(cmd, g.metadata)
 	g.standaloneScript = standaloneLinkScript(cmd)
 	copied, copyLeak := g.copiedUnlocks(sc, segs, vars, depth)
@@ -239,6 +297,8 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 				return l
 			}
 			g.feeds = feedsOutput(sc, segs, i)
+			g.inTest = (sg.before == "&&" || sg.before == "||") && inTestExpr(sc.masked[:sg.start])
+			g.cut = cutBySubstitution(sg)
 			l := g.sourceLeak(exp, pipelineBefore(sc.plain, segs, i), aliases, dirs, copied)
 			if l == nil || flowsSafely(sc, segs, i, l) {
 				continue
@@ -724,6 +784,9 @@ func pipelineBefore(cmd string, segs []segment, i int) string {
 
 // sourceLeak returns the leak when the simple command exposes secret values.
 func (g secretGuard) sourceLeak(words []string, before string, aliases map[string]bool, dirs []string, copied map[string]string) *leak {
+	if l := g.transcripts.fileLeak(words, dirs, g.metadata); l != nil {
+		return l
+	}
 	if l := procFileLeak(words); l != nil {
 		return l
 	}

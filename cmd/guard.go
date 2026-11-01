@@ -558,6 +558,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
 				_, _ = w.Write(h.DecideCodex(raw))
