@@ -142,6 +142,42 @@ func (c *Client) Edit(ctx context.Context, issue string, id int64, m Marker) err
 	return nil
 }
 
+// Delete removes comment id on issue; ErrGone when GitHub has no such
+// comment.
+func (c *Client) Delete(ctx context.Context, issue string, id int64) error {
+	repo, _, err := ref(issue)
+	if err != nil {
+		return err
+	}
+	_, err = c.GH(github.ActingOn(ctx, repo), "api", "-X", "DELETE", fmt.Sprintf("repos/%s/issues/comments/%d", repo, id))
+	switch {
+	case err != nil && strings.Contains(err.Error(), "HTTP 404"):
+		return fmt.Errorf("%s, comment %d: %w", issue, id, ErrGone)
+	case err != nil:
+		return fmt.Errorf("deleting a released claim on %s: %w", issue, err)
+	}
+	return nil
+}
+
+// Pull says whether issue is a pull request, which carries no claim.
+func (c *Client) Pull(ctx context.Context, issue string) (bool, error) {
+	repo, n, err := ref(issue)
+	if err != nil {
+		return false, err
+	}
+	out, err := c.GH(github.ActingOn(ctx, repo), "api", fmt.Sprintf("repos/%s/issues/%d", repo, n))
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", issue, err)
+	}
+	var r struct {
+		PullRequest json.RawMessage `json:"pull_request"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		return false, fmt.Errorf("reading %s: %w", issue, err)
+	}
+	return len(r.PullRequest) > 0 && string(r.PullRequest) != "null", nil
+}
+
 // splitHTTP splits gh api --include's output into its head and body.
 func splitHTTP(out []byte) (head string, body []byte) {
 	for _, sep := range []string{"\r\n\r\n", "\n\n"} {

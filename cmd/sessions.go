@@ -341,6 +341,7 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			if err != nil {
 				return err
 			}
+			a.warnClaimedElsewhere(cmd.Context(), cmd.ErrOrStderr(), r.Issue)
 			line := fmt.Sprintf("%q %s", r.Session.Name, recordText(r))
 			if absent != "" {
 				line += "; " + absent

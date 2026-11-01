@@ -169,9 +169,12 @@ the session's end); the supervisor loop and the watch keep them in line.
 next reads the claims of each pick in turn and skips an item another desk
 claims ("claimed by desk <name> (session <id>) since <time>"), up to the
 first item no other desk claims; a claim unrefreshed for
-board.claims.staleAfter is shown on the pick and not honoured. --claim
-publishes its claim at once and, should another desk's claim on the item
-be older, gives it back and exits 3 naming it. Without board.claims.desk
+board.claims.staleAfter is shown on the pick and not honoured, and a read
+GitHub fails is a warning, the pick standing as if unclaimed. --claim
+publishes its claim at once (waiting for a sync that runs) and, should
+another desk's claim on the item be older (a new claim is a new comment,
+the lower id the older), gives it back and exits 3 naming it. A pull
+request carries no claim. Without board.claims.desk
 the desk publishes none and still honours the other desks'.
 
 --limit <n> lists at most n items of each list: the skipped lines above the
@@ -235,9 +238,7 @@ the whole walk.`,
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
-			if err := a.skipClaimed(cmd.Context(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick }); err != nil {
-				return err
-			}
+			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }

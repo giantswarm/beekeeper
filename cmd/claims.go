@@ -101,6 +101,9 @@ func planClaims(st *state.State, now time.Time, refresh time.Duration) (publish 
 			continue
 		}
 		c := st.Claims[i]
+		if c.Comment == 0 {
+			continue // a pull request: no claim
+		}
 		if !c.Session.Is(r.Session) || now.Sub(c.Seen) >= refresh {
 			publish = append(publish, claimWork{rec: r, prev: &c})
 		}
@@ -113,11 +116,17 @@ func planClaims(st *state.State, now time.Time, refresh time.Duration) (publish 
 	return publish, release
 }
 
+// claimsLockWait bounds how long a sync that must run (board next
+// --claim's) waits for another to finish; claimsLockRetry is how often it
+// tries the lock meanwhile.
+const (
+	claimsLockWait  = time.Minute
+	claimsLockRetry = 200 * time.Millisecond
+)
+
 // syncClaims brings the desk's marker comments in line with its records
-// (planClaims): one comment per issue and desk, edited in place, a claim
-// that ended released. One sync runs at a time on the state; a second
-// returns at once. GitHub's answers are written back to the state; an
-// error names each claim that failed, the rest stand.
+// (planClaims). One sync runs at a time on the state; while another runs,
+// this one returns at once, the running one or the next doing its work.
 func (a *app) syncClaims(ctx context.Context) error {
 	if a.claimDesk() == "" {
 		return nil
@@ -128,6 +137,35 @@ func (a *app) syncClaims(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = lock.Unlock() }()
+	return a.syncClaimsLocked(ctx)
+}
+
+// syncClaimsNow is syncClaims that waits for a running sync to finish, up
+// to claimsLockWait, instead of leaving its work to it: a claim that must be
+// on GitHub before its caller goes on.
+func (a *app) syncClaimsNow(ctx context.Context) error {
+	if a.claimDesk() == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, claimsLockWait)
+	defer cancel()
+	lock := flock.New(filepath.Join(a.store.Dir(), claimsLockFile))
+	ok, err := lock.TryLockContext(ctx, claimsLockRetry)
+	switch {
+	case err != nil:
+		return fmt.Errorf("waiting for the claims' sync: %w", err)
+	case !ok:
+		return errors.New("waiting for the claims' sync: the lock stayed held")
+	}
+	defer func() { _ = lock.Unlock() }()
+	return a.syncClaimsLocked(ctx)
+}
+
+// syncClaimsLocked is one sync under the claims' lock: one comment per
+// issue and desk, a claim that holds edited in place, a claim that ended
+// released. GitHub's answers are written back to the state; an error names
+// each claim that failed, the rest stand.
+func (a *app) syncClaimsLocked(ctx context.Context) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -150,6 +188,10 @@ func (a *app) syncClaims(ctx context.Context) error {
 		done = append(done, c)
 	}
 	for _, c := range release {
+		if c.Comment == 0 {
+			gone = append(gone, c.Issue)
+			continue
+		}
 		m := claim.Marker{Desk: desk, Session: claimSession(c.Session), At: c.At, Seen: c.Seen, Released: now}
 		if err := cl.Edit(ctx, c.Issue, c.Comment, m); err != nil && !errors.Is(err, claim.ErrGone) {
 			errs = append(errs, err)
@@ -162,22 +204,28 @@ func (a *app) syncClaims(ctx context.Context) error {
 		for _, c := range done {
 			st.Claims = slices.DeleteFunc(st.Claims, func(o state.Claim) bool { return strings.EqualFold(o.Issue, c.Issue) })
 			st.Claims = append(st.Claims, c)
-			if c.Seen.Equal(c.At) {
+			if c.Comment != 0 && c.Seen.Equal(c.At) {
 				evs = append(evs, about(event(claimsParty, verbClaimPublish, "%s for %s (desk %s, comment %d)", c.Issue, c.Session.Name, desk, c.Comment), c.Issue))
 			}
 		}
 		for _, issue := range gone {
+			i := slices.IndexFunc(st.Claims, func(o state.Claim) bool { return strings.EqualFold(o.Issue, issue) })
+			if i >= 0 && st.Claims[i].Comment != 0 {
+				evs = append(evs, about(event(claimsParty, verbClaimRelease, "%s (desk %s)", issue, desk), issue))
+			}
 			st.Claims = slices.DeleteFunc(st.Claims, func(o state.Claim) bool { return strings.EqualFold(o.Issue, issue) })
-			evs = append(evs, about(event(claimsParty, verbClaimRelease, "%s (desk %s)", issue, desk), issue))
 		}
 		return evs, nil
 	})
 	return errors.Join(append(errs, err)...)
 }
 
-// publishClaim writes w's claim on its issue: an edit of the comment
-// published before, else of the desk's comment the thread already has
-// (one per issue and desk), else a new comment.
+// publishClaim writes w's claim on its issue. A claim that holds (the one
+// published before, or the desk's open comment the thread has) is edited in
+// place and keeps its comment, so its place in a race; a new claim is a new
+// comment, so comment ids follow the order claims open in (lostClaim), and
+// the desk's released comments on the thread are deleted: one comment per
+// issue and desk. A pull request carries no claim (Comment 0).
 func publishClaim(ctx context.Context, cl *claim.Client, desk string, w claimWork, now time.Time) (state.Claim, error) {
 	at, id := now, int64(0)
 	if w.prev != nil {
@@ -187,29 +235,52 @@ func publishClaim(ctx context.Context, cl *claim.Client, desk string, w claimWor
 		}
 	}
 	m := claim.Marker{Desk: desk, Session: claimSession(w.rec.Session), At: at, Seen: now}
-	if id == 0 {
-		cs, err := cl.Read(ctx, w.rec.Issue)
-		if err != nil {
-			return state.Claim{}, err
-		}
-		if mine := claim.Desk(cs, desk); mine != nil {
-			id = mine.ID
-		}
-	}
 	if id != 0 {
 		err := cl.Edit(ctx, w.rec.Issue, id, m)
 		switch {
-		case errors.Is(err, claim.ErrGone):
-			id = 0
-		case err != nil:
+		case err == nil:
+			return state.Claim{Issue: w.rec.Issue, Comment: id, Session: w.rec.Session, At: at, Seen: now}, nil
+		case !errors.Is(err, claim.ErrGone):
 			return state.Claim{}, err
+		}
+		id = 0 // deleted on GitHub: claimed anew
+	}
+	pull, err := cl.Pull(ctx, w.rec.Issue)
+	if err != nil {
+		return state.Claim{}, err
+	}
+	if pull {
+		return state.Claim{Issue: w.rec.Issue, Session: w.rec.Session, At: at, Seen: now}, nil
+	}
+	cs, err := cl.Read(ctx, w.rec.Issue)
+	if err != nil {
+		return state.Claim{}, err
+	}
+	var released []int64
+	for _, c := range cs {
+		if !strings.EqualFold(c.Desk, desk) {
+			continue
+		}
+		if c.Open() && id == 0 { // the desk's claim, which the state lost
+			if err := cl.Edit(ctx, w.rec.Issue, c.ID, m); err == nil {
+				id = c.ID
+				continue
+			} else if !errors.Is(err, claim.ErrGone) {
+				return state.Claim{}, err
+			}
+		}
+		if c.ID != id {
+			released = append(released, c.ID)
 		}
 	}
 	if id == 0 {
-		var err error
 		if id, err = cl.Post(ctx, w.rec.Issue, m); err != nil {
 			return state.Claim{}, err
 		}
+	}
+	for _, old := range released {
+		// a released comment left behind holds nothing: the claim stands
+		_ = cl.Delete(ctx, w.rec.Issue, old)
 	}
 	return state.Claim{Issue: w.rec.Issue, Comment: id, Session: w.rec.Session, At: at, Seen: now}, nil
 }
@@ -237,41 +308,45 @@ func (a *app) otherClaims(ctx context.Context, issue string) (live, stale []clai
 const claimedPrefix = "claimed by desk "
 
 // skipClaimed walks the picks of pick in order and marks each one another
-// desk claims skipped ("claimed by desk <host> (session …) since …") until
+// desk claims skipped ("claimed by desk <name> (session …) since …") until
 // one is not, which a stale claim of another desk only annotates
-// (Candidate.Claim). Only the candidates up to that pick are read.
-func (a *app) skipClaimed(ctx context.Context, cands []board.Candidate, pick func() *board.Candidate) error {
+// (Candidate.Claim). Only the candidates up to that pick are read. A read
+// GitHub fails ends the walk with a warning on warn: the pick stands as if
+// no other desk claimed it.
+func (a *app) skipClaimed(ctx context.Context, warn io.Writer, cands []board.Candidate, pick func() *board.Candidate) {
 	if !a.claimsOn() {
-		return nil
+		return
 	}
 	staleAfter := a.cfg.Board.Claims.StaleAfter.Duration
 	for {
 		p := pick()
 		if p == nil || !issueRef.MatchString(p.Ref) {
-			return nil
+			return
 		}
 		i := slices.IndexFunc(cands, func(c board.Candidate) bool { return strings.EqualFold(c.Ref, p.Ref) && c.Skip == "" })
 		if i < 0 {
-			return nil
+			return
 		}
 		live, stale, err := a.otherClaims(ctx, p.Ref)
 		if err != nil {
-			return err
+			_, _ = fmt.Fprintf(warn, "beekeeper: claims unread, %s and the items after it picked as if no other desk claimed them: %v\n", p.Ref, err)
+			return
 		}
 		if len(live) == 0 {
 			if len(stale) > 0 {
 				cands[i].Claim = "not honoured: " + stale[0].Says(time.Now(), staleAfter)
 			}
-			return nil
+			return
 		}
 		cands[i].Skip = "claimed by " + live[0].Says(time.Now(), staleAfter)
 	}
 }
 
 // lostClaim checks, after me claimed issue and the desk published it, that
-// no other desk's live claim on it is older than the desk's own (the lower
-// comment id wins a race): it returns the winner's line, "" when the desk's
-// claim stands.
+// no other desk's live claim on it is older than the desk's own: the lower
+// comment id wins, a new claim being a new comment (publishClaim). It
+// returns the winner's line, "" when the desk's claim stands, and an error
+// when the thread holds no open claim of the desk.
 func (a *app) lostClaim(ctx context.Context, issue string) (string, error) {
 	cs, err := a.claimClient().Read(ctx, issue)
 	if err != nil {
@@ -279,8 +354,16 @@ func (a *app) lostClaim(ctx context.Context, issue string) (string, error) {
 	}
 	staleAfter := a.cfg.Board.Claims.StaleAfter.Duration
 	live, _ := claim.Others(cs, a.claimDesk(), time.Now(), staleAfter)
-	mine := claim.Desk(cs, a.claimDesk())
-	if len(live) == 0 || mine != nil && mine.Open() && live[0].ID > mine.ID {
+	var mine *claim.Comment
+	for i := range cs {
+		if strings.EqualFold(cs[i].Desk, a.claimDesk()) && cs[i].Open() {
+			mine = &cs[i]
+		}
+	}
+	switch {
+	case mine == nil:
+		return "", fmt.Errorf("%s holds no open claim of desk %s", issue, a.claimDesk())
+	case len(live) == 0 || live[0].ID > mine.ID:
 		return "", nil
 	}
 	return live[0].Says(time.Now(), staleAfter), nil
@@ -289,13 +372,14 @@ func (a *app) lostClaim(ctx context.Context, issue string) (string, error) {
 // claimGate refuses the start of name, whose brief serves issue, while
 // another desk's live claim holds it; force starts it anyway, which the
 // event log records (agents.start), and a dry run only says so. A stale
-// claim is said, never a refusal.
+// claim is said, never a refusal, and so is a read GitHub fails.
 func (a *app) claimGate(ctx context.Context, name, issue string, force, dryRun bool) error {
 	if issue == "" || !a.claimsOn() {
 		return nil
 	}
 	live, stale, err := a.otherClaims(ctx, issue)
 	if err != nil {
+		_, err = fmt.Fprintf(a.out, "claims unread, started as if no other desk claimed %s: %v\n", issue, err)
 		return err
 	}
 	staleAfter := a.cfg.Board.Claims.StaleAfter.Duration
@@ -336,14 +420,14 @@ func (a *app) publishClaimed(ctx context.Context, w io.Writer, me state.Party, i
 		_, err := fmt.Fprintln(w, "beekeeper: board.claims.desk unset: the claim is this desk's only, no other desk sees it")
 		return err
 	}
-	if err := a.syncClaims(ctx); err != nil {
-		_, err = fmt.Fprintf(w, "beekeeper: claims on GitHub: %v; the claim is this desk's only\n", err)
+	if err := a.syncClaimsNow(ctx); err != nil {
+		_, err = fmt.Fprintf(w, "beekeeper: claims on GitHub: %v; the claim is this desk's only until a sync publishes it\n", err)
 		return err
 	}
 	winner, err := a.lostClaim(ctx, issue)
 	if err != nil || winner == "" {
 		if err != nil {
-			_, err = fmt.Fprintf(w, "beekeeper: claims on GitHub: %v\n", err)
+			_, err = fmt.Fprintf(w, "beekeeper: claims on GitHub: %v; the claim is this desk's only until a sync publishes it\n", err)
 		}
 		return err
 	}
@@ -366,4 +450,19 @@ func (w *watcher) claims(ctx context.Context) {
 		return
 	}
 	w.clear("claims")
+}
+
+// warnClaimedElsewhere says on w when another desk's live claim holds issue,
+// which sessions serve records over: two desks then work it.
+func (a *app) warnClaimedElsewhere(ctx context.Context, w io.Writer, issue string) {
+	if !a.claimsOn() || !issueRef.MatchString(issue) {
+		return
+	}
+	live, _, err := a.otherClaims(ctx, issue)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(w, "beekeeper: claims unread for %s: %v\n", issue, err)
+	case len(live) > 0:
+		_, _ = fmt.Fprintf(w, "beekeeper: %s is claimed by %s as well: two desks work it now\n", issue, live[0].Says(time.Now(), a.cfg.Board.Claims.StaleAfter.Duration))
+	}
 }

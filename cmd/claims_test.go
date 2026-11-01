@@ -3,9 +3,14 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claim"
@@ -124,13 +129,16 @@ func TestSyncClaimsPublishesRefreshesAndReleasesOneComment(t *testing.T) {
 		t.Errorf("state keeps released claims %+v", st.Claims)
 	}
 
-	// claimed again: the desk's released comment is reused
+	// claimed again: a new comment, so its id says when the claim opened,
+	// and the desk's released one is deleted
+	released := gh.Comments(claimIssue)[0].ID
 	serveClaim(t, one, "Worker two", claimIssue)
 	if err := one.syncClaims(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if ms := markers(t, gh, claimIssue); len(ms) != 1 || !ms[0].Open() || gh.Calls["post"] != 1 {
-		t.Errorf("reclaimed markers = %+v, calls %v", ms, gh.Calls)
+	cs := gh.Comments(claimIssue)
+	if ms := markers(t, gh, claimIssue); len(ms) != 1 || !ms[0].Open() || cs[0].ID <= released || gh.Calls["post"] != 2 || gh.Calls["delete"] != 1 {
+		t.Errorf("reclaimed markers = %+v, comments %+v, calls %v", ms, cs, gh.Calls)
 	}
 }
 
@@ -208,9 +216,7 @@ func TestBoardNextSkipsAnItemAnotherDeskClaims(t *testing.T) {
 	sc := pickScope{me: state.Party{Name: agentOne}, alive: func(state.Party) bool { return false }, listed: time.Now()}
 
 	cands := claimCands(claimIssue, claimIssue2)
-	if err := two.skipClaimed(ctx, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick }); err != nil {
-		t.Fatal(err)
-	}
+	two.skipClaimed(ctx, io.Discard, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 	res := nextFree(st, cands, sc)
 	if res.Pick == nil || res.Pick.Ref != claimIssue2 {
 		t.Fatalf("pick = %+v, want %s", res.Pick, claimIssue2)
@@ -224,16 +230,15 @@ func TestBoardNextSkipsAnItemAnotherDeskClaims(t *testing.T) {
 
 	// the desk's own claim is no obstacle to itself
 	cands = claimCands(claimIssue)
-	if err := one.skipClaimed(ctx, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick }); err != nil || cands[0].Skip != "" {
-		t.Errorf("own claim: skip %q, %v", cands[0].Skip, err)
+	one.skipClaimed(ctx, io.Discard, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
+	if cands[0].Skip != "" {
+		t.Errorf("own claim: skip %q", cands[0].Skip)
 	}
 
 	// stale: unrefreshed past staleAfter
 	two.cfg.Board.Claims.StaleAfter.Duration = time.Nanosecond
 	cands = claimCands(claimIssue)
-	if err := two.skipClaimed(ctx, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick }); err != nil {
-		t.Fatal(err)
-	}
+	two.skipClaimed(ctx, io.Discard, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 	if res := nextFree(st, cands, sc); res.Pick == nil || !strings.Contains(res.Pick.Why(), "a claim not honoured: stale, desk "+deskOne) {
 		t.Errorf("stale claim: pick %+v", res.Pick)
 	}
@@ -245,15 +250,32 @@ func TestBoardNextSkipsAnItemAnotherDeskClaims(t *testing.T) {
 	}
 	two.cfg.Board.Claims.StaleAfter.Duration = 24 * time.Hour
 	cands = claimCands(claimIssue)
-	if err := two.skipClaimed(ctx, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick }); err != nil || cands[0].Skip != "" || cands[0].Claim != "" {
-		t.Errorf("released claim: %+v, %v", cands[0], err)
+	two.skipClaimed(ctx, io.Discard, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
+	if cands[0].Skip != "" || cands[0].Claim != "" {
+		t.Errorf("released claim: %+v", cands[0])
 	}
 
 	// board.claims.off reads nothing
 	two.cfg.Board.Claims.Off = true
 	before := gh.Calls["list"] + gh.Calls["notModified"]
-	if err := two.skipClaimed(ctx, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick }); err != nil || gh.Calls["list"]+gh.Calls["notModified"] != before {
-		t.Errorf("claims off read GitHub: %v, %v", gh.Calls, err)
+	two.skipClaimed(ctx, io.Discard, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
+	if gh.Calls["list"]+gh.Calls["notModified"] != before {
+		t.Errorf("claims off read GitHub: %v", gh.Calls)
+	}
+
+	// a read GitHub fails is a warning; the pick stands
+	two.cfg.Board.Claims.Off = false
+	claimGH = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("HTTP 403: rate limit") }
+	var warn bytes.Buffer
+	cands = claimCands(claimIssue)
+	two.skipClaimed(ctx, &warn, cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
+	if res := nextFree(st, cands, sc); res.Pick == nil || !strings.Contains(warn.String(), "claims unread") {
+		t.Errorf("failed read: pick %+v, warning %q", res.Pick, warn.String())
+	}
+	out := two.out.(*bytes.Buffer)
+	out.Reset()
+	if err := two.claimGate(ctx, "Worker two", claimIssue, false, false); err != nil || !strings.Contains(out.String(), "claims unread") {
+		t.Errorf("failed read at the start: %v, %q", err, out.String())
 	}
 }
 
@@ -332,18 +354,138 @@ func TestPlanClaims(t *testing.T) {
 	a := state.Party{Session: "a", Name: "A"}
 	b := state.Party{Session: "b", Name: "B"}
 	st := &state.State{
-		Records: []state.Record{{Session: a, Issue: planIssue1}, {Session: b, Issue: planIssue2}, {Session: a, Issue: "not an issue"}},
+		Records: []state.Record{{Session: a, Issue: planIssue1}, {Session: b, Issue: planIssue2}, {Session: a, Issue: "not an issue"}, {Session: a, Issue: "p/q#4"}},
 		Claims: []state.Claim{
-			{Issue: "P/Q#1", Session: a, Seen: now.Add(-time.Hour)},
-			{Issue: planIssue2, Session: a, Seen: now},
-			{Issue: "p/q#3", Session: b, Seen: now},
+			{Issue: "P/Q#1", Comment: 1, Session: a, Seen: now.Add(-time.Hour)},
+			{Issue: planIssue2, Comment: 2, Session: a, Seen: now},
+			{Issue: "p/q#3", Comment: 3, Session: b, Seen: now},
+			{Issue: "p/q#4", Session: a, Seen: now.Add(-24 * time.Hour)}, // a pull request's
 		},
 	}
 	publish, release := planClaims(st, now, 6*time.Hour)
 	if len(publish) != 1 || publish[0].rec.Issue != planIssue2 || publish[0].prev == nil {
-		t.Errorf("publish = %+v, want o/r#2's new session", publish)
+		t.Errorf("publish = %+v, want p/q#2's new session alone, never a pull request's", publish)
 	}
 	if len(release) != 1 || release[0].Issue != "p/q#3" {
 		t.Errorf("release = %+v", release)
+	}
+}
+
+// The review's race: the desk that loses owns a released comment older than
+// the winner's. Its new claim is a new comment, newer than the winner's, so
+// it loses; the winner, which read the thread before, keeps its claim.
+func TestARaceIsLostByTheLaterClaimWhateverCommentsTheDeskOwns(t *testing.T) {
+	one, two, gh := claimDesks(t)
+	ctx := context.Background()
+	var w bytes.Buffer
+	// desk one held the issue earlier and released it
+	serveClaim(t, one, "Worker one", claimIssue)
+	if err := one.syncClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	unserveClaim(t, one, claimIssue)
+	if err := one.syncClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// desk two claims, and its check sees only the released comment
+	meTwo := serveClaim(t, two, "Worker two", claimIssue)
+	if err := two.publishClaimed(ctx, &w, meTwo, claimIssue); err != nil {
+		t.Fatalf("the first claim: %v (%s)", err, w.String())
+	}
+	// desk one claims at the same time, its skip read before desk two's post
+	meOne := serveClaim(t, one, "Worker three", claimIssue)
+	err := one.publishClaimed(ctx, &w, meOne, claimIssue)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "claimed by desk "+deskTwo) {
+		t.Fatalf("the later claim = exit %d, %v (%s)", Code(err), err, w.String())
+	}
+	if winner, err := two.lostClaim(ctx, claimIssue); err != nil || winner != "" {
+		t.Errorf("the first claim now: %q, %v", winner, err)
+	}
+	var open []string
+	for _, m := range markers(t, gh, claimIssue) {
+		if m.Open() {
+			open = append(open, m.Desk)
+		}
+	}
+	if len(open) != 1 || open[0] != deskTwo {
+		t.Errorf("open claims = %v, want desk two's alone", open)
+	}
+}
+
+// --claim's publish waits for a sync another process runs, then publishes;
+// one it cannot wait out is said, never taken for a published claim.
+func TestPublishClaimedWaitsForARunningSync(t *testing.T) {
+	one, _, gh := claimDesks(t)
+	lock := flock.New(filepath.Join(one.store.Dir(), claimsLockFile))
+	if ok, err := lock.TryLock(); err != nil || !ok {
+		t.Fatalf("lock: %v, %v", ok, err)
+	}
+	me := serveClaim(t, one, "Worker one", claimIssue)
+	var w bytes.Buffer
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := one.publishClaimed(ctx, &w, me, claimIssue); err != nil || !strings.Contains(w.String(), "this desk's only") {
+		t.Fatalf("with the lock held throughout: %v, %q", err, w.String())
+	}
+	if len(markers(t, gh, claimIssue)) != 0 {
+		t.Fatal("published under another sync's lock")
+	}
+
+	w.Reset()
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_ = lock.Unlock()
+	}()
+	if err := one.publishClaimed(context.Background(), &w, me, claimIssue); err != nil || w.Len() != 0 {
+		t.Fatalf("after the other sync: %v, %q", err, w.String())
+	}
+	if ms := markers(t, gh, claimIssue); len(ms) != 1 || !ms[0].Open() {
+		t.Errorf("markers = %+v", ms)
+	}
+}
+
+// A record serving a pull request publishes no claim, and its end releases
+// nothing on GitHub.
+func TestAPullRequestCarriesNoClaim(t *testing.T) {
+	one, _, gh := claimDesks(t)
+	ctx := context.Background()
+	gh.Pulls[claimIssue2] = true
+	serveClaim(t, one, "Reviewer", claimIssue2)
+	for range 2 {
+		if err := one.syncClaims(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(gh.Comments(claimIssue2)) != 0 || gh.Calls["issue"] != 1 {
+		t.Errorf("comments %v, calls %v", gh.Comments(claimIssue2), gh.Calls)
+	}
+	unserveClaim(t, one, claimIssue2)
+	if err := one.syncClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := one.store.Read()
+	if len(st.Claims) != 0 || gh.Calls["edit"] != 0 {
+		t.Errorf("claims %+v, calls %v", st.Claims, gh.Calls)
+	}
+}
+
+// sessions serve over another desk's claim says so.
+func TestServeWarnsOverAnotherDesksClaim(t *testing.T) {
+	one, two, _ := claimDesks(t)
+	ctx := context.Background()
+	serveClaim(t, one, "Worker one", claimIssue)
+	if err := one.syncClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var w bytes.Buffer
+	two.warnClaimedElsewhere(ctx, &w, claimIssue)
+	if !strings.Contains(w.String(), "claimed by desk "+deskOne) {
+		t.Errorf("warning %q", w.String())
+	}
+	w.Reset()
+	one.warnClaimedElsewhere(ctx, &w, claimIssue)
+	if w.Len() != 0 {
+		t.Errorf("own claim warned %q", w.String())
 	}
 }

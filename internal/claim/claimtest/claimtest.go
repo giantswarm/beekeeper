@@ -23,8 +23,11 @@ type GitHub struct {
 	mu       sync.Mutex
 	next     int64
 	comments map[string][]Comment // by owner/repo#n
-	// Calls counts the calls by kind: list, notModified, post, edit.
+	// Calls counts the calls by kind: list, notModified, post, edit,
+	// delete, issue.
 	Calls map[string]int
+	// Pulls are the refs (owner/repo#n) that are pull requests.
+	Pulls map[string]bool
 }
 
 // Comment is one comment of an issue.
@@ -35,7 +38,7 @@ type Comment struct {
 
 // New is a GitHub without comments.
 func New() *GitHub {
-	return &GitHub{next: 1000, comments: map[string][]Comment{}, Calls: map[string]int{}}
+	return &GitHub{next: 1000, comments: map[string][]Comment{}, Calls: map[string]int{}, Pulls: map[string]bool{}}
 }
 
 // Add puts a comment on issue (owner/repo#n) and returns its id.
@@ -92,11 +95,18 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 		}
 	}
 	path, _, _ = strings.Cut(path, "?")
-	parts := strings.Split(path, "/") // repos o r issues n comments | repos o r issues comments id
-	if len(parts) != 6 || parts[0] != "repos" || parts[3] != "issues" {
+	parts := strings.Split(path, "/") // repos o r issues n [comments] | repos o r issues comments id
+	if len(parts) < 5 || len(parts) > 6 || parts[0] != "repos" || parts[3] != "issues" {
 		return nil, fmt.Errorf("gh api %s: not a call claims make", path)
 	}
 	repo := parts[1] + "/" + parts[2]
+	if len(parts) == 5 {
+		g.Calls["issue"]++
+		if g.Pulls[repo+"#"+parts[4]] {
+			return []byte(`{"number":` + parts[4] + `,"pull_request":{"url":"x"}}`), nil
+		}
+		return []byte(`{"number":` + parts[4] + `}`), nil
+	}
 	switch {
 	case method == "" && parts[5] == comments:
 		issue := repo + "#" + parts[4]
@@ -125,6 +135,18 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 				if cs[i].ID == id {
 					cs[i].Body = body
 					return []byte(`{"id":` + parts[5] + `}`), nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("gh api %s: exit status 1: gh: Not Found (HTTP 404)", path)
+	case method == "DELETE" && parts[4] == comments:
+		g.Calls["delete"]++
+		id, _ := strconv.ParseInt(parts[5], 10, 64)
+		for k, cs := range g.comments {
+			for i := range cs {
+				if cs[i].ID == id && strings.HasPrefix(k, repo+"#") {
+					g.comments[k] = append(cs[:i:i], cs[i+1:]...)
+					return nil, nil
 				}
 			}
 		}

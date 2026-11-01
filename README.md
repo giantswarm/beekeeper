@@ -1271,18 +1271,20 @@ Claimed by beekeeper desk platform-desk for session "0b5c1d2e-…" since 2026-11
   Unset, the desk publishes no claim and still honours the other desks'. The session is named by its id,
   which the claiming desk resolves with `beekeeper sessions`.
 - The supervisor loop's pass and the watch keep the comments in line with the records, as do the commands
-  that change a record: a new record posts the desk's comment (or edits its earlier one on that issue), a
-  claim that holds is refreshed every `board.claims.refresh` (6h), and a record that ends (`agents idle
-  --done`, `sessions unserve`, the session's end) releases it in place (`released=<time>`). One comment per
-  issue and desk, never one per refresh.
+  that change a record: a new claim is a new comment (the desk's released one on that issue deleted), a
+  claim that holds is edited in place, refreshed every `board.claims.refresh` (6h), and a record that ends
+  (`agents idle --done`, `sessions unserve`, the session's end) releases it in place (`released=<time>`).
+  One comment per issue and desk, never one per refresh. A pull request carries no claim.
 - `board next` reads the claims of each pick in turn, up to the first item no other desk claims, and skips
   a claimed one (`claimed by desk <name> (session <id>) since <time>`). `--claim` publishes the desk's claim
-  at once; should another desk's be older (the lower comment id wins a race), it gives its own back and
-  exits 3 naming the winner.
+  at once, waiting for a sync another process runs; should another desk's be older (the lower comment id,
+  since every claim opens with a new comment), it gives its own back and exits 3 naming the winner.
+  `sessions serve` over another desk's claim warns that two desks work the issue.
 - `agents start` refuses a brief whose issue another desk claims, with that claim's desk, session and time
   (exit 3); `--force` starts it anyway and the event log records the claim overridden (`agents.start`).
 - A claim unrefreshed for `board.claims.staleAfter` (24h) is stale: shown with the pick or the start, never
-  honoured. `board.claims.off` publishes and reads none.
+  honoured. A read GitHub fails is a warning (`claims unread`), the pick or start going on as if unclaimed.
+  `board.claims.off` publishes and reads none.
 - Reads go through REST with each thread's ETag cached in the state folder: an unchanged thread costs no
   rate limit.
 
