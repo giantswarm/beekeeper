@@ -229,7 +229,7 @@ func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopWorker}, Task: "fix " + loopURL})
 			i = len(st.Agents) - 1
 		}
-		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: "desk review"}
+		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: "desk review", ReviewHead: loopHead}
 		return nil, nil
 	})
 	if err != nil {
@@ -1847,7 +1847,7 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 	r.park(t, loopPR, time.Now())
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker two"}, Task: "upstream",
-			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge"}})
+			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge", ReviewHead: loopHead}})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -1876,30 +1876,61 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 	}
 }
 
-// A legacy park naming a PR in its wait belongs to the review loop too.
+func TestSupervisorLoopPlainWaitReadsNoPullAndStartsNoReview(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.ReviewHead = ""
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		t.Fatal("plain wait read for review")
+		return superloop.Pull{}, nil
+	}
+	r.pass(t)
+	if slices.ContainsFunc(r.calls, func(args []string) bool { return len(args) > 0 && args[0] == agentsName }) || strings.Contains(r.out.String(), "SUPERVISOR WOULD") {
+		t.Fatalf("plain wait acted: %s %v", r.out, r.calls)
+	}
+}
+
+// A PR URL makes a legacy wait operational, but only publication evidence
+// authorizes review, whether the PR is explicit or inferred from the wait.
 func TestLoopOwnsPullRequestWaitsWithoutOn(t *testing.T) {
 	for _, green := range []bool{false, true} {
-		for _, on := range []string{"", loopPR} {
-			t.Run(fmt.Sprintf("green=%t/on=%s", green, on), func(t *testing.T) {
-				r := newLoopRig(t)
-				r.park(t, on, time.Now())
-				r.pull.Green = green
-				err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-					ag := &st.Agents[0]
-					ag.Park.Waits = "CI pending for " + loopURL
-					return []state.Event{event(ag.Party, "agents.park", "%s: %s", ag.Name, parkedText(ag.Park, r.a.now))}, nil
+		for _, verified := range []bool{false, true} {
+			for _, on := range []string{"", loopPR} {
+				t.Run(fmt.Sprintf("green=%t/verified=%t/on=%s", green, verified, on), func(t *testing.T) {
+					r := newLoopRig(t)
+					r.park(t, on, time.Now())
+					r.pull.Green = green
+					err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+						ag := &st.Agents[0]
+						ag.Park.Waits = "CI pending for " + loopURL
+						if !verified {
+							ag.Park.ReviewHead = ""
+						}
+						return []state.Event{event(ag.Party, "agents.park", "%s: %s", ag.Name, parkedText(ag.Park, r.a.now))}, nil
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !verified {
+						readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+							t.Fatal("unverified wait read for review")
+							return superloop.Pull{}, nil
+						}
+					}
+					r.pass(t)
+					if note := r.called("note", loopAdd); note != nil {
+						t.Fatalf("operational park got a note: %v", note)
+					}
+					if got := r.called(agentsName, "start"); (got != nil) != (green && verified) {
+						t.Fatalf("review start = %v, green=%t verified=%t\n%s", got, green, verified, r.out)
+					}
 				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				r.pass(t)
-				if note := r.called("note", loopAdd); note != nil {
-					t.Fatalf("operational park got a note: %v", note)
-				}
-				if got := r.called(agentsName, "start"); (got != nil) != green {
-					t.Fatalf("review start = %v, green=%t\n%s", got, green, r.out)
-				}
-			})
+			}
 		}
 	}
 }
