@@ -14,7 +14,14 @@ merge is refused in this slice, including when a local approval exists.
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
-host needs Linux with a working user service manager, Git, and a pinned Claude Code version
+host installation may sit at any absolute path, including a per-user one; the
+pinned configuration and prepared policy bind that exact executable. A managed
+worker calls its component by bare `beekeeper`, and the runner places the
+bound installation's directory first on the harness PATH, so a system-wide
+installation is not required. `agents hosts check` refuses a host whose bound
+executable is missing or not executable: that worker could not report or park.
+The host needs Linux with a working user service manager, Git, and a pinned
+Claude Code version
 in the supported family (`>= 2.1.268, < 3.0.0`). Provision its subscription login
 there independently. `agents hosts check` reads version and authentication
 metadata; it makes no model request. Starting a session never copies a provider

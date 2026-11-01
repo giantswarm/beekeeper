@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -158,15 +159,31 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 	return p, nil
 }
 
+// workerExecutable fails closed when the embedded worker contract cannot
+// execute its component. The managed turn commands the host by bare
+// `beekeeper` through the harness PATH, which the runner pins to this
+// installation's directory, so readiness must refuse a host where note, park
+// and report cannot run instead of starting a worker that cannot reach its
+// coordinator. A per-user installation is accepted; a system-wide one is not
+// required.
+func (s *Server) workerExecutable() error {
+	install := filepath.Join(filepath.Clean(filepath.Dir(filepath.Clean(s.Executable))), managedBinary)
+	fi, err := os.Stat(install)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return errors.New("no executable beekeeper at the bound execution host installation; install it and prepare the matching bundle")
+	}
+	return nil
+}
+
 // Probe runs no model call and returns no authentication values. Its output is
 // only metadata. No provider credential from the SSH login shell is inherited.
 func (s *Server) probe(ctx context.Context, h HarnessConfig) error {
-	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
+	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) == 0 || parts[0] != h.Version {
 		return errors.New("unsupported or mismatched harness version/flags")
 	}
-	raw, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir), h.Executable, authCommand, "status")
+	raw, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, authCommand, "status")
 	if err != nil {
 		return errors.New("harness authentication is not ready; provision it on the execution host")
 	}
