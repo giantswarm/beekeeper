@@ -50,7 +50,7 @@ func (a *app) transferPublication(st *state.State, ref execution.Ref, p publicat
 		if len(p.Data) != 0 {
 			return result, refused("download cannot upload data")
 		}
-		f, openErr := os.Open(path)
+		f, openErr := os.Open(filepath.Clean(path))
 		if openErr != nil {
 			return result, openErr
 		}
@@ -69,7 +69,7 @@ func (a *app) transferPublication(st *state.State, ref execution.Ref, p publicat
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return result, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return result, err
 	}

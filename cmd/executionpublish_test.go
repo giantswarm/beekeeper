@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const publicationClaudeVersion = "2.1.291"
+
 type publicationRig struct {
 	a                       *app
 	request                 execution.StartRequest
@@ -49,7 +51,7 @@ func newPublicationRig(t *testing.T) *publicationRig {
 	git(rig.workspace, "push", rig.remote, "main")
 	r.LeaseRequired = true
 	rig.request = r
-	a.cfg.GitHub.AllowedOrgs = []string{"giantswarm"}
+	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		record := st.Starts[0].Execution
 		record.Request = r
@@ -99,7 +101,7 @@ func (rig *publicationRig) commit(t *testing.T, file, text string) string {
 	if err := os.WriteFile(filepath.Join(rig.workspace, file), []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"add", file}, {"commit", "-m", "fixture change"}} {
+	for _, args := range [][]string{{loopAdd, file}, {"commit", "-m", "fixture change"}} {
 		if _, err := executionPublishGit(context.Background(), rig.workspace, args...); err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +221,7 @@ func TestExecutionPublicationSyncBaseBundleAndMerge(t *testing.T) {
 }
 
 func TestExecutionPublicationRefusesRevokedAndForgedAuthority(t *testing.T) {
-	for _, kind := range []string{"stop", "completed", "expired", "missing-lease", "allowlist", "generation", "forged-proof", "github-hold"} {
+	for _, kind := range []string{bgStopCmd, "completed", handoverExpiredMode, "missing-lease", "allowlist", "generation", "forged-proof", "github-hold"} {
 		t.Run(kind, func(t *testing.T) {
 			rig := newPublicationRig(t)
 			head := rig.commit(t, "change.txt", "one\n")
@@ -227,11 +229,11 @@ func TestExecutionPublicationRefusesRevokedAndForgedAuthority(t *testing.T) {
 			if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				r := st.Starts[0].Execution
 				switch kind {
-				case "stop":
-					st.Stop = &state.Stop{Reason: "fixture"}
+				case bgStopCmd:
+					st.Stop = &state.Stop{Reason: "publication authority fixture"}
 				case "completed":
 					r.Completed = true
-				case "expired":
+				case handoverExpiredMode:
 					r.Lease.ExpiresAt = time.Now().Add(-time.Minute)
 				case "missing-lease":
 					r.Lease = nil
@@ -343,7 +345,7 @@ func TestExecutionPublicationCheckRejectsOlderHost(t *testing.T) {
 	a, r := executionTestApp(t)
 	host := a.cfg.Agents.Hosts[sshTestSelector]
 	a.executionProbe = func(context.Context, execution.Host) (execution.Capabilities, error) {
-		return execution.Capabilities{Protocol: execution.Protocol, Identity: r.Ref.Host, PolicyDigest: host.PolicyDigest, Harnesses: map[string]string{execution.HarnessClaude: "2.1.290"}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
+		return execution.Capabilities{Protocol: execution.Protocol, Identity: r.Ref.Host, PolicyDigest: host.PolicyDigest, Harnesses: map[string]string{execution.HarnessClaude: publicationClaudeVersion}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
 	}
 	if _, err := a.probeExecution(context.Background(), host); err == nil || !strings.Contains(err.Error(), "publication") {
 		t.Fatal("older host accepted", err)
@@ -358,8 +360,8 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint := execution.Endpoint{SSH: "coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}
-	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "fixture", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: "2.1.290"}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
+	endpoint := execution.Endpoint{SSH: "publication-coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}
+	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
 	digest, err := s.Prepare(s.Policy())
 	if err != nil {
 		t.Fatal(err)
