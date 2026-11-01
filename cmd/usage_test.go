@@ -2456,6 +2456,9 @@ func newSelfHostedApp(cfgPath string, cfg *config.Config, store state.Store, out
 		now:     now,
 		out:     out,
 		as:      usageCaller,
+		readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
+			return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+		},
 	}
 }
 

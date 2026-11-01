@@ -197,7 +197,11 @@ func TestClaudeUsageProbeCwdAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(cfg.StateDir, "usage", "claude") + "\n"
+	probeDir, err := filepath.EvalSymlinks(filepath.Join(cfg.StateDir, "usage", "claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := probeDir + "\n"
 	if string(got) != want {
 		t.Fatalf("probe cwd/calls: %q want %q", got, want)
 	}
