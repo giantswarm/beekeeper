@@ -65,7 +65,12 @@ source too, one value of a plain file on the host
 mapping or a line of its dotenv lines): a credential a CLI writes as a
 plain file (the Codex CLI's auth.json, for one) is read in beekeeper's
 process, the file under a directory of secret.fileRoots and never written,
-moved or deleted. A SOPS
+moved or deleted. A credential-store source (store://<entry>[#<field>]) is
+read by the broker with secret.store.read, even without secret.session; the
+default field is the secret/password, an explicit field adds --attribute
+<field> before the entry. A {field} argument template in secret.store.read
+selects it for other adapters instead (password when omitted). These
+sources work with copy, compare and fingerprint. A SOPS
 file is encrypted under the creation rules of the .sops.yaml nearest above
 it.
 
@@ -156,7 +161,7 @@ anything is not equal.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
-			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, args)...)) {
+			if inSandbox || secret.NeedsStore(callArgs(cmd, args)) || a.cfg.Secret.Session && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, args)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -1404,7 +1409,7 @@ func (a *app) secretArgsNeedVault(args []string) bool {
 // age identity secret.ageIdentities names, a file's included, which the
 // broker alone reads.
 func (a *app) secretNeedsBroker(args []string) bool {
-	return secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", a.secretFileArgs(args)) || a.recipientsNeedVault(args)
+	return secret.NeedsStore(args) || secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", a.secretFileArgs(args)) || a.recipientsNeedVault(args)
 }
 
 // ageOps decide where a SOPS file's age identity lives.

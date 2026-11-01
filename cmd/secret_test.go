@@ -929,3 +929,37 @@ func TestSecretCopyToARemoteFile(t *testing.T) {
 		noSecret(t, "the log", e.Detail)
 	}
 }
+
+func TestStoreSourceCopyAnswersAndLogsNoValue(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	a.cfg.Secret.Vault, a.cfg.Secret.TokenFile = "", ""
+	a.cfg.Secret.Store.Read = []string{"read-entry"}
+	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "read-entry" {
+			if args[len(args)-1] == "absent-store-entry" {
+				return []byte(secretValue), fmt.Errorf("diagnostic: %s", secretValue)
+			}
+			return []byte(secretValue + "\n"), nil
+		}
+		return tools.Run(ctx, dir, env, in, name, args...)
+	}
+	// Exercise the same copy handler the broker's protected child executes.
+	for _, source := range []string{"store://service#password", "store://absent-store-entry#custom"} {
+		a.out = &bytes.Buffer{}
+		c := a.secretCopyCmd()
+		c.SetArgs([]string{source, filepath.Join(repo, "db.sops.yaml") + "#data.password"})
+		c.SetOut(a.out)
+		c.SetErr(a.out)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		err := c.ExecuteContext(context.Background())
+		if strings.Contains(source, "absent-store-entry") != (err != nil) {
+			t.Fatalf("unexpected copy result: %v", err)
+		}
+		noSecret(t, "store copy stdout and stderr", fmt.Sprint(a.out, err))
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == copyVerb })
+	if err != nil || len(evs) != 2 {
+		t.Fatalf("copy events: %d, %v", len(evs), err)
+	}
+	noSecret(t, "store copy logs", fmt.Sprint(evs))
+}

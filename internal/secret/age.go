@@ -281,7 +281,11 @@ func (o *Ops) storeRun(ctx context.Context, argv []string, arg string) ([]byte, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
 	defer cancel()
-	return o.Run(ctx, "", nil, nil, argv[0], append(argv[1:len(argv):len(argv)], arg)...)
+	args := slices.Clone(argv[1:])
+	for i := range args {
+		args[i] = strings.ReplaceAll(args[i], "{field}", "password")
+	}
+	return o.Run(ctx, "", nil, nil, argv[0], append(args, arg)...)
 }
 
 // AgeNeedsVault reports whether decrypting one of the SOPS files args name,
@@ -305,7 +309,7 @@ func (o *Ops) ageNeeds(dir string, args []string, match func(*AgeIdentity) bool)
 		return false
 	}
 	for _, a := range args {
-		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, guard.OpRef) || strings.HasPrefix(a, K8sRef) || strings.HasPrefix(a, FileRef) {
+		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, guard.OpRef) || strings.HasPrefix(a, K8sRef) || strings.HasPrefix(a, FileRef) || strings.HasPrefix(a, StoreRef) {
 			continue
 		}
 		r, err := ParseRef(a)

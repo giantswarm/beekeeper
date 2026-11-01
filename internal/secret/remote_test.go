@@ -409,3 +409,32 @@ func TestRemoteScriptReadsInAnyLoginShell(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreSourceToRemoteUsesStdinOnly(t *testing.T) {
+	var calls []sshCall
+	o := remoteOps(t, &calls, nil)
+	run := o.Run
+	o.Store.Read = []string{storeReader}
+	o.Run = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name == storeReader {
+			return []byte(token + "\n"), nil
+		}
+		return run(ctx, dir, env, in, name, args...)
+	}
+	src, err := secret.ParseRef(credentialStoreRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := secret.ParseRemoteFile(remoteSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := o.CopyToRemote(context.Background(), src, dst)
+	if err != nil || len(calls) != 1 {
+		t.Fatalf("remote: %d calls, %v", len(calls), err)
+	}
+	if calls[0].stdin != token || strings.Contains(strings.Join(calls[0].argv, " "), token) {
+		t.Fatal("remote value was not confined to stdin")
+	}
+	noValue(t, "store remote result", res)
+}

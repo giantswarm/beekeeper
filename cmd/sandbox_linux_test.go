@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -311,5 +312,37 @@ func TestScratchStartInTheSandboxAsksTheHostBroker(t *testing.T) {
 		if len(got) != 1 || strings.Join(got[0].Args, " ") != want {
 			t.Errorf("%+v: broker got %+v, want %q", tc, got, want)
 		}
+	}
+}
+
+// Store sources use the broker even outside the sandbox and with no vault.
+func TestStoreSourceAlwaysUsesBroker(t *testing.T) {
+	for _, session := range []bool{false, true} {
+		t.Run(fmt.Sprint(session), func(t *testing.T) {
+			a, _, _ := secretApp(t)
+			a.cfg.Secret.Session = session
+			a.cfg.Secret.Vault = ""
+			t.Setenv(sandbox.Env, "")
+			t.Setenv(sandbox.Brokered, "")
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = sandbox.Serve(ctx, sandbox.SpoolDir(a.cfg.StateDir), "/proc", 5*time.Millisecond, func(_ context.Context, _ int, req sandbox.Request) (sandbox.Reply, error) {
+					if req.Op == sandbox.OpPing {
+						return sandbox.Reply{}, nil
+					}
+					if req.Op != sandbox.OpSecret {
+						return sandbox.Reply{}, fmt.Errorf("unexpected broker operation %s", req.Op)
+					}
+					return sandbox.Reply{Out: "brokered store\n"}, nil
+				})
+			}()
+			t.Cleanup(func() { cancel(); <-done })
+			out, err := runSecret(a, fingerprintOp, "store://service#username")
+			if err != nil || out != "brokered store\n" {
+				t.Fatalf("store did not reach broker: %q, %v", out, err)
+			}
+		})
 	}
 }
