@@ -475,6 +475,9 @@ type Hooks struct {
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
+	// TranscriptGrants authorize exact transcript files or fixture directories per session ID.
+	// Set by the supervisor, never inferred from a hook event.
+	TranscriptGrants map[string][]string `yaml:"transcriptGrants"`
 	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
 	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
 	// session would create directly in one, and one git neither tracks nor
@@ -1031,6 +1034,9 @@ type Capacity struct {
 	Ceiling    int `yaml:"ceiling"`
 	floorSet   bool
 	ceilingSet bool
+	// ReviewHeadroom reserves extra subscription sessions for reviews. Zero disables it.
+	ReviewHeadroom    int `yaml:"reviewHeadroom"`
+	reviewHeadroomSet bool
 	// AvailMinMiB is the MemAvailable a start needs (20 GiB), and the floor
 	// under which disk swap's growth refuses a start.
 	AvailMinMiB int `yaml:"availMinMiB"`
@@ -1778,7 +1784,7 @@ func (k Capacity) ProviderNames() []string {
 	return out
 }
 
-// UnmarshalYAML records whether floor, ceiling and reviewSkipPace were set, and
+// UnmarshalYAML records whether floor, ceiling and reviewHeadroom were set, and
 // preserves the YAML key order of providers.
 func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 	type plain Capacity
@@ -1786,13 +1792,15 @@ func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	var set struct {
-		Floor   *int `yaml:"floor"`
-		Ceiling *int `yaml:"ceiling"`
+		Floor          *int `yaml:"floor"`
+		Ceiling        *int `yaml:"ceiling"`
+		ReviewHeadroom *int `yaml:"reviewHeadroom"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
 	k.floorSet, k.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	k.reviewHeadroomSet = set.ReviewHeadroom != nil
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		if n.Content[i].Value == "providers" && n.Content[i+1].Kind == yaml.MappingNode {
 			pn := n.Content[i+1]
@@ -3285,6 +3293,9 @@ func (c *Config) defaults() error {
 	setInt(&c.Memcap.Slots, 2)
 	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
 	setDur(&c.Memcap.HoldBound, 30*time.Minute)
+	if !c.Capacity.reviewHeadroomSet {
+		c.Capacity.ReviewHeadroom = 2
+	}
 	if !c.Capacity.ceilingSet && c.Capacity.Ceiling == 0 {
 		c.Capacity.Ceiling = DefaultCeiling
 	}
@@ -3703,6 +3714,9 @@ func (c *Config) validate() error {
 	}
 	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
 		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
+	}
+	if c.Capacity.ReviewHeadroom < 0 {
+		return fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom)
 	}
 	if c.Capacity.SwapPSIMax < 0 {
 		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
