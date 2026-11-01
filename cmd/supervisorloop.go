@@ -471,9 +471,12 @@ type supervisorLoop struct {
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
 	stages map[string]bool
-	// fillPause defers an unproductive board read until the roster or
-	// capacity changes, or the configured retry interval passes.
+	// fillPause defers an unproductive board read until capacity changes,
+	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
+	// boardNone is this pass's empty or failed board next answer: every
+	// later start of the pass takes it instead of walking the board again.
+	boardNone *loopBoardNone
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
 	// login is the login gh acts as, once read; teams the team files'
@@ -588,6 +591,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
 	a := l.a
+	l.boardNone = nil
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
 	if b := loopBinary(); b != nil && !l.dryRun && b.Replaced() {
@@ -1507,8 +1511,25 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 	return l.startItem(ctx, act, *next)
 }
 
+// loopBoardNone is a board next answer without a pick: nothing free, or
+// the error that kept the board from answering.
+type loopBoardNone struct{ err error }
+
 // nextItem is the board's first free ranked item, or nil when none is free.
+// A walk costs a large share of the GraphQL budget: an empty or failed one
+// answers the rest of the pass.
 func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
+	if l.boardNone != nil {
+		return nil, l.boardNone.err
+	}
+	next, err := l.readNextItem(ctx)
+	if next == nil {
+		l.boardNone = &loopBoardNone{err: err}
+	}
+	return next, err
+}
+
+func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
 	out, err := l.run(ctx, loopBoard, "next", "--json")
 	if err != nil {
 		return nil, err
