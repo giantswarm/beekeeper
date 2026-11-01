@@ -1374,3 +1374,46 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 		}
 	}
 }
+
+// A legacy park naming a PR in its wait belongs to the review loop too.
+func TestLoopOwnsPullRequestWaitsWithoutOn(t *testing.T) {
+	for _, green := range []bool{false, true} {
+		for _, on := range []string{"", loopPR} {
+			t.Run(fmt.Sprintf("green=%t/on=%s", green, on), func(t *testing.T) {
+				r := newLoopRig(t)
+				r.park(t, on, time.Now())
+				r.pull.Green = green
+				err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					ag := &st.Agents[0]
+					ag.Park.Waits = "CI pending for " + loopURL
+					return []state.Event{event(ag.Party, "agents.park", "%s: %s", ag.Name, parkedText(ag.Park, r.a.now))}, nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.pass(t)
+				if note := r.called("note", loopAdd); note != nil {
+					t.Fatalf("operational park got a note: %v", note)
+				}
+				if got := r.called(agentsName, "start"); (got != nil) != green {
+					t.Fatalf("review start = %v, green=%t\n%s", got, green, r.out)
+				}
+			})
+		}
+	}
+}
+
+func TestLoopParkOnKeepsExplicitAndAmbiguousWaits(t *testing.T) {
+	for _, tc := range []struct{ on, waits, want string }{
+		{"#12", "CI pending " + loopURL, "#12"},
+		{"", "desk review " + loopURL, loopPR},
+		{"", "CI pending " + loopURL + " and " + loopURL, loopPR},
+		{"", "waiting https://github.com/o/r/issues/7", ""},
+		{"", "CI pending " + loopURL + " https://github.com/o/r/pull/8", ""},
+		{"", "waiting for the person's rollout decision", ""},
+	} {
+		if got := loopParkOn(&state.Park{On: tc.on, Waits: tc.waits}); got != tc.want {
+			t.Errorf("%+v: got %q", tc, got)
+		}
+	}
+}

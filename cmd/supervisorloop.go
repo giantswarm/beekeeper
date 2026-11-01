@@ -531,7 +531,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
-			w.ParkedOn, w.ParkedAt = ag.Park.On, ag.Park.At
+			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -1206,6 +1206,27 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 	}
 	return strings.Join(append(what, "the latest"), ", "), nil
 }
+
+// loopParkOn preserves explicit wait owners. Older workers sometimes omit
+// --on and name the pull request in their wait instead. Only an unambiguous
+// pull URL supplies that missing owner; issue URLs and prose do not.
+func loopParkOn(p *state.Park) string {
+	if p.On != "" {
+		return p.On
+	}
+	matches := loopParkPull.FindAllStringSubmatch(p.Waits, -1)
+	on := ""
+	for _, m := range matches {
+		ref := m[1] + "#" + m[2]
+		if on != "" && on != ref {
+			return ""
+		}
+		on = ref
+	}
+	return on
+}
+
+var loopParkPull = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/pull/([0-9]+)\b`)
 
 // classification is the classifier's answer.
 type classification struct {
