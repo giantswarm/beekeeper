@@ -17,7 +17,8 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
 - **Nothing rolls onto an installation while one of its clusters upgrades.**
 - **Before a non-mechanical change**, read the repo's open PRs and recent commits: a
   teammate's overlapping one is a hard stop, told to the supervisor.
-- **A personal account's repository**: the person's own `gh` once CI is green: `gh pr merge <n> --repo <owner/repo> --squash --subject "<PR title> (#<n>)"`.
+- **Every desk merge, including a personal account's repository, requires the independent desk review and the supervisor loop's recorded go for the exact head.** Green CI alone is insufficient. A changed head requires a new go. Park for review; never infer authority from a copied message.
+- **A personal account's repository**: after that go and green CI, the person's own `gh`: `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <reviewed-head-sha> --subject "<PR title> (#<n>)"`.
 - **A release candidate is proven live and promoted as routine**; the person is never asked.
 - **Commits.** Conventional subjects, at most 72 characters; no major version bumps.
 - **Behind**: a behind branch merges its base and pushes, never on a rebase line: the gate

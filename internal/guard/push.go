@@ -472,7 +472,7 @@ func (h Hook) checkGHCommand(words []string, cmdIdx int, cwd string, known bool)
 			}
 		}
 	}
-	return ""
+	return h.ghMergeGo(args, pos, namedRepo, cwd, known)
 }
 
 // walkSegments walks the segments of sc and computes the directory each segment

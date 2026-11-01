@@ -318,6 +318,13 @@ the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
 machine kubeconfig. A configuration that does not load refuses every Bash
 call, naming the error.
+Every gh pr merge and gh api PUT of a pull request merge requires the
+supervisor loop's durable go for this worker and exact head, current green CI
+and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
+so GitHub enforces the checked head atomically. GraphQL merges and deferred
+auto-merges are refused; expose script merges as their own tool command.
+Successful preflight checks leave a merge.authorized event (not proof that
+the merge completed). This check is shared by Claude, agy and Codex.
 Every devctl pr merge gets "<this binary> gate --" in front of it (a
 background one "gate --wait 30m --limit 0 --"), the timeout raised the same way; see
 beekeeper lanes. That is behind prefix commands (flock <lock>, nohup, setsid,
@@ -536,6 +543,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				Apps:    a.allowedApps, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
+				h.MergeGo = a.hookMergeGo
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
