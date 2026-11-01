@@ -327,8 +327,8 @@ its key first in the detail):
             maps the item's repository, pinned to its default branch; the
             local machine keeps the start while it has room, unless
             supervisor.hostsFirst, which prefers hosts always. No host
-            with room and no room locally: the start waits. Reviewers,
-            releases and the loop itself stay on the coordinator
+            with room and no room locally: the start waits. Releases
+            and the loop itself stay on the coordinator
   release   a newer release, in stages a later pass resumes until the
             last holds: self-update (verified, installed) while --check
             finds it newer, the sandbox's broker on the installed binary
@@ -1179,6 +1179,14 @@ func startFlags(review, selfHosted bool) []string {
 	return args
 }
 
+// placesRemotely says whether the loop's starts may be placed on an
+// execution host: supervisor.hosts names one and capacity.choices gives a
+// remote start its model name. Then the local room alone never stops a
+// start; startPlacement judges each host's too.
+func (l *supervisorLoop) placesRemotely() bool {
+	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
+}
+
 // startPlacement picks where one of the loop's starts runs, judged like
 // the start itself would be (review and selfHosted mark the reviewer
 // kinds). Without supervisor.hosts, or for a desk with no capacity.choices
@@ -1196,7 +1204,7 @@ func startFlags(review, selfHosted bool) []string {
 // wait when it has none either.
 func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
 	k := l.a.cfg.Supervisor
-	if len(k.Hosts) == 0 || len(l.a.cfg.Capacity.Choices) == 0 {
+	if !l.placesRemotely() {
 		// Nothing to place remotely: the local machine does what it did
 		// before, and the start's own gate makes it wait when it has no
 		// room.
@@ -1289,7 +1297,7 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
 	}
-	if len(k.Hosts) == 0 {
+	if !l.placesRemotely() {
 		// The room check as before: a machine with no room reads no board.
 		if _, code, err := beekeeperRun(ctx, l.as(loopCapacity)...); err != nil || code != 0 {
 			return "", errLoopLater
@@ -1362,6 +1370,21 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		return "", err
 	}
 	if _, err := l.run(ctx, args...); err != nil {
+		if Code(err) == ExitRefused && place.remote() {
+			// A refusal of a placed start on a host is either room or
+			// an execution its interrupted start left reserved. The
+			// recovery, when it succeeds, is the start taken after all:
+			// it is decided before any failure closes the claim, so a
+			// recovered execution is reconciled from the claim even
+			// when the pass dies before the taken line.
+			what, rerr := l.remoteStartRefused(ctx, name)
+			if rerr == nil {
+				return what, nil
+			}
+			if !errors.Is(rerr, errLoopLater) {
+				err = rerr
+			}
+		}
 		if strings.HasPrefix(act.Key, loopFillKey) {
 			// A returned failure is settled, rather than an interruption
 			// that a later start under the same name could reconcile.
@@ -1371,15 +1394,6 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			}
 		}
 		if Code(err) == ExitRefused {
-			if place.remote() {
-				// A refusal of a placed start on a host is either room or
-				// an execution its interrupted start left reserved.
-				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-					return what, nil
-				} else if !errors.Is(rerr, errLoopLater) {
-					return "", rerr
-				}
-			}
 			return "", errLoopLater
 		}
 		return "", err
