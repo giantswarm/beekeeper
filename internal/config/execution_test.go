@@ -24,12 +24,12 @@ func TestSupervisorHostsValidateAgainstTheCatalog(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)
 	host := fmt.Sprintf(entry, "host-a", "host-a", digest)
 	for _, tc := range []struct{ name, raw, want string }{
-		{"supervisor hosts omitted", "agents:\n  hosts:\n" + host, ""},
+		{unsetCase, "agents:\n  hosts:\n" + host, ""},
 		{"known", "agents:\n  hosts:\n" + host + "supervisor:\n  hosts: [host-a]\n", ""},
 		{"hostsFirst alone", "supervisor:\n  hostsFirst: true\n", ""},
 		{"unknown", "supervisor:\n  hosts: [host-z]\n", "no agents.hosts entry"},
 		{"local", "agents:\n  hosts:\n" + host + "supervisor:\n  hosts: [local]\n", "no SSH execution host"},
-		{"blank host name", "supervisor:\n  hosts: [\"\"]\n", "no SSH execution host"},
+		{emptyCase, "supervisor:\n  hosts: [\"\"]\n", "no SSH execution host"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "config.yaml")

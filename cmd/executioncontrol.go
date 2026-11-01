@@ -249,6 +249,11 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if len(missing) > 0 {
 			return "", nil, refused("note refused: %s", strings.Join(missing, "; "))
 		}
+		// A worker's operational ask is the loop's on the coordinator too;
+		// the worker's host refused it before it was sent, so this logs nothing.
+		if c, ok := operational(d, a.cfg.Plans); ok {
+			return "", nil, refused("note refused: a %s ask is operational, never a person's decision: %s. Do not file it again", c.name, c.where)
+		}
 		// Plan admission needs external checks; do not silently skip that gate.
 		if len(a.cfg.Plans.Repositories) > 0 && len(pullURL.FindAllString(d.subject(), -1)) > 0 {
 			return "", nil, refused("plan-linked decisions require the coordinating component directly")
