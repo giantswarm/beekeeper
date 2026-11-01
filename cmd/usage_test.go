@@ -33,10 +33,11 @@ func (tightMachine) Mem() (machine.Mem, error) {
 }
 
 const (
-	usageDirFlag   = "--dir"
-	usageForceFlag = "--force"
-	usageVerbStart = "agents.start"
-	usageCaller    = "usage-sup"
+	usageDirFlag    = "--dir"
+	usageForceFlag  = "--force"
+	usageVerbStart  = "agents.start"
+	usageCaller     = "usage-sup"
+	usageTestReader = "reader"
 )
 
 func isolateUsageTestEnv(t *testing.T) (dir, cfgPath string) {
@@ -3621,7 +3622,7 @@ func TestIdleFiveHourProviderCapacity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		provider := config.Provider{Floor: 1, Ceiling: 2, Usage: config.Usage{Command: []string{"reader"}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}}
+		provider := config.Provider{Floor: 1, Ceiling: 2, Usage: config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}}
 		view := buildSingleProviderView("claude", provider, providerAgents{}, providerReadingResult{reading: r, ok: true}, keepNow)
 		want := 2
 		if weekly > 80 {
@@ -3641,7 +3642,7 @@ func TestUsageLastGoodFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := keepNow
-			u := config.Usage{Command: []string{"reader"}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}
+			u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}
 			original := usageReading{At: now.Add(-6 * time.Minute), SevenDay: &usageWindow{UsedPercent: 80, ResetsAt: now.Add(6 * 24 * time.Hour)}}
 			if err := store.WriteFile(usageProviderFile("claude"), original); err != nil {
 				t.Fatal(err)
@@ -3682,11 +3683,11 @@ func TestUsageLastGoodFallback(t *testing.T) {
 }
 
 func TestUsageReaderDeadline(t *testing.T) {
-	_, err := runUsageCommand(context.Background(), []string{"/bin/sh", "-c", "exec sleep 60"}, 20*time.Millisecond)
+	_, err := runUsageCommand(context.Background(), []string{sleepComm, "60"}, 20*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "timed out after") {
 		t.Fatalf("deadline: %v", err)
 	}
-	u := config.Usage{Command: []string{"reader"}, Timeout: config.Duration{Duration: 2 * time.Minute}}
+	u := config.Usage{Command: []string{usageTestReader}, Timeout: config.Duration{Duration: 2 * time.Minute}}
 	k := config.Capacity{Providers: map[string]config.Provider{"one": {Usage: u}, "two": {Usage: u}}}
 	if usageRefreshTimeout(k) != 4*time.Minute {
 		t.Fatalf("refresh cancels provider deadline: %s", usageRefreshTimeout(k))

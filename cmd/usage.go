@@ -1138,7 +1138,7 @@ func usageRefreshTimeout(k config.Capacity) time.Duration {
 	var timeout time.Duration
 	for _, p := range k.Providers {
 		if p.Enabled() {
-			timeout += p.Usage.EffectiveTimeout()
+			timeout += p.EffectiveTimeout()
 		}
 	}
 	return max(timeout, k.Usage.EffectiveTimeout())
