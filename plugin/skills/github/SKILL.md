@@ -9,6 +9,10 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
   search adds `--bucket code_search`.
 - **Membership** is `beekeeper person <login>`, never a members endpoint of `gh api`, which
   misreads a private member.
+- **Security scans.** Read Dependabot state with `beekeeper security alert <owner/repo> <number>`
+  before and after remediation. An unreadable alert is an open check, never fixed; a dismissal
+  is distinct from a fix. The App needs Dependabot alerts: read, accepted on its installation;
+  never add scopes to a person's login or bypass a failed security scan.
 - **Scans list each repository** (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr
   list` likewise), never one `gh search` over several, which drops a private repository. One
   the listing cannot read is a problem found, never "no match".

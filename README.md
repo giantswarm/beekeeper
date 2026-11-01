@@ -3238,4 +3238,8 @@ holds the lock, so a frozen turn never holds it.
 
 ## Development
 
+Workers read Dependabot alert states with `beekeeper security alert <owner/repo> <number>`
+through their existing GitHub identity. The [security-scans rule and App setup](docs/security-scans.md)
+describe the read-only permission and how to handle inaccessible alerts.
+
 See [docs/development.md](docs/development.md).
