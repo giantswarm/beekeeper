@@ -246,7 +246,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	}
 	for _, r := range j.Reviews {
 		member := slices.Contains([]string{"MEMBER", "OWNER", "COLLABORATOR"}, r.Association)
-		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
+		p.Reviews = append(p.Reviews, superloop.Review{ID: r.ID, Author: r.Author.Login, Member: member, Commit: r.Commit.OID, Head: superloop.ReviewedHead(r.Body, r.Commit.OID), Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At})
 	}
 	slices.SortStableFunc(p.Reviews, func(x, y superloop.Review) int { return x.At.Compare(y.At) })
 	return p, nil
@@ -303,8 +303,15 @@ its key first in the detail):
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), decided like any start; a worker on a
-            self-hosted provider's model gets one on no self-hosted provider
-            (--review-of-self-hosted)
+            self-hosted provider's model gets one on no self-hosted
+            provider (--review-of-self-hosted). With supervisor.hosts
+            (execution hosts, agents.hosts) the start goes to the first
+            host whose own check (capacity --host) has room for its kind
+            and that maps the repository, pinned to its default branch;
+            the local machine keeps starts while it has room, unless
+            supervisor.hostsFirst, which prefers hosts always. No host
+            with room and no room locally: the start waits. A desk with
+            no capacity.choices never places remotely
   go        every check on the head green, and either the last round's
             verdict approves that head, or the worker parked after the
             approval on a head that only merges the base into the approved
@@ -360,13 +367,22 @@ its key first in the detail):
             once its turn ends: a reviewer once the loop acted on its
             round's verdict (a go, forward, escalation, next round or
             end), and the worker of a pull request the loop gave the go
-            for once it merged, reported or not. A session its person
+            for once it merged, reported or not. A managed SSH execution
+            stops (agents stop) and leaves the roster only once the host
+            acknowledged its termination. A session its person
             started is never retired
   next      after a done, and every pass below capacity.floor while capacity
             has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
-            configured, none starts
+            configured, none starts. With supervisor.hosts (execution
+            hosts, agents.hosts) the start goes to the first host whose
+            check (agents hosts check, capacity --host) has room and that
+            maps the item's repository, pinned to its default branch; the
+            local machine keeps the start while it has room, unless
+            supervisor.hostsFirst, which prefers hosts always. No host
+            with room and no room locally: the start waits. Releases
+            and the loop itself stay on the coordinator
   release   a newer release, in stages a later pass resumes until the
             last holds: self-update (verified, installed) while --check
             finds it newer, the sandbox's broker on the installed binary
@@ -741,7 +757,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
 			// Claimed before an interruption: what the log shows of its
 			// side effect decides, never a second one.
-			what, done, err := l.reconcile(st, act, c)
+			what, done, err := l.reconcile(ctx, st, act, c)
 			if err != nil {
 				return err
 			}
@@ -890,7 +906,7 @@ func (l *supervisorLoop) claim(act superloop.Action, target string) error {
 // reconcile decides a claimed action from the log since its claim: done
 // when the command it ran left its line (agents start, agents wake, agents
 // remove, note add, all logged as the loop), else not, and it runs.
-func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
+func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act superloop.Action, c loopClaim) (string, bool, error) {
 	evs, err := l.a.store.Events(0, func(e state.Event) bool { return e.By.Name == loopParty.Name && !e.At.Before(c.at) })
 	if err != nil {
 		return "", false, err
@@ -913,6 +929,11 @@ func (l *supervisorLoop) reconcile(st *state.State, act superloop.Action, c loop
 	}
 	if !done {
 		return "", false, nil
+	}
+	if act.Kind == superloop.KindReview {
+		if err := l.a.assignExecutionReview(ctx, act); err != nil {
+			return "", false, err
+		}
 	}
 	return fmt.Sprintf("taken before an interruption: %s, as the log shows", c.target), true, nil
 }
@@ -1033,10 +1054,17 @@ var newerLine = regexp.MustCompile(`(\S+) is newer than`)
 
 // The subcommands the loop runs that no other constant names.
 const (
-	loopRemove = "remove"
-	loopBoard  = "board"
-	loopAdd    = "add"
-	loopNote   = "note"
+	loopCapacity = "capacity"
+	loopRemove   = "remove"
+	loopStop     = bgStopCmd
+	loopRecover  = "recover"
+	loopBoard    = "board"
+	loopAdd      = "add"
+	loopNote     = "note"
+	// The placement flags a remote start names on its agents start line.
+	loopHostFlag = "--host"
+	loopRepoFlag = "--repo"
+	loopRefFlag  = "--ref"
 )
 
 // asFlag is the global flag that names the party a command acts as.
@@ -1071,6 +1099,20 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindReview:
 		return l.startReviewer(ctx, act)
 	case superloop.KindGo:
+		for _, worker := range st.Agents {
+			if worker.Name != act.Agent || worker.Execution == nil {
+				continue
+			}
+			ref, ok := parseRef(act.Ref)
+			if !ok {
+				return "", errors.New("invalid remote merge pull request")
+			}
+			grant, err := a.issueExecutionMerge(ctx, *worker.Execution, ref.Repo, ref.N, act.Head, loopParty)
+			if err != nil {
+				return "", err
+			}
+			act.Message = fmt.Sprintf("Merge %s at reviewed head %s using: beekeeper agents merge %s %d --head %s --authorization %s. The grant expires at %s; if it expires, park for a new supervisor go.", act.URL, act.Head, ref.Repo, ref.N, act.Head, grant.ID, grant.ExpiresAt.Format(time.RFC3339))
+		}
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
 		}
@@ -1116,6 +1158,16 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		if act.Event == nil && loopInTurn(a, st.Agents[i].Party) {
 			l.sayOnce("turn "+act.Key, "SUPERVISOR DONE WAITS %s: its session runs a turn", act.Agent)
 			return "", errLoopLater
+		}
+		// A managed SSH execution ends with a stop the host acknowledges:
+		// removal is refused while its reservation stands. An unreachable
+		// host fails the stop; the loop says so once and tries again.
+		if ref := st.Agents[i].Execution; ref != nil {
+			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
+				if _, err := l.run(ctx, agentsName, loopStop, act.Agent, "--reason", "supervisor loop: task done"); err != nil {
+					return "", err
+				}
+			}
 		}
 		if err := l.claim(act, act.Agent); err != nil {
 			return "", err
@@ -1163,7 +1215,7 @@ type briefData struct {
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
 const defaultReviewBrief = `Review {{.URL}} at head {{.Head}}, review round {{.Round}}, the work of {{.Worker}}.
 
-Read the pull request, the issue it closes and the diff. Judge whether it does what the issue asks, and find its bugs. Post one review on the pull request (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>): its first line "Review: approved" or "Review: changes requested", its second "Head reviewed: ` + "`{{.Head}}`" + `", then every blocking finding with its file and line. Then report: beekeeper agents idle --done --report "<the verdict and the review's URL>" --problem none (or --problem "<finding, evidence, owning repo>" for each problem the review met).
+Read the pull request, the issue it closes and the diff. Judge whether it does what the issue asks, and find its bugs. Post one review on the pull request (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>): its first line "Review: approved" or "Review: changes requested", its second "Head reviewed: ` + "`{{.Head}}`" + `", then every blocking finding with its file and line. Then report: beekeeper agents idle --done --report "<the same Review: verdict line, a newline, and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>" for each problem the review met).
 `
 
 // brief renders the template in file (def when file is empty) with d into
@@ -1206,6 +1258,14 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err != nil {
 		return "", err
 	}
+	place, err := l.startPlacement(ctx, r.Repo, true, act.SelfHosted)
+	if err != nil {
+		if errors.Is(err, errLoopLater) {
+			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
+			return "", errLoopLater
+		}
+		return "", err
+	}
 	name := superloop.ReviewerName(act.Ref, act.Round)
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
 	if len(l.a.cfg.Capacity.Choices) > 0 {
@@ -1216,15 +1276,31 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			args = append(args, "--"+reviewOfSelfHostedFlag)
 		}
 	}
+	args = append(args, place.remoteStartFlags()...)
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
 	if _, err := l.run(ctx, args...); err != nil {
 		if Code(err) == ExitRefused {
+			if place.remote() {
+				// A refusal of a placed start on a host is either room or
+				// an execution its interrupted start left reserved.
+				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+					return what, nil
+				} else if !errors.Is(rerr, errLoopLater) {
+					return "", rerr
+				}
+			}
 			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet (%v)", act.URL, err)
 			return "", errLoopLater
 		}
 		return "", err
+	}
+	if err := l.a.assignExecutionReview(ctx, act); err != nil {
+		return "", err
+	}
+	if place.remote() {
+		return fmt.Sprintf("reviewer %q started for %s at %s, round %d, on %s", name, act.URL, act.Head, act.Round, place.Selector), nil
 	}
 	return fmt.Sprintf("reviewer %q started for %s at %s, round %d", name, act.URL, act.Head, act.Round), nil
 }
@@ -1252,8 +1328,165 @@ func selfHostedModel(k config.Capacity, model string) bool {
 	return false
 }
 
+// startHost is one placement of a loop start: local with Selector "", else
+// an execution host (agents.hosts) whose repository is mapped and whose
+// ref to pin is Ref.
+type startHost struct {
+	Selector string
+	Repo     string
+	Ref      string
+}
+
+// remote reports whether the start runs on an execution host.
+func (h startHost) remote() bool { return h.Selector != "" }
+
+// roomOpen says whether a `capacity --json` answer leaves room for a
+// start. An unreadable answer leaves the room open: the start judges it
+// again itself, as before.
+func roomOpen(out string) bool {
+	var v struct {
+		Room int `json:"room"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil {
+		return true
+	}
+	return v.Room > 0
+}
+
+// capacityRoom reads one `capacity [--host <selector>] … --json` verdict:
+// whether a start fits there. A run that failed or refused (a host that
+// fails its check) has no room.
+func (l *supervisorLoop) capacityRoom(ctx context.Context, args ...string) bool {
+	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, args...)...)...)
+	return err == nil && code == 0 && roomOpen(out)
+}
+
+// startFlags are the capacity flags of a start's kind: review marks a
+// review, selfHosted the review of a self-hosted model's work.
+func startFlags(review, selfHosted bool) []string {
+	args := []string{"--json"}
+	if review {
+		args = append(args, "--"+reviewFlag)
+		if selfHosted {
+			args = append(args, "--"+reviewOfSelfHostedFlag)
+		}
+	}
+	return args
+}
+
+// placesRemotely says whether the loop's starts may be placed on an
+// execution host: supervisor.hosts names one and capacity.choices gives a
+// remote start its model name. Then the local room alone never stops a
+// start; startPlacement judges each host's too.
+func (l *supervisorLoop) placesRemotely() bool {
+	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
+}
+
+// startPlacement picks where one of the loop's starts runs, judged like
+// the start itself would be (review and selfHosted mark the reviewer
+// kinds). Without supervisor.hosts, or for a desk with no capacity.choices
+// (a remote start needs a model name from the pick), it stays local (the
+// zero value). Otherwise the local verdict (capacity --json, with the
+// start kind's flags) decides first: room keeps the start local unless
+// supervisor.hostsFirst; a capacity read that did not run waits, as it
+// did before hosts existed. Then the first host whose own check (capacity
+// --host, which probes the host first) has room and that maps the
+// repository takes it, pinned to the repository's default branch; a host
+// that cannot be read, maps no repository or has no room is said once (or
+// passed quietly) and skipped. With supervisor.hostsFirst and no host with
+// room the start waits, as it does on a full machine; without the
+// preference the local machine attempts it, whose own start gate makes it
+// wait when it has none either.
+func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
+	k := l.a.cfg.Supervisor
+	if !l.placesRemotely() {
+		// Nothing to place remotely: the local machine does what it did
+		// before, and the start's own gate makes it wait when it has no
+		// room.
+		return startHost{}, nil
+	}
+	flags := startFlags(review, selfHosted)
+	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
+	if err != nil || code != 0 {
+		return startHost{}, errLoopLater
+	}
+	if roomOpen(out) && !k.HostsFirst {
+		return startHost{}, nil
+	}
+	for _, selector := range k.Hosts {
+		h, err := l.a.executionHost(selector)
+		if err != nil {
+			l.sayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
+			continue
+		}
+		if _, mapped := h.Repositories[repo]; !mapped {
+			l.sayOnce("host "+selector+" "+repo, "SUPERVISOR HOST WAITS: %s maps no %s", selector, repo)
+			continue
+		}
+		if !l.capacityRoom(ctx, append([]string{"--host", selector}, flags...)...) {
+			continue
+		}
+		ref, err := ghDefaultBranch(ctx, repo)
+		if err != nil || ref == "" {
+			l.sayOnce("branch "+repo, "SUPERVISOR HOST WAITS: %s: no default branch of %s to pin a remote start (%v)", selector, repo, err)
+			continue
+		}
+		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
+	}
+	if k.HostsFirst {
+		return startHost{}, errLoopLater
+	}
+	return startHost{}, nil
+}
+
+// remoteStartFlags are what a placed start names on its agents start line:
+// the host, the mapped repository and the ref to pin.
+func (h startHost) remoteStartFlags() []string {
+	if !h.remote() {
+		return nil
+	}
+	return []string{loopHostFlag, h.Selector, loopRepoFlag, h.Repo, loopRefFlag, h.Ref}
+}
+
+// ghDefaultBranch reads a repository's default branch.
+var ghDefaultBranch = func(ctx context.Context, repo string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	out, err := github.RunGH(ctx, "api", "repos/"+repo, "--jq", ".default_branch")
+	return strings.TrimSpace(string(out)), err
+}
+
+// remoteStartRefused decides a refused placed start on a host: an
+// interruption between the reservation and first-task acceptance leaves
+// the managed execution reserved, and every later agents start then refuses
+// the name; the loop recovers the recorded execution (agents recover), the
+// way a hand start's operator would, and reports its result as the start's.
+// A start a host refused for room, with nothing reserved, waits for a
+// later pass as before.
+func (l *supervisorLoop) remoteStartRefused(ctx context.Context, name string) (string, error) {
+	st, err := l.a.store.Read()
+	if err != nil {
+		return "", err
+	}
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) && ag.Execution != nil })
+	if i < 0 {
+		return "", errLoopLater
+	}
+	if rec, _ := executionRecord(st, *st.Agents[i].Execution); rec != nil && rec.Terminal() {
+		return "", errLoopLater
+	}
+	out, err := l.run(ctx, agentsName, loopRecover, name)
+	if err != nil {
+		l.sayOnce("recover "+name, "SUPERVISOR RECOVER FAILED %s: %v", name, err)
+		return "", errLoopLater
+	}
+	return fmt.Sprintf("%q recovered the execution its interrupted start reserved: %s", name, oneLine(out)), nil
+}
+
 // startNext starts the next ranked item with the worker brief, when
-// capacity has room.
+// capacity has room — on an execution host when supervisor.hosts names one
+// with room (and the board item's repository is mapped there), else on the
+// coordinator's own machine.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
 	if l.startsHeld {
 		return "", errLoopLater
@@ -1262,8 +1495,11 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 	if k.WorkerBrief == "" {
 		return "no supervisor.workerBrief: no worker starts", nil
 	}
-	if _, code, err := beekeeperRun(ctx, l.as("capacity")...); err != nil || code != 0 {
-		return "", errLoopLater
+	if !l.placesRemotely() {
+		// The room check as before: a machine with no room reads no board.
+		if _, code, err := beekeeperRun(ctx, l.as(loopCapacity)...); err != nil || code != 0 {
+			return "", errLoopLater
+		}
 	}
 	next, err := l.nextItem(ctx)
 	if err != nil {
@@ -1320,6 +1556,14 @@ type loopBoardItem struct {
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
+	place, err := l.startPlacement(ctx, r.Repo, false, false)
+	if err != nil {
+		if errors.Is(err, errLoopLater) {
+			l.sayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet on any host", next.URL)
+			return "", errLoopLater
+		}
+		return "", err
+	}
 	brief, err := l.brief(k.WorkerBrief, "", "next "+next.Ref, briefData{URL: next.URL, Repo: r.Repo, Number: r.N})
 	if err != nil {
 		return "", err
@@ -1331,10 +1575,31 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		// reviewer's does.
 		args = append(args, "--harness", harnessAuto)
 	}
+	if place.remote() {
+		// A remote start needs its mapped repository and a ref to pin; the
+		// host's start judges its own capacity, so --harness auto's pick
+		// comes from that host's decision.
+		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
 	if _, err := l.run(ctx, args...); err != nil {
+		if Code(err) == ExitRefused && place.remote() {
+			// A refusal of a placed start on a host is either room or
+			// an execution its interrupted start left reserved. The
+			// recovery, when it succeeds, is the start taken after all:
+			// it is decided before any failure closes the claim, so a
+			// recovered execution is reconciled from the claim even
+			// when the pass dies before the taken line.
+			what, rerr := l.remoteStartRefused(ctx, name)
+			if rerr == nil {
+				return what, nil
+			}
+			if !errors.Is(rerr, errLoopLater) {
+				err = rerr
+			}
+		}
 		if strings.HasPrefix(act.Key, loopFillKey) {
 			// A returned failure is settled, rather than an interruption
 			// that a later start under the same name could reconcile.
@@ -1347,6 +1612,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			return "", errLoopLater
 		}
 		return "", err
+	}
+	if place.remote() {
+		return fmt.Sprintf("%q started on %s on %s at %s", name, next.URL, place.Selector, place.Ref), nil
 	}
 	return fmt.Sprintf("%q started on %s", name, next.URL), nil
 }

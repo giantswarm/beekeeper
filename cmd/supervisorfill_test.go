@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -513,5 +515,124 @@ func TestLoopFillDryRunPreviewsWithoutStartingOrWriting(t *testing.T) {
 				t.Fatalf("dry run: busy %d, events %d -> %d, reads %d/%d, calls %v", *busy, len(before), len(after), capacityReads, boardReads, r.calls)
 			}
 		})
+	}
+}
+
+// hostFillRig is fillRig with an execution host configured: the
+// coordinator's machine has no room (local capacity --json answers room
+// 0), the host has room, and the board offers items of the mapped
+// repository.
+func hostFillRig(t *testing.T) (*loopRig, *int) {
+	t.Helper()
+	return hostFillRigRoom(t, 0)
+}
+
+// hostFillRigRoom is hostFillRig with localRoom the coordinator's room.
+func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
+	t.Helper()
+	r, busy := fillRig(t)
+	r.sshLoopHost(t, true)
+	branch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	original := r.answer
+	r.answer = func(args []string) (string, int) {
+		switch args[0] {
+		case fillCapacityCommand:
+			if slices.Contains(args, loopHostFlag) {
+				return loopRoomJSON, 0
+			}
+			out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: localRoom, agentCount: agentCount{Busy: make([]string, *busy)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(out), 0
+		case loopBoard:
+			n := *busy + 10
+			return fmt.Sprintf(`{"pick":{"ref":"%s#%d","url":"https://github.com/%s/issues/%d"}}`, sshTestRepository, n, sshTestRepository, n), 0
+		}
+		return original(args)
+	}
+	return r, busy
+}
+
+// TestLoopFillPlacesOnAHostWhenTheCoordinatorIsFull is the issue's case for
+// the capacity fill: the coordinator's machine is at its floor of room, a
+// host has room, and the shortfall is filled there rather than not at all.
+func TestLoopFillPlacesOnAHostWhenTheCoordinatorIsFull(t *testing.T) {
+	r, busy := hostFillRig(t)
+	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR WOULD NEXT fill 3 to capacity.floor") {
+		t.Fatalf("no refill preview onto the host: %s", r.out)
+	}
+	r.pass(t)
+	if *busy != 3 || len(r.logged(t, "supervisor.next")) != 3 {
+		t.Fatalf("the fill did not reach the floor on the host: busy %d\n%s", *busy, r.out)
+	}
+	for _, c := range r.calls {
+		if c[0] == agentsName && c[1] == agentStartName {
+			for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch} {
+				if !slices.Contains(c, want) {
+					t.Errorf("the fill's start names no %q: %v", want, c)
+				}
+			}
+		}
+	}
+}
+
+// TestLoopFillStaysBoundByLocalRoomWithoutHosts keeps the fill's local
+// bound when nothing can be placed remotely: no capacity.choices means no
+// remote start, so the full coordinator starts nothing.
+func TestLoopFillStaysBoundByLocalRoomWithoutHosts(t *testing.T) {
+	r, busy := hostFillRig(t)
+	r.a.cfg.Capacity.Choices = nil
+	r.pass(t)
+	if *busy != 0 || r.called(agentsName, agentStartName) != nil {
+		t.Fatalf("a full coordinator started without a placeable host: %v", r.calls)
+	}
+}
+
+// TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim covers a
+// placed start refused after it reserved its execution: the loop recovers
+// it, and the claim stays open until the taken line, so an interruption in
+// between still reconciles it. supervisor.hostsFirst places the start on
+// the host although the coordinator has room.
+func TestLoopFillRecoversAReservedPlacedStartBeforeClosingItsClaim(t *testing.T) {
+	r, busy := hostFillRigRoom(t, 5)
+	r.a.cfg.Supervisor.HostsFirst = true
+	name := repoName(sshTestRepository) + " 10"
+	original := r.answer
+	recovered := 0
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName && args[2] == name {
+			// The start reserved its execution, then was refused before
+			// the host accepted the first task.
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: name}, Execution: &execution.Ref{Host: execution.HostID(sshTestSelector), Execution: "x1", Generation: 1}})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return "refused: execution reserved", ExitRefused
+		}
+		if args[0] == agentsName && args[1] == loopRecover {
+			recovered++
+			*busy++
+			return "recovered", 0
+		}
+		return original(args)
+	}
+	r.pass(t)
+	if recovered != 1 {
+		t.Fatalf("the reserved execution was not recovered: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, loopClaimEndVerb); len(evs) != 0 {
+		t.Fatalf("the recovered start's claim was closed as failed: %+v", evs)
+	}
+	evs := r.logged(t, "supervisor.next")
+	if len(evs) == 0 || !strings.Contains(evs[0].Detail, "recovered") {
+		t.Fatalf("the recovery is not the start taken: %+v", evs)
 	}
 }
