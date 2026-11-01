@@ -35,12 +35,23 @@ a replaced binary is re-executed at the loop's next quiet pass, after
 pending timer actions finish. `beekeeper uninstall` removes the service
 recorded in `install.json`. The service is off by default.
 
+With `supervisor.workerBrief` configured, each pass fills the desk to
+`capacity.floor` from the next free ranked board items, including after a
+restart or roster loss without a done report. Each start rechecks capacity
+and stops when its gates refuse, the floor is reached, or the board offers
+nothing. The existing done-triggered next-item transition remains active.
+An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
+default) before retrying, unless the roster or capacity changes first.
+`supervisor loop --dry-run` previews refill intent with read-only capacity
+and board queries and starts nothing.
+
 A park on a pull request requests the supervisor loop's independent review only
 when run from that pull request's worktree branch at its published HEAD. The
 command records and prints the verified head. Other parks, including older parks
 without this evidence, are plain waits: no reviewer, merge go or findings
 forwarded; the watch resumes them when the pull request merges or closes. If
 publication could not be verified, re-run the park from the published worktree.
+
 
 Download the binary for your OS and architecture from the latest release into any directory on
 your `PATH`:
