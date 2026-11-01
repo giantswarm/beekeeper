@@ -45,7 +45,7 @@ var runExecutionMerge = func(ctx context.Context, use execution.MergeUse) error 
 
 func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execution.MergeUse) error {
 	r, _ := executionRecord(st, use.Ref)
-	if r == nil || r.Request.Repository != use.Repository || r.Request.Harness != execution.HarnessClaude || !r.Request.LeaseRequired || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || r.StopRequest != nil || r.Completed || r.Terminal() || st.Stop != nil {
+	if r == nil || r.Request.Repository != use.Repository || !execution.SupportedHarness(r.Request.Harness) || !r.Request.LeaseRequired || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || r.StopRequest != nil || r.Completed || r.Terminal() || st.Stop != nil {
 		return refused("execution merge authority stopped or mismatched")
 	}
 	owner, _, _ := strings.Cut(use.Repository, "/")
@@ -217,7 +217,7 @@ func (a *app) executionMergeCmd() *cobra.Command {
 		if policyErr != nil || policy.Digest() != j.Request.PolicyDigest || j.StopRequest != nil {
 			return refused("remote merge policy changed or execution stopped")
 		}
-		if j.Request.Harness != execution.HarnessClaude {
+		if !execution.SupportedHarness(j.Request.Harness) {
 			return refused("harness has no supported remote merge surface")
 		}
 		pr, err := strconv.Atoi(args[1])

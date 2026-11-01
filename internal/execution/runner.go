@@ -101,6 +101,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		go func() { defer close(leaseDone); s.maintainLease(leaseCtx, ref, leaseStarted, lease) }()
 		defer func() { stopLease(); <-leaseDone }()
 	}
+	if j.Request.Harness == HarnessCodex {
+		return s.runCodex(ctx, ref, j)
+	}
 	h := s.Config.Harnesses[j.Request.Harness]
 	env := append(cleanEnvironment(h.ConfigDir, s.Executable), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
 	tools := "Bash,Read,Write,Edit,Grep,Glob"
@@ -118,13 +121,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		defer stream.Close()
 		c.Stdin = stream.reader
 	}
-	logPath := filepath.Join(s.Root, string(ref.Execution)+".log")
-	if fi, e := os.Lstat(logPath); e == nil && !fi.Mode().IsRegular() {
-		return errors.New("invalid owned execution log")
-	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
-		return e
-	}
-	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // owned execution log
+	log, err := s.openLog(ref)
 	if err != nil {
 		return err
 	}
@@ -198,4 +195,15 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		return errors.New(detail)
 	}
 	return nil
+}
+
+// openLog opens the owned, append-only execution log.
+func (s *Server) openLog(ref Ref) (*os.File, error) {
+	logPath := filepath.Join(s.Root, string(ref.Execution)+".log")
+	if fi, e := os.Lstat(logPath); e == nil && !fi.Mode().IsRegular() {
+		return nil, errors.New("invalid owned execution log")
+	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return nil, e
+	}
+	return os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // owned execution log
 }

@@ -24,7 +24,8 @@ not resolve to the very executable the prepared policy binds (missing, not
 executable, or shadowed by a stale sibling), because that worker could not
 report or park. The host needs Linux with a working user service manager,
 Git, and a pinned Claude Code version
-in the supported family (`>= 2.1.268, < 3.0.0`). Provision its subscription login
+in the supported family (`>= 2.1.268, < 3.0.0`), a pinned Codex CLI (see
+"Codex on an execution host"), or both. Provision its subscription login
 there independently. `agents hosts check` reads version and authentication
 metadata; it makes no model request. Starting a session never copies a provider
 credential store or forwards an authentication agent.
@@ -132,6 +133,56 @@ the coordinator's protocol before starting new work.
 Changing the host binary, rules, settings, or protected host configuration invalidates
 the policy. Prepare and pin a matching bundle again before starting new work.
 Do not weaken a required guard to make a check pass.
+
+## Codex on an execution host
+
+A host may run Codex workers next to or instead of Claude. Install a pinned
+Codex CLI in the supported family (`>= 0.165.0, < 1.0.0`) and add it to the
+host's `harnesses`:
+
+```yaml
+agents:
+  execution:
+    harnesses:
+      codex:
+        executable: /usr/local/bin/codex
+        version: 0.165.0
+        configDir: /srv/beekeeper/codex
+```
+
+`configDir` is the host's own `CODEX_HOME` holding its login, and it is
+required. Logging in is a one-time step for the person, on the host, with
+the device flow; credentials are never copied from the coordinator:
+
+```sh
+CODEX_HOME=/srv/beekeeper/codex codex login --device-auth
+```
+
+Workers never run in that home. `prepare` installs a managed `CODEX_HOME`
+inside the policy directory with the embedded worker rules as `AGENTS.md`, a
+`config.toml` with hooks on and the browser, computer, code-mode, image and
+plugin tools off, and a `hooks.json` whose PreToolUse hook is the execution
+guard in Codex's format. It links only `auth.json` from `configDir`. The policy
+binds those files; a changed one fails `hosts check` until a matching bundle is
+prepared again. Use a ChatGPT subscription login: an API-key login is refused.
+
+`hosts check` probes each configured harness's version, login and guard
+without a model call. It advertises only the harnesses that pass and names
+the others, with their reason, under `unavailable`. The coordinator lists the
+harnesses it may start there, for example `harnesses: [claude, codex]`, and
+starts a harness only when both list it and the host's check passes; `--harness
+auto` chooses among those.
+
+A remote Codex worker runs one `codex exec --json` turn per message. The first
+turn carries the brief and creates the thread; the runner records it, binds the
+guard to it, and runs each stored wake as `codex exec resume` on that thread. A
+wake is accepted once its turn has started on the recorded thread; a turn on
+another thread, or one that ends before it starts, leaves the receipt uncertain
+for explicit resolution. A finished report ends the runner after its turn.
+Lease, publication, review, merge, stop and recovery are the same as for
+Claude. Codex usage stays on the coordinator: the remote worker counts against
+the configured `codex` provider's ceiling, and the coordinator's own usage
+reading covers the shared subscription; a host adds machine room only.
 
 ## Start, inspect, and recover
 

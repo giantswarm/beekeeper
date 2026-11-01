@@ -102,6 +102,84 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 	return h.Decide(raw)
 }
 
+// ExecutionDenyCodex is ExecutionDeny in codex's PreToolUse format, which a
+// codex hook needs: codex treats a non-JSON answer or an error exit as a pass.
+func ExecutionDenyCodex(reason string) []byte { return DenyCodex(reason) }
+
+// DecideExecutionCodex is DecideExecution for the remote codex adapter. The
+// session is the codex thread the runner recorded. Shell commands, patch
+// targets and image reads stay inside the owned workspace and pass the same
+// remote command guard before the full codex guard runs; every other codex
+// tool is refused.
+func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protected []string) (out []byte) {
+	defer func() {
+		if recover() != nil {
+			out = ExecutionDenyCodex("execution guard failed; tool call denied")
+		}
+	}()
+	if reason := ValidateCodexInput(raw); reason != "" {
+		return ExecutionDenyCodex(reason)
+	}
+	var ev event
+	if json.Unmarshal(raw, &ev) != nil || ev.Session != session || session == "" || !filepath.IsAbs(workspace) {
+		return ExecutionDenyCodex("invalid managed execution tool event")
+	}
+	if h.ConfigErr != nil {
+		return ExecutionDenyCodex("execution guard configuration is unavailable")
+	}
+	if ev.CWD == "" {
+		ev.CWD = workspace
+	}
+	if !filepath.IsAbs(ev.CWD) || !executionWithin(workspace, ev.CWD) {
+		return ExecutionDenyCodex("tool working directory is outside its owned workspace")
+	}
+	target := func(p string) bool {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(ev.CWD, p)
+		}
+		return executionWithin(workspace, p)
+	}
+	switch {
+	case isCodexShellTool(ev.ToolName):
+		command, _, _ := extractCodexShellCommand(ev.ToolInput)
+		if strings.TrimSpace(command) == "" {
+			return ExecutionDenyCodex("invalid execution command")
+		}
+		if dir, ok := ev.ToolInput["workdir"].(string); ok && dir != "" && !target(dir) {
+			return ExecutionDenyCodex("tool working directory is outside its owned workspace")
+		}
+		if err := executionShell(command, workspace, protected, 0); err != nil {
+			return ExecutionDenyCodex(err.Error())
+		}
+	case ev.ToolName == codexApplyPatchTool:
+		patch, _ := extractCodexPatch(ev.ToolInput)
+		headers, reason := parseCodexPatchHeaders(patch)
+		if reason != "" {
+			return ExecutionDenyCodex(reason)
+		}
+		for _, hdr := range headers {
+			if !target(hdr.target) {
+				return ExecutionDenyCodex("patch target is outside its owned workspace")
+			}
+		}
+	case ev.ToolName == codexWriteStdinTool:
+		// An empty write only polls a running command; typed input would be
+		// a shell command the guard never inspected.
+		if chars, _ := ev.ToolInput[codexCharsKey].(string); chars != "" {
+			return ExecutionDenyCodex("uninspected shell input is not supported remotely; run a guarded command directly")
+		}
+	case ev.ToolName == codexViewImageTool:
+		if p, _ := ev.ToolInput[pathKey].(string); !target(p) {
+			return ExecutionDenyCodex("file tool target is outside its owned workspace")
+		}
+	case ev.ToolName == codexUpdatePlanTool:
+	default:
+		return ExecutionDenyCodex("tool is not supported by the managed remote adapter; use component commands for notes and reports")
+	}
+	h.Transcripts.Managed = func(string) (bool, error) { return true, nil }
+	return h.DecideCodex(raw)
+}
+
 func executionWithin(root, p string) bool {
 	root, p = filepath.Clean(root), filepath.Clean(p)
 	r, err := filepath.Rel(root, p)

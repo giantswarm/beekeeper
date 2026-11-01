@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -33,8 +34,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != "headless" {
 		return usageErr("remote starts require --repo and --ref, use headless mode and do not accept --dir or --desktop")
 	}
-	if o.Harness != claudeComm && o.Harness != harnessAuto {
-		return refused("execution host supports harness claude only")
+	if o.Harness != harnessAuto && (!execution.SupportedHarness(o.Harness) || !host.Supports(o.Harness)) {
+		return refused("execution host %s does not list harness %s; it lists %s", host.Identity, o.Harness, strings.Join(host.Harnesses, ", "))
 	}
 	if _, ok := host.Repositories[o.Repository]; !ok {
 		return refused("repository is not mapped on the selected execution host")
@@ -80,7 +81,17 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
-	exclude := append(slices.Clone(o.Exclude), "agy", "omp", "codex")
+	// Only the harnesses this host lists and its check passed are choices;
+	// agy and omp have no remote adapter yet.
+	exclude := append(slices.Clone(o.Exclude), "agy", "omp")
+	for _, name := range []string{claudeComm, codex.Harness} {
+		if !host.Supports(name) || caps.Harnesses[name] == "" {
+			exclude = append(exclude, name)
+		}
+	}
+	if o.Harness != harnessAuto && caps.Harnesses[o.Harness] == "" {
+		return refused("execution host %s does not offer harness %s: %s", host.Identity, o.Harness, caps.Unavailable[o.Harness])
+	}
 	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
 	if o.Harness == harnessAuto {
 		choice, err := pickAutoChoice(verdict, o.Force)
@@ -89,8 +100,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		}
 		o.Harness, o.Model = choice.Harness, choice.Model
 	}
-	if o.Harness != claudeComm || o.Model == "" {
-		return usageErr("remote claude requires an explicit --model or a configured auto choice")
+	if !execution.SupportedHarness(o.Harness) || slices.Contains(exclude, o.Harness) || o.Model == "" {
+		return usageErr("remote %s requires an explicit --model or a configured auto choice this host offers", o.Harness)
 	}
 	if _, err := gateStart(verdict, o.Force); err != nil {
 		return err
