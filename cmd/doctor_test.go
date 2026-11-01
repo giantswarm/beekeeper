@@ -309,15 +309,15 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		want      bool
 	}{
 		"supervisor ready": {"", "rollout ready; waiting for the supervisor", false},
-		"supervisor go":    {"", "the supervisor's go", false},
+		"supervisor go":    {"", "awaiting the supervisor's go", false},
 		"guide handoff":    {"", "the guide handoff ready", false},
 		"gate":             {"", "the supervisor's gate", false},
 		"install chain":    {"", "the supervisor's install chain", false},
-		"note":             {"#12", "install chain ready", true},
+		"local note":       {"#787", "install chain ready", true},
 		"central note":     {"central#12", "gate ready", true},
-		"person":           {"", "operator's go on the install chain", true},
-		"answer":           {"", "the person's answer", true},
-		"review":           {"example/tool#12", "a colleague's review", true},
+		"named person":     {"", "operator's go on the install chain", true},
+		"answer":           {"", "awaiting the person's answer", true},
+		"colleague review": {"example/tool#12", "a colleague's review", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}
