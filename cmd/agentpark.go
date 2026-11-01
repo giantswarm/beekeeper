@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 // The events of a park: set, settled (its note closed or its pull request
@@ -84,15 +86,27 @@ alert:<name> waits for a firing alert (a bare alertname or installation/alertnam
 lease claim --park parks on a lease. The supervisor loop wakes alert waits
 and replaces a parked session that cannot be resumed, keeping its task.
 
-Once the note is closed (answered, defaulted, done or overtaken), the pull
-request merged or closed or given a review or comment by anyone but its
-author since the park (a review posted under the author's own login settles
-nothing), the hold
+GitHub targets are resolved before the park is recorded; a confirmed unknown
+target is refused. If GitHub cannot be read, the park is recorded and its type
+resolved later. Issues are plain waits checked every five minutes and never
+enter pull request review. Once the note is closed (answered, defaulted, done
+or overtaken), the issue closed, the pull request merged or closed or given a
+review or comment by anyone but its author since the park (a review posted
+under the author's own login settles nothing), the hold
 lifted or ended, or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
-by hand, also for a park without --on. A new task or agents idle ends the
+by hand, also for a park without --on.
+
+A park from the pull request's own worktree at its published HEAD records
+an independent review request. A worker on an SSH execution host parks from
+its workspace: the coordinator checks the pull request against the
+execution's own published branch and the workspace's HEAD, and a park after
+a new publication asks for that head's review. Every other park (including one whose
+publication cannot be verified) records a plain wait: no reviewer, merge
+go or findings forwarded. The command says which it recorded. Request review in one shell call:
+cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
 park. A session off the roster parks too (any session that never
 registered): its park is kept apart from the roster,
 settles the same way and resumes it by its session id; one whose session
@@ -137,7 +151,14 @@ agents wake: its task is that message's first line.`,
 				}
 			}
 			if a.managedExecutionID() != "" {
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits})
+				kind, err := resolveParkRef(cmd.Context(), on)
+				if err != nil {
+					return err
+				}
+				// The coordinator proves the review head against the
+				// execution's owned branch: the workspace's own branch
+				// never is the published one, nor does the host read GitHub.
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on)})
 			}
 			line, err := a.park(me, on, waits)
 			if err != nil {
@@ -165,8 +186,13 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		}
 		id, isNote = parkNote(on)
 	}
+	kind, err := resolveParkRef(context.Background(), on)
+	if err != nil {
+		return "", err
+	}
+	reviewHead := parkReviewHead(on)
 	var line string
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
 		if i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done) {
 			return nil, refused("%q has no task: park keeps a task, an idle agent has nothing to wait for", st.Agents[i].Name)
@@ -183,7 +209,7 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		if target, ok := parkHold(on); ok && !holdStands(st, target, a.now) {
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
-		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits}
+		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
 		name, counted, resume := me.Name, "off the roster, woken by its session id", fmt.Sprintf("beekeeper agents resume %s", wakeID(me))
 		// One park per session: a new one replaces the last, also one it
 		// took off the roster before it registered.
@@ -210,12 +236,20 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		case on != "":
 			back = "the watch says AGENT RESUMABLE once " + on + " settles; " + resume + " brings it back"
 		}
+		if _, ok := parseRef(on); ok {
+			back += "; " + parkReviewMode(reviewHead)
+		}
 		line = fmt.Sprintf("%s: %s; %s, and %s. End your turn now.", name, parkedText(park, a.now), counted, back)
 		if k := st.StartIndex(me); k >= 0 && st.Starts[k].Background {
 			line += " The watch stops your background session once the turn ends, and the wake resumes it from its transcript."
 		}
 		return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
 	})
+	if err == nil && kind == github.RefIssue {
+		if suggestion := a.parkSuggestion(me, on); suggestion != "" {
+			line += " This is an issue wait. For desk review, park on your open pull request: " + suggestion
+		}
+	}
 	return line, err
 }
 
@@ -476,6 +510,9 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			}
 		} else if r, ok := parseRef(p.On); ok {
 			parked = append(parked, ag)
+			if p.RefKind != github.RefPullRequest && !p.RefChecked.IsZero() && w.now.Sub(p.RefChecked) < parkRefRetry {
+				continue
+			}
 			if !slices.Contains(refs, r) {
 				refs = append(refs, r)
 			}
@@ -487,7 +524,20 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	}
 	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
-		// A failed batch leaves its agents parked; the others settle.
+		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
+		// its agents parked; the others settle.
+		attempts := map[github.PR]github.RefState{}
+		for _, ag := range parked {
+			if ag.Park != nil && ag.Park.RefKind != github.RefPullRequest {
+				r, ok := parseRef(ag.Park.On)
+				if ok && slices.Contains(refs, r) {
+					attempts[r] = github.RefState{Kind: ag.Park.RefKind}
+				}
+			}
+		}
+		if len(attempts) > 0 {
+			w.cacheParkRefs(parked, attempts)
+		}
 		s, err := refStates(ctx, refs)
 		if err != nil {
 			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
@@ -495,6 +545,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			w.clear("park-refs")
 		}
 		states = s
+		w.cacheParkRefs(parked, s)
 	}
 	var closes map[int]string
 	if len(closed) > 0 {
@@ -546,7 +597,7 @@ func noteCloses(evs []state.Event, ids []int, central string) map[int]string {
 		for _, id := range ids {
 			if an, ok := parseAnswered(e); ok {
 				if an.ID == id {
-					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.For, an.Answer)
+					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.attribution(), an.Answer)
 					if an.Comment != "" {
 						closes[id] += " (" + an.Comment + ")"
 					}
@@ -690,4 +741,72 @@ func (w *watcher) autoResume(ctx context.Context, st *state.State) {
 			w.emit("park-resume-"+id, "AGENT RESUME FAILED %q (off the roster): %v; beekeeper agents resume %s", p.By.Name, err, id)
 		}
 	}
+}
+
+// parkReviewHead fails closed: a repository/branch name or shared GitHub
+// author alone is no evidence that this caller published the pull request.
+var parkReviewHead = func(on string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return publishedParkHead(ctx, on, ".", runGit, github.RunGH)
+}
+
+func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) string {
+	r, ok := parseRef(on)
+	if !ok {
+		return ""
+	}
+	read := func(args ...string) string {
+		out, err := git(ctx, dir, args...)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	repo := worktrees.RepoOf(read("remote", "get-url", "origin"))
+	branch := read("symbolic-ref", "--quiet", "--short", "HEAD")
+	head := read("rev-parse", "HEAD")
+	if !strings.EqualFold(repo, r.Repo) || branch == "" || head == "" {
+		return ""
+	}
+	out, err := gh(github.ActingOn(ctx, r.Repo), "api", fmt.Sprintf("repos/%s/pulls/%d", r.Repo, r.N))
+	if err != nil {
+		return ""
+	}
+	var p struct {
+		Head struct {
+			Ref, SHA string
+			Repo     struct {
+				FullName string `json:"full_name"`
+			}
+		}
+	}
+	if json.Unmarshal(out, &p) != nil || p.Head.Ref != branch || p.Head.SHA != head || !strings.EqualFold(p.Head.Repo.FullName, repo) {
+		return ""
+	}
+	return head
+}
+
+// executionWorkspaceHead is the HEAD of the calling execution's workspace
+// for a park on a pull request, or "" when it has none to read.
+func (a *app) executionWorkspaceHead(ctx context.Context, on string) string {
+	if _, ok := parseRef(on); !ok {
+		return ""
+	}
+	_, j, err := a.executionCaller()
+	if err != nil || j.Handle.Workspace == "" {
+		return ""
+	}
+	head, err := publishGit(ctx, j.Handle.Workspace, "rev-parse", "HEAD")
+	if err != nil || !publicationCommit(head) {
+		return ""
+	}
+	return head
+}
+
+func parkReviewMode(head string) string {
+	if head != "" {
+		return "review request recorded for pushed HEAD " + head
+	}
+	return "plain wait recorded; no review, go or findings forwarded; to request review, re-run from the published worktree: cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\""
 }

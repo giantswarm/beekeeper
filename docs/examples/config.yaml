@@ -191,6 +191,7 @@ upgrades:
   every: 5m                 # each installation's Cluster API upgrades are read this often; every watch.interval while one runs on it
 
 supervisor:                 # the supervisor loop, which beekeeper install always installs as a user service (systemd or launchd); no session holds the role
+  postMergeWindow: 2h       # retain merged workers until done or this long without activity
   hosts: []                # execution host selectors (agents.hosts) the loop's worker and reviewer starts may run on, in order; with no room locally, or always with hostsFirst: true; a host must map the item's repository and pass its check (capacity --host); empty: the coordinator's own machine
   hostsFirst: false        # prefer the first host with room over the coordinator's own machine, whatever its room is
   # The loop owns a watch beside it, reading alerts every alerts.every;
@@ -234,7 +235,10 @@ agents:                     # the hand-over of registered agents
     path: [~/.local/share/devctl/agent-bin]   # directories first on PATH, in this order: the agent's own programs (a gh link to devctl acts with the App's short-lived token); default: none
 capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY LOW / FULL)
   floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start (0: never)
+  reviewHeadroom: 2         # extra subscription sessions reserved for reviews; 0 disables
   ceiling: 10               # CAPACITY FULL at this many; no start past it (0: no unforced start, suppresses CAPACITY LOW / FULL; unset: 5 and 10)
+  local:
+    ceiling: 5              # optional: the busy agents this machine runs (self-hosted ones included; execution hosts' count against their maxBusy); unset: no local cap, 0: no unforced local start
   availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
   swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
   swapPSIMax: 0             # the default; memory pressure (full avg60 of /proc/pressure/memory, %) up to which that growth is only a warning while MemAvailable is over availMinMiB
@@ -343,6 +347,7 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepDepth: 5
 
 hooks:
+  transcriptGrants: {}      # supervisor-granted exact own-transcript files or fixture directories, by receiving session ID; no globs
   scope:                    # where the Claude Code hooks act; unset, in every session
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
   personFolders: [~, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
@@ -391,7 +396,7 @@ board:                      # the project board `beekeeper board next` picks wor
     - {name: In Progress, status: [in progress], subIssues: true}   # an epic offers its open sub-issues
     - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed, the Status set before the last close
     - {name: Up Next, status: [up next]}
-    - {name: bug, status: [backlog], kind: [bug], workScope: true}   # an item without a Kind by its label too (bug, kind/bug); workScope: only a priority epic's sub-issues, orders and their blockers
+    - {name: bug, status: [backlog], kind: [bug], workScope: true}   # an item without a Kind by its label too (bug, kind/bug); workScope is read and ignored: the priority list orders and gates nothing
     - {name: queue, search: "repo:example-org/tools label:team/platform"}   # open issues, oldest first
     - {name: Backlog, status: [backlog], createdWithin: 2160h, workScope: true}
   epics:                    # the epic gate, whatever the order says (these are the defaults)
@@ -400,6 +405,7 @@ board:                      # the project board `beekeeper board next` picks wor
     go: in progress         # the go: its open sub-issues offered in their order; board move records the plan head
   archiveAfter: 336h        # the default; board tidy archives a closed item after this long (its Status set to Done first); negative: never
   tidyEvery: 1h             # the default; how often the supervisor loop runs board tidy; negative: never
+  escalateEvery: 24h        # the default; board escalate (after each tidy) asks the person about a blocked item, and again this long later while it stays blocked; negative: never
   claims:                   # the desk's session records as marker comments on their issues, for other desks on the same repositories (defaults but desk)
     off: false              # true: publish no claim and read none
     desk: platform-desk     # the neutral name the desk's claims carry, seen on (possibly public) issues; unset: no claim published, the other desks' still honoured

@@ -31,7 +31,7 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
-	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.ReviewHeadroom != 2 || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
 		t.Errorf("swap guard and capacity defaults = %s %d/%d %d %g %d", w.SwapWindow, k.Floor, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
@@ -1030,6 +1030,36 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 	}
 }
 
+func TestReviewHeadroomConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+		bad   bool
+	}{
+		{"0", 0, false}, {"3", 3, false}, {"-1", 0, true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("capacity:\n  reviewHeadroom: "+tc.value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.reviewHeadroom") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Capacity.ReviewHeadroom != tc.want {
+				t.Fatalf("headroom %d, want %d", c.Capacity.ReviewHeadroom, tc.want)
+			}
+		})
+	}
+}
+
 func TestClaudeUsageDefault(t *testing.T) {
 	for _, raw := range []string{"capacity: {providers: {claude: {}}}\n", "capacity: {providers: {claude: {ceiling: 2}}}\n"} {
 		c, err := Load(writeTemp(t, raw))
@@ -1152,6 +1182,43 @@ func TestMissingEnvironmentConfig(t *testing.T) {
 				}
 			} else if err != nil || cfg.StateDir != filepath.Join(root, "beekeeper") {
 				t.Fatalf("default Load = %v, %v", cfg, err)
+			}
+		})
+	}
+}
+
+// capacity.local.ceiling is the coordinator machine's own cap: unset means
+// none, 0 is honoured and a negative one is refused.
+func TestCapacityLocalCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		yaml  string
+		want  int
+		set   bool
+		bad   bool
+		label string
+	}{
+		{label: "unset", yaml: "capacity:\n  ceiling: 14\n"},
+		{label: "zero", yaml: "capacity:\n  local:\n    ceiling: 0\n", want: 0, set: true},
+		{label: "five", yaml: "capacity:\n  ceiling: 14\n  local:\n    ceiling: 5\n", want: 5, set: true},
+		{label: "negative", yaml: "capacity:\n  local:\n    ceiling: -1\n", bad: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.local.ceiling") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, ok := c.Capacity.Local.Limit(); n != tc.want || ok != tc.set {
+				t.Fatalf("local ceiling %d (set %v), want %d (set %v)", n, ok, tc.want, tc.set)
 			}
 		})
 	}

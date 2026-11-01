@@ -646,16 +646,16 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 			cancel(errRestart)
 		}
 	})
-	if w.restartFor == nil {
-		return nil
-	}
-	// The restart stops the watch as a SIGTERM does and waits for every run
-	// it started: a save under way ends before the new binary starts, and
-	// the restarted watch's mark says nothing twice.
+	// Every shutdown waits for the runs the watch started, including saves
+	// still writing its state after cancellation.
 	wg.Wait()
 	w.bg.Wait()
 	w.stand.inflight.Wait()
 	w.timerActs.Wait()
+	if w.restartFor == nil {
+		return nil
+	}
+	// A restarted watch's mark says nothing twice.
 	w.saveMark()
 	return errRestart
 }

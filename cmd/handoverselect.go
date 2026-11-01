@@ -124,6 +124,8 @@ type answered struct {
 	Question string
 	At       time.Time
 	By       string
+	// Recorder is the party that recorded it: Via is its channel.
+	Recorder state.Party
 }
 
 // answeredDetail is answer.recorded's detail, as beekeeper answer writes it
@@ -142,7 +144,7 @@ func parseAnswered(e state.Event) (answered, bool) {
 		u, _ := strconv.Unquote(s)
 		return u
 	}
-	return answered{About: m[1], For: unquote(m[2]), Via: m[3], Comment: m[4], ID: id, Asker: unquote(m[6]), Question: unquote(m[7]), Answer: m[8], At: e.At, By: e.By.Name}, true
+	return answered{About: m[1], For: unquote(m[2]), Via: m[3], Comment: m[4], ID: id, Asker: unquote(m[6]), Question: unquote(m[7]), Answer: m[8], At: e.At, By: e.By.Name, Recorder: e.By}, true
 }
 
 // answeredSince is the answers recorded since since, oldest first.

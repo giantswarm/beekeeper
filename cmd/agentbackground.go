@@ -76,8 +76,34 @@ func daemonRan(ctx context.Context, id string) bool {
 	return err == nil && slices.ContainsFunc(rows, func(r bgSession) bool { return r.SessionID == id && r.Kind == bgKind })
 }
 
+// daemonRunning returns the session ids the claude daemon lists as running
+// right now (claude agents --json without --all).
+func daemonRunning(ctx context.Context, config string) map[string]bool {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return nil
+	}
+	rows, err := bgList(ctx, bin, cleanEnv(os.Environ(), config), false)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if r.SessionID != "" {
+			out[r.SessionID] = true
+		}
+	}
+	return out
+}
+
 // bgKind is the kind claude agents gives a session the daemon runs.
 const bgKind = "background"
+
+// desktopMode reports whether the desk runs its sessions in the desktop
+// (agents.mode desktop, the default).
+func (a *app) desktopMode() bool {
+	return a == nil || a.cfg == nil || cmp.Or(strings.TrimSpace(a.cfg.Agents.Mode), config.ModeDesktop) == config.ModeDesktop
+}
 
 // desktopStarted reports whether p's session is one of beekeeper's starts
 // that the desktop shows: a background start has no desktop row to miss.
@@ -85,8 +111,8 @@ func desktopStarted(st *state.State, p state.Party) bool {
 	if !started(st, p) {
 		return false
 	}
-	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Session == p.Session })
-	return !st.Starts[i].Background
+	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Execution == nil && s.Session == p.Session })
+	return i >= 0 && !st.Starts[i].Background
 }
 
 // cleanEnv is environ without the caller's session and harness variables
@@ -348,6 +374,9 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
 	}
+	if loopInTurn(a, p) {
+		return fmt.Sprintf("its background session %s stays: its CLI is in a turn", short), true
+	}
 	if err := a.bgStop(ctx, id); err != nil {
 		return fmt.Sprintf("its background session %s stays: %v", short, err), true
 	}
@@ -531,6 +560,7 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 // read anew, still running with its turn ended; false when it stays. The
 // lock holds until the stopped CLI exits, so the next wake finds it gone.
 func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.Party) (bool, error) {
+	defer a.recordStoppedGates(ctx)
 	l, err := a.parkStopLock(p.Session)
 	if err != nil {
 		return false, err

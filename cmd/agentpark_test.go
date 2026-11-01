@@ -59,7 +59,7 @@ func answer(t *testing.T, w *watcher) {
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
 		st.Notes = nil
-		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Answer: parkAnswer, Note: n.ID}
+		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Channel: channelTerminal, Answer: parkAnswer, Note: n.ID}
 		return []state.Event{answerEvent(state.Party{Name: personTimo, Person: personTimo}, rec, &n)}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -240,6 +240,100 @@ func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 	}
 }
 
+func TestPublishedParkHead(t *testing.T) {
+	const branch = "fix/example"
+	const repo = "o/r"
+	for _, tc := range []struct {
+		name, localBranch, remoteBranch, localHead, remoteHead, remoteRepo string
+		readErr                                                            bool
+		want                                                               string
+	}{
+		{name: "published branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, want: loopHead},
+		{name: "other branch same commit", localBranch: branch, remoteBranch: "another-feature", localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
+		{name: "unpushed head", localBranch: branch, remoteBranch: branch, localHead: loopFixed, remoteHead: loopHead, remoteRepo: repo},
+		{name: "fork same branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: "other/r"},
+		{name: "detached", remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
+		{name: "unreachable", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, readErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			git := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				var out string
+				switch args[0] {
+				case "remote":
+					out = "git@github.com:o/r.git"
+				case "symbolic-ref":
+					out = tc.localBranch
+				case "rev-parse":
+					out = tc.localHead
+				default:
+					t.Fatalf("unexpected git call %v", args)
+				}
+				return []byte(out), nil
+			}
+			gh := func(ctx context.Context, args ...string) ([]byte, error) {
+				if github.Repo(ctx) != repo || !slices.Equal(args, []string{"api", "repos/o/r/pulls/7"}) {
+					t.Fatalf("gh call %v", args)
+				}
+				if tc.readErr {
+					return nil, fmt.Errorf("unreachable")
+				}
+				return []byte(fmt.Sprintf(`{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, tc.remoteBranch, tc.remoteHead, tc.remoteRepo)), nil
+			}
+			if got := publishedParkHead(context.Background(), loopPR, ".", git, gh); got != tc.want {
+				t.Fatalf("head %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
+	was := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = was })
+	for _, head := range []string{"", loopHead} {
+		w := parkingWatch(t, map[string]string{refOne: github.Open})
+		parkReviewHead = func(string) string { return head }
+		if err := park(t, w, "--on", refOne, "waiting"); err != nil {
+			t.Fatal(err)
+		}
+		if ag := agentOf(t, w); ag.Park.ReviewHead != head {
+			t.Fatalf("park %+v", ag.Park)
+		}
+		if !strings.Contains(w.out.(*bytes.Buffer).String(), parkReviewMode(head)) {
+			t.Fatalf("output %s", w.out)
+		}
+		if head == "" && !strings.Contains(w.out.(*bytes.Buffer).String(), `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`) {
+			t.Fatalf("plain wait must explain how to request review: %s", w.out)
+		}
+	}
+}
+
+func TestPlainPullWaitWakesOnMergeOrClose(t *testing.T) {
+	for _, status := range []string{github.Merged, github.Closed} {
+		t.Run(status, func(t *testing.T) {
+			refs := map[string]string{refOne: github.Open}
+			w := parkingWatch(t, refs)
+			w.cfg.Agents.AutoResume = true
+			woke := stubWakes(t)
+			if err := park(t, w, "--on", refOne, "another worker's pull request"); err != nil {
+				t.Fatal(err)
+			}
+			if agentOf(t, w).Park.ReviewHead != "" {
+				t.Fatal("plain wait requested review")
+			}
+			w.pending(context.Background(), nil)
+			if len(*woke) != 0 {
+				t.Fatalf("woke while open: %v", *woke)
+			}
+			refs[refOne] = status
+			w.pending(context.Background(), nil)
+			w.pending(context.Background(), nil)
+			if len(*woke) != 1 || !strings.Contains((*woke)[0], strings.ToLower(status)) || agentOf(t, w).Park != nil {
+				t.Fatalf("settled %s: %v", status, *woke)
+			}
+		})
+	}
+}
+
 // reviewerLogin reviews the pull request a session parked on.
 const reviewerLogin = "a-reviewer"
 
@@ -255,7 +349,7 @@ func replyingRefs(t *testing.T, reply *github.Reply) {
 	refStates = func(_ context.Context, rs []github.PR) (map[github.PR]github.RefState, error) {
 		m := map[github.PR]github.RefState{}
 		for _, r := range rs {
-			m[r] = github.RefState{State: github.Open, Reply: *reply}
+			m[r] = github.RefState{Kind: github.RefPullRequest, State: github.Open, Reply: *reply}
 		}
 		return m, nil
 	}
@@ -385,6 +479,28 @@ func TestJoiningTheRosterEndsAParkOffIt(t *testing.T) {
 		}
 		if st, _ := w.store.Read(); len(st.Parks) != 0 {
 			t.Errorf("register %v: parks %+v", viaRegister, st.Parks)
+		}
+	}
+}
+
+// Publication evidence and its mode survive the shared park path for a
+// session off the roster, as they do for registered workers.
+func TestOffRosterParkRetainsReviewMode(t *testing.T) {
+	was := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = was })
+	for _, head := range []string{"", loopHead} {
+		w := parkingWatch(t, map[string]string{refOne: github.Open})
+		parkReviewHead = func(string) string { return head }
+		line, err := w.park(offSession, refOne, "waiting")
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := w.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || !strings.Contains(line, parkReviewMode(head)) {
+			t.Fatalf("parks %+v, line %q", st.Parks, line)
 		}
 	}
 }

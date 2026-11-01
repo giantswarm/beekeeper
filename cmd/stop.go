@@ -317,6 +317,7 @@ func sparedUnit(unit, own string, spare []state.Party) bool {
 // stopped, which resume starts again, a line for each unit stopped and one
 // for each that did not stop.
 func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, lines, failed []string) {
+	defer a.recordStoppedGates(ctx)
 	if !plat.Launcher.Available() {
 		return nil, []string{"no unit stopped: this machine has no unit launcher (systemd --user); the standby watch honours the stop"}, nil
 	}
@@ -351,6 +352,7 @@ func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, li
 // ones, in parallel, and returns the names it ended, a line for each and
 // one for each it could not end.
 func (a *app) endWorkers(ctx context.Context, st *state.State, spare []state.Party) (ended, lines, failed []string) {
+	defer a.recordStoppedGates(ctx)
 	sessions, _, err := a.sessions()
 	if err != nil {
 		return nil, nil, []string{fmt.Sprintf("no session ended: reading the sessions failed: %v", err)}

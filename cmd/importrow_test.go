@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -373,5 +375,80 @@ func TestAgentsMarkAWorkerWithoutADesktopRow(t *testing.T) {
 		if v.NoRow || v.Reachable != notRunning {
 			t.Errorf("with the desktop down: %+v", v)
 		}
+	}
+}
+
+// Managed SSH executions and desks whose agents.mode is not the desktop
+// never offer or launch a local desktop reopen.
+func TestDoctorSkipsReopenForSSHExecutionsAndNonDesktopMode(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Claude.DesktopLog = capLog(t, 4)
+	l := &reopenLauncher{}
+	useLauncher(t, l)
+	plat.Machine = tableMachine{plat.Machine}
+	plat.Opener = &recordingOpener{}
+	now := a.now
+	const sshExecID = "ssh00001"
+	sshRef := execution.Ref{Host: "exec-host-row", Execution: sshExecID, Generation: 1}
+	sshParty := state.Party{Session: sshExecID, Name: "ssh worker"}
+	st := &state.State{
+		Starts: []state.Start{{
+			Party:     sshParty,
+			Dir:       "/remote/ssh00001/workspace",
+			At:        now.Add(-time.Hour),
+			Harness:   claudeComm,
+			Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: sshRef, ConversationID: sshExecID}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopAcknowledged: true}},
+		}},
+		Agents: []state.Agent{{
+			Party:     sshParty,
+			Execution: &sshRef,
+			Task:      rowlessTask,
+		}},
+	}
+	by := state.Party{Name: "beekeeper doctor"}
+	if _, ok := rowlessCandidate(st, st.Agents[0], now); ok {
+		t.Fatal("SSH execution became a rowless candidate")
+	}
+	if lines := a.reopenRowless(t.Context(), st, rowlessTable(), rowlessRecord, doctorRun{by: by, dryRun: true}); len(lines) != 0 {
+		t.Fatalf("dry-run reopen of SSH execution: %v", lines)
+	}
+	if lines := a.reopenRowless(t.Context(), st, rowlessTable(), rowlessRecord, doctorRun{by: by}); len(lines) != 0 || len(l.started) != 0 {
+		t.Fatalf("reopen of SSH execution: lines=%v started=%+v", lines, l.started)
+	}
+	if name, ok := reopens(st, sshExecID); ok || name != "" {
+		t.Fatalf("reopens(ssh00001) = %q, %v", name, ok)
+	}
+
+	// On a desk with agents.mode != desktop, even a local start without a
+	// row is never offered a desktop reopen, NO DESKTOP ROW or no desktop row.
+	a.cfg.Agents.Mode = config.ModeBackground
+	localSt := rowlessState(now)
+	if err := a.store.Update(func(cur *state.State) ([]state.Event, error) { *cur = *localSt; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if w := a.rowlessWorkers(t.Context(), localSt, rowlessTable(), rowlessRecord); len(w) != 0 {
+		t.Fatalf("rowlessWorkers in background mode: %+v", w)
+	}
+	if lines := a.reopenRowless(t.Context(), localSt, rowlessTable(), rowlessRecord, doctorRun{by: by, dryRun: true}); len(lines) != 0 {
+		t.Fatalf("dry-run reopenRowless in background mode: %v", lines)
+	}
+	if lines := a.reopenRowless(t.Context(), localSt, rowlessTable(), rowlessRecord, doctorRun{by: by}); len(lines) != 0 || len(l.started) != 0 {
+		t.Fatalf("reopenRowless in background mode: lines=%v started=%+v", lines, l.started)
+	}
+	for _, v := range a.agentViews(localSt, nil) {
+		if v.NoRow || strings.Contains(v.Reachable, "no desktop row") {
+			t.Fatalf("agentViews in background mode marked no desktop row: %+v", v)
+		}
+	}
+	w, _, watchOut := notifyingWatch(t, t.TempDir(), false)
+	w.cfg.Agents.Mode = config.ModeBackground
+	w.table = rowlessTable()
+	w.rowlessAgents(localSt)
+	if watchOut.Len() != 0 {
+		t.Fatalf("watch emitted NO DESKTOP ROW in background mode: %s", watchOut.String())
+	}
+	out.Reset()
+	if err := a.reopenSession(t.Context(), rowlessOne, ""); err != nil || len(l.started) != 0 || !strings.Contains(out.String(), "left closed") {
+		t.Fatalf("reopenSession in background mode: err=%v started=%+v out=%q", err, l.started, out.String())
 	}
 }

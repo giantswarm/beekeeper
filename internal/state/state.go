@@ -334,10 +334,17 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
-	By    Party     `json:"by"`
-	At    time.Time `json:"at"`
-	On    string    `json:"on,omitempty"`
-	Waits string    `json:"waits"`
+	// RefKind caches GitHub's Issue or PullRequest type for this park.
+	RefKind string `json:"refKind,omitempty"`
+	// RefChecked is the last lookup attempt; issues and unresolved references retry every five minutes.
+	RefChecked time.Time `json:"refChecked,omitzero"`
+	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
+	// Empty (including parks written by older versions) is a plain wait.
+	ReviewHead string    `json:"reviewHead,omitempty"`
+	By         Party     `json:"by"`
+	At         time.Time `json:"at"`
+	On         string    `json:"on,omitempty"`
+	Waits      string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -804,7 +811,19 @@ type ExecutionRecord struct {
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
-	rest            rest
+	// Published is the execution's last publication (agents publish): its
+	// owned branch, the head it pushed and its pull request. Handle.Commit
+	// stays the commit the execution started from.
+	Published *ExecutionPublication `json:"published,omitempty"`
+	rest      rest
+}
+
+// ExecutionPublication is one publication of an SSH execution's branch.
+type ExecutionPublication struct {
+	At     time.Time `json:"at"`
+	Branch string    `json:"branch"`
+	Head   string    `json:"head"`
+	URL    string    `json:"url,omitempty"`
 }
 
 type ExecutionMessage struct {
@@ -1389,6 +1408,12 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteHistory is the optional history of a store that retains central note
+// closures beyond the late-answer window. File-backed stores need not implement it.
+type NoteHistory interface {
+	NoteClosure(int) (*Event, error)
 }
 
 // Store is the seam every command reads and changes the state through.
