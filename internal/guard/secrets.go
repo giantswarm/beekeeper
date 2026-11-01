@@ -193,9 +193,31 @@ type secretGuard struct {
 	linkAllowance    linkAllowance
 	noLinks          bool
 	standaloneScript string
+	// funcs are the bodies of the functions the command line defines, which
+	// a helper call is inlined from (secretlinksmade.go).
+	funcs map[string]string
+	// made are the links to guarded files the command line and the command
+	// lines around it create; opaque the helpers whose calls make one and
+	// could not be inlined.
+	made   []madeLink
+	sink   *[]madeLink
+	opaque map[string]string
+	// vars are the bindings of the command line being scanned; bound marks
+	// the scan of an inlined helper body, which inherits them, its caller's
+	// functions and depth.
+	vars    map[string][]string
+	bound   bool
+	depth   int
+	inlines int
 	// feeds: the simple command's output is piped on or substituted, so a
 	// path a metadata command prints is read by the command consuming it.
 	feeds bool
+	// inTest: the simple command is the rest of a [[ … ]] expression that
+	// its && or || split off, operands of the test.
+	inTest bool
+	// cut: the simple command's words continue past a substitution, so the
+	// last of them are not its words.
+	cut bool
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -203,11 +225,19 @@ const maxScript = 64 << 10
 
 // leak returns the leak cmd would expose, nil when it exposes none.
 func (g secretGuard) leak(cmd string) *leak {
+	// A link made in a nested command line (a script, bash -c, eval) is read
+	// by the command lines around it, before or after it in the text: a
+	// second scan knows every link the first one found.
+	g.sink = &[]madeLink{}
+	if l := g.scan(cmd, 0); l != nil || len(*g.sink) == 0 {
+		return l
+	}
+	g.made, g.sink = slices.Clone(*g.sink), &[]madeLink{}
 	return g.scan(cmd, 0)
 }
 
 func (g secretGuard) scan(cmd string, depth int) *leak {
-	if depth > 4 {
+	if depth > maxScanDepth {
 		return nil
 	}
 	sc := scanShell(cmd)
@@ -241,7 +271,18 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		dirs = append(dirs, d)
 	}
 	vars := scanVars(sc, segs)
-	g.metadata = metadataFunctions(cmd)
+	metadata, funcs := metadataFunctions(cmd), functionBodies(cmd)
+	if g.bound {
+		vars = mergeVars(g.vars, vars)
+		metadata, funcs = mergeFuncs(g.metadata, metadata), mergeFuncs(g.funcs, funcs)
+		g.bound = false
+	}
+	g.metadata, g.funcs, g.vars, g.depth = metadata, funcs, vars, depth
+	made, opaque := g.linksMade(cmd, vars, dirs, depth)
+	g.made, g.opaque = slices.Concat(g.made, made), opaque
+	if g.sink != nil {
+		*g.sink = append(*g.sink, made...)
+	}
 	g.linkAllowance = simpleLinkAllowance(cmd, g.metadata)
 	g.standaloneScript = standaloneLinkScript(cmd)
 	copied, copyLeak := g.copiedUnlocks(sc, segs, vars, depth)
@@ -256,6 +297,8 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 				return l
 			}
 			g.feeds = feedsOutput(sc, segs, i)
+			g.inTest = (sg.before == "&&" || sg.before == "||") && inTestExpr(sc.masked[:sg.start])
+			g.cut = cutBySubstitution(sg)
 			l := g.sourceLeak(exp, pipelineBefore(sc.plain, segs, i), aliases, dirs, copied)
 			if l == nil || flowsSafely(sc, segs, i, l) {
 				continue

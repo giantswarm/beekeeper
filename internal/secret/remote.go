@@ -226,7 +226,7 @@ func (o *Ops) CopyToRemote(ctx context.Context, src Ref, f RemoteFile) (RemoteRe
 		return RemoteResult{}, fmt.Errorf("%s: not written, the target kept: %s", f, redact(err.Error(), v, src.String()))
 	}
 	res := RemoteResult{File: f.String(), Mode: f.mode(), Owner: f.Owner, Bytes: len(body), Length: len(v)}
-	if o.Fingerprint != nil {
+	if o.Fingerprint != nil && src.Store == "" {
 		res.Fingerprint = o.Fingerprint(v)
 	}
 	return res, nil

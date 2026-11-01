@@ -31,7 +31,7 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
-	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.ReviewHeadroom != 2 || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
 		t.Errorf("swap guard and capacity defaults = %s %d/%d %d %g %d", w.SwapWindow, k.Floor, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
@@ -1023,6 +1023,36 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeTemp(t, bad)); err == nil {
 				t.Errorf("%s: loaded invalid config", name)
+			}
+		})
+	}
+}
+
+func TestReviewHeadroomConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+		bad   bool
+	}{
+		{"0", 0, false}, {"3", 3, false}, {"-1", 0, true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("capacity:\n  reviewHeadroom: "+tc.value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.reviewHeadroom") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Capacity.ReviewHeadroom != tc.want {
+				t.Fatalf("headroom %d, want %d", c.Capacity.ReviewHeadroom, tc.want)
 			}
 		})
 	}
