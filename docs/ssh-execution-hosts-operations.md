@@ -295,6 +295,9 @@ service manager to stop only its owned service and dependent build scopes. With 
 responsive service manager, the disconnected bound is 90 seconds plus the one-second
 check interval and the service's 60-second termination timeout. Service-manager
 failure remains explicitly unconfirmed; it is not a termination acknowledgement.
+A stop of its own unit is an orderly owned stop, not a crash: the runner records
+the journal as `exited` with the recorded stop reason and exits 0, so a lease-expiry
+stop leaves no failed unit to mistake for a harness crash.
 Host suspension pauses monotonic elapsed time on platforms where the OS does so;
 this bound assumes a running host and functioning user service manager.
 
