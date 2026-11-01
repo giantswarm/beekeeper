@@ -44,7 +44,10 @@ restart or roster loss without a done report. Each start rechecks capacity
 and stops when its gates refuse, the floor is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
 An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
-default) before retrying, unless the roster or capacity changes first.
+default) before retrying, unless `capacity.floor` or `capacity.ceiling`
+changes or an agent is done or leaves the roster first; a park, a resume,
+a wait or a new task, and the busy count and room they move, do not end it. An empty or failed read answers
+the rest of its pass, the done-triggered starts included.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
@@ -2278,6 +2281,14 @@ entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board nex
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
 returns the entry to `agents.staleAfter`. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
+
+A park on a pull request requests the supervisor loop's independent review only
+when run from that pull request's worktree branch at its published HEAD. The
+command records and prints the verified head. Other parks, including older parks
+without this evidence, are plain waits: no reviewer, merge go or findings
+forwarded; the watch resumes them when the pull request merges or closes. If
+publication could not be verified, request review in one shell call:
+`cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`.
 
 A worker that waits on a person, a merge lane or a release parks instead of sleeping in a turn
 that holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|<context>#note|owner/repo#n>]

@@ -292,8 +292,9 @@ its key first in the detail):
             releases the ended task holder so board next can offer it again.
             Claude transcript resumes, live sessions, managed SSH executions and a
             stopped desk are left alone
-  review    an agent parked on its pull request (agents park --on
-            owner/repo#n) with every check on the head green, for the
+  review    an agent parked from its pull request's worktree at its
+            published HEAD (agents park --on owner/repo#n), with every
+            check on the head green, for the
             first round, for every new head the worker parked on after an
             approval (one review per head) but one that only merges the
             base into the approved head (below), or after the last round's
@@ -433,7 +434,9 @@ overridden pull requests.
 
 The briefs are Go templates over .URL, .Repo, .Number, .Head, .Round and
 .Worker. A pull request is read (one gh pr view) only while an agent is
-parked on it or the loop reviews it. Every transition happens once: a
+parked on a verified review request or the loop reviews it. A plain wait
+starts no review and receives no go or forwarded findings; the watch
+resumes it when the pull request merges or closes. Every transition happens once: a
 restarted loop reads its own log lines back and takes no key twice; a
 failed one is tried again next pass, its failure printed once. An action
 with a side effect is claimed in the log first (supervisor.claim): one
@@ -471,9 +474,12 @@ type supervisorLoop struct {
 	tidyAt time.Time
 	// stages are the release stages finished, by key.
 	stages map[string]bool
-	// fillPause defers an unproductive board read until the roster or
-	// capacity changes, or the configured retry interval passes.
+	// fillPause defers an unproductive board read until capacity changes,
+	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
+	// boardNone is this pass's empty or failed board next answer: every
+	// later start of the pass takes it instead of walking the board again.
+	boardNone *loopBoardNone
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
 	// login is the login gh acts as, once read; teams the team files'
@@ -588,6 +594,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
 	a := l.a
+	l.boardNone = nil
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
 	if b := loopBinary(); b != nil && !l.dryRun && b.Replaced() {
@@ -648,6 +655,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
+			w.ReviewRequested = ag.Park.ReviewHead != ""
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		in.Workers = append(in.Workers, w)
@@ -1507,8 +1515,25 @@ func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (s
 	return l.startItem(ctx, act, *next)
 }
 
+// loopBoardNone is a board next answer without a pick: nothing free, or
+// the error that kept the board from answering.
+type loopBoardNone struct{ err error }
+
 // nextItem is the board's first free ranked item, or nil when none is free.
+// A walk costs a large share of the GraphQL budget: an empty or failed one
+// answers the rest of the pass.
 func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
+	if l.boardNone != nil {
+		return nil, l.boardNone.err
+	}
+	next, err := l.readNextItem(ctx)
+	if next == nil {
+		l.boardNone = &loopBoardNone{err: err}
+	}
+	return next, err
+}
+
+func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
 	out, err := l.run(ctx, loopBoard, "next", "--json")
 	if err != nil {
 		return nil, err

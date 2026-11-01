@@ -178,3 +178,21 @@ func TestExecutionCoordinatorRefusesWrongIdentityAndLiveStop(t *testing.T) {
 		t.Fatal("status exposed a component credential")
 	}
 }
+
+func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
+	a, _ := executionTestApp(t)
+	for _, head := range []string{"", loopHead} {
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: "wait for PR", ReviewHead: head})}
+		line, _, err := a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Agents[0].Park.ReviewHead != head || !strings.Contains(line, parkReviewMode(head)) {
+			t.Fatalf("park %+v: %s", st.Agents[0].Park, line)
+		}
+	}
+}
