@@ -77,10 +77,16 @@ func TestMissingEnvironmentConfigDoesNotOpenState(t *testing.T) {
 	for _, args := range [][]string{{verbHold}, {verbHold, setOp, holdMerges, "--reason=config-test", "--as=config-test-actor"}, {configHookVerb, configPreToolUse}, {configHookVerb, "sessionstart"}, {configHookVerb, "permissionrequest"}, {configFlag, setOp, "stateDir", "unused-state"}, {"run", "--", "printf"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			root := t.TempDir()
+			t.Setenv("HOME", root)
+			t.Setenv("APPDATA", root)
 			t.Setenv("XDG_CONFIG_HOME", root)
 			t.Setenv("XDG_STATE_HOME", root)
 			realState := filepath.Join(root, "real-state")
-			defaultConfig := filepath.Join(root, "beekeeper", "config.yaml")
+			configDir, err := os.UserConfigDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defaultConfig := filepath.Join(configDir, "beekeeper", "config.yaml")
 			if err := os.MkdirAll(filepath.Dir(defaultConfig), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -89,7 +95,7 @@ func TestMissingEnvironmentConfigDoesNotOpenState(t *testing.T) {
 			}
 			missing := filepath.Join(root, "missing.yaml")
 			t.Setenv("BEEKEEPER_CONFIG", missing)
-			_, err := execute(t, args...)
+			_, err = execute(t, args...)
 			if err == nil || Code(err) == 0 || !strings.Contains(err.Error(), missing) {
 				t.Fatalf("command = %v; want error naming %s", err, missing)
 			}
@@ -108,6 +114,8 @@ func TestDefaultEnvironmentConfig(t *testing.T) {
 	for _, unset := range []bool{false, true} {
 		t.Run(fmt.Sprint(unset), func(t *testing.T) {
 			root := t.TempDir()
+			t.Setenv("HOME", root)
+			t.Setenv("APPDATA", root)
 			t.Setenv("XDG_CONFIG_HOME", root)
 			t.Setenv("XDG_STATE_HOME", root)
 			t.Setenv("BEEKEEPER_CONFIG", "")
@@ -116,7 +124,11 @@ func TestDefaultEnvironmentConfig(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			defaultConfig := filepath.Join(root, "beekeeper", "config.yaml")
+			configDir, err := os.UserConfigDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defaultConfig := filepath.Join(configDir, "beekeeper", "config.yaml")
 			if err := os.MkdirAll(filepath.Dir(defaultConfig), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +137,7 @@ func TestDefaultEnvironmentConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, args := range [][]string{{verbHold}, {verbHold, setOp, holdMerges, "--reason=config-test", "--as=config-test-actor"}} {
-				if _, err := execute(t, args...); err != nil {
+				if _, err = execute(t, args...); err != nil {
 					t.Fatalf("%v: %v", args, err)
 				}
 			}

@@ -1117,6 +1117,8 @@ func TestMissingEnvironmentConfig(t *testing.T) {
 	for _, value := range []string{missingCase, "empty", "unset"} {
 		t.Run(value, func(t *testing.T) {
 			root := t.TempDir()
+			t.Setenv("HOME", root)
+			t.Setenv("APPDATA", root)
 			t.Setenv("XDG_CONFIG_HOME", root)
 			t.Setenv("XDG_STATE_HOME", root)
 			missing := filepath.Join(root, "missing.yaml")
