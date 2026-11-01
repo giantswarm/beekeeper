@@ -2150,7 +2150,17 @@ the agent's to claim (a grant to another session first keeps it parked), the wat
 `agents.autoResume` the next poll resumes the agent with that answer as `agents wake` does (by name
 to a running CLI, else headless); without it, or for a park without `--on`, `beekeeper agents
 resume <agent>` does it by hand. A resume that cannot wake the agent leaves it parked (`AGENT
-RESUME FAILED`); `agents idle` ends the park with the task. An archive
+RESUME FAILED`); `agents idle` ends the park with the task. A parked background session
+beekeeper started (`agents.mode: background`) costs no memory: once its turn ended (no command,
+no headless turn, its transcript and its subagents' quiet for 30 seconds), the watch stops it
+(`claude stop`, which keeps its conversation; `PARKED SESSION STOPPED` and an `agents.parkstop`
+event), and the wake or resume that ends the park continues it from its transcript (`claude --bg
+--resume`). The stop and every wake of the session hold one lock per session: under it the
+stop looks again (the same park, still quiet, not woken in the last 30 seconds) and holds the lock
+until the CLI exited, so a wake that comes meanwhile waits and then resumes the stopped session. A
+stop that fails says `PARKED SESSION STAYS` and is tried again the next poll. The
+supervisor's and the guide's sessions, a park already resumable and an agent on an execution
+host stay. An archive
 that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed, and
 so is, once, every finished worker beekeeper started whose desktop record stayed unarchived, its
 CLI running or not: the doctor asks for at most 20 of them per run, while the CLI runs no turn, in
