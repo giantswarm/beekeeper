@@ -14,5 +14,5 @@ description: Load before merges/promotions/tags: the gate, exits, protection, ho
 - **Before non-mechanical changes:** read open PRs/recent commits; stop on overlap and tell the supervisor.
 - **Release candidates:** prove live, promote routinely; never ask the person.
 - **Commits:** Conventional subjects, ≤72 characters; no major bumps.
-- **Behind:** a behind branch merges its base and pushes, never on a rebase line: the gate rebases at its turn. A conflict or merge commit (77) needs a fresh branch and PR from the base.
+- **Behind:** before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. A conflict or merge commit (77): a fresh branch and PR off base.
 - **Desk review** after push and green CI, in one shell call: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`. Other directories or unpushed heads record plain waits; re-run there.

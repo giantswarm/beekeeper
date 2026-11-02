@@ -162,9 +162,14 @@ Hosts run the coordinator's release. `agents hosts update <host>` connects
 over the host's SSH route and runs `agents hosts self-update --version
 <coordinator release>` there. With no execution running, the host holds its
 admission, installs exactly that release once its Sigstore bundle verifies (as
-`self-update` does; the replaced binary is kept beside it as
-`.beekeeper.previous`), and has the installed release prepare its own policy.
-A release that does not prepare is rolled back and the old one prepares again;
+`self-update` does), and has the installed release prepare its own policy.
+The download is staged in a writable temporary directory beside the executable
+and atomically renamed over it; no backup or hard link is created. The update
+account needs write permission on that directory, rather than ownership of the
+old binary. If a system installation directory is not writable, beekeeper verifies
+the download in its own temporary directory, then uses `sudo -n` only to stage
+and atomically rename it in the destination directory. Sudo never prompts;
+if it is unavailable or denied, the failure is reported and the host stays held. A release that does not prepare leaves the host held for a retry;
 one that does moves the host's watches and sandbox broker onto it, as
 `self-update` does.
 The coordinator then runs `hosts check` with the digest the host answered and
@@ -268,6 +273,60 @@ Claude. Codex usage stays on the coordinator: the remote worker counts against
 the configured `codex` provider's ceiling, and the coordinator's own usage
 reading covers the shared subscription; a host adds machine room only.
 
+## Antigravity (agy) on an execution host
+
+A host may also run Antigravity (`agy` / Gemini) workers. Install a pinned `agy`
+CLI in the supported family (`>= 1.4.7, < 2.0.0`) and add it to the host's
+`harnesses`:
+
+```yaml
+agents:
+  execution:
+    harnesses:
+      agy:
+        executable: /usr/local/bin/agy
+        version: 1.4.7
+        configDir: /srv/beekeeper/agy
+```
+
+`configDir` is the directory holding the host's `agy` OAuth login token, and it
+is required. Logging in is a one-time step for the person on the execution
+host; credentials are never copied from the coordinator:
+
+```sh
+HOME=/srv/beekeeper/agy agy
+```
+
+(or point `configDir` at the host user's `~/.gemini` directory after logging in
+once with `agy` on the host). `prepare` locates the OAuth token at
+`<configDir>/.gemini/antigravity-cli/antigravity-oauth-token`,
+`<configDir>/antigravity-cli/antigravity-oauth-token`, or
+`<configDir>/antigravity-oauth-token` and links only that token into a managed
+home inside the policy directory (`<policy>/agy/.gemini/`).
+
+Workers never run in the host's own home. Inside `<policy>/agy/.gemini/config`,
+`prepare` installs the embedded worker rules as `GEMINI.md`, empty
+`mcp_config.json` and `skills.json` files (augmented per execution only with
+the authenticated `coordinator` MCP proxy when `agents.remoteMCP` is enabled),
+and a `hooks.json` in the `{"beekeeper":{"PreToolUse":[...]}}` format running
+`beekeeper agents execution-guard --format agy`. The policy digest binds those
+files; tampering with any of them fails `hosts check` until a matching bundle
+is prepared again.
+
+`hosts check` verifies `agy --version`, probes login with `agy models` inside
+the managed home without a model call, and runs the `agy` execution guard
+conformance probe. The host advertises `agy` only when all three pass, and a
+coordinator listing `agy` in the host's `harnesses` (`harnesses: [claude,
+codex, agy]`) starts `agy` workers there only when advertised.
+
+A remote `agy` worker runs one `agy --input-format stream-json --output-format
+stream-json` turn per message. The first turn sends the brief and records the
+emitted `conversation_id`, binds the execution guard to that conversation, and
+resumes stored wakes with `--conversation <id>`. Lease, publication, review,
+merge, stop and recovery follow the same contract as Claude and Codex. `agy`
+usage and pace stay on the coordinator: remote `agy` workers count against the
+`agy` provider ceiling, not the coordinator's local ceiling (`local.ceiling`).
+
 ## Start, inspect, and recover
 
 Run the coordinator's commands against its configuration:
@@ -291,10 +350,11 @@ host's physical guards. A host does not create another subscription budget.
 whose repository a host maps, and for which `capacity --host <selector>` has
 room, runs there pinned to the repository's default branch — while the
 coordinator is out of room, or always with `supervisor.hostsFirst`. A host's
-check weighs only the choices it can run (Claude Code). `hostsFirst` prefers
-hosts only for what a host can run: without room on any host a Claude start
+check weighs only the choices it can run (Claude Code, Codex, and Antigravity
+where configured and offered). `hostsFirst` prefers
+hosts only for what a host can run: without room on any host a supported start
 waits, while a repository no host maps, or a choice of a harness no host has
-an adapter for (agy, omp, codex), starts on the coordinator within its local
+an adapter for (`omp`), starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs. A desk
 without `capacity.choices` never places remotely. Reviewers stay on the
 coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
@@ -552,7 +612,10 @@ up the exact owned branch before creating a PR. A create attempt is never retrie
 blindly. PR editing and commenting continue to use coordinating workflows;
 this command grants no general GitHub API authority.
 
-To bring the latest default branch into the workspace before publishing again:
+To bring the latest default branch into the workspace before publishing again
+(before the desk review approves the PR; after approval only the merge moves the
+head: the supervisor's reviewed merge updates a behind branch itself, and a
+sync is left for a conflict the supervisor reports):
 
 ```sh
 beekeeper agents publish --sync-base

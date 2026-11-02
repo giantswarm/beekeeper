@@ -18,15 +18,16 @@ import (
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
 const (
-	inProgress = "In Progress ⛏️"
-	blocked    = "Blocked / Waiting ⛔️"
-	upNext     = "Up Next ➡️"
-	backlog    = "Backlog 📦"
-	epic       = "Epic 🎯"
-	bug        = "Bug 🐞"
-	upNextEpic = "Up Next epic"
-	bugStep    = "bug"
-	typedNext  = "up next"
+	boardItemsQuery = "items(first:"
+	inProgress      = "In Progress ⛏️"
+	blocked         = "Blocked / Waiting ⛔️"
+	upNext          = "Up Next ➡️"
+	backlog         = "Backlog 📦"
+	epic            = "Epic 🎯"
+	bug             = "Bug 🐞"
+	upNextEpic      = "Up Next epic"
+	bugStep         = "bug"
+	typedNext       = "up next"
 	// backlogStep is the name of the order's Backlog step.
 	backlogStep = "Backlog"
 )
@@ -397,7 +398,7 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, boardItemsQuery):
 		if vars["q"] != `is:open team:"X" status:"In Progress ⛏️","Up Next ➡️"` {
 			f.t.Errorf("board query %q", vars["q"])
 		}

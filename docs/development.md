@@ -94,6 +94,32 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
+The doctor releases a local lease when its session is no longer running,
+preserving any lab configuration drift for the next claimant. Person-held
+leases and remote holders are left alone. Each release is logged once as
+`lease.release-gone`. Configured kind labs with no lease are stopped after
+15 minutes (`lab.stop`); containers and their data stay intact. The idle
+observation is persisted across watch restarts and reset by a claim.
+Unmapped clusters are never stopped. A failed Docker read or stop is reported
+and retried on the next doctor tick; `doctor --dry-run` changes nothing.
+
+A handover successor's recorded start protects inherited leases throughout
+the five-minute first-reply startup window, including when the doctor's
+process snapshot predates the handover or launch. The original claim time
+stays intact; after the startup window an absent successor's lease is
+eligible for normal cleanup.
+
+A successful lab claim starts existing stopped kind nodes (`lab.start`)
+before returning the kubeconfig. It does not create a missing cluster. A
+failed restart fails the command while retaining ownership for a claim retry.
+Sandboxed claims run the restart through the host broker, which rechecks
+ownership. Docker stop and start operations share the state lock with claims.
+For a live lifecycle proof, use isolated state and disposable Docker containers
+with a unique `io.x-k8s.kind.cluster` label: seed an idle timestamp 15 minutes
+ago, run the doctor, then claim the lease and check that the same containers
+restart with a marker file intact. Never point scratch state at another
+worker's lab.
+
 ```bash
 cat >| /tmp/bk.yaml <<EOF
 stateDir: /tmp/bk-state
@@ -534,7 +560,15 @@ The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed
 The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
 uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
 names to `squash` (the default), `rebase`, or `merge`; `merge.admin` controls `--admin`.
-The pinned path never updates the branch: a behind or conflicting branch goes back to its
+After approval only the merge moves the head. A branch behind its base is updated by the
+mutation child itself, once its authority, stop and hold checks pass: GitHub's update-branch
+merges the base into it, pinned to the reviewed head, and the child waits up to the squash
+timeout for the new head's checks (every check the reviewed head had, all green), confirms
+that the approval covers the new head (`github.ApprovalCovers`: it only merges the base),
+checks the stop and holds again and merges that head. The loop accepts a merged head the
+approval covers; its planner gives the go for such a head without a fresh park. A rebase
+merge method cannot take a base merge, so its behind branch, a conflicting or draft branch,
+red checks on the updated head or an updated head the approval does not cover go back to the
 worker for repair and another green published head. A restart reads GitHub before repeating
 a mutation whose completion record was lost. Successful merge actions are `supervisor.merge`,
 not worker merge grants. An already queued or running gate is observed without submitting

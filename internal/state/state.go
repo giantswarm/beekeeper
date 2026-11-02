@@ -1019,6 +1019,8 @@ func (st *State) Knows(p Party) bool {
 
 // State is the whole document.
 type State struct {
+	// LabIdle records when a configured kind lab was first seen unleased.
+	LabIdle map[string]time.Time `json:"labIdle,omitempty"`
 	// Guide is the guide's role: the person's decisions. The supervisor is
 	// the supervisor loop, which holds no role record.
 	Guide *Role `json:"guide,omitempty"`

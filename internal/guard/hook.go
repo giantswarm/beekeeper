@@ -1124,11 +1124,18 @@ func LabCluster(dir string) (string, bool) {
 	return "agentlab", true
 }
 
+func guardHomeDir() (string, error) {
+	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+		return filepath.Clean(h), nil
+	}
+	return os.UserHomeDir()
+}
+
 func expandHome(p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
 		return p
 	}
-	home, err := os.UserHomeDir()
+	home, err := guardHomeDir()
 	if err != nil {
 		return p
 	}
