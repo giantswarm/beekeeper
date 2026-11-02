@@ -67,6 +67,13 @@ func TestBudgetNamesIdentitiesAndNeverReusesAnotherWindow(t *testing.T) {
 		case "/rate_limit":
 			_, _ = w.Write([]byte(`{"resources":{"search":{"limit":30,"remaining":30},"code_search":{"limit":10,"remaining":10}}}`))
 		default:
+			repo := a.cfg.GitHub.ProbeRepo
+			if id == github.IdentityApp {
+				repo = github.BudgetAppRepo
+			}
+			if r.URL.Path != "/repos/"+repo {
+				t.Errorf("%s REST probe used wrong repository: %s", id, r.URL.Path)
+			}
 			_, _ = w.Write([]byte(`{}`))
 		}
 	}))

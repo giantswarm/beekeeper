@@ -14,6 +14,9 @@ import (
 
 const IdentityApp = "app"
 const IdentityGH = "gh"
+
+// BudgetAppRepo pins App credential acquisition and its REST probe to the same repository.
+const BudgetAppRepo = "giantswarm/beekeeper"
 const budgetHostFlag = "--hostname"
 const budgetAuthCommand = "auth"
 
@@ -61,7 +64,7 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	}
 	// devctl applies its owner routing even under auth exec. Pin the App's
 	// owner explicitly so a personal checkout cannot select the gh login.
-	appEnv := ghEnv(env, "giantswarm/beekeeper")
+	appEnv := ghEnv(env, BudgetAppRepo)
 	return append(result, budgetCredential(ctx, IdentityApp, devctl,
 		[]string{budgetAuthCommand, "exec", "--", gh, budgetAuthCommand, "token", budgetHostFlag, "github.com"}, appEnv))
 }

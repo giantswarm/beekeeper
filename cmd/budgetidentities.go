@@ -131,7 +131,11 @@ func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredent
 		return unknown(credential.Err)
 	}
 	client := &http.Client{Timeout: 20 * time.Second}
-	b, etag, err := github.Probe(ctx, client, credential.Value, a.cfg.GitHub.ProbeRepo, previous.ETag)
+	repo := a.cfg.GitHub.ProbeRepo
+	if id == github.IdentityApp {
+		repo = github.BudgetAppRepo
+	}
+	b, etag, err := github.Probe(ctx, client, credential.Value, repo, previous.ETag)
 	if err != nil {
 		return unknown(err)
 	}

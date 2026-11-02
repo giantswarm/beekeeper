@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Priority-list reads omit candidate-only label and assignee connections, keeping the large-board regression at 37 GraphQL points without changing ranks or blocker holds.
 - Initialize notification-test watchers through the production constructor and supply deterministic OOM history in harness tracking tests, preventing a host-dependent nil-map panic (https://github.com/giantswarm/beekeeper/issues/2102).
-- Read devctl GitHub metadata even when another provider requires authentication; fall back to the stored gh identity with a warning when App metadata is unreadable, retaining known unexpired App budget observations (https://github.com/giantswarm/beekeeper/issues/2108).
+- Read devctl GitHub metadata even when another provider requires authentication; fall back to the stored gh identity with a warning when App metadata is unreadable, retaining known unexpired App budget observations. Probe the App through its pinned repository instead of the personal login’s configured probe (https://github.com/giantswarm/beekeeper/issues/2108).
 
 - GitHub budgets name and probe the stored gh login and devctl App login separately, preserve each identity's cache and reset, and gate on the lowest REST and GraphQL balances. Changing checkout or minimum identity cannot hide a depleted window or replenish the supervisor's hourly allowance.
 
