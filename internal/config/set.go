@@ -13,7 +13,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const yamlNullTag = "!!null"
+const (
+	yamlNullTag    = "!!null"
+	yamlMappingTag = "!!map"
+)
 
 // ErrInvalid refuses a Set whose result does not load.
 var ErrInvalid = errors.New("refused")
@@ -75,7 +78,7 @@ func apply(raw []byte, settings []Setting) ([]byte, error) {
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Tag == yamlNullTag {
 		// an empty file, or one of comments alone
-		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}
+		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: yamlMappingTag}}
 	}
 	for _, s := range settings {
 		var v yaml.Node
@@ -125,7 +128,7 @@ func setKey(m *yaml.Node, key string, value *yaml.Node) error {
 		if next == nil {
 			next = value
 			if i < len(parts)-1 {
-				next = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				next = &yaml.Node{Kind: yaml.MappingNode, Tag: yamlMappingTag}
 			}
 			m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: p}, next)
 		}

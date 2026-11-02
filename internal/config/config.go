@@ -201,25 +201,22 @@ func (s *Sink) defaults() {
 	}
 }
 
-func (s Sink) validate() error {
+func (s Sink) validateEach(report func(error)) {
 	if !s.Enabled() {
 		if s.Workflow != "" || s.Ref != "" || len(s.Verbs) > 0 {
-			return fmt.Errorf("sink: no repo: set sink.repo, the workflow's owner/repo, or nothing of sink")
+			report(fmt.Errorf("sink: no repo: set sink.repo, the workflow's owner/repo, or nothing of sink"))
 		}
-		return nil
+		return
 	}
-	if err := ownerRepos("sink.repo", []string{s.Repo}); err != nil {
-		return err
-	}
+	ownerReposEach("sink.repo", []string{s.Repo}, report)
 	if strings.TrimSpace(s.Workflow) == "" {
-		return fmt.Errorf("sink.workflow: the workflow of %s to dispatch, its file name or id", s.Repo)
+		report(fmt.Errorf("sink.workflow: the workflow of %s to dispatch, its file name or id", s.Repo))
 	}
 	for _, v := range s.Verbs {
 		if !slices.Contains(SinkVerbs, v) {
-			return fmt.Errorf("sink.verbs: %q is none of %s", v, strings.Join(SinkVerbs, ", "))
+			report(fmt.Errorf("sink.verbs: %q is none of %s", v, strings.Join(SinkVerbs, ", ")))
 		}
 	}
-	return nil
 }
 
 // Feedback configures the Slack feedback watch of the standby watch. It
@@ -1636,40 +1633,36 @@ func (u *Usage) defaults(home string) {
 	}
 }
 
-func (u Usage) validate() error {
-	return u.validateNamed("capacity.usage")
-}
-
-func (u Usage) validateNamed(prefix string) error {
+func (u Usage) validateNamedEach(prefix string, report func(error)) {
 	if !u.Enabled() {
 		if u.hasFields() {
-			return fmt.Errorf("%s: no command: set %s.command, or nothing of %s", prefix, prefix, prefix)
+			report(fmt.Errorf("%s: no command: set %s.command, or nothing of %s", prefix, prefix, prefix))
 		}
-		return nil
+		return
 	}
 	if strings.TrimSpace(u.Command[0]) == "" {
-		return fmt.Errorf("%s.command[0]: empty executable", prefix)
+		report(fmt.Errorf("%s.command[0]: empty executable", prefix))
 	}
 	if u.Every.Duration <= 0 {
-		return fmt.Errorf("%s.every: %s is not positive", prefix, u.Every.Duration)
+		report(fmt.Errorf("%s.every: %s is not positive", prefix, u.Every.Duration))
 	}
 	if u.Timeout.Duration <= 0 {
-		return fmt.Errorf("%s.timeout: %s is not positive", prefix, u.Timeout.Duration)
+		report(fmt.Errorf("%s.timeout: %s is not positive", prefix, u.Timeout.Duration))
 	}
 	if u.StaleAfter.Duration < 0 {
-		return fmt.Errorf("%s.staleAfter: %s is negative", prefix, u.StaleAfter.Duration)
+		report(fmt.Errorf("%s.staleAfter: %s is negative", prefix, u.StaleAfter.Duration))
 	}
 	if !(u.HighPercent > 0 && u.HighPercent <= 100) {
-		return fmt.Errorf("%s.highPercent: %g is not in (0, 100]", prefix, u.HighPercent)
+		report(fmt.Errorf("%s.highPercent: %g is not in (0, 100]", prefix, u.HighPercent))
 	}
 	if u.fiveHourMaxSet && !(u.FiveHourMax > 0 && u.FiveHourMax <= 100) {
-		return fmt.Errorf("%s.fiveHourMax: %g is not in (0, 100]", prefix, u.FiveHourMax)
+		report(fmt.Errorf("%s.fiveHourMax: %g is not in (0, 100]", prefix, u.FiveHourMax))
 	}
 	if u.sevenDayMaxSet && !(u.SevenDayMax > 0 && u.SevenDayMax <= 100) {
-		return fmt.Errorf("%s.sevenDayMax: %g is not in (0, 100]", prefix, u.SevenDayMax)
+		report(fmt.Errorf("%s.sevenDayMax: %g is not in (0, 100]", prefix, u.SevenDayMax))
 	}
 	if u.paceMarginSet && (u.PaceMargin < -100 || u.PaceMargin > 100) {
-		return fmt.Errorf("%s.paceMargin: %g is not in [-100, 100]", prefix, u.PaceMargin)
+		report(fmt.Errorf("%s.paceMargin: %g is not in [-100, 100]", prefix, u.PaceMargin))
 	}
 	for _, w := range []struct {
 		name  string
@@ -1682,13 +1675,13 @@ func (u Usage) validateNamed(prefix string) error {
 		for i, b := range w.bands {
 			switch {
 			case !(b.UpTo > 0 && b.UpTo <= 100):
-				return fmt.Errorf("%s[%d]: upTo %g is not in (0, 100]", w.name, i, b.UpTo)
+				report(fmt.Errorf("%s[%d]: upTo %g is not in (0, 100]", w.name, i, b.UpTo))
 			case b.UpTo <= prev:
-				return fmt.Errorf("%s[%d]: upTo %g is not above %g: list bands in ascending order", w.name, i, b.UpTo, prev)
+				report(fmt.Errorf("%s[%d]: upTo %g is not above %g: list bands in ascending order", w.name, i, b.UpTo, prev))
 			case !b.ceilingSet:
-				return fmt.Errorf("%s[%d]: ceiling is required", w.name, i)
+				report(fmt.Errorf("%s[%d]: ceiling is required", w.name, i))
 			case b.Ceiling < 0:
-				return fmt.Errorf("%s[%d]: ceiling %d is negative", w.name, i, b.Ceiling)
+				report(fmt.Errorf("%s[%d]: ceiling %d is negative", w.name, i, b.Ceiling))
 			}
 			prev = b.UpTo
 		}
@@ -1698,17 +1691,16 @@ func (u Usage) validateNamed(prefix string) error {
 		name := prefix + ".paceCaps"
 		switch {
 		case !(pc.OverBy > 0 && pc.OverBy <= 100):
-			return fmt.Errorf("%s[%d]: overBy %g is not in (0, 100]", name, i, pc.OverBy)
+			report(fmt.Errorf("%s[%d]: overBy %g is not in (0, 100]", name, i, pc.OverBy))
 		case pc.OverBy <= prevOver:
-			return fmt.Errorf("%s[%d]: overBy %g is not above %g: list paceCaps in ascending order", name, i, pc.OverBy, prevOver)
+			report(fmt.Errorf("%s[%d]: overBy %g is not above %g: list paceCaps in ascending order", name, i, pc.OverBy, prevOver))
 		case !pc.ceilingSet:
-			return fmt.Errorf("%s[%d]: ceiling is required", name, i)
+			report(fmt.Errorf("%s[%d]: ceiling is required", name, i))
 		case pc.Ceiling < 0:
-			return fmt.Errorf("%s[%d]: ceiling %d is negative", name, i, pc.Ceiling)
+			report(fmt.Errorf("%s[%d]: ceiling %d is negative", name, i, pc.Ceiling))
 		}
 		prevOver = pc.OverBy
 	}
-	return nil
 }
 
 // Derive returns Capacity with Ceiling derived from the subscription usage
@@ -2199,22 +2191,21 @@ func (o Ownership) TeamFilesRepo() (repo, dir string) {
 	return owner + "/" + name, dir
 }
 
-// validate refuses a team-files place without a directory and a pattern
+// validateEach reports a team-files place without a directory and a pattern
 // path.Match cannot read.
-func (o Ownership) validate() error {
+func (o Ownership) validateEach(report func(error)) {
 	if o.TeamFiles != "" {
 		if repo, dir := o.TeamFilesRepo(); dir == "" || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
-			return fmt.Errorf("teamFiles: %q is not <owner>/<repo>/<dir>", o.TeamFiles)
+			report(fmt.Errorf("teamFiles: %q is not <owner>/<repo>/<dir>", o.TeamFiles))
 		}
 	}
 	for field, patterns := range map[string][]string{"review": o.Review, "never": o.Never} {
 		for _, p := range patterns {
 			if _, err := path.Match(p, ""); err != nil || !strings.Contains(p, "/") || strings.HasSuffix(p, "/") {
-				return fmt.Errorf("%s: %q is no owner/name pattern", field, p)
+				report(fmt.Errorf("%s: %q is no owner/name pattern", field, p))
 			}
 		}
 	}
-	return nil
 }
 
 // Role configures a relayed role, the guide's: the
@@ -3461,26 +3452,25 @@ func (r *Role) defaults(home string) {
 // GitHubHosts are the hosts the GitHub token goes to.
 var GitHubHosts = []string{"github.com", "api.github.com", "uploads.github.com"}
 
-func (s *Sandbox) validate() error {
+func (s *Sandbox) validateEach(report func(error)) {
 	for key, ps := range map[string][]string{"sandbox.allowRead": s.AllowRead, "sandbox.allowWrite": s.AllowWrite} {
 		for _, p := range ps {
 			if !filepath.IsAbs(p) {
-				return fmt.Errorf("%s: %q is neither absolute nor under ~/", key, p)
+				report(fmt.Errorf("%s: %q is neither absolute nor under ~/", key, p))
 			}
 		}
 	}
 	if s.ProxyPort < 0 || s.ProxyPort > 65535 {
-		return fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort)
+		report(fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort))
 	}
 	for _, d := range s.Domains {
 		if openLoopback(d) {
-			return fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d)
+			report(fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d))
 		}
 		if host, port, err := net.SplitHostPort(d); err == nil && Loopback(host) && port == strconv.Itoa(s.ProxyPort) {
-			return fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d)
+			report(fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d))
 		}
 	}
-	return nil
 }
 
 // openLoopback reports whether the egress entry d opens loopback beyond one
@@ -3524,11 +3514,11 @@ func (s *Sandbox) defaults(home string) {
 // homePath is p with a leading ~/ resolved against home.
 // validateDiskCaches refuses a cache policy that could reach beyond a cache:
 // a relative path or filesystem root, a bad glob, a rule-less custom entry.
-func validateDiskCaches(caches []DiskCache) error {
+func validateDiskCachesEach(caches []DiskCache, report func(error)) {
 	names := map[string]bool{}
 	for _, e := range caches {
 		if e.Name == "" || names[e.Name] {
-			return fmt.Errorf("disk.caches: each entry needs a path or a unique name (%q)", e.Name)
+			report(fmt.Errorf("disk.caches: each entry needs a path or a unique name (%q)", e.Name))
 		}
 		names[e.Name] = true
 		builtin := e.Builtin(e.Name)
@@ -3536,38 +3526,37 @@ func validateDiskCaches(caches []DiskCache) error {
 		case "", DiskCacheEntries, DiskCacheFiles, DiskCacheOff:
 		case DiskCacheCommand:
 			if strings.TrimSpace(e.Command) == "" {
-				return fmt.Errorf("disk.caches %s: mode command needs a command", e.Name)
+				report(fmt.Errorf("disk.caches %s: mode command needs a command", e.Name))
 			}
 		case DiskCacheModeGo, DiskCacheModeSc:
 			if (e.Mode == DiskCacheModeGo) != (e.Name == DiskCacheGo) || (e.Mode == DiskCacheModeSc) != (e.Name == DiskCacheSccache) {
-				return fmt.Errorf("disk.caches %s: mode %s belongs to the built-in entry of that cache alone", e.Name, e.Mode)
+				report(fmt.Errorf("disk.caches %s: mode %s belongs to the built-in entry of that cache alone", e.Name, e.Mode))
 			}
 		default:
-			return fmt.Errorf("disk.caches %s: mode %q is none of entries, files, command, off", e.Name, e.Mode)
+			report(fmt.Errorf("disk.caches %s: mode %q is none of entries, files, command, off", e.Name, e.Mode))
 		}
 		if e.Command != "" && e.Mode != DiskCacheCommand {
-			return fmt.Errorf("disk.caches %s: command needs mode command", e.Name)
+			report(fmt.Errorf("disk.caches %s: command needs mode command", e.Name))
 		}
 		if e.OlderThan.Duration < 0 || e.MaxGiB < 0 {
-			return fmt.Errorf("disk.caches %s: olderThan and maxGiB take no negative value", e.Name)
+			report(fmt.Errorf("disk.caches %s: olderThan and maxGiB take no negative value", e.Name))
 		}
 		if e.Path == "" {
 			if !builtin {
-				return fmt.Errorf("disk.caches %s: path is required", e.Name)
+				report(fmt.Errorf("disk.caches %s: path is required", e.Name))
 			}
 			continue
 		}
 		if !filepath.IsAbs(e.Path) || filepath.Dir(e.Path) == e.Path {
-			return fmt.Errorf("disk.caches %s: path must be absolute and not a filesystem root", e.Name)
+			report(fmt.Errorf("disk.caches %s: path must be absolute and not a filesystem root", e.Name))
 		}
 		if _, err := filepath.Match(e.Path, ""); err != nil {
-			return fmt.Errorf("disk.caches %s: path: %w", e.Name, err)
+			report(fmt.Errorf("disk.caches %s: path: %w", e.Name, err))
 		}
 		if !builtin && e.Mode != DiskCacheOff && e.Mode != DiskCacheCommand && e.OlderThan.Duration == 0 && e.MaxGiB == 0 && !e.Regenerable {
-			return fmt.Errorf("disk.caches %s: set olderThan, maxGiB or regenerable", e.Name)
+			report(fmt.Errorf("disk.caches %s: set olderThan, maxGiB or regenerable", e.Name))
 		}
 	}
-	return nil
 }
 
 func homePath(home, p string) string {
@@ -3597,95 +3586,107 @@ func (r *Reporter) defaults(home, person string) {
 	r.Brief, r.Dir = homePath(home, r.Brief), homePath(home, r.Dir)
 }
 
-func (c *Config) validate() error {
+// validate keeps the loader's first-finding contract. The checker uses
+// validateEach to collect independent rules without repeated edit/check rounds.
+func (c *Config) validate() error { return firstFinding(c.validateEach) }
+
+func firstFinding(visit func(func(error))) error {
+	var first error
+	visit(func(err error) {
+		if first == nil {
+			first = err
+		}
+	})
+	return first
+}
+
+func (c *Config) validateEach(report func(error)) {
 	if err := c.Run.Remote.Validate(); err != nil {
-		return err
+		report(err)
 	}
 	if c.Run.Tail != "" && c.Run.Tail != "off" && !runTailRe.MatchString(c.Run.Tail) {
-		return fmt.Errorf("run.tail: want a size with an optional K, M, G or T suffix (256K) or off")
+		report(fmt.Errorf("run.tail: want a size with an optional K, M, G or T suffix (256K) or off"))
 	}
 	if c.Disk.Prune != "" && c.Disk.Prune != DiskPruneAuto && c.Disk.Prune != DiskPruneAsk {
-		return fmt.Errorf("disk.prune: want auto or ask")
+		report(fmt.Errorf("disk.prune: want auto or ask"))
 	}
 	for _, p := range c.Disk.TrashDirs {
 		if !filepath.IsAbs(p) || filepath.Clean(p) == string(filepath.Separator) {
-			return fmt.Errorf("disk.trashDirs: each entry must be an absolute trash directory, not a filesystem root")
+			report(fmt.Errorf("disk.trashDirs: each entry must be an absolute trash directory, not a filesystem root"))
 		}
 	}
 	for _, n := range c.Disk.BuildDirs {
 		if n == "" || n == "." || filepath.IsAbs(n) || strings.Contains(n, "..") || strings.Contains(n, ".git") {
-			return fmt.Errorf("disk.buildDirs: invalid directory %q", n)
+			report(fmt.Errorf("disk.buildDirs: invalid directory %q", n))
 		}
 	}
-	if err := validateDiskCaches(c.Disk.Caches); err != nil {
-		return err
-	}
+	validateDiskCachesEach(c.Disk.Caches, report)
 	for _, o := range c.Disk.BuildOutputs {
 		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
-			return fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths")
+			report(fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths"))
 		}
 	}
 	identities := map[execution.HostID]bool{}
 	for selector, host := range c.Agents.Hosts {
 		if selector == "local" || !execution.ValidIdentity(selector) || identities[host.Identity] {
-			return errors.New("agents.hosts requires unique identities and selectors; local is reserved")
+			report(errors.New("agents.hosts requires unique identities and selectors; local is reserved"))
 		}
 		if err := host.Validate(); err != nil {
-			return fmt.Errorf("agents.hosts.%s: %w", selector, err)
+			report(fmt.Errorf("agents.hosts.%s: %w", selector, err))
 		}
 		identities[host.Identity] = true
 	}
 	if c.Agents.Execution != nil {
 		if err := c.Agents.Execution.Validate(); err != nil {
-			return fmt.Errorf("agents.execution: %w", err)
+			report(fmt.Errorf("agents.execution: %w", err))
 		}
 	}
 	for name := range c.Agents.Profiles {
 		if !profileNamePattern.MatchString(name) {
-			return fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name)
+			report(fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name))
 		}
 	}
 	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "guide.profile": c.Guide.Profile} {
 		if _, ok := c.Agents.ProfileFor(name); name != "" && !ok {
-			return fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile)
+			report(fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile))
 		}
 	}
 	if m := c.Agents.Mode; m != "" && m != ModeDesktop && m != ModeBackground {
-		return fmt.Errorf("agents.mode: %q: want %s or %s", m, ModeDesktop, ModeBackground)
+		report(fmt.Errorf("agents.mode: %q: want %s or %s", m, ModeDesktop, ModeBackground))
 	}
 	if g := c.Agents.Shell.Globs; g != "" && g != GlobsLiteral && g != GlobsShell {
-		return fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell)
+		report(fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell))
 	}
 	for _, n := range c.Agents.Shell.Unalias {
 		if !commandName.MatchString(n) {
-			return fmt.Errorf("agents.shell.unalias: %q is no command name", n)
+			report(fmt.Errorf("agents.shell.unalias: %q is no command name", n))
 		}
 	}
 	for _, n := range c.Secret.UnlockCommands {
 		if !commandName.MatchString(n) {
-			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
+			report(fmt.Errorf("secret.unlockCommands: %q is no command name", n))
 		}
 	}
 	for _, f := range c.Secret.Files {
 		if _, err := filepath.Match(f, ""); err != nil || !filepath.IsAbs(f) {
-			return fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f)
+			report(fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f))
 		}
 	}
 	for i, id := range c.Secret.AgeIdentities {
 		switch {
 		case id.Recipient == "" && id.PathRegex == "":
-			return fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i)
+			report(fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i))
 		case id.Recipient != "" && !strings.HasPrefix(id.Recipient, "age1"):
-			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
+			report(fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient))
 		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///") && !strings.HasPrefix(id.Ref, "store://"):
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref)
+			report(fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref))
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
-			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
+			report(fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err))
 		}
 		if rest, ok := strings.CutPrefix(id.Ref, "op://"); ok {
 			if vault, _, _ := strings.Cut(rest, "/"); vault != c.Secret.Vault && !slices.Contains(c.Secret.AgeVaults, vault) {
-				return fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault)
+				report(fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault))
 			}
 		}
 	}
@@ -3693,181 +3694,163 @@ func (c *Config) validate() error {
 		s := c.Apps.Secrets[in]
 		switch {
 		case !filepath.IsAbs(s.File):
-			return fmt.Errorf("apps.secrets.%s.file: %q is no absolute path (~/ allowed)", in, s.File)
+			report(fmt.Errorf("apps.secrets.%s.file: %q is no absolute path (~/ allowed)", in, s.File))
 		case (s.Name == "") != (s.Namespace == ""):
-			return fmt.Errorf("apps.secrets.%s: name and namespace start an absent file's Secret together", in)
+			report(fmt.Errorf("apps.secrets.%s: name and namespace start an absent file's Secret together", in))
 		}
 	}
 	for i, v := range c.Secret.AgeVaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
-			return fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+			report(fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v))
 		}
 	}
 	for i, r := range c.Secret.FileRoots {
 		if !filepath.IsAbs(r) || r == "/" {
-			return fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r)
+			report(fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r))
 		}
 	}
 	for i, v := range c.Secret.Vaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
-			return fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+			report(fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v))
 		}
 	}
 	for name, p := range c.Omp.Providers {
 		// the message never carries the value someone put there
 		if !opRef(p.APIKey) {
-			return fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name)
+			report(fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name))
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {
 		for _, g := range []string{r.Vault, r.Item} {
 			if _, err := filepath.Match(g, ""); err != nil {
-				return fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err)
+				report(fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err))
 			}
 		}
 	}
 	for _, g := range c.Hooks.PersonFolders {
 		if _, err := filepath.Match(g, ""); err != nil {
-			return fmt.Errorf("hooks.personFolders: %q: %w", g, err)
+			report(fmt.Errorf("hooks.personFolders: %q: %w", g, err))
 		}
 	}
 	for _, g := range c.Outbound.Paths {
 		if _, err := filepath.Match(g, ""); err != nil {
-			return fmt.Errorf("outbound.paths: %q: %w", g, err)
+			report(fmt.Errorf("outbound.paths: %q: %w", g, err))
 		}
 	}
-	if err := c.Sandbox.validate(); err != nil {
-		return err
-	}
+	c.Sandbox.validateEach(report)
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
-		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
+		report(fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration))
 	}
 	if c.Feedback.Enabled() && !c.Reporter.Enabled() {
-		return fmt.Errorf("feedback.context: the feedback watch reads the reporter's posts: set reporter.every and reporter.brief")
+		report(fmt.Errorf("feedback.context: the feedback watch reads the reporter's posts: set reporter.every and reporter.brief"))
 	}
 	if tz := c.Reporter.TZ; tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {
-			return fmt.Errorf("reporter.tz: %w", err)
+			report(fmt.Errorf("reporter.tz: %w", err))
 		}
 	}
-	if err := ownerRepos("reporter.reviews", c.Reporter.Reviews); err != nil {
-		return err
-	}
-	if err := ownerRepos("plans.repositories", c.Plans.Repositories); err != nil {
-		return err
-	}
+	ownerReposEach("reporter.reviews", c.Reporter.Reviews, report)
+	ownerReposEach("plans.repositories", c.Plans.Repositories, report)
 	for repo, method := range c.Merge.Methods {
-		if err := ownerRepos("merge.methods", []string{repo}); err != nil {
-			return err
-		}
+		ownerReposEach("merge.methods", []string{repo}, report)
 		if method != "squash" && method != "rebase" && method != "merge" {
-			return fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo)
+			report(fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo))
 		}
 	}
-	if err := ownerRepos("merge.admin", c.Merge.Admin); err != nil {
-		return err
-	}
-	if err := c.Sink.validate(); err != nil {
-		return err
-	}
+	ownerReposEach("merge.admin", c.Merge.Admin, report)
+	c.Sink.validateEach(report)
 	for i, st := range c.Board.Order {
 		if st.Name == "" {
-			return fmt.Errorf("board.order[%d]: no name", i)
+			report(fmt.Errorf("board.order[%d]: no name", i))
 		}
 		if st.Search != "" && (len(st.Status)+len(st.Kind)+len(st.Labels) > 0 || st.SubIssues || st.Unblocked) {
-			return fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name)
+			report(fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name))
 		}
 	}
 	if t := c.Teleport; t.WarnBefore.Duration > t.RenewBefore.Duration {
-		return fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration)
+		report(fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration))
 	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
-		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)
+		report(fmt.Errorf("kube.contextTemplate: %q has no {installation}", t))
 	}
 	if c.Supervisor.ReviewRounds < 0 {
-		return fmt.Errorf("supervisor.reviewRounds: %d is fewer than one review round (0 is the default, 1)", c.Supervisor.ReviewRounds)
+		report(fmt.Errorf("supervisor.reviewRounds: %d is fewer than one review round (0 is the default, 1)", c.Supervisor.ReviewRounds))
 	}
 	if k := c.Supervisor.ClassifierConfidence; k < 0 || k > 1 {
-		return fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k)
+		report(fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k))
 	}
-	if err := c.Supervisor.Ownership.validate(); err != nil {
-		return fmt.Errorf("supervisor.ownership.%w", err)
-	}
+	c.Supervisor.Ownership.validateEach(func(err error) { report(fmt.Errorf("supervisor.ownership.%w", err)) })
 	for _, selector := range c.Supervisor.Hosts {
 		if selector == "" || selector == "local" {
-			return fmt.Errorf("supervisor.hosts: %q names no SSH execution host", selector)
+			report(fmt.Errorf("supervisor.hosts: %q names no SSH execution host", selector))
 		}
 		if _, ok := c.Agents.Hosts[selector]; !ok {
-			return fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector)
+			report(fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector))
 		}
 	}
 	if r := c.Guide.Role; r.Skill != "" && r.Instructions != "" {
-		return errors.New("guide: set skill or instructions, not both")
+		report(errors.New("guide: set skill or instructions, not both"))
 	}
 	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
-		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)
+		report(fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context))
 	}
 	if d := c.Alerts.Discover; d.Enabled() && c.Alerts.Team == "" {
-		return errors.New("alerts.discover: discovering the installations that carry the team's HelmReleases needs alerts.team")
+		report(errors.New("alerts.discover: discovering the installations that carry the team's HelmReleases needs alerts.team"))
 	}
 	for _, p := range c.Alerts.Discover.Exclude {
 		if _, err := path.Match(p, ""); err != nil {
-			return fmt.Errorf("alerts.discover.exclude: %q: %w", p, err)
+			report(fmt.Errorf("alerts.discover.exclude: %q: %w", p, err))
 		}
 	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {
-			return fmt.Errorf("alerts.installations[%d]: an installation needs a name", i)
+			report(fmt.Errorf("alerts.installations[%d]: an installation needs a name", i))
 		}
 		if in.Floor != "" && !slices.Contains(alerts.Severities, in.Floor) {
-			return fmt.Errorf("alerts.installations[%d]: floor %q is none of %s", i, in.Floor, strings.Join(alerts.Severities, ", "))
+			report(fmt.Errorf("alerts.installations[%d]: floor %q is none of %s", i, in.Floor, strings.Join(alerts.Severities, ", ")))
 		}
 	}
 	if n := c.Alerts.Flap.Changes; n < 0 || n == 1 {
-		return fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n)
+		report(fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n))
 	}
 	if p := c.Alerts.PageSeverity; p != "" && !slices.Contains(alerts.Severities, p) {
-		return fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", "))
+		report(fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", ")))
 	}
 	if g := c.Alerts.OwnerGrace.Duration; g != 0 && g < time.Minute {
-		return fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g)
+		report(fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g))
 	}
 	if e := c.Upgrades.Every.Duration; e < 0 {
-		return fmt.Errorf("upgrades.every: %s; an installation is read at most this long apart", e)
+		report(fmt.Errorf("upgrades.every: %s; an installation is read at most this long apart", e))
 	}
-	if err := c.Notify.validate(); err != nil {
-		return err
-	}
+	c.Notify.validateEach(report)
 	for _, r := range c.Resources {
 		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
-			return fmt.Errorf("resources: %q is not a valid resource name", r)
+			report(fmt.Errorf("resources: %q is not a valid resource name", r))
 		}
 	}
 	if k := c.Capacity; k.Ceiling < 0 {
-		return fmt.Errorf("capacity.ceiling: %d is negative", k.Ceiling)
+		report(fmt.Errorf("capacity.ceiling: %d is negative", k.Ceiling))
 	}
 	if c.Capacity.ReviewHeadroom < 0 {
-		return fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom)
+		report(fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom))
 	}
 	if n, ok := c.Capacity.Local.Limit(); ok && n < 0 {
-		return fmt.Errorf("capacity.local.ceiling: %d is negative", n)
+		report(fmt.Errorf("capacity.local.ceiling: %d is negative", n))
 	}
 	if c.Capacity.SwapPSIMax < 0 {
-		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
+		report(fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax))
 	}
-	if err := c.Capacity.Usage.validate(); err != nil {
-		return err
-	}
+	c.Capacity.Usage.validateNamedEach("capacity.usage", report)
 	for _, name := range c.Capacity.ProviderNames() {
 		if strings.TrimSpace(name) == "" {
-			return errors.New("capacity.providers: empty provider name")
+			report(errors.New("capacity.providers: empty provider name"))
 		}
 		p := c.Capacity.Providers[name]
 		if k := strings.TrimSpace(p.Kind); k != "" && k != KindSubscription && k != KindSelfHosted {
-			return fmt.Errorf("capacity.providers.%s.kind: %q is not %s or %s", name, p.Kind, KindSubscription, KindSelfHosted)
+			report(fmt.Errorf("capacity.providers.%s.kind: %q is not %s or %s", name, p.Kind, KindSubscription, KindSelfHosted))
 		}
 		if p.Ceiling < 0 {
-			return fmt.Errorf("capacity.providers.%s.ceiling: %d is negative", name, p.Ceiling)
+			report(fmt.Errorf("capacity.providers.%s.ceiling: %d is negative", name, p.Ceiling))
 		}
 		if p.SelfHosted() {
 			// claude, agy and codex are the subscription harnesses' names: a
@@ -3875,67 +3858,67 @@ func (c *Config) validate() error {
 			// subscription start's fallback and hand it its room.
 			switch strings.ToLower(strings.TrimSpace(name)) {
 			case ClaudeHarness, AgyHarness, CodexHarness:
-				return fmt.Errorf("capacity.providers.%s: %s names the %s subscription; a %s provider has another name", name, name, name, KindSelfHosted)
+				report(fmt.Errorf("capacity.providers.%s: %s names the %s subscription; a %s provider has another name", name, name, name, KindSelfHosted))
 			}
 			if p.Enabled() {
-				return fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted)
+				report(fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted))
 			}
 			if p.hasFields() {
-				return fmt.Errorf("capacity.providers.%s: a %s provider has no usage windows: remove its usage fields", name, KindSelfHosted)
+				report(fmt.Errorf("capacity.providers.%s: a %s provider has no usage windows: remove its usage fields", name, KindSelfHosted))
 			}
 			if p.ServeModeStale.Duration < 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeStaleAfter: %s is negative", name, p.ServeModeStale.Duration)
+				report(fmt.Errorf("capacity.providers.%s.serveModeStaleAfter: %s is negative", name, p.ServeModeStale.Duration))
 			}
 			if p.ServeModeSwitchTimeout.Duration < 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchTimeout: %s is negative", name, p.ServeModeSwitchTimeout.Duration)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchTimeout: %s is negative", name, p.ServeModeSwitchTimeout.Duration))
 			}
 			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeCeilings)) {
 				if strings.TrimSpace(mode) == "" {
-					return fmt.Errorf("capacity.providers.%s.serveModeCeilings: empty mode name", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings: empty mode name", name))
 				}
 				if p.ServeModeCeilings[mode] < 0 {
-					return fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d is negative", name, mode, p.ServeModeCeilings[mode])
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d is negative", name, mode, p.ServeModeCeilings[mode]))
 				}
 			}
 			if len(p.ServeModeCommand) > 0 {
 				if strings.TrimSpace(p.ServeModeCommand[0]) == "" {
-					return fmt.Errorf("capacity.providers.%s.serveModeCommand[0]: empty executable", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCommand[0]: empty executable", name))
 				}
 				if len(p.ServeModeCeilings) == 0 && len(p.ServeModeModes) == 0 {
-					return fmt.Errorf("capacity.providers.%s.serveModeCommand: no serveModeCeilings: the command's modes name no ceiling", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCommand: no serveModeCeilings: the command's modes name no ceiling", name))
 				}
 			} else if len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeCeilings: no serveModeCommand: the ceilings name no mode reader", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeCeilings: no serveModeCommand: the ceilings name no mode reader", name))
 			}
 			if len(p.ServeModeModes) > 0 && len(p.ServeModeCommand) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeCommand: the modes name no mode reader", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeCommand: the modes name no mode reader", name))
 			}
 			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeCommand) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeCommand: the switch has no mode reader", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeCommand: the switch has no mode reader", name))
 			}
 			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeModes) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeModes: the switch knows no mode to switch into", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeModes: the switch knows no mode to switch into", name))
 			}
 			if len(p.ServeModeSwitch) > 0 && strings.TrimSpace(p.ServeModeSwitch[0]) == "" {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand[0]: empty executable", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand[0]: empty executable", name))
 			}
 			if len(p.ServeModeModes) > 0 && len(p.ServeModeSwitch) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeSwitchCommand: the modes name no switch", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeSwitchCommand: the modes name no switch", name))
 			}
 			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeModes)) {
 				m := p.ServeModeModes[mode]
 				if strings.TrimSpace(mode) == "" {
-					return fmt.Errorf("capacity.providers.%s.serveModeModes: empty mode name", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeModes: empty mode name", name))
 				}
 				if m.Sessions < 0 {
-					return fmt.Errorf("capacity.providers.%s.serveModeModes.%s: sessions %d is negative", name, mode, m.Sessions)
+					report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: sessions %d is negative", name, mode, m.Sessions))
 				}
 				if c, ok := p.ServeModeCeilings[mode]; ok && c != m.Sessions {
-					return fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions))
 				}
 				for _, n := range m.Nodes {
 					if strings.TrimSpace(n) == "" {
-						return fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode)
+						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode))
 					}
 				}
 			}
@@ -3943,69 +3926,64 @@ func (c *Config) validate() error {
 		}
 		if len(p.ServeModeCommand) > 0 || len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 ||
 			len(p.ServeModeSwitch) > 0 || p.ServeModeSwitchTimeout.Duration != 0 {
-			return fmt.Errorf("capacity.providers.%s: serveModeCommand, serveModeCeilings, serveModeModes and serveModeSwitchCommand belong to a %s provider", name, KindSelfHosted)
+			report(fmt.Errorf("capacity.providers.%s: serveModeCommand, serveModeCeilings, serveModeModes and serveModeSwitchCommand belong to a %s provider", name, KindSelfHosted))
 		}
-		if err := p.validateNamed("capacity.providers." + name); err != nil {
-			return err
-		}
+		p.validateNamedEach("capacity.providers."+name, report)
 	}
 	for i, ch := range c.Capacity.Choices {
 		switch {
 		case strings.TrimSpace(ch.Harness) == "":
-			return fmt.Errorf("capacity.choices[%d]: harness is required", i)
+			report(fmt.Errorf("capacity.choices[%d]: harness is required", i))
 		case strings.TrimSpace(ch.Model) == "":
-			return fmt.Errorf("capacity.choices[%d]: model is required", i)
+			report(fmt.Errorf("capacity.choices[%d]: model is required", i))
 		case ch.fiveHourMaxSet && !(ch.FiveHourMax > 0 && ch.FiveHourMax <= 100):
-			return fmt.Errorf("capacity.choices[%d]: fiveHourMax %g is not in (0, 100]", i, ch.FiveHourMax)
+			report(fmt.Errorf("capacity.choices[%d]: fiveHourMax %g is not in (0, 100]", i, ch.FiveHourMax))
 		case ch.sevenDayMaxSet && !(ch.SevenDayMax > 0 && ch.SevenDayMax <= 100):
-			return fmt.Errorf("capacity.choices[%d]: sevenDayMax %g is not in (0, 100]", i, ch.SevenDayMax)
+			report(fmt.Errorf("capacity.choices[%d]: sevenDayMax %g is not in (0, 100]", i, ch.SevenDayMax))
 		case ch.paceMarginSet && (ch.PaceMargin < -100 || ch.PaceMargin > 100):
-			return fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin)
+			report(fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin))
 		}
 		prov := ch.EffectiveProvider()
 		if p, ok := c.Capacity.Providers[prov]; ok && p.SelfHosted() && !strings.EqualFold(strings.TrimSpace(ch.Harness), OmpHarness) {
-			return fmt.Errorf("capacity.choices[%d]: harness %q is a subscription; %s is a %s provider", i, ch.Harness, prov, KindSelfHosted)
+			report(fmt.Errorf("capacity.choices[%d]: harness %q is a subscription; %s is a %s provider", i, ch.Harness, prov, KindSelfHosted))
 		}
 		if _, ok := c.Capacity.Providers[prov]; !ok {
-			return fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov)
+			report(fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov))
 		}
 	}
 	if w := c.Watch.SwapWindow.Duration; w != 0 && w < MinSwapSpan {
-		return fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan)
+		report(fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan))
 	}
 	if a := c.Agents; a.LastStepCeiling != 0 && a.LastStepCeiling <= a.RelayAt {
-		return fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt)
+		report(fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt))
 	}
-	if err := c.validateLabs(); err != nil {
-		return err
-	}
+	c.validateLabsEach(report)
 	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
-		return fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB)
+		report(fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB))
 	}
 	faults := map[string]bool{}
 	for i, f := range c.Doctor.Faults {
 		if f.Name == "" || f.Probe == "" || f.Remedy == "" || faults[f.Name] {
-			return fmt.Errorf("doctor.faults[%d]: a fault needs a name of its own, a probe and a remedy", i)
+			report(fmt.Errorf("doctor.faults[%d]: a fault needs a name of its own, a probe and a remedy", i))
 		}
 		faults[f.Name] = true
 	}
 	names, repos := map[string]bool{}, map[string]string{}
 	for i, l := range c.Lanes {
 		if l.Name == "" || len(l.Repositories) == 0 || strings.Contains(l.Name, "/") {
-			return fmt.Errorf("lanes[%d]: a lane needs a name without a slash and repositories", i)
+			report(fmt.Errorf("lanes[%d]: a lane needs a name without a slash and repositories", i))
 		}
 		if names[l.Name] {
-			return fmt.Errorf("lanes: %q is named twice", l.Name)
+			report(fmt.Errorf("lanes: %q is named twice", l.Name))
 		}
 		names[l.Name] = true
 		for _, r := range l.Repositories {
 			if prev, ok := repos[r]; ok {
-				return fmt.Errorf("lanes: %s is in both %q and %q", r, prev, l.Name)
+				report(fmt.Errorf("lanes: %s is in both %q and %q", r, prev, l.Name))
 			}
 			repos[r] = l.Name
 		}
 	}
-	return nil
 }
 
 // machineKinds are the kinds that notified before the machine's lines went
@@ -4022,24 +4000,23 @@ func notifyKind(field, k string) error {
 	return nil
 }
 
-func (n Notify) validate() error {
+func (n Notify) validateEach(report func(error)) {
 	for _, k := range n.Kinds {
 		if err := notifyKind("notify.kinds", k); err != nil {
-			return err
+			report(err)
 		}
 	}
 	for k, u := range n.Urgency {
 		if err := notifyKind("notify.urgency", k); err != nil {
-			return err
+			report(err)
 		}
 		if !slices.Contains(notify.Urgencies, u) {
-			return fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", "))
+			report(fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", ")))
 		}
 	}
 	if _, err := notify.ParseQuietHours(n.QuietHours); err != nil {
-		return fmt.Errorf("notify.quietHours: %w", err)
+		report(fmt.Errorf("notify.quietHours: %w", err))
 	}
-	return nil
 }
 
 // LaneOf is the lane a repository's merges queue in: the configured lane
@@ -4101,24 +4078,23 @@ func (c *Config) Leasable() []string {
 	return append(out, Browser)
 }
 
-// validateLabs checks that every lab lease is a configured resource and
+// validateLabsEach checks that every lab lease is a configured resource and
 // that no two lab leases map one kind cluster.
-func (c *Config) validateLabs() error {
+func (c *Config) validateLabsEach(report func(error)) {
 	by := map[string]string{}
 	for _, res := range slices.Sorted(maps.Keys(c.Labs)) {
 		cl := c.Labs[res]
 		if !slices.Contains(c.Resources, res) {
-			return fmt.Errorf("labs: %q is not one of the resources %s", res, strings.Join(c.Resources, ", "))
+			report(fmt.Errorf("labs: %q is not one of the resources %s", res, strings.Join(c.Resources, ", ")))
 		}
 		if cl == "" {
-			return fmt.Errorf("labs: %q names no kind cluster", res)
+			report(fmt.Errorf("labs: %q names no kind cluster", res))
 		}
 		if other, ok := by[cl]; ok {
-			return fmt.Errorf("labs: %q and %q both map the kind cluster %q", other, res, cl)
+			report(fmt.Errorf("labs: %q and %q both map the kind cluster %q", other, res, cl))
 		}
 		by[cl] = res
 	}
-	return nil
 }
 
 // LabCluster is the kind cluster the lab lease res stands for, "" when res
@@ -4141,14 +4117,13 @@ func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
 }
 
-// ownerRepos refuses an entry of field that is not owner/repo.
-func ownerRepos(field string, repos []string) error {
+// ownerReposEach reports entries of field that are not owner/repo.
+func ownerReposEach(field string, repos []string, report func(error)) {
 	for _, r := range repos {
 		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {
-			return fmt.Errorf("%s: %q is not owner/repo", field, r)
+			report(fmt.Errorf("%s: %q is not owner/repo", field, r))
 		}
 	}
-	return nil
 }
 
 func setStr(p *string, v string) {
