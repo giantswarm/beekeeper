@@ -117,7 +117,7 @@ func (a *app) githubAppDryRun(args []string) bool {
 		return false
 	}
 	c := a.secretGitHubAppCmd()
-	c.Flags().ParseErrorsWhitelist.UnknownFlags = true
+	c.Flags().ParseErrorsAllowlist.UnknownFlags = true
 	if err := c.Flags().Parse(args[1:]); err != nil {
 		return false
 	}

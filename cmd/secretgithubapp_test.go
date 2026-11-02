@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	dryAppSkeleton = "kind: Secret\nmetadata: {name: app}\n"
 	codeFlag       = "--code"
 	conversionCode = "a1b2c3d4e5f6"
 	// a key's lines without PEM armour: the command writes what GitHub
@@ -67,7 +68,7 @@ func fakeConversion(t *testing.T, webhook string) *int {
 func githubAppConfig(a *app, repo string) string {
 	file := filepath.Join(repo, "installations", fixtureOrg, "secrets", "github-app-secret.yaml")
 	_ = os.MkdirAll(filepath.Dir(file), 0o750)
-	a.cfg.Apps.Secrets = map[string]config.AppSecret{fixtureOrg: {File: file, Name: "github-app", Namespace: "team-agents"}}
+	a.cfg.Apps.Secrets = map[string]config.AppSecret{fixtureOrg: {File: file, Name: githubAppOp, Namespace: "team-agents"}}
 	return file
 }
 
@@ -187,7 +188,7 @@ func TestSecretGitHubAppRefusesAFileThatIsNoSecret(t *testing.T) {
 	if _, err := runSecret(a, githubAppOp, "absent", codeFlag, conversionCode); Code(err) != ExitRefused || !strings.Contains(err.Error(), "is absent") {
 		t.Errorf("an absent file without a Secret's name = %v", err)
 	}
-	a.cfg.Apps.Secrets["nodir"] = config.AppSecret{File: filepath.Join(repo, "nowhere", "secret.yaml"), Name: "github-app", Namespace: "team-agents"}
+	a.cfg.Apps.Secrets["nodir"] = config.AppSecret{File: filepath.Join(repo, "nowhere", "secret.yaml"), Name: githubAppOp, Namespace: "team-agents"}
 	if _, err := runSecret(a, githubAppOp, "nodir", codeFlag, conversionCode); Code(err) != ExitRefused || !strings.Contains(err.Error(), "no directory") {
 		t.Errorf("a file in an absent directory = %v", err)
 	}
@@ -265,11 +266,11 @@ func TestSecretGitHubAppDryRun(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Even a supplied code is ignored and never consumed.
-			out, err := runSecret(a, githubAppOp, "--dry-run", fixtureOrg, codeFlag, conversionCode)
+			out, err := runSecret(a, githubAppOp, testDryRunFlag, fixtureOrg, codeFlag, conversionCode)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{file, "github-app", "team-agents", recipient, "stringData.private-key", "stringData.client-secret", "stringData.webhook-secret"} {
+			for _, want := range []string{file, githubAppOp, "team-agents", recipient, "stringData.private-key", "stringData.client-secret", "stringData.webhook-secret"} {
 				if !strings.Contains(out, want) {
 					t.Errorf("output lacks %q: %s", want, out)
 				}
@@ -282,7 +283,7 @@ func TestSecretGitHubAppDryRun(t *testing.T) {
 			if err != nil || len(before) != len(after) {
 				t.Fatalf("dry run wrote events: %v", err)
 			}
-			raw, err := os.ReadFile(file)
+			raw, err := os.ReadFile(file) //nolint:gosec // the test’s scratch target
 			if err != nil || string(raw) != body {
 				t.Fatalf("dry run changed target: %v", err)
 			}
@@ -293,7 +294,7 @@ func TestSecretGitHubAppDryRun(t *testing.T) {
 				t.Fatalf("dry run created fingerprint key: %v", err)
 			}
 			a.out = &bytes.Buffer{}
-			if _, err := runSecret(a, githubAppOp, fixtureOrg, "--dry-run"); err != nil {
+			if _, err := runSecret(a, githubAppOp, fixtureOrg, testDryRunFlag); err != nil {
 				t.Fatalf("dry run without code: %v", err)
 			}
 		})
@@ -302,19 +303,19 @@ func TestSecretGitHubAppDryRun(t *testing.T) {
 
 func TestSecretGitHubAppDryRunMissingParts(t *testing.T) {
 	for _, tc := range []struct{ name, body, rules, want string }{
-		{name: "installation", want: "names no Secret"},
+		{name: "missing-installation", want: "names no Secret"},
 		{name: "file", want: "target Secret:"},
-		{name: "rules", body: "kind: Secret\nmetadata: {name: app}\n", want: "no .sops.yaml"},
-		{name: "unmatched", body: "kind: Secret\nmetadata: {name: app}\n", rules: "creation_rules:\n  - path_regex: nowhere\n", want: "no creation rule"},
-		{name: "recipient", body: "kind: Secret\nmetadata: {name: app}\n", rules: "creation_rules:\n  - age: invalid\n", want: "no valid age recipient"},
-		{name: "kind", body: "kind: ConfigMap\n", want: "no Kubernetes Secret"},
-		{name: "name", body: "kind: Secret\n", want: "no metadata.name"},
+		{name: "rules", body: dryAppSkeleton, want: "no .sops.yaml"},
+		{name: "unmatched", body: dryAppSkeleton, rules: "creation_rules:\n  - path_regex: nowhere\n", want: "no creation rule"},
+		{name: "recipient", body: dryAppSkeleton, rules: "creation_rules:\n  - age: invalid\n", want: "no valid age recipient"},
+		{name: "wrong-kind", body: "kind: ConfigMap\n", want: "no Kubernetes Secret"},
+		{name: "missing-name", body: "kind: Secret\n", want: "no metadata.name"},
 		{name: "malformed", body: "[" + secretValue, want: "no YAML mapping"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, tools, repo := secretApp(t)
 			file := githubAppConfig(a, repo)
-			if tc.name == "installation" {
+			if tc.name == "missing-installation" {
 				a.cfg.Apps.Secrets = nil
 			}
 			if tc.body != "" {
@@ -331,7 +332,7 @@ func TestSecretGitHubAppDryRunMissingParts(t *testing.T) {
 				}
 			}
 			calls := fakeConversion(t, "")
-			out, err := runSecret(a, githubAppOp, "--dry-run", fixtureOrg)
+			out, err := runSecret(a, githubAppOp, testDryRunFlag, fixtureOrg)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %q", err, tc.want)
 			}
@@ -354,12 +355,12 @@ func TestGitHubAppDryRunVaultRouting(t *testing.T) {
 		args []string
 		want bool
 	}{
-		{[]string{githubAppOp, "--dry-run", fixtureOrg}, true},
-		{[]string{githubAppOp, fixtureOrg, "--dry-run=true"}, true},
+		{[]string{githubAppOp, testDryRunFlag, fixtureOrg}, true},
+		{[]string{githubAppOp, fixtureOrg, testDryRunFlag + "=true"}, true},
 		{[]string{githubAppOp, fixtureOrg, "--dry-run=false"}, false},
-		{[]string{githubAppOp, fixtureOrg, "--dry-run", "--dry-run=false"}, false},
-		{[]string{githubAppOp, codeFlag, "--dry-run", fixtureOrg}, false},
-		{[]string{githubAppOp, "--", "--dry-run"}, false},
+		{[]string{githubAppOp, fixtureOrg, testDryRunFlag, "--dry-run=false"}, false},
+		{[]string{githubAppOp, codeFlag, testDryRunFlag, fixtureOrg}, false},
+		{[]string{githubAppOp, "--", testDryRunFlag}, false},
 	} {
 		if got := a.githubAppDryRun(tc.args); got != tc.want {
 			t.Errorf("%v: dry run %v, want %v", tc.args, got, tc.want)
@@ -395,7 +396,7 @@ func TestSecretGitHubAppDryRunEncryptionAndReplace(t *testing.T) {
 		if err := os.WriteFile(rulesFile, []byte(rules+tc.rule+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		args := []string{githubAppOp, fixtureOrg, "--dry-run"}
+		args := []string{githubAppOp, fixtureOrg, testDryRunFlag}
 		if tc.replace {
 			args = append(args, "--replace")
 		}
@@ -413,7 +414,7 @@ func TestSecretGitHubAppDryRunEncryptionAndReplace(t *testing.T) {
 	if len(tools.Calls) != 0 {
 		t.Fatalf("dry run invoked tools: %v", tools.Calls)
 	}
-	raw, err := os.ReadFile(file)
+	raw, err := os.ReadFile(file) //nolint:gosec // the test’s scratch target
 	if err != nil || string(raw) != body {
 		t.Fatalf("dry run changed target: %v", err)
 	}
@@ -429,7 +430,7 @@ func TestSecretGitHubAppDryRunCreatesNoStateDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules:\n  - age: "+id.Recipient().String()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(file, []byte("kind: Secret\nmetadata: {name: app}\n"), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(dryAppSkeleton), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stateDir := filepath.Join(repo, "no-state")
@@ -439,7 +440,7 @@ func TestSecretGitHubAppDryRunCreatesNoStateDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := New()
-	c.SetArgs([]string{"--config", cfgPath, "secret", githubAppOp, "--dry-run", fixtureOrg})
+	c.SetArgs([]string{"--" + configFlag, cfgPath, "secret", githubAppOp, testDryRunFlag, fixtureOrg})
 	c.SetOut(io.Discard)
 	c.SetErr(io.Discard)
 	if err := c.Execute(); err != nil {
