@@ -613,3 +613,15 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 		t.Errorf("liveCapacity on broken file = %+v, want fallback %+v", got, zero)
 	}
 }
+
+func TestSubscriptionWithoutReaderRefusesStart(t *testing.T) {
+	for _, name := range []string{"codex", "claude", "agy", "custom"} {
+		t.Run(name, func(t *testing.T) {
+			p := config.Provider{Floor: 0, Ceiling: 2}
+			v := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{}, time.Now())
+			if v.Room != 0 || v.Ceiling != 0 || !strings.Contains(v.Error, "usage not read") || len(v.Blocks) == 0 {
+				t.Fatalf("unknown subscription usage allowed: %+v", v)
+			}
+		})
+	}
+}
