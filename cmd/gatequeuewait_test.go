@@ -1,0 +1,130 @@
+//go:build unix
+
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+func TestQueuedFollowerOnlyReadsItsPlace(t *testing.T) {
+	for _, tc := range []struct {
+		phase   string
+		handoff bool
+	}{{state.Waiting, false}, {state.Running, false}, {state.Waiting, true}, {state.Running, true}} {
+		t.Run(fmt.Sprintf("%s/handoff=%v", tc.phase, tc.handoff), func(t *testing.T) {
+			asked := stubGitHub(t, github.Open, "")
+			a := busyLaneApp(t)
+			pid := os.Getpid()
+			if tc.handoff {
+				pid = sleeper(t)
+			}
+			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Merges[0].Phase = tc.phase
+				st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: pid, Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
+				// Either of these would make the old housekeeping read GitHub,
+				// even though another live gate holds this follower's lane.
+				st.Holds = append(st.Holds, state.Hold{Tool: merge.Tool, ToolPR: 123, Target: "o/other"})
+				st.Merges = append(st.Merges, state.Merge{Repo: "o/other", PR: 123, Lane: "unrelated-lane", Phase: state.Waiting, Outside: true, Seen: time.Now()})
+				return nil, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
+			if tc.handoff {
+				g.from, g.queued = pid, true
+				if why, err := g.step(); err != nil || why == "" || *asked != 0 {
+					t.Fatalf("handoff read GitHub or failed: %q, %v, reads %d", why, err, *asked)
+				}
+			}
+			path := filepath.Join(a.store.Dir(), "state.json")
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 3 {
+				if why, err := g.step(); err != nil || why == "" || !g.passive {
+					t.Fatalf("follower: why %q, err %v, passive %v", why, err, g.passive)
+				}
+			}
+			after, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *asked != 0 || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+				t.Fatalf("follower made %d GitHub reads or rewrote state", *asked)
+			}
+		})
+	}
+}
+
+func TestQueuedFollowerResumesNormalChecksAtItsTurn(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	a := busyLaneApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: os.Getpid(), Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo), pid: os.Getpid(), placed: true}
+	if why, err := g.step(); err != nil || why == "" || !g.passive {
+		t.Fatalf("not waiting behind predecessor: %q, %v", why, err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = st.Merges[1:]
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	was := readBudget
+	t.Cleanup(func() { readBudget = was })
+	reads := 0
+	readBudget = func(*app, context.Context) (github.Budget, error) {
+		reads++
+		return github.Budget{}, fmt.Errorf("no budget in this test")
+	}
+	if _, err := g.step(); Code(err) != ExitGateRefused || g.passive || reads != 1 {
+		t.Fatalf("head skipped normal checks: %v, passive %v, budget reads %d", err, g.passive, reads)
+	}
+}
+
+func TestQueueBackoffIsBoundedAndResetsAtTheHead(t *testing.T) {
+	pause := time.Duration(0)
+	for _, want := range []time.Duration{5, 10, 20, 40, 60, 60} {
+		pause = gateQueuePause(pause, true)
+		if pause != want*time.Second {
+			t.Fatalf("pause %s, want %s", pause, want*time.Second)
+		}
+	}
+	if pause = gateQueuePause(pause, false); pause != 5*time.Second {
+		t.Fatalf("head pause %s", pause)
+	}
+}
+
+func TestQueuedFollowerCancellationDoesNotWaitForItsSleep(t *testing.T) {
+	asked := stubGitHub(t, github.Open, "")
+	a := busyLaneApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: os.Getpid(), Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := a.gate(ctx, mergeArgv(scratchRepo), time.Hour, 0, true)
+	if err != context.DeadlineExceeded || time.Since(started) > time.Second || *asked != 0 {
+		t.Fatalf("cancellation: %v after %s, %d GitHub reads", err, time.Since(started), *asked)
+	}
+}

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -341,7 +342,9 @@ func TestCodexRunnerRefusesForeignThread(t *testing.T) {
 		t.Fatal("a foreign thread was accepted or replaced the recorded one")
 	}
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("runner cancellation: %v", err)
+	}
 }
 
 // A turn that fails after its acceptance ends a messaging runner as failed:
