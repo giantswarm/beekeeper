@@ -64,8 +64,8 @@ func TestNoteDeliveryMailboxFailure(t *testing.T) {
 	a.central = true
 	store := &auditStore{Store: kstore}
 	a.store = store
-	n := state.Note{ID: 1, Kind: noteDecision, For: "person@example.com", Text: laneQuestion, Refs: []string{decisionRef}, By: state.Party{Name: agentOne, Host: "test-machine", Team: "test-team"}}
-	n2 := state.Note{ID: 2, Kind: noteDecision, For: "person@example.com", Text: laneQuestion, Refs: []string{decisionRef}, By: state.Party{Name: agentOne, Host: "test-machine", Team: "test-team"}}
+	n := state.Note{ID: 1, Kind: noteDecision, For: boEmail, Text: laneQuestion, Refs: []string{decisionRef}, By: state.Party{Name: agentOne, Host: "test-machine", Team: ourTeam}}
+	n2 := state.Note{ID: 2, Kind: noteDecision, For: boEmail, Text: laneQuestion, Refs: []string{decisionRef}, By: state.Party{Name: agentOne, Host: "test-machine", Team: ourTeam}}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Notes = []state.Note{n, n2}
 		return nil, nil
@@ -74,7 +74,7 @@ func TestNoteDeliveryMailboxFailure(t *testing.T) {
 	}
 	a.mailFiler = func(context.Context, *state.Note, string) error { return errors.New("mailbox unavailable") }
 	srv := &server{cfg: a.cfg, store: kstore}
-	c := &call{ctx: t.Context(), s: srv, who: identity.Caller{Email: "person@example.com", Team: "test-team"}, app: a, store: store, out: &bytes.Buffer{}}
+	c := &call{ctx: t.Context(), s: srv, who: identity.Caller{Email: boEmail, Team: ourTeam}, app: a, store: store, out: &bytes.Buffer{}}
 	a.out = c.out
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{paramNote: 1, paramText: noteDeliveryWords}
@@ -95,7 +95,7 @@ func TestNoteDeliveryMailboxFailure(t *testing.T) {
 		t.Fatalf("retained central delivery: %+v, %v", shown, err)
 	}
 	a.mailFiler = func(context.Context, *state.Note, string) error { return nil }
-	c2 := &call{ctx: t.Context(), s: srv, who: identity.Caller{Email: "person@example.com", Team: "test-team"}, app: a, store: store, out: &bytes.Buffer{}}
+	c2 := &call{ctx: t.Context(), s: srv, who: identity.Caller{Email: boEmail, Team: ourTeam}, app: a, store: store, out: &bytes.Buffer{}}
 	a.out = c2.out
 	req2 := mcp.CallToolRequest{}
 	req2.Params.Arguments = map[string]any{paramNote: 2, paramText: noteDeliveryWords}
