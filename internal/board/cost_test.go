@@ -200,7 +200,7 @@ func (b *largeBoard) items() []string {
 	var out []string
 	n := 1
 	for i := range b.progress {
-		prio := "null"
+		prio := jsonNull
 		if i < b.ranked {
 			prio = fmt.Sprintf(`{"number":%d}`, i+1)
 		}

@@ -29,6 +29,9 @@ func TestStaleBinariesReplacementAtStartup(t *testing.T) {
 		}
 	}
 	child := exec.Command(path, "-c", "echo ready; read line") //nolint:gosec // executable fixture in the test directory
+	// BusyBox selects its shell applet by argv[0], even after copying.
+	child.Args[0] = "sh"
+	child.Stderr = os.Stderr
 	out, err := child.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
