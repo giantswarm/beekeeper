@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 )
@@ -20,6 +21,8 @@ func TestExecutionReservationNeedsTerminationEvidence(t *testing.T) {
 		{name: "unconfirmed stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: "fixture"}, Observation: execution.Observation{ProcessState: execution.Exited}}},
 		{name: "acknowledged stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: "fixture"}, Observation: execution.Observation{StopAcknowledged: true}}, terminal: true},
 		{name: "confirmed exit", record: ExecutionRecord{Observation: execution.Observation{ProcessState: execution.Exited}}, terminal: true},
+		{name: "released before acknowledgement", record: ExecutionRecord{Phase: "pending", ReleasedAt: time.Unix(1, 0)}, terminal: true},
+		{name: "released with an undeliverable stop", record: ExecutionRecord{Phase: "pending", StopRequest: &execution.StopRequest{ID: "fixture"}, ReleasedAt: time.Unix(1, 0)}, terminal: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

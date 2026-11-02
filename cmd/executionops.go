@@ -215,7 +215,7 @@ func activeExecution(st *state.State, ref execution.Ref) bool {
 }
 
 func executionNeedsSync(st *state.State, r *state.ExecutionRecord) bool {
-	if r == nil {
+	if r == nil || r.Released() {
 		return false
 	}
 	if !r.Terminal() || r.Observation.Reachability != execution.Reachable {
@@ -274,6 +274,23 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		}
 		r := st.Starts[idx].Execution
 		ref := r.Handle.Ref
+		// A reservation its host never acknowledged, past its start's
+		// window, is released when no host journal backs it: it holds
+		// no host or desk slot from then on.
+		opCtx, cancel := withTimeout(ctx)
+		released, releaseErr := a.releaseStaleReservation(opCtx, a.executionClient(h), r, time.Now())
+		cancel()
+		if released {
+			continue
+		}
+		if releaseErr != nil {
+			a.executionFailure(ref, releaseErr)
+			failures = append(failures, releaseErr.Error())
+			if isUnreachable(releaseErr) || ctx.Err() != nil {
+				break
+			}
+			continue
+		}
 		if st.Stop != nil && !r.Terminal() && r.StopRequest == nil {
 			opCtx, cancel := withTimeout(ctx)
 			stopErr := a.stopExecution(opCtx, ref, st.Stop.Reason)
@@ -285,7 +302,7 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 				}
 			}
 		}
-		opCtx, cancel := withTimeout(ctx)
+		opCtx, cancel = withTimeout(ctx)
 		_, syncErr := syncer.SyncControl(opCtx, ref)
 		cancel()
 		if syncErr != nil {
