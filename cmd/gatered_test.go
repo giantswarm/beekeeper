@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -79,6 +80,29 @@ func TestARedMergeWakesItsOwnerAndStaysOnItsLane(t *testing.T) {
 	if want := `failed o/r#7 by "worker" at`; !strings.Contains(out.String(), want) ||
 		!strings.Contains(out.String(), "nothing merged, exit 1: "+redReason+"; shown until its next attempt") {
 		t.Errorf("lanes:\n%s", out.String())
+	}
+}
+
+// A merge with --update-branch whose updated head got no workflow runs
+// (devctl exit 4, required_missing, no Actions run among its checks) ends
+// with a reason that says what retriggers them; another wait would not.
+func TestAMergeWhoseHeadGotNoRunsSaysHowToRetrigger(t *testing.T) {
+	noSystemd(t)
+	doc := `{"exitCode":4,"verdict":"required_missing","reason":"required status context build never reported","mergeCommitSha":"","checks":[],"release":null}`
+	fakeDevctl(t, `echo '`+doc+`'; exit 4`)
+	stubGitHub(t, "", "")
+	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+	g.argv = append(g.argv, "--update-branch")
+	if err := g.runMerge(); Code(err) != 4 {
+		t.Fatalf("exit %d, want devctl's 4", Code(err))
+	}
+	want := "required_missing: required status context build never reported; " + merge.NoRunsHint
+	st := gateState(t, g)
+	if len(st.Failed) != 1 || st.Failed[0].Exit != 4 || st.Failed[0].Reason != want {
+		t.Errorf("failed attempts %+v, want reason %q", st.Failed, want)
+	}
+	if d := lastEvent(t, g, "merge.failed"); !strings.Contains(d, "git commit --allow-empty") {
+		t.Errorf("merge.failed event: %q", d)
 	}
 }
 
