@@ -343,11 +343,13 @@ type Park struct {
 	ReviewHead string `json:"reviewHead,omitempty"`
 	// PostMerge is work remaining after merge; nil preserves older parks.
 	// An explicit empty string lets the loop close the task without a wake.
-	PostMerge *string   `json:"postMerge,omitempty"`
-	By        Party     `json:"by"`
-	At        time.Time `json:"at"`
-	On        string    `json:"on,omitempty"`
-	Waits     string    `json:"waits"`
+	PostMerge *string `json:"postMerge,omitempty"`
+	// Worktree is the local git worktree root the caller parked from.
+	Worktree string    `json:"worktree,omitempty"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	On       string    `json:"on,omitempty"`
+	Waits    string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -825,7 +827,17 @@ type ExecutionRecord struct {
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
 	Published *ExecutionPublication `json:"published,omitempty"`
-	rest      rest
+	// StartUnsent says no start request of this reservation has left the
+	// coordinator yet, so the host holds no journal of it. A reservation
+	// recorded before this field existed reads false: maybe sent.
+	StartUnsent bool `json:"startUnsent,omitempty"`
+	// StartSentAt is when the coordinator last sent its start request.
+	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// ReleasedAt is when a reservation the host never acknowledged was
+	// given up, ReleaseReason why: it holds no host or desk slot since.
+	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
+	ReleaseReason string    `json:"releaseReason,omitempty"`
+	rest          rest
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
@@ -847,11 +859,18 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if r.Released() {
+		return true
+	}
 	if r.StopRequest != nil && !r.Observation.StopAcknowledged {
 		return false
 	}
 	return r.Observation.StopAcknowledged || r.Observation.ProcessState == execution.Exited || r.Observation.ProcessState == execution.Failed
 }
+
+// Released says the reservation was given up before its host acknowledged
+// a start: no process of it can exist.
+func (r *ExecutionRecord) Released() bool { return !r.ReleasedAt.IsZero() }
 
 // Archive is the desktop session of an agent that left the roster while
 // its archive could not be done (its CLI ran a turn, no steward recorded
@@ -1084,6 +1103,7 @@ type State struct {
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
 	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
+	ReviewParks   []ReviewPark   `json:"reviewParks,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
@@ -1288,10 +1308,15 @@ func (e *StaleWriterError) Unwrap() error { return e.Load }
 
 // Budget is one reading of the GitHub core budget.
 type Budget struct {
-	Remaining int       `json:"remaining"`
-	Limit     int       `json:"limit"`
-	Reset     time.Time `json:"reset"`
-	At        time.Time `json:"at"`
+	Identity   string             `json:"identity,omitempty"`
+	Login      string             `json:"login,omitempty"`
+	ETag       string             `json:"etag,omitempty"`
+	Identities map[string]Budget  `json:"identities,omitempty"`
+	Windows    map[string]GraphQL `json:"windows,omitempty"`
+	Remaining  int                `json:"remaining"`
+	Limit      int                `json:"limit"`
+	Reset      time.Time          `json:"reset"`
+	At         time.Time          `json:"at"`
 	// GraphQL is the last reading of the GraphQL limit; nil before the
 	// first.
 	GraphQL *GraphQL `json:"graphql,omitempty"`
@@ -1301,9 +1326,14 @@ type Budget struct {
 
 // GraphQL is one reading of the GitHub GraphQL limit.
 type GraphQL struct {
-	Remaining int `json:"remaining"`
-	Limit     int `json:"limit"`
-	// Reset is when a refusal ends; zero when GitHub named no time.
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	Identity  string   `json:"identity,omitempty"`
+	Login     string   `json:"login,omitempty"`
+	Err       string   `json:"error,omitempty"`
+	Remaining int      `json:"remaining"`
+	Limit     int      `json:"limit"`
+	// Reset is when the window the reading counts resets and a refusal
+	// ends; zero when GitHub named no time.
 	Reset time.Time `json:"reset,omitzero"`
 	// Refused is GitHub's words while it refused GraphQL calls.
 	Refused   string    `json:"refused,omitempty"`
@@ -1316,7 +1346,7 @@ type GraphQL struct {
 // Blocks says the reading's refusal still holds at now: one without a
 // reset holds until a reading says otherwise.
 func (g *GraphQL) Blocks(now time.Time) bool {
-	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
+	return g != nil && (len(g.BlockedBy) > 0 || g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset)))
 }
 
 // The phases of a Merge.
