@@ -17,6 +17,8 @@ import (
 // limits is GitHub's message for a field over its resource limits.
 const limits = "Resource limits for this query exceeded."
 
+const partialSubIssue = "o/r#20"
+
 func TestGraphQLReturnsAPartialAnswerWithItsData(t *testing.T) {
 	answer := ""
 	c := &Client{GH: func(context.Context, ...string) ([]byte, error) { return []byte(answer), nil }}
@@ -172,5 +174,63 @@ func TestAReadRetriesAnEmptyOrCutOffAnswer(t *testing.T) {
 	answers, calls = []string{""}, 0
 	if _, err := c.Open(t.Context(), "example/tools#5"); err == nil || !strings.HasPrefix(err.Error(), "gh api graphql (repository): an empty body after 3 tries") {
 		t.Errorf("Open of a persistent empty answer = %v after %d calls", err, calls)
+	}
+}
+
+// A partial extras answer may preserve a sub-issue while its blocker is null
+// or its state could not be read. Neither is evidence that the blocker closed.
+func TestPartialExtrasKeepUnreadBlockersHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name, blocker string
+		held, named   bool
+	}{
+		{"null node", "null", true, false},
+		{"unread state", `{"number":9,"repository":{"nameWithOwner":"o/r"},"closedAt":"2026-10-01T00:00:00Z"}`, true, true},
+		{"null state", `{"number":9,"repository":{"nameWithOwner":"o/r"},"state":null}`, true, true},
+		{"closed", `{"number":9,"repository":{"nameWithOwner":"o/r"},"state":"CLOSED","closedAt":"2026-10-01T00:00:00Z"}`, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeGH{t: t, pages: []string{
+				`{"data":{"repositoryOwner":{"projectV2":{"items":{"nodes":[` +
+					node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":1,"completed":0}`)) + `]}}}}}`,
+			}}
+			errs := ""
+			if tc.held {
+				errs = `,"errors":[{"type":"RESOURCE_LIMITS_EXCEEDED","path":["e0","issue","subIssues","nodes",0,"blockedBy","nodes",0],"message":"` + limits + `"}]`
+			}
+			f.extrasBy = func(string) string {
+				return `{"data":{"e0":{"issue":{"subIssues":{"nodes":[` +
+					issue(20, `,"blockedBy":{"totalCount":1,"nodes":[`+tc.blocker+`]}`) + `]}}}}` + errs + `}`
+			}
+			b := readBoard()
+			snap, err := (&Client{GH: f.run, Board: b}).Read(t.Context(), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cands := Rank(snap, b, now)
+			if len(cands) != 1 {
+				t.Fatalf("candidates: %+v", cands)
+			}
+			c := cands[0]
+			wantOpen := 0
+			if tc.held {
+				wantOpen = 1
+			}
+			if c.Ref != partialSubIssue || c.Blockers != 1 || c.OpenBlockers != wantOpen || (c.Skip != "") != tc.held {
+				t.Fatalf("partial blocker candidate: %+v", c)
+			}
+			if tc.held {
+				if !slices.Equal(c.Missing, []string{"blockedBy: " + limits}) || !c.BlockersClosed.IsZero() {
+					t.Errorf("unread blocker: missing=%v closed=%v", c.Missing, c.BlockersClosed)
+				}
+			}
+			if tc.named {
+				if !slices.Equal(c.OpenBlockedBy, []string{issue9}) {
+					t.Errorf("named blocker: %v", c.OpenBlockedBy)
+				}
+			} else if len(c.OpenBlockedBy) != 0 {
+				t.Errorf("fabricated blocker: %v", c.OpenBlockedBy)
+			}
+		})
 	}
 }
