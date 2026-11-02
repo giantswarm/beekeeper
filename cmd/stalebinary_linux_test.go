@@ -37,7 +37,9 @@ func TestStaleBinariesReplacementAtStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := time.Now()
+	// Like /proc's boot-time-based start, use an early bound. Filesystem
+	// ctime can lag time.Now by a clock tick, even for a later rename.
+	started := time.Now().Add(-100 * time.Millisecond)
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
