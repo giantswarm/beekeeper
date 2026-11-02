@@ -116,13 +116,12 @@ func (s *Server) probeTool(ctx context.Context, name string, t ToolConfig) error
 	// GOTOOLCHAIN=local makes go report itself rather than a toolchain a
 	// go.mod in the current directory would select and download.
 	env := append(cleanEnvironment("", ""), "GOTOOLCHAIN=local")
-	args, want := []string{"version"}, []string{"go", "version", "go" + t.Version}
+	args, want := []string{"version"}, "go version go"+t.Version
 	if name == ToolGitHub {
-		args, want = []string{"--version"}, []string{"gh", "version", t.Version}
+		args, want = []string{"--version"}, "gh version "+t.Version
 	}
 	out, err := s.command(ctx, "", env, t.Executable, args...)
-	parts := strings.Fields(string(out))
-	if err != nil || len(parts) < len(want) || !slices.Equal(parts[:len(want)], want) {
+	if err != nil || !strings.HasPrefix(strings.Join(strings.Fields(string(out)), " ")+" ", want+" ") {
 		return fmt.Errorf("missing or mismatched %s version at %s", name, t.Executable)
 	}
 	return nil

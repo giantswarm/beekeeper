@@ -9,7 +9,11 @@ import (
 	"testing"
 )
 
-const fixtureGoExecutable = "/srv/tools/go/bin/go"
+const (
+	fixtureGoExecutable = "/srv/tools/go/bin/go"
+	fixtureGoVersion    = "1.27.3"
+	fixtureHome         = "HOME=/home/worker"
+)
 
 // goFixture gives the fixture's source checkout a go.mod naming toolchain
 // and answers go version with installed.
@@ -48,15 +52,15 @@ func setTool(t *testing.T, f fixture, name string, c ToolConfig) {
 
 func TestCheckRequiresTheToolchainTheServedRepositoriesName(t *testing.T) {
 	ctx := context.Background()
-	mod := "module github.com/giantswarm/beekeeper\n\ngo 1.26.0\n\ntoolchain go1.27.3\n"
+	mod := "module github.com/giantswarm/beekeeper\n\ngo 1.26.0\n\ntoolchain go" + fixtureGoVersion + "\n"
 	for _, test := range []struct {
 		name, pinned, installed, wantErr string
 		tools                            bool
 	}{
 		{name: "go missing", wantErr: "go: not provisioned under agents.execution.tools"},
-		{name: "go older than toolchain", pinned: "1.26.4", installed: "1.26.4", tools: true, wantErr: "go: pinned 1.26.4 is older than 1.27.3"},
-		{name: "installed go differs from pin", pinned: "1.27.3", installed: "1.27.1", tools: true, wantErr: "go: missing or mismatched go version"},
-		{name: "go at toolchain", pinned: "1.27.3", installed: "1.27.3", tools: true},
+		{name: "go older than toolchain", pinned: "1.26.4", installed: "1.26.4", tools: true, wantErr: "go: pinned 1.26.4 is older than " + fixtureGoVersion},
+		{name: "installed go differs from pin", pinned: fixtureGoVersion, installed: "1.27.1", tools: true, wantErr: "go: missing or mismatched go version"},
+		{name: "go at toolchain", pinned: fixtureGoVersion, installed: fixtureGoVersion, tools: true},
 		{name: "newer go", pinned: "1.28.0", installed: "1.28.0", tools: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -109,10 +113,10 @@ func TestToolConfigValidation(t *testing.T) {
 		t    ToolConfig
 		ok   bool
 	}{
-		{"go", ToolGo, ToolConfig{Executable: "/srv/tools/go/bin/go", Version: "1.27.3"}, true},
-		{"gh", ToolGitHub, ToolConfig{Executable: "/usr/bin/gh", Version: "2.83.0"}, true},
-		{"relative", ToolGo, ToolConfig{Executable: "bin/go", Version: "1.27.3"}, false},
-		{"renamed", ToolGitHub, ToolConfig{Executable: "/usr/bin/gh-2", Version: "2.83.0"}, false},
+		{"go", ToolGo, ToolConfig{Executable: fixtureGoExecutable, Version: fixtureGoVersion}, true},
+		{"gh", ToolGitHub, ToolConfig{Executable: "/usr/bin/gh", Version: fixtureGitHubVersion}, true},
+		{"relative", ToolGo, ToolConfig{Executable: "bin/go", Version: fixtureGoVersion}, false},
+		{"renamed", ToolGitHub, ToolConfig{Executable: "/usr/bin/gh-2", Version: fixtureGitHubVersion}, false},
 		{"unpinned", ToolGo, ToolConfig{Executable: "/srv/tools/go/bin/go", Version: "latest"}, false},
 		{"unknown", "node", ToolConfig{Executable: "/usr/bin/node", Version: "22.0.0"}, false},
 	} {
@@ -124,15 +128,15 @@ func TestToolConfigValidation(t *testing.T) {
 
 func TestToolPathFollowsTheComponent(t *testing.T) {
 	s := &Server{Executable: "/opt/beekeeper/bin/beekeeper", Config: HostConfig{Tools: map[string]ToolConfig{
-		ToolGo:     {Executable: "/srv/tools/go/bin/go", Version: "1.27.3"},
-		ToolGitHub: {Executable: "/usr/bin/gh", Version: "2.83.0"},
+		ToolGo:     {Executable: fixtureGoExecutable, Version: fixtureGoVersion},
+		ToolGitHub: {Executable: "/usr/bin/gh", Version: fixtureGitHubVersion},
 	}}}
-	got := s.toolPath([]string{"HOME=/home/worker", "PATH=/opt/beekeeper/bin:/usr/local/bin:/usr/bin:/srv/tools/go/bin"})
-	want := []string{"HOME=/home/worker", "PATH=/opt/beekeeper/bin:/usr/bin:/srv/tools/go/bin:/usr/local/bin"}
+	got := s.toolPath([]string{fixtureHome, "PATH=/opt/beekeeper/bin:/usr/local/bin:/usr/bin:/srv/tools/go/bin"})
+	want := []string{fixtureHome, "PATH=/opt/beekeeper/bin:/usr/bin:/srv/tools/go/bin:/usr/local/bin"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("toolPath = %v, want %v", got, want)
 	}
-	if got := s.toolPath([]string{"HOME=/home/worker"}); !slices.Contains(got, "PATH=/usr/bin:/srv/tools/go/bin") {
+	if got := s.toolPath([]string{fixtureHome}); !slices.Contains(got, "PATH=/usr/bin:/srv/tools/go/bin") {
 		t.Fatalf("toolPath without PATH = %v", got)
 	}
 	if got := (&Server{}).toolPath([]string{"PATH=/usr/bin"}); !slices.Equal(got, []string{"PATH=/usr/bin"}) {
