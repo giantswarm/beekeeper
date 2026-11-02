@@ -82,7 +82,8 @@ func (a *app) doctorLabs(ctx context.Context, sessions []*claude.Session, r doct
 				continue
 			}
 			if err := dir.Release(h.Env); err != nil {
-				return evs, err
+				lines = append(lines, fmt.Sprintf("lease %s: %v", h.Env, err))
+				continue
 			}
 			if st.Released == nil {
 				st.Released = map[string]time.Time{}
