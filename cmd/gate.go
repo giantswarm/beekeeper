@@ -71,6 +71,7 @@ const (
 func (a *app) gateCmd() *cobra.Command {
 	var wait, limit time.Duration
 	var queued bool
+	var reviewedHead string
 	c := &cobra.Command{
 		Use:   gateCmdName + " [--wait DURATION] [--limit DURATION] -- devctl pr merge|release promote|pr wait|release wait|rollout wait <args>",
 		Short: "The PreToolUse hook's gate on devctl's blocking commands",
@@ -260,12 +261,13 @@ gate runs lists the runs the gate runs outside their callers, gate stop
 			if !cmd.Flags().Changed("limit") {
 				limit = a.cfg.Merge.ToolLimit.Duration
 			}
-			return a.gate(cmd.Context(), args, wait, limit, queued)
+			return a.gate(cmd.Context(), args, wait, limit, queued, reviewedHead)
 		},
 	}
 	c.Flags().SetInterspersed(false)
 	c.Flags().DurationVar(&wait, "wait", DefaultGateWait, "how long to wait for the merge's turn")
 	c.Flags().DurationVar(&limit, "limit", 0, "how long the call runs before it exits 76 and the merge or wait runs on outside it (default merge.toolLimit; 0: no limit)")
+	c.Flags().StringVar(&reviewedHead, "reviewed-head", "", "pin the supervisor merge to its reviewed head; refuse a moved head")
 	c.Flags().BoolVar(&queued, "queued", false, "wait as a queued merge's own run, which refuses at the end of --wait")
 	_ = c.Flags().MarkHidden("queued")
 	c.AddCommand(a.gateRunsCmd(), a.gateStopCmd(), a.gateCheckCmd())
@@ -293,6 +295,7 @@ func gateRefusedWith(code int, format string, args ...any) error {
 
 // gateRun is one gated merge.
 type gateRun struct {
+	reviewedHead string
 	*app
 	ctx     context.Context
 	argv    []string
@@ -347,7 +350,10 @@ type gateRun struct {
 	sig <-chan os.Signal
 }
 
-func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool) error {
+func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool, reviewedHead ...string) error {
+	if inSandbox() && len(reviewedHead) > 0 && reviewedHead[0] != "" {
+		return refused("reviewed merges run on the coordinator, outside an execution sandbox")
+	}
 	if inSandbox() {
 		return a.gateBrokered(argv, wait, queued)
 	}
@@ -370,6 +376,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	}
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
+	if len(reviewedHead) > 0 {
+		g.reviewedHead = reviewedHead[0]
+	}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	g.leaveAt = leaveAt(time.Now(), limit, queued)
 	if paired {
@@ -562,7 +571,11 @@ func (g *gateRun) enqueue(why string) error {
 		if c := g.explicitConfig(); c != "" {
 			argv = append(argv, "--config", c)
 		}
-		argv = append(append(argv, gateCmdName, "--queued", "--wait", g.cfg.Merge.SeedTTL.String(), "--"), g.argv...)
+		argv = append(argv, gateCmdName, "--queued", "--wait", g.cfg.Merge.SeedTTL.String())
+		if g.reviewedHead != "" {
+			argv = append(argv, "--reviewed-head", g.reviewedHead)
+		}
+		argv = append(append(argv, "--"), g.argv...)
 		_ = os.Setenv(gateFromEnv, strconv.Itoa(g.pid))
 		var pid int
 		if pid, err = launchChild(childSpec{Argv: argv, Command: g.argv, Owner: g.me, Config: g.explicitConfig()}, ownedBase(g.store.Dir(), g.argv, g.pid)); err == nil {
@@ -1577,6 +1590,13 @@ func (g *gateRun) runMerge() error {
 // hand-cut base, or the plain squash merge for a repository devctl does not
 // serve.
 func (g *gateRun) mergeArgv() ([]string, error) {
+	if g.reviewedHead != "" {
+		self, err := selfExe()
+		if err != nil {
+			return nil, err
+		}
+		return []string{self, squashMergeCmd, g.repo, fmt.Sprint(g.pr), "--head", g.reviewedHead}, nil
+	}
 	argv := g.argv
 	if !g.runsDevctl() {
 		self, err := selfExe()
@@ -1800,7 +1820,9 @@ func (g *gateRun) failureWake(run childRun) string {
 func (g *gateRun) record(base string, run childRun) error {
 	doc, rc, output := run.doc, run.rc, run.kept
 	note := ""
-	if !g.runsDevctl() {
+	if g.reviewedHead != "" {
+		note = ", reviewed merge"
+	} else if !g.runsDevctl() {
 		note = ", " + github.SquashRoute
 	}
 	if output != "" {

@@ -66,8 +66,9 @@ type loopRig struct {
 	stderr string
 	// replaced says the loop's binary was replaced; execs counts its
 	// re-executions.
-	replaced bool
-	execs    int
+	lastMerged string
+	replaced   bool
+	execs      int
 	// broker answers the broker stage of a release.
 	broker func() (string, error)
 	// failRecord fails the store's Record of the first event it accepts.
@@ -185,7 +186,14 @@ func newLoopRig(t *testing.T) *loopRig {
 		t.Fatal(err)
 	}
 	r.answer = func([]string) (string, int) { return "", 0 }
-	r.command = func([]string) (string, int) { return "", 0 }
+	r.command = func(argv []string) (string, int) {
+		if len(argv) > 2 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == "merge" {
+			r.pull.State = superloop.Merged
+			r.pull.MergeCommit = loopFixed
+			r.lastMerged = r.pull.Head
+		}
+		return "", 0
+	}
 	r.pull = superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	r.pulls = map[string]superloop.Pull{}
 	r.broker = func() (string, error) { return "no broker runs", nil }
@@ -214,6 +222,15 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		r.calls = append(r.calls, args)
 		o, code := r.answer(args)
+		if len(args) > 0 && args[0] == gateCmdName && code == 0 {
+			idx := slices.Index(args, "--reviewed-head")
+			if idx >= 0 && idx+1 < len(args) {
+				doc := r.a.reviewedMerge(context.Background(), r.pullRepo(), 7, args[idx+1])
+				code = doc.ExitCode
+				b, _ := json.Marshal(doc)
+				o = string(b)
+			}
+		}
 		if e, ok := logs(args); ok && code == 0 && !strings.HasPrefix(o, "left ") {
 			if err := store.Record(e); err != nil {
 				t.Fatal(err)
@@ -242,6 +259,9 @@ func newLoopRig(t *testing.T) *loopRig {
 // park puts the worker on the roster, parked on on at.
 func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 	t.Helper()
+	if r.lastMerged != "" && r.pull.Head != r.lastMerged && r.pull.State == superloop.Merged {
+		r.pull.State = superloop.Open
+	}
 	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
 		if i < 0 {
@@ -284,6 +304,8 @@ func (r *loopRig) called(prefix ...string) []string {
 	return nil
 }
 
+func (r *loopRig) pullRepo() string { repo, _, _ := strings.Cut(r.pull.Ref, "#"); return repo }
+
 func (r *loopRig) logged(t *testing.T, verb string) []state.Event {
 	t.Helper()
 	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
@@ -315,11 +337,11 @@ func TestLoopTakesAParkedPullRequestFromReviewToTheMergeGo(t *testing.T) {
 	}
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopHead) {
+	wake := r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopHead) {
 		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
 	}
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "[go "+loopPR+"@"+loopHead+"]") {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "[go "+loopPR+"@"+loopHead+"]") {
 		t.Errorf("the go logged as %+v", evs)
 	}
 	r.pass(t)
@@ -392,8 +414,8 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopFixed) {
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Fatalf("no merge go for the fixed head: %v\n%s", r.calls, r.out)
 	}
 }
@@ -417,7 +439,7 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+	if r.called(gateCmdName) == nil {
 		t.Fatalf("no merge go for the approved head: %v", r.calls)
 	}
 	// The worker pushes one more commit and parks again.
@@ -468,8 +490,8 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "`devctl pr merge o/r 7 --update-branch`") || strings.Contains(wake[3], "--match-head-commit") {
+	wake := r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, "--reviewed-head") || !slices.Contains(wake, loopHead) {
 		t.Fatalf("no gated merge go: %v\n%s", r.calls, r.out)
 	}
 	r.pull.Head = loopFixed
@@ -481,11 +503,11 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Errorf("a base merge started a review: %v", c)
 	}
-	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only brings main into it") {
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Fatalf("no go for the base merge: %v\n%s", r.calls, r.out)
 	}
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
 		t.Errorf("the go logged as %+v", evs)
 	}
 	if !slices.Equal(r.baseReads, []string{loopHead + ".." + loopFixed}) {
@@ -507,8 +529,8 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	r.a.cfg.Merge.Admin = []string{"O/R"}
 	r.verdict("R2", own, superloop.Approved, "")
 	r.pass(t)
-	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "`gh pr merge 7 --repo o/r --squash --admin --match-head-commit "+own+"`") {
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, own) {
 		t.Fatalf("no admin merge go: %v\n%s", r.calls, r.out)
 	}
 }
@@ -531,7 +553,7 @@ func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 0 {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 0 {
 		t.Fatalf("a base merge of unfixed findings got the go: %+v", evs)
 	}
 	wake := r.called(agentsName, agentWakeName, loopWorker)
@@ -569,8 +591,8 @@ func TestLoopGivesTheFixedHeadTheGoWithoutASecondReview(t *testing.T) {
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Errorf("a second review started: %v", c)
 	}
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopFixed) {
+	wake := r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Errorf("no go for the fixed head: %v", r.calls)
 	}
 }
@@ -952,7 +974,7 @@ func TestLoopRetiresTheReviewerAndRetainsTheMergedWorker(t *testing.T) {
 	r.started(t, reviewer, "reviewer-session")
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
 	}
 	// The reviewer still writes its report: the retirement waits.
@@ -1329,7 +1351,7 @@ func TestLoopGivesNoGoToAnApprovedHeadWithoutGreenChecks(t *testing.T) {
 	}
 	r.pull.Green = true
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Errorf("no go once green: %v", r.calls)
 	}
 }
@@ -1373,7 +1395,7 @@ func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if wake := r.called(agentsName, agentWakeName, loopWorker); wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopFixed) {
+	if wake := r.called(gateCmdName); wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Errorf("no go for the fixes: %v", r.calls)
 	}
 }
@@ -1385,18 +1407,18 @@ func TestLoopDoesNotRepeatAnActionWhoseRecordWasLost(t *testing.T) {
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.failRecord = func(e state.Event) bool { return e.Verb == "supervisor.go" }
+	r.failRecord = func(e state.Event) bool { return e.Verb == "supervisor.merge" }
 	if err := r.passErr(); err == nil {
 		t.Fatal("the lost record was not an error")
 	}
-	if r.called(agentsName, agentWakeName) == nil {
-		t.Fatalf("no wake: %v", r.calls)
+	if r.called(gateCmdName) == nil {
+		t.Fatalf("no merge: %v", r.calls)
 	}
 	r.pass(t)
 	if c := r.called(agentsName, agentWakeName); c != nil {
 		t.Errorf("the go was sent again after the restart: %v", c)
 	}
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
 		t.Errorf("the go logged as %+v", evs)
 	}
 }
@@ -1411,7 +1433,7 @@ func TestLoopTakesAClaimedActionItNeverRan(t *testing.T) {
 	}
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Errorf("the claimed go never ran: %v", r.calls)
 	}
 }
@@ -2607,7 +2629,7 @@ func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
 	r.started(t, reviewer, "reviewer-session")
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
 	}
 	ref := execution.Ref{Host: execution.HostID(sshTestSelector), Execution: execution.ExecutionID("11112222-3333-4444-5555-666677778888"), Generation: 1}
@@ -2674,7 +2696,7 @@ func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T)
 	r.started(t, reviewer, "reviewer-session")
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
 	}
 

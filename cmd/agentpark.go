@@ -65,7 +65,7 @@ func parkMessage(p *state.Park, by string) string {
 }
 
 func (a *app) agentParkCmd() *cobra.Command {
-	var on string
+	var on, postMerge string
 	c := &cobra.Command{
 		Use:   "park <what it waits for>",
 		Short: "Park the calling agent on a note, a pull request or a person: it keeps its task without holding a busy slot",
@@ -158,9 +158,9 @@ agents wake: its task is that message's first line.`,
 				// The coordinator proves the review head against the
 				// execution's owned branch: the workspace's own branch
 				// never is the published one, nor does the host read GitHub.
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on)})
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: &postMerge})
 			}
-			line, err := a.park(me, on, waits)
+			line, err := a.park(me, on, waits, postMerge)
 			if err != nil {
 				return err
 			}
@@ -168,6 +168,7 @@ agents wake: its task is that message's first line.`,
 			return err
 		},
 	}
+	c.Flags().StringVar(&postMerge, "post-merge", "", "work to wake for after merge (release, rollout, proof); empty closes the task without a wake")
 	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n), a hold (hold:<target>) or an alert (alert:<name>)")
 	return c
 }
@@ -177,7 +178,7 @@ agents wake: its task is that message's first line.`,
 // holdParkOn, a lease of leaseParkOn, or nothing) waiting for waits, and
 // returns the line that says so. A bare note number is the central
 // instance's note when the machine has none of it open, as note answer's.
-func (a *app) park(me state.Party, on, waits string) (string, error) {
+func (a *app) park(me state.Party, on, waits string, postMerge ...string) (string, error) {
 	id, isNote := parkNote(on)
 	if _, _, central := parkCentralNote(on); isNote || central {
 		var err error
@@ -210,6 +211,9 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
 		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
+		if len(postMerge) > 0 {
+			park.PostMerge = &postMerge[0]
+		}
 		name, counted, resume := me.Name, "off the roster, woken by its session id", fmt.Sprintf("beekeeper agents resume %s", wakeID(me))
 		// One park per session: a new one replaces the last, also one it
 		// took off the roster before it registered.
@@ -235,6 +239,12 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 			back = "the watch resumes it with what settles " + on
 		case on != "":
 			back = "the watch says AGENT RESUMABLE once " + on + " settles; " + resume + " brings it back"
+		}
+		if reviewHead != "" && park.PostMerge != nil {
+			back = "the supervisor loop reviews and merges, then closes the task without waking you"
+			if *park.PostMerge != "" {
+				back = "the supervisor loop reviews and merges, then wakes you for " + oneLine(*park.PostMerge)
+			}
 		}
 		if _, ok := parseRef(on); ok {
 			back += "; " + parkReviewMode(reviewHead)
@@ -485,7 +495,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	var out []settledPark
 	for _, ag := range parkedAgents(st) {
 		p := ag.Park
-		if p == nil || p.On == "" || !p.Resumable.IsZero() {
+		if p == nil || p.On == "" || !p.Resumable.IsZero() || p.ReviewHead != "" && p.PostMerge != nil {
 			continue
 		}
 		if res, ok := parkLease(p.On); ok {

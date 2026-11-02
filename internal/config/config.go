@@ -2310,6 +2310,8 @@ const DefaultQueueTTL = 15 * time.Minute
 
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
+	// Methods selects squash, rebase or merge for each repository. Empty: squash.
+	Methods map[string]string `yaml:"methods"`
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
 	Cap int `yaml:"cap"`
@@ -3809,6 +3811,14 @@ func (c *Config) validate() error {
 	}
 	if err := ownerRepos("plans.repositories", c.Plans.Repositories); err != nil {
 		return err
+	}
+	for repo, method := range c.Merge.Methods {
+		if err := ownerRepos("merge.methods", []string{repo}); err != nil {
+			return err
+		}
+		if method != "squash" && method != "rebase" && method != "merge" {
+			return fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo)
+		}
 	}
 	if err := ownerRepos("merge.admin", c.Merge.Admin); err != nil {
 		return err

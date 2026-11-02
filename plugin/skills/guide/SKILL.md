@@ -79,6 +79,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   conversation, the one they read, one at a time and without waiting for them to ask. A note in the
   queue is not the asking. A note that is work rather than a decision (a problem found to file in
   its owning repository) is carried out or handed to the supervisor, not put to the person.
+- **Dialog answers verify once.** Serve the local note with `beekeeper guide next` before asking. Keep its option labels and order in the question dialog, and show the thread URL and head from the note. The completed dialog result hook binds the person's selection and verbatim text to that note in this guide session. Record it with `beekeeper answer <thread> --note <id> --choice <n>` for a selected option, adding the verbatim text if any; free text uses no choice. This channel verifies as the person's word without a terminal confirmation. Cancelled dialogs, other sessions, changed choices and invented text do not verify.
 - **Answers travel word for word.** Each answer, given on a note, in this conversation or on Slack,
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session

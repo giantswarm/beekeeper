@@ -74,7 +74,7 @@ const (
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
 	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
-		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake}
+		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, "merge"}
 }
 
 // The verbs of the events the rules act on.
@@ -101,10 +101,12 @@ const (
 
 // Pull is a tracked pull request as GitHub reports it.
 type Pull struct {
-	Ref   string // owner/repo#n
-	URL   string
-	State string
-	Head  string
+	Draft                 bool
+	Mergeable, MergeState string
+	Ref                   string // owner/repo#n
+	URL                   string
+	State                 string
+	Head                  string
 	// Base is the branch it merges into.
 	Base        string
 	MergeCommit string
@@ -391,6 +393,10 @@ func (a Action) Line(what string) string { return "[" + a.Key + "] " + what }
 // "[<key>] <agent>: …") back; false for another line.
 func ParseTaken(at time.Time, verb, subject, detail string) (Taken, bool) {
 	kind, ok := strings.CutPrefix(verb, "supervisor.")
+	// New loops execute a merge; old go records remain readable for recovery.
+	if kind == "merge" {
+		kind = KindGo
+	}
 	if !ok || !slices.Contains(Verbs(), kind) {
 		return Taken{}, false
 	}
