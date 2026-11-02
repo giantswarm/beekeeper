@@ -260,6 +260,7 @@ type goGH struct {
 }
 
 func (f *goGH) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
 	checkedQuery(f.t, q)
 	f.repos = append(f.repos, github.Repo(ctx))
