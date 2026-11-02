@@ -417,3 +417,24 @@ func TestCodexRunnerSurfacesFailedTurns(t *testing.T) {
 		}
 	})
 }
+
+func TestCodexRunnerCoordinatorMCP(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	f, dir := codexFixture(t)
+	f.r.MCP = true
+	ctx := startCodex(t, f)
+	if err := f.s.Run(ctx, f.r.Ref); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // test-owned fake harness log
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"mcp_servers.coordinator.command=", "mcp_servers.coordinator.args=", "mcp_servers.coordinator.env_vars=", EnvID, EnvCoordinator, "mcp-proxy", f.s.Executable, f.s.ConfigPath} {
+		if !strings.Contains(string(calls), part) {
+			t.Fatalf("proxy setting %q missing in %s", part, calls)
+		}
+	}
+}

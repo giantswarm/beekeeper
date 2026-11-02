@@ -178,6 +178,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	t.Cleanup(func() { readReviewedBehind = wasBehind })
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
+	oldBudget := readLoopGraphQLBudget
+	t.Cleanup(func() { readLoopGraphQLBudget = oldBudget })
+	readLoopGraphQLBudget = func(a *app, _ context.Context) (github.Budget, error) {
+		st, err := a.store.Read()
+		if err != nil || st.Budget == nil {
+			return github.Budget{}, err
+		}
+		return github.Budget{Remaining: st.Budget.Remaining, Limit: st.Budget.Limit, Reset: st.Budget.Reset, GraphQL: graphqlOf(st.Budget.GraphQL)}, nil
+	}
 	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +284,7 @@ func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopWorker}, Task: "fix " + loopURL})
 			i = len(st.Agents) - 1
 		}
-		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: "desk review", ReviewHead: loopHead}
+		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: deskReviewWait, ReviewHead: loopHead}
 		return nil, nil
 	})
 	if err != nil {
@@ -2696,6 +2705,9 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	park := func(head string) {
 		t.Helper()
 		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(party) }) {
+				st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Execution: &ref})
+			}
 			_, evs, err := r.a.applyExecutionControl(context.Background(), st, party, execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: deskReviewWait, Head: head})})
 			return evs, err
 		}); err != nil {
@@ -3009,5 +3021,15 @@ func TestLoopLogsAnOrphanedPendingReviewOnce(t *testing.T) {
 	r.pass(t)
 	if r.called(agentsName, agentStartName) == nil {
 		t.Fatalf("review lost after re-park: %v", r.calls)
+	}
+}
+
+// An unchanged refusal is retried less and less often, never every five
+// minutes all day.
+func TestLoopFailureDelayGrowsToAnHour(t *testing.T) {
+	for count, want := range map[int]time.Duration{2: 5 * time.Minute, 3: 10 * time.Minute, 4: 20 * time.Minute, 5: 40 * time.Minute, 6: time.Hour, 50: time.Hour} {
+		if got := loopFailureDelay(count); got != want {
+			t.Fatalf("delay after %d failures: %s, want %s", count, got, want)
+		}
 	}
 }
