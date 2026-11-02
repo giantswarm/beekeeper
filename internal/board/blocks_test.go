@@ -28,6 +28,7 @@ type fakeDeps struct {
 }
 
 func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
 	checkedQuery(f.t, q)
 	f.repos = append(f.repos, github.Repo(ctx))

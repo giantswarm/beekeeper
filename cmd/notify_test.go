@@ -42,8 +42,8 @@ func notifyingWatch(t *testing.T, dir string, standby bool) (*watcher, *desktop,
 	}
 	var out bytes.Buffer
 	d := &desktop{}
-	w := &watcher{app: &app{cfg: cfg, store: store, out: &out, now: relayNow}, standby: standby, last: map[string]time.Time{}, reported: map[string]bool{},
-		readHeadroom: func(context.Context, *swapReading) *headroom { return tight() }}
+	w := (&app{cfg: cfg, store: store, out: &out, now: relayNow}).newWatcher(standby, false)
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { return tight() }
 	w.notifier = notify.New(cfg.Notify.Policy(), dir, d, func(l string) { w.emitNow("notify", "%s", l) })
 	w.doctoring.Store(true) // background maintenance is not under test in this output fixture
 	t.Cleanup(func() {
