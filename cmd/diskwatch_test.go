@@ -68,6 +68,30 @@ func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 	}
 }
 
+// A fill rate over the free-disk floor is a forecast: the published
+// reading says Filling without Low, and LOW DISK stays silent. The same
+// rate under the floor is the emergency (Low), which is what holds starts.
+func TestSampleDiskPublishesTheForecastApartFromTheFloor(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Watch.DiskFillWithin = config.Duration{Duration: 2 * time.Hour}
+	w := r.a.newWatcher(false, false)
+	total := 1900 * gibMiB // floor 95 GiB
+	for i := range 5 {
+		now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC).Add(time.Duration(i) * 30 * time.Second)
+		w.sampleDisk(now, machine.Disk{FreeMiB: 100*gibMiB - i*1229, TotalMiB: total}, nil, nil)
+	}
+	if got := r.a.watchDisk(); got == nil || !got.Filling || got.Low {
+		t.Fatalf("forecast over the floor: %+v", got)
+	}
+	if strings.Contains(r.out.String(), "LOW DISK") {
+		t.Errorf("LOW DISK said above the floor:\n%s", r.out.String())
+	}
+	w.sampleDisk(time.Date(2026, 10, 6, 12, 2, 30, 0, time.UTC), machine.Disk{FreeMiB: 90 * gibMiB, TotalMiB: total}, nil, nil)
+	if got := r.a.watchDisk(); got == nil || !got.Low || !got.Filling {
+		t.Fatalf("the same rate under the floor: %+v", got)
+	}
+}
+
 // A slow fill that would take far longer than diskFillWithin is no DISK
 // FILLING, and free space that holds steady ends one.
 func TestSampleDiskIgnoresASlowFill(t *testing.T) {

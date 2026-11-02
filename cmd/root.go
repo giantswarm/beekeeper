@@ -417,6 +417,16 @@ func clock(now, t time.Time) string {
 	return t.Format("Jan 2 15:04")
 }
 
+// clockZone is clock with the local zone's name: "08:30 CET". A timer's
+// due time and the time it fired or started are read side by side, so
+// both carry the zone they are in.
+func clockZone(now, t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return clock(now, t) + " " + t.Local().Format("MST")
+}
+
 // untilTime parses "15:30" (the next such local time) or a duration ("2h").
 func untilTime(now time.Time, s string) (time.Time, error) {
 	if s == "" {
