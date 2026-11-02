@@ -564,7 +564,7 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			case programCode:
 				// Classify unresolved interpreter paths before the shell scanner
 				// splits assignments and loses their construction context.
-				if len(g.transcripts.roots) > 0 && transcriptPathConstruction.MatchString(p.arg) {
+				if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(p.arg) {
 					return &leak{never: true, transcript: true, unresolvedTranscript: true}
 				}
 				if l := g.scan(p.arg, depth+1); l != nil {

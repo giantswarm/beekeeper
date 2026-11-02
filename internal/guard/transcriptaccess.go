@@ -209,9 +209,25 @@ const transcriptRefusal = "Refused: this call may read another session's private
 // Include literal paths embedded in interpreter code, not just shell words.
 var transcriptHomeComponent = regexp.MustCompile(`['"]\.(?:codex|claude|gemini|omp|agy)['"]`)
 
-// A component alone may be ordinary replacement text in a repository edit.
-// Operators and join calls, however, construct a path whose base is unknown.
-var transcriptPathConstruction = regexp.MustCompile(`(?:[/+=]\s*['"]\.(?:codex|claude|gemini|omp|agy)['"]|['"]\.(?:codex|claude|gemini|omp|agy)['"]\s*[/+]|(?:join|Join|joinpath)\s*\([^)]*['"]\.(?:codex|claude|gemini|omp|agy)['"])`)
+// Inspect operations outside string data. A harness component may be stored in
+// a replacement variable, but grouping or a variable must not hide a path
+// operation. We cannot prove the base of such constructions, so fail closed.
+var transcriptCodeString = regexp.MustCompile(`[fF]?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
+var transcriptPathOperation = regexp.MustCompile(`[/+]|\b(?:join|Join|joinpath|home|expanduser|homedir|environ|getenv)\b`)
+
+func unresolvedTranscriptPath(code string) bool {
+	if !transcriptHomeComponent.MatchString(code) {
+		return false
+	}
+	operations := transcriptCodeString.ReplaceAllStringFunc(code, func(literal string) string {
+		// Formatted strings contain executable expressions, not just data.
+		if literal[0] == 'f' || literal[0] == 'F' {
+			return literal
+		}
+		return ""
+	})
+	return transcriptPathOperation.MatchString(operations)
+}
 
 const transcriptUnresolved = "Refused: the guard cannot resolve a constructed harness path in this script. Use explicit file paths so transcript access can be checked, or ask the supervisor for an explicit fixture grant."
 
@@ -264,7 +280,7 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 		}
 		// A program that constructs a harness home from a quoted component
 		// has no statically provable transcript target: fail closed.
-		if ip, ok := interpreters[name]; ok && ip.code != nil && transcriptHomeComponent.MatchString(word) && transcriptPathConstruction.MatchString(word) {
+		if ip, ok := interpreters[name]; ok && ip.code != nil && unresolvedTranscriptPath(word) {
 			return &leak{never: true, transcript: true, unresolvedTranscript: true}
 		}
 		word = strings.TrimPrefix(strings.TrimPrefix(word, "0<"), "<>")

@@ -325,3 +325,36 @@ func TestTranscriptConstructedPathReason(t *testing.T) {
 		t.Errorf("relative protected root passed: %+v", d)
 	}
 }
+
+func TestTranscriptReviewParenthesizedComponent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	for _, expression := range []string{
+		`Path.home() / (".codex") / "history.jsonl"`,
+		`Path.home() / (((".codex"))) / "history.jsonl"`,
+		`Path.home() / component / "history.jsonl"`,
+		`Path.home().joinpath(((".codex")), "history.jsonl")`,
+		`Path(f"{Path.home()}/{'.codex'}/history.jsonl")`,
+	} {
+		prefix := ""
+		if strings.Contains(expression, "component") {
+			prefix = `component = ".codex"; `
+		}
+		code := `from pathlib import Path; ` + prefix + `print((` + expression + `).read_text())`
+		command := "python3 -c '" + strings.ReplaceAll(code, "'", "'\\''") + "'"
+		if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("constructed protected path passed: %s: %+v", command, d)
+		}
+	}
+}
+
+func TestTranscriptReviewReplacementVariable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	command := `python3 -c 'from pathlib import Path; old = ".claude"; p = Path("config.yaml"); p.write_text(p.read_text().replace(old, "new"))'`
+	if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d != nil && d.PermissionDecision == decisionDeny {
+		t.Errorf("replacement variable refused: %+v", d)
+	}
+}
