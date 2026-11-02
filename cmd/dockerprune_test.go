@@ -66,6 +66,12 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 	return nil, errors.New("unexpected docker " + strings.Join(args, " "))
 }
 
+// The fake's images by the reference a removal names them with.
+const (
+	devOne, devTwo, devThree = "x:dev-1", "x:dev-2", "x:dev-3"
+	labRef                   = "gsoci.azurecr.io/giantswarm/y:dev"
+)
+
 // dockerExec is the docker verb the fake answers with a kind node's images.
 const dockerExec = "exec"
 
@@ -98,7 +104,7 @@ func TestPruneDockerKeepsUnderTheCapsAndLogs(t *testing.T) {
 	}
 	// 7 GiB down to 3 GiB (three quarters of the 4 GiB cap): the two
 	// oldest unused images go; the lab's, older still, and the node's stay.
-	if want := [][]string{{"x:dev-1"}, {"x:dev-2"}}; !slices.EqualFunc(f.removed, want, slices.Equal) {
+	if want := [][]string{{devOne}, {devTwo}}; !slices.EqualFunc(f.removed, want, slices.Equal) {
 		t.Errorf("removed %v; want %v", f.removed, want)
 	}
 	if want := []string{"--force", "--max-used-space", "3221225472"}; !slices.Equal(f.pruned, want) {
@@ -122,7 +128,7 @@ func TestPruneDockerKeepsAnOldImageTaggedRecently(t *testing.T) {
 	// the session that tagged it has not loaded it yet.
 	f.tagged["sha256:old"] = time.Now().Add(-time.Hour)
 	r := a.pruneDocker(false, noHolds)
-	if want := [][]string{{"x:dev-2"}, {"x:dev-3"}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
+	if want := [][]string{{devTwo}, {devThree}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
 		t.Errorf("removed %v, %v; want %v, the recently tagged x:dev-1 kept", f.removed, r.err, want)
 	}
 }
@@ -153,7 +159,7 @@ func TestPruneDockerRemovesAKindLabsCopyLast(t *testing.T) {
 	r := a.pruneDocker(false, noHolds)
 	// The lab's image, created first, goes after every other unused one;
 	// the node image a container runs stays.
-	if want := [][]string{{"x:dev-1"}, {"x:dev-2"}, {"x:dev-3"}, {"gsoci.azurecr.io/giantswarm/y:dev"}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
+	if want := [][]string{{devOne}, {devTwo}, {devThree}, {labRef}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
 		t.Errorf("removed %v, %v; want %v", f.removed, r.err, want)
 	}
 	if r.after.Images > 3<<30 || r.blocked() {
@@ -185,7 +191,7 @@ func TestPruneDockerNamesWhatKeepsTheImagesOverTheCap(t *testing.T) {
 	f.tagged["sha256:new"] = time.Now().Add(-time.Hour)
 	f.tagged["sha256:mid"] = time.Now().Add(-2 * time.Hour)
 	r := a.pruneDocker(false, noHolds)
-	if want := [][]string{{"x:dev-1"}, {"gsoci.azurecr.io/giantswarm/y:dev"}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
+	if want := [][]string{{devOne}, {labRef}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
 		t.Fatalf("removed %v, %v; want %v", f.removed, r.err, want)
 	}
 	line := r.String()

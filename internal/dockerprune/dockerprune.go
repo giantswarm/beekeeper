@@ -258,9 +258,14 @@ func kept(i Image, keep time.Time) string {
 	case i.Containers > 0:
 		return "a container uses it"
 	case i.Active().After(keep):
-		return "created or tagged " + i.Active().Format("2006-01-02 15:04 MST") + ", in flight"
+		return inFlight(i.Active())
 	}
 	return ""
+}
+
+// inFlight says why an image created or tagged at t stays.
+func inFlight(t time.Time) string {
+	return "created or tagged " + t.Format("2006-01-02 15:04 MST") + ", in flight"
 }
 
 // Candidates are the images a trim may remove, in the order it removes

@@ -169,8 +169,8 @@ func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 		why = append(why, b.Image.ID+": "+b.Why)
 	}
 	if want := []string{
-		"sha256:new: created or tagged " + images[0].Active().Format("2006-01-02 15:04 MST") + ", in flight",
-		"sha256:old: created or tagged " + images[1].Active().Format("2006-01-02 15:04 MST") + ", in flight",
+		"sha256:new: " + inFlight(images[0].Active()),
+		"sha256:old: " + inFlight(images[1].Active()),
 		"sha256:node: a container uses it",
 	}; !slices.Equal(why, want) {
 		t.Errorf("kept = %q; want %q", why, want)
@@ -239,23 +239,24 @@ func TestTrimImagesGoesOnWhileDockerSaysMore(t *testing.T) {
 // A refused image is tried again after the others: a parent goes once its
 // child did. One refused twice is the trim's to report.
 func TestTrimImagesRetriesARefusedImage(t *testing.T) {
-	f := &fake{refuse: "stuck"}
+	const stuck, parent, child = "stuck", "parent", "child"
+	f := &fake{refuse: stuck}
 	parentRefused := true
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
 		switch {
-		case slices.Contains(args, "parent") && parentRefused:
+		case slices.Contains(args, parent) && parentRefused:
 			return nil, errors.New("conflict: image has dependent child images")
-		case slices.Contains(args, "child"):
+		case slices.Contains(args, child):
 			parentRefused = false
 		}
 		return f.run(ctx, args...)
 	}
-	cands := []Image{{ID: "stuck", Unique: 1}, {ID: "parent", Unique: 1}, {ID: "child", Unique: 1}}
+	cands := []Image{{ID: stuck, Unique: 1}, {ID: parent, Unique: 1}, {ID: child, Unique: 1}}
 	tr, err := TrimImages(context.Background(), run, cands, 3, 0, nil, func() bool { return false })
-	if err != nil || !slices.Equal(tr.Removed, []string{"child", "parent"}) {
+	if err != nil || !slices.Equal(tr.Removed, []string{child, parent}) {
 		t.Fatalf("trim = %+v, %v; want child, then parent removed", tr, err)
 	}
-	if len(tr.Refused) != 1 || tr.Refused[0].Image.ID != "stuck" || !strings.Contains(tr.Refused[0].Why, "being used by a container") {
+	if len(tr.Refused) != 1 || tr.Refused[0].Image.ID != stuck || !strings.Contains(tr.Refused[0].Why, "being used by a container") {
 		t.Errorf("refused = %+v; want stuck with Docker's reason", tr.Refused)
 	}
 }
