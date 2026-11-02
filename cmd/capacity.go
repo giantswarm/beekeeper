@@ -70,15 +70,22 @@ type capacityView struct {
 // the busy agents whose sessions run here, a self-hosted provider's
 // included, and the room the cap leaves a local start. An agent on an
 // execution host counts against that host's maxBusy, never here.
+// ReviewHeadroom is capacity.reviewHeadroom a review start may use above a
+// positive local ceiling, as above the worker ceiling; zero for any other
+// start.
 type localView struct {
-	Busy    []string `json:"busy"`
-	Ceiling int      `json:"ceiling"`
-	Room    int      `json:"room"`
+	Busy           []string `json:"busy"`
+	Ceiling        int      `json:"ceiling"`
+	ReviewHeadroom int      `json:"reviewHeadroom,omitempty"`
+	Room           int      `json:"room"`
 }
 
 // line is the local cap's line in capacity's text.
 func (l *localView) line() string {
 	s := fmt.Sprintf("%d busy of ceiling %d", len(l.Busy), l.Ceiling)
+	if l.ReviewHeadroom > 0 {
+		s += fmt.Sprintf(" plus review headroom %d", l.ReviewHeadroom)
+	}
 	if len(l.Busy) > 0 {
 		s += ": " + strings.Join(l.Busy, ", ")
 	}
@@ -90,7 +97,11 @@ func (l *localView) block() string {
 	if l.Ceiling == 0 {
 		return "capacity.local.ceiling 0"
 	}
-	return fmt.Sprintf("%d busy locally at capacity.local.ceiling %d", len(l.Busy), l.Ceiling)
+	s := fmt.Sprintf("%d busy locally at capacity.local.ceiling %d", len(l.Busy), l.Ceiling)
+	if l.ReviewHeadroom > 0 {
+		s += fmt.Sprintf(" plus review headroom %d", l.ReviewHeadroom)
+	}
+	return s
 }
 
 // localBusy is the busy agents of busy whose sessions run on this machine:
@@ -113,14 +124,23 @@ func localBusy(st *state.State, busy []string) []string {
 
 // withLocal bounds a local start's verdict by capacity.local.ceiling, when
 // set: the busy agents running here against it, apart from capacity.ceiling
-// and the hosts' own maxBusy.
+// and the hosts' own maxBusy. A review start may use capacity.reviewHeadroom
+// above it as above the worker ceiling: reviews run only here, so a cap
+// full of workers would otherwise hold back the review that lets them
+// merge. A local ceiling of 0 stays closed (reviewCeiling).
 func (v *capacityView) withLocal(st *state.State, k config.Capacity) *capacityView {
 	n, ok := k.Local.Limit()
 	if v == nil || !ok {
 		return v
 	}
 	busy := localBusy(st, v.Busy)
-	v.Local = &localView{Busy: busy, Ceiling: n, Room: max(0, n-len(busy))}
+	l := &localView{Busy: busy, Ceiling: n}
+	limit := n
+	if v.Review && n > 0 {
+		l.ReviewHeadroom, limit = k.ReviewHeadroom, reviewCeiling(n, k.ReviewHeadroom)
+	}
+	l.Room = max(0, limit-len(busy))
+	v.Local = l
 	return v.capLocal()
 }
 
@@ -1825,8 +1845,11 @@ desk and its execution hosts: every busy agent whose session runs here
 counts, a self-hosted provider's included, while an agent on an execution
 host counts against that host's maxBusy and never here. Every local start
 is refused at it ("no start: N busy locally at capacity.local.ceiling N"),
-the supervisor loop's and one by hand, worker, reviewer and resume alike;
-the "local:" line shows it. Unset, there is no local cap; 0 refuses every
+the supervisor loop's and one by hand, worker and resume alike; a review
+start, which runs only here, may use capacity.reviewHeadroom above it as
+above the worker ceiling ("... plus review headroom N"), the machine's
+guards still applying. The "local:" line shows it. Unset, there is no
+local cap; 0 refuses every
 unforced local start. --host verdicts weigh only the choices a host can
 run (Claude Code).
 
