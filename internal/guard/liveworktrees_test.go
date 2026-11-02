@@ -67,6 +67,15 @@ func TestLiveWorktreeGuardRefusesMovingAFolderOfLiveWorktrees(t *testing.T) {
 		"D=" + lt.wts + "; rm -rf \"${D:?}\"",
 		"bash -c 'gio trash " + lt.wts + "'",
 		"sudo mv " + lt.wts + " /elsewhere",
+		"cd -P " + lt.root + " && mv worktrees aside",
+		"mv -vt /elsewhere " + lt.wts,
+		"mv -t/elsewhere " + lt.wts,
+		"mv --target-directory /elsewhere " + lt.wts,
+		"mv " + lt.wts + " /elsewhere 2>/dev/null",
+		"bash <<'EOF'\nmv " + lt.wts + " /aside\nEOF",
+		"for d in " + filepath.Join(lt.wts, "*") + "; do rm -rf \"$d\"; done",
+		"gio trash file://" + lt.wts,
+		"cd " + lt.root + " || exit 1; gio trash worktrees",
 	}
 	for _, cmd := range refused {
 		r := h.liveWorktreeRefusal(cmd, lt.root)
@@ -85,6 +94,16 @@ func TestLiveWorktreeGuardRefusesMovingAFolderOfLiveWorktrees(t *testing.T) {
 		"rm -rf \"$(mktemp -d)\"",
 		"mv \"$UNSET_DIR_1541\" /elsewhere",
 		"ls " + lt.wts,
+		// a redirection is no operand: a move into a live worktree passes
+		"mv " + filepath.Join(lt.live, "README.md") + " " + lt.wts + " 2>/dev/null",
+		"mv " + filepath.Join(lt.live, "README.md") + " " + lt.wts + " > /dev/null",
+		"mv " + filepath.Join(lt.live, "README.md") + " " + lt.wts + " 2>&1",
+		"WT=" + lt.live + "; mv patch.diff \"$WT\" 2>/dev/null",
+		"mv -f " + filepath.Join(lt.live, "README.md") + " " + lt.wts + "/",
+		// where the shell stands is unknown after cd - or cd $(…): nothing resolves
+		"cd " + lt.wts + " && cd - && mv backstage aside",
+		"cd \"$(mktemp -d)\" && mv worktrees aside",
+		"for d in $(ls); do rm -rf \"$d\"; done",
 	}
 	for _, cmd := range passed {
 		if r := h.liveWorktreeRefusal(cmd, lt.root); r != "" {

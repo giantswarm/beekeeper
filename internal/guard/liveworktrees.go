@@ -2,7 +2,6 @@ package guard
 
 import (
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -12,10 +11,14 @@ import (
 // The live-worktree guard refuses a Bash command that moves, trashes or
 // deletes a folder that is, or holds, a linked git worktree a live session
 // or process works in (mv, rm, rmdir, trash, trash-put, gio trash|remove|
-// move|rename, git worktree remove|move): a cleanup takes only the worktrees
-// whose session ended, one by one, and a folder of worktrees goes only once
-// none of them is in use. A move inside a worktree, or of a folder no live
-// session works under, passes.
+// move|rename, git worktree remove|move, also over a for loop's variable):
+// a cleanup takes only the worktrees whose session ended, one by one, and a
+// folder of worktrees goes only once none of them is in use. A move inside
+// a worktree, or of a folder no live session works under, passes. The
+// command line is read as the folder guard reads it (targetWalk): where the
+// shell stands, what its variables hold, shell strings and here-documents.
+// It is a best effort: paths a command reads from its input (xargs), finds
+// itself (find -exec) or builds by brace expansion are not followed.
 
 // liveWorktreeFix is what every refusal offers instead.
 const liveWorktreeFix = "A cleanup takes only the worktrees whose session ended: `beekeeper worktrees` removes the finished ones, " +
@@ -27,14 +30,8 @@ const (
 	trashPutCmd = "trash-put"
 )
 
-// liveWorktreeDepth bounds how deep shell strings (sh -c '…') are followed.
-const liveWorktreeDepth = 4
-
-// movedPath is a folder a command moves or removes, as written and as an
-// absolute path.
-type movedPath struct {
-	written, abs string
-}
+// targetDirOpt is mv's and cp's long option naming the target directory.
+const targetDirOpt = "--target-directory"
 
 // liveWorktreeRefusal returns why cmd, run in cwd, moves or removes a
 // folder holding a worktree a live session or process works in, "" when it
@@ -44,18 +41,14 @@ func (h Hook) liveWorktreeRefusal(cmd, cwd string) string {
 	if h.LiveDirs == nil {
 		return ""
 	}
-	moved := movedDirs(cmd, cwd, 0)
+	moved := walkTargets(cmd, cwd, 0, true)
 	if len(moved) == 0 {
 		return ""
 	}
 	live := h.LiveDirs()
 	for _, m := range moved {
-		if wt, dir := LiveWorktreeUnder(m.abs, live); wt != "" {
-			what := "`" + m.written + "`"
-			if m.written != m.abs {
-				what += " (" + m.abs + ")"
-			}
-			return "Refused: this command moves or removes " + what + ", which holds the worktree `" + wt +
+		if wt, dir := LiveWorktreeUnder(m, live); wt != "" {
+			return "Refused: this command moves or removes `" + m + "`, which holds the worktree `" + wt +
 				"` a live session or process works in (`" + dir + "`). " + liveWorktreeFix
 		}
 	}
@@ -100,64 +93,86 @@ func canonicalPath(p string) string {
 	return p
 }
 
-// movedDirs lists the existing directories (not symlinks) cmd moves or
-// removes. A target whose value the line does not tell (a command
-// substitution, a variable neither assigned nor in the environment) is
-// passed over: the delete guard refuses the dangerous ones.
-func movedDirs(cmd, cwd string, depth int) []movedPath {
-	if depth > liveWorktreeDepth {
-		return nil
+// addMoved records the existing directories (not symlinks) the command
+// moves or removes, its operands resolved from dir.
+func (w *targetWalk) addMoved(st *deleteState, dir, name string, args []string) {
+	for _, op := range movedOperands(name, withoutRedirections(args)) {
+		base := dir
+		if op.base != "" {
+			b, ok := w.resolve(st, dir, op.base)
+			if len(b) != 1 || !ok {
+				continue
+			}
+			base = b[0]
+		}
+		ps, _ := w.resolve(st, base, strings.TrimPrefix(op.word, "file://"))
+		for _, p := range ps {
+			if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
+				w.out = append(w.out, p)
+			}
+		}
 	}
-	sc := scanShell(cmd)
-	st := deleteState{assigned: map[string]string{}, env: os.Getenv}
-	dir := cwd
-	var out []movedPath
-	for _, raw := range rawCommands(sc.plain) {
-		for len(raw) > 0 && keywords[raw[0]] {
-			raw = raw[1:]
+}
+
+// loop records what a for loop's variable takes: for NAME in WORDS, each
+// word resolved and its glob expanded. A loop over anything unknown takes
+// nothing.
+func (w *targetWalk) loop(st *deleteState, dir string, args []string) {
+	if len(args) < 2 || strings.Join(shellWords(args[1]), "") != "in" {
+		return
+	}
+	name := strings.Join(shellWords(args[0]), "")
+	var vals []string
+	for _, a := range args[2:] {
+		ps, ok := w.resolve(st, dir, a)
+		if !ok {
+			return
 		}
-		words := make([]string, len(raw))
-		for i, r := range raw {
-			words[i] = strings.Join(shellWords(r), "")
+		vals = append(vals, ps...)
+	}
+	if w.loops == nil {
+		w.loops = map[string][]string{}
+	}
+	w.loops[name] = vals
+}
+
+// resolve returns the absolute paths a word names from dir: a for loop's
+// variable by what it takes, else the word as the folder guard resolves it
+// (st.path) with its glob expanded; false when it stays unknown.
+func (w *targetWalk) resolve(st *deleteState, dir, word string) ([]string, bool) {
+	if v := strings.Join(shellWords(word), ""); plainVar.MatchString(v) {
+		if vals, ok := w.loops[strings.Trim(v, "${}")]; ok {
+			return vals, true
 		}
-		k := commandAt(words)
-		if k == len(words) {
-			st.assign(raw, words)
-			continue
-		}
-		name, args := path.Base(words[k]), raw[k+1:]
-		switch {
-		case name == "cd" && len(args) > 0:
-			if ps := st.paths(args[0], dir, false); len(ps) == 1 {
-				dir = ps[0]
+	}
+	if w.nested && strings.ContainsAny(word, "$`") {
+		return nil, false // the outer shell may have expanded it before
+	}
+	p, ok := st.path(word)
+	if !ok || dir == "" && !filepath.IsAbs(p) {
+		return nil, false
+	}
+	p = absIn(dir, p)
+	if !strings.ContainsAny(p, globChar) {
+		return []string{p}, true
+	}
+	matches, _ := filepath.Glob(p)
+	return matches, true
+}
+
+// withoutRedirections drops the redirections among a command's arguments
+// (as written): 2>/dev/null, > file, 2>&1, <<< word.
+func withoutRedirections(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		w := strings.Join(shellWords(args[i]), "")
+		if redirection.MatchString(args[i]) {
+			if bareRedirect.MatchString(w) {
+				i++ // the target is the next word
 			}
 			continue
-		case declarations[name]:
-			st.assign(raw[k+1:], words[k+1:])
-			continue
-		case shells[name]:
-			for _, a := range words[k+1:] {
-				if strings.ContainsAny(a, " \t\n;|&") {
-					out = append(out, movedDirs(a, dir, depth+1)...)
-				}
-			}
-			continue
 		}
-		for _, op := range movedOperands(name, args) {
-			base := dir
-			if op.base != "" {
-				if ps := st.paths(op.base, dir, false); len(ps) == 1 {
-					base = ps[0]
-				} else {
-					continue
-				}
-			}
-			for _, p := range st.paths(op.word, base, true) {
-				if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
-					out = append(out, movedPath{written: strings.Join(shellWords(op.word), ""), abs: p})
-				}
-			}
-		}
+		out = append(out, args[i])
 	}
 	return out
 }
@@ -175,7 +190,7 @@ type operand struct {
 func movedOperands(name string, args []string) []operand {
 	switch name {
 	case "mv":
-		ops, target := operands(args, map[string]bool{"-S": true, "--suffix": true}, map[string]bool{"-t": true, "--target-directory": true})
+		ops, target := operands(args, "S", "t")
 		if target {
 			return ops
 		}
@@ -184,14 +199,14 @@ func movedOperands(name string, args []string) []operand {
 		}
 		return ops[:len(ops)-1]
 	case rmCmd, transcriptRmdir, trashCmd, trashPutCmd, "gio-trash":
-		ops, _ := operands(args, nil, nil)
+		ops, _ := operands(args, "", "")
 		return ops
 	case "gio":
 		if len(args) == 0 {
 			return nil
 		}
 		sub := strings.Join(shellWords(args[0]), "")
-		ops, _ := operands(args[1:], nil, nil)
+		ops, _ := operands(args[1:], "", "")
 		switch sub {
 		case trashCmd, "remove":
 			return ops
@@ -234,7 +249,7 @@ func gitWorktreeOperands(args []string) []operand {
 	if s := strings.Join(shellWords(args[i+1]), ""); s != "remove" && s != "move" {
 		return nil
 	}
-	ops, _ := operands(args[i+2:], nil, nil)
+	ops, _ := operands(args[i+2:], "", "")
 	if len(ops) == 0 {
 		return nil
 	}
@@ -243,9 +258,11 @@ func gitWorktreeOperands(args []string) []operand {
 }
 
 // operands splits a command's arguments into its operands, skipping its
-// options and the values of those in values; an option in targets takes the
-// target directory, and target reports that one was given.
-func operands(args []string, values, targets map[string]bool) (ops []operand, target bool) {
+// options. value and target are the short options (letters) that take a
+// value; target's value is the target directory (mv -t, also clustered as
+// -vt DIR or -tDIR, and --target-directory), and target reports that one
+// was given.
+func operands(args []string, value, target string) (ops []operand, hasTarget bool) {
 	rest := false
 	for i := 0; i < len(args); i++ {
 		a := strings.Join(shellWords(args[i]), "")
@@ -254,72 +271,31 @@ func operands(args []string, values, targets map[string]bool) (ops []operand, ta
 			ops = append(ops, operand{word: args[i]})
 		case a == "--":
 			rest = true
-		case targets[a]:
-			target = true
-			i++
-		case targets[strings.SplitN(a, "=", 2)[0]] || strings.HasPrefix(a, "-t") && targets["-t"]:
-			target = true
-		case values[a]:
-			i++
+		case strings.HasPrefix(a, "--"):
+			long, _, inline := strings.Cut(a, "=")
+			if target != "" && long == targetDirOpt {
+				hasTarget = true
+			}
+			if !inline && (target != "" && long == targetDirOpt || value != "" && long == "--suffix") {
+				i++
+			}
+		default:
+			// A cluster of short options; the first that takes a value
+			// takes the rest of the word, or the next word.
+			for j := 1; j < len(a); j++ {
+				c := a[j : j+1]
+				if !strings.Contains(value+target, c) {
+					continue
+				}
+				if strings.Contains(target, c) {
+					hasTarget = true
+				}
+				if j == len(a)-1 {
+					i++
+				}
+				break
+			}
 		}
 	}
-	return ops, target
-}
-
-// paths resolves a word to the absolute paths it names in dir: its
-// variables by the values the line assigned or the environment holds, ~ as
-// the home directory, a glob by its matches when glob is set. A word whose
-// value is unknown names nothing.
-func (st *deleteState) paths(word, dir string, glob bool) []string {
-	lit, exps := st.expansions(word)
-	home, _ := os.UserHomeDir()
-	for i, e := range exps {
-		v, ok := st.known(e.token)
-		if !ok {
-			return nil
-		}
-		exps[i].value = v
-	}
-	p := strings.ReplaceAll(st.resolve(lit, exps), homePart, home)
-	if p == "" || strings.Contains(p, opaquePart) || strings.Contains(p, homePart) {
-		return nil
-	}
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(dir, p)
-	}
-	p = filepath.Clean(p)
-	if !glob || !strings.ContainsAny(p, globChar) {
-		return []string{p}
-	}
-	matches, _ := filepath.Glob(p)
-	return matches
-}
-
-// known is the value of a parameter expansion when the line or the
-// environment tells it: $NAME, ${NAME} and ${NAME:?…} of an assigned or
-// exported variable, $HOME; never a command substitution or another
-// operator.
-func (st *deleteState) known(token string) (string, bool) {
-	if token[0] == '`' || strings.HasPrefix(token, "$(") {
-		return "", false
-	}
-	name, op := token[1:], ""
-	if inner, ok := strings.CutPrefix(token, "${"); ok {
-		inner = strings.TrimSuffix(inner, "}")
-		n := len(inner) - len(strings.TrimLeft(inner, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"))
-		name, op = inner[:n], inner[n:]
-	}
-	if op != "" && !strings.HasPrefix(op, ":?") && !strings.HasPrefix(op, "?") {
-		return "", false
-	}
-	if name == homeVar {
-		return homePart, true
-	}
-	if v, ok := st.assigned[name]; ok {
-		return v, v != ""
-	}
-	if v := st.environ(name); v != "" {
-		return v, true
-	}
-	return "", false
+	return ops, hasTarget
 }

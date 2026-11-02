@@ -99,6 +99,9 @@ func (a *app) worktreeMachine() (worktreeMachine, error) {
 // hookLiveDirs is liveFolders for the hook: the folders it read, an
 // unreadable roster or process table leaving out only what it holds.
 func (a *app) hookLiveDirs() []string {
+	// The error is dropped on purpose: the hook fails open, so an unreadable
+	// process table never blocks a session's every rm or mv; the worktree
+	// trim fails closed on the same error.
 	live, _ := a.liveFolders(time.Now())
 	return live
 }
