@@ -1,6 +1,7 @@
 package superloop
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -1218,5 +1219,62 @@ func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
 	acts = Plan(in)
 	if len(acts) < 4 || acts[0].Kind != KindIntake || acts[1].Kind != KindIntake || acts[2].Kind != KindIntake || acts[3].Kind != KindNext {
 		t.Fatalf("order = %+v, want intake actions before next", acts)
+	}
+}
+
+// The desk's standing rule is one review, then the fixes and the merge:
+// past MaxReviews, a head whose change beyond the approved one stays in
+// the files the reviews' findings name and tests gets the go with no
+// note; one that changes another file goes to the person, the file named.
+func TestAHeadPastTheReviewsThatOnlyFixesFindingsMerges(t *testing.T) {
+	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "Review: changes requested\n- cmd/agentpark.go:12 drops the wait", At: t1}
+	r2 := Review{ID: "R2", Head: head2, Verdict: Approved, Body: "Review: approved\nnit: internal/state/state.go:40 could name the field", At: t0.Add(2*time.Hour + time.Minute)}
+	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
+		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
+	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
+	var asked []string
+	changed := []string{"cmd/agentpark.go", "cmd/agentpark_test.go", "internal/state/state.go", "internal/state/testdata/park.json"}
+	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 1, Person: guidePerson, Taken: acts,
+		ChangedPast: func(p Pull, reviewed string) ([]string, error) {
+			asked = append(asked, reviewed+".."+p.Head)
+			return changed, nil
+		}}
+	g := only(t, Plan(in), KindGo)
+	if g.Head != head3 || !strings.Contains(g.Message, "the files of the reviews' findings and tests") || !slices.Equal(asked, []string{head2 + ".." + head3}) {
+		t.Errorf("go = %+v, compared %v", g, asked)
+	}
+	// Red checks: no go yet, and no note either.
+	in.Pulls = pull(head3, false, r1, r2)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a red head past the reviews got %+v", got)
+	}
+	// A file no finding names: the person decides, told which file.
+	in.Pulls = pull(head3, true, r1, r2)
+	changed = append(changed, "cmd/board.go")
+	if e := only(t, Plan(in), KindEscalate); e.Head != head3 || !strings.Contains(e.Message, "it changes cmd/board.go, which no review finding names") {
+		t.Errorf("escalation = %+v", e)
+	}
+	// A comparison GitHub cuts short proves nothing: the person decides.
+	in.ChangedPast = func(Pull, string) ([]string, error) { return nil, errors.New("at the comparison's cap") }
+	if e := only(t, Plan(in), KindEscalate); !strings.Contains(e.Message, "cannot be read: at the comparison's cap") {
+		t.Errorf("escalation = %+v", e)
+	}
+}
+
+func TestFixesOnlyNamesFilesByPathOrBaseName(t *testing.T) {
+	for _, c := range []struct {
+		file string
+		want bool
+	}{
+		{"cmd/agentpark.go", true},
+		{"internal/x/agentpark.go", true},
+		{"cmd/park_test.go", true},
+		{"testdata/a.json", true},
+		{"cmd/board.go", false},
+	} {
+		in := Input{ChangedPast: func(Pull, string) ([]string, error) { return []string{c.file}, nil }}
+		if got, why := in.fixesOnly(Pull{Head: head2}, head1, []string{"- agentpark.go:12 drops the wait"}); got != c.want {
+			t.Errorf("%s: fixesOnly = %v (%s), want %v", c.file, got, why, c.want)
+		}
 	}
 }
