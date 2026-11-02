@@ -214,7 +214,7 @@ func TestAlertSnapshotLabels(t *testing.T) {
 	hidden := alerts.Raw{Fingerprint: "hidden", Labels: map[string]string{labelAlertname: ignored}}
 	silenced := alerts.Raw{Fingerprint: "silenced", Labels: labels}
 	silenced.Status.SilencedBy = []string{"silence"}
-	targets := []alerts.Target{{Name: lab}, {Name: "unreachable"}, {Name: "no-context"}}
+	targets := []alerts.Target{{Name: lab}, {Name: "snapshot-down"}, {Name: "no-context"}}
 	answers := []alerts.Answer{
 		{OK: true, Alerts: []alerts.Raw{{Fingerprint: namespaceA, Labels: labels}, {Fingerprint: namespaceB, Labels: other}, hidden, silenced}},
 		{Why: "read failed"}, {NoContext: true, Why: "context missing"},
