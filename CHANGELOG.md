@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Allow repository Python edits that use harness directory names as replacement text. Constructed harness paths that cannot be resolved now receive an explicit unresolved-path diagnostic instead of being classified as transcript reads (https://github.com/giantswarm/beekeeper/issues/1968).
+
 - Recognize Codex `webrun` calls as read-only web tools in local and managed workers, applying the shared hook rules instead of refusing them as unknown ([https://github.com/giantswarm/beekeeper/issues/1972](https://github.com/giantswarm/beekeeper/issues/1972)).
 
 - SSH workers start at the coordinator-fetched ref head even when the execution host checkout is stale or lacks GitHub credentials; preparation transfers and pins the source objects before activation ([https://github.com/giantswarm/beekeeper/issues/1929](https://github.com/giantswarm/beekeeper/issues/1929)).
