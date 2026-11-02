@@ -174,6 +174,86 @@ func parseTurns(line []byte, tools bool) []Turn {
 	return append(out, calls...)
 }
 
+// turnEndReasons are the stop reasons that close a turn: the model answered
+// and stopped. A tool call round stops with another reason (its result feeds
+// the next round of the same turn).
+var turnEndReasons = map[string]bool{"end_turn": true, "stop_sequence": true}
+
+// TurnDone reports whether the transcript at path proves its session's last
+// turn ended: its last message of its own is an assistant message that
+// stopped with an end reason. A tail that ends on a user message (a wake or
+// a tool result the model has not answered yet), on an assistant message
+// still running (a tool call, a stop reason missing while the CLI writes
+// it), on a line only partly written, or says nothing at all (no file, no
+// message) is not proof: false. A wake or resume appends the message it was
+// given as a user message before its model answers, so a session in a turn
+// a wake just started reads as not done.
+func TurnDone(path string) bool {
+	if path == "" {
+		return false
+	}
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	off := max(fi.Size()-tailWindow, 0)
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return false
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return false
+	}
+	if off > 0 {
+		_, raw, _ = bytes.Cut(raw, []byte{'\n'}) // a partial first line
+	}
+	if !bytes.HasSuffix(raw, []byte{'\n'}) {
+		return false // the last line is only partly written: the CLI is writing right now,
+		// and that line may be the message that opens the session's next turn.
+	}
+	return lastTurnEnded(raw)
+}
+
+// lastTurnEnded reports whether the whole transcript lines end on a finished
+// assistant message of the session's own.
+func lastTurnEnded(raw []byte) bool {
+	lines := bytes.Split(bytes.TrimRight(raw, "\n"), []byte{'\n'})
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) == 0 {
+			continue
+		}
+		var e struct {
+			Type        string `json:"type"`
+			IsMeta      bool   `json:"isMeta"`
+			IsSidechain bool   `json:"isSidechain"`
+			Message     struct {
+				StopReason string          `json:"stop_reason"`
+				Content    json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &e) != nil || e.IsMeta || e.IsSidechain {
+			continue // no message, or another session's (a subagent's)
+		}
+		if e.Type == roleUser {
+			return false // a message or a tool result the model has not answered
+		}
+		if e.Type != roleAssistant {
+			continue
+		}
+		if !turnEndReasons[e.Message.StopReason] {
+			return false // still running: a tool call round, a line mid-write
+		}
+		return !bytes.Contains(e.Message.Content, []byte(`"`+blockToolUse+`"`))
+	}
+	return false // no message of its own: nothing proves a turn ended
+}
+
 // gistKeys are the tool input fields that say what a call does, the most
 // telling first: a command's description before the command itself.
 var gistKeys = []string{"description", "command", "file_path", "path", "pattern", "url", "query", "prompt", "to", "skill"}

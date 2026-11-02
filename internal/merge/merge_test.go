@@ -800,6 +800,7 @@ func TestParseReleaseWait(t *testing.T) {
 		{"tag pipeline failed", `{"verdict":"ci_failed","reason":"push failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "push failed", true},
 		{"a status failed", `{"verdict":"status_failed","reason":"ci/x failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "ci/x failed", true},
 		{"timed out", `{"verdict":"timeout","reason":"30m","tag":"v1.4.0"}`, Outcome{Merged: true, Unconfirmed: true}, "30m", true},
+		{"no release", `{"verdict":"no_release","reason":"no version bump"}`, Outcome{Merged: true, NoRelease: true}, "no version bump", true},
 		{"no document", ``, Outcome{}, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
