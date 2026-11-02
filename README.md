@@ -18,7 +18,11 @@ The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
 stops. Remote wakes and resumes use durable ordered message receipts; inspect
-them with `agents messages` and reconcile with `agents hosts sync`. With
+them with `agents messages` and reconcile with `agents hosts sync`. Hosts
+follow the coordinator's release: `agents hosts update` installs it there,
+verified, and pins the prepared policy digest in beekeeper's state, which the
+supervisor loop does after each coordinator update; a host that cannot be
+updated is held. With
 `supervisor.hosts`, `supervisor loop` places its worker starts
 on these hosts when the coordinator is out of room (or always with
 `supervisor.hostsFirst`, for what a host can run: a repository no host maps
