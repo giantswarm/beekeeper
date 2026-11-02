@@ -27,7 +27,8 @@ const (
 func sshCodexTestApp(t *testing.T, offered map[string]string) (*app, string, *[]execution.StartRequest) {
 	t.Helper()
 	a, brief := sshStartTestApp(t)
-	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{claudeComm: {Ceiling: 1}, codex.Harness: {Ceiling: 1}}, Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: codexTestModel}}}
+	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{claudeComm: {Ceiling: 1}, codex.Harness: {Ceiling: 1, Usage: config.Usage{Command: config.DefaultCodexUsageCommand}}}, Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: codex.Harness, Model: codexTestModel}}}
+	stubSubscriptionUsage(a)
 	h := a.cfg.Agents.Hosts[sshTestSelector]
 	h.Harnesses = []string{claudeComm, codex.Harness}
 	a.cfg.Agents.Hosts[sshTestSelector] = h
@@ -175,13 +176,13 @@ func TestExecutionGuardDecisionMatchesHookFormatToHarness(t *testing.T) {
 func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	host := a.cfg.Agents.Hosts[sshTestSelector]
-	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{codex.Harness: {Ceiling: 1}}, Choices: []config.Choice{{Harness: codex.Harness, Model: codexTestModel}}}
+	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{codex.Harness: {Ceiling: 1, Usage: config.Usage{Command: config.DefaultCodexUsageCommand}}}, Choices: []config.Choice{{Harness: codex.Harness, Model: codexTestModel}}}
 	resources := execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}
 	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room != 0 {
 		t.Fatalf("a Claude-only host offers the codex choice: %+v", v.Choice)
 	}
 	host.Harnesses = []string{claudeComm, codex.Harness}
-	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != codex.Harness {
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, a.executionReadings(context.Background(), k), nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != codex.Harness {
 		t.Fatalf("a codex host does not offer the codex choice: room %d, %+v, %v", v.Room, v.Choice, v.Blocks)
 	}
 	// The check's verdict narrows the catalogue: a codex the host failed is no choice.

@@ -615,7 +615,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 }
 
 func TestSubscriptionWithoutReaderRefusesStart(t *testing.T) {
-	for _, name := range []string{"codex", "claude", "agy", "custom"} {
+	for _, name := range []string{config.CodexHarness, config.ClaudeHarness, config.AgyHarness, "custom"} {
 		t.Run(name, func(t *testing.T) {
 			p := config.Provider{Floor: 0, Ceiling: 2}
 			v := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{}, time.Now())
@@ -623,5 +623,19 @@ func TestSubscriptionWithoutReaderRefusesStart(t *testing.T) {
 				t.Fatalf("unknown subscription usage allowed: %+v", v)
 			}
 		})
+	}
+}
+
+// Subscription admission fixtures provide an explicit healthy reading instead
+// of relying on the former unpaced fallback for providers without a reader.
+func stubSubscriptionUsage(a *app) {
+	for name, p := range a.cfg.Capacity.Providers {
+		if !p.SelfHosted() && !p.Enabled() {
+			p.Command = []string{"fixture-usage"}
+			a.cfg.Capacity.Providers[name] = p
+		}
+	}
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
 	}
 }
