@@ -2145,7 +2145,7 @@ type Supervisor struct {
 	NoteDue         Duration `yaml:"noteDue"`
 	// FillRetryEvery bounds repeated empty or failed board reads while
 	// capacity's ceiling stays unchanged and no agent is done or removed
-	// (5m).
+	// (5m), doubled for each further one in a row up to four times.
 	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
