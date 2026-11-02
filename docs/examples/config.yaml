@@ -204,7 +204,7 @@ supervisor:                 # the supervisor loop, which beekeeper install alway
   # An unresumable parked session is replaced on its original task. Every
   # watch poll reads the budget; the loop holds starts on low/stale budget
   # or machine pressure. Watch lines are durable watch.* events.
-  fillRetryEvery: 5m        # retry an empty/failed board read; roster or capacity changes retry immediately
+  fillRetryEvery: 5m        # retry an empty/failed board read, doubled per further empty read up to 4x; roster or capacity changes retry immediately
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
   waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
@@ -219,7 +219,7 @@ agents:                     # the hand-over of registered agents
   lastStepGrace: 30m        # an agent over relayAt in its task's last step (its serve record waits on the report or says the merge landed, or the gate saw its merge land) is HANDOVER HELD this long from that evidence, its report expected
   lastStepCeiling: 500k     # the context at which the hand-over is due whatever the last step; default: a quarter above relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
-  staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
+  staleAfter: 24h           # inactivity without a CLI: idle and gone task holders retire unless kept or parked; negative: off
   archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive
   dir: ~/src/desk           # every agent beekeeper starts runs here (start, handover, a role's successor); empty: the caller's folder
   roots: [~/src/worktrees]  # with dir set, a --dir is refused unless it is dir or under one of these

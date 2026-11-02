@@ -31,7 +31,17 @@ var boardGH github.GH = github.RunGH
 
 // boardClient is the client of the configured board and plans repositories.
 func (a *app) boardClient() *board.Client {
-	return &board.Client{GH: boardGH, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+	gh := boardGH
+	if a.as == loopParty.Name {
+		gh = func(ctx context.Context, args ...string) (out []byte, err error) {
+			err = a.loopGitHub(ctx, "board", func() error {
+				out, err = boardGH(ctx, args...)
+				return err
+			})
+			return out, err
+		}
+	}
+	return &board.Client{GH: gh, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
 }
 
 func (a *app) boardCmd() *cobra.Command {
