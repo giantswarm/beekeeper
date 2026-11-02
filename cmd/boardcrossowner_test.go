@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -256,5 +257,116 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	}
 	if *busy != 1 || len(dispatched) != 1 || !strings.Contains(dispatched[0], filedURL) {
 		t.Fatalf("board next did not offer ranked cross-owner issue %s ahead of bottom backlog: busy %d, briefs %v\n%s", filedURL, *busy, dispatched, r.out)
+	}
+}
+
+func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board = config.Board{Owner: "personal", Project: 1}
+	r.a.cfg.GitHub.AllowedOrgs = []string{"personal", "org"}
+	const (
+		reportIssue = "org/engine#89"
+		restartRef  = "org/engine#90"
+		intakeVerb  = "supervisor.intake"
+	)
+	if err := r.a.store.Record(
+		event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: finished", loopWorker),
+		event(state.Party{Name: loopWorker}, superloop.VerbReport,
+			"%s: closed https://github.com/personal/tasks/issues/1. Filed https://github.com/org/engine/issues/89; Problems found: none", loopWorker),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	wasAnchor := readIntakeAnchor
+	var anchorErr error
+	readIntakeAnchor = func(_ context.Context, _ *app, _, _ string) (string, error) {
+		if anchorErr != nil {
+			return "", anchorErr
+		}
+		return crossHome, nil
+	}
+	t.Cleanup(func() { readIntakeAnchor = wasAnchor })
+
+	rankCode := 1
+	r.answer = func(args []string) (string, int) {
+		switch {
+		case args[0] == loopBoard && slices.Contains(args, "--intake"):
+			return "added " + args[2] + " to the board personal/1: → Backlog\n", 0
+		case args[0] == loopBoard && slices.Contains(args, "--after"):
+			if rankCode != 0 {
+				return "gh failed: 502 Bad Gateway\n", rankCode
+			}
+			return "ranked " + args[2] + " on the board personal/1: after " + args[4] + "\n", 0
+		}
+		return "", 0
+	}
+
+	// 1. Move succeeds, then anchor lookup fails: intake is not settled.
+	anchorErr = errors.New("priority query failed")
+	r.pass(t)
+	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") == nil {
+		t.Fatalf("move did not run on pass 1: %v", r.calls)
+	}
+	if len(r.logged(t, intakeVerb)) != 0 {
+		t.Fatalf("intake settled despite anchor lookup failure: %+v", r.logged(t, intakeVerb))
+	}
+
+	// 2. Anchor lookup recovers, but board rank fails: move is not repeated and
+	// intake still remains unsettled.
+	anchorErr = nil
+	r.pass(t)
+	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") != nil {
+		t.Fatalf("move repeated on retry pass: %v", r.calls)
+	}
+	if r.called(loopBoard, "rank", reportIssue, "--after", crossHome) == nil {
+		t.Fatalf("rank did not run on retry pass: %v", r.calls)
+	}
+	if len(r.logged(t, intakeVerb)) != 0 {
+		t.Fatalf("intake settled despite rank failure: %+v", r.logged(t, intakeVerb))
+	}
+
+	// 3. Rank succeeds: intake settles without repeating move.
+	rankCode = 0
+	r.pass(t)
+	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") != nil {
+		t.Fatalf("move repeated on final pass: %v", r.calls)
+	}
+	if r.called(loopBoard, "rank", reportIssue, "--after", crossHome) == nil {
+		t.Fatalf("rank did not run on final pass: %v", r.calls)
+	}
+	if len(r.logged(t, intakeVerb)) != 1 {
+		t.Fatalf("intake did not settle after rank succeeded: %+v", r.logged(t, intakeVerb))
+	}
+
+	// 4. Interruption between board.move and board.rank (before stage record):
+	// recovery after restart must not settle intake from board.move alone, and
+	// must resume with board.rank without repeating board.move.
+	if err := r.a.store.Record(
+		event(state.Party{Name: loopWorker}, superloop.VerbProblem,
+			"%s: filed https://github.com/org/engine/issues/90 for follow-up", loopWorker),
+	); err != nil {
+		t.Fatal(err)
+	}
+	r.failRecord = func(e state.Event) bool {
+		return e.Verb == loopStageVerb && strings.Contains(e.Detail, restartRef)
+	}
+	r.pass(t)
+	if r.called(loopBoard, "move", restartRef, "backlog", "--intake") == nil ||
+		r.called(loopBoard, "rank", restartRef, "--after", crossHome) != nil {
+		t.Fatalf("interrupted pass did not stop between move and rank: %v", r.calls)
+	}
+	if len(r.logged(t, intakeVerb)) != 1 {
+		t.Fatalf("interrupted intake settled early: %+v", r.logged(t, intakeVerb))
+	}
+
+	r.pass(t)
+	if r.called(loopBoard, "move", restartRef, "backlog", "--intake") != nil {
+		t.Fatalf("move repeated after restart between move and rank: %v", r.calls)
+	}
+	if r.called(loopBoard, "rank", restartRef, "--after", crossHome) == nil {
+		t.Fatalf("rank did not resume after restart between move and rank: %v", r.calls)
+	}
+	if evs := r.logged(t, intakeVerb); len(evs) != 2 || strings.Contains(evs[1].Detail, "before an interruption") {
+		t.Fatalf("restarted intake settled without running rank: %+v", evs)
 	}
 }

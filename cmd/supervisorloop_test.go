@@ -138,6 +138,10 @@ func logs(args []string) (state.Event, bool) {
 		return event(loopParty, "agents.remove", "%s", args[2]), true
 	case args[0] == "note" && args[1] == loopAdd:
 		return event(loopParty, "note.add", "#1 %s", args[len(args)-1]), true
+	case args[0] == loopBoard && args[1] == "move":
+		return event(loopParty, "board.move", "%s: → %s", args[2], args[3]), true
+	case args[0] == loopBoard && args[1] == "rank":
+		return event(loopParty, "board.rank", "%s: %s %s", args[2], args[3], args[len(args)-1]), true
 	}
 	return state.Event{}, false
 }
@@ -210,7 +214,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		r.calls = append(r.calls, args)
 		o, code := r.answer(args)
-		if e, ok := logs(args); ok && code == 0 {
+		if e, ok := logs(args); ok && code == 0 && !strings.HasPrefix(o, "left ") {
 			if err := store.Record(e); err != nil {
 				t.Fatal(err)
 			}

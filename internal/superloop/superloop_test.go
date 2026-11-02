@@ -1070,6 +1070,7 @@ func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
 		Events: []Event{
 			{At: t1, Verb: VerbDone, Agent: worker, Detail: worker + " done: finished"},
 			{At: t1, Verb: VerbProblem, Agent: worker, Detail: worker + ": filed https://github.com/org/engine/issues/42 for the blocker"},
+			{At: t1, Verb: VerbReport, Agent: worker, Detail: worker + ": closed https://github.com/personal/tasks/issues/1. Filed follow-up https://github.com/org/engine.io/issues/44 after v0.174.0; Problems found: none"},
 		},
 		Filed: []FiledIssue{
 			{Ref: "org/engine#43", URL: "https://github.com/org/engine/issues/43", Agent: "guide", From: task1},
@@ -1084,8 +1085,8 @@ func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
 			origins = append(origins, a.Message)
 		}
 	}
-	if !slices.Equal(keys, []string{"intake org/engine#42", "intake org/engine#43"}) ||
-		!slices.Equal(origins, []string{task1, task1}) {
+	if !slices.Equal(keys, []string{"intake org/engine#42", "intake org/engine.io#44", "intake org/engine#43"}) ||
+		!slices.Equal(origins, []string{task1, task1, task1}) {
 		t.Fatalf("intake actions = %+v", acts)
 	}
 	// Once done is taken, intake still precedes KindNext in the pass.
@@ -1095,7 +1096,7 @@ func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
 	}
 	in.Taken = taken(t, t1, acts[i])
 	acts = Plan(in)
-	if len(acts) < 3 || acts[0].Kind != KindIntake || acts[1].Kind != KindIntake || acts[2].Kind != KindNext {
+	if len(acts) < 4 || acts[0].Kind != KindIntake || acts[1].Kind != KindIntake || acts[2].Kind != KindIntake || acts[3].Kind != KindNext {
 		t.Fatalf("order = %+v, want intake actions before next", acts)
 	}
 }

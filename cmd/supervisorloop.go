@@ -566,9 +566,11 @@ type supervisorLoop struct {
 	stopWatch  func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
-	// stages are the release stages finished, by key.
-	stages    map[string]bool
-	postMerge []superloop.Action
+	// stages are the release or intake stages finished, by key; stageDetail
+	// is the recorded detail of each stage.
+	stages      map[string]bool
+	stageDetail map[string]string
+	postMerge   []superloop.Action
 	// fillPause defers an unproductive board read until capacity changes,
 	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
@@ -841,7 +843,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	claims, stages := map[string]loopClaim{}, map[string]bool{}
+	claims, stages, stageDetail := map[string]loopClaim{}, map[string]bool{}, map[string]string{}
 	failures := map[string]loopFailure{}
 	for _, e := range taken {
 		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
@@ -857,6 +859,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			delete(claims, key)
 		case e.Verb == loopStageVerb:
 			stages[key] = true
+			stageDetail[key] = rest
 		case e.Verb == loopFailureVerb:
 			var f loopFailure
 			if json.Unmarshal([]byte(rest), &f) == nil {
@@ -867,7 +870,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}
-	l.stages = stages
+	l.stages, l.stageDetail = stages, stageDetail
 	since := l.since
 	evs, err := a.store.Follow("supervisor-loop", func(e state.Event) bool {
 		return slices.Contains(loopEventVerbs, e.Verb) && !e.At.Before(since)
@@ -1149,7 +1152,16 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	case superloop.KindIntake:
-		done = logged("board.move", opens) || logged("board.rank", opens)
+		for _, e := range evs {
+			if e.Verb == "board.move" && opens(e.Detail) {
+				moveStage := act.Key + " move"
+				l.stages[moveStage] = true
+				if l.stageDetail != nil && l.stageDetail[moveStage] == "" {
+					l.stageDetail[moveStage] = e.Detail
+				}
+			}
+		}
+		done = logged("board.rank", opens)
 	}
 	if !done {
 		return "", false, nil
@@ -2336,30 +2348,49 @@ func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act s
 	if lowBudget(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
 		return "", errLoopLater
 	}
-	if err := l.claim(act, act.Ref); err != nil {
-		return "", err
-	}
-	out, err := l.run(ctx, loopBoard, "move", act.Ref, "backlog", "--intake")
-	if err != nil {
-		return "", err
-	}
-	l.boardNone = nil
-	l.fillPause = fillPause{}
-	moveLine := oneLine(out)
-	if strings.HasPrefix(moveLine, "left ") {
-		return moveLine, nil
+	moveStage := act.Key + " move"
+	moveLine := l.stageDetail[moveStage]
+	if !l.stages[moveStage] {
+		if err := l.claim(act, act.Ref); err != nil {
+			return "", err
+		}
+		out, err := l.run(ctx, loopBoard, "move", act.Ref, "backlog", "--intake")
+		if err != nil {
+			return "", err
+		}
+		l.boardNone = nil
+		l.fillPause = fillPause{}
+		moveLine = oneLine(out)
+		if strings.HasPrefix(moveLine, "left ") {
+			return moveLine, nil
+		}
+		if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] %s", moveStage, moveLine)); err != nil {
+			return "", err
+		}
+		l.stages[moveStage] = true
+		if l.stageDetail != nil {
+			l.stageDetail[moveStage] = moveLine
+		}
 	}
 	from := cmp.Or(act.Message, agentRef(st, act.Agent))
 	anchor, err := readIntakeAnchor(ctx, l.a, act.Ref, from)
-	if (err != nil || anchor == "") && from != "" {
+	if err != nil {
+		return "", err
+	}
+	if anchor == "" && from != "" && !superloop.IsPull(from) {
 		if r, ok := parseRef(from); ok && !strings.EqualFold(refName(r), act.Ref) {
 			anchor = refName(r)
 		}
 	}
 	if anchor != "" && !strings.EqualFold(anchor, act.Ref) {
-		if rankOut, rankErr := l.run(ctx, loopBoard, "rank", act.Ref, "--after", anchor); rankErr == nil {
-			return fmt.Sprintf("%s; %s", moveLine, oneLine(rankOut)), nil
+		rankOut, err := l.run(ctx, loopBoard, "rank", act.Ref, "--after", anchor)
+		if err != nil {
+			return "", err
 		}
+		if moveLine == "" {
+			return oneLine(rankOut), nil
+		}
+		return fmt.Sprintf("%s; %s", moveLine, oneLine(rankOut)), nil
 	}
 	return moveLine, nil
 }

@@ -1176,8 +1176,9 @@ var issueURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/issues/\d
 // pullURL is a pull request's URL.
 var pullURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 
-// filedReportClause matches a clause in a report that names newly filed issues.
-var filedReportClause = regexp.MustCompile(`(?i)\b(?:filed|created|opened|follow[- ]?ups?|problems?\s+found)\b[^.;\n]*`)
+// filedReportClause matches a clause in a report that names newly filed issues,
+// keeping dots inside URLs and version tokens while stopping at sentence ends.
+var filedReportClause = regexp.MustCompile(`(?i)\b(?:filed|created|opened|follow[- ]?ups?|problems?\s+found)\b(?:[^.;\n]|\.[^.;\s])*`)
 
 // filedIssueURLs returns the issue URLs a report names as newly filed or
 // found problems, leaving out the closed task issue the report summarizes.
