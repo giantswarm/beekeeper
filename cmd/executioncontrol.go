@@ -97,6 +97,18 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		return json.NewEncoder(output).Encode(reply)
 	}
 	reply.Ref, reply.RequestID = req.Ref, req.RequestID
+	if req.Operation == execution.MCPList || req.Operation == execution.MCPCall {
+		value, callErr := a.executionMCP(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		r, i := executionRecord(st, req.Ref)
 		if r == nil || req.Protocol != execution.Protocol || req.RequestID == "" || req.Ref.Validate() != nil || string(req.Ref.Host) != host || !execution.VerifyCallback(req, r.Request.ControlKey) {

@@ -111,6 +111,8 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// ExecutionMCP admits only the authenticated coordinator proxy namespace.
+	ExecutionMCP bool
 	// MergeGo checks the durable supervisor go for this session and exact head.
 	MergeGo func(session, repo string, pr int, head string) string
 	// GatedOwners are merge.devctlOwners: a merge of their repositories is
