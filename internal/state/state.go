@@ -1415,6 +1415,11 @@ type Event struct {
 	Subject string `json:"subject,omitempty"`
 }
 
+// NoteLookup is the optional complete history of a store that retains closed notes.
+type NoteLookup interface {
+	LookupNote(int) (*Note, *Event, error)
+}
+
 // NoteHistory is the optional history of a store that retains central note
 // closures beyond the late-answer window. File-backed stores need not implement it.
 type NoteHistory interface {
