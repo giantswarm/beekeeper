@@ -4,22 +4,26 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
 func TestExecutionReservationNeedsTerminationEvidence(t *testing.T) {
+	const pending, stopID = "pending", "fixture"
 	tests := []struct {
 		name     string
 		record   ExecutionRecord
 		terminal bool
 	}{
-		{name: "pending reservation", record: ExecutionRecord{Phase: "pending"}},
+		{name: "pending reservation", record: ExecutionRecord{Phase: pending}},
 		{name: "failed coordinator attempt", record: ExecutionRecord{Phase: execution.Failed}},
 		{name: "unreachable running process", record: ExecutionRecord{Observation: execution.Observation{Reachability: execution.Unreachable, ProcessState: execution.Running}}},
-		{name: "unconfirmed stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: "fixture"}, Observation: execution.Observation{ProcessState: execution.Exited}}},
-		{name: "acknowledged stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: "fixture"}, Observation: execution.Observation{StopAcknowledged: true}}, terminal: true},
+		{name: "unconfirmed stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: stopID}, Observation: execution.Observation{ProcessState: execution.Exited}}},
+		{name: "acknowledged stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: stopID}, Observation: execution.Observation{StopAcknowledged: true}}, terminal: true},
 		{name: "confirmed exit", record: ExecutionRecord{Observation: execution.Observation{ProcessState: execution.Exited}}, terminal: true},
+		{name: "released before acknowledgement", record: ExecutionRecord{Phase: pending, ReleasedAt: time.Unix(1, 0)}, terminal: true},
+		{name: "released with an undeliverable stop", record: ExecutionRecord{Phase: pending, StopRequest: &execution.StopRequest{ID: stopID}, ReleasedAt: time.Unix(1, 0)}, terminal: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
