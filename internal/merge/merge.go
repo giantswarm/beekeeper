@@ -248,17 +248,38 @@ func ParsePromoteDocument(raw []byte) (Outcome, bool) {
 // ParsePromoteCandidate reads the candidate of devctl release promote
 // --dry-run's JSON document for one repository: the release candidate a
 // promotion would dispatch now, "" when there is none. ok is false when the
-// document names no single repository.
+// document names no single repository or its read failed (state "failed").
 func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
 	var doc struct {
 		Repositories []struct {
 			Candidate string `json:"candidate"`
+			State     string `json:"state"`
 		} `json:"repositories"`
 	}
-	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 {
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 || doc.Repositories[0].State == "failed" {
 		return "", false
 	}
 	return doc.Repositories[0].Candidate, true
+}
+
+// PromoteFailure is the failure diagnostic of devctl release promote's JSON
+// document: the failed repository's message, or the envelope's reason when
+// there is none. "" when the document names neither.
+func PromoteFailure(raw []byte) string {
+	var doc struct {
+		Reason       string `json:"reason"`
+		Repositories []struct {
+			State   string `json:"state"`
+			Message string `json:"message"`
+		} `json:"repositories"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return ""
+	}
+	if len(doc.Repositories) == 1 && doc.Repositories[0].State == "failed" && doc.Repositories[0].Message != "" {
+		return doc.Repositories[0].Message
+	}
+	return doc.Reason
 }
 
 // owned are the subcommands of devctl that block until an outcome, which

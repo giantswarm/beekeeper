@@ -27,7 +27,8 @@ const (
 
 func TestPromoteCandidateKeepsKilledChildStderr(t *testing.T) {
 	const cause = "dial tcp: connect: network is unreachable"
-	fakeDevctl(t, "echo '"+cause+"' >&2\nexec sleep 30")
+	fakeDevctl(t, `case " $* " in *" --progress "*) echo '`+cause+`' >&2;; esac
+exec sleep 30`)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	candidate, err := promoteCandidate(ctx, scratchRepo)
@@ -48,10 +49,26 @@ func TestPromoteCandidateKeepsKilledChildStderr(t *testing.T) {
 	}
 }
 
+func TestPromoteCandidateRejectsFailedDryRunDocument(t *testing.T) {
+	const cause = "reading the repository: GET https://api.github.com/repos/o/r: dial tcp: lookup api.github.com: no such host"
+	fakeDevctl(t, `echo '{"exitCode":1,"verdict":"red","reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","candidate":"`+candidateA+`","state":"failed","message":"`+cause+`"}]}'
+exit 1`)
+	candidate, err := promoteCandidate(context.Background(), scratchRepo)
+	if candidate != "" || err == nil {
+		t.Fatalf("candidate %q, error %v; want failed dry-run document rejected", candidate, err)
+	}
+	for _, want := range []string{"devctl release promote " + scratchRepo + " --dry-run", "exit status 1", cause} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
 func TestGateReportsKilledCandidateRead(t *testing.T) {
 	a := queueApp(t)
 	const cause = "dial tcp: connect: connection refused"
-	fakeDevctl(t, "echo '"+cause+"' >&2\nexec sleep 30")
+	fakeDevctl(t, `case " $* " in *" --progress "*) echo '`+cause+`' >&2;; esac
+exec sleep 30`)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var err error

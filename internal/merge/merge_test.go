@@ -712,9 +712,24 @@ func TestParsePromoteCandidate(t *testing.T) {
 			t.Errorf("%s: %q %v, want %q", raw, c, ok, want)
 		}
 	}
-	for _, raw := range []string{"not json", `{"repositories":[]}`, `{"repositories":[{},{}]}`} {
+	for _, raw := range []string{
+		"not json",
+		`{"repositories":[]}`,
+		`{"repositories":[{},{}]}`,
+		`{"repositories":[{"repository":"o/r","state":"failed","message":"reading the repository: dial tcp: connection refused"}]}`,
+		`{"repositories":[{"repository":"o/r","candidate":"v0.49.1-rc.2","state":"failed","message":"reading the commit status of v0.49.1-rc.2: dial tcp: connection refused"}]}`,
+	} {
 		if _, ok := ParsePromoteCandidate([]byte(raw)); ok {
 			t.Errorf("%s parsed", raw)
+		}
+	}
+	for raw, want := range map[string]string{
+		`{"reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","state":"failed","message":"reading the repository: dial tcp: connection refused"}]}`: "reading the repository: dial tcp: connection refused",
+		`{"reason":"no GitHub token; run devctl auth login","repositories":[]}`:                                                                                                               "no GitHub token; run devctl auth login",
+		"not json": "",
+	} {
+		if got := PromoteFailure([]byte(raw)); got != want {
+			t.Errorf("%s: PromoteFailure = %q, want %q", raw, got, want)
 		}
 	}
 }

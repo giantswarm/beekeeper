@@ -906,7 +906,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run") //nolint:gosec // the merge tool, a checked repository
+	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if candidate, ok := merge.ParsePromoteCandidate(out); ok {
@@ -920,7 +920,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	if cause := ctx.Err(); cause != nil {
 		err = fmt.Errorf("%w (%w)", err, cause)
 	}
-	if tail := lastOf(stderr.String()); tail != "" {
+	if tail := cmp.Or(lastOf(stderr.String()), merge.PromoteFailure(out)); tail != "" {
 		err = fmt.Errorf("%w: %s", err, tail)
 	}
 	return "", fmt.Errorf("%s release promote %s --dry-run: %w", merge.Tool, repo, err)

@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Promotion candidate read failures retain the child's stderr tail and name an expired deadline when the gate kills devctl, preserving network diagnostics ([https://github.com/giantswarm/beekeeper/issues/1235](https://github.com/giantswarm/beekeeper/issues/1235)).
+- Promotion candidate read failures pass `--progress` to `devctl release promote --dry-run`, reject failed `--dry-run` documents, retain the child's stderr tail or document failure diagnostic, and name an expired deadline when the gate kills devctl, preserving network diagnostics ([https://github.com/giantswarm/beekeeper/issues/1235](https://github.com/giantswarm/beekeeper/issues/1235)).
 - `board move <epic> "In Progress"` records the go when the epic's plan pull request is already merged: with no open plan found, it searches the plans repositories' merged pull requests for the epic's number, takes the latest whose Epic line names it (its URL or `owner/repo#n`), and records the go at its merge commit. A merged plan's head is its merge commit wherever an epic's plan is shown; a go recorded earlier at the merged branch's head counts as unmoved. With neither an open nor a merged plan, the move says so and records no go (https://github.com/giantswarm/beekeeper/issues/1540).
 - Secret-file checks track `pushd`/`popd`, refuse directory copies and `find` moves that expose guarded files, and recognize helper paths split across arguments. Codex also checks split protected-home paths (https://github.com/giantswarm/beekeeper/issues/1902).
 
