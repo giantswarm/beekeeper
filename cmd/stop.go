@@ -198,7 +198,7 @@ func (a *app) stop(ctx context.Context, reason string) error {
 	ended, el, f := a.endWorkers(ctx, st, spare)
 	lines, failed = append(lines, el...), append(failed, f...)
 	for _, s := range st.Starts {
-		if s.Execution == nil || s.Execution.Observation.StopAcknowledged {
+		if s.Execution == nil || s.Execution.Observation.StopAcknowledged || s.Execution.Released() {
 			continue
 		}
 		if err := a.stopExecution(ctx, s.Execution.Handle.Ref, reason); err != nil {

@@ -34,6 +34,7 @@ func apiURL() string {
 // Budget is the core rate limit as GitHub reported it, and the GraphQL
 // limit beside it.
 type Budget struct {
+	Warnings   []string           `json:"warnings,omitempty"`
 	Identity   string             `json:"identity,omitempty"`
 	Login      string             `json:"login,omitempty"`
 	Identities map[string]Budget  `json:"identities,omitempty"`

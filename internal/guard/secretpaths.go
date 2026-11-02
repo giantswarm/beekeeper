@@ -82,7 +82,7 @@ func lnOperands(args []string) (sources []string, dest string, into, ok bool) {
 		switch {
 		case options && a == "--":
 			options = false
-		case options && (a == "-t" || a == "--target-directory"):
+		case options && (a == "-t" || a == targetDirOpt):
 			if i+1 >= len(args) {
 				ok = false
 				break
@@ -202,12 +202,13 @@ func findRuns(args []string) (starts, runs []string) {
 var findQuiet = map[string]bool{"shred": true, "unlink": true, "rmdir": true, echoCommand: true, printfCommand: true}
 
 // findReads reports whether find's actions run a command that is neither a
-// metadata command nor quiet. An action runs a program, never a function the
+// metadata command nor quiet. Moving a found file can expose its content
+// at an unguarded destination, so it also counts as a read. An action runs a program, never a function the
 // command line defines, so no helper shadows a metadata command here.
 func findReads(args []string) bool {
 	_, runs := findRuns(args)
 	for _, r := range runs {
-		if !metaCmds[r] && !findQuiet[r] {
+		if r == "mv" || !metaCmds[r] && !findQuiet[r] {
 			return true
 		}
 	}

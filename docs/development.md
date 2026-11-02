@@ -580,6 +580,20 @@ command-line flag alone cannot select the channel. The guide keeps the note's op
 and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
 relay still does not verify. The central instance retains its authenticated identity checks.
 
+The guide defaults to a 200k relay point. When a feed line arrives after an hour
+of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`
+before the expired cache is warmed again. Unknown activity times and active
+subagents do not count as idle. The supervisor loop is a service with no model
+context; retired supervisor-session relay settings remain ignored.
+
+The guide successor prompt references its skill or configured instruction file
+and the desk's standing file once. Queue rows are shortened; `guide queue --full`
+reads them in full, and `handover --full` retains live details and recent history.
+`TestGuidePromptBudget` exercises a typical desk with 40 verbose decisions and
+a large standing file, using a conservative 25,000-byte prompt budget (no more
+than 25,000 byte-level tokens). The role skill and project instructions loaded
+by the harness remain outside the generated prompt's budget.
+
 The doctor stops reparented process trees left in linked worktrees by known local
 workers that have left the roster. It sends SIGTERM, then SIGKILL after
 two seconds, checking the process start time, user and worktree before each

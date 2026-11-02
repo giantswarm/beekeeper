@@ -573,3 +573,93 @@ func TestCodexWebTools(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexExecCommandWorkdirBodyFile(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "session")
+	worktreeDir := filepath.Join(sessionDir, "worktrees", "beekeeper")
+	for _, d := range []string{sessionDir, worktreeDir} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(worktreeDir, "PR_BODY.md"), []byte("Closes https://github.com/giantswarm/beekeeper/issues/1874\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeDir, "BAD_BODY.md"), []byte("Closes #1874\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "SESSION_ONLY.md"), []byte("Closes https://github.com/giantswarm/beekeeper/issues/1874\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	h := Hook{
+		Self:     testBeekeeperExe,
+		Shell:    zshCmd,
+		Upstream: Upstream{Orgs: []string{allowedOrg}},
+	}
+
+	const createCmd = `gh pr create --repo giantswarm/beekeeper --title "fix: resolve workdir" --body-file PR_BODY.md`
+	for _, wd := range []string{worktreeDir, filepath.Join("worktrees", "beekeeper")} {
+		d := decideCodexCall(t, h, sessionDir, codexExecCommand, map[string]any{
+			codexCmdKey:     createCmd,
+			codexWorkdirKey: wd,
+		})
+		if d.PermissionDecision == decisionDeny {
+			t.Errorf("workdir=%q good body-file denied: %s", wd, d.Reason)
+		}
+	}
+
+	badD := decideCodexCall(t, h, sessionDir, codexExecCommand, map[string]any{
+		codexCmdKey:     `gh pr create --repo giantswarm/beekeeper --title "fix: resolve workdir" --body-file BAD_BODY.md`,
+		codexWorkdirKey: worktreeDir,
+	})
+	if badD.PermissionDecision != decisionDeny || !strings.Contains(badD.Reason, "#1874 without its full URL") {
+		t.Errorf("unlinked ref in workdir body-file: got %+v, want deny naming #1874", badD)
+	}
+
+	sessionOnlyD := decideCodexCall(t, h, sessionDir, codexExecCommand, map[string]any{
+		codexCmdKey:     `gh pr create --repo giantswarm/beekeeper --title "fix: resolve workdir" --body-file SESSION_ONLY.md`,
+		codexWorkdirKey: worktreeDir,
+	})
+	if sessionOnlyD.PermissionDecision != decisionDeny || !strings.Contains(sessionOnlyD.Reason, "--body-file SESSION_ONLY.md cannot be read") {
+		t.Errorf("file only in sessionDir with workdir set: got %+v, want unreadable --body-file refusal", sessionOnlyD)
+	}
+
+	if err := os.WriteFile(filepath.Join(worktreeDir, "MENTION_BODY.md"), []byte("Closes https://github.com/giantswarm/beekeeper/issues/1874 cc @someone\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mentionD := decideCodexCall(t, h, sessionDir, codexExecCommand, map[string]any{
+		codexCmdKey:     `gh pr create --repo giantswarm/beekeeper --title "fix: resolve workdir" --body-file MENTION_BODY.md`,
+		codexWorkdirKey: worktreeDir,
+	})
+	if mentionD.PermissionDecision != decisionDeny || !strings.Contains(mentionD.Reason, "someone") {
+		t.Errorf("mention in workdir body-file: got %+v, want deny naming someone", mentionD)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		sessionKey:          "sess-codex-wd",
+		executionWorkingDir: sessionDir,
+		hookEventKey:        PreToolUseEvent,
+		toolNameKey:         codexExecCommand,
+		toolInputKey: map[string]any{
+			codexCmdKey:     createCmd,
+			codexWorkdirKey: filepath.Join("worktrees", "beekeeper"),
+		},
+	})
+	if paths := CodexPaths(raw); !slices.Contains(paths, worktreeDir) {
+		t.Errorf("CodexPaths = %v, want %s included", paths, worktreeDir)
+	}
+
+	badWD, _ := json.Marshal(map[string]any{
+		hookEventKey: PreToolUseEvent,
+		toolNameKey:  codexExecCommand,
+		toolInputKey: map[string]any{
+			codexCmdKey:     codexGitStatus,
+			codexWorkdirKey: 123,
+		},
+	})
+	if d := decideCodexRaw(t, h, badWD); d.PermissionDecision != decisionDeny {
+		t.Errorf("non-string workdir: got %+v, want deny", d)
+	}
+}
