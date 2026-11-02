@@ -2828,3 +2828,46 @@ func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T)
 		t.Fatalf("the remote worker was not removed after its turn ended: %v\n%s", r.calls, r.out)
 	}
 }
+
+// A claim waiting for review capacity must not disappear silently when its
+// parked worker is removed. The warning survives loop restarts.
+func TestLoopLogsAnOrphanedPendingReviewOnce(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, r.a.now)
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			return "capacity: no start", ExitRefused
+		}
+		return "", 0
+	}
+	for range 2 {
+		r.pass(t)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 0 {
+		t.Fatalf("parked pending review reported as orphaned: %+v", evs)
+	}
+	if len(r.logged(t, loopClaimVerb)) == 0 || len(r.logged(t, "supervisor.review")) != 0 {
+		t.Fatal("expected an uncompleted review claim while capacity refuses")
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r.pass(t)
+	}
+	evs := r.logged(t, "supervisor.leave")
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "orphaned") || !strings.Contains(evs[0].Detail, loopURL) || !strings.Contains(evs[0].Detail, loopHead) {
+		t.Fatalf("pending review disappeared without one orphan warning: %+v", evs)
+	}
+	// Reporting an orphan must not consume the pending review: a new park
+	// still starts the original review when capacity becomes available.
+	r.answer = func([]string) (string, int) { return "", 0 }
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	if r.called(agentsName, agentStartName) == nil {
+		t.Fatalf("review lost after re-park: %v", r.calls)
+	}
+}

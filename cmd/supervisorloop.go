@@ -999,7 +999,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		in.Release = l.newerRelease(ctx)
 	}
 	planned := map[string]bool{}
-	for _, act := range superloop.Plan(in) {
+	for _, act := range append(superloop.Plan(in), orphanedReviewClaims(claims, in)...) {
 		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
 			planned[act.Agent] = true
 		}
@@ -1148,6 +1148,42 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 type loopClaim struct {
 	at     time.Time
 	target string
+}
+
+// orphanedReviewClaims reports a pending review whose verified park is gone.
+// Claims remain in the event log, so the warning must be durable across loop
+// restarts too. It does not complete the claim: a later park can still use it.
+func orphanedReviewClaims(claims map[string]loopClaim, in superloop.Input) []superloop.Action {
+	keys := make([]string, 0, len(claims))
+	for key := range claims {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	var out []superloop.Action
+	for _, key := range keys {
+		pending, ok := strings.CutPrefix(key, "review ")
+		if !ok {
+			continue
+		}
+		ref, head, ok := strings.Cut(pending, "@")
+		pr, valid := parseRef(ref)
+		if !ok || !valid || head == "" {
+			continue
+		}
+		if slices.ContainsFunc(in.Workers, func(w superloop.Worker) bool {
+			return w.ReviewRequested && strings.EqualFold(w.ParkedOn, ref)
+		}) {
+			continue
+		}
+		warning := "leave " + key + " orphaned"
+		if slices.ContainsFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == warning }) {
+			continue
+		}
+		url := fmt.Sprintf("https://github.com/%s/pull/%d", pr.Repo, pr.N)
+		out = append(out, superloop.Action{Key: warning, Kind: superloop.KindLeave, Ref: ref, URL: url,
+			Message: fmt.Sprintf("%s head %s: orphaned pending review claim; no worker holds a verified review park; claim retained for a new park", url, head)})
+	}
+	return out
 }
 
 // keyed reads a loop line's detail: "[<key>] <rest>".
