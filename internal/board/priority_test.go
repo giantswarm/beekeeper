@@ -148,7 +148,7 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"x"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(priorityMetaJSON), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, boardItemsQuery):
 		ranked, team := f.ranked, teamX
 		switch vars["q"] {
 		case `is:open team:"X" kind:"Epic 🎯"`:
@@ -272,7 +272,7 @@ func TestSetPriorityInsertsAndRenumbers(t *testing.T) {
 			}
 			// Only the items named are read, besides the ranked epics.
 			for _, q := range f.queries {
-				if strings.Contains(q, "items(first:100") && !strings.Contains(q, "priority:fieldValueByName") {
+				if strings.Contains(q, boardItemsQuery) && !strings.Contains(q, "priority:fieldValueByName") {
 					t.Errorf("a board read beside the priority list: %s", q)
 				}
 			}
@@ -392,7 +392,7 @@ func TestRankAnchorPlacesBlockingOrFollowUpIssueAfterHighRankedItem(t *testing.T
 		switch {
 		case strings.Contains(q, "fields(first:50)"):
 			return []byte(priorityMetaJSON), nil
-		case strings.Contains(q, "items(first:100"):
+		case strings.Contains(q, boardItemsQuery):
 			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[
 				{"id":"I1","priority":{"number":1},"status":{"name":"In Progress ⛏️"},"team":{"name":"X 🐝"},"content":{"number":1,"url":"https://github.com/o/r/issues/1","title":"epic 1","state":"OPEN","repository":{"nameWithOwner":"o/r"},"blockedBy":{"nodes":[{"number":50,"state":"OPEN","repository":{"nameWithOwner":"org/engine"}}]}}},{"id":"I2","priority":{"number":2},"status":{"name":"Up Next ➡️"},"team":{"name":"X 🐝"},"content":{"number":2,"url":"https://github.com/o/r/issues/2","title":"epic 2","state":"OPEN","repository":{"nameWithOwner":"o/r"}}}]}}}}}`), nil
 		case strings.Contains(q, "projectItems"):

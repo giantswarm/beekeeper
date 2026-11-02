@@ -83,7 +83,7 @@ type secretFiles struct {
 
 // newSecretFiles takes the built-in list and extra, ~/ expanded.
 func newSecretFiles(extra []string) secretFiles {
-	home, _ := os.UserHomeDir()
+	home, _ := guardHomeDir()
 	f := secretFiles{home: home}
 	list := slices.Concat(SecretFiles, extra, []string{"~/.local/state/beekeeper/codex/home/auth.json"})
 	if ch := strings.TrimSpace(os.Getenv("CODEX_HOME")); ch != "" {

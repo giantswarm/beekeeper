@@ -34,6 +34,7 @@ func claimApp(t *testing.T, grants ...state.Grant) *app {
 	t.Cleanup(func() { plat.Machine = was })
 	a.kindClusters = func() ([]string, error) { return []string{labCluster}, nil }
 	a.cfg.LeaseDir = t.TempDir()
+	a.labDocker = func(context.Context, ...string) ([]byte, error) { return nil, nil }
 	a.cfg.Resources = []string{labOne, labTwo, graveler}
 	a.cfg.Labs = map[string]string{labOne: labCluster, labTwo: labTwo}
 	labDirs := labConfigs(t, labCluster, labTwo)
