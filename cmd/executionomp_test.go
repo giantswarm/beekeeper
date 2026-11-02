@@ -68,7 +68,7 @@ func TestExecutionOmpGuardFormat(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j.Request.Harness = tc.harness
-			raw, _ := json.Marshal(map[string]any{executionOmpSession: j.Thread, executionOmpCwd: workspace, "tool_name": tc.tool, "tool_input": map[string]any{hookTypeCommand: tc.command}})
+			raw, _ := json.Marshal(map[string]any{executionOmpSession: j.Thread, executionOmpCwd: workspace, executionHookTool: tc.tool, executionHookInput: map[string]any{hookTypeCommand: tc.command}})
 			b := executionGuardDecision(guard.Hook{}, tc.format, j, nil)(raw)
 			var out struct {
 				Allow bool `json:"allow"`
