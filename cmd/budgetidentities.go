@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -16,6 +19,18 @@ var budgetCredentials = github.BudgetCredentials
 const unlabelledIdentity = "unlabelled"
 
 func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
+	// Every producer (watch, loop and CLI) shares this lock. Hold it from
+	// the initial cache read through publication so a delayed high response
+	// cannot overwrite a concurrent low reading or return it to admission.
+	lock := flock.New(filepath.Join(a.store.Dir(), "budget-probe.lock"))
+	held, err := lock.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
+		return github.Budget{}, err
+	}
+	if !held {
+		return github.Budget{}, errors.New("budget probe lock unavailable")
+	}
+	defer func() { _ = lock.Unlock() }()
 	st, err := a.store.Read()
 	if err != nil {
 		return github.Budget{}, err

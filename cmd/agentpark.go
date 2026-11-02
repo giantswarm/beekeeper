@@ -543,19 +543,30 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
-		attempts := map[github.PR]github.RefState{}
-		for _, ag := range parked {
-			if ag.Park != nil && ag.Park.RefKind != github.RefPullRequest {
-				r, ok := parseRef(ag.Park.On)
-				if ok && slices.Contains(refs, r) {
-					attempts[r] = github.RefState{Kind: ag.Park.RefKind}
+		var s map[github.PR]github.RefState
+		read := func() error {
+			attempts := map[github.PR]github.RefState{}
+			for _, ag := range parked {
+				if ag.Park != nil && ag.Park.RefKind != github.RefPullRequest {
+					r, ok := parseRef(ag.Park.On)
+					if ok && slices.Contains(refs, r) {
+						attempts[r] = github.RefState{Kind: ag.Park.RefKind}
+					}
 				}
 			}
+			if len(attempts) > 0 {
+				w.cacheParkRefs(parked, attempts)
+			}
+			var err error
+			s, err = refStates(ctx, refs)
+			return err
 		}
-		if len(attempts) > 0 {
-			w.cacheParkRefs(parked, attempts)
+		var err error
+		if w.loopOwned {
+			err = w.loopGitHub(ctx, "park-refs", read)
+		} else {
+			err = read()
 		}
-		s, err := refStates(ctx, refs)
 		if err != nil {
 			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
 		} else {

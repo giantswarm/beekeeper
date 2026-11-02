@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,5 +132,82 @@ func TestBudgetNamesIdentitiesAndNeverReusesAnotherWindow(t *testing.T) {
 	b, err = a.probeBudget(context.Background())
 	if err == nil || b.GraphQL.Identity != "gh" || b.GraphQL.Err == "" {
 		t.Fatal("a missing provider erased the low identity")
+	}
+}
+
+// Separate app instances stand in for the loop and embedded watch. A delayed
+// response must hold the producer lock; later admission sees the lower reading
+// regardless of which response was delayed.
+func TestBudgetSerializesConcurrentDelayedResponses(t *testing.T) {
+	for _, firstLow := range []bool{false, true} {
+		t.Run(fmt.Sprint(firstLow), func(t *testing.T) {
+			a, _ := budgetApp(t)
+			a.cfg.Merge.BudgetFresh.Duration = -time.Second
+			other := *a
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			t.Cleanup(unblock)
+			var queries atomic.Int32
+			reset := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-RateLimit-Limit", "5000")
+				w.Header().Set("X-RateLimit-Remaining", "4800")
+				w.Header().Set("X-RateLimit-Reset", fmt.Sprint(reset.Unix()))
+				if r.URL.Path != budgetGraphQLPath {
+					_, _ = w.Write([]byte(`{}`))
+					return
+				}
+				n := queries.Add(1)
+				remaining := 4900
+				if (n == 1 && firstLow) || (n == 2 && !firstLow) {
+					remaining = 2000
+				}
+				if n == 1 {
+					close(entered)
+					<-release
+				}
+				_, _ = fmt.Fprintf(w, `{"data":{"viewer":{"login":"fixture"},"rateLimit":{"limit":5000,"remaining":%d,"resetAt":%q}}}`, remaining, reset.Format(time.RFC3339))
+			}))
+			t.Cleanup(srv.Close)
+			// Unblock handlers before closing the server, even on a failed assertion.
+			t.Cleanup(unblock)
+			t.Setenv("BEEKEEPER_GITHUB_API", srv.URL)
+			type result struct {
+				budget github.Budget
+				err    error
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			first, second := make(chan result, 1), make(chan result, 1)
+			go func() { b, err := a.probeBudget(ctx); first <- result{b, err} }()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			go func() { b, err := other.probeBudget(ctx); second <- result{b, err} }()
+			select {
+			case r := <-second:
+				t.Fatalf("concurrent producer bypassed delayed probe: %+v", r)
+			case <-time.After(50 * time.Millisecond):
+			}
+			if queries.Load() != 1 {
+				t.Fatal("second GraphQL probe overlapped delayed response")
+			}
+			unblock()
+			if r := <-first; r.err != nil {
+				t.Fatal(r.err)
+			}
+			if r := <-second; r.err != nil || r.budget.GraphQL.Remaining != 2000 {
+				t.Fatalf("admission lost the low reading: %+v, %v", r.budget.GraphQL, r.err)
+			}
+			// Another high sample cannot reopen admission in the same window.
+			b, err := a.probeBudget(ctx)
+			st, readErr := a.store.Read()
+			if err != nil || readErr != nil || b.GraphQL.Remaining != 2000 || st.Budget.GraphQL.Remaining != 2000 || st.Budget.Identities["gh"].GraphQL.Remaining != 2000 {
+				t.Fatalf("returned/persisted minima diverged: %+v, %+v, %v, %v", b.GraphQL, st.Budget, err, readErr)
+			}
+		})
 	}
 }
