@@ -309,13 +309,16 @@ type thread struct {
 	} `json:"nodes"`
 }
 
+// planMerged is a merged plan's state.
+const planMerged = "merged"
+
 // plan is the pull request as an epic's plan, its state the board's word,
 // a merged one's head its merge commit.
 func (n *planPR) plan() *Plan {
 	p := &Plan{Ref: fmt.Sprintf("%s#%d", n.Repository.NameWithOwner, n.Number), URL: n.URL, Title: n.Title, Head: n.Head, Private: n.Repository.IsPrivate, id: n.ID}
 	switch {
 	case n.Merged:
-		p.State = "merged"
+		p.State = planMerged
 		if n.Merge != nil && n.Merge.OID != "" {
 			p.Head = n.Merge.OID
 		}
@@ -541,7 +544,7 @@ func readGo(ref string, p *Plan, prs []planPR, epic thread) *Plan {
 		p.Since = "the plan no longer names the epic"
 	case closed:
 		p.Since = "plan closed"
-	case p.Head != head && !(of.Merged && of.Head == head):
+	case p.Head != head && (!of.Merged || of.Head != head):
 		p.Moved = since(of, head)
 		if p.Moved < 0 {
 			p.Moved, p.Since = 0, fmt.Sprintf("plan moved since the go: head %s not among its last %d commits", short(head), goCommits)

@@ -357,7 +357,7 @@ func TestMovingAnEpicWhosePlanIsMergedRecordsTheGoAtItsMergeCommit(t *testing.T)
 	f := &goGH{t: t, planPrivate: true, merged: merged(2, "Epic: https://github.com/o/r/issues/1\n\n1. o/r#50: a slice") + "," + merged(1, "**Epic:** o/r#50")}
 	c := &Client{GH: f.run, Board: b, Plans: []string{plansRepo}}
 	mv, err := c.Move(context.Background(), epicRef, "in progress")
-	if err != nil || mv.Go == nil || mv.Go.Plan == nil || mv.Go.Plan.URL != "https://github.com/o/plans/pull/1" || mv.Go.Plan.Head != "m1" || mv.Go.Plan.State != "merged" || mv.Go.Thread != "o/plans#1" {
+	if err != nil || mv.Go == nil || mv.Go.Plan == nil || mv.Go.Plan.URL != "https://github.com/o/plans/pull/1" || mv.Go.Plan.Head != "m1" || mv.Go.Plan.State != planMerged || mv.Go.Thread != "o/plans#1" {
 		t.Fatalf("Move = %+v (go %+v), %v", mv, mv.Go, err)
 	}
 	if len(f.queries) != 2 || !strings.Contains(f.queries[1], `search(query:"repo:o/plans is:pr is:merged 50 sort:updated-desc",type:ISSUE,first:30)`) || !strings.Contains(f.queries[1], "mergeCommit{oid}") {
