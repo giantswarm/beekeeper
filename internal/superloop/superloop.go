@@ -156,10 +156,12 @@ const verdictSlack = 30 * time.Second
 // head submitted after the round started; nil while the round runs. A
 // worker that pushes while its round runs has the newer head reviewed: with
 // none on the round's head, the latest verdict submitted before the next
-// round started on a head no earlier round reviewed is the round's, on its
-// own head. A verdict of an earlier round, or of nobody's round, never
+// round started on a head no earlier round opened on is the round's, on its
+// own head, when pushed says that head was pushed during the round. A
+// verdict on any other head (one from before the round, a teammate's late
+// review of an older head), of an earlier round, or of nobody's round never
 // counts.
-func (p Pull) verdict(rd round) *Review {
+func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 	since := rd.at.Add(-verdictSlack)
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
 		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) {
@@ -171,7 +173,7 @@ func (p Pull) verdict(rd round) *Review {
 		if r.Verdict == "" || r.Head == "" || r.At.Before(since) || !rd.until.IsZero() && !r.At.Before(rd.until) {
 			continue
 		}
-		if !slices.ContainsFunc(rd.earlier, func(h string) bool { return sameHead(h, r.Head) }) {
+		if !slices.ContainsFunc(rd.earlier, func(h string) bool { return sameHead(h, r.Head) }) && pushed(r) {
 			return &p.Reviews[i]
 		}
 	}
@@ -486,6 +488,14 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 
 func (l ledger) has(key string) bool { _, ok := l.keys[key]; return ok }
 
+// pushed reports whether review r of p is on a head its worker pushed while
+// a round ran: the pull request's head now, which no rule lets go back to
+// an older one, or a head whose findings the loop forwarded already, so a
+// round's verdict stays its verdict once the head moves on.
+func (l ledger) pushed(p Pull) func(Review) bool {
+	return func(r Review) bool { return sameHead(r.Head, p.Head) || l.has(forwardKey(p.Ref, r.ID)) }
+}
+
 // actedAfter reports whether the loop acted on ref after at: a round's
 // verdict is acted on once anything follows the round's start.
 func (l ledger) actedAfter(ref string, at time.Time) bool {
@@ -799,7 +809,7 @@ func Plan(in Input) []Action {
 		// not cover, and never past MaxReviews.
 		cycles := 0
 		for _, rd := range rs {
-			if v := p.verdict(rd); v != nil && v.Verdict == ChangesRequested {
+			if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested {
 				cycles++
 			}
 		}
@@ -810,9 +820,24 @@ func Plan(in Input) []Action {
 			continue
 		}
 		last := rs[len(rs)-1]
-		v := p.verdict(last)
+		v := p.verdict(last, l.pushed(p))
 		if v == nil {
-			continue // the round runs
+			// The round runs until its reviewer reports done. One done
+			// without a verdict on the round's head or on the head now
+			// reviewed a head the worker pushed in between: the newest
+			// head gets its round.
+			done := slices.ContainsFunc(in.Events, func(e Event) bool {
+				return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
+			})
+			if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !w.ParkedAt.After(last.at) {
+				continue
+			}
+			if len(rs) < MaxReviews {
+				review()
+				continue
+			}
+			escalate(last.head)
+			continue
 		}
 		left := cycles < rounds && len(rs) < MaxReviews
 		// reviewed is the head the verdict is on: the round's, or a newer
@@ -839,7 +864,7 @@ func Plan(in Input) []Action {
 			if !p.Green || !isParked {
 				continue
 			}
-			if !w.ParkedAt.After(v.At) && !w.ParkedAt.After(last.at) {
+			if !w.ParkedAt.After(last.at) {
 				leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 				continue
 			}
@@ -927,7 +952,7 @@ func Plan(in Input) []Action {
 				if ReviewerName(ref, i+1) != e.Agent || !tracked {
 					continue
 				}
-				v := p.verdict(rd)
+				v := p.verdict(rd, l.pushed(p))
 				if v == nil || v.Verdict != ChangesRequested {
 					continue
 				}

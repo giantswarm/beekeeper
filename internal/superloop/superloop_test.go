@@ -1008,18 +1008,27 @@ func TestAHeadPushedDuringTheRoundGetsItsGo(t *testing.T) {
 }
 
 // A verdict on a head between the round's and the one the worker parks on
-// now is followed by a round for the newest head.
+// now is no verdict of the round: once the round's reviewer reports done
+// without one on the newest head, the newest head gets its round.
 func TestAVerdictOnAnOlderPushedHeadIsFollowedByARoundForTheParkedHead(t *testing.T) {
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
 	approved := Review{ID: "R1", Head: head2, Verdict: Approved, At: t1}
 	in := Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head3, true, approved), Rounds: 1, Taken: tk}
-	a := only(t, Plan(in), KindReview)
-	if a.Round != 2 || a.Head != head3 {
-		t.Errorf("review = %+v", a)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a running round got %+v", got)
 	}
+	// The reviewer's done is the loop's to take as well.
+	in.Events = []Event{{At: t1.Add(time.Minute), Verb: VerbDone, Agent: ReviewerName(pr, 1)}}
+	got := Plan(in)
+	i := slices.IndexFunc(got, func(a Action) bool { return a.Kind == KindReview })
+	if i < 0 || got[i].Round != 2 || got[i].Head != head3 {
+		t.Fatalf("want round 2 on head 3, got %+v", got)
+	}
+	a := got[i]
 	// Round 2 runs on head 3: a late verdict on round 1's head is not its.
 	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Hour), a)...)
 	late := Review{ID: "R2", Head: head1, Verdict: Approved, At: t0.Add(3 * time.Hour)}
+	in.Events = nil
 	in.Pulls = pull(head3, true, approved, late)
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("round 1's head's verdict gave round 2 %+v", got)
@@ -1028,6 +1037,19 @@ func TestAVerdictOnAnOlderPushedHeadIsFollowedByARoundForTheParkedHead(t *testin
 	in.Pulls = pull(head3, true, approved, late, Review{ID: "R3", Head: head3, Verdict: Approved, At: t0.Add(4 * time.Hour)})
 	if g := only(t, Plan(in), KindGo); g.Head != head3 {
 		t.Errorf("go = %+v", g)
+	}
+}
+
+// A verdict on a head from before the round (a teammate's late review, a
+// stale bot's) is nothing while the round runs: no forward, no cycle, and
+// the round's reviewer stays.
+func TestAPreRoundHeadsVerdictLeavesTheRoundRunning(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})
+	workers := append(parked(t0.Add(-time.Minute)), Worker{Name: ReviewerName(pr, 1), Started: true})
+	stale := Review{ID: "S1", Head: head1, Verdict: ChangesRequested, Body: "old", At: t0.Add(5 * time.Minute)}
+	in := Input{Workers: workers, Pulls: pull(head2, true, stale), Rounds: 2, Taken: tk}
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a pre-round head's verdict got %+v", got)
 	}
 }
 
