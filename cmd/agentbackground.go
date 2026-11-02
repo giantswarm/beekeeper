@@ -419,7 +419,9 @@ const parkStoppedEvent = "agents.parkstop"
 // --resume). A session in a turn (a headless turn of it in t, a running
 // command, its transcript or a subagent's written within stewardQuiet of
 // now), a park already resumable (the watch resumes it), an agent on an
-// execution host and the guide's session stay.
+// execution host and the guide's session stay. stopParkedSession looks once
+// more, at the transcript's own proof that the last turn ended, before it
+// stops: a turn a wake or resume started is never stopped mid-way.
 func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time) []state.Party {
 	var out []state.Party
 	for _, ag := range st.Agents {
@@ -556,9 +558,13 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 // (parkStopLock), which every wake of p takes too: a wake in flight keeps
 // it running this poll, one that comes meanwhile waits for the stop and
 // then resumes the stopped session. Under the lock it looks again: p still
-// parked on the park seen in seen, not woken within stewardQuiet, and,
-// read anew, still running with its turn ended; false when it stays. The
-// lock holds until the stopped CLI exits, so the next wake finds it gone.
+// parked on the park seen in seen, not woken within stewardQuiet, still
+// running with its turn ended (the transcript's last message of its own
+// answers the last message and stopped — TurnDone — so a turn a wake or
+// resume started is never stopped mid-way, even while its model thinks and
+// the transcript stays quiet), and, read anew, still running; false when it
+// stays. The lock holds until the stopped CLI exits, so the next wake finds
+// it gone.
 func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.Party) (bool, error) {
 	defer a.recordStoppedGates(ctx)
 	l, err := a.parkStopLock(p.Session)
@@ -585,6 +591,21 @@ func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.
 	}
 	if !slices.ContainsFunc(parkedResident(st, sessions, t, a.now), p.Is) {
 		return false, nil
+	}
+	// The quiet look is the transcript's last write: while a turn runs but
+	// writes nothing yet (the model of a wake or resume thinks over the
+	// message it was given, the next model call of a long turn), the
+	// transcript stays quiet and the session would read as idle. Stop only
+	// once the transcript proves the last turn answered and ended, so a stop
+	// never undoes a turn a wake or resume started (the wake's stamp holds
+	// the first stewardQuiet of it off; this is the rest of the turn).
+	for _, s := range sessions {
+		if s.ID != p.Session {
+			continue
+		}
+		if !claude.TurnDone(cmp.Or(s.Transcript, transcriptOf(a.cfg, s.ID))) {
+			return false, nil // in a turn, or a transcript that cannot prove it ended
+		}
 	}
 	if err := a.bgStop(ctx, p.Session); err != nil {
 		return false, err

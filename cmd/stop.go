@@ -121,7 +121,7 @@ it was (unless its time passed meanwhile), and starts, wakes, revives,
 reopens and imports run again. A unit that does not start again is named
 on a FAILED line and makes it exit 1: beekeeper stays stopped, with that
 unit still to start, and resume runs again once it is fixed. The capacity is what it was: the stop never
-changes capacity.floor or capacity.ceiling. A wake timer that fell due
+changes capacity.ceiling. A wake timer that fell due
 during the stop fires at the watch's next poll.
 
 It starts no session: it names the sessions the stop ended, which wait for
@@ -482,7 +482,7 @@ func (a *app) resume(ctx context.Context) error {
 	for _, t := range lapsed {
 		p("resume: the hold on %s ended during the stop, not put back", t)
 	}
-	p("resume: capacity as configured: floor %d, ceiling %d", a.cfg.Capacity.Floor, a.cfg.Capacity.Ceiling)
+	p("resume: capacity as configured: ceiling %d", a.cfg.Capacity.Ceiling)
 	if len(rec.Sessions) > 0 {
 		p("resume: the sessions the stop ended wait for a wake (beekeeper agents wake): %s", strings.Join(rec.Sessions, ", "))
 	}

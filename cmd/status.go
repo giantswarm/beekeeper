@@ -21,7 +21,7 @@ func (a *app) statusCmd() *cobra.Command {
 		Long: `Print the machine's coordination state in one line: whether the
 supervisor loop runs, the
 leases held, the holds in force, the notes and timers that are due and the
-busy agents against capacity.floor and capacity.ceiling; while beekeeper
+busy agents against capacity.ceiling; while beekeeper
 stop stands, the line starts with STOPPED and the stop's reason.
 
 --bar prints it for a desktop bar as one tab-separated row, the same shape
@@ -35,7 +35,7 @@ contract is fixed: six fields, always present, in this order:
   leases      the number of leases held
   holds       the number of holds in force
   due         the number of notes and timers whose time has come
-  busy        the busy agents against capacity.floor, <n>/<floor>
+  busy        the busy agents against capacity.ceiling, <n>/<ceiling>
               (beekeeper capacity)
 
 The exit code is 0 whenever the state can be read.`,
@@ -71,9 +71,8 @@ type statusView struct {
 	// who lifted them.
 	Lifted []string `json:"lifted,omitempty"`
 	Due    int      `json:"due"`
-	// Busy are the busy agents, against Floor and Ceiling (capacity).
+	// Busy are the busy agents, against Ceiling (capacity).
 	Busy    int `json:"busy"`
-	Floor   int `json:"floor"`
 	Ceiling int `json:"ceiling"`
 	// VaultWaits are the sessions whose calls wait on the person's unlock
 	// of the vault.
@@ -97,7 +96,7 @@ func (a *app) status() (*statusView, error) {
 		return nil, err
 	}
 	k, _ := a.cachedUsageCapacity(a.liveCapacity())
-	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now), Floor: k.Floor, Ceiling: k.Ceiling}
+	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now), Ceiling: k.Ceiling}
 	if st.Stop != nil {
 		v.Stopped = a.stopText(st.Stop)
 	}
@@ -151,7 +150,7 @@ func (v *statusView) bar() string {
 	if v.SupervisorLoop > 0 {
 		sup = "loop"
 	}
-	fields := []string{"beekeeper", sup, fmt.Sprint(len(v.Leases)), fmt.Sprint(len(v.Holds)), fmt.Sprint(v.Due), fmt.Sprintf("%d/%d", v.Busy, v.Floor)}
+	fields := []string{"beekeeper", sup, fmt.Sprint(len(v.Leases)), fmt.Sprint(len(v.Holds)), fmt.Sprint(v.Due), fmt.Sprintf("%d/%d", v.Busy, v.Ceiling)}
 	for i, f := range fields {
 		fields[i] = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(f)
 	}
@@ -178,7 +177,7 @@ func (v *statusView) line() string {
 	if len(v.Lifted) > 0 {
 		holds += "; " + list(len(v.Lifted), "lifted", "lifted", v.Lifted)
 	}
-	line := fmt.Sprintf("%s; %s; %s; %d due; busy %d/%d-%d", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due, v.Busy, v.Floor, v.Ceiling)
+	line := fmt.Sprintf("%s; %s; %s; %d due; busy %d/%d", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due, v.Busy, v.Ceiling)
 	if v.Serving != "" {
 		line += "; " + v.Serving
 	}
