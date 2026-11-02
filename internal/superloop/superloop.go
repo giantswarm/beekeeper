@@ -108,12 +108,12 @@ type Pull struct {
 	// Base is the branch it merges into.
 	Base        string
 	MergeCommit string
-	// Green is every check on Head concluded successfully (none is not
+	// Green is every non-superseded check on Head concluded successfully (none is not
 	// green: they have not reported yet).
 	Green bool
 	// Red are the checks on Head that concluded red (failure, cancelled,
 	// timed out, startup failure, action required; a commit status's
-	// failure or error), by name.
+	// failure or error), by name. Superseded cancellations are excluded.
 	Red     []Check
 	Reviews []Review // oldest first
 	// Author is the login that opened it; Title, Branch (its head branch)
