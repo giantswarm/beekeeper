@@ -725,7 +725,7 @@ func TestParsePromoteCandidate(t *testing.T) {
 	}
 	for raw, want := range map[string]string{
 		`{"reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","state":"failed","message":"reading the repository: dial tcp: connection refused"}]}`: "reading the repository: dial tcp: connection refused",
-		`{"reason":"no GitHub token; run devctl auth login","repositories":[]}`:                                                                                                               "no GitHub token; run devctl auth login",
+		`{"reason":"no GitHub token; run devctl auth login","repositories":[]}`: "no GitHub token; run devctl auth login",
 		"not json": "",
 	} {
 		if got := PromoteFailure([]byte(raw)); got != want {
