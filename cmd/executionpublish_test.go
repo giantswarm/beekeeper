@@ -215,7 +215,7 @@ func TestPublicationGitFailureNamesOnlyKnownStages(t *testing.T) {
 	if err.Error() != "publication Git operation failed: the coordinator's GitHub credential was not accepted" {
 		t.Fatal(err)
 	}
-	err = publicationGitFailure(context.Background(), []string{"bundle", "verify", "/fixture/path"}, "unexpected text")
+	err = publicationGitFailure(context.Background(), []string{gitBundle, gitVerify, "/fixture/path"}, "unexpected text")
 	if err.Error() != "publication Git bundle verify failed: unclassified Git failure" {
 		t.Fatal(err)
 	}

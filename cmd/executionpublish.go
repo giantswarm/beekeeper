@@ -70,7 +70,13 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 
 // publicationGitStages are the Git subcommands publication runs; any other
 // argument is never echoed back as a stage.
-var publicationGitStages = []string{"init", "fetch", "push", "bundle", "cat-file", "rev-parse", "merge-base", "log", "merge", "diff"}
+var publicationGitStages = []string{"init", "fetch", "push", gitBundle, "cat-file", "rev-parse", "merge-base", "log", gitMerge, "diff"}
+
+const (
+	gitBundle = "bundle"
+	gitMerge  = "merge"
+	gitVerify = "verify"
+)
 
 // publicationGitReasons map a known Git or GitHub rejection to a fixed
 // diagnosis. The raw output may carry URLs, paths or remote text, so only the
@@ -98,7 +104,7 @@ func publicationGitFailure(ctx context.Context, args []string, stderr string) er
 	stage := "operation"
 	if len(args) > 0 && slices.Contains(publicationGitStages, args[0]) {
 		stage = args[0]
-		if stage == "bundle" && len(args) > 1 && slices.Contains([]string{"create", "verify", "list-heads"}, args[1]) {
+		if stage == gitBundle && len(args) > 1 && slices.Contains([]string{"create", gitVerify, "list-heads"}, args[1]) {
 			stage += " " + args[1]
 		}
 	}
