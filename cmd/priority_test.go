@@ -101,7 +101,7 @@ func TestBoardRankSplitLogsCallerAndWritesOnlyPosition(t *testing.T) {
 		q := args[3]
 		switch {
 		case strings.Contains(q, "fields(first:50)"):
-			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[]}}}}}`), nil
+			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog"}]}]}}}}}`), nil
 		case strings.Contains(q, "projectItems"):
 			return []byte(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"I1","project":{"id":"P"}}]}}}}}`), nil
 		case strings.Contains(q, "updateProjectV2ItemPosition"):
@@ -113,6 +113,7 @@ func TestBoardRankSplitLogsCallerAndWritesOnlyPosition(t *testing.T) {
 		}
 	}
 	c := a.boardRankCmd()
+	c.SilenceUsage, c.SilenceErrors = true, true
 	c.SetArgs([]string{refOne, "--top"})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
@@ -134,6 +135,7 @@ func TestBoardRankSplitRefusesAnonymousWrites(t *testing.T) {
 	}
 	a, _ := priorityApp(t, "")
 	c := a.boardRankCmd()
+	c.SilenceUsage, c.SilenceErrors = true, true
 	c.SetArgs([]string{refOne, "--top"})
 	err := c.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "identified caller") {
