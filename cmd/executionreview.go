@@ -26,8 +26,8 @@ func sameReviewSession(a, b state.Party) bool {
 // worker-selected name or a review's prose. Reconciliation is idempotent.
 func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		workerIndex := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent })
-		if workerIndex < 0 || st.Agents[workerIndex].Execution == nil {
+		worker, ok := executionReviewWorker(st, act)
+		if !ok {
 			return nil, nil
 		}
 		for _, round := range st.DeskReviews {
@@ -43,10 +43,10 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 				start = candidate
 			}
 		}
-		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, st.Agents[workerIndex].Party) {
+		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, worker) {
 			return nil, refused("independent reviewer start identity is unavailable")
 		}
-		st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: uuid.NewString(), Ref: act.Ref, Head: act.Head, Round: act.Round, Worker: st.Agents[workerIndex].Party, Reviewer: start.Party, AssignedAt: start.At})
+		st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: uuid.NewString(), Ref: act.Ref, Head: act.Head, Round: act.Round, Worker: worker, Reviewer: start.Party, AssignedAt: start.At})
 		for _, report := range st.WorkerReports {
 			if report.Finished && sameReviewSession(report.By, start.Party) {
 				if err := a.captureExecutionReviewReport(ctx, st, report.By, report.Text, report.At, true); err != nil {
@@ -56,6 +56,21 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 		}
 		return []state.Event{event(loopParty, "execution.review-assigned", "%s for %s at %s", name, act.URL, act.Head)}, nil
 	})
+}
+
+func executionReviewWorker(st *state.State, act superloop.Action) (state.Party, bool) {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 && st.Agents[i].Execution != nil {
+		return st.Agents[i].Party, true
+	}
+	if rp, ok := st.ReviewParkFor(act.Ref); ok && rp.Execution != nil {
+		return rp.Party, true
+	}
+	for i := len(st.Starts) - 1; i >= 0; i-- {
+		if st.Starts[i].Name == act.Agent && st.Starts[i].Execution != nil {
+			return st.Starts[i].Party, true
+		}
+	}
+	return state.Party{}, false
 }
 
 func executionReviewRound(st *state.State, use execution.MergeUse) *state.DeskReview {
@@ -107,7 +122,7 @@ func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, 
 	round := executionReviewRound(st, use)
 	_, workerIndex := executionRecord(st, use.Ref)
 	reviewed := use.Head
-	if round != nil && round.Head != use.Head && pull.Head == use.Head {
+	if round != nil && round.Head != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
 		covered, err := readBaseMerge(ctx, pull, round.Head)
 		if err != nil {
 			return err
@@ -116,7 +131,13 @@ func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, 
 			reviewed = round.Head
 		}
 	}
-	if round == nil || round.Head != reviewed || workerIndex < 0 || !sameReviewSession(round.Worker, st.Starts[workerIndex].Party) || sameReviewSession(round.Worker, round.Reviewer) {
+	workerOK := workerIndex >= 0 && round != nil && sameReviewSession(round.Worker, st.Starts[workerIndex].Party)
+	if !workerOK && use.ID == "" && workerIndex >= 0 && round != nil {
+		workerOK = slices.ContainsFunc(st.Starts, func(s state.Start) bool {
+			return s.Execution != nil && s.Execution.Request.Repository == use.Repository && sameReviewSession(round.Worker, s.Party)
+		})
+	}
+	if round == nil || round.Head != reviewed || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
 		return refused("no assigned independent review round for this execution and head")
 	}
 	result := round.Result

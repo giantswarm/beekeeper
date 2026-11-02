@@ -914,6 +914,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := l.endReviewWorkers(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
 	own := a.cfg.Supervisor.Ownership
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now, PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
@@ -930,12 +937,34 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
-			w.ReviewRequested = ag.Park.ReviewHead != ""
-			w.ParkedHead = ag.Park.ReviewHead
+			if !shouldEndReviewWorker(st, ag) || l.dryRun {
+				w.ReviewRequested = ag.Park.ReviewHead != ""
+				w.ParkedHead = ag.Park.ReviewHead
+			}
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		w.Serves = loopServes(st, ag)
 		in.Workers = append(in.Workers, w)
+	}
+	for _, rp := range st.ReviewParks {
+		if rp.On == "" || rp.ReviewHead == "" {
+			continue
+		}
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Name == rp.Agent || (ag.Park != nil && strings.EqualFold(loopParkOn(ag.Park), rp.On))
+		}) {
+			continue
+		}
+		in.Workers = append(in.Workers, superloop.Worker{
+			Name:            rp.Agent,
+			ParkedOn:        rp.On,
+			ParkedAt:        rp.At,
+			ReviewRequested: true,
+			ParkedHead:      rp.ReviewHead,
+			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
+			Started:         false,
+			Serves:          rp.Serves,
+		})
 	}
 	for _, n := range st.Notes {
 		if n.Kind != noteLogin {
@@ -1341,11 +1370,12 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		if err != nil {
 			return "", false, err
 		}
-		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens)
+		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens) || logged(verbStart, opens)
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
-		done = logged("agents.wake", opens)
+		done = logged("agents.wake", opens) || logged(verbStart, opens)
 	case superloop.KindEnd:
-		done = logged("agents.wake", opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done })
+		done = logged("agents.wake", opens) || logged(verbStart, opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done }) ||
+			!slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, act.Ref) }) && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target })
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
@@ -1576,27 +1606,27 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindGo:
 		return l.mergePull(ctx, st, act)
 	case superloop.KindForward:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
 	case superloop.KindRed:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("%s at %s: red checks told: %s", act.URL, act.Head, redChecks(act.Key)), nil
 	case superloop.KindRework:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("%s at %s: the review's findings stand with no round left, rework told", act.URL, act.Head), nil
 	case superloop.KindAnswer:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("the person's answer about %s told", act.URL), nil
 	case superloop.KindRelay:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("the owning team's review of %s told", act.URL), nil
@@ -1801,10 +1831,242 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 	return err
 }
 
+func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
+	if ag.Park == nil || ag.Park.ReviewHead == "" || loopParkOn(ag.Park) == "" {
+		return false
+	}
+	k := st.StartIndex(ag.Party)
+	if k < 0 {
+		return false
+	}
+	if ag.Execution != nil {
+		return st.Starts[k].Execution != nil
+	}
+	return ag.Park.PostMerge != nil || st.Starts[k].Dir != ""
+}
+
+func reviewParkServes(st *state.State, ag state.Agent, on string) string {
+	if s := loopServes(st, ag); s != "" && !strings.EqualFold(s, on) {
+		return s
+	}
+	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) {
+		if r, ok := parseRef(ref); ok {
+			return refName(r)
+		}
+	}
+	if rp, ok := st.ReviewParkFor(on); ok && rp.Serves != "" {
+		return rp.Serves
+	}
+	return ""
+}
+
+func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
+	for _, ag := range st.Agents {
+		if ag.Park == nil || ag.Park.ReviewHead == "" {
+			continue
+		}
+		on := loopParkOn(ag.Park)
+		if on == "" {
+			continue
+		}
+		if l.dryRun || !shouldEndReviewWorker(st, ag) {
+			continue
+		}
+		if loopInTurn(l.a, ag.Party) {
+			l.sayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
+			continue
+		}
+		var selector, model string
+		worktreeDir := ag.Park.Worktree
+		if k := st.StartIndex(ag.Party); k >= 0 {
+			model = st.Starts[k].Model
+			if st.Starts[k].Execution != nil {
+				selector = st.Starts[k].Execution.Selector
+			}
+			if worktreeDir == "" {
+				worktreeDir = st.Starts[k].Dir
+			}
+		}
+		rp := state.ReviewPark{
+			On:         on,
+			At:         ag.Park.At,
+			ReviewHead: ag.Park.ReviewHead,
+			Agent:      ag.Name,
+			Party:      ag.Party,
+			Execution:  ag.Execution,
+			Selector:   selector,
+			Model:      cmp.Or(ag.Model, model),
+			Serves:     reviewParkServes(st, ag, on),
+			PostMerge:  ag.Park.PostMerge,
+			Worktree:   worktreeDir,
+		}
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.UpsertReviewPark(rp)
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+		if ref := ag.Execution; ref != nil {
+			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
+				if _, err := l.run(ctx, agentsName, loopStop, ag.Name, "--reason", "supervisor loop: desk review requested"); err != nil {
+					l.sayOnce("stop "+ag.Name, "SUPERVISOR STOP FAILED %s: %v", ag.Name, err)
+					continue
+				}
+				if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+					if r, _ := executionRecord(current, *ref); r != nil {
+						r.Observation.StopAcknowledged = true
+						r.Observation.ProcessState = execution.Exited
+					}
+					return nil, nil
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := l.run(ctx, agentsName, loopRemove, ag.Name); err != nil {
+			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
+			continue
+		}
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.UpsertReviewPark(rp)
+			if i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) }); i >= 0 {
+				removeAgent(current, i)
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+		l.a.cleanRemovedWorktree(ctx, worktreeDir, ag.Park.ReviewHead)
+	}
+	return nil
+}
+
+func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
+		return l.wake(ctx, act)
+	}
+	return l.startFixer(ctx, st, act)
+}
+
+const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{else}}Fix{{end}} the findings on {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
+
+{{.Task}}
+
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
+`
+
+const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
+
+{{.Task}}
+
+Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Complete the remaining work and finish with beekeeper agents idle --done --report and --problem.
+`
+
+func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if l.startsHeld {
+		return errLoopLater
+	}
+	r, ok := parseRef(act.Ref)
+	if !ok {
+		return refused("invalid pull request ref %q", act.Ref)
+	}
+	rp, hasRP := st.ReviewParkFor(act.Ref)
+	var servesURL, postMerge string
+	if hasRP {
+		if rp.Serves != "" && !strings.EqualFold(rp.Serves, act.Ref) {
+			servesURL = issueURL(rp.Serves)
+		}
+		if rp.PostMerge != nil {
+			postMerge = strings.TrimSpace(*rp.PostMerge)
+		}
+	}
+	place, err := l.startPlacement(ctx, r.Repo, false, false)
+	if err != nil {
+		if errors.Is(err, errLoopLater) {
+			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet on any host", act.URL)
+			return errLoopLater
+		}
+		return err
+	}
+	tmpl := defaultFixerBrief
+	branch := ""
+	head := act.Head
+	if act.Kind == superloop.KindEnd {
+		tmpl = defaultContinuationBrief
+		merged := l.merged[act.Ref]
+		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
+		branch = cmp.Or(place.Ref, merged.Base, head)
+		if place.remote() && place.Ref == "" {
+			place.Ref = cmp.Or(merged.Base, merged.MergeCommit)
+		}
+	} else {
+		if p, err := readLoopPull(ctx, act.Ref); err == nil {
+			branch = p.Branch
+		}
+		if branch == "" {
+			branch = fmt.Sprintf("pr-%d", r.N)
+		}
+		if place.remote() {
+			place.Ref = branch
+		}
+	}
+	brief, err := l.brief("", tmpl, act.Key, briefData{
+		URL:       act.URL,
+		Repo:      r.Repo,
+		Number:    r.N,
+		Head:      head,
+		Branch:    branch,
+		Worker:    act.Agent,
+		Task:      act.Message,
+		ServesURL: servesURL,
+		PostMerge: postMerge,
+	})
+	if err != nil {
+		return err
+	}
+	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
+	args := []string{agentsName, agentStartName, name, brief}
+	if len(l.a.cfg.Capacity.Choices) > 0 {
+		args = append(args, "--harness", harnessAuto)
+	}
+	if place.remote() {
+		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
+	}
+	args = append(args, place.excludeFlags()...)
+	if err := l.claim(act, name); err != nil {
+		return err
+	}
+	if _, err := l.run(ctx, args...); err != nil {
+		if Code(err) == ExitRefused && place.remote() {
+			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+				return nil
+			} else if !errors.Is(rerr, errLoopLater) {
+				return rerr
+			}
+		}
+		if Code(err) == ExitRefused {
+			return errLoopLater
+		}
+		return err
+	}
+	if hasRP && rp.Serves != "" {
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			if i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }); i >= 0 {
+				inheritReviewParkOnAgent(current, &current.Agents[i], rp, l.a.now.UTC())
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Worker, Task string
-	Number, Round                 int
+	URL, Repo, Head, Branch, Worker, Task, ServesURL, PostMerge string
+	Number, Round                                               int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
