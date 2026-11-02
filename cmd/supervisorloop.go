@@ -232,9 +232,11 @@ type loopLogin struct {
 // loopCheck is one entry of a pull request's check rollup: a check run
 // reports a status and a conclusion, a commit status a state.
 type loopCheck struct {
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	State      string `json:"state"`
+	StartedAt    time.Time `json:"startedAt"`
+	WorkflowName string    `json:"workflowName"`
+	Status       string    `json:"status"`
+	Conclusion   string    `json:"conclusion"`
+	State        string    `json:"state"`
 	// A check run's name and details URL, a commit status's context and
 	// target URL.
 	Name       string `json:"name"`
@@ -274,6 +276,39 @@ func (c loopCheck) concluded() bool {
 	return slices.Contains([]string{checkSuccess, checkFailure, checkError}, c.State)
 }
 
+// superseded reports only cancellations replaced on this head's rollup.
+// Failures and timeouts remain red even when a later run exists. Actions run
+// IDs also order queued replacements whose startedAt has not been set yet.
+func (c loopCheck) superseded(checks []loopCheck) bool {
+	if c.Conclusion != "CANCELLED" || c.Status != checkCompleted {
+		return false
+	}
+	oldRun := loopActionsRun(c.DetailsURL)
+	oldRepo, _, _ := strings.Cut(c.DetailsURL, "/actions/runs/")
+	return slices.ContainsFunc(checks, func(next loopCheck) bool {
+		if next.Status == "" {
+			return false // A commit status is not a replacement check run.
+		}
+		newRun := loopActionsRun(next.DetailsURL)
+		newRepo, _, _ := strings.Cut(next.DetailsURL, "/actions/runs/")
+		newerActionsRun := oldRun != 0 && newRun > oldRun && oldRepo == newRepo
+		sameCheck := c.Name != "" && c.Name == next.Name
+		sameWorkflow := c.WorkflowName != "" && c.WorkflowName == next.WorkflowName && newerActionsRun
+		return (sameCheck || sameWorkflow) && (newerActionsRun || !c.StartedAt.IsZero() && next.StartedAt.After(c.StartedAt))
+	})
+}
+
+func loopActionsRun(detailsURL string) uint64 {
+	// The rollup exposes the Actions run ID through its details URL.
+	_, tail, ok := strings.Cut(detailsURL, "/actions/runs/")
+	if !ok {
+		return 0
+	}
+	id, _, _ := strings.Cut(tail, "/")
+	n, _ := strconv.ParseUint(id, 10, 64)
+	return n
+}
+
 // parseLoopPull reads gh pr view's JSON of ref.
 func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	var j loopPullJSON
@@ -285,6 +320,9 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		p.Files = append(p.Files, f.Path)
 	}
 	for _, c := range j.Rollup {
+		if c.superseded(j.Rollup) {
+			continue
+		}
 		if !c.green() {
 			p.Green = false
 		}
