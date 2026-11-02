@@ -509,6 +509,16 @@ func TestExecutionPublicationFollowUpAfterHostPolicyRebind(t *testing.T) {
 	if err != nil || first.URL == "" {
 		t.Fatal("first publication failed", err)
 	}
+	// The rebind needs a launched execution whose owned unit is active.
+	j.Phase = execution.Running
+	raw, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Root, string(j.Handle.Ref.Execution)+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Launcher = &agyTestLauncher{states: map[string]string{j.Handle.Unit: unitActive}}
 	original := j.Request.PolicyDigest
 	s.Version = "publication-test-upgraded"
 	prepared, err := s.Prepare(s.Policy())

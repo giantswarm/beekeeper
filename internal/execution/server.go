@@ -449,17 +449,26 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	return Ack{ID: q.ID, Stage: Applied}, nil
 }
 
-// RebindPolicy binds a live execution to the host's prepared policy. The
+// RebindPolicy binds a running execution to the host's prepared policy. The
 // coordinator sends it only for the policy pinned in its host catalog; the
-// host still requires that exact prepared policy and the bound one it
-// replaces, so a stale request or an unprepared host fails closed.
+// host still requires a launched execution whose owned unit is active, that
+// exact prepared policy and the bound one it replaces, so a stale request, an
+// exited execution or an unprepared host fails closed.
 func (s *Server) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Observation, error) {
 	if !ValidDigest(q.From) || !ValidDigest(q.To) {
 		return Observation{}, errors.New("policy rebind needs the bound and the prepared policy digests")
 	}
+	if s.Launcher == nil {
+		return Observation{}, errors.New("policy rebind needs the host's service manager")
+	}
 	if err := s.update(ctx, r, func(j *Journal) error {
-		if j.StopRequest != nil || j.StopAcknowledged || j.Completed || j.Phase == Failed {
-			return errors.New("execution is stopped, completed or failed; it cannot be rebound")
+		if j.StopRequest != nil || j.StopAcknowledged || j.Completed || j.Phase != Running && j.Phase != Activating {
+			return errors.New("only a running execution is rebound; this one is not launched, or it stopped, completed, exited or failed")
+		}
+		switch s.Launcher.State(ctx, j.Handle.Unit) {
+		case unitActive, Activating, "reloading":
+		default:
+			return errors.New("only a running execution is rebound; its owned unit is not active")
 		}
 		p, err := s.InstalledPolicy()
 		if err != nil {

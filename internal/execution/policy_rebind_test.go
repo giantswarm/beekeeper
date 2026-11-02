@@ -67,6 +67,22 @@ func TestPolicyRebindMovesRunningExecutionOntoPreparedPolicy(t *testing.T) {
 		t.Fatal("rebind started another unit")
 	}
 
+	// A unit that ended without a completion report is not rebound.
+	f.s.Version = "upgraded while exited"
+	exited, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.launcher.states[UnitName(f.r.Ref)] = unitInactive
+	if _, err := tr.RebindPolicy(ctx, f.r.Ref, PolicyRebind{From: prepared, To: exited}); err == nil {
+		t.Fatal("rebind moved an execution whose unit is not active")
+	}
+	if j, err := f.s.Read(f.r.Ref); err != nil || j.BoundPolicy() != prepared {
+		t.Fatal("refused rebind of an exited unit changed the bound policy", err)
+	}
+	f.launcher.states[UnitName(f.r.Ref)] = unitActive
+	prepared = exited
+
 	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: "rebind-stop", Reason: "stopped before the next host upgrade"}); err != nil {
 		t.Fatal(err)
 	}
@@ -77,5 +93,23 @@ func TestPolicyRebindMovesRunningExecutionOntoPreparedPolicy(t *testing.T) {
 	}
 	if _, err := tr.RebindPolicy(ctx, f.r.Ref, PolicyRebind{From: prepared, To: again}); err == nil {
 		t.Fatal("rebind moved a stopped execution")
+	}
+}
+
+// A prepared execution that was never launched has no running unit to rebind.
+func TestPolicyRebindRefusesUnlaunchedExecution(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	tr := f.transport(t, nil)
+	if _, err := tr.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Version = "upgraded before launch"
+	prepared, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.RebindPolicy(ctx, f.r.Ref, PolicyRebind{From: f.r.PolicyDigest, To: prepared}); err == nil {
+		t.Fatal("rebind moved an execution that was never launched")
 	}
 }

@@ -150,7 +150,8 @@ upgrade re-prepared its policy under a running execution, that execution's
 publication, merge and capped runs refuse until recover rebinds it: only to the
 host's prepared policy, and only once its digest is the one pinned in the host
 catalog. Until then recover exits 3, naming the reachable unit and why its
-publication is unavailable.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+publication is unavailable. Only a running execution is rebound; an exited
+one is confirmed as it is.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		ref, err := a.executionByName(args[0])
 		if err != nil {
 			return err
@@ -423,14 +424,15 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	return updated
 }
 
-// rebindExecutionPolicy moves a confirmed execution onto its host's prepared
+// rebindExecutionPolicy moves a running execution onto its host's prepared
 // policy after an approved host-policy update: only the digest pinned in the
 // coordinator's host catalog is accepted, and the host requires both that it is
 // prepared and that the execution is bound to the policy it replaces. Every
 // other difference keeps failing closed and says so: the unit runs on, its
-// publication, merge and capped runs refuse.
+// publication, merge and capped runs refuse. An exited execution has nothing
+// left to publish under its policy: its recovery confirms it as it is.
 func (a *app) rebindExecutionPolicy(ctx context.Context, host execution.Host, client execution.Transport, name string, ref execution.Ref, o execution.Observation) (execution.Observation, error) {
-	if o.PolicyAvailable() {
+	if o.PolicyAvailable() || o.ProcessState != execution.Running {
 		return o, nil
 	}
 	unavailable := fmt.Sprintf("execution %s of %s on %s is reachable (unit %s, process %s), but its publication, merge and capped runs are unavailable under its policy %s: ", ref.Execution, name, ref.Host, o.Handle.Unit, o.ProcessState, o.PolicyDigest)

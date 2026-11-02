@@ -472,11 +472,11 @@ func TestExecutionRecoverRebindsApprovedHostPolicy(t *testing.T) {
 	}
 	handle := st.Starts[0].Execution.Handle
 	original, prepared := r.PolicyDigest, execution.Digest([]byte("upgraded fixture policy"))
-	bound, installed := original, ""
+	bound, installed, process := original, "", execution.Running
 	var rebinds []execution.PolicyRebind
 	fake := &testExecutionTransport{}
 	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
-		return execution.Observation{Handle: handle, ProcessState: execution.Running, Reachability: execution.Reachable, Ready: true, PolicyDigest: bound, HostPolicyDigest: installed}, nil
+		return execution.Observation{Handle: handle, ProcessState: process, Reachability: execution.Reachable, Ready: true, PolicyDigest: bound, HostPolicyDigest: installed}, nil
 	}
 	fake.start = func(context.Context, execution.StartRequest) (execution.Handle, error) {
 		t.Fatal("recovery started a unit")
@@ -527,5 +527,17 @@ func TestExecutionRecoverRebindsApprovedHostPolicy(t *testing.T) {
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "execution.policy-rebound" })
 	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, original+" -> "+prepared) {
 		t.Fatal("rebind left no audit event", evs, err)
+	}
+
+	// An execution that already exited under a since-changed policy is
+	// confirmed as it is, never rebound and never recorded as a failure.
+	process, installed = execution.Exited, execution.Digest([]byte("policy after exit"))
+	host.PolicyDigest = installed
+	a.cfg.Agents.Hosts[sshTestSelector] = host
+	if err := a.activateExecution(ctx, r.Ref); err != nil || len(rebinds) != 1 {
+		t.Fatal("recover of an exited execution failed or rebound it", err)
+	}
+	if st, err := a.store.Read(); err != nil || st.Starts[0].Execution.Observation.LastError != "" || st.Starts[0].Execution.Observation.ProcessState != execution.Exited {
+		t.Fatal("recover of an exited execution recorded a failure", err)
 	}
 }

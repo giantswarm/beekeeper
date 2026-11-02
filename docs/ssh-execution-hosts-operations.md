@@ -150,8 +150,10 @@ digest, and only from the policy the execution is bound to; it records an
 `execution.policy-rebound` event with both digests. The worker keeps its
 workspace, commits, owned branch and pull request, and retries its publication.
 While the host policy is unprepared, stale, or not yet pinned, `recover` exits 3
-and says that the unit is reachable but its publication is unavailable. A stopped,
-completed or failed execution is never rebound.
+and says that the unit is reachable but its publication is unavailable. Only a
+running execution whose owned unit is active is rebound: a stopped, completed,
+exited, failed or never launched one is not, and recovery confirms an exited
+execution as it is.
 
 The pinned digest covers every host setting that changes what a worker may start
 under or how much it may consume: the security sections, the execution host
