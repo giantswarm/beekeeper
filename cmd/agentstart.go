@@ -310,9 +310,11 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			if strings.TrimSpace(model) == "" {
-				rules := a.cfg.Agents
-				rules.Model = "" // a harness-specific fallback is resolved after choosing the harness
-				model = rules.ModelFor(name, a.selectionKind)
+				if model = a.ruleModel(name, a.selectionKind); model != "" {
+					if err := cmd.Flags().Set("model", model); err != nil {
+						return err
+					}
+				}
 			}
 			harness = a.defaultStartHarness(harness, model)
 			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
@@ -339,7 +341,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if err != nil {
 					return err
 				}
-				sp := agentStart{name: name, task: task, model: model}
+				sp := agentStart{name: name, kind: a.selectionKind, task: task, model: model}
 				if dryRun {
 					return h.DryRun(cmd.Context(), a, sp, nil)
 				}
@@ -398,11 +400,9 @@ work, which takes no choice on a self-hosted provider.`,
 			if !dryRun && harness == omp.Harness && model != "" {
 				// a bare id resolves once here; the broker and the start get
 				// the selector omp lists
-				if q := a.ompQualified(model); q != model {
-					if err := cmd.Flags().Set("model", q); err != nil {
-						return err
-					}
-					model = q
+				model = a.ompQualified(model)
+				if err := cmd.Flags().Set("model", model); err != nil {
+					return err
 				}
 			}
 			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
@@ -461,7 +461,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -534,7 +534,7 @@ work, which takes no choice on a self-hosted provider.`,
 					return err
 				}
 			}
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
+			sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
 			if byTimer {
 				line, err := a.recordTimerStart(name, tm, gateWait)
 				if err != nil {
@@ -713,6 +713,9 @@ type agentStart struct {
 	// role is the role whose profile the session gets (workerRole, or a
 	// relayed role's name); empty: none.
 	role string
+	// kind is the task kind for model policy (a.selectionKind); empty
+	// defaults to role.
+	kind string
 	// task is the roster's task unless the entry taken over holds one.
 	task string
 	// serves is the issue the task works (briefIssue), recorded as the
@@ -799,7 +802,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, sp.role))
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, cmp.Or(sp.kind, sp.role)))
 	if err := a.requireStartModel(sp.name, sp.model); err != nil {
 		return startedAgent{}, err
 	}
@@ -2089,7 +2092,7 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 	if err != nil {
 		return err
 	}
-	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, sp.role))
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, cmp.Or(sp.kind, sp.role)))
 	if err := a.requireStartModel(sp.name, sp.model); err != nil {
 		return err
 	}

@@ -17,6 +17,15 @@ const (
 	taskKindArg         = "--kind"
 )
 
+func (a *app) ruleModel(name, kind string) string {
+	if a.cfg == nil {
+		return ""
+	}
+	rules := a.cfg.Agents
+	rules.Model = "" // a harness-specific fallback is resolved after choosing the harness
+	return rules.ModelFor(name, kind)
+}
+
 func (a *app) requireStartModel(name, model string) error {
 	if a.cfg.Agents.RequireModel && strings.TrimSpace(model) == "" {
 		return refused("%s: agents.requireModel is true, but no model resolved: set --model, agents.models, or the harness model in the configuration", name)

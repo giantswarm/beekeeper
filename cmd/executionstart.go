@@ -206,7 +206,16 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	counts := countAgents(st, sessions, a.now, a.cfg)
 	var v *capacityView
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
-		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), k, readings, h, false, exclude, kind, a.now)
+		choicesCap := k
+		if harness == harnessAuto {
+			choicesCap = filterChoiceModel(k, model)
+		}
+		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), choicesCap, readings, h, false, exclude, kind, a.now)
+		if len(k.Choices) > 0 && len(choicesCap.Choices) == 0 {
+			reason := fmt.Sprintf("model %q is not in capacity.choices", strings.TrimSpace(model))
+			v.Choice = &choiceView{Review: kind != forWorker, ReviewOfSelfHosted: kind == forReviewOfSelfHosted, Reason: reason}
+			v.Room, v.Blocks = 0, []string{"no choice has room: " + reason}
+		}
 	} else {
 		v = newStartCapacity(counts, k, h, false, kind).withUsage(legacy, a.now)
 	}

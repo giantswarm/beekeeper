@@ -1663,7 +1663,14 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
-	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, kind, now)
+	choicesCap := filterChoiceModel(k, wantModel)
+	v := buildProvidersCapacity(c, pa, choicesCap, readings, h, builds, exclude, kind, now)
+	if len(k.Choices) > 0 && len(choicesCap.Choices) == 0 {
+		reason := fmt.Sprintf("model %q is not in capacity.choices", strings.TrimSpace(wantModel))
+		v.Choice = &choiceView{Review: kind != forWorker, ReviewOfSelfHosted: kind == forReviewOfSelfHosted, Reason: reason}
+		v.Room, v.Blocks = 0, []string{"no choice has room: " + reason}
+	}
+	return v
 }
 
 // withUsage attaches u to v and replaces or prepends the usage block when
@@ -1796,7 +1803,7 @@ func (a *app) watchSwap() *swapReading {
 }
 
 func (a *app) capacityCmd() *cobra.Command {
-	var host string
+	var host, model string
 	var builds, review, ofSelfHosted bool
 	var exclude []string
 	c := &cobra.Command{
@@ -1931,9 +1938,9 @@ nothing; it makes no GitHub call.`,
 				if len(k.Providers) == 0 {
 					k, legacy = a.resolveUsage(cmd.Context(), k)
 				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, "")
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted)).withLocal(st, liveCap).stopped(a, st.Stop)
+				v = a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap).stopped(a, st.Stop)
 			} else {
 				c := countAgents(st, sessions, a.now, a.cfg)
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
@@ -1982,6 +1989,7 @@ nothing; it makes no GitHub call.`,
 	}
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
+	c.Flags().StringVar(&model, "model", "", "filter capacity.choices to a model")
 	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
 	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, using reserved review headroom")
@@ -2039,6 +2047,7 @@ func newPick(v *capacityView) *pickView {
 }
 
 func (a *app) capacityPickCmd() *cobra.Command {
+	var model string
 	var review, ofSelfHosted bool
 	c := &cobra.Command{
 		Use:   "pick [--review | --review-of-self-hosted]",
@@ -2068,7 +2077,7 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 				return usageErr(authorNeedsReview)
 			}
 			kind := startKind(review, ofSelfHosted)
-			v, err := a.startCapacityForAuto(cmd.Context(), false, nil, kind, "")
+			v, err := a.startCapacityForAuto(cmd.Context(), false, nil, kind, model)
 			if err != nil {
 				return err
 			}
@@ -2080,6 +2089,7 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 			return err
 		},
 	}
+	c.Flags().StringVar(&model, "model", "", "filter capacity.choices to a model")
 	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
 	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().BoolVar(&review, reviewFlag, false, "decide a review start using reserved review headroom")

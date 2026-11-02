@@ -135,6 +135,29 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cmd.Name() == agentStartName && !cmd.Flags().Changed("model") {
+		name, _ := cmd.Flags().GetString("name")
+		if strings.TrimSpace(name) == "" && len(args) >= 2 {
+			name = strings.TrimSpace(args[0])
+		}
+		kind, _ := cmd.Flags().GetString("kind")
+		kind = strings.TrimSpace(kind)
+		if kind == "" {
+			rev, _ := cmd.Flags().GetBool(reviewFlag)
+			ofSH, _ := cmd.Flags().GetBool(reviewOfSelfHostedFlag)
+			if rev || ofSH {
+				kind = taskKindReview
+			} else {
+				kind = workerRole
+			}
+		}
+		if m := a.ruleModel(name, kind); m != "" {
+			if h, _ := cmd.Flags().GetString("harness"); h == "omp" {
+				m = a.ompQualified(m)
+			}
+			argv = append(argv, "--model="+m)
+		}
+	}
 	if scratch != "" {
 		abs, err := filepath.Abs(scratch)
 		if err != nil {

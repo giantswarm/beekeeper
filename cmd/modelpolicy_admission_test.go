@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const policyOmpSelector = "fixture-provider/qwen-x"
@@ -21,8 +27,11 @@ func TestModelPolicyReviewPlacementUsesAuthorCapacity(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Capacity = p.cfg.Capacity
 	r.park(t, loopPR, r.a.now)
+	r.started(t, loopWorker, "worker-session-1")
+	work := ""
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Model = pickOpus
+		st.Agents[0].Park.PostMerge = &work
+		st.Starts[0].Model = pickOpus
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -175,5 +184,136 @@ func TestModelPolicySSHRequiresMetadataWithoutProviders(t *testing.T) {
 		modelFlag, bgModel, taskKindArg, testTaskAudit, usageForceFlag, testDryRunFlag)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
 		t.Fatalf("missing provider metadata hid target policy: %v", err)
+	}
+}
+
+func TestModelPolicyPlacementHonorsAgentsModelsRule(t *testing.T) {
+	// Reviewer placement passes --model when agents.models resolves a model for kind: review.
+	r := newLoopRig(t)
+	r.a.cfg.Agents.Models = []config.AgentModelRule{{Kind: taskKindReview, Model: pickOpus}}
+	r.a.cfg.Capacity.Choices = []config.Choice{
+		{Harness: claudeComm, Model: pickOpus},
+		{Harness: config.OmpHarness, Model: loopQwen},
+	}
+	r.park(t, loopPR, r.a.now)
+	var capArgs []string
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 0 && args[0] == loopCapacity {
+			capArgs = append([]string(nil), args...)
+			return loopRoomJSON, 0
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if !slices.Contains(capArgs, modelFlag) || !slices.Contains(capArgs, pickOpus) {
+		t.Fatalf("reviewer placement did not pass --model %s: %v", pickOpus, capArgs)
+	}
+
+	// Worker and fixer placement with supervisor.hosts passes --model and waits when the rule-selected model has no room.
+	r2 := newLoopRig(t)
+	nextBrief(t, r2)
+	r2.sshLoopHost(t, true)
+	r2.a.cfg.Agents.Models = []config.AgentModelRule{{Kind: workerRole, Model: bgModel}}
+	r2.a.cfg.Capacity.Choices = []config.Choice{
+		{Harness: claudeComm, Model: bgModel},
+		{Harness: config.OmpHarness, Model: loopQwen},
+	}
+	r2.park(t, loopPR, time.Now())
+	r2.pull.State = superloop.Merged
+	r2.pass(t)
+	loopNextDone(t, r2)
+	branch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	var workerCapCalls [][]string
+	r2.answer = func(args []string) (string, int) {
+		if len(args) > 0 && args[0] == loopCapacity {
+			workerCapCalls = append(workerCapCalls, append([]string(nil), args...))
+			// Local has no room for bgModel, SSH host has room.
+			if slices.Contains(args, loopHostFlag) {
+				if !slices.Contains(args, modelFlag) || !slices.Contains(args, bgModel) {
+					t.Fatalf("worker host placement omitted --model %s: %v", bgModel, args)
+				}
+				return loopRoomJSON, 0
+			}
+			return loopNoRoomJSON, 0
+		}
+		if len(args) > 0 && args[0] == loopBoard {
+			return loopNextPickJSON, 0
+		}
+		return "", 0
+	}
+	r2.pass(t)
+	r2.pass(t)
+	if !slices.ContainsFunc(workerCapCalls, func(c []string) bool {
+		return !slices.Contains(c, loopHostFlag) && slices.Contains(c, modelFlag) && slices.Contains(c, bgModel)
+	}) {
+		t.Fatalf("worker local placement omitted --model %s: %v", bgModel, workerCapCalls)
+	}
+	start := r2.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+	if start == nil || !slices.Contains(start, loopHostFlag) {
+		t.Fatalf("rule-selected Claude worker did not place onto SSH host: %v", start)
+	}
+}
+
+func TestModelPolicyOmpVaultAndScratchArgvHonorAgentsModels(t *testing.T) {
+	a := vaultApp(t, 20*time.Millisecond)
+	const qualified = "spidertron/qwen-x"
+	a.cfg.Omp = config.Omp{Providers: map[string]config.OmpProvider{"spidertron": {APIKey: sparkRef}}}
+	a.cfg.Agents.Models = []config.AgentModelRule{{Match: "^worker", Model: qualified}}
+	a.cfg.Capacity = config.Capacity{
+		Providers: map[string]config.Provider{
+			claudeComm:   {Ceiling: 2},
+			"spidertron": {Kind: config.KindSelfHosted, Ceiling: 2},
+		},
+		Choices: []config.Choice{
+			{Harness: claudeComm, Model: pickOpus},
+			{Harness: config.OmpHarness, Model: "qwen-x", Provider: "spidertron"},
+		},
+	}
+	if !a.ompStartNeedsVault([]string{agentStartName, "worker-1", briefMD, testHarnessFlag, config.OmpHarness}) {
+		t.Fatal("ompStartNeedsVault ignored agents.models for --harness omp")
+	}
+	if !a.ompStartNeedsVault([]string{agentStartName, testHarnessFlag + "=omp", "--", "worker-1", briefMD}) {
+		t.Fatal("ompStartNeedsVault ignored agents.models after --")
+	}
+	if !a.ompStartNeedsVault([]string{agentStartName, "worker-1", briefMD, testHarnessFlag, harnessAuto}) {
+		t.Fatal("ompStartNeedsVault ignored agents.models for --harness auto when non-vault choice ranked first")
+	}
+	c := a.agentStartCmd()
+	if err := c.ParseFlags([]string{testHarnessFlag, config.OmpHarness}); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := a.scratchArgv(c, []string{"worker-1", briefMD})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(argv, "--model="+qualified) {
+		t.Fatalf("scratchArgv omitted qualified rule model: %v", argv)
+	}
+}
+
+func TestModelPolicyStartAgentDoesNotApplyWorkerRuleToOtherKinds(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Agents.Models = []config.AgentModelRule{{Kind: workerRole, Model: "worker-only-sonnet"}}
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Review the change."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range [][]string{
+		{"--review"},
+		{taskKindArg, testTaskAudit},
+	} {
+		out.Reset()
+		c := a.agentStartCmd()
+		c.SilenceErrors, c.SilenceUsage = true, true
+		args := append([]string{"rev", brief, usageDirFlag, filepath.Dir(brief), testHarnessFlag, claudeComm, testDryRunFlag, usageForceFlag}, extra...)
+		c.SetArgs(args)
+		if err := c.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out.String(), "worker-only-sonnet") {
+			t.Fatalf("start %v inherited worker-only rule model: %s", extra, out.String())
+		}
 	}
 }
