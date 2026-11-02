@@ -266,14 +266,14 @@ func (a *app) answerCentral(ctx context.Context, id, choice int, via, words stri
 // doneCentral withdraws central notes ids (note_done through muster): each
 // its filer's, or its filer's team's supervisor role's, as the central
 // instance decides. It stops at the first refused.
-func (a *app) doneCentral(ctx context.Context, me state.Party, ids []int) error {
+func (a *app) doneCentral(ctx context.Context, me state.Party, ids []int, reason string) error {
 	for _, id := range ids {
 		ref := a.cfg.Central.Context + "#" + strconv.Itoa(id)
-		if _, err := a.callCentral(ctx, me, "note_done", map[string]any{paramNote: id}, nil); err != nil {
+		if _, err := a.callCentral(ctx, me, "note_done", map[string]any{paramNote: id, paramReason: reason}, nil); err != nil {
 			return err
 		}
-		_ = a.store.Log(event(me, noteCentralDone, "%s withdrawn", ref))
-		if _, err := fmt.Fprintf(a.out, "note %s done\n", ref); err != nil {
+		_ = a.store.Log(event(me, noteCentralDone, "%s withdrawn: %s", ref, reason))
+		if _, err := fmt.Fprintf(a.out, "note %s done: %s\n", ref, reason); err != nil {
 			return err
 		}
 	}

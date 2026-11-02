@@ -3384,8 +3384,9 @@ The central instance's notes stand beside the machine's. `note list`, `guide que
 next` read its open notes (`note_list`, through muster as the person) after the machine's, each
 named `<context>#<n>` (`--json`: its `central`). `note answer <context>#<n>` answers one as the
 person (`note_answer`: only its addressee may), which closes its Slack message and tells its
-filer; `note done <context>#<n>` withdraws one (`note_done`: its filer, or the filer's team's
-supervisor role). A bare `<n>` is the machine's note when it has one, else the central
+filer; `note done <context>#<n> --reason "<why>"` withdraws one (`note_done`: its filer, or
+the filer's team's supervisor role). The tool requires `reason`; it is retained in the closure,
+shown by `note show` and included in the closed Slack message. A bare `<n>` is the machine's note when it has one, else the central
 instance's; one open on both is refused, naming both. `--post` and `--overtaken` are the
 machine's notes' only. With the central instance unreachable, `note list` prints the machine's
 notes and exits 69; `guide queue` and `guide next` warn on stderr and serve the machine's.

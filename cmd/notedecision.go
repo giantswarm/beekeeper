@@ -118,13 +118,13 @@ func defaultedLine(n *state.Note) string {
 }
 
 // defaultDue takes the decisions out of st whose due time has come
-// unanswered and returns them, to close with their default. Only a decision
-// whose default is an action closes: a sign-in's due time is a reminder, and
-// a decision filed before defaults had to act stays open.
+// unanswered and returns them, to close with their default. A decision
+// closes even when its legacy default is passive: a sign-in's due time
+// remains a reminder. New decisions still require an action when filed.
 func defaultDue(st *state.State, now time.Time) []state.Note {
 	var due []state.Note
 	st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
-		if n.Due.IsZero() || now.Before(n.Due) || !isAction(n.Default) || n.Kind != noteDecision {
+		if n.Due.IsZero() || now.Before(n.Due) || n.Kind != noteDecision {
 			return false
 		}
 		due = append(due, n)

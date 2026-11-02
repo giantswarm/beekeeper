@@ -64,14 +64,17 @@ another object's update. Apply the generated Note CRD before running the new ser
 Kubernetes preserves these optional spec fields.
 
 `note show <id>` reads one note in full, with its status, audience and retained answer;
-`--json` returns the note fields plus `status`, `answer` and `closure`. Open central
+`--json` returns the note fields plus `status`, `answer`, `reason` and `closure`. Open central
 notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
 while `#<n>` selects the local record. The central instance's own CLI can also
 read retained closed Note resources. File-backed stores can recover answered
 notes while their full `answer.recorded` event remains, without a record-size cap.
 New answer events retain the original audience separately from the answerer;
 older events without that audience show it as unknown rather than naming the
-answerer as the addressee. Other removed or expired
+answerer as the addressee. `note done <id> --reason "<why>"` (or the
+`note_done` tool's required `reason`) retains the withdrawal reason and original
+question; `note show` reads these from new file-backed withdrawal events too.
+Older withdrawal events without this record remain unavailable. Other removed or expired
 records are reported as unavailable, never reconstructed from a truncated log.
 
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
@@ -512,7 +515,9 @@ Note-only updates, including the periodic default tick, collect older closed
 records; unrelated object updates leave collection to that tick. Cleanup first
 preserves the note counter, so expired numbers are never issued again.
 `beekeeper log` includes the retained line even after Kubernetes Events expire
-or an Event write fails. An answer after the default-answer window explicitly
+or an Event write fails. Due decisions with legacy passive or empty defaults also close and retain the
+24-hour late-answer window. Filing a new decision still requires an action.
+An answer after the default-answer window explicitly
 reports that the note was closed by its default. Folding a new question into an
 open note leaves the existing note open and logs `note.folded`.
 

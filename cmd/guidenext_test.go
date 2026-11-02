@@ -81,7 +81,7 @@ func TestGuideNextServesOneDecisionAtATime(t *testing.T) {
 	if id, _, _ = serveNext(t, a); id != 2 {
 		t.Fatalf("after the answer: want #2, got %d", id)
 	}
-	noteCmdRun(t, a, "done", "2")
+	noteCmdRun(t, a, "done", "2", "--reason", withdrawalReason)
 	if id, _, _ = serveNext(t, a); id != 1 {
 		t.Fatalf("after done: want the undated #1, got %d", id)
 	}
