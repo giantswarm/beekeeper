@@ -14,8 +14,12 @@ on:
 permissions:
   contents: read
 
+# A push to main is keyed by its commit: one group per branch keeps only the
+# newest pending run, so a third quick merge cancels the second's, and that
+# commit, often a release candidate's tag, keeps a cancelled check. A pull
+# request's newer push still cancels its older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
