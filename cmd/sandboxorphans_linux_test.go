@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +70,8 @@ func TestWatchStopsSandboxOrphan(t *testing.T) {
 	args := []string{"--unshare-pid", "--die-with-parent", "--ro-bind", "/", "/", "--bind", spool, spool, "--dev", "/dev", "sh", "-c",
 		`"$@" && echo ready; read -r finish`, "sh"}
 	cmd := exec.CommandContext(ctx, sandboxInitCommand, append(args, scoped.Args...)...) //nolint:gosec // this test's binary, scratch spool and scope inside bubblewrap
-	cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+dir+"/none.yaml")
+	cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1",
+		"BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "none.yaml")))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	in, err := cmd.StdinPipe()
