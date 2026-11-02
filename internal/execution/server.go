@@ -171,6 +171,13 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if len(unavailable) == 0 {
 		unavailable = nil
 	}
+	tools, missing, err := s.probeTools(ctx)
+	if err != nil {
+		return c, err
+	}
+	if len(missing) > 0 {
+		return c, toolsError(missing)
+	}
 	if s.Resources == nil {
 		return c, errors.New("execution host resource observation is unavailable")
 	}
@@ -181,7 +188,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Resources: resources}, nil
+	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
