@@ -801,6 +801,76 @@ func TestClosesAsksInBatches(t *testing.T) {
 
 const (
 	personalOwner  = "personal"
+	engineIssue7   = "org/engine#7"
 	addIssue7      = "add I7 to P"
 	issue7OffBoard = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`
 )
+
+func TestIntakeAddsMissingIssueUnlessWorkedOnAnotherBoard(t *testing.T) {
+	ctx := context.Background()
+	c := &Client{GH: nil, Board: config.Board{Owner: personalOwner, Project: 1, Team: "X"}}
+
+	// 1. A foreign issue not on any board (or only in Backlog on another board)
+	// lands on the configured board in Backlog.
+	f := &fakeGH{t: t,
+		item:  `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + homeItem("U1", "Q", "other", 2, "Backlog") + `]}}}}}`,
+		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I70","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`,
+	}
+	c.GH = f.run
+	mv, err := c.Intake(ctx, engineIssue7, "backlog")
+	if err != nil || *mv != (Moved{Ref: engineIssue7, To: backlog, Added: true, Team: teamX}) ||
+		!slices.Equal(f.mutations, []string{addIssue7, "I70=t1", "I70=s1"}) {
+		t.Fatalf("Intake of unworked foreign issue = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+
+	// 2. An issue already being worked on another board (In Review) stays
+	// there and is not added to the configured board.
+	f = &fakeGH{t: t,
+		item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + homeItem("U1", "Q", "other", 2, "In Review") + `]}}}}}`,
+	}
+	c.GH = f.run
+	mv, err = c.Intake(ctx, engineIssue7, "backlog")
+	if err != nil || *mv != (Moved{Ref: engineIssue7, From: "In Review", To: "In Review", Board: "other/2", Kept: true}) ||
+		len(f.mutations) != 0 {
+		t.Fatalf("Intake of issue worked on another board = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+
+	// 3. An issue already on the configured board in In Progress keeps its
+	// Status instead of being moved back to Backlog.
+	f = &fakeGH{t: t,
+		item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[{"id":"I70","project":{"id":"P"},"status":{"name":"In Progress ⛏️"},"team":{"name":"X 🐝"}}]}}}}}`,
+	}
+	c.GH = f.run
+	mv, err = c.Intake(ctx, engineIssue7, "backlog")
+	if err != nil || *mv != (Moved{Ref: engineIssue7, From: inProgress, To: inProgress, Kept: true}) ||
+		len(f.mutations) != 0 {
+		t.Fatalf("Intake of issue already in progress on configured board = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+}
+
+func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing.T) {
+	// GitHub omits another owner's project from issue.projectItems, so
+	// placing an item after a cross-owner anchor on a personal board probes
+	// addProjectV2ItemById to resolve the anchor's existing item ID.
+	f := &fakeGH{t: t,
+		byIssue: map[string]string{
+			"7": issue7OffBoard,
+			"9": `{"data":{"repository":{"issue":{"id":"ISSUE9","projectItems":{"nodes":[]}}}}}`,
+		},
+		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I9","project":{"id":"P"},"status":{"name":"In Progress ⛏️"},"kind":null,"team":null}}}}`,
+	}
+	origRun := f.run
+	c := &Client{Board: config.Board{Owner: personalOwner, Project: 1, Team: "X"}}
+	c.GH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(args[3], "addProjectV2ItemById") && slices.Contains(args, "c=I7") {
+			f.mutations = append(f.mutations, addIssue7)
+			return []byte(`{"data":{"addProjectV2ItemById":{"item":{"id":"I71","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`), nil
+		}
+		return origRun(ctx, args...)
+	}
+	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: "org/engine#9"})
+	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: "org/engine#9", Added: true, Team: teamX}) ||
+		!slices.Equal(f.mutations, []string{"add ISSUE9 to P", addIssue7, "I71=t1", `I71 after "I9"`}) {
+		t.Fatalf("Rank after cross-owner item = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+}

@@ -62,12 +62,18 @@ const (
 	// has a check that concluded red (failed, cancelled, timed out), with
 	// each such check's name and URL: once for each head, check and park.
 	KindRed = "red"
+	// KindIntake puts an issue the desk filed (a problem report's issue URL,
+	// a follow-up named in a report, an issue a session created with gh
+	// issue create) onto the configured board in Backlog and ranks it from
+	// the priority list, unless it already sits on another board where it
+	// is being worked.
+	KindIntake = "intake"
 )
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
 	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
-		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed}
+		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake}
 }
 
 // The verbs of the events the rules act on.
@@ -269,6 +275,22 @@ type Input struct {
 	// serves goes once it stayed quiet this long with no park or wake
 	// timer (0: a day).
 	StaleAfter time.Duration
+	// Board reports whether a project board is configured: when true,
+	// issues the desk files land on it in Backlog and get ranked from the
+	// priority list (KindIntake).
+	Board bool
+	// Filed are the issues sessions on the desk created (gh issue create,
+	// create_issue, issue_write), read from their transcripts.
+	Filed []FiledIssue
+}
+
+// FiledIssue is an issue a session on the desk created, with the issue or
+// pull request the session was working on (From) when it filed it.
+type FiledIssue struct {
+	Ref   string
+	URL   string
+	Agent string
+	From  string
 }
 
 // serving says what open work keeps the worker w of the merged ref on the
@@ -504,6 +526,7 @@ func reworkKey(ref, head string, parked time.Time) string {
 func escalateKey(ref, head string) string   { return fmt.Sprintf("escalate %s@%s", ref, head) }
 func answerKey(ref string, note int) string { return fmt.Sprintf("answer %s #%d", ref, note) }
 func endKey(ref string) string              { return "end " + ref }
+func intakeKey(ref string) string           { return "intake " + strings.ToLower(ref) }
 
 // redKey is the key of the wake that tells the red checks names of ref's
 // head to the park of parked; a single check's redKey is its own mark.
@@ -934,6 +957,42 @@ func Plan(in Input) []Action {
 		ev := e
 		add(Action{Key: eventKey(KindClassify, e), Kind: KindClassify, Agent: e.Agent, Event: &ev})
 	}
+	intake := func(ref, url, agent, from string) {
+		if !in.Board || ref == "" {
+			return
+		}
+		if reason, _ := in.Desk.unread(ref); reason != "" {
+			return
+		}
+		if url == "" {
+			repo, n, _ := strings.Cut(ref, "#")
+			url = fmt.Sprintf("https://github.com/%s/issues/%s", repo, n)
+		}
+		add(Action{Key: intakeKey(ref), Kind: KindIntake, Ref: ref, URL: url, Agent: agent, Message: from})
+	}
+	originOf := func(e Event, excludeURL string) string {
+		if w, ok := workers[e.Agent]; ok {
+			if w.Serves != "" && !strings.EqualFold(w.Serves, issueRefFromURL(excludeURL)) {
+				return w.Serves
+			}
+			if w.ParkedOn != "" && !strings.EqualFold(w.ParkedOn, issueRefFromURL(excludeURL)) {
+				return w.ParkedOn
+			}
+		}
+		for _, o := range in.Events {
+			if (o.Verb == VerbReport || o.Verb == VerbDone) && near(o, e) {
+				if m := pullURL.FindString(o.Detail); m != "" {
+					return issueRefFromURL(m)
+				}
+				for _, u := range issueURL.FindAllString(o.Detail, -1) {
+					if !strings.EqualFold(u, excludeURL) {
+						return issueRefFromURL(u)
+					}
+				}
+			}
+		}
+		return ""
+	}
 	for _, e := range in.Events {
 		switch e.Verb {
 		case VerbDone:
@@ -950,6 +1009,9 @@ func Plan(in Input) []Action {
 					}
 					if Filed(p.Detail) {
 						filed = append(filed, problemText(p))
+						for _, u := range issueURL.FindAllString(p.Detail, -1) {
+							intake(issueRefFromURL(u), u, p.Agent, originOf(p, u))
+						}
 					} else {
 						unfiled = append(unfiled, problemText(p))
 					}
@@ -971,8 +1033,18 @@ func Plan(in Input) []Action {
 				add(a)
 				continue
 			}
+			for _, p := range in.Events {
+				if p.Verb == VerbProblem && near(p, e) && !forwarded(p) && Filed(p.Detail) {
+					for _, u := range issueURL.FindAllString(p.Detail, -1) {
+						intake(issueRefFromURL(u), u, p.Agent, originOf(p, u))
+					}
+				}
+			}
 			add(Action{Key: eventKey(KindNext, e), Kind: KindNext, Agent: e.Agent, Event: &ev})
 		case VerbReport:
+			for _, u := range filedIssueURLs(e.Detail) {
+				intake(issueRefFromURL(u), u, e.Agent, originOf(e, u))
+			}
 			// The final report rides with agents.done, which the rules
 			// classify.
 			if !paired(e) {
@@ -985,15 +1057,24 @@ func Plan(in Input) []Action {
 			// finding, never a decision: one naming its issue is filed,
 			// one naming none goes to the guide's feed to file in its
 			// owning repository, and the agent keeps its task.
-			if !paired(e) && !forwarded(e) && !Filed(e.Detail) {
-				ev := e
-				add(Action{Key: eventKey(KindFile, e), Kind: KindFile, Agent: e.Agent, Event: &ev, Message: problemText(e)})
+			if !paired(e) && !forwarded(e) {
+				if Filed(e.Detail) {
+					for _, u := range issueURL.FindAllString(e.Detail, -1) {
+						intake(issueRefFromURL(u), u, e.Agent, originOf(e, u))
+					}
+				} else {
+					ev := e
+					add(Action{Key: eventKey(KindFile, e), Kind: KindFile, Agent: e.Agent, Event: &ev, Message: problemText(e)})
+				}
 			}
 		case VerbPark:
 			if on, _ := ParkedOn(e.Detail); on == "" && !waiting(e) {
 				classify(e)
 			}
 		}
+	}
+	for _, f := range in.Filed {
+		intake(f.Ref, f.URL, f.Agent, f.From)
 	}
 	// A worker's open question for someone else than the guide's person,
 	// whenever it was asked.
@@ -1102,6 +1183,39 @@ func planTheirs(in Input, l ledger, p Pull, w Worker, isParked bool, base Action
 
 // issueURL is an issue's URL: a problem naming one is filed.
 var issueURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/issues/\d+`)
+
+// pullURL is a pull request's URL.
+var pullURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+
+// filedReportClause matches a clause in a report that names newly filed issues,
+// keeping dots inside URLs and version tokens while stopping at sentence ends.
+var filedReportClause = regexp.MustCompile(`(?i)\b(?:filed|created|opened|follow[- ]?ups?|problems?\s+found)\b(?:[^.;\n]|\.[^.;\s])*`)
+
+// filedIssueURLs returns the issue URLs a report names as newly filed or
+// found problems, leaving out the closed task issue the report summarizes.
+func filedIssueURLs(report string) []string {
+	var out []string
+	for _, clause := range filedReportClause.FindAllString(report, -1) {
+		for _, u := range issueURL.FindAllString(clause, -1) {
+			if !slices.Contains(out, u) {
+				out = append(out, u)
+			}
+		}
+	}
+	return out
+}
+
+// issueRefFromURL converts https://github.com/owner/repo/issues/n (or /pull/n)
+// to owner/repo#n.
+func issueRefFromURL(u string) string {
+	s := strings.TrimPrefix(u, "https://github.com/")
+	for _, sep := range []string{"/issues/", "/pull/"} {
+		if repo, n, ok := strings.Cut(s, sep); ok && repo != "" && n != "" {
+			return repo + "#" + n
+		}
+	}
+	return ""
+}
 
 // Filed reports whether a problem found names its issue's URL: it is
 // filed.

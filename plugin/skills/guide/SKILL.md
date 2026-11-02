@@ -31,7 +31,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   makes this session the guide or takes a relayed role; `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
   the person (`GUIDE WAITING`), each unfiled finding (`GUIDE PROBLEM`, the full report
-  to file in its owning repository or hand to the supervisor, without asking the person),
+  to file in its owning repository, put on the board in `Backlog` with `beekeeper board move <issue> backlog --intake` and rank from `beekeeper priority` with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
   each answered or closed note, and the guide's own relay (`GUIDE
   RELAY DUE` at `guide.relayAt`); `GUIDE WATCH STALE` or `GUIDE SAVE REFUSED` means re-arm the
   `Monitor` with the command the line names. `beekeeper guide next` serves the one decision to ask now, due
