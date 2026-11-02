@@ -60,7 +60,7 @@ const isOpen = "is:open"
 
 // issueFields is what every read takes of an issue.
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
-labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}
+labels(first:20){nodes{name}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
 parent{number repository{nameWithOwner}}}`
 
 // boardFields is what every read takes of a board item, the Status with
@@ -68,11 +68,9 @@ parent{number repository{nameWithOwner}}}`
 const boardFields = `status:fieldValueByName(name:"` + StatusField + `"){...on ProjectV2ItemFieldSingleSelectValue{name updatedAt}}
 kind:fieldValueByName(name:"` + KindField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
-// blockerFields is what a read of the board's items takes of an issue's
-// recorded blockers: when each closed, the last close a blocked item's
-// Status is weighed against (Item.HeldByStatus). An issue with more
-// blockers has its last close unknown.
-const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt number state repository{nameWithOwner}}}}`
+// blockerFields reads the dependency list in the same request as the issue.
+// The page matches Block and Unblock; unknown blockers keep the item held.
+const blockerFields = `...on Issue{blockedBy(first:100){totalCount nodes{closedAt number state repository{nameWithOwner}}}}`
 
 // itemFields is what a move takes of an item: its id, its board and the
 // board fields with the Team.
@@ -95,10 +93,6 @@ type issueJSON struct {
 	Assignees struct {
 		Nodes []struct{ Login string } `json:"nodes"`
 	} `json:"assignees"`
-	Deps struct {
-		BlockedBy      int `json:"blockedBy"`
-		TotalBlockedBy int `json:"totalBlockedBy"`
-	} `json:"issueDependenciesSummary"`
 	Subs struct {
 		Total     int `json:"total"`
 		Completed int `json:"completed"`
@@ -109,13 +103,15 @@ type issueJSON struct {
 			NameWithOwner string `json:"nameWithOwner"`
 		} `json:"repository"`
 	} `json:"parent"`
-	// BlockedBy are the recorded blockers, read with blockerFields only.
+	// BlockedBy is current immediately after a dependency mutation; GitHub
+	// updates its dependency summary asynchronously.
 	BlockedBy struct {
-		Nodes []blockerNode `json:"nodes"`
+		TotalCount int           `json:"totalCount"`
+		Nodes      []blockerNode `json:"nodes"`
 	} `json:"blockedBy"`
 }
 
-// blockerNode is a recorded blocker as blockerFields reads it.
+// blockerNode is a recorded blocker as issueFields reads it.
 type blockerNode struct {
 	ClosedAt *time.Time `json:"closedAt"`
 	depRef
@@ -125,7 +121,7 @@ type blockerNode struct {
 // while one is open, for none, or when not every one was read.
 func (j issueJSON) blockersClosed() time.Time {
 	ns := j.BlockedBy.Nodes
-	if len(ns) == 0 || len(ns) != j.Deps.TotalBlockedBy {
+	if len(ns) == 0 || len(ns) != j.BlockedBy.TotalCount {
 		return time.Time{}
 	}
 	var last time.Time
@@ -147,7 +143,7 @@ func (j issueJSON) open() bool { return j.URL != "" && j.State == stateOpen }
 func (j issueJSON) item() Item {
 	it := Item{
 		Ref: fmt.Sprintf("%s#%d", j.Repository.NameWithOwner, j.Number), URL: j.URL, Title: j.Title,
-		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.Deps.TotalBlockedBy, OpenBlockers: j.Deps.BlockedBy, OpenSubIssues: j.Subs.Total - j.Subs.Completed,
+		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.BlockedBy.TotalCount, OpenBlockers: max(0, j.BlockedBy.TotalCount-len(j.BlockedBy.Nodes)), OpenSubIssues: j.Subs.Total - j.Subs.Completed,
 		subIssues: j.Subs.Total, BlockersClosed: j.blockersClosed(),
 	}
 	for _, l := range j.Labels.Nodes {
@@ -156,8 +152,10 @@ func (j issueJSON) item() Item {
 	for _, a := range j.Assignees.Nodes {
 		it.Assignees = append(it.Assignees, a.Login)
 	}
+	// An unread blocker cannot be assumed closed.
 	for _, b := range j.BlockedBy.Nodes {
 		if b.State == stateOpen {
+			it.OpenBlockers++
 			it.OpenBlockedBy = append(it.OpenBlockedBy, fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number))
 		}
 	}
@@ -456,7 +454,7 @@ func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
 		}
 		err := c.graphql(ctx, &r, `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
 items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+boardFields+`
-content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
+content{...I}}}}}}}`+issueFields, vs)
 		if err != nil {
 			return nil, err
 		}

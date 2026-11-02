@@ -243,7 +243,7 @@ func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
 	at := func(d int) *time.Time { t := days(d); return &t }
 	j := func(total int, closed ...*time.Time) issueJSON {
 		var i issueJSON
-		i.Deps.TotalBlockedBy = total
+		i.BlockedBy.TotalCount = total
 		for _, c := range closed {
 			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c})
 		}
@@ -873,5 +873,67 @@ func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing
 	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: "org/engine#9", Added: true, Team: teamX}) ||
 		!slices.Equal(f.mutations, []string{"add ISSUE9 to P", addIssue7, "I71=t1", `I71 after "I9"`}) {
 		t.Fatalf("Rank after cross-owner item = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+}
+
+// Every candidate source uses the current blocker list even when the summary
+// still describes the previous dependency state.
+func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
+			state, summary := "CLOSED", 1
+			if open {
+				state, summary = "OPEN", 0
+			}
+			deps := fmt.Sprintf(`,"issueDependenciesSummary":{"blockedBy":%d,"totalBlockedBy":%d},"blockedBy":{"totalCount":1,"nodes":[{"number":9,"state":%q,"repository":{"nameWithOwner":"o/r"}}]}`, summary, summary, state)
+			f := &fakeGH{t: t, pages: []string{
+				`{"data":{"repositoryOwner":{"projectV2":{"items":{"nodes":[` +
+					node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":1,"completed":0}`)) + "," +
+					node(upNext, "null", issue(4, deps)) + `]}}}}}`,
+			}, extras: `{"data":{"e0":{"issue":{"subIssues":{"nodes":[` + issue(20, deps) + `]}}},"s2":{"nodes":[` + issue(30, deps) + `]}}}`}
+			// This fixture's epic is at index 0 rather than fakeGH's index 1.
+			f.extrasBy = func(string) string { return f.extras }
+			b := readBoard()
+			snap, err := (&Client{GH: f.run, Board: b}).Read(context.Background(), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]Candidate{}
+			for _, c := range Rank(snap, b, now) {
+				got[c.Ref] = c
+			}
+			for _, ref := range []string{"o/r#4", "o/r#20", "o/r#30"} {
+				c, ok := got[ref]
+				if !ok {
+					t.Fatalf("missing candidate %s: %+v", ref, got)
+				}
+				wantOpen := 0
+				if open {
+					wantOpen = 1
+				}
+				if c.Blockers != 1 || c.OpenBlockers != wantOpen || (c.Skip != "") != open {
+					t.Errorf("%s: blockers=%d open=%d skip=%q", ref, c.Blockers, c.OpenBlockers, c.Skip)
+				}
+			}
+			if len(f.queries) != 3 {
+				t.Errorf("read made %d requests, want metadata, board page and extras only", len(f.queries))
+			}
+			for _, q := range f.queries {
+				if strings.Contains(q, "issueDependenciesSummary") {
+					t.Errorf("read requests stale summary: %s", q)
+				}
+			}
+		})
+	}
+}
+
+func TestUnreadBlockerKeepsTheItemHeld(t *testing.T) {
+	var j issueJSON
+	j.BlockedBy.TotalCount = 2
+	closed := days(1)
+	j.BlockedBy.Nodes = []blockerNode{{ClosedAt: &closed, depRef: depRef{State: "CLOSED"}}}
+	it := j.item()
+	if it.Blockers != 2 || it.OpenBlockers != 1 || !it.BlockersClosed.IsZero() {
+		t.Fatalf("incomplete blockers: %+v", it)
 	}
 }

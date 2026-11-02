@@ -45,7 +45,7 @@ func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
 		return n
 	}
 	// summary is the issue's blockers, as their list and as the summary
-	// board next reads.
+	// older readers used.
 	summary := func(key string) string {
 		var bs []string
 		for _, b := range f.blockers[key] {
@@ -172,15 +172,16 @@ func TestABlockedItemIsSkippedThenOfferedOnceItsBlockerCloses(t *testing.T) {
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7}}
 	ctx := context.Background()
 	b := deskBoard()
-	// board next ranks the item as Read builds it: its blockers' summary
-	// from the issue, as GitHub answers it.
+	// Keep GitHub's summary stale while the dependency list changes.
+	f.lag = true
+	// Rank the same issue fragment the board, sub-issues and searches read.
 	rank := func() Candidate {
 		var r struct {
 			Repository struct {
 				Item issueJSON `json:"issueOrPullRequest"`
 			} `json:"repository"`
 		}
-		if err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...on Issue{issueDependenciesSummary{blockedBy totalBlockedBy}}}}}`,
+		if err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...I}}}`+issueFields,
 			vars{"o": "o", "r": "r", "n": 5}); err != nil {
 			t.Fatal(err)
 		}
