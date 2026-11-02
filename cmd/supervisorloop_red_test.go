@@ -104,7 +104,7 @@ func TestLoopWakesAWorkerOnARedCheck(t *testing.T) {
 			err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				for i := range st.Agents {
 					if st.Agents[i].Name == loopWorker {
-						st.Agents[i].Park = &state.Park{On: loopPR, At: time.Now().Add(time.Minute), Waits: "desk review", ReviewHead: loopFixed}
+						st.Agents[i].Park = &state.Park{On: loopPR, At: time.Now().Add(time.Minute), Waits: deskReviewWait, ReviewHead: loopFixed}
 					}
 				}
 				return nil, nil

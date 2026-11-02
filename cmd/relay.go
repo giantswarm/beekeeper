@@ -395,15 +395,17 @@ func sessionContext(sessions []*claude.Session, p state.Party) int64 {
 func transcriptContext(s *claude.Session) int64 { return claude.Context(s.Transcript) }
 
 // quietness is the watch's reading of a holder's context for a relay:
-// checked once it reached relayAt (context).
+// checked once it reached relayAt, or half of it after an idle hour.
 type quietness struct {
 	checked bool
 	context int64
+	idle    bool
 	relayAt config.Tokens
 }
 
 // fireRelayDue reports rl's relay due once its holder's context reached
-// q.relayAt: once per term and relayAt in the
+// q.relayAt, or a new line arrives after an idle hour above half of it:
+// once per term and relayAt in the
 // state, and once more in a watch process that did not say it yet. The
 // record keeps when it was first reported at that relayAt.
 func (rl role) fireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) (lines []string, evs []state.Event) {
@@ -416,8 +418,36 @@ func (rl role) fireRelayDue(st *state.State, q quietness, said relayDues, now ti
 			r.RelayDue = &state.RelayDue{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Context: q.context, RelayAt: int64(q.relayAt)}
 		}
 		said.say(sup, q.relayAt, now)
-		lines = append(lines, fmt.Sprintf("%sRELAY DUE: %q is at %s tokens of context: %s", rl.tag, sup.Name, tokensText(q.context), rl.handover))
+		reason := ""
+		if q.idle {
+			reason = " after an idle hour (cache expired)"
+		}
+		lines = append(lines, fmt.Sprintf("%sRELAY DUE: %q is at %s tokens of context%s: %s", rl.tag, sup.Name, tokensText(q.context), reason, rl.handover))
 		evs = append(evs, event(watchParty, rl.name+".relay-due", "%s at %s tokens", sup.Name, tokensText(q.context)))
 	})
 	return lines, evs
+}
+
+// idleRoleReading recommends a fresh run before a new feed line rewarms an
+// hour-old context. An unknown activity time is no evidence of an idle hour.
+func idleRoleReading(r state.Role, sessions []*claude.Session, now time.Time, relayAt config.Tokens, said relayDues) quietness {
+	q := quietness{relayAt: relayAt}
+	if r.Holder == nil || r.Relay.Open(now) || said.said(r, relayAt, now) {
+		return q
+	}
+	s, live := claude.Live(sessions, r.Holder.Party)
+	if !live {
+		return q
+	}
+	last := s.LastActive
+	if s.LastSubagent.After(last) {
+		last = s.LastSubagent
+	}
+	if last.IsZero() || now.Sub(last) < time.Hour {
+		return q
+	}
+	q.context = transcriptContext(s)
+	q.checked = q.context > int64(relayAt)/2
+	q.idle = q.checked
+	return q
 }
