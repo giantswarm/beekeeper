@@ -189,7 +189,7 @@ skill_mcp_dependency_install = false
 func (s *Server) codexFiles() map[string][]byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard --format codex"
 	hooks := mustJSON(map[string]any{hooksKey: preToolUse(cmd)})
-	return map[string][]byte{"config.toml": []byte(codexConfig), "hooks.json": hooks, "AGENTS.md": s.Rules}
+	return map[string][]byte{"config.toml": []byte(codexConfig), hooksJSONFile: hooks, "AGENTS.md": s.Rules}
 }
 
 // linkCodexLogin links the person's own host login into the managed home. A
@@ -208,7 +208,12 @@ func (s *Server) linkCodexLogin() error {
 	return os.Symlink(filepath.Join(h.ConfigDir, "auth.json"), link)
 }
 
-const agyLoginToken = "antigravity-oauth-token"
+const (
+	agyLoginToken  = "antigravity-oauth-token" //nolint:gosec // OAuth token file basename, not a credential value
+	hooksJSONFile  = "hooks.json"
+	mcpServersKey  = "mcpServers"
+	streamJSONMode = "stream-json"
+)
 
 // agyHomeDir is the managed HOME of every remote agy worker on this host:
 // policy-owned config, hooks and rules under .gemini, never the person's own.
@@ -229,14 +234,13 @@ func (s *Server) agyAppDir() string {
 func (s *Server) agyFiles() map[string][]byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard --format agy"
 	hooks := mustJSON(map[string]any{managedBinary: agyPreToolUse(cmd)})
-	mcp := mustJSON(map[string]any{"mcpServers": map[string]any{}})
+	mcp := mustJSON(map[string]any{mcpServersKey: map[string]any{}})
 	skills := mustJSON(map[string]any{"entries": []any{}})
-	return map[string][]byte{"GEMINI.md": s.Rules, "hooks.json": hooks, "mcp_config.json": mcp, "skills.json": skills}
+	return map[string][]byte{"GEMINI.md": s.Rules, hooksJSONFile: hooks, "mcp_config.json": mcp, "skills.json": skills}
 }
 
 func agyPreToolUse(command string) map[string]any {
-	const kind = "command"
-	return map[string]any{"PreToolUse": []any{map[string]any{"matcher": "*", hooksKey: []any{map[string]any{"type": kind, kind: command, "timeout": 30}}}}}
+	return preToolUseMatcher("*", command)
 }
 
 func agyLoginSource(configDir string) string {
@@ -290,8 +294,12 @@ const hooksKey = "hooks"
 
 // preToolUse is the hook table both harnesses read: one command for every tool.
 func preToolUse(command string) map[string]any {
+	return preToolUseMatcher(".*", command)
+}
+
+func preToolUseMatcher(matcher, command string) map[string]any {
 	const kind = "command"
-	return map[string]any{"PreToolUse": []any{map[string]any{"matcher": ".*", hooksKey: []any{map[string]any{"type": kind, kind: command, "timeout": 30}}}}}
+	return map[string]any{"PreToolUse": []any{map[string]any{"matcher": matcher, hooksKey: []any{map[string]any{"type": kind, kind: command, "timeout": 30}}}}}
 }
 
 func (s *Server) settings() []byte {

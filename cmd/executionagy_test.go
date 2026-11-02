@@ -137,7 +137,8 @@ func TestExecutionGuardDecisionMatchesAgyHookFormat(t *testing.T) {
 	thread := "019a0000-0000-7000-8000-000000000001"
 	agyRaw := []byte(`{"conversationId":"` + thread + `","workspacePaths":["` + workspace + `"],"toolCall":{"name":"run_command","args":{"CommandLine":"git status"}}}`)
 	deniedAgy := func(b []byte) bool { return strings.Contains(string(b), `"decision":"deny"`) }
-	agyJournal := execution.Journal{Request: execution.StartRequest{Harness: harnessAgy, ConversationID: "c0ffee00-0000-4000-8000-000000000000"}, Handle: execution.Handle{Workspace: workspace, ConversationID: "c0ffee00-0000-4000-8000-000000000000"}, Thread: thread}
+	convID := "c0ffee01-0000-4000-8000-000000000000"
+	agyJournal := execution.Journal{Request: execution.StartRequest{Harness: harnessAgy, ConversationID: convID}, Handle: execution.Handle{Workspace: workspace, ConversationID: convID}, Thread: thread}
 	if out := executionGuardDecision(guard.Hook{}, harnessAgy, agyJournal, nil)(agyRaw); deniedAgy(out) {
 		t.Fatalf("agy hook on its own thread was denied: %s", out)
 	}

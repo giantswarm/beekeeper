@@ -110,32 +110,33 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
 	s.GuardProbe = func() error {
+		const probeSession = "probe"
 		h := a.executionHook()
 		for _, command := range []string{"git push origin main", "gh pr merge 1 --repo giantswarm/beekeeper", "gh issue create --repo forbidden/repository --title fixture --body fixture"} {
-			raw, _ := json.Marshal(map[string]any{"session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
+			raw, _ := json.Marshal(map[string]any{"session_id": probeSession, "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
 			var out struct {
 				Hook struct {
 					Decision string `json:"permissionDecision"`
 				} `json:"hookSpecificOutput"`
 			}
-			b := h.DecideExecution(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
+			b := h.DecideExecution(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
 			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("execution hook conformance probe failed")
 			}
 			if _, ok := cfg.Harnesses[execution.HarnessCodex]; ok {
-				raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
+				raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": probeSession, "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
 				out.Hook.Decision = ""
-				b = h.DecideExecutionCodex(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
+				b = h.DecideExecutionCodex(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
 				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 					return errors.New("codex execution hook conformance probe failed")
 				}
 			}
 			if _, ok := cfg.Harnesses[execution.HarnessAgy]; ok {
-				raw, _ = json.Marshal(map[string]any{"conversationId": "probe", "workspacePaths": []string{cfg.WorkspaceRoot}, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": command}}})
+				raw, _ = json.Marshal(map[string]any{"conversationId": probeSession, "workspacePaths": []string{cfg.WorkspaceRoot}, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": command}}})
 				var agyOut struct {
 					Decision string `json:"decision"`
 				}
-				b = h.DecideExecutionAgy(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
+				b = h.DecideExecutionAgy(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
 				if json.Unmarshal(b, &agyOut) != nil || agyOut.Decision != guardDeny {
 					return errors.New("agy execution hook conformance probe failed")
 				}

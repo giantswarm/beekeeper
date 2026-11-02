@@ -89,7 +89,7 @@ func TestAgyHostConfigHarnesses(t *testing.T) {
 		harnesses []string
 		ok        bool
 	}{{[]string{HarnessAgy}, true}, {[]string{HarnessClaude, HarnessAgy}, true}, {[]string{HarnessClaude, HarnessCodex, HarnessAgy}, true}, {[]string{HarnessAgy, HarnessAgy}, false}} {
-		h := Host{Endpoint: Endpoint{SSH: "host-a.example", Executable: "/usr/local/bin/beekeeper", Config: "/etc/beekeeper/worker.json"}, Identity: fixtureHost, WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{f.r.Repository: "/srv/source"}, Harnesses: test.harnesses, PolicyDigest: Digest([]byte("policy")), MaxBusy: 1}
+		h := Host{Endpoint: Endpoint{SSH: "host-agy.example", Executable: "/usr/local/bin/beekeeper", Config: "/etc/beekeeper/worker.json"}, Identity: fixtureHost, WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{f.r.Repository: "/srv/source"}, Harnesses: test.harnesses, PolicyDigest: Digest([]byte("policy")), MaxBusy: 1}
 		if err := h.Validate(); (err == nil) != test.ok {
 			t.Fatalf("host harnesses %v: %v, want ok %v", test.harnesses, err, test.ok)
 		}
@@ -107,7 +107,7 @@ func TestPrepareInstallsManagedAgyHome(t *testing.T) {
 		t.Fatalf("agy policy not installed: %v", err)
 	}
 	cfgDir := f.s.agyConfigDir()
-	hooks, err := os.ReadFile(filepath.Join(cfgDir, "hooks.json")) //nolint:gosec // test-owned managed home
+	hooks, err := os.ReadFile(filepath.Join(cfgDir, hooksJSONFile)) //nolint:gosec // test-owned managed home
 	if err != nil || !strings.Contains(string(hooks), "agents execution-guard --format agy") || !strings.Contains(string(hooks), "PreToolUse") {
 		t.Fatalf("agy hooks do not run the execution guard: %s %v", hooks, err)
 	}
@@ -121,7 +121,7 @@ func TestPrepareInstallsManagedAgyHome(t *testing.T) {
 	if target, err := os.Readlink(filepath.Join(f.s.agyAppDir(), agyLoginToken)); err != nil || target != filepath.Join(dir, "login", agyLoginToken) {
 		t.Fatalf("agy login is not linked from the host's own configDir: %q %v", target, err)
 	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "hooks.json"), []byte(`{"beekeeper":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfgDir, hooksJSONFile), []byte(`{"beekeeper":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.InstalledPolicy(); err == nil {
@@ -210,9 +210,9 @@ func TestAgyRunnerWakesResumeTheConversation(t *testing.T) {
 	ctx := startCodex(t, f)
 	done := make(chan error, 1)
 	go func() { done <- f.s.Run(ctx, f.r.Ref) }()
-	one := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "first follow-up", Sender: Sender{Name: "supervisor"}}
+	one := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "first agy follow-up", Sender: Sender{Name: "lead"}}
 	two := one
-	two.ID, two.Sequence, two.Text, two.Sender = newID(), 2, "second follow-up", Sender{}
+	two.ID, two.Sequence, two.Text, two.Sender = newID(), 2, "second agy follow-up", Sender{}
 	if _, err := f.s.Message(ctx, f.r.Ref, two); err != nil {
 		t.Fatal(err)
 	}
@@ -266,10 +266,10 @@ func TestAgyRunnerWakesResumeTheConversation(t *testing.T) {
 		t.Fatalf("want 3 turns, got %d: %q", len(turns), turns)
 	}
 	resume := "--input-format stream-json --output-format stream-json --model gemini-3.1-pro-high --dangerously-skip-permissions --new-project --conversation " + fixtureThread + "|"
-	if !strings.HasPrefix(turns[1], resume) || !strings.Contains(turns[1], "Message from ") || !strings.Contains(turns[1], "supervisor") || !strings.Contains(turns[1], "first follow-up") {
+	if !strings.HasPrefix(turns[1], resume) || !strings.Contains(turns[1], "Message from ") || !strings.Contains(turns[1], "lead") || !strings.Contains(turns[1], "first agy follow-up") {
 		t.Fatalf("first wake turn: %q", turns[1])
 	}
-	if !strings.HasPrefix(turns[2], resume) || !strings.Contains(turns[2], "second follow-up") {
+	if !strings.HasPrefix(turns[2], resume) || !strings.Contains(turns[2], "second agy follow-up") {
 		t.Fatalf("second wake turn out of order: %q", turns[2])
 	}
 }
@@ -294,7 +294,7 @@ func TestAgyRunnerRefusesForeignConversation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "foreign"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "follow-up"}
+	m := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "agy follow-up"}
 	if _, err := f.s.Message(ctx, f.r.Ref, m); err != nil {
 		t.Fatal(err)
 	}

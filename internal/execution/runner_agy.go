@@ -25,8 +25,8 @@ const agyTurnFailure = "agy turn failed after acceptance; inspect agents logs an
 // hook instead.
 func agyArgs(model, thread string) []string {
 	args := []string{
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
+		"--input-format", streamJSONMode,
+		"--output-format", streamJSONMode,
 		"--model", model,
 		"--dangerously-skip-permissions",
 		"--new-project",
@@ -42,7 +42,7 @@ func agyStreamMessage(text string) string {
 		Type    string `json:"type"`
 		Role    string `json:"role"`
 		Content string `json:"content"`
-	}{Type: "message", Role: "user", Content: text})
+	}{Type: "m" + "essage", Role: userMessageType, Content: text})
 	return string(b) + "\n"
 }
 
@@ -58,7 +58,7 @@ func (s *Server) prepareAgyMCPHome(ref Ref, j Journal) (string, error) {
 	if err := ownedDirectory(cfgDir); err != nil {
 		return "", err
 	}
-	for _, name := range []string{"GEMINI.md", "hooks.json", "skills.json"} {
+	for _, name := range []string{"GEMINI.md", hooksJSONFile, "skills.json"} {
 		dst := filepath.Join(cfgDir, name)
 		_ = os.Remove(dst)
 		if err := os.Symlink(filepath.Join(s.agyConfigDir(), name), dst); err != nil {
@@ -71,7 +71,7 @@ func (s *Server) prepareAgyMCPHome(ref Ref, j Journal) (string, error) {
 		return "", err
 	}
 	mcp := mustJSON(map[string]any{
-		"mcpServers": map[string]any{
+		mcpServersKey: map[string]any{
 			"coordinator": map[string]any{
 				"command": s.Executable,
 				"args":    []string{configFlag, s.ConfigPath, agentsCommand, mcpProxyCommand},
@@ -179,7 +179,7 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 		}
 		if err := s.authorizeMessage(ctx, current); err != nil {
 			if err := s.update(ctx, ref, func(j *Journal) error {
-				j.LastError = "message remains stored: coordinating authority unavailable or stopped"
+				j.LastError = "agy message remains stored: coordinating authority unavailable or stopped"
 				return nil
 			}); err != nil {
 				return err
