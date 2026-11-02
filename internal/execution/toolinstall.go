@@ -139,7 +139,7 @@ func installToolWithClient(ctx context.Context, name string, tool ToolConfig, cl
 	}
 	// Go needs its complete GOROOT, whereas gh is a standalone executable.
 	if name == ToolGo && filepath.Base(filepath.Dir(tool.Executable)) != toolBinDirectory {
-		return errors.New("Go executable must be under a dedicated installation's bin directory")
+		return errors.New("go executable must be under a dedicated installation's bin directory")
 	}
 	target := filepath.Dir(filepath.Dir(tool.Executable))
 	if name == ToolGitHub {
@@ -166,7 +166,7 @@ func installToolWithClient(ctx context.Context, name string, tool ToolConfig, cl
 		return os.Link(filepath.Join(stage, toolBinDirectory, ToolGitHub), tool.Executable)
 	}
 	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("Go installation directory exists; use a new dedicated path")
+		return errors.New("go installation directory exists; use a new dedicated path")
 	}
 	return os.Rename(stage, target)
 }
@@ -204,10 +204,10 @@ func unpackTool(data []byte, prefix, dest string, ghOnly bool) error {
 		if h.Typeflag != tar.TypeDir && h.Typeflag != tar.TypeReg {
 			return errors.New("tool archive contains unsupported entry")
 		}
-		total += h.Size
-		if h.Size < 0 || total > 1<<30 {
+		if h.Size < 0 || h.Size > (1<<30)-total {
 			return errors.New("expanded tool archive exceeds size limit")
 		}
+		total += h.Size
 		if ghOnly && relative != "bin/gh" {
 			continue
 		}
@@ -229,7 +229,7 @@ func unpackTool(data []byte, prefix, dest string, ghOnly bool) error {
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(f, tr)
+		_, err = io.CopyN(f, tr, h.Size)
 		closeErr := f.Close()
 		if err != nil {
 			return err

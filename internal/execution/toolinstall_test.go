@@ -67,7 +67,7 @@ func TestUnpackPinnedTool(t *testing.T) {
 func TestProvisionToolsPreservesExistingMismatchedInstallation(t *testing.T) {
 	f := testFixture(t)
 	exe := filepath.Join(t.TempDir(), "gh")
-	if err := os.WriteFile(exe, []byte("original"), 0700); err != nil {
+	if err := os.WriteFile(exe, []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Config.Tools[ToolGitHub] = ToolConfig{Executable: exe, Version: fixtureGitHubVersion}
@@ -77,7 +77,7 @@ func TestProvisionToolsPreservesExistingMismatchedInstallation(t *testing.T) {
 	if err := f.s.ProvisionTools(context.Background()); err == nil || !strings.Contains(err.Error(), "installation exists") {
 		t.Fatalf("provision: %v", err)
 	}
-	got, err := os.ReadFile(exe)
+	got, err := readRegular(exe, MaxWire)
 	if err != nil || string(got) != "original" {
 		t.Fatal("existing installation changed")
 	}
@@ -147,7 +147,7 @@ func TestInstallPinnedToolVerifiesBeforeInstalling(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				got, err := os.ReadFile(exe)
+				got, err := readRegular(exe, MaxWire)
 				if err != nil || !bytes.Equal(got, executable) {
 					t.Fatalf("installed executable: %q %v", got, err)
 				}

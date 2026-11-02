@@ -215,7 +215,7 @@ func TestWorkspaceProvisionsThirdRepository(t *testing.T) {
 			if _, err := f.s.git(ctx, f.source, "bundle", "create", bundle, "refs/heads/execution-source"); err != nil {
 				t.Fatal(err)
 			}
-			data, err := os.ReadFile(bundle)
+			data, err := readRegular(bundle, MaxSourceBundle)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -224,7 +224,7 @@ func TestWorkspaceProvisionsThirdRepository(t *testing.T) {
 			if err := json.Unmarshal(raw, &config); err != nil {
 				t.Fatal(err)
 			}
-			config["repositoryOrgs"] = []string{"example"}
+			config["repositoryOrgs"] = []string{fixtureRepositoryOwner}
 			raw, _ = json.Marshal(config)
 			if err := json.Unmarshal(raw, &f.s.Config); err != nil {
 				t.Fatal(err)
