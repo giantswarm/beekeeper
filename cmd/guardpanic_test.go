@@ -8,12 +8,23 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const panicCWDKey = "cwd"
 
+type guardPanicMachine struct{ platform.Machine }
+
+func (guardPanicMachine) Processes() (*proc.Table, error) {
+	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
+}
+
 func TestHookWorktreeMoveColdState(t *testing.T) {
+	oldPlatform, oldMachine := plat, testMachine
+	testMachine = guardPanicMachine{Machine: plat.Machine}
+	t.Cleanup(func() { plat, testMachine = oldPlatform, oldMachine })
 	for _, live := range []bool{false, true} {
 		t.Run(map[bool]string{false: "finished", true: holderLive}[live], func(t *testing.T) {
 			var out bytes.Buffer
@@ -47,6 +58,8 @@ func TestHookWorktreeMoveColdState(t *testing.T) {
 }
 
 func TestRecordGuardPanicLog(t *testing.T) {
+	oldPlatform := plat
+	t.Cleanup(func() { plat = oldPlatform })
 	var out bytes.Buffer
 	a, dir := scopeApp(t, &out)
 	if err := a.loadConfig(); err != nil {
