@@ -18,16 +18,15 @@ import (
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
 const (
-	inProgress  = "In Progress ⛏️"
-	blocked     = "Blocked / Waiting ⛔️"
-	upNext      = "Up Next ➡️"
-	backlog     = "Backlog 📦"
-	epic        = "Epic 🎯"
-	bug         = "Bug 🐞"
-	upNextEpic  = "Up Next epic"
-	bugStep     = "bug"
-	typedNext   = "up next"
-	closedState = "CLOSED"
+	inProgress = "In Progress ⛏️"
+	blocked    = "Blocked / Waiting ⛔️"
+	upNext     = "Up Next ➡️"
+	backlog    = "Backlog 📦"
+	epic       = "Epic 🎯"
+	bug        = "Bug 🐞"
+	upNextEpic = "Up Next epic"
+	bugStep    = "bug"
+	typedNext  = "up next"
 	// backlogStep is the name of the order's Backlog step.
 	backlogStep = "Backlog"
 )
@@ -246,7 +245,11 @@ func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
 		var i issueJSON
 		i.BlockedBy.TotalCount = total
 		for _, c := range closed {
-			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c})
+			state := stateOpen
+			if c != nil {
+				state = stateClosed
+			}
+			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c, depRef: depRef{State: state}})
 		}
 		return i
 	}
@@ -882,7 +885,7 @@ func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing
 func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 	for _, open := range []bool{true, false} {
 		t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
-			state, summary := closedState, 1
+			state, summary := stateClosed, 1
 			if open {
 				state, summary = "OPEN", 0
 			}
@@ -903,7 +906,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 			for _, c := range Rank(snap, b, now) {
 				got[c.Ref] = c
 			}
-			for _, ref := range []string{ref4, "o/r#20", "o/r#30"} {
+			for _, ref := range []string{ref4, partialSubIssue, "o/r#30"} {
 				c, ok := got[ref]
 				if !ok {
 					t.Fatalf("missing candidate %s: %+v", ref, got)
@@ -932,7 +935,7 @@ func TestUnreadBlockerKeepsTheItemHeld(t *testing.T) {
 	var j issueJSON
 	j.BlockedBy.TotalCount = 2
 	closed := days(1)
-	j.BlockedBy.Nodes = []blockerNode{{ClosedAt: &closed, depRef: depRef{State: closedState}}}
+	j.BlockedBy.Nodes = []blockerNode{{ClosedAt: &closed, depRef: depRef{State: stateClosed}}}
 	it := j.item()
 	if it.Blockers != 2 || it.OpenBlockers != 1 || !it.BlockersClosed.IsZero() {
 		t.Fatalf("incomplete blockers: %+v", it)

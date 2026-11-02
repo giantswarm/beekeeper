@@ -52,8 +52,11 @@ type meta struct {
 	Fields map[string]field
 }
 
-// stateOpen is the state of an open issue or pull request.
-const stateOpen = "OPEN"
+// States read from GitHub; an absent state confirms neither one.
+const (
+	stateOpen   = "OPEN"
+	stateClosed = "CLOSED"
+)
 
 // isOpen is a board query's filter of the open items.
 const isOpen = "is:open"
@@ -126,7 +129,7 @@ func (j issueJSON) blockersClosed() time.Time {
 	}
 	var last time.Time
 	for _, n := range ns {
-		if n.ClosedAt == nil {
+		if n.State != stateClosed || n.ClosedAt == nil {
 			return time.Time{}
 		}
 		if n.ClosedAt.After(last) {
@@ -154,9 +157,11 @@ func (j issueJSON) item() Item {
 	}
 	// An unread blocker cannot be assumed closed.
 	for _, b := range j.BlockedBy.Nodes {
-		if b.State == stateOpen {
+		if b.State != stateClosed {
 			it.OpenBlockers++
-			it.OpenBlockedBy = append(it.OpenBlockedBy, fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number))
+			if b.Number > 0 && b.Repository.NameWithOwner != "" {
+				it.OpenBlockedBy = append(it.OpenBlockedBy, fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number))
+			}
 		}
 	}
 	if p := j.Parent; p != nil {
