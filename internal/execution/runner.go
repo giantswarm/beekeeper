@@ -103,6 +103,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		go func() { defer close(leaseDone); s.maintainLease(leaseCtx, ref, leaseStarted, lease) }()
 		defer func() { stopLease(); <-leaseDone }()
 	}
+	if j.Request.Harness == HarnessOmp {
+		return s.runOmp(ctx, ref, j)
+	}
 	if j.Request.Harness == HarnessCodex {
 		return s.runCodex(ctx, ref, j)
 	}

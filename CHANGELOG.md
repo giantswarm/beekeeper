@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SSH execution hosts can run guarded omp workers with host-local authentication, durable RPC wake receipts and the shared coordinator-owned capacity, publication and merge contracts (https://github.com/giantswarm/beekeeper/issues/1943).
+
 - The disk step's caches come from config: `disk.caches` lists cache policies, each a path or glob with a mode (`entries` removes a root's direct children whole, `files` its files, `command` runs the tool's own cleaner over its budget and under pressure), `olderThan`, `maxGiB` and `regenerable` (under disk pressure, everything older than an hour). References are read again before removal and each entry is inspected again right before it goes, so one opened or written meanwhile stays. Beekeeper's own caches (`go-build`, `sccache`, `beekeeper-tmp`) are the default entries; an entry of the same name changes them, `mode: off` drops one. Nothing written within the hour, nothing a process references and nothing holding a git checkout is removed. `disk prune` (also `--dry-run`) lists each cache with what it holds and would free, `--report` the user cache directory's largest entries no policy covers, and a pressure run's `DISK PRUNE` line names the caches holding the most and, while the disk stays low, the user cache directory's largest uncovered directories with their last write; the low-disk note carries that. Durations take whole days (`7d`) ([https://github.com/giantswarm/beekeeper/issues/1933](https://github.com/giantswarm/beekeeper/issues/1933)).
 
 ### Fixed

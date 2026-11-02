@@ -70,10 +70,11 @@ func TestExecutionHostConfigValidatesCatalogWithoutChangingLocalDefaults(t *test
 	for _, tc := range []struct{ name, raw, want string }{
 		{"absent", "", ""},
 		{"valid", "agents:\n  hosts:\n" + first, ""},
+		{"omp catalogue", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "[claude]", "[omp]"), ""},
 		{"reserved", "agents:\n  hosts:\n" + fmt.Sprintf(entry, "local", "host-a", digest), "local is reserved"},
 		{"duplicate identity", "agents:\n  hosts:\n" + first + fmt.Sprintf(entry, "host-b", "host-a", digest), "unique identities"},
 		{"unsafe endpoint", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "host-a.example", "-unsafe"), "SSH endpoint"},
-		{"unsupported harness", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "[claude]", "[agy]"), "entries of claude and codex"},
+		{"unsupported harness", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "[claude]", "[agy]"), "entries of claude, codex and omp"},
 		{"workspace root", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "/srv/workspaces", "/"), "workspace root"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

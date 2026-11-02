@@ -97,7 +97,7 @@ func TestHostConfigHarnesses(t *testing.T) {
 	for _, test := range []struct {
 		harnesses []string
 		ok        bool
-	}{{[]string{HarnessClaude}, true}, {[]string{HarnessCodex}, true}, {[]string{HarnessClaude, HarnessCodex}, true}, {nil, false}, {[]string{"omp"}, false}, {[]string{HarnessCodex, HarnessCodex}, false}} {
+	}{{[]string{HarnessClaude}, true}, {[]string{HarnessCodex}, true}, {[]string{HarnessClaude, HarnessCodex}, true}, {nil, false}, {[]string{HarnessOmp}, true}, {[]string{HarnessCodex, HarnessCodex}, false}} {
 		h := Host{Endpoint: Endpoint{SSH: "host-a.example", Executable: "/usr/local/bin/beekeeper", Config: "/etc/beekeeper/worker.json"}, Identity: fixtureHost, WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{f.r.Repository: "/srv/source"}, Harnesses: test.harnesses, PolicyDigest: Digest([]byte("policy")), MaxBusy: 1}
 		if err := h.Validate(); (err == nil) != test.ok {
 			t.Fatalf("host harnesses %v: %v, want ok %v", test.harnesses, err, test.ok)
