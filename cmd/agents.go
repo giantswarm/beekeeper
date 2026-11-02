@@ -19,8 +19,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// agentFields keeps the roster fields without Agent's state-preserving JSON
+// methods: promoting its marshaler would hide every field added by the view.
+type agentFields state.Agent
+
 type agentView struct {
-	state.Agent
+	agentFields
 	// Reachable: "live" (the CLI runs), "live, first turn running" or
 	// "live, wake turn running" (a headless turn of agents start or agents
 	// wake is its CLI), "waiting <t> left" (a bounded wait keeps it
@@ -144,6 +148,11 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 				if err != nil {
 					return nil, err
 				}
+				for i := range st.Agents {
+					if st.Agents[i].Is(me) {
+						st.Agents[i].ActivityAt = a.now.UTC()
+					}
+				}
 				if os.Getenv(sandbox.Runtime) == "" {
 					// outside the sandbox, this shell's PATH is the agent's own
 					_ = recordGH(st, me, guard.Resolve("gh", os.Getenv("PATH")), a.now.UTC())
@@ -237,7 +246,11 @@ each finding as a line of its own (PROBLEM FOUND), for the supervisor to
 file; a finding filed already names its issue's URL. The log keeps them
 (agents.report, agents.problem). Use agents problem "<finding>" to report a
 finding mid-task. Repeated findings are logged and delivered once per
-worker assignment, including those repeated here.`,
+worker assignment, including those repeated here.
+
+--as <name> reports for the registered agent of that name, whatever
+session registered it, as agents park does; an independent reviewer's
+completion is refused under --as.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			found, err := problemsFound(problems, finished)
@@ -263,7 +276,7 @@ worker assignment, including those repeated here.`,
 				return err
 			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) })
+				i := a.callerAgent(st, me)
 				if i < 0 {
 					return nil, refused("this session is not registered: `beekeeper agents register` first")
 				}
@@ -596,7 +609,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
 	desktop := a.desktopMode() && t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
-		v := agentView{Agent: ag, Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
+		v := agentView{agentFields: agentFields(ag), Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
 		if ag.Execution != nil {
 			v.Reachable = "SSH reachability unknown; process unknown"
 			if r, _ := executionRecord(st, *ag.Execution); r != nil {
@@ -626,6 +639,9 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 			if turn := headlessTurn(t, s.ID); turn != "" {
 				v.Reachable, v.HeadlessTurn = "live, "+turn+" running", true
 			}
+		}
+		if last, gone := goneAgent(a.cfg, st, sessions, ag, a.cfg.Agents.StaleAfter.Duration, a.now); gone {
+			v.Reachable = goneActivityPrefix + last.UTC().Format(time.RFC3339)
 		}
 		if desktop && desktopStarted(st, ag.Party) && !a.hasRow(ag.Session) {
 			v.NoRow = true
@@ -657,8 +673,12 @@ func stoppedAgents(agents []state.Agent, sessions []*claude.Session) []state.Age
 const resumeMessage = "Your CLI stopped (a reboot or a crash). Re-query the live state of your task and continue it."
 
 // resumeHint is how a stopped agent comes back: a desktop session by
-// opening its row, a background one by claude --bg --resume.
+// opening its row, a background one by claude --bg --resume, and another
+// harness through agents wake.
 func resumeHint(ag state.Agent) string {
+	if _, _, ok := harnessForHost(ag.HostSession); ok || ag.Harness != "" && ag.Harness != claudeComm {
+		return fmt.Sprintf("beekeeper agents wake %q %q", ag.Name, resumeMessage)
+	}
 	if ag.HostSession != "" {
 		return "open " + continueURL(ag.HostSession)
 	}

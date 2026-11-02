@@ -18,7 +18,11 @@ The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
 stops. Remote wakes and resumes use durable ordered message receipts; inspect
-them with `agents messages` and reconcile with `agents hosts sync`. With
+them with `agents messages` and reconcile with `agents hosts sync`. Hosts
+follow the coordinator's release: `agents hosts update` installs it there,
+verified, and pins the prepared policy digest in beekeeper's state, which the
+supervisor loop does after each coordinator update; a host that cannot be
+updated is held. With
 `supervisor.hosts`, `supervisor loop` places its worker starts
 on these hosts when the coordinator is out of room (or always with
 `supervisor.hostsFirst`, for what a host can run: a repository no host maps
@@ -2078,8 +2082,10 @@ and a crash both start a fresh session.
   worker a reboot stopped, a desktop session closed) does not come back by itself. `watch` says
   `AGENTS STOPPED` once per agent, and the `handover` Agents section marks it, each with
   how to resume it: `claude --bg --resume <session> "…"` for a background worker, its
-  `claude://code/continue` link for a desktop session. Nothing is resumed automatically: a burst
-  of resumed workers after a login is the supervisor's call against the machine's memory. The
+  `claude://code/continue` link for a desktop session, or `beekeeper agents wake <name> <message>`
+  for codex, omp and agy workers. Those workers count as running while their harness runner
+  lives, including between turns and before their first transcript. Nothing is resumed automatically:
+  a burst of resumed workers after a login is the supervisor's call against the machine's memory. The
   line tells a worker parked on a person (its serve record's `--waits` names the person, a note,
   the supervisor or the guide: `parked on a person: …`) apart from one whose headless turn ended
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
@@ -2384,7 +2390,17 @@ open timer that wakes the agent by name (`timer add --wake`) keeps it the same w
 is done. `agents` shows what keeps an entry in its KEPT column, `doctor --dry-run` names each kept
 entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board next` counts its
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
-returns the entry to `agents.staleAfter`. The doctor also reopens a worker whose session the desktop
+returns the entry to `agents.staleAfter`.
+
+A task holder with no running CLI or turn and no transcript or roster activity
+for `agents.staleAfter` is **gone**. Kept and parked agents, agents with a wake
+timer, and remote executions are protected. `capacity` releases its busy and
+provider slots; `agents` and the watch show its last activity. The doctor retires
+it through the usual archive path, ends its serve record so the board can offer
+its item again, and logs its unfinished task and latest hand-over note as an
+`agents.gone` event without asking for a decision. Before retirement, a wake, resume or
+new activity restores its slot. Setting `agents.staleAfter` negative disables
+stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
 
 A park on a pull request requests the supervisor loop's independent review only

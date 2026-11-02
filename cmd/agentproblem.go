@@ -32,7 +32,7 @@ delivers it once per worker assignment.`,
 				return err
 			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
+				i := a.callerAgent(st, me)
 				if i < 0 {
 					return nil, refused("this session is not registered: `beekeeper agents register` first")
 				}
@@ -58,6 +58,7 @@ func (a *app) recordWorkerProblem(st *state.State, ag *state.Agent, me state.Par
 	if missing := post.Unlinked(finding, agentHere(st, ag)); len(missing) > 0 {
 		return nil, refused("problem refused: %s", strings.Join(missing, "; "))
 	}
+	ag.ActivityAt = a.now.UTC()
 	found := freshWorkerProblems(ag, []string{finding})
 	if len(found) == 0 {
 		return nil, nil

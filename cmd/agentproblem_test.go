@@ -114,7 +114,7 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 		t.Fatal("unregistered finding accepted")
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: sshTestTask, AssignedAt: a.now, Park: &state.Park{On: "#1", Waits: "fixture wait"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne, Session: "problem-test-session"}, Task: sshTestTask, AssignedAt: a.now, Park: &state.Park{On: "#1", Waits: "fixture wait"}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -134,6 +134,9 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if st.Agents[0].Task != sshTestTask || st.Agents[0].Park == nil || st.Agents[0].Done {
 			t.Fatal("finding ended the worker's task or park")
+		}
+		if !st.Agents[0].ActivityAt.Equal(a.now.UTC()) {
+			t.Fatal("finding did not refresh explicit roster activity")
 		}
 		lines, events := firePending(st, nil, a.now)
 		if len(lines) != 1 || !strings.Contains(lines[0], "PROBLEM FOUND") {
