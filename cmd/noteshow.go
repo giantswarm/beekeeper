@@ -83,7 +83,11 @@ history cannot be recovered.`,
 				}
 				return a.printJSON(m)
 			}
-			if _, err := fmt.Fprintf(a.out, "%s [status: %s] [for %s]\n%s\n", noteRef(&local.Note), local.Status, local.For, local.Text); err != nil {
+			audience := local.For
+			if audience == "" {
+				audience = "unknown (not retained)"
+			}
+			if _, err := fmt.Fprintf(a.out, "%s [status: %s] [for %s]\n%s\n", noteRef(&local.Note), local.Status, audience, local.Text); err != nil {
 				return err
 			}
 			if local.Default != "" {
@@ -160,7 +164,7 @@ func (a *app) localNote(id int) (*shownNote, error) {
 	if len(evs) > 0 {
 		e := evs[len(evs)-1]
 		an, _ := parseAnswered(e)
-		return &shownNote{Note: state.Note{ID: id, Text: an.Question, For: an.For, By: state.Party{Name: an.Asker}}, Status: closedAnswered, Answer: an.Answer, Closure: &e}, nil
+		return &shownNote{Note: state.Note{ID: id, Text: an.Question, For: an.Audience, By: state.Party{Name: an.Asker}}, Status: closedAnswered, Answer: an.Answer, Closure: &e}, nil
 	}
 	return shown, nil
 }

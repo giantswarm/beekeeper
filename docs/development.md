@@ -62,7 +62,10 @@ Kubernetes preserves these optional spec fields.
 notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
 while `#<n>` selects the local record. The central instance's own CLI can also
 read retained closed Note resources. File-backed stores can recover answered
-notes while their full `answer.recorded` event remains; other removed or expired
+notes while their full `answer.recorded` event remains, without a record-size cap.
+New answer events retain the original audience separately from the answerer;
+older events without that audience show it as unknown rather than naming the
+answerer as the addressee. Other removed or expired
 records are reported as unavailable, never reconstructed from a truncated log.
 
 `note list` and `guide queue` show open notes. An answer removes a note from both; a

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ import (
 const noteShowName = "show"
 
 func TestNoteShow(t *testing.T) {
-	body := strings.Repeat("A long line with unicode 🐝\n", 20000) + "last line"
+	body := strings.Repeat("A long line with unicode 🐝\n", 50000) + "last line"
 	answer := strings.Repeat("The complete answer\n", 100) + "answer tail"
 	for _, tc := range []struct {
 		name, id, status          string
@@ -37,7 +38,7 @@ func TestNoteShow(t *testing.T) {
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				switch {
 				case tc.answered:
-					return []state.Event{answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Channel: viaCLI, Answer: answer}, &n)}, nil
+					return []state.Event{{Verb: "unrelated", Detail: strings.Repeat("z", 1_100_000)}, answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Channel: viaCLI, Answer: answer}, &n)}, nil
 				case tc.defaulted:
 					st.Defaulted = []state.Note{n}
 				default:
@@ -102,6 +103,51 @@ func TestNoteShowRejectsMissingAndInvalidIDs(t *testing.T) {
 				t.Fatal("failed lookup printed a note")
 			}
 		})
+	}
+}
+
+func TestNoteShowAnsweredAudience(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, asJSON := range []bool{false, true} {
+			t.Run(fmt.Sprintf("legacy=%t/json=%t", legacy, asJSON), func(t *testing.T) {
+				a, out := noteApp(t)
+				const audience = "team:ops"
+				n := state.Note{ID: 1, For: audience, Text: laneQuestion, By: state.Party{Name: agentOne}}
+				e := answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: "Ada", Channel: viaCLI, Answer: "approved"}, &n)
+				if legacy {
+					e.Detail = strings.Replace(e.Detail, ` for "team:ops"`, "", 1)
+				}
+				if err := a.store.Log(state.Event{Verb: "unrelated", Detail: strings.Repeat("z", 1_100_000)}, e); err != nil {
+					t.Fatal(err)
+				}
+				a.json = asJSON
+				c := a.noteCmd()
+				c.SetArgs([]string{noteShowName, "#1"})
+				if err := c.Execute(); err != nil {
+					t.Fatal(err)
+				}
+				wantFor := audience
+				if asJSON {
+					var got struct{ For, Text, Answer string }
+					if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+						t.Fatal(err)
+					}
+					if legacy {
+						wantFor = ""
+					}
+					if got.For != wantFor || got.Text != n.Text || got.Answer != "approved" {
+						t.Fatalf("recovered note: %+v", got)
+					}
+				} else {
+					if legacy {
+						wantFor = "unknown (not retained)"
+					}
+					if !strings.Contains(out.String(), "[for "+wantFor+"]") {
+						t.Fatalf("audience: %s", out)
+					}
+				}
+			})
+		}
 	}
 }
 
