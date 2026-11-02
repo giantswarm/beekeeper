@@ -467,7 +467,8 @@ func skipRefs(refs []string) ([]string, error) {
 
 // skipAsked marks every free candidate skipped that skip names (board next
 // --skip), so a scan walks the candidates by repeated calls; one skipped
-// for another reason keeps it.
+// for another reason keeps it, and nextFree puts a decision's or a
+// session's hold over the skip.
 func skipAsked(cands []board.Candidate, skip []string) {
 	for i := range cands {
 		if cands[i].Skip == "" && slices.ContainsFunc(skip, func(r string) bool { return strings.EqualFold(r, cands[i].Ref) }) {
@@ -741,6 +742,12 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 		return o
 	}
 	for _, c := range cands {
+		// A decision or a session holding an item --skip names says so,
+		// not the skip.
+		asked := c.Skip == skipAskedReason
+		if asked {
+			c.Skip = ""
+		}
 		c.Skip = cmp.Or(heldByDecision(st.Notes, c.Item), c.Skip)
 		if c.Skip == "" {
 			c.Skip = owned(c.Ref)
@@ -749,6 +756,9 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 			if o := owned(c.Epic); o != "" {
 				c.Skip = o + ", on epic " + c.Epic
 			}
+		}
+		if c.Skip == "" && asked {
+			c.Skip = skipAskedReason
 		}
 		if c.Skip != "" {
 			res.SkippedBy[skipKind(c.Skip)]++

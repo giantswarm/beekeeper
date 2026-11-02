@@ -938,7 +938,7 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 		t.Errorf("walked %v, want %v", picks, want)
 	}
 	cands := fresh()
-	refs, err := skipRefs([]string{"https://github.com/O/R/issues/1", " " + all[2].Ref})
+	refs, err := skipRefs([]string{"https://github.com/O/R/issues/1", idleRef, " " + all[2].Ref})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,14 +948,14 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 		t.Errorf("pick %v, skipped by %v, skipped %+v", res.Pick, res.SkippedBy, res.Skipped)
 	}
 	if skipKind(res.Skipped[1].Skip) != kindServed {
-		t.Errorf("a served item keeps its reason: %q", res.Skipped[1].Skip)
+		t.Errorf("a served item --skip names keeps its reason: %q", res.Skipped[1].Skip)
 	}
 	res.NextSkip = nextSkip(refs, res.Pick)
 	var out strings.Builder
 	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
 		t.Fatal(err)
 	}
-	if want := "  next candidate: board next --skip O/R#1,o/r#3,o/r#5\n"; !strings.Contains(out.String(), want) {
+	if want := "  next candidate: board next --skip O/R#1," + idleRef + ",o/r#3,o/r#5\n"; !strings.Contains(out.String(), want) {
 		t.Errorf("output lacks %q:\n%s", want, out.String())
 	}
 	if _, err := skipRefs([]string{scratchRepo}); err == nil {
