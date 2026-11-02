@@ -1528,6 +1528,8 @@ calls and does not rewrite the state. Its sleeps back off from five seconds to o
 so the next merge notices its turn within one minute. A dropped place, a paired refusal,
 a dead predecessor, or the turn itself resumes the ordinary gate checks; deadlines and
 cancellation still bound the wait. A live gate keeps its queue place without heartbeat writes.
+Before handing the wait to a detached run, it renews the place once so the queue TTL covers
+the successor registering after the original process exits.
 
 Sessions keep typing `devctl pr merge <owner/repo> <n> [flags]`; beekeeper never replaces devctl.
 `devctl release promote <owner/repo>` (one repository, no `--dry-run`) passes the same gate: it

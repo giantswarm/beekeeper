@@ -572,6 +572,21 @@ func (g *gateRun) enqueue(why string) error {
 		return g.refuse("%s, and only a pinned promotion waits on outside the call: unpinned, its turn would promote whatever candidate is newest by then. Nothing promoted, its place is dropped: run %s release promote %s --version <the candidate you proved> (the newest is %s now)",
 			why, merge.Tool, g.repo, cmp.Or(g.candidate, "none"))
 	}
+	// Passive waits do not refresh Seen. Renew the owned place once,
+	// before launching the successor: after this PID exits, the ordinary
+	// queue TTL must still cover the successor's registration.
+	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := g.mine(st, state.Waiting); i >= 0 && st.Merges[i].PID == g.pid {
+			st.Merges[i].Seen = time.Now().UTC()
+		}
+		return nil, nil
+	}); err != nil {
+		var stale *state.StaleWriterError
+		if errors.As(err, &stale) {
+			return g.staleRefused(stale)
+		}
+		return g.stateRefused(err)
+	}
 	queued := &exitError{code: ExitGateQueued}
 	self, err := selfExe()
 	if err == nil {

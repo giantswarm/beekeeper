@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -126,5 +127,58 @@ func TestQueuedFollowerCancellationDoesNotWaitForItsSleep(t *testing.T) {
 	err := a.gate(ctx, mergeArgv(scratchRepo), time.Hour, 0, true)
 	if err != context.DeadlineExceeded || time.Since(started) > time.Second || *asked != 0 {
 		t.Fatalf("cancellation: %v after %s, %d GitHub reads", err, time.Since(started), *asked)
+	}
+}
+
+func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
+	t.Setenv(gateFromEnv, "")
+	for _, seeded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("seeded=%v", seeded), func(t *testing.T) {
+			asked := stubGitHub(t, github.Open, "")
+			_, launched := stubSelf(t)
+			parent := deadPID(t)
+			a := busyLaneApp(t)
+			joined := time.Now().Add(-2 * time.Hour)
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Merges[0].Joined = joined.Add(-time.Hour)
+				st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: parent,
+					Phase: state.Waiting, Joined: joined, Seen: joined, Seeded: seeded})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7,
+				lane: a.cfg.LaneOf(scratchRepo), pid: parent, placed: true}
+			before, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			merge.Prune(before, time.Now(), a.cfg.Merge.QueueTTL.Duration, a.cfg.Merge.SeedTTL.Duration, proc.Alive)
+			if g.mine(before, state.Waiting) >= 0 {
+				t.Fatal("fixture does not reproduce an expired place whose parent is gone")
+			}
+			handoff := time.Now()
+			if err := g.enqueue("a long passive wait"); Code(err) != ExitGateQueued {
+				t.Fatalf("handoff: %v", err)
+			}
+			launched()
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := st.Merges[g.mine(st, state.Waiting)].Seen
+			g.pid, g.from, g.queued = os.Getpid(), parent, true
+			if why, err := g.step(); err != nil || why == "" || !g.passive {
+				t.Fatalf("expired handoff was lost: why %q, err %v", why, err)
+			}
+			st, err = a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := st.Merges[g.mine(st, state.Waiting)]
+			if seen.Before(handoff) || !m.Joined.Equal(joined) || m.PID != g.pid || m.Seeded != seeded || *asked != 0 {
+				t.Fatalf("handoff changed order, missed its refresh or read GitHub: %+v, seen %s, reads %d", m, seen, *asked)
+			}
+		})
 	}
 }
