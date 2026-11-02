@@ -31,7 +31,9 @@ func (a *app) answerCmd() *cobra.Command {
 slack), about the issue or pull request they concern: answer.recorded is
 logged with the thread, the words and the channel they came through, which
 beekeeper sets from where it runs (answer verify): one recorded from
-inside an agent session is relayed, and the session told names its relay; --note <id> closes that note
+inside an agent session is relayed, except a local guide dialog selection
+bound by its completed tool result to this note and session. The session
+told names any relay; --note <id> closes that note
 (--choice <n> picks one of its options, 1-based, the words optional then)
 and tells the session that filed it; without a note, the sessions serving
 the thread (beekeeper sessions serve) are told. A decision its default
@@ -103,6 +105,7 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 	}
 	var n *state.Note
 	text := strings.TrimSpace(words)
+	verbatim := text
 	if n := utf8.RuneCountInString(text); n > answerMax {
 		return usageErr("the answer has %d characters, at most %d", n, answerMax)
 	}
@@ -122,6 +125,9 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 	}
 	rec := recordedAnswer{About: about, By: a.answerer(me, n), Via: via, Answer: text, Note: noteID}
 	rec.Channel, rec.RelayedBy = a.answerChannel(me, via)
+	if a.dialogAnswer(me, n, about, choice, verbatim) {
+		rec.Channel, rec.RelayedBy = channelGuideDialog, ""
+	}
 	if post {
 		if err := a.postAnswer(ctx, &rec); err != nil {
 			return err

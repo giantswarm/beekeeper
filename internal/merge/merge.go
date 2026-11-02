@@ -359,6 +359,8 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 			o.NoRelease = true
 		case "ci_failed":
 			o.Release, o.ReleaseFailed = doc.Release.Tag, true
+		case "unconfirmed":
+			o.Unconfirmed = true
 		}
 	}
 	return o, true
@@ -384,6 +386,8 @@ func ParseReleaseWait(raw []byte) (o Outcome, reason string, ok bool) {
 		o.Release = doc.Tag
 	case "ci_failed", "status_failed":
 		o.Release, o.ReleaseFailed = doc.Tag, true
+	case "no_release":
+		o.NoRelease = true
 	default:
 		o.Unconfirmed = true
 	}
