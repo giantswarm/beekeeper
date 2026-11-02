@@ -45,7 +45,7 @@ func (f *tidyGH) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"x"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(f.meta), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, boardItemsQuery):
 		f.query = vars["q"]
 		page := 0
 		if vars["c"] != "" {
