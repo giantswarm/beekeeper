@@ -441,22 +441,23 @@ func TestStaleBinaries(t *testing.T) {
 		// A gate started after the install: whatever file it runs, that
 		// install did not replace it.
 		9: p(9, project.Name, "beekeeper gate -- devctl pr merge o/r 2", after),
-		// Within the start's second of slack.
-		10: p(10, project.Name, "beekeeper gate -- devctl pr merge o/r 3", installed.Add(-startSlack/2)),
+		// An inode replacement within the uncertain start second is still
+		// potentially stale; only an install proven earlier is excluded.
+		10: p(10, project.Name, "beekeeper gate -- devctl pr merge o/r 3", installed.Add(-time.Second/2)),
 	}}
 	replaced := func(pid int) (platform.Install, bool) {
 		return platform.Install{Path: path, At: installed}, pid != 6
 	}
 	got := staleBinaries(tab, 8, replaced)
-	if len(got) != 3 || got[0].PID != 3 || got[1].PID != 4 || got[2].PID != 5 {
+	if len(got) != 4 || got[0].PID != 3 || got[1].PID != 4 || got[2].PID != 5 || got[3].PID != 10 {
 		t.Fatalf("stale binaries = %v", got)
 	}
 	rest := slices.DeleteFunc(got, isStaleWatch)
-	if len(rest) != 2 || staleLine(rest[0]) != "stale binary: pid 3 (beekeeper gate --) runs a beekeeper an install at "+path+
+	if len(rest) != 3 || staleLine(rest[0]) != "stale binary: pid 3 (beekeeper gate --) runs a beekeeper an install at "+path+
 		" at 2026-11-02T03:00:00Z replaced; it re-executes the installed one at its next step" {
 		t.Errorf("without the watches = %v: %q", rest, staleLine(rest[0]))
 	}
-	if len(rest) == 2 && staleLine(rest[1]) != "stale binary: pid 5 (beekeeper agents reopen) runs a beekeeper an install at "+path+
+	if len(rest) == 3 && staleLine(rest[1]) != "stale binary: pid 5 (beekeeper agents reopen) runs a beekeeper an install at "+path+
 		" at 2026-11-02T03:00:00Z replaced; its saves of the state are refused until it ends or is restarted" {
 		t.Errorf("a reopen: %q", staleLine(rest[1]))
 	}

@@ -84,17 +84,16 @@ type staleBinary struct {
 	by platform.Install
 }
 
-// startSlack is how far a process's start may read early: it counts from
-// /proc/stat's btime, which is whole seconds.
-const startSlack = time.Second
-
 // staleBinaries are the beekeeper processes of t, self apart, whose binary
 // another file was renamed over since they started (replacement says which
 // for a pid): an install's leftovers, which run the old code and whose saves
 // of the state the new release refuses. An install that arrived before a
 // process started never replaced the binary it runs, whatever file it runs:
 // a copy elsewhere on the PATH, a file another mount namespace holds at the
-// path. By pid.
+// path. The recorded start can be up to a second early because /proc/stat
+// rounds boot time down. A replacement inside that uncertain second still
+// counts: only an install at or before the recorded start is proven earlier.
+// By pid.
 func staleBinaries(t *proc.Table, self int, replacement func(pid int) (platform.Install, bool)) []staleBinary {
 	var out []staleBinary
 	for _, p := range t.ByPID {
@@ -102,7 +101,7 @@ func staleBinaries(t *proc.Table, self int, replacement func(pid int) (platform.
 			continue
 		}
 		in, ok := replacement(p.PID)
-		if !ok || !in.At.IsZero() && !p.Start.IsZero() && !in.At.After(p.Start.Add(startSlack)) {
+		if !ok || !in.At.IsZero() && !p.Start.IsZero() && !in.At.After(p.Start) {
 			continue
 		}
 		out = append(out, staleBinary{Process: p, by: in})
