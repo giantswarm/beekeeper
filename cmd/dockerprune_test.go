@@ -26,6 +26,23 @@ type fakeDocker struct {
 	tagged        map[string]time.Time
 	removed       [][]string
 	pruned        []string
+	// cacheRecords are the build cache's records the fake answers
+	// `builder du` with; a per-record prune removes one and shrinks the
+	// cache size, and a record the map does not list is in use or unreadable
+	// and stays.
+	cacheRecords map[string]fakeCacheRecord
+	// builderRefused are the records the fake refuses to remove.
+	builderRefused map[string]bool
+	// builderRemoved are the records the per-record prunes took.
+	builderRemoved []string
+}
+
+type fakeCacheRecord struct {
+	size int64
+	// usedAgo is the record's "LastUsedAt" as docker prints it.
+	usedAgo string
+	// free says docker calls the record reclaimable.
+	free bool
 }
 
 func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
@@ -56,16 +73,38 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 		f.removed = append(f.removed, args[2:])
 		f.images -= 2 << 30
 		return nil, nil
+	case args[0] == "builder" && args[1] == "du":
+		var out []byte
+		for id, rec := range f.cacheRecords {
+			out = fmt.Appendf(out, `{"ID":%q,"Size":%q,"Reclaimable":%t,"LastUsedAt":%q}`+"\n", id, bytesStr(rec.size), rec.free, rec.usedAgo)
+		}
+		return out, nil
 	case args[0] == "builder" && args[1] == "prune":
 		f.pruned = args[2:]
-		f.cache = 3 << 30
-		return nil, nil
+		if len(args) == 5 && args[2] == pruneForceFlag && args[3] == "--filter" && strings.HasPrefix(args[4], "id=") {
+			id := strings.TrimPrefix(args[4], "id=")
+			if f.builderRefused[id] {
+				return nil, errors.New("docker builder prune: failed to remove " + id)
+			}
+			rec, ok := f.cacheRecords[id]
+			if !ok || !rec.free {
+				return nil, errors.New("docker builder prune: " + id + " is not reclaimable")
+			}
+			f.builderRemoved = append(f.builderRemoved, id)
+			delete(f.cacheRecords, id)
+			f.cache -= rec.size
+			return []byte("Total:\t0B\n"), nil
+		}
+		return nil, errors.New("unexpected builder prune " + strings.Join(args[2:], " "))
 	}
 	return nil, errors.New("unexpected docker " + strings.Join(args, " "))
 }
 
 // dockerExec is the docker verb the fake answers with a kind node's images.
 const dockerExec = "exec"
+
+// pruneForceFlag is the flag that makes `builder prune` act without asking.
+const pruneForceFlag = "--force"
 
 // dockerImage is the docker command the fake inspects and removes images with.
 const dockerImage = "image"
@@ -74,7 +113,12 @@ func bytesStr(n int64) string { return strconv.FormatInt(n, 10) + "B" }
 
 func dockerApp(t *testing.T) (*app, *fakeDocker) {
 	t.Helper()
-	f := &fakeDocker{images: 7 << 30, cache: 6 << 30, tagged: map[string]time.Time{}}
+	f := &fakeDocker{images: 7 << 30, cache: 6 << 30, tagged: map[string]time.Time{},
+		cacheRecords: map[string]fakeCacheRecord{
+			"cache-old": {size: 2 << 30, usedAgo: "5 days ago", free: true},
+			"cache-mid": {size: 1 << 30, usedAgo: "2 days ago", free: true},
+			"cache-new": {size: 3 << 30, usedAgo: "1 hour ago", free: true},
+		}}
 	dockerCLI = f.run
 	t.Cleanup(func() { dockerCLI = nil })
 	dir := t.TempDir()
@@ -99,8 +143,13 @@ func TestPruneDockerKeepsUnderTheCapsAndLogs(t *testing.T) {
 	if want := [][]string{{"x:dev-1"}, {"x:dev-2"}}; !slices.EqualFunc(f.removed, want, slices.Equal) {
 		t.Errorf("removed %v; want %v", f.removed, want)
 	}
-	if want := []string{"--force", "--max-used-space", "3221225472"}; !slices.Equal(f.pruned, want) {
-		t.Errorf("builder prune %v; want %v", f.pruned, want)
+	// 6 GiB down to 3 GiB (three quarters of the 4 GiB cap): the two
+	// reclaimable records used longest ago go; the freshest stays.
+	if want := []string{"cache-old", "cache-mid"}; !slices.Equal(f.builderRemoved, want) {
+		t.Errorf("builder removed %v; want %v", f.builderRemoved, want)
+	}
+	if want := []string{pruneForceFlag, "--filter", "id=cache-mid"}; !slices.Equal(f.pruned, want) {
+		t.Errorf("last builder prune %v; want %v", f.pruned, want)
 	}
 	want := "Docker: images 7.0 GiB, cap 4.0 GiB; build cache 6.0 GiB, cap 4.0 GiB (doctor.dockerImagesMaxGiB, doctor.dockerBuildCacheMaxGiB); " +
 		"2 unused images removed (about 4.0 GiB), images now 3.0 GiB; build cache pruned to 3.0 GiB"

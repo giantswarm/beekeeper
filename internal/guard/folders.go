@@ -187,23 +187,29 @@ func gitSays(dir string, args ...string) bool {
 // own, where a variable that is neither assigned there nor in the
 // environment is unknown: the outer shell may have set it.
 func writeTargets(cmd, cwd string, depth int) []string {
+	return walkTargets(cmd, cwd, depth, false)
+}
+
+// walkTargets is writeTargets, or with moves the existing directories the
+// command line moves or removes (movedDirs).
+func walkTargets(cmd, cwd string, depth int, moves bool) []string {
 	if depth > 4 {
 		return nil
 	}
 	sc := scanShell(cmd)
 	segs := sc.segments()
-	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1}
+	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1, moves: moves}
 	st := deleteState{assigned: map[string]string{}, env: os.Getenv, nounset: depth > 0}
 	w.walk(0, st, cwd)
 	out := w.out
 	for _, cs := range shellStrings(cmd) {
 		if sc.masked[cs.at] == cmd[cs.at] {
-			out = append(out, writeTargets(cs.text, cwd, depth+1)...)
+			out = append(out, walkTargets(cs.text, cwd, depth+1, moves)...)
 		}
 	}
 	for _, hd := range sc.heredocs {
 		if shellReads(sc, segs, hd.op) {
-			out = append(out, writeTargets(cmd[hd.start:hd.end], cwd, depth+1)...)
+			out = append(out, walkTargets(cmd[hd.start:hd.end], cwd, depth+1, moves)...)
 		}
 	}
 	return out
@@ -212,6 +218,10 @@ func writeTargets(cmd, cwd string, depth int) []string {
 // pwdVar is the shell's working directory; writeTargets assigns it while
 // the directory is known.
 const pwdVar = "PWD"
+
+// guardedVar: ${NAME:?…} or ${NAME?…}, which stops the shell on an unset
+// NAME.
+var guardedVar = regexp.MustCompile(`^\$\{(\w+):?\?[^}]*\}$`)
 
 // plainVar: a parameter expansion without an operator, $NAME or ${NAME}.
 var plainVar = regexp.MustCompile(`^\$(?:\w+|\{\w+\})$`)
@@ -225,6 +235,14 @@ func (st *deleteState) word(raw string) (string, bool) {
 	for i, e := range exps {
 		if pwd, ok := st.assigned[pwdVar]; ok && (e.token == "$"+pwdVar || e.token == "${"+pwdVar+"}") {
 			exps[i].value, e.value = pwd, pwd
+		}
+		if m := guardedVar.FindStringSubmatch(e.token); m != nil {
+			// ${NAME:?…} stops the shell on an empty NAME: its value is NAME's.
+			if v, ok := st.assigned[m[1]]; ok && v != "" {
+				exps[i].value, e.value = v, v
+			} else if v := st.environ(m[1]); v != "" && !ok {
+				exps[i].value, e.value = v, v
+			}
 		}
 		if strings.Contains(e.value, opaquePart) || e.maybeEmpty && e.value == "" && !plainVar.MatchString(e.token) {
 			return "", false
@@ -266,7 +284,12 @@ type targetWalk struct {
 	// nested: the command line is a shell's -c string or here-document.
 	nested   bool
 	branches int
-	out      []string
+	// moves collects the directories moved or removed (liveworktrees.go)
+	// instead of the files written; loops holds what a for loop's variable
+	// takes then.
+	moves bool
+	loops map[string][]string
+	out   []string
 }
 
 // walk follows the segments from i on with the variables st and the
@@ -276,7 +299,9 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 	st.chdir(dir)
 	for ; i < len(w.segs); i++ {
 		sg := w.segs[i]
-		w.redirections(sg, &st, dir)
+		if !w.moves {
+			w.redirections(sg, &st, dir)
+		}
 		cmds := rawCommands(w.sc.plain[sg.start:sg.end])
 		if len(cmds) == 0 {
 			continue
@@ -308,6 +333,10 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 				dir = st.cd(dir, raw[k+1:], words[k+1:])
 			}
 			st.chdir(dir)
+		case w.moves && name == "for":
+			w.loop(&st, dir, raw[k+1:])
+		case w.moves:
+			w.addMoved(&st, dir, name, raw[k+1:])
 		case name == "tee":
 			for j, word := range words[k+1:] {
 				if strings.HasPrefix(word, ">") || strings.HasPrefix(word, "<") || strings.HasPrefix(word, "2>") {

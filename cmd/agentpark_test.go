@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -99,7 +100,7 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 		t.Fatalf("agent %+v park %+v", ag, ag.Park)
 	}
 	st, _ := w.store.Read()
-	c := countAgents(st, nil, relayNow)
+	c := countAgents(st, nil, relayNow, nil)
 	if len(c.Busy) != 0 || len(c.Parked) != 1 || !strings.Contains(c.Parked[0], "parked on #3: Timo's answer on the rollout") {
 		t.Errorf("count %+v", c)
 	}
@@ -182,6 +183,53 @@ func TestMergedPullRequestMakesTheParkResumable(t *testing.T) {
 	}
 	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err == nil || !strings.Contains(err.Error(), "is not parked") {
 		t.Errorf("second resume: %v", err)
+	}
+}
+
+// --as <name> acts as the registered agent of that name for agents park and
+// agents idle, though a session registered it: a session of another harness
+// or a wrapper script parks and reports as its agent without a harness's
+// session variables. A managed SSH execution's entry is not reached by name.
+func TestAsNamesTheRegisteredAgent(t *testing.T) {
+	const session = "5f0c2a7e-0000-4000-8000-000000000001"
+	w := parkingWatch(t, nil)
+	agent := state.Party{Session: session, HostSession: "local_" + session, Name: agentOne}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Party = agent
+		st.Records = []state.Record{{Session: agent}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "3", "Timo's answer on the rollout"); err != nil {
+		t.Fatalf("park --as %s: %v", agentOne, err)
+	}
+	st, _ := w.store.Read()
+	if ag := st.Agents[0]; ag.Park == nil || ag.Park.On != "#3" || len(st.Parks) != 0 {
+		t.Fatalf("agent %+v park %+v, parks off the roster %+v", ag, ag.Park, st.Parks)
+	}
+	if st.Records[0].Waits != "Timo's answer on the rollout" {
+		t.Errorf("the agent's session record waits %q", st.Records[0].Waits)
+	}
+	c := w.agentsCmd()
+	c.SetOut(w.out)
+	c.SetErr(w.out)
+	c.SetArgs([]string{stateIdle, "--done", "--report", "https://github.com/giantswarm/beekeeper/issues/86 done", "--problem", noProblems})
+	if err := c.Execute(); err != nil {
+		t.Fatalf("idle --done --as %s: %v", agentOne, err)
+	}
+	if ag := agentOf(t, w); !ag.Done || ag.Task != "" || ag.Session != session {
+		t.Errorf("agent after idle --done %+v", ag)
+	}
+
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: agent, Task: parkTask, AssignedAt: relayNow, Execution: &execution.Ref{}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "3", "an answer"); err == nil || !strings.Contains(err.Error(), "no session id") {
+		t.Errorf("park --as an SSH execution's entry: %v", err)
 	}
 }
 
@@ -632,8 +680,49 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || !strings.Contains(line, parkReviewMode(head)) {
+		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || strings.Contains(line, "review request recorded") {
 			t.Fatalf("parks %+v, line %q", st.Parks, line)
 		}
+	}
+}
+
+func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
+	for _, exhausted := range []bool{false, true} {
+		t.Run(fmt.Sprint(exhausted), func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			w.loopOwned = true
+			w.cfg.GitHub.Floor = 2500
+			w.cfg.Agents.AutoResume = true
+			woke := stubWakes(t)
+			if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+				t.Fatal(err)
+			}
+			if exhausted {
+				if err := w.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{Reset: w.now.Add(time.Hour), Spent: loopGraphQLLimit}); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Budget = &state.Budget{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour), GraphQL: &state.GraphQL{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour)}}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} // Otherwise GraphQL is unknown and must fail closed.
+			previous := readLoopGraphQLBudget
+			t.Cleanup(func() { readLoopGraphQLBudget = previous })
+			readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+				t.Fatal("local-note settlement probed GitHub under a held budget")
+				return github.Budget{}, nil
+			}
+			answer(t, w)
+			w.pending(t.Context(), nil)
+			if p := agentOf(t, w).Park; p == nil || p.Resumable.IsZero() || !strings.Contains(p.Answer, parkAnswer) {
+				t.Fatalf("answered local note did not become resumable: %+v", p)
+			}
+			w.pending(t.Context(), nil)
+			if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) || agentOf(t, w).Park != nil {
+				t.Fatalf("answered local note did not wake once with answer: %v", *woke)
+			}
+		})
 	}
 }
