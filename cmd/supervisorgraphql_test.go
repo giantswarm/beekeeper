@@ -85,6 +85,54 @@ func TestLoopTimerChecksHoldGitHubButKeepLocalProbes(t *testing.T) {
 	}
 }
 
+func TestLoopAllowanceCannotRefillWhenMinimumIdentityChanges(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = 2500
+	healthyLoopBudget(t, r)
+	start := r.a.now
+	remaining := map[string]int{"gh": 4500, github.IdentityApp: 4900}
+	resets := map[string]time.Time{"gh": start.Add(20 * time.Minute), github.IdentityApp: start.Add(54 * time.Minute)}
+	seen := map[string]bool{}
+	probes := 0
+	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+		probes++
+		profiles := map[string]github.Budget{}
+		for id := range remaining {
+			remaining[id]--
+			profiles[id] = github.Budget{Identity: id, Remaining: 4900,
+				GraphQL: &github.GraphQL{Identity: id, Limit: 5000, Remaining: remaining[id], Reset: resets[id]}}
+		}
+		b := github.LowestBudget(profiles, r.a.now)
+		seen[b.GraphQL.Identity] = true
+		return b, nil
+	}
+	runs := 0
+	for attempt := range 30 {
+		r.a.now = start.Add(time.Duration(attempt) * time.Second)
+		err := r.a.loopGitHub(context.Background(), "pull", func() error { remaining[github.IdentityApp] -= 60; runs++; return nil })
+		if err != nil && !errors.Is(err, errLoopLater) {
+			t.Fatal(err)
+		}
+	}
+	if len(seen) != 2 || runs == 0 || runs > 12 {
+		t.Fatalf("minimum change refilled quota: minima=%v runs=%d", seen, runs)
+	}
+	var spend loopGraphQLSpend
+	if _, err := r.a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
+		t.Fatal(err)
+	}
+	if !spend.Reset.Equal(start.Add(time.Hour)) || len(spend.Accounts) != 2 {
+		t.Fatalf("quota follows a credential window: %+v", spend)
+	}
+	before := probes
+	r.a.now = start.Add(21 * time.Minute)
+	remaining["gh"] = 5000
+	resets["gh"] = r.a.now.Add(time.Hour)
+	if err := r.a.loopGitHub(context.Background(), "pull", func() error { t.Fatal("GitHub reset refilled loop quota"); return nil }); !errors.Is(err, errLoopLater) || probes != before {
+		t.Fatalf("held loop probed or ran after one identity reset: %v", err)
+	}
+}
+
 func TestLoopPullInvalidationIsSpecificToItsThread(t *testing.T) {
 	now := time.Now()
 	in := superloop.Input{Workers: []superloop.Worker{{ParkedOn: loopPR, ParkedAt: now}}, Events: []superloop.Event{

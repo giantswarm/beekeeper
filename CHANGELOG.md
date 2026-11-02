@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GitHub budgets name and probe the stored gh login and devctl App login separately, preserve each identity's cache and reset, and gate on the lowest REST and GraphQL balances. Changing checkout or minimum identity cannot hide a depleted window or replenish the supervisor's hourly allowance.
+
 - The supervisor loop holds GitHub observations under the GraphQL floor, shares a durable 1,500-point hourly allowance across board queries and PR reads, and reuses unchanged PR reads for five minutes. Fresh probes, per-request reservations and a cross-process lock protect headroom; `budget --json` reports conservative spend by step ([https://github.com/giantswarm/beekeeper/issues/2042](https://github.com/giantswarm/beekeeper/issues/2042)).
 
 - A board walk costs less of the GraphQL budget, and the supervisor loop's capacity refill walks the board less often. `board next` reads each epic's sub-issues with a page of the epic's own size (at most 50) instead of a page of 50 for every epic, which GitHub charges per slot whether filled or not: a board of 426 candidates went from 92 to 39 GraphQL points per read by GitHub's documented formula. The refill holds its board read under `github.floor` until the low GraphQL reading's reset rather than for an hour after the reading, and each further empty or failed read in a row doubles its `supervisor.fillRetryEvery` pause, up to four times the interval, until a start or a capacity or roster change ([https://github.com/giantswarm/beekeeper/issues/1857](https://github.com/giantswarm/beekeeper/issues/1857)).

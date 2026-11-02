@@ -63,8 +63,8 @@ reset, an hour after the reading when GitHub named none, or a GraphQL refusal): 
 skips its read, without a failure or a pause.
 The loop also holds ownership and PR observations under the GraphQL floor
 or while the reading is unknown or stale. Board queries and tracked PR reads
-check a fresh budget against a durable allowance of 1,500 points per GitHub
-window, keeping 200 points for budget probes and reserving 500 points before
+check a fresh budget against a durable allowance of 1,500 points per hour,
+keeping 300 points for two identities' budget probes and reserving 500 points before
 each work request. Budget probes run at most every 30 seconds. Concurrent timer commands
 share its lock. An interrupted request keeps its reservation. Traffic between
 observations counts conservatively toward the allowance as `shared`; a busy
@@ -72,6 +72,19 @@ desk can therefore pause the loop early. `budget --json` exposes the window,
 spent points and `board`, `pull`, `watch`, `timers`, `pass` and `shared` totals
 under `loop`. The embedded watch's note and parked-PR reads and GitHub timer
 conditions share the allowance; local timer jobs remain independent.
+`budget` names the stored `gh` login and the configured devctl `app` login,
+with each account's login, counters and reset under JSON `identities`.
+Both routes are explicit, independent of the checkout, and cached separately.
+Each identity retains all unexpired observed GraphQL `windows`: a newer high
+window cannot erase an older drained one, and counters cannot increase before
+their window resets. An older unlabelled low reading is retained as `unlabelled`
+until its reset rather than silently reassigned to a credential.
+The top-level REST and GraphQL readings each select their lowest balance;
+`budget --gate`, merge admission and the loop use those minima. An unknown
+or missing previously configured identity holds the gate. Refusals on a
+higher-balance identity also hold it without hiding the lowest counter.
+Loop spend tracks each identity's counter separately; selecting another
+minimum or a GitHub window resetting never replenishes its own hourly allowance.
 Unchanged PR observations last five minutes; a new park, a report from that
 PR's reviewer or an answer on its thread invalidates them immediately.
 `supervisor loop --dry-run` previews refill intent with read-only capacity

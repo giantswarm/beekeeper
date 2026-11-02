@@ -17,18 +17,64 @@ const loopGraphQLFile = "loop-graphql.json"
 const loopGraphQLLimit = 1500
 
 // The loop-owned watch samples the budget at most every 30 seconds. Keep
-// 200 points outside the work allowance for those probes and boundaries.
-const loopGraphQLProbeReserve = 200
+// 300 points outside the work allowance for two identities' probes and boundaries.
+const loopGraphQLProbeReserve = 300
 
 // Keep room for an admitted query and for concurrent callers. The large
 // board regression checks a whole walk below this per-request reserve.
 const loopGraphQLReserve = 500
 
 type loopGraphQLSpend struct {
-	Reset     time.Time      `json:"reset"`
-	Remaining int            `json:"remaining"`
-	Spent     int            `json:"spent"`
-	Steps     map[string]int `json:"steps"`
+	Reset     time.Time                     `json:"reset"`
+	Remaining int                           `json:"remaining"`
+	Spent     int                           `json:"spent"`
+	Steps     map[string]int                `json:"steps"`
+	Accounts  map[string]loopGraphQLAccount `json:"accounts,omitempty"`
+}
+
+type loopGraphQLAccount struct {
+	Reset     time.Time `json:"reset"`
+	Remaining int       `json:"remaining"`
+}
+
+func graphQLAccounts(b github.Budget) map[string]loopGraphQLAccount {
+	out := map[string]loopGraphQLAccount{}
+	add := func(id string, g *github.GraphQL) {
+		if g != nil {
+			if g.Login != "" {
+				id += "/" + g.Login
+			}
+			out[id] = loopGraphQLAccount{Reset: g.Reset, Remaining: g.Remaining}
+		}
+	}
+	if len(b.Identities) == 0 {
+		if b.GraphQL != nil {
+			add(b.GraphQL.Identity, b.GraphQL)
+		}
+	} else {
+		for id, profile := range b.Identities {
+			if len(profile.Windows) == 0 {
+				add(id, profile.GraphQL)
+			} else {
+				for key, window := range profile.Windows {
+					add(id+"@"+key, &window)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func (s loopGraphQLSpend) floorHeld(now time.Time, floor int) bool {
+	if len(s.Accounts) == 0 {
+		return now.Before(s.Reset) && s.Remaining < floor+loopGraphQLReserve
+	}
+	for _, account := range s.Accounts {
+		if now.Before(account.Reset) && account.Remaining < floor+loopGraphQLReserve {
+			return true
+		}
+	}
+	return false
 }
 
 var readLoopGraphQLBudget = func(a *app, ctx context.Context) (github.Budget, error) {
@@ -68,7 +114,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	// Once this window is held, another budget probe cannot release it.
 	// Repeated held attempts must cost zero GraphQL until its reset.
-	if a.now.Before(spend.Reset) && (spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.Remaining < a.cfg.GitHub.Floor+loopGraphQLReserve) {
+	if a.now.Before(spend.Reset) && spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.floorHeld(a.now, a.cfg.GitHub.Floor) {
 		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, errLoopLater)
 	}
 	b, err := readLoopGraphQLBudget(a, ctx)
@@ -76,13 +122,22 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		return fmt.Errorf("loop GitHub budget unavailable: %w", errLoopLater)
 	}
 	g := b.GraphQL
-	if !spend.Reset.Equal(g.Reset) || spend.Steps == nil {
-		spend = loopGraphQLSpend{Reset: g.Reset, Remaining: g.Remaining, Steps: map[string]int{}}
+	// This allowance has its own hour. Selecting another identity or a
+	// GitHub window resetting must never replenish the loop's allowance.
+	if !a.now.Before(spend.Reset) || spend.Steps == nil {
+		spend = loopGraphQLSpend{Reset: a.now.Add(time.Hour), Remaining: g.Remaining, Steps: map[string]int{}}
 	}
-	shared := max(0, spend.Remaining-g.Remaining)
+	accounts := graphQLAccounts(b)
+	shared := 0
+	for id, current := range accounts {
+		if previous, ok := spend.Accounts[id]; ok && previous.Reset.Equal(current.Reset) {
+			shared += max(0, previous.Remaining-current.Remaining)
+		}
+	}
 	spend.Spent += shared
 	spend.Steps["shared"] += shared
 	spend.Remaining = g.Remaining
+	spend.Accounts = accounts
 	if b.Remaining <= a.cfg.GitHub.Floor || g.Remaining < a.cfg.GitHub.Floor+loopGraphQLReserve || spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve {
 		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 			return err
@@ -99,15 +154,28 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
 		return fmt.Errorf("loop GitHub spend unknown; reservation retained: %w", errLoopLater)
 	}
-	// A reset while the query ran cannot be charged to the next window.
-	if after.GraphQL.Reset.Equal(g.Reset) {
-		cost := max(0, g.Remaining-after.GraphQL.Remaining)
+	// Match counters by identity and window, never by the aggregate minimum.
+	afterAccounts := graphQLAccounts(after)
+	known := len(afterAccounts) == len(accounts)
+	cost := 0
+	for id, previous := range accounts {
+		current, ok := afterAccounts[id]
+		if !ok || !current.Reset.Equal(previous.Reset) {
+			known = false
+			continue
+		}
+		cost += max(0, previous.Remaining-current.Remaining)
+	}
+	if known {
 		spend.Spent += cost - loopGraphQLReserve
 		spend.Steps[step] += cost - loopGraphQLReserve
 		spend.Remaining = after.GraphQL.Remaining
+		spend.Accounts = afterAccounts
 		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 			return err
 		}
+	} else {
+		return fmt.Errorf("loop GitHub identity or window changed; reservation retained: %w", errLoopLater)
 	}
 	return runErr
 }
