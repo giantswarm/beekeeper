@@ -501,7 +501,7 @@ machine's, each named <context>#<n> (in JSON its "central"); with the
 central instance unreachable, the list fails after the machine's notes.`
 	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
 	list.Flags().BoolVar(&full, "full", false, "each note's whole text and the issues and pull requests it names")
-	c.AddCommand(add, answer, done, list)
+	c.AddCommand(add, answer, done, list, a.noteShowCmd())
 	return c
 }
 
