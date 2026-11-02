@@ -99,6 +99,15 @@ func (l *MessageLedger) Next() (Envelope, bool) {
 	return Envelope{}, false
 }
 
+func (l MessageLedger) hasUncertain() bool {
+	for _, d := range l.Entries {
+		if d.Stage == Uncertain {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *MessageLedger) Attempt(m Envelope) error {
 	d, ok := l.Entries[m.ID]
 	if !ok || d.Stage != Stored || m.Sequence != l.Sequence+1 {
