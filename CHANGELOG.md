@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A parked agent of any harness can leave its park once its wait settled: `agents resume` with no agent named (or naming the caller) ends the caller's own park, wakes nobody and prints what settled the wait. `agents resume` of an agent whose harness beekeeper has no message route to (a non-Claude session that registered itself) ends its park and says so instead of waking a headless Claude Code session, and `agents.autoResume` leaves such a park resumable for the agent's own resume ([https://github.com/giantswarm/beekeeper/issues/1728](https://github.com/giantswarm/beekeeper/issues/1728)).
+- A parked agent of any harness can leave its park once its wait settled: `agents resume` with no agent named (or naming the caller) ends the caller's own park, wakes nobody and prints what settled the wait. A managed SSH worker's `agents resume` ends its own park on the coordinator. `agents register --harness omp|agy|codex` records a self-registered session's harness; `agents resume` of such an agent, which beekeeper has no message route to, ends its park and says so instead of waking a headless Claude Code session, its park line and `AGENT RESUMABLE` point to its own resume, and `agents.autoResume` leaves such a park resumable for the agent's own resume ([https://github.com/giantswarm/beekeeper/issues/1728](https://github.com/giantswarm/beekeeper/issues/1728)).
 
 - The supervisor loop ignores cancelled checks superseded by a newer check on the same head when waking workers and requiring green CI; pending replacements still block the go (https://github.com/giantswarm/beekeeper/issues/1958).
 

@@ -106,16 +106,26 @@ or "wake turn running".`,
 		RunE: func(*cobra.Command, []string) error { return a.agentList(full) },
 	}
 	fullFlag(c, &full)
-	var name string
+	var name, harness string
 	register := &cobra.Command{
 		Use:   "register",
 		Short: "Register the calling session as an idle agent",
 		Long: `Register the calling session as an idle agent, named by its title unless
 --name overrides it. A caller whose parent chain passes two claude session
 CLIs, a claude started inside another session, is refused with the name of
-that parent session, whose ids it inherits and whose entry stays as it is.`,
+that parent session, whose ids it inherits and whose entry stays as it is.
+
+--harness names the harness a session runs on when it is not Claude Code
+(omp, agy, codex) and agents start did not start it: beekeeper has no
+message route to such a session, so agents resume and the watch never wake
+it headless, which would start a second, unrelated Claude Code session; it
+leaves its own park with agents resume, no agent named.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			h, ok := harnessByName(harness)
+			if !ok {
+				return usageErr("--harness %s is not a harness beekeeper knows: claude, omp, agy or codex", harness)
+			}
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -144,6 +154,10 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 				if err != nil {
 					return nil, err
 				}
+				if harness != "" {
+					// the entry registerAgent appended is me's
+					st.Agents[len(st.Agents)-1].Harness = h.Name()
+				}
 				if os.Getenv(sandbox.Runtime) == "" {
 					// outside the sandbox, this shell's PATH is the agent's own
 					_ = recordGH(st, me, guard.Resolve("gh", os.Getenv("PATH")), a.now.UTC())
@@ -166,6 +180,9 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 			for _, r := range reg.replaced {
 				_, _ = fmt.Fprintf(a.out, "register: replaces the entry of session %s, which no longer runs\n", r.Session)
 			}
+			if h.Name() != "" {
+				_, _ = fmt.Fprintf(a.out, "register: %s runs on %s, which beekeeper has no message route to: nobody wakes it, it ends its own park with `beekeeper agents resume`\n", me.Name, h.Name())
+			}
 			if reg.own {
 				_, err = fmt.Fprintf(a.out, "register: %s busy with %q since %s: work it, then `beekeeper agents idle`\n",
 					me.Name, reg.task, clock(a.now, reg.assignedAt))
@@ -181,6 +198,7 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 		},
 	}
 	register.Flags().StringVar(&name, "name", "", "the name to register under (default: the session's title)")
+	register.Flags().StringVar(&harness, "harness", "", "the harness the session runs on when it is not Claude Code: omp, agy or codex")
 	assign := &cobra.Command{
 		Use:   "assign <agent> <task>",
 		Short: "Record the task handed to an agent",

@@ -246,25 +246,49 @@ func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
 }
 
 // An agent of a harness beekeeper has no message route to (one that
-// registered itself, not started under its harness's host prefix) is never
-// woken headless: agents resume ends its park and says so, and the watch's
-// agents.autoResume leaves it resumable for the agent's own resume.
+// registered itself with agents register --harness, not started under its
+// harness's host prefix) is never woken headless: its park line and the
+// watch's AGENT RESUMABLE say so, agents.autoResume leaves it resumable,
+// and agents resume by another ends its park and says so.
 func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 	w := parkingWatch(t, nil)
 	w.cfg.Agents.AutoResume = true
 	woke := stubWakes(t)
-	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Harness = omp.Harness
-		return nil, nil
-	}); err != nil {
+	w.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-omp-rpc")
+	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
+	register := func(args ...string) error {
+		c := w.agentsCmd()
+		c.SetArgs(append([]string{"register"}, args...))
+		c.SetOut(w.out)
+		c.SetErr(w.out)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		return c.Execute()
+	}
+	if err := register("--harness", "pi"); Code(err) != ExitUsage {
+		t.Fatalf("register --harness pi: %v", err)
+	}
+	if err := register("--harness", omp.Harness); err != nil {
 		t.Fatal(err)
+	}
+	if ag := agentOf(t, w); ag.Harness != omp.Harness || ag.Session != "s-omp-rpc" || ag.Task != parkTask {
+		t.Fatalf("registered %+v", ag)
 	}
 	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
 		t.Fatal(err)
 	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, unroutedResume) || strings.Contains(out, "the watch resumes it") {
+		t.Errorf("park said:\n%s", out)
+	}
 	answer(t, w)
+	w.out.(*bytes.Buffer).Reset()
 	for range 2 {
 		w.pending(context.Background(), nil)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, `AGENT RESUMABLE "`+agentOne+`"`) || !strings.Contains(out, unroutedResume) ||
+		strings.Contains(out, "the watch resumes it") {
+		t.Errorf("watch said:\n%s", out)
 	}
 	if ag := agentOf(t, w); len(*woke) > 0 || ag.Park == nil || ag.Park.Resumable.IsZero() {
 		t.Fatalf("autoResume of an unrouted harness: woke %q park %+v", *woke, ag.Park)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -232,6 +233,8 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		switch {
 		case strings.HasPrefix(on, alertParkPrefix):
 			back = "the supervisor loop wakes it when the alert fires"
+		case on != "" && i >= 0 && !wakeRoute(st.Agents[i]):
+			back = "the watch says AGENT RESUMABLE once " + on + " settles; " + unroutedResume
 		case on != "" && a.cfg.Agents.AutoResume:
 			back = "the watch resumes it with what settles " + on
 		case on != "":
@@ -340,6 +343,14 @@ agents.autoResume leaves such a park resumable for the agent's own resume.`,
 			if len(args) > 0 {
 				q = args[0]
 			}
+			if a.managedExecutionID() != "" {
+				// Its roster entry is the coordinator's: it ends its own
+				// park there, and only its own.
+				if q != by.Name && q != by.Session {
+					return refused("a managed SSH worker resumes only its own park: beekeeper agents resume, no agent named")
+				}
+				return a.remoteControl(cmd.Context(), execution.ControlResume, struct{}{})
+			}
 			return a.resumeParkedOpts(cmd.Context(), by, q, force)
 		},
 	}
@@ -431,6 +442,11 @@ func wakeRoute(ag state.Agent) bool {
 	h := strings.TrimSpace(ag.Harness)
 	return h == "" || h == claudeComm
 }
+
+// unroutedResume says how the park of an agent without a wakeRoute ends:
+// the watch never wakes it.
+const unroutedResume = "its harness has no message route, so nobody wakes it: it ends its own park with " +
+	"`beekeeper agents resume`, no agent named, which prints what settled the wait"
 
 // endParkUnwoken ends ag's park without a wake: by is ag leaving its own
 // park, or ag has no wakeRoute. It prints what settled the wait, which the
@@ -749,10 +765,13 @@ func parkedAgents(st *state.State) []state.Agent {
 func markResumable(st *state.State, settled []settledPark, auto bool, now time.Time) ([]string, []state.Event) {
 	var lines []string
 	var evs []state.Event
-	mark := func(name string, p *state.Park, s settledPark) {
+	mark := func(name string, p *state.Park, s settledPark, routed bool) {
 		p.Resumable, p.Answer = now.UTC(), s.answer
 		next := fmt.Sprintf("beekeeper agents resume %q", name)
-		if auto {
+		switch {
+		case !routed:
+			next = unroutedResume
+		case auto:
 			next = "the watch resumes it with these words"
 		}
 		lines = append(lines, fmt.Sprintf("AGENT RESUMABLE %q: %s; %s", name, truncate(parkedText(p, now), 400), next))
@@ -764,12 +783,12 @@ func markResumable(st *state.State, settled []settledPark, auto bool, now time.T
 	for _, s := range settled {
 		for k := range st.Agents {
 			if ag := &st.Agents[k]; unsettled(ag.Party, ag.Park, s) {
-				mark(ag.Name, ag.Park, s)
+				mark(ag.Name, ag.Park, s, wakeRoute(*ag))
 			}
 		}
 		for k := range st.Parks {
 			if p := &st.Parks[k]; unsettled(p.By, p, s) {
-				mark(cmp.Or(wakeID(p.By), p.By.Name), p, s)
+				mark(cmp.Or(wakeID(p.By), p.By.Name), p, s, true)
 			}
 		}
 	}

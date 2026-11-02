@@ -25,6 +25,7 @@ const (
 	Applied          = "applied"
 	ControlNote      = "note"
 	ControlPark      = "park"
+	ControlResume    = "resume"
 	ControlReport    = "report"
 	unitActive       = "active"
 	unitInactive     = "inactive"
