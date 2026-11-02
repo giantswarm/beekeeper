@@ -90,6 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `watch` discovers codex, omp and agy runners as well as Claude Code sessions, so a running worker no longer produces false `AGENTS STOPPED` and `SESSION ENDED` alerts. Stopped workers of those harnesses get an `agents wake` command instead of a Claude desktop link ([https://github.com/giantswarm/beekeeper/issues/1965](https://github.com/giantswarm/beekeeper/issues/1965)).
 
+- Allow UI-only permissions section expansion, collapse and tab clicks without an App or permission in the summary, after verifying the clicked ref’s role and label in a current page read; permission changes and grant submissions retain their record checks (https://github.com/giantswarm/beekeeper/issues/927).
+
 ### Changed
 
 - `supervisor loop` fills every free slot up to `capacity.ceiling` on each pass while a provider choice is available, instead of stopping at `capacity.floor`. `capacity.floor` and provider/usage band floors are removed (`floor:` keys in `config.yaml` are ignored), `capacity`, `status` and `watch` report only ceilings, and `watch` no longer emits `CAPACITY LOW` ([https://github.com/giantswarm/beekeeper/issues/1996](https://github.com/giantswarm/beekeeper/issues/1996)).
