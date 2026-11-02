@@ -724,6 +724,18 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 	if len(okRes) != 0 {
 		t.Errorf("ordinary command: got %v, want {}", okRes)
 	}
+
+	// exec_command with workdir resolves relative --body-file against workdir (and enters scope via workdir).
+	if err := os.WriteFile(filepath.Join(inRoot, "PR_BODY.md"), []byte("Closes https://github.com/giantswarm/beekeeper/issues/1874\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wdRes := runCodex(t, outRoot, "exec_command", map[string]any{
+		"cmd":     `gh pr create --repo giantswarm/beekeeper --title "fix: workdir" --body-file PR_BODY.md`,
+		"workdir": inRoot,
+	})
+	if len(wdRes) != 0 {
+		t.Errorf("exec_command with workdir and valid PR_BODY.md: got %v, want {}", wdRes)
+	}
 }
 
 // emptyTestConfig creates the file an isolated command explicitly selects.
