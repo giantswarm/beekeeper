@@ -1917,7 +1917,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return nil
 	}
 	if w.loopOwned {
-		if err := w.app.loopGitHub(ctx, "watch", readRefs); err != nil {
+		if err := w.loopGitHub(ctx, "watch", readRefs); err != nil {
 			over, kept, parks = nil, nil, nil
 		}
 	} else {
@@ -1930,7 +1930,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	githubHeld := boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
 	var found map[int]checkResult
 	if w.loopOwned {
-		found = w.app.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)
+		found = w.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)
 	} else {
 		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
 	}
