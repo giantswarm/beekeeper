@@ -90,7 +90,7 @@ func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *t
 					t.Fatal("interrupted start reported success")
 				}
 				st, readErr := a.store.Read()
-				if readErr != nil || len(st.Starts) != 1 || len(st.Agents) != 1 || len(countAgents(st, nil, a.now).Busy) != 1 {
+				if readErr != nil || len(st.Starts) != 1 || len(st.Agents) != 1 || len(countAgents(st, nil, a.now, nil).Busy) != 1 {
 					t.Fatal("interruption dropped the reservation")
 				}
 				if err = a.activateExecution(context.Background(), *st.Agents[0].Execution); err != nil {
@@ -145,7 +145,7 @@ func TestExecutionTwoHostsCompeteForFinalProviderSlot(t *testing.T) {
 	if err != nil || len(st.Agents) != 1 || len(st.Starts) != 1 || preparations != 1 {
 		t.Fatalf("provider reservation raced: %d preparations, %v", preparations, err)
 	}
-	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, nil)
 	if len(counts[claudeComm].Busy) != 1 || st.Starts[0].Execution.Observation.Reachability != execution.Unreachable {
 		t.Fatal("unreachable host released its provider reservation")
 	}
@@ -173,12 +173,12 @@ func TestExecutionProviderReservationStaysPinnedAcrossConfigurationChanges(t *te
 	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "remote-worker"}, Execution: &ref, Harness: claudeComm, Model: bgModel, Done: true}}, Starts: []state.Start{{Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Provider: claudeComm, Observation: execution.Observation{ProcessState: execution.Running, Reachability: execution.Unreachable}}}}}
 	a.cfg.Capacity.Providers["other-pool"] = config.Provider{Ceiling: 2}
 	a.cfg.Capacity.Choices[0].Provider = "other-pool"
-	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, nil)
 	if len(counts[claudeComm].Busy) != 1 || len(counts["other-pool"].Busy) != 0 {
 		t.Fatal("configuration moved a live reservation to a fresh provider")
 	}
 	delete(a.cfg.Capacity.Providers, claudeComm)
-	counts = countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts = countProviderAgents(st, nil, a.cfg.Capacity, a.now, nil)
 	if len(counts["other-pool"].Unconfirmed) != 1 {
 		t.Fatal("removing the pinned provider released its reservation")
 	}
@@ -466,7 +466,7 @@ func TestExecutionParkedWorkerCountsParkedNotBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	hostID := a.cfg.Agents.Hosts[sshTestSelector].Identity
-	if got := countAgents(st, nil, a.now); len(got.Busy) != 1 || len(got.Parked) != 0 {
+	if got := countAgents(st, nil, a.now, a.cfg); len(got.Busy) != 1 || len(got.Parked) != 0 {
 		t.Fatalf("before park countAgents = %+v, want Busy=1 Parked=0", got)
 	}
 	if got := executionHostBusy(st, hostID); got != 1 {
@@ -482,7 +482,7 @@ func TestExecutionParkedWorkerCountsParkedNotBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countAgents(st, nil, a.now); len(got.Busy) != 0 || len(got.Parked) != 1 {
+	if got := countAgents(st, nil, a.now, a.cfg); len(got.Busy) != 0 || len(got.Parked) != 1 {
 		t.Fatalf("after park countAgents = %+v, want Busy=0 Parked=1", got)
 	}
 	if got := executionHostBusy(st, hostID); got != 0 {
@@ -492,7 +492,7 @@ func TestExecutionParkedWorkerCountsParkedNotBusy(t *testing.T) {
 		Providers: map[string]config.Provider{claudeComm: {Kind: config.KindSubscription, Ceiling: 2}},
 		Choices:   []config.Choice{{Harness: claudeComm, Model: bgModel, Provider: claudeComm}},
 	}
-	if got := countProviderAgents(st, nil, k, a.now)[claudeComm]; len(got.Busy) != 0 {
+	if got := countProviderAgents(st, nil, k, a.now, a.cfg)[claudeComm]; len(got.Busy) != 0 {
 		t.Fatalf("after park countProviderAgents = %+v, want Busy=0", got)
 	}
 }

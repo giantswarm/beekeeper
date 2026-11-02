@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -71,11 +72,67 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 	c.Dir = dir
 	c.Env = append(os.Environ(), identity...)
 	c.Env = append(c.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {
-		return nil, errors.New("publication Git operation failed; inspect the execution publication before retrying")
+		return nil, publicationGitFailure(ctx, args, stderr.String())
 	}
 	return out, nil
+}
+
+// publicationGitStages are the Git subcommands publication runs; any other
+// argument is never echoed back as a stage.
+var publicationGitStages = []string{"init", "fetch", "push", gitBundle, "cat-file", "rev-parse", "merge-base", "log", gitMerge, "diff"}
+
+const (
+	gitBundle = "bundle"
+	gitMerge  = "merge"
+	gitVerify = "verify"
+)
+
+// publicationGitReasons map a known Git or GitHub rejection to a fixed
+// diagnosis. The raw output may carry URLs, paths or remote text, so only the
+// diagnosis leaves the coordinator. The first match wins.
+var publicationGitReasons = []struct{ match, reason string }{
+	{"create or update workflow", "GitHub refused a workflow file change: the coordinator's GitHub credential lacks the workflow scope or permission; an authorization barrier, not a transfer, ancestry or execution-policy error, and a retry fails the same until the credential is granted it"},
+	{"GH006", "GitHub refused the push: a protected branch rule rejects it"},
+	{"GH013", "GitHub refused the push: a repository rule rejects it"},
+	{"non-fast-forward", "the remote branch moved: the push is not a fast-forward of it"},
+	{"fetch first", "the remote branch moved: the push is not a fast-forward of it"},
+	{"Authentication failed", "the coordinator's GitHub credential was not accepted"},
+	{"could not read Username", "the coordinator has no usable GitHub credential"},
+	{"terminal prompts disabled", "the coordinator has no usable GitHub credential"},
+	{"Permission to", "GitHub denied the coordinator's credential write access to the repository"},
+	{"returned error: 403", "GitHub denied the coordinator's credential write access to the repository"},
+	{"Repository not found", "GitHub did not find the repository for the coordinator's credential"},
+	{"Could not resolve host", "the coordinator could not reach GitHub"},
+	{"Failed to connect", "the coordinator could not reach GitHub"},
+}
+
+// publicationGitFailure names the failed stage and a sanitized reason, never
+// the command's raw output, so an operator can tell an authorization barrier
+// from a transfer fault without exposing credentials.
+func publicationGitFailure(ctx context.Context, args []string, stderr string) error {
+	stage := "operation"
+	if len(args) > 0 && slices.Contains(publicationGitStages, args[0]) {
+		stage = args[0]
+		if stage == gitBundle && len(args) > 1 && slices.Contains([]string{"create", gitVerify, "list-heads"}, args[1]) {
+			stage += " " + args[1]
+		}
+	}
+	reason := "unclassified Git failure"
+	if ctx.Err() != nil {
+		reason = "the publication attempt ran out of time"
+	} else {
+		for _, r := range publicationGitReasons {
+			if strings.Contains(stderr, r.match) {
+				reason = r.reason
+				break
+			}
+		}
+	}
+	return fmt.Errorf("publication Git %s failed: %s", stage, reason)
 }
 
 var executionPublishGH = github.RunGH
