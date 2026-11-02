@@ -158,6 +158,7 @@ merge:
   ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
   toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
+  admin: []                    # the repositories (owner/repo) whose merge go names gh pr merge --admin --match-head-commit after the approved review
 
 units:
   quiet: false              # true counts every end of a started unit (any exit, SIGKILL, SIGTERM, SIGABRT) as success; for an isolated harness state only, never the desk's
