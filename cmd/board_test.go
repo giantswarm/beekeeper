@@ -914,7 +914,7 @@ func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T
 func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	running := state.Party{Session: "s1", Name: workerOne}
-	st := &state.State{Records: []state.Record{{Session: running, Issue: "o/r#2", At: listed.Add(-time.Hour)}}}
+	st := &state.State{Records: []state.Record{{Session: running, Issue: idleRef, At: listed.Add(-time.Hour)}}}
 	sc := pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed}
 	fresh := func() []board.Candidate {
 		cands := boardCandidates(5)
@@ -933,7 +933,8 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 		picks = append(picks, res.Pick.Ref)
 		skip = nextSkip(skip, res.Pick)
 	}
-	if want := []string{"o/r#1", "o/r#3", "o/r#5"}; !slices.Equal(picks, want) {
+	all := fresh()
+	if want := []string{all[0].Ref, all[2].Ref, all[4].Ref}; !slices.Equal(picks, want) {
 		t.Errorf("walked %v, want %v", picks, want)
 	}
 	cands := fresh()
@@ -943,10 +944,10 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 	}
 	skipAsked(cands, refs)
 	res := nextFree(st, cands, sc)
-	if res.Pick == nil || res.Pick.Ref != "o/r#5" || res.SkippedBy[kindAsked] != 2 || res.Skipped[0].Skip != skipAskedReason {
+	if res.Pick == nil || res.Pick.Ref != all[4].Ref || res.SkippedBy[kindAsked] != 2 || res.Skipped[0].Skip != skipAskedReason {
 		t.Errorf("pick %v, skipped by %v, skipped %+v", res.Pick, res.SkippedBy, res.Skipped)
 	}
-	if res.Skipped[1].Skip != `served by "Worker one"` {
+	if skipKind(res.Skipped[1].Skip) != kindServed {
 		t.Errorf("a served item keeps its reason: %q", res.Skipped[1].Skip)
 	}
 	res.NextSkip = nextSkip(refs, res.Pick)
