@@ -366,10 +366,12 @@ type Agent struct {
 	// Its reachability and lifecycle are stored on the matching Start.
 	Execution  *execution.Ref `json:"execution,omitempty"`
 	Registered time.Time      `json:"registered"`
-	Task       string         `json:"task,omitempty"`
-	AssignedAt time.Time      `json:"assignedAt,omitzero"`
-	IdleSince  time.Time      `json:"idleSince,omitzero"`
-	LastTask   string         `json:"lastTask,omitempty"`
+	// ActivityAt is the latest explicit roster activity (note, wake or resume).
+	ActivityAt time.Time `json:"activityAt,omitzero"`
+	Task       string    `json:"task,omitempty"`
+	AssignedAt time.Time `json:"assignedAt,omitzero"`
+	IdleSince  time.Time `json:"idleSince,omitzero"`
+	LastTask   string    `json:"lastTask,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
@@ -1008,6 +1010,9 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
+	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// They grant no start permissions; Starts remains the authorization ledger.
+	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a
 	// session no roster entry names), one per session, its By: the watch
 	// settles and resumes them as it does a roster agent's.
@@ -1092,8 +1097,44 @@ type State struct {
 	// Stop is the stop of every start, wake, revive, import and merge
 	// (beekeeper stop) while it stands; beekeeper resume lifts it.
 	Stop *Stop `json:"stop,omitempty"`
+	// HostPins are the execution hosts beekeeper updated (agents hosts
+	// update): the release each runs and the policy digest its starts are
+	// pinned to, or why it is held.
+	HostPins []HostPin `json:"hostPins,omitempty"`
 
 	rest rest
+}
+
+// HostPin is an execution host's release and the policy digest beekeeper
+// recorded when it last updated the host, in place of a hand-kept
+// agents.hosts digest, and the hold of a host whose update failed.
+type HostPin struct {
+	Selector     string           `json:"selector"`
+	Identity     execution.HostID `json:"identity"`
+	Version      string           `json:"version,omitempty"`
+	PolicyDigest string           `json:"policyDigest,omitempty"`
+	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
+	// Tried is the last update attempt, which paces the retries.
+	Tried time.Time `json:"tried,omitzero"`
+	// Held is why the host takes no start: its update to HeldVersion
+	// failed, since HeldAt. The next successful update lifts it.
+	Held        string    `json:"held,omitempty"`
+	HeldAt      time.Time `json:"heldAt,omitzero"`
+	HeldVersion string    `json:"heldVersion,omitempty"`
+	// Reported says the supervisor loop handed the hold on as its finding.
+	Reported bool `json:"reported,omitempty"`
+
+	rest rest
+}
+
+// HostPin is the pin of the execution host selector, nil for none.
+func (st *State) HostPin(selector string) *HostPin {
+	for i := range st.HostPins {
+		if st.HostPins[i].Selector == selector {
+			return &st.HostPins[i]
+		}
+	}
+	return nil
 }
 
 // Stop is a standing beekeeper stop: who stopped the machine's sessions,

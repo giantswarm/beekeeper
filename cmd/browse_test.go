@@ -653,6 +653,30 @@ func TestBrowseConsent(t *testing.T) {
 	}
 }
 
+// A sign-in on the lab's identity provider at localhost, an
+// authorization-code flow to a CLI's loopback callback, runs with the lab's
+// rule and words and the front-tab and draw checks every turn has, and the
+// report says the lab sign-in was allowed.
+func TestBrowseLocalhostLabSignIn(t *testing.T) {
+	const steps = "Open https://localhost:32000/dex/auth?client_id=kubernetes&redirect_uri=http%3A%2F%2F127.0.0.1%3A5555%2Fcallback" +
+		"&response_type=code. Sign in as viewer@lab.local with the fixture password 'password' and press Login."
+	if !namesLoopback(steps) {
+		t.Fatalf("namesLoopback(%q) = false", steps)
+	}
+	if rules := browseRules("", nil, true); len(rules) != 1 || rules[0] != labRule {
+		t.Errorf("browseRules of the lab = %q", rules)
+	}
+	p := browsePrompt(steps, "", nil, true, nil)
+	for _, w := range []string{frontWords, drawWords, windowWords, labWords} {
+		if !strings.Contains(p, w) {
+			t.Errorf("browsePrompt of a localhost sign-in lacks %q", bounded(w, 60))
+		}
+	}
+	if l := (browseFindings{}).lines(steps, "", nil, true); len(l) != 1 || !strings.HasPrefix(l[0], "allowed lab sign-in: ") {
+		t.Errorf("lines of a localhost sign-in = %q", l)
+	}
+}
+
 // A browse turn reads the Apps on record: steps naming one run with its rule
 // and prompt words and the report says so; the turn's start record, which
 // has the hook act in the turn wherever it runs, exists while the turn runs

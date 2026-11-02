@@ -79,3 +79,18 @@ func wakeID(p state.Party) string { return cmp.Or(p.Session, p.HostSession) }
 func onRoster(st *state.State, p state.Party) bool {
 	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
 }
+
+// callerAgent is the index of the roster agent the caller me is, -1 when
+// none: the entry of its session, else, under --as, the entry registered by
+// that name, whatever session registered it. That is how a session of
+// another harness or a wrapper script acts as its registered agent without
+// a harness's session variables. A managed SSH execution's entry is never
+// reached by name: its worker reports through its coordinator.
+func (a *app) callerAgent(st *state.State, me state.Party) int {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }); i >= 0 || a.as == "" {
+		return i
+	}
+	return slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Execution == nil && strings.EqualFold(ag.Name, me.Name) && state.Party{Name: me.Name, Person: ag.Person, Host: ag.Host}.Is(me)
+	})
+}
