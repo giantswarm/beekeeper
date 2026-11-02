@@ -15,74 +15,85 @@ type abstractType struct {
 	possible []string
 }
 
-// abstractTypes are the interfaces and unions the board's queries select
-// on, as GitHub's public schema declares them. A field outside fields is
-// one GitHub rejects the whole query for, as it did the owner's login
-// selected on ProjectV2Owner (https://github.com/giantswarm/beekeeper/issues/1997).
-var abstractTypes = map[string]abstractType{
-	"Actor": {
-		fields:   []string{"avatarUrl", "login", "resourcePath", "url"},
-		possible: []string{"Bot", "EnterpriseUserAccount", "Mannequin", "Organization", "User"},
-	},
-	"ProjectV2Owner": {
-		fields:   []string{"id", "projectV2", "projectsV2"},
-		possible: []string{"Issue", "Organization", "PullRequest", "User"},
-	},
-	"RepositoryOwner": {
-		fields:   []string{"avatarUrl", "id", "login", "repositories", "repository", "resourcePath", "url"},
-		possible: []string{"Organization", "User"},
-	},
-	"IssueOrPullRequest":          {possible: []string{"Issue", "PullRequest"}},
-	"ProjectV2ItemContent":        {possible: []string{"DraftIssue", "Issue", "PullRequest"}},
-	"ProjectV2FieldConfiguration": {possible: []string{"ProjectV2Field", "ProjectV2IterationField", "ProjectV2SingleSelectField"}},
-	"ProjectV2ItemFieldValue": {possible: []string{
-		"ProjectV2ItemFieldDateValue", "ProjectV2ItemFieldIterationValue", "ProjectV2ItemFieldLabelValue",
-		"ProjectV2ItemFieldMilestoneValue", "ProjectV2ItemFieldNumberValue", "ProjectV2ItemFieldPullRequestValue",
-		"ProjectV2ItemFieldRepositoryValue", "ProjectV2ItemFieldReviewerValue", "ProjectV2ItemFieldSingleSelectValue",
-		"ProjectV2ItemFieldTextValue", "ProjectV2ItemFieldUserValue",
-	}},
-	"SearchResultItem": {possible: []string{
-		"App", "Discussion", "Issue", "MarketplaceListing", "Organization", "PullRequest", "Repository", "User",
-	}},
-}
+// githubSchema is the part of GitHub's public GraphQL schema the board's
+// queries reach, one declaration a line:
+//
+//	interface Name: field ... = ObjectType ...
+//	union Name = ObjectType ...
+//	Type.field FieldType
+//
+// The interfaces and unions are the types a selection is checked on: a
+// field outside an interface's (a union has none but __typename) is one
+// GitHub rejects the whole query for, as it did the owner's login selected
+// on ProjectV2Owner (https://github.com/giantswarm/beekeeper/issues/1997).
+// The field types lead from a query's root to them; a field missing here
+// leaves its selection unchecked up to its next inline fragment.
+const githubSchema = `
+interface Actor: avatarUrl login resourcePath url = Bot EnterpriseUserAccount Mannequin Organization User
+interface ProjectV2Owner: id projectV2 projectsV2 = Issue Organization PullRequest User
+interface RepositoryOwner: avatarUrl id login repositories repository resourcePath url = Organization User
+union IssueOrPullRequest = Issue PullRequest
+union ProjectV2ItemContent = DraftIssue Issue PullRequest
+union ProjectV2FieldConfiguration = ProjectV2Field ProjectV2IterationField ProjectV2SingleSelectField
+union ProjectV2ItemFieldValue = ProjectV2ItemFieldDateValue ProjectV2ItemFieldIterationValue ProjectV2ItemFieldLabelValue ProjectV2ItemFieldMilestoneValue ProjectV2ItemFieldNumberValue ProjectV2ItemFieldPullRequestValue ProjectV2ItemFieldRepositoryValue ProjectV2ItemFieldReviewerValue ProjectV2ItemFieldSingleSelectValue ProjectV2ItemFieldTextValue ProjectV2ItemFieldUserValue
+union SearchResultItem = App Discussion Issue MarketplaceListing Organization PullRequest Repository User
+Query.repositoryOwner RepositoryOwner
+Query.repository Repository
+Query.search SearchResultItemConnection
+Mutation.addProjectV2ItemById AddProjectV2ItemByIdPayload
+Mutation.archiveProjectV2Item ArchiveProjectV2ItemPayload
+Mutation.updateProjectV2ItemFieldValue UpdateProjectV2ItemFieldValuePayload
+Mutation.clearProjectV2ItemFieldValue ClearProjectV2ItemFieldValuePayload
+AddProjectV2ItemByIdPayload.item ProjectV2Item
+ArchiveProjectV2ItemPayload.item ProjectV2Item
+UpdateProjectV2ItemFieldValuePayload.projectV2Item ProjectV2Item
+ClearProjectV2ItemFieldValuePayload.projectV2Item ProjectV2Item
+Repository.issue Issue
+Repository.pullRequest PullRequest
+Repository.issueOrPullRequest IssueOrPullRequest
+Issue.parent Issue
+Issue.blockedBy IssueConnection
+Issue.projectItems ProjectV2ItemConnection
+PullRequest.closingIssuesReferences IssueConnection
+PullRequest.projectItems ProjectV2ItemConnection
+IssueConnection.nodes Issue
+ProjectV2ItemConnection.nodes ProjectV2Item
+ProjectV2FieldConfigurationConnection.nodes ProjectV2FieldConfiguration
+SearchResultItemConnection.nodes SearchResultItem
+ProjectV2Owner.projectV2 ProjectV2
+ProjectV2.owner ProjectV2Owner
+ProjectV2.items ProjectV2ItemConnection
+ProjectV2.fields ProjectV2FieldConfigurationConnection
+ProjectV2.field ProjectV2FieldConfiguration
+ProjectV2Item.project ProjectV2
+ProjectV2Item.content ProjectV2ItemContent
+ProjectV2Item.fieldValueByName ProjectV2ItemFieldValue
+ProjectV2ItemFieldNumberValue.creator Actor
+ProjectV2ItemFieldSingleSelectValue.creator Actor
+`
 
-// fieldTypes are the types of the fields on the way from a query's root to
-// the abstract types above, by "Type.field"; a field missing here leaves
-// its selection unchecked up to its next inline fragment.
-var fieldTypes = map[string]string{
-	"Query.repositoryOwner":                              "RepositoryOwner",
-	"Query.repository":                                   "Repository",
-	"Query.search":                                       "SearchResultItemConnection",
-	"Mutation.addProjectV2ItemById":                      "AddProjectV2ItemByIdPayload",
-	"Mutation.archiveProjectV2Item":                      "ArchiveProjectV2ItemPayload",
-	"Mutation.updateProjectV2ItemFieldValue":             "UpdateProjectV2ItemFieldValuePayload",
-	"Mutation.clearProjectV2ItemFieldValue":              "ClearProjectV2ItemFieldValuePayload",
-	"AddProjectV2ItemByIdPayload.item":                   "ProjectV2Item",
-	"ArchiveProjectV2ItemPayload.item":                   "ProjectV2Item",
-	"UpdateProjectV2ItemFieldValuePayload.projectV2Item": "ProjectV2Item",
-	"ClearProjectV2ItemFieldValuePayload.projectV2Item":  "ProjectV2Item",
-	"Repository.issue":                                   "Issue",
-	"Repository.pullRequest":                             "PullRequest",
-	"Repository.issueOrPullRequest":                      "IssueOrPullRequest",
-	"Issue.parent":                                       "Issue",
-	"Issue.blockedBy":                                    "IssueConnection",
-	"Issue.projectItems":                                 "ProjectV2ItemConnection",
-	"PullRequest.closingIssuesReferences":                "IssueConnection",
-	"PullRequest.projectItems":                           "ProjectV2ItemConnection",
-	"IssueConnection.nodes":                              "Issue",
-	"ProjectV2ItemConnection.nodes":                      "ProjectV2Item",
-	"ProjectV2FieldConfigurationConnection.nodes":        "ProjectV2FieldConfiguration",
-	"SearchResultItemConnection.nodes":                   "SearchResultItem",
-	"ProjectV2Owner.projectV2":                           "ProjectV2",
-	"ProjectV2.owner":                                    "ProjectV2Owner",
-	"ProjectV2.items":                                    "ProjectV2ItemConnection",
-	"ProjectV2.fields":                                   "ProjectV2FieldConfigurationConnection",
-	"ProjectV2.field":                                    "ProjectV2FieldConfiguration",
-	"ProjectV2Item.project":                              "ProjectV2",
-	"ProjectV2Item.content":                              "ProjectV2ItemContent",
-	"ProjectV2Item.fieldValueByName":                     "ProjectV2ItemFieldValue",
-	"ProjectV2ItemFieldNumberValue.creator":              "Actor",
-	"ProjectV2ItemFieldSingleSelectValue.creator":        "Actor",
+// abstractTypes and fieldTypes are githubSchema's interfaces and unions by
+// name and its field types by "Type.field".
+var abstractTypes, fieldTypes = parseSchema(githubSchema)
+
+func parseSchema(s string) (map[string]abstractType, map[string]string) {
+	abstract, fields := map[string]abstractType{}, map[string]string{}
+	for line := range strings.Lines(s) {
+		decl, possible, ok := strings.Cut(line, "=")
+		w := strings.Fields(decl)
+		switch {
+		case len(w) == 0:
+		case ok && len(w) >= 2 && w[0] == "interface":
+			abstract[strings.TrimSuffix(w[1], ":")] = abstractType{fields: w[2:], possible: strings.Fields(possible)}
+		case ok && len(w) == 2 && w[0] == "union":
+			abstract[w[1]] = abstractType{possible: strings.Fields(possible)}
+		case !ok && len(w) == 2:
+			fields[w[0]] = w[1]
+		default:
+			panic("githubSchema: " + line)
+		}
+	}
+	return abstract, fields
 }
 
 // gqlTokens splits a GraphQL document into names, punctuators and string
