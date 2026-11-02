@@ -1229,31 +1229,9 @@ func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 	}
 }
 
-// A report sentence about a screenshot that calls it not saved says it is
-// saved once beekeeper saved one, in each phrasing a turn uses; other
-// sentences, and every sentence when none was saved, stand as written.
-func TestShotWords(t *testing.T) {
-	for report, want := range map[string]string{
-		"Took a screenshot (not saved to disk).":                   "Took a screenshot (" + shotSaved + ").",
-		"The screenshot was not saved to disk. The page is green.": "The screenshot was " + shotSaved + ". The page is green.",
-		"Screenshot captured but wasn't saved.":                    "Screenshot captured but was " + shotSaved + ".",
-		"The image has not been stored on the filesystem!":         "The image has been " + shotSaved + "!",
-		"Proof: screenshot ss_1, never saved to a file.\nDone.":    "Proof: screenshot ss_1, " + shotSaved + ".\nDone.",
-		"The form was not saved. Screenshot taken.":                "The form was not saved. Screenshot taken.",
-		"Screenshot taken; the page says deployed.":                "Screenshot taken; the page says deployed.",
-	} {
-		if got := shotWords(report, 1); got != want {
-			t.Errorf("shotWords(%q, 1) = %q, want %q", report, got, want)
-		}
-	}
-	const unsaved = "The screenshot was not saved to disk."
-	if got := shotWords(unsaved, 0); got != unsaved {
-		t.Errorf("shotWords with none saved = %q", got)
-	}
-}
-
 // A path is printed only for a file written: none taken, or none saved with
-// the reason, prints no shot path.
+// the reason, prints no shot path; saved files print the line naming
+// beekeeper's record, then their paths.
 func TestShotLines(t *testing.T) {
 	if got := shotLines(nil, nil); !slices.Equal(got, []string{noShots}) {
 		t.Errorf("shotLines(none) = %q", got)
@@ -1261,14 +1239,16 @@ func TestShotLines(t *testing.T) {
 	if got := shotLines(nil, errors.New("disk full")); !slices.Equal(got, []string{"screenshot: none saved: disk full"}) {
 		t.Errorf("shotLines(none, err) = %q", got)
 	}
-	if got := shotLines([]string{"/s/shot-1.jpg"}, errors.New("disk full")); !slices.Equal(got, []string{"screenshot: /s/shot-1.jpg"}) {
+	if got := shotLines([]string{"/s/shot-1.jpg"}, errors.New("disk full")); !slices.Equal(got, []string{shotsSaved, "screenshot: /s/shot-1.jpg"}) {
 		t.Errorf("shotLines(one, err) = %q", got)
 	}
 }
 
-// A turn that took a screenshot and reports it not saved prints the saved
-// shot's path and a report that calls it saved, never unsaved; a turn that
-// took none prints no shot path and its report as written.
+// A turn's report is printed as the turn wrote it, a finding that something
+// on the page was not saved included. A turn that took a screenshot and
+// reports it not saved prints beekeeper's record line, which says the turn
+// writes no file, and the saved shot's path; a turn that took none prints no
+// shot path.
 func TestBrowseReportsSavedShots(t *testing.T) {
 	a, out := stubApp(t)
 	bin := t.TempDir()
@@ -1284,7 +1264,13 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
 	const steps = "Open the demo page and take a screenshot."
 	const unsaved = "Opened the page and took a screenshot (not saved to disk). The page says deployed."
-	writeFile(t, reportFile, unsaved+"\n")
+	// What the page showed as not saved stays the turn's finding.
+	pageUnsaved := []string{
+		"The agent settings were not saved, as the screenshot shows.",
+		"The avatar image was not saved: the form shows an error.",
+		"Screenshot: the change was never persisted to the cluster.",
+	}
+	writeFile(t, reportFile, unsaved+"\n"+strings.Join(pageUnsaved, "\n")+"\n")
 
 	jpg := base64.StdEncoding.EncodeToString([]byte("jpg-bytes"))
 	writeFile(t, transcript, chromeUse("t1", "computer", `{"action":"screenshot"}`)+
@@ -1293,15 +1279,12 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 		t.Fatalf("browse with a screenshot: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 3 || got[0] != "Opened the page and took a screenshot ("+shotSaved+"). The page says deployed." ||
-		!strings.HasPrefix(got[1], "transcript: ") || !strings.HasPrefix(got[2], "screenshot: ") || !strings.HasSuffix(got[2], "shot-1.jpg") {
+	if len(got) != 7 || got[0] != unsaved || !slices.Equal(got[1:4], pageUnsaved) || !strings.HasPrefix(got[4], "transcript: ") ||
+		got[5] != shotsSaved || !strings.HasPrefix(got[6], "screenshot: ") || !strings.HasSuffix(got[6], "shot-1.jpg") {
 		t.Fatalf("browse with a screenshot printed %q", got)
 	}
-	if b, err := os.ReadFile(strings.TrimPrefix(got[2], "screenshot: ")); err != nil || string(b) != "jpg-bytes" {
+	if b, err := os.ReadFile(strings.TrimPrefix(got[6], "screenshot: ")); err != nil || string(b) != "jpg-bytes" {
 		t.Errorf("the printed shot holds %q, %v", b, err)
-	}
-	if strings.Contains(out.String(), "not saved") {
-		t.Errorf("a turn that saved a screenshot reports it unsaved: %q", out.String())
 	}
 
 	out.Reset()
@@ -1310,7 +1293,7 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 		t.Fatalf("browse without a screenshot: %v\n%s", err, out.String())
 	}
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 3 || got[0] != unsaved || got[2] != noShots || strings.Contains(out.String(), "shot-") {
+	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
 		t.Errorf("browse without a screenshot printed %q", got)
 	}
 }
