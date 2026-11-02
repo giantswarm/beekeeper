@@ -371,7 +371,7 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 		cp := st.Agents[i]
 		target = &cp
 	}
-	if target != nil && (target.Party.Is(by) || !wakeRoute(*target)) {
+	if target != nil && (target.Is(by) || !wakeRoute(*target)) {
 		return a.endParkUnwoken(by, *target)
 	}
 	block := a.usageHighBlockForAgent(ctx, st, nil, target)
@@ -436,7 +436,7 @@ func wakeRoute(ag state.Agent) bool {
 // park, or ag has no wakeRoute. It prints what settled the wait, which the
 // agent reads in its own output, or relays by its harness's own channel.
 func (a *app) endParkUnwoken(by state.Party, ag state.Agent) error {
-	self := ag.Party.Is(by)
+	self := ag.Is(by)
 	var p *state.Park
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(ag.Party) })

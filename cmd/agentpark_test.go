@@ -289,7 +289,7 @@ func TestOffRosterSessionLeavesItsOwnPark(t *testing.T) {
 	woke := stubWakes(t)
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = nil
-		st.Parks = []state.Park{{By: state.Party{Name: agentOne}, At: relayNow, Waits: "the supervisor's go"}}
+		st.Parks = []state.Park{{By: state.Party{Name: agentOne}, At: relayNow, Waits: "a reply on my branch"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
