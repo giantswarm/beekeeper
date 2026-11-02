@@ -752,7 +752,7 @@ func diffSnapshots(prev, cur *snapshot) []string {
 	}
 	if len(cur.Providers) > 0 && providersChanged(prev.Providers, cur.Providers, prev.Choice, cur.Choice) {
 		out = append(out, snapshotProvidersLine(config.Capacity{}, cur.Providers, cur.Choice, cur.At.Local()))
-	} else if cur.Usage != nil && (prev.Usage == nil || cur.Usage.Floor != prev.Usage.Floor ||
+	} else if cur.Usage != nil && (prev.Usage == nil ||
 		cur.Usage.Ceiling != prev.Usage.Ceiling || cur.Usage.High != prev.Usage.High || cur.Usage.Error != prev.Usage.Error) {
 		out = append(out, cur.Usage.snapshotLine(cur.At.Local()))
 	}
@@ -785,7 +785,7 @@ func providersChanged(prev, cur map[string]*providerView, prevChoice, curChoice 
 	}
 	for k, c := range cur {
 		p := prev[k]
-		if p == nil || p.Floor != c.Floor || p.Ceiling != c.Ceiling || p.Room != c.Room || p.High != c.High || p.Error != c.Error {
+		if p == nil || p.Ceiling != c.Ceiling || p.Room != c.Room || p.High != c.High || p.Error != c.Error {
 			return true
 		}
 	}
