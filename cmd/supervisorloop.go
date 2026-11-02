@@ -45,6 +45,7 @@ const loopStartVerb = "supervisor.loop"
 // effect; loopStageVerb a finished stage of a release.
 const (
 	loopClaimVerb    = "supervisor.claim"
+	loopFileVerb     = "supervisor." + superloop.KindFile
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
 	loopFailureVerb  = "supervisor.failure"
