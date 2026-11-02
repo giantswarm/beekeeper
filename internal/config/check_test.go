@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const checkRunTailPath = "run.tail:"
+
 func TestCheck(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -22,7 +24,7 @@ func TestCheck(t *testing.T) {
 		{name: "duplicates", raw: "resources: [a]\nwatch: {loadMax: 1, loadMax: 2}\nlabs: {a: a, a: b}\n", want: []string{"watch.loadMax: duplicate key", "labs.a: duplicate key"}},
 		{name: "aliases", raw: "watch: &watch {loadMax: bad}\nwatch: *watch\n", want: []string{"watch.loadMax: invalid value", "watch: duplicate key"}},
 		{name: "merge", raw: "watch: {<<: &base {badKey: 1}, loadMax: 2}\n", want: []string{"watch.badKey: unknown key"}},
-		{name: "semantic", raw: "run: {tail: wrong}\n", want: []string{"run.tail:"}},
+		{name: "semantic", raw: "run: {tail: wrong}\n", want: []string{checkRunTailPath}},
 		{name: "incomplete", raw: "secret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}\n", want: []string{"secret.ageIdentities[0]:"}},
 		{name: "output need not exist", raw: "stateDir: /missing-config-check-output\napps: {secrets: {test: {file: /missing-output.sops.yaml}}}\n"},
 	} {
@@ -92,8 +94,8 @@ func TestCheckReviewRegressions(t *testing.T) {
 		{name: "sequence first missing file", raw: "supervisor: {<<: [{workerBrief: /missing-review-2062}, {workerBrief: ''}]}", want: []string{"supervisor.workerBrief:"}},
 		{name: "nested aliases and merges", raw: "supervisor: {<<: [&base {<<: {workerBrief: /missing-review-2062}, workerBrief: ''}, *base]}", loads: true},
 		{name: "map merge overrides", raw: "metrics: {models: {<<: {model: {input: bad}}, model: {input: 1}}}", loads: true},
-		{name: "independent rules", raw: "run: {tail: wrong}\ndisk: {prune: wrong}", want: []string{"run.tail:", "disk.prune:"}},
-		{name: "mixed findings", raw: "run: {tail: wrong}\ndisk: {prune: wrong}\nwatch: {loadMax: bad}\nreporter: {brief: /missing-review-2062}\nsecret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}", want: []string{"run.tail:", "disk.prune:", "watch.loadMax:", "reporter.brief:", "secret.ageIdentities[0]:"}},
+		{name: "independent rules", raw: "run: {tail: wrong}\ndisk: {prune: wrong}", want: []string{checkRunTailPath, "disk.prune:"}},
+		{name: "mixed findings", raw: "run: {tail: wrong}\ndisk: {prune: wrong}\nwatch: {loadMax: bad}\nreporter: {brief: /missing-review-2062}\nsecret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}", want: []string{checkRunTailPath, "disk.prune:", "watch.loadMax:", "reporter.brief:", "secret.ageIdentities[0]:"}},
 		{name: "nested usage wrong type", raw: "capacity: {providers: {claude: {usage: {command: [echo], highPercent: bad}}}}", want: []string{"capacity.providers.claude.usage.highPercent:"}},
 		{name: "multiple usage rules", raw: "capacity: {usage: {command: [echo], highPercent: -1, fiveHourMax: -1, sevenDayMax: -1}}", want: []string{"capacity.usage.highPercent:", "capacity.usage.fiveHourMax:", "capacity.usage.sevenDayMax:"}},
 		{name: "independent rules in section", raw: "capacity: {ceiling: -1, reviewHeadroom: -1}", want: []string{"capacity.ceiling:", "capacity.reviewHeadroom:"}},
