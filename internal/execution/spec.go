@@ -83,6 +83,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	MCP            bool   `json:"mcp,omitempty"`
 	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
 	Messaging      bool   `json:"messaging,omitempty"`
 	Builds         bool   `json:"builds"`
