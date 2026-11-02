@@ -929,7 +929,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			// A step taken is no longer failing.
 			delete(failures, t.Key)
 			if t.Kind == superloop.KindFile && strings.HasPrefix(t.Key, loopStuckKey) {
-				stuckFiled[t.Key] = e.At
+				// The episode's start ends the key; filed is by step and error.
+				i := strings.LastIndexByte(t.Key, ' ')
+				stuckFiled[t.Key[:max(i, 0)]] = e.At
 			}
 			continue
 		}
@@ -1094,6 +1096,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 				if err := l.record(act, what); err != nil {
 					return err
 				}
+				delete(failures, act.Key)
 				continue
 			}
 		}
@@ -1418,7 +1421,8 @@ func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFa
 	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: l.a.now, At: l.a.now}
 	// Compare exact messages: a changing timestamp or PID is a different
 	// failure and starts a new count, rather than hiding a new cause.
-	if f.Message == previous.Message {
+	// A failure not attempted within loopStuckRecent ended its episode.
+	if f.Message == previous.Message && l.a.now.Sub(previous.At) < loopStuckRecent {
 		f.Count = previous.Count + 1
 		f.Since = cmp.Or(previous.Since, f.Since)
 	} else {
@@ -1461,18 +1465,19 @@ func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, messa
 
 // stuck files each step failing the same way for loopStuckAfter or on more
 // than one item, once per episode: the guide's feed says it as GUIDE
-// PROBLEM. An episode filed before it began (filed, by key) is a new one.
+// PROBLEM. An episode filed before it began (filed, by step and error) is a
+// new one.
 func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string]time.Time) error {
 	keys := slices.Sorted(maps.Keys(failures))
 	done := map[string]bool{}
 	for _, key := range keys {
 		f := failures[key]
 		sum := sha256.Sum256([]byte(f.Kind + "\x00" + f.Message))
-		fileKey := loopStuckKey + f.Kind + " " + hex.EncodeToString(sum[:6])
-		if done[fileKey] {
+		step := loopStuckKey + f.Kind + " " + hex.EncodeToString(sum[:6])
+		if done[step] {
 			continue
 		}
-		done[fileKey] = true
+		done[step] = true
 		group := l.stuckGroup(failures, f.Kind, f.Message)
 		if len(group) == 0 {
 			continue
@@ -1488,7 +1493,7 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 		if len(group) < 2 && l.a.now.Sub(since) < loopStuckAfter {
 			continue
 		}
-		if at, ok := filed[fileKey]; ok && !at.Before(since) {
+		if at, ok := filed[step]; ok && !at.Before(since) {
 			continue
 		}
 		slices.Sort(items)
@@ -1497,10 +1502,12 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 			"It retries every %s; own the failure to the component its error names.",
 			f.Kind, since.UTC().Format(time.RFC3339), attempts, strings.Join(items, ", "), f.Message, loopFailureBackoff)
 		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+		// Each episode its own key: guide watch says each one once.
+		fileKey := step + " " + since.UTC().Format("20060102T150405Z")
 		if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: fileKey}, line); err != nil {
 			return err
 		}
-		filed[fileKey] = l.a.now
+		filed[step] = l.a.now
 	}
 	return nil
 }

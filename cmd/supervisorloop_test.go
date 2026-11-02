@@ -1419,23 +1419,42 @@ func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
 	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "o/r#1, o/r#2") || strings.Contains(evs[0].Detail, "o/r#3") {
 		t.Fatalf("filed: %+v", evs)
 	}
-	// Both stop failing; the same failure on one item later is a new
-	// episode, filed once it lasts.
-	delete(failures, a.Key)
-	delete(failures, b.Key)
+	guide := &state.State{}
+	if lines, _ := guideProblemLines(guide, evs); len(lines) != 1 {
+		t.Fatalf("guide problem: %q", lines)
+	}
+	// Both go quiet, not taken; the same failure on one item later is a
+	// new episode, neither filed at once nor continuing the filed one, and
+	// filed once it lasts.
 	r.a.now = t0.Add(2 * time.Hour)
 	if err := l.failed(a, failures, cause); err != nil {
 		t.Fatal(err)
 	}
-	r.a.now = t0.Add(2*time.Hour + loopStuckAfter)
-	if err := l.failed(a, failures, cause); err != nil {
-		t.Fatal(err)
+	if f := failures[a.Key]; !f.Since.Equal(r.a.now) || f.Count != 1 {
+		t.Fatalf("a quiet failure continued its episode: %+v", f)
 	}
 	if err := l.stuck(failures, filed); err != nil {
 		t.Fatal(err)
 	}
-	if evs := r.logged(t, loopFileVerb); len(evs) != 2 {
+	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+		t.Fatalf("a new episode filed at once: %+v", evs)
+	}
+	for _, m := range []time.Duration{10, 20, 30} {
+		r.a.now = t0.Add(2*time.Hour + m*time.Minute)
+		if err := l.failed(a, failures, cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	evs = r.logged(t, loopFileVerb)
+	if len(evs) != 2 {
 		t.Fatalf("a new episode filed %d times in all", len(evs))
+	}
+	// The guide says the new episode too.
+	if lines, _ := guideProblemLines(guide, evs); len(lines) != 1 || !strings.Contains(lines[0], "o/r#1") || strings.Contains(lines[0], "o/r#2") {
+		t.Fatalf("the second episode's guide problem: %q", lines)
 	}
 }
 
