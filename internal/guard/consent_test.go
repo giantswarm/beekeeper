@@ -74,6 +74,7 @@ func TestConsent(t *testing.T) {
 		"the portal":                         {Page{URL: "https://portal.example.org/agents", Title: "Agents"}, recorded, "", ""},
 		"lab Dex sign-in":                    {Page{URL: labDexPage, Title: "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
 		"lab Dex approval on localhost":      {Page{URL: "https://localhost:32000/dex/approval?req=abc", Title: grantAccess}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
+		"lab Dex email login on localhost":   {Page{URL: "https://localhost:32003/dex/auth/local/login?back=&state=abc", Title: "Dex Lab"}, nil, Allow, "localhost:32003 is the lab's own identity provider"},
 		"lab portal sign-in":                 {Page{URL: "https://" + ownCallback + "/connect/github", Title: "Connect"}, nil, Allow, "loopback host"},
 		"second lab's authorize page":        {Page{URL: lab2AuthorizePage, Title: "Authorize agentlab"}, nil, Allow, "github-bearer.lab2.127.0.0.2.nip.io is the lab's own identity provider on a loopback host"},
 		"a consent on a non-loopback nip.io": {Page{URL: "https://dex.10.0.0.2.nip.io/dex/approval?req=abc", Title: grantAccess}, recorded, Deny, "on dex.10.0.0.2.nip.io, neither the consent page of an App on record"},
