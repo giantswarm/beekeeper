@@ -46,8 +46,8 @@ func TestWatchOnceSaysAFailedNotesReadAndExitsNonZero(t *testing.T) {
 	}
 }
 
-// The machine is the fixture's: under the floor without room for a start,
-// the watch reads its headroom and says nothing.
+// Under the ceiling, the watch says nothing and does not read the machine's
+// headroom.
 func TestWatchOnceWithoutChangeIsSilent(t *testing.T) {
 	w, out := onceWatch(t, openRefs)
 	reads := 0
@@ -56,8 +56,8 @@ func TestWatchOnceWithoutChangeIsSilent(t *testing.T) {
 	if said := out.String(); said != "" {
 		t.Errorf("watch --once without a change said %q", said)
 	}
-	if reads != 1 {
-		t.Errorf("headroom read %d times, want once from the fixture", reads)
+	if reads != 0 {
+		t.Errorf("headroom read %d times under the ceiling, want 0", reads)
 	}
 	if err := w.onceErr(); err != nil {
 		t.Errorf("watch --once without a change: %v", err)
