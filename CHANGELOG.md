@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SSH hosts can admit repositories by owner with `repositoryOrgs` and provision an isolated workspace from the coordinator's pinned source bundle without preseeded checkouts. Idle hosts provision missing pinned Go and GitHub CLI installations from checksum-verified official releases; host checks flag a coordinator release mismatch, and preparation checks the actual workspace's Go requirement (https://github.com/giantswarm/beekeeper/issues/2111).
+
 - SSH execution hosts pin the worker toolchain under `agents.execution.tools` (`go` and `gh`, each an absolute executable and its version). `agents hosts check`, and every start, refuses a host whose `gh` or, for a served repository whose source checkout has a `go.mod`, whose Go is missing, differs from its pin or is older than that `go.mod`'s `toolchain` (or `go`) line, and reports the provisioned versions under `tools`. The runner puts the pinned tools' directories on the worker's PATH right after the component's ([https://github.com/giantswarm/beekeeper/issues/2077](https://github.com/giantswarm/beekeeper/issues/2077)).
 
 - `note show <id>` prints one note in full with its audience, status and retained answer; `--json` returns one complete object.

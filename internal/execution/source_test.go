@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,5 +194,73 @@ func TestSourceInspectionDistinguishesMissingAndUnreadableJournal(t *testing.T) 
 	}
 	if _, err := transport.Inspect(ctx, f.r.Ref); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("unreadable journal treated as absent: %v", err)
+	}
+}
+
+// An organization admitted by host policy needs no preseeded source checkout.
+func TestWorkspaceProvisionsThirdRepository(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(fmt.Sprint(denied), func(t *testing.T) {
+			f := testFixture(t)
+			ctx := context.Background()
+			out, err := f.s.git(ctx, f.source, "rev-parse", "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			head := strings.TrimSpace(string(out))
+			if _, err := f.s.git(ctx, f.source, "update-ref", "refs/heads/execution-source", head); err != nil {
+				t.Fatal(err)
+			}
+			bundle := filepath.Join(t.TempDir(), "source.bundle")
+			if _, err := f.s.git(ctx, f.source, "bundle", "create", bundle, "refs/heads/execution-source"); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(f.s.Config)
+			var config map[string]any
+			if err := json.Unmarshal(raw, &config); err != nil {
+				t.Fatal(err)
+			}
+			config["repositoryOrgs"] = []string{"example"}
+			raw, _ = json.Marshal(config)
+			if err := json.Unmarshal(raw, &f.s.Config); err != nil {
+				t.Fatal(err)
+			}
+			digest, err := f.s.Prepare(f.s.Policy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.r.Repository, f.r.GitRef, f.r.SourceDigest, f.r.PolicyDigest = "example/third", head, Digest(data), digest
+			if denied {
+				f.r.Repository = "foreign/third"
+			}
+			if err := f.s.ReceiveSource(ctx, f.r.Ref, SourceChunk{Total: int64(len(data)), Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			h, err := f.s.Start(ctx, f.r)
+			if denied {
+				if err == nil {
+					t.Fatal("untrusted repository admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("provision third repository: %v", err)
+			}
+			origin, err := f.s.git(ctx, h.Workspace, "remote", "get-url", "origin")
+			if err != nil || strings.TrimSpace(string(origin)) != "https://github.com/example/third.git" {
+				t.Fatalf("origin=%s err=%v", origin, err)
+			}
+			if h.Commit != head {
+				t.Fatalf("commit=%s want=%s", h.Commit, head)
+			}
+			again, err := f.s.Start(ctx, f.r)
+			if err != nil || again.Commit != head {
+				t.Fatalf("retry: %v %v", again, err)
+			}
+		})
 	}
 }
