@@ -2281,8 +2281,8 @@ func (g *gateRun) gateBudget() (state.Budget, error) {
 	if err != nil {
 		return state.Budget{}, err
 	}
-	if b := st.Budget; b != nil && g.now.Sub(b.At) <= g.cfg.Merge.BudgetFresh.Duration && g.now.Before(b.Reset) {
-		return *b, nil
+	if b := st.Budget; b != nil && (len(b.Identities) > 0 || b.GraphQL == nil) && g.now.Sub(b.At) <= g.cfg.Merge.BudgetFresh.Duration && g.now.Before(b.Reset) {
+		return minimumGateBudget(*b, g.now)
 	}
 	var b github.Budget
 	err = g.readRetrying("the GitHub budget", func() (err error) {
@@ -2291,7 +2291,26 @@ func (g *gateRun) gateBudget() (state.Budget, error) {
 		b, err = readBudget(g.app, ctx)
 		return err
 	})
-	return state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset}, err
+	if err != nil {
+		return state.Budget{}, err
+	}
+	reading := state.Budget{Identity: b.Identity, Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset}
+	if b.GraphQL != nil {
+		reading.GraphQL = storedGraphQL(b.GraphQL, g.now)
+	}
+	return minimumGateBudget(reading, g.now)
+}
+
+func minimumGateBudget(b state.Budget, now time.Time) (state.Budget, error) {
+	if g := b.GraphQL; g != nil {
+		if g.Err != "" || g.Blocks(now) {
+			return b, fmt.Errorf("GraphQL identity %s is unavailable (blocked by %s): %s %s", g.Identity, strings.Join(g.BlockedBy, ", "), g.Err, g.Refused)
+		}
+		if g.Remaining < b.Remaining {
+			b.Identity, b.Login, b.Remaining, b.Limit, b.Reset = g.Identity, g.Login, g.Remaining, g.Limit, g.Reset
+		}
+	}
+	return b, nil
 }
 
 // readBudget reads the GitHub budget afresh (probeBudget); a seam for the

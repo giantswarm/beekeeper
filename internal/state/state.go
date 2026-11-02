@@ -1296,10 +1296,15 @@ func (e *StaleWriterError) Unwrap() error { return e.Load }
 
 // Budget is one reading of the GitHub core budget.
 type Budget struct {
-	Remaining int       `json:"remaining"`
-	Limit     int       `json:"limit"`
-	Reset     time.Time `json:"reset"`
-	At        time.Time `json:"at"`
+	Identity   string             `json:"identity,omitempty"`
+	Login      string             `json:"login,omitempty"`
+	ETag       string             `json:"etag,omitempty"`
+	Identities map[string]Budget  `json:"identities,omitempty"`
+	Windows    map[string]GraphQL `json:"windows,omitempty"`
+	Remaining  int                `json:"remaining"`
+	Limit      int                `json:"limit"`
+	Reset      time.Time          `json:"reset"`
+	At         time.Time          `json:"at"`
 	// GraphQL is the last reading of the GraphQL limit; nil before the
 	// first.
 	GraphQL *GraphQL `json:"graphql,omitempty"`
@@ -1309,9 +1314,14 @@ type Budget struct {
 
 // GraphQL is one reading of the GitHub GraphQL limit.
 type GraphQL struct {
-	Remaining int `json:"remaining"`
-	Limit     int `json:"limit"`
-	// Reset is when a refusal ends; zero when GitHub named no time.
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	Identity  string   `json:"identity,omitempty"`
+	Login     string   `json:"login,omitempty"`
+	Err       string   `json:"error,omitempty"`
+	Remaining int      `json:"remaining"`
+	Limit     int      `json:"limit"`
+	// Reset is when the window the reading counts resets and a refusal
+	// ends; zero when GitHub named no time.
 	Reset time.Time `json:"reset,omitzero"`
 	// Refused is GitHub's words while it refused GraphQL calls.
 	Refused   string    `json:"refused,omitempty"`
@@ -1324,7 +1334,7 @@ type GraphQL struct {
 // Blocks says the reading's refusal still holds at now: one without a
 // reset holds until a reading says otherwise.
 func (g *GraphQL) Blocks(now time.Time) bool {
-	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
+	return g != nil && (len(g.BlockedBy) > 0 || g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset)))
 }
 
 // The phases of a Merge.
