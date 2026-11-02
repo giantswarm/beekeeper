@@ -7,7 +7,7 @@ import (
 )
 
 func TestGuardPanicNamesCheckAndLogsStack(t *testing.T) {
-	for _, format := range []string{"claude", "codex", transcriptAgyHarness} {
+	for _, format := range []string{"claude", "codex", agyHarnessName} {
 		t.Run(format, func(t *testing.T) {
 			lt := newLiveTree(t)
 			var check, stack string
@@ -20,7 +20,7 @@ func TestGuardPanicNamesCheckAndLogsStack(t *testing.T) {
 			switch format {
 			case "codex":
 				out = h.DecideCodex(raw)
-			case transcriptAgyHarness:
+			case agyHarnessName:
 				out, _ = json.Marshal(decideAgyCmd(t, h, lt.root, "git worktree move "+lt.live+" /aside"))
 			default:
 				out = h.Decide(raw)

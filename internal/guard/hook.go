@@ -112,6 +112,8 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// ExecutionMCP admits only the authenticated coordinator proxy namespace.
+	ExecutionMCP bool
 	// Panic records the failing check and stack without exposing them to the tool.
 	Panic func(check string, stack []byte)
 	check *string
