@@ -359,17 +359,25 @@ type Park struct {
 	rest rest
 }
 
+// WorkerProblems keeps finding receipts after the watch drains its reports.
+type WorkerProblems struct {
+	Task       string    `json:"task"`
+	AssignedAt time.Time `json:"assignedAt,omitzero"`
+	Findings   []string  `json:"findings"`
+}
+
 // Agent is an empty session registered as spare capacity.
 type Agent struct {
 	Party
 	// Execution references a coordinating roster entry's remote process.
 	// Its reachability and lifecycle are stored on the matching Start.
-	Execution  *execution.Ref `json:"execution,omitempty"`
-	Registered time.Time      `json:"registered"`
-	Task       string         `json:"task,omitempty"`
-	AssignedAt time.Time      `json:"assignedAt,omitzero"`
-	IdleSince  time.Time      `json:"idleSince,omitzero"`
-	LastTask   string         `json:"lastTask,omitempty"`
+	Execution        *execution.Ref  `json:"execution,omitempty"`
+	Registered       time.Time       `json:"registered"`
+	Task             string          `json:"task,omitempty"`
+	AssignedAt       time.Time       `json:"assignedAt,omitzero"`
+	IdleSince        time.Time       `json:"idleSince,omitzero"`
+	LastTask         string          `json:"lastTask,omitempty"`
+	ReportedProblems *WorkerProblems `json:"reportedProblems,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
@@ -1072,8 +1080,8 @@ type State struct {
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 	// Writer is the newest beekeeper that saved the state.
 	Writer *Writer `json:"writer,omitempty"`
-	// WorkerReports are the reports workers finished with (agents idle
-	// --done) that the supervisor's watch has not printed yet.
+	// WorkerReports are mid-task findings and idle reports that the
+	// supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
 	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their

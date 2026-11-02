@@ -360,6 +360,13 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			}
 		}
 		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+	case "problem":
+		var finding string
+		if err := execution.Decode(c.Data, &finding); err != nil {
+			return "", nil, err
+		}
+		events, err := a.recordWorkerProblem(st, ag, me, finding)
+		return "problem acknowledged by coordinator", events, err
 	case "report":
 		var v executionReport
 		if err := execution.Decode(c.Data, &v); err != nil {
@@ -379,6 +386,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {
 			return "", nil, err
 		}
+		problems = freshWorkerProblems(ag, problems)
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished

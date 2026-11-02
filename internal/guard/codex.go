@@ -1244,7 +1244,7 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 		return false
 	}
 	switch sub[0] + " " + sub[1] {
-	case "note add", "log add", "agents idle", "agents park", "agents note":
+	case "note add", "log add", "agents idle", "agents park", "agents note", "agents problem":
 		return true
 	}
 	return false
