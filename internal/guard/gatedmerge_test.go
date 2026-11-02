@@ -46,7 +46,7 @@ func TestGatedRepositoryMergeIsTheGates(t *testing.T) {
 				}
 				return d.Reason
 			}(),
-			"agy": func() string {
+			transcriptAgyHarness: func() string {
 				d := decideAgyCmd(t, h, "/", command)
 				if d.Decision != decisionDeny {
 					return ""
