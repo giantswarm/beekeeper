@@ -235,9 +235,11 @@ type loopLogin struct {
 // loopCheck is one entry of a pull request's check rollup: a check run
 // reports a status and a conclusion, a commit status a state.
 type loopCheck struct {
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	State      string `json:"state"`
+	StartedAt    time.Time `json:"startedAt"`
+	WorkflowName string    `json:"workflowName"`
+	Status       string    `json:"status"`
+	Conclusion   string    `json:"conclusion"`
+	State        string    `json:"state"`
 	// A check run's name and details URL, a commit status's context and
 	// target URL.
 	Name       string `json:"name"`
@@ -277,6 +279,39 @@ func (c loopCheck) concluded() bool {
 	return slices.Contains([]string{checkSuccess, checkFailure, checkError}, c.State)
 }
 
+// superseded reports only cancellations replaced on this head's rollup.
+// Failures and timeouts remain red even when a later run exists. Actions run
+// IDs also order queued replacements whose startedAt has not been set yet.
+func (c loopCheck) superseded(checks []loopCheck) bool {
+	if c.Conclusion != "CANCELLED" || c.Status != checkCompleted {
+		return false
+	}
+	oldRun := loopActionsRun(c.DetailsURL)
+	oldRepo, _, _ := strings.Cut(c.DetailsURL, "/actions/runs/")
+	return slices.ContainsFunc(checks, func(next loopCheck) bool {
+		if next.Status == "" {
+			return false // A commit status is not a replacement check run.
+		}
+		newRun := loopActionsRun(next.DetailsURL)
+		newRepo, _, _ := strings.Cut(next.DetailsURL, "/actions/runs/")
+		newerActionsRun := oldRun != 0 && newRun > oldRun && oldRepo == newRepo
+		sameCheck := c.Name != "" && c.Name == next.Name
+		sameWorkflow := c.WorkflowName != "" && c.WorkflowName == next.WorkflowName && newerActionsRun
+		return (sameCheck || sameWorkflow) && (newerActionsRun || !c.StartedAt.IsZero() && next.StartedAt.After(c.StartedAt))
+	})
+}
+
+func loopActionsRun(detailsURL string) uint64 {
+	// The rollup exposes the Actions run ID through its details URL.
+	_, tail, ok := strings.Cut(detailsURL, "/actions/runs/")
+	if !ok {
+		return 0
+	}
+	id, _, _ := strings.Cut(tail, "/")
+	n, _ := strconv.ParseUint(id, 10, 64)
+	return n
+}
+
 // parseLoopPull reads gh pr view's JSON of ref.
 func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	var j loopPullJSON
@@ -288,6 +323,9 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		p.Files = append(p.Files, f.Path)
 	}
 	for _, c := range j.Rollup {
+		if c.superseded(j.Rollup) {
+			continue
+		}
 		if !c.green() {
 			p.Green = false
 		}
@@ -984,7 +1022,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		in.Release = l.newerRelease(ctx)
 	}
 	planned := map[string]bool{}
-	for _, act := range superloop.Plan(in) {
+	for _, act := range append(superloop.Plan(in), orphanedReviewClaims(claims, in)...) {
 		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
 			planned[act.Agent] = true
 		}
@@ -1139,6 +1177,42 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 type loopClaim struct {
 	at     time.Time
 	target string
+}
+
+// orphanedReviewClaims reports a pending review whose verified park is gone.
+// Claims remain in the event log, so the warning must be durable across loop
+// restarts too. It does not complete the claim: a later park can still use it.
+func orphanedReviewClaims(claims map[string]loopClaim, in superloop.Input) []superloop.Action {
+	keys := make([]string, 0, len(claims))
+	for key := range claims {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	var out []superloop.Action
+	for _, key := range keys {
+		pending, ok := strings.CutPrefix(key, "review ")
+		if !ok {
+			continue
+		}
+		ref, head, ok := strings.Cut(pending, "@")
+		pr, valid := parseRef(ref)
+		if !ok || !valid || head == "" {
+			continue
+		}
+		if slices.ContainsFunc(in.Workers, func(w superloop.Worker) bool {
+			return w.ReviewRequested && strings.EqualFold(w.ParkedOn, ref)
+		}) {
+			continue
+		}
+		warning := "leave " + key + " orphaned"
+		if slices.ContainsFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == warning }) {
+			continue
+		}
+		url := fmt.Sprintf("https://github.com/%s/pull/%d", pr.Repo, pr.N)
+		out = append(out, superloop.Action{Key: warning, Kind: superloop.KindLeave, Ref: ref, URL: url,
+			Message: fmt.Sprintf("%s head %s: orphaned pending review claim; no worker holds a verified review park; claim retained for a new park", url, head)})
+	}
+	return out
 }
 
 // keyed reads a loop line's detail: "[<key>] <rest>".
