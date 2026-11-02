@@ -378,7 +378,8 @@ extended. A pressure run's `DISK PRUNE` line names the caches still holding
 the most, and when the disk is still under the free-disk floor after it, the
 largest directories (100 MiB or more) of the user cache directory no policy
 covers, with their last write. The supervisor's "Disk remains low after
-pruning" note carries the same.
+pruning" finding carries the same; it goes to the guide to file, never to
+the person as a decision.
 
 ### The disk step
 
