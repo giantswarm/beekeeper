@@ -76,12 +76,9 @@ closed, is one MERGE HUNG line: the watch ends its devctl and records the
 merge at the next poll. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
-that wakes it). Fewer busy agents than capacity.floor, with the headroom
-for a start, is one CAPACITY LOW line, and a positive capacity.ceiling
-reached one CAPACITY FULL line, each with the headroom (beekeeper capacity)
-and one ENDED line when the count recovers; capacity.ceiling of 0 suppresses
-both CAPACITY LOW and CAPACITY FULL (capacity.floor of 0 suppresses CAPACITY
-LOW). When capacity.usage.command or capacity.providers is configured, the watch refreshes each
+that wakes it). A positive capacity.ceiling reached is one CAPACITY FULL
+line with the headroom (beekeeper capacity) and one ENDED line when the
+count recovers; capacity.ceiling of 0 suppresses CAPACITY FULL. When capacity.usage.command or capacity.providers is configured, the watch refreshes each
 subscription's 5-hour and 7-day usage windows every usage.every
 (default 5m, and once resetsAt passes), prints one USAGE line (with each
 provider's windows and verdict and the capacity.choices selection when
@@ -1326,7 +1323,7 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 // pollSessions does what the process table and the sessions in it tell.
 func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Table) {
 	w.table = t
-	sessions := claude.Discover(w.cfg, t, w.now)
+	sessions := discover(w.cfg, t, w.now)
 	owners := make(map[int]string, len(sessions))
 	for _, s := range sessions {
 		owners[s.PID] = s.Name
@@ -1939,7 +1936,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
-		tl, te, tf, touched := settleTimersMatching(st, found, w.now, settles)
+		tl, te, tf, touched := settleTimersMatching(st, found, w.now, w.cfg.Watch.Interval.Duration, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen := touched
 		pl, pe := firePending(st, sessions, w.now)
@@ -2068,6 +2065,10 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 			continue // parked on purpose: a person or its timer brings it back
 		}
 		k := cmp.Or(ag.Session, ag.Name)
+		last, gone := goneAgent(w.cfg, st, sessions, ag, w.cfg.Agents.StaleAfter.Duration, w.now)
+		if gone {
+			k += "/gone"
+		}
 		stopped[k] = true
 		if !w.stopped[k] {
 			hint := resumeHint(ag)
@@ -2080,6 +2081,9 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 				hint = fmt.Sprintf("parked on a person: %s; their answer resumes it", on)
 			case resumedForTask(ag):
 				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", clock(w.now, ag.ResumedWait), ag.ResumedOn, hint)
+			}
+			if gone {
+				hint = goneActivityPrefix + last.UTC().Format(time.RFC3339) + "; doctor retires it; " + hint
 			}
 			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, hint))
 		}

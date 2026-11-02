@@ -1268,12 +1268,6 @@ type projectItem struct {
 			Login string `json:"login"`
 		} `json:"owner"`
 	} `json:"project"`
-	Home *struct {
-		Number int `json:"number"`
-		Owner  *struct {
-			Login string `json:"login"`
-		} `json:"owner"`
-	} `json:"home"`
 	Status *struct {
 		Name      string
 		UpdatedAt time.Time `json:"updatedAt"`
@@ -1285,9 +1279,6 @@ type projectItem struct {
 func (p projectItem) boardName() string {
 	if p.Project.Owner != nil && p.Project.Owner.Login != "" && p.Project.Number != 0 {
 		return fmt.Sprintf("%s/%d", p.Project.Owner.Login, p.Project.Number)
-	}
-	if p.Home != nil && p.Home.Owner != nil && p.Home.Owner.Login != "" && p.Home.Number != 0 {
-		return fmt.Sprintf("%s/%d", p.Home.Owner.Login, p.Home.Number)
 	}
 	return p.Project.ID
 }

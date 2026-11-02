@@ -36,6 +36,7 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
+	PostMerge *string `json:"postMerge,omitempty"`
 	// Head is the HEAD of the execution's workspace when it parked. The
 	// coordinator checks it against the pull request itself (a host's own
 	// branch and GitHub view are no proof); ReviewHead is an older host's.
@@ -164,7 +165,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
 			if publishErr != nil {
 				reply.Error = publishErr.Error()
-				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s", publication.Head))
+				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s: %s", publication.Head, publishErr))
 			} else {
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
@@ -349,8 +350,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
+		} else {
+			v.PostMerge = nil
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)

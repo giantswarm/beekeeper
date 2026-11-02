@@ -188,8 +188,8 @@ func TestLoopSupersededCancellations(t *testing.T) {
 			if got := len(r.logged(t, "supervisor.red")) > 0; got != tt.red {
 				t.Errorf("red wake=%v, want %v", got, tt.red)
 			}
-			if got := len(r.logged(t, "supervisor.go")) > 0; got != tt.green {
-				t.Errorf("go=%v, want %v", got, tt.green)
+			if got := len(r.logged(t, "supervisor.merge")) > 0; got != tt.green {
+				t.Errorf("merge=%v, want %v", got, tt.green)
 			}
 		})
 	}

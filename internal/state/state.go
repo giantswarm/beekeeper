@@ -340,11 +340,14 @@ type Park struct {
 	RefChecked time.Time `json:"refChecked,omitzero"`
 	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
 	// Empty (including parks written by older versions) is a plain wait.
-	ReviewHead string    `json:"reviewHead,omitempty"`
-	By         Party     `json:"by"`
-	At         time.Time `json:"at"`
-	On         string    `json:"on,omitempty"`
-	Waits      string    `json:"waits"`
+	ReviewHead string `json:"reviewHead,omitempty"`
+	// PostMerge is work remaining after merge; nil preserves older parks.
+	// An explicit empty string lets the loop close the task without a wake.
+	PostMerge *string   `json:"postMerge,omitempty"`
+	By        Party     `json:"by"`
+	At        time.Time `json:"at"`
+	On        string    `json:"on,omitempty"`
+	Waits     string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -363,10 +366,12 @@ type Agent struct {
 	// Its reachability and lifecycle are stored on the matching Start.
 	Execution  *execution.Ref `json:"execution,omitempty"`
 	Registered time.Time      `json:"registered"`
-	Task       string         `json:"task,omitempty"`
-	AssignedAt time.Time      `json:"assignedAt,omitzero"`
-	IdleSince  time.Time      `json:"idleSince,omitzero"`
-	LastTask   string         `json:"lastTask,omitempty"`
+	// ActivityAt is the latest explicit roster activity (note, wake or resume).
+	ActivityAt time.Time `json:"activityAt,omitzero"`
+	Task       string    `json:"task,omitempty"`
+	AssignedAt time.Time `json:"assignedAt,omitzero"`
+	IdleSince  time.Time `json:"idleSince,omitzero"`
+	LastTask   string    `json:"lastTask,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
@@ -561,6 +566,9 @@ type Timer struct {
 	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
 	// until marked done.
 	Repeat string `json:"repeat,omitempty"`
+	// Held is what kept a due timer from firing at its time (a beekeeper
+	// stop), said when it fires late; a re-armed timer starts without it.
+	Held string `json:"held,omitempty"`
 
 	rest rest
 }
@@ -1002,6 +1010,9 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
+	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// They grant no start permissions; Starts remains the authorization ledger.
+	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a
 	// session no roster entry names), one per session, its By: the watch
 	// settles and resumes them as it does a roster agent's.
@@ -1086,8 +1097,44 @@ type State struct {
 	// Stop is the stop of every start, wake, revive, import and merge
 	// (beekeeper stop) while it stands; beekeeper resume lifts it.
 	Stop *Stop `json:"stop,omitempty"`
+	// HostPins are the execution hosts beekeeper updated (agents hosts
+	// update): the release each runs and the policy digest its starts are
+	// pinned to, or why it is held.
+	HostPins []HostPin `json:"hostPins,omitempty"`
 
 	rest rest
+}
+
+// HostPin is an execution host's release and the policy digest beekeeper
+// recorded when it last updated the host, in place of a hand-kept
+// agents.hosts digest, and the hold of a host whose update failed.
+type HostPin struct {
+	Selector     string           `json:"selector"`
+	Identity     execution.HostID `json:"identity"`
+	Version      string           `json:"version,omitempty"`
+	PolicyDigest string           `json:"policyDigest,omitempty"`
+	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
+	// Tried is the last update attempt, which paces the retries.
+	Tried time.Time `json:"tried,omitzero"`
+	// Held is why the host takes no start: its update to HeldVersion
+	// failed, since HeldAt. The next successful update lifts it.
+	Held        string    `json:"held,omitempty"`
+	HeldAt      time.Time `json:"heldAt,omitzero"`
+	HeldVersion string    `json:"heldVersion,omitempty"`
+	// Reported says the supervisor loop handed the hold on as its finding.
+	Reported bool `json:"reported,omitempty"`
+
+	rest rest
+}
+
+// HostPin is the pin of the execution host selector, nil for none.
+func (st *State) HostPin(selector string) *HostPin {
+	for i := range st.HostPins {
+		if st.HostPins[i].Selector == selector {
+			return &st.HostPins[i]
+		}
+	}
+	return nil
 }
 
 // Stop is a standing beekeeper stop: who stopped the machine's sessions,
@@ -1410,6 +1457,11 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteLookup is the optional complete history of a store that retains closed notes.
+type NoteLookup interface {
+	LookupNote(int) (*Note, *Event, error)
 }
 
 // NoteHistory is the optional history of a store that retains central note
@@ -1824,21 +1876,27 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
+	reader := bufio.NewReader(f)
+	for {
+		// A record can contain a complete note and answer of any length.
+		line, readErr := reader.ReadBytes('\n')
 		var e Event
 		// A write lost to an unclean shutdown leaves NUL bytes, and the next
 		// append lands right behind them on the same line.
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
+			if n > 0 && len(out) > n {
+				out = out[len(out)-n:]
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return out, nil
+		}
+		if readErr != nil {
+			return out, readErr
 		}
 	}
-	if n > 0 && len(out) > n {
-		out = out[len(out)-n:]
-	}
-	return out, sc.Err()
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under

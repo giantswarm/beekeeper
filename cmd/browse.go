@@ -39,7 +39,8 @@ const browseWait = 8 * time.Minute
 const (
 	browsePreamble = "beekeeper browse: you run browser steps for another Claude session, with the Claude in Chrome tools only. " +
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
-		"Take a screenshot of each page the steps name as their proof. End with a short plain report of what you saw and did, " +
+		"Take a screenshot of each page the steps name as their proof; beekeeper saves each one and prints its path below your report, " +
+		"so your report never says whether a screenshot was saved or where. End with a short plain report of what you saw and did, " +
 		"or of what stopped you. " + controlWords
 
 	browseSteps = "The steps:\n\n"
@@ -218,7 +219,12 @@ Desktop holds such a session's navigate to a new site for a person's site
 approval, which neither bypassPermissions nor a hook answers (beekeeper
 hook pretooluse refuses those calls and names this command). The turn's
 report is printed, then its transcript and each screenshot it took, saved
-under <stateDir>/browse/<id>/ as an image file the caller reads.
+under <stateDir>/browse/<id>/ as an image file the caller reads
+("screenshot: <path>", a path only for a file written; "screenshot: none
+taken" or "screenshot: none saved: <why>" otherwise). The files saved are
+the one record of the screenshots: the turn writes no file, and the line
+heading the paths says a report calling a screenshot not saved speaks for
+the turn alone. The report is printed as the turn wrote it.
 
 The turn shares the person's Chrome: hold the browser lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
@@ -324,7 +330,10 @@ host (*.127.0.0.<n>.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
 that name such a host run with the lab's rule, the prompt's exception for
 the fixture user's credential the steps give, and "allowed lab sign-in:"
-below the report.
+below the report. Such a page needs no fallback: the lab's certificate
+authority is one Chrome trusts, and a sign-in there whose clicks and keys
+do nothing and whose screenshots fail is a tab behind another or a window
+not drawn, which the front-tab and draw checks below handle as on any host.
 
 Every other grant stays refused. A call the classifier refused is named
 below the report, one "refused:" line per call, with the call's own words
@@ -704,12 +713,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
 	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
 	lines = append(lines, "transcript: "+path)
-	for _, s := range shots {
-		lines = append(lines, "screenshot: "+s)
-	}
-	if len(shots) == 0 {
-		lines = append(lines, "screenshot: none taken")
-	}
+	lines = append(lines, shotLines(shots, serr)...)
 	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
@@ -1882,6 +1886,30 @@ func sharedLines(shared []sharedFile) []string {
 	out := make([]string, 0, len(shared))
 	for _, f := range shared {
 		out = append(out, "shared for upload: "+f.Named)
+	}
+	return out
+}
+
+// shotsSaved heads the screenshot lines when beekeeper wrote a file: the
+// turn cannot write one, its Chrome tool keeps a screenshot in the
+// transcript only, so a report calling a screenshot not saved speaks for the
+// turn alone and these lines are the record.
+const shotsSaved = "screenshots saved by beekeeper from the turn's transcript (the turn writes no file; a report line calling a screenshot not saved is the turn's own view):"
+
+// shotLines are the lines below the report for the screenshots: with files
+// saved, shotsSaved and one path per file; with none, one line saying none
+// was taken or why none was saved. A path is printed only for a file written.
+func shotLines(shots []string, err error) []string {
+	if len(shots) == 0 {
+		if err != nil {
+			return []string{"screenshot: none saved: " + err.Error()}
+		}
+		return []string{"screenshot: none taken"}
+	}
+	out := make([]string, 0, len(shots)+1)
+	out = append(out, shotsSaved)
+	for _, s := range shots {
+		out = append(out, "screenshot: "+s)
 	}
 	return out
 }
