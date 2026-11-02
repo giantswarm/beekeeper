@@ -2192,7 +2192,7 @@ messages and `agents resume` remain available to the person.
 |---|---|
 | Park settlement (`watch`, `agents.autoResume`) | Only after the named note, issue, PR, hold or lease settles. |
 | Timers and probes | A failed probe stays in the watch; no model checks it. At delivery, the current park is read again. A person/note park gets `TIMER WAKE SKIPPED`; another named park accepts only a typed GitHub condition on its own reference. A plain external wait accepts its timer, including its explicit timeout. Skipped fires keep their watch/log record and normal close/repeat behavior. |
-| Command outcomes (`devctl.unheard`) | A named or person park keeps the outcome owed until the park ends; the result is retained within the existing 24-hour outcome retention window. |
+| Command outcomes (`devctl.unheard`) | A person park keeps the outcome owed until the park ends, within the existing 24-hour outcome retention window. A plain PR wait still receives its own command result, including red CI. |
 | Automatic note/default and hold-release notifications | A parked session gets its own park settlement instead, for local and central defaults. Other note outcomes stay in the log. A person's explicit answer/message still reaches it. |
 | Supervisor loop | Verified review findings, red CI, merge go, completed release proof and matching alerts settle their corresponding waits; a note park gets no idle wake. |
 | Idle, stopped-agent and high-usage notices | Parked workers are skipped; notices do not start a model turn. |

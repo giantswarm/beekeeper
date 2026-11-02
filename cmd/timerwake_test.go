@@ -177,8 +177,8 @@ func TestMailboxDefaultLeavesPersonParkAsleep(t *testing.T) {
 	}
 }
 
-func TestCommandOutcomeWaitsForCurrentNamedPark(t *testing.T) {
-	for _, on := range []string{"#3", parkedCentralNote, claimIssue, parkedHoldWait, "lease agentlab-1", parkedAlertWait} {
+func TestCommandOutcomeWaitsForPersonPark(t *testing.T) {
+	for _, on := range []string{"#3", parkedCentralNote} {
 		t.Run(on, func(t *testing.T) {
 			w, _, _ := notifyingWatch(t, t.TempDir(), false)
 			woke := stubWakes(t)
@@ -208,5 +208,25 @@ func TestCommandOutcomeWaitsForCurrentNamedPark(t *testing.T) {
 				t.Fatalf("ended park: deliveries=%v state=%+v error=%v", *woke, st, err)
 			}
 		})
+	}
+}
+
+// A gated wait's own result is a wake condition, including red CI. A plain
+// PR park must still hear it; waiting for a person's review is different.
+func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	woke := stubWakes(t)
+	owner := state.Party{Name: agentOne, Session: "ci-wait-fixture"}
+	o := state.Owed{Owner: owner, Line: "devctl pr wait o/r 7 exit 1: red", Since: relayNow}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: owner, Task: parkTask, Park: &state.Park{On: claimIssue, At: relayNow, Waits: "CI completion"}}}
+		st.Owed = []state.Owed{o}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.payOwed(t.Context(), o)
+	if len(*woke) != 1 || !strings.Contains((*woke)[0], o.Line) {
+		t.Fatalf("the CI result did not reach its waiting caller: %v", *woke)
 	}
 }

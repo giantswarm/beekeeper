@@ -103,9 +103,9 @@ func (a *app) payOwed(ctx context.Context, o state.Owed) {
 		a.paid(o, fmt.Sprintf("%q has no session id, nobody is woken", owner.Name))
 		return
 	}
-	if p := wakeTargetPark(st, q); p != nil && (p.On != "" || parkOnPerson(p, a.cfg.Guide.Person)) {
-		// Keep the result owed until the named/person wait settles. An
-		// old command completing does not settle the current park.
+	if p := wakeTargetPark(st, q); p != nil && parkOnPerson(p, a.cfg.Guide.Person) {
+		// Keep the result owed until the person's wait settles. An old
+		// command completing is no answer to a later decision.
 		return
 	}
 	line, ok := a.owedLine(ctx, o)
