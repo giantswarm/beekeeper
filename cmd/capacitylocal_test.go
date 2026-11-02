@@ -76,6 +76,53 @@ func TestLocalCeilingCountsOnlyThisMachine(t *testing.T) {
 	}
 }
 
+// A review may use capacity.reviewHeadroom above capacity.local.ceiling as
+// above the worker ceiling: a local cap full of workers leaves a review its
+// headroom, and only the headroom used up refuses it. A local ceiling of 0
+// stays closed, and the machine's guards still hold.
+func TestLocalCeilingLeavesAReviewItsHeadroom(t *testing.T) {
+	st := supervised(5)
+	c := countAgents(st, nil, keepNow)
+	k := localCap(14, 3)
+	k.ReviewHeadroom = 2
+
+	worker := newStartCapacity(c, k, roomy(), false, forWorker).withLocal(st, k)
+	if want := "no start: 5 busy locally at capacity.local.ceiling 3"; worker.Room != 0 || worker.verdict() != want {
+		t.Errorf("worker over the local ceiling: room %d, %q, want %q", worker.Room, worker.verdict(), want)
+	}
+
+	k.ReviewHeadroom = 3
+	review := newStartCapacity(c, k, roomy(), false, forReview).withLocal(st, k)
+	if review.Local == nil || review.Local.Room != 1 || review.Room != 1 {
+		t.Fatalf("review within the local headroom: local %+v, room %d (%v), want room 1", review.Local, review.Room, review.Blocks)
+	}
+	if got := review.Local.line(); got != "5 busy of ceiling 3 plus review headroom 3: BK 0, BK 1, BK 2, BK 3, BK 4" {
+		t.Errorf("review local line %q", got)
+	}
+	if _, err := gateStart(review, false); err != nil {
+		t.Errorf("gateStart for a review within the local headroom = %v", err)
+	}
+
+	k.ReviewHeadroom = 2
+	used := newStartCapacity(c, k, roomy(), false, forReviewOfSelfHosted).withLocal(st, k)
+	if want := "no start: 5 busy locally at capacity.local.ceiling 3 plus review headroom 2"; used.Room != 0 || used.verdict() != want {
+		t.Errorf("review headroom used up locally: room %d, %q, want %q", used.Room, used.verdict(), want)
+	}
+
+	zero := localCap(14, 0)
+	zero.ReviewHeadroom = 2
+	if v := newStartCapacity(c, zero, roomy(), false, forReview).withLocal(st, zero); v.Room != 0 || v.verdict() != "no start: capacity.local.ceiling 0" {
+		t.Errorf("review at local ceiling 0: room %d, %q", v.Room, v.verdict())
+	}
+
+	k.ReviewHeadroom = 3
+	busyMachine := roomy()
+	busyMachine.Load1 = busyMachine.LoadMax + 1
+	if v := newStartCapacity(c, k, busyMachine, false, forReview).withLocal(st, k); v.Room != 0 {
+		t.Errorf("review under high load within the local headroom: room %d, want 0 (%v)", v.Room, v.Blocks)
+	}
+}
+
 // forTarget narrows a verdict to an explicit harness's provider: the local
 // cap still holds after it, even where the provider's own room replaces
 // the pool's.
@@ -151,18 +198,39 @@ func TestLocalCeilingRefusesAHandStart(t *testing.T) {
 	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, extra := range [][]string{nil, {"--" + reviewFlag}} {
-		start := a.agentStartCmd()
-		start.SilenceErrors, start.SilenceUsage = true, true
-		start.SetArgs(append([]string{busyOne, brief, "--dir", dir}, extra...))
-		if err := start.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), block) {
-			t.Errorf("agents start %v at the local ceiling = exit %d (%v), want a refusal naming it", extra, Code(err), err)
-		}
+	startArgs := []string{busyOne, brief, "--dir", dir}
+	start := a.agentStartCmd()
+	start.SilenceErrors, start.SilenceUsage = true, true
+	start.SetArgs(startArgs)
+	if err := start.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), block) {
+		t.Errorf("agents start at the local ceiling = exit %d (%v), want a refusal naming it", Code(err), err)
+	}
+	// A review keeps capacity.reviewHeadroom (2 by default) above the local
+	// ceiling: room for 2 more, and refused once those are busy too.
+	a, out = openApp()
+	review := a.capacityCmd()
+	review.SetArgs([]string{"--" + reviewFlag})
+	if err := review.Execute(); err != nil || !strings.Contains(out.String(), "local: 1 busy of ceiling 1 plus review headroom 2: BK 0\n") || !strings.Contains(out.String(), "room for 2 starts\n") {
+		t.Fatalf("capacity --review at the local ceiling = %q, %v", out.String(), err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, tasked("BK 1"), tasked("BK 2"))
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = openApp()
+	const reviewBlock = "no start: 3 busy locally at capacity.local.ceiling 1 plus review headroom 2"
+	reviewer := a.agentStartCmd()
+	reviewer.SilenceErrors, reviewer.SilenceUsage = true, true
+	reviewer.SetArgs(append(slices.Clone(startArgs), "--"+reviewFlag))
+	if err := reviewer.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), reviewBlock) {
+		t.Errorf("agents start --review with the local review headroom used = exit %d (%v), want a refusal naming it", Code(err), err)
 	}
 	stubBackground(t, "backgrounded · "+bgShortID+" · "+busyOne+"\n", bgSession{ID: bgShortID, SessionID: bgID, Name: busyOne})
 	force := a.agentStartCmd()
 	force.SilenceErrors, force.SilenceUsage = true, true
-	force.SetArgs([]string{busyOne, brief, "--dir", dir, modeFlag, config.ModeBackground, "--force"})
+	force.SetArgs(append(slices.Clone(startArgs), modeFlag, config.ModeBackground, "--force"))
 	if err := force.Execute(); err != nil {
 		t.Fatalf("agents start --force at the local ceiling = %v", err)
 	}

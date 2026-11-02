@@ -2064,7 +2064,8 @@ and a crash both start a fresh session.
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
   resume at …`).
 - **Review headroom:** `capacity.reviewHeadroom` (default 2, zero disables it) reserves
-  extra subscription sessions above a positive worker ceiling for `--review` starts.
+  extra subscription sessions above a positive worker ceiling for `--review` starts, and as
+  many above a positive `capacity.local.ceiling`.
   Reviews run before new workers within a supervisor pass. Memory, swap, load, lab
   and build guards, usage window stops and weekly pace still apply. `capacity` and
   its JSON show the reserve, occupancy above the worker ceiling and busy sessions.
@@ -2086,8 +2087,10 @@ and a crash both start a fresh session.
   which bounds the subscriptions across the desk and its execution hosts: every busy agent whose
   session runs locally counts, a self-hosted provider's included; an agent on an execution host
   counts against that host's `maxBusy` and never against it. Every local start, the loop's and
-  one by hand, worker, reviewer and resume alike, is refused at it (`no start: N busy locally at
-  capacity.local.ceiling N`); `capacity` prints it as its `local:` line (`--json` `local`). Unset,
+  one by hand, worker and resume alike, is refused at it (`no start: N busy locally at
+  capacity.local.ceiling N`); a review, which runs only on the coordinator, may use
+  `capacity.reviewHeadroom` above it as above the worker ceiling (`… plus review headroom N`), the
+  machine's guards still applying. `capacity` prints it as its `local:` line (`--json` `local`). Unset,
   there is no local cap; 0 refuses every unforced local start. `beekeeper capacity` (and
   `--json`) prints the count, the headroom that bounds a new start (MemAvailable against
   `capacity.availMinMiB`, disk swap's growth over the watch's readings of `watch.swapWindow` against
