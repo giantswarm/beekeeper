@@ -82,3 +82,16 @@ func TestMergeLiveFailureDeniesWithoutConsumption(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeAuthorizationIdentityRefusalNamesPresentedAndExpected(t *testing.T) {
+	_, _, root := testMergeGrant(t)
+	for id, want := range map[string]string{
+		"":          "none presented, expected the ID of a supervisor-issued grant",
+		"../escape": `"../escape": expected the ID of a supervisor-issued grant`,
+	} {
+		_, err := ReadMergeAuthorization(root, id)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("identity %q: %v, want %q", id, err, want)
+		}
+	}
+}
