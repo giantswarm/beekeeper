@@ -73,7 +73,7 @@ Without a subcommand, lists the leases.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.leaseList() },
 	}
-	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(), a.leaseKubeconfigCmd(), a.leaseLabCmd(labUp), a.leaseLabCmd(labDown),
+	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(), a.leaseKubeconfigCmd(), a.leaseLabCmd(labUp), a.leaseLabCmd(labDown), a.leaseResumeCmd(),
 		a.leaseGrantCmd(), a.leaseRevokeCmd())
 	return c
 }
@@ -250,6 +250,12 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 				return err
 			}
 			if a.cfg.LabCluster(res) != "" {
+				if err := a.resumeLab(cmd.Context(), res); err != nil {
+					return fmt.Errorf("%s is held by you, but its kind nodes could not be started (retry the claim): %w", res, err)
+				}
+				if lab := a.claimedLab(res); strings.Contains(lab, ", running)") {
+					msg = strings.Replace(msg, " (kind cluster "+a.cfg.LabCluster(res)+", not running)", lab, 1)
+				}
 				msg += a.claimKubeconfig(cmd.Context(), res)
 			}
 			_, err = fmt.Fprintln(a.out, msg)
@@ -317,6 +323,7 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 	}
 	var msg string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		delete(st.LabIdle, res)
 		holders, err := dir.List()
 		if err != nil {
 			return nil, err

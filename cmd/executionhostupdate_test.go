@@ -68,19 +68,19 @@ func hostUpdateServer(t *testing.T, a *app, version string) *execution.Server {
 	return s
 }
 
-// hostInstall replaces the host's install, its rollback and the installed
+// hostInstall replaces the host's install and the installed
 // release's prepare: install records its calls, prepare answers answer.
 type hostInstall struct {
-	installs, rollbacks, restarts []string
-	prepareArgs                   []string
-	answer                        execution.HostUpdate
+	installs, restarts []string
+	prepareArgs        []string
+	answer             execution.HostUpdate
 }
 
 func stubHostInstall(t *testing.T, h *hostInstall) {
 	t.Helper()
-	install, rollback, prepare, restart := installVersion, rollbackInstall, runHostPrepare, restartOnInstalled
+	install, prepare, restart := installVersion, runHostPrepare, restartOnInstalled
 	t.Cleanup(func() {
-		installVersion, rollbackInstall, runHostPrepare, restartOnInstalled = install, rollback, prepare, restart
+		installVersion, runHostPrepare, restartOnInstalled = install, prepare, restart
 	})
 	restartOnInstalled = func(_ context.Context, _ *app, path string, _ time.Time) {
 		h.restarts = append(h.restarts, path)
@@ -88,10 +88,6 @@ func stubHostInstall(t *testing.T, h *hostInstall) {
 	installVersion = func(_ context.Context, _ io.Writer, version string) (update.Result, error) {
 		h.installs = append(h.installs, version)
 		return update.Result{Latest: version, Path: sshTestExecutable, Updated: true}, nil
-	}
-	rollbackInstall = func(path string) error {
-		h.rollbacks = append(h.rollbacks, path)
-		return nil
 	}
 	runHostPrepare = func(_ context.Context, path string, args ...string) ([]byte, error) {
 		h.prepareArgs = append([]string{path}, args...)
@@ -126,8 +122,8 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	if got != want {
 		t.Fatalf("self-update answered %+v, want the installed release's %+v", got, want)
 	}
-	if !slices.Equal(h.installs, []string{hostNewRelease}) || len(h.rollbacks) != 0 || !slices.Equal(h.restarts, []string{sshTestExecutable}) {
-		t.Errorf("installs %v, rollbacks %v, restarts %v", h.installs, h.rollbacks, h.restarts)
+	if !slices.Equal(h.installs, []string{hostNewRelease}) || !slices.Equal(h.restarts, []string{sshTestExecutable}) {
+		t.Errorf("installs %v, restarts %v", h.installs, h.restarts)
 	}
 	wantArgs := []string{sshTestExecutable, "--" + configFlag, s.ConfigPath, agentsName, "hosts", "self-update", "--protocol", "1", "--" + hostVersionFlag, hostNewRelease}
 	if !slices.Equal(h.prepareArgs, wantArgs) {
@@ -135,7 +131,7 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	}
 }
 
-func TestHostSelfUpdateRollsBackAReleaseThatDoesNotPrepare(t *testing.T) {
+func TestHostSelfUpdateHoldsAReleaseThatDoesNotPrepare(t *testing.T) {
 	for name, answer := range map[string]execution.HostUpdate{
 		"the release refuses":   {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, Error: "policy bundle differs"},
 		"the release no digest": {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease},
@@ -151,14 +147,14 @@ func TestHostSelfUpdateRollsBackAReleaseThatDoesNotPrepare(t *testing.T) {
 			h := &hostInstall{answer: answer}
 			stubHostInstall(t, h)
 			got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
-			if !strings.Contains(got.Error, "rolled back to "+hostOldRelease) || got.PolicyDigest != "" {
-				t.Fatalf("self-update answered %+v, want a rollback", got)
+			if !strings.Contains(got.Error, "did not prepare its policy") || got.PolicyDigest != "" {
+				t.Fatalf("self-update answered %+v, want a prepare failure", got)
 			}
-			if !slices.Equal(h.rollbacks, []string{sshTestExecutable}) || len(h.restarts) != 0 {
-				t.Errorf("rollbacks %v, restarts onto the rolled back release %v", h.rollbacks, h.restarts)
+			if len(h.restarts) != 0 {
+				t.Errorf("restarts onto an unprepared release %v", h.restarts)
 			}
-			if _, err := s.InstalledPolicy(); err != nil {
-				t.Errorf("the rolled back release's policy is not prepared again: %v", err)
+			if got, err := os.ReadFile(filepath.Join(s.Root, "CLAUDE.md")); err != nil || string(got) != "the new release's rules" {
+				t.Errorf("failed prepare restored old policy: %q, %v", got, err)
 			}
 		})
 	}
