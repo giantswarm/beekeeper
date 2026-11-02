@@ -145,7 +145,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -196,6 +196,9 @@ const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
+	Draft       bool   `json:"isDraft"`
+	Mergeable   string `json:"mergeable"`
+	MergeState  string `json:"mergeStateStatus"`
 	MergeCommit struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -315,7 +318,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -412,18 +415,12 @@ its key first in the detail):
             the same failure seen again wakes nobody, a new head or a new
             park on the same head is told again. None after the head's
             merge go; a red head gets no review
-  go        every check on the head green, and either the last round's
-            verdict approves that head, or the worker parked after the
-            approval on a head the approval covers, or no round is left,
-            its verdict asked for changes, they
-            were forwarded and the worker parked again on a new head (its
-            fixes) that is more than bringing in the base: the merge go for
-            that head, told to the worker (agents wake) with the merge
-            command of the repository's path: the gate's devctl pr merge
-            <repo> <n> --update-branch on a repository of
-            merge.devctlOwners, whose base update the go covers, else gh
-            pr merge --match-head-commit <head> (--admin --match-head-commit
-            <head> where merge.admin lists the repository). An approval covers a head
+  merge     every check on the head green and the review policy releases it:
+            the loop merges it through the gate with its exact reviewed head,
+            configured merge.methods (default squash) and merge.admin flags.
+            No worker wakes for the mechanical merge. Behind or conflicting
+            branches go back for repair; other gate refusals stay barriers.
+            The gate never updates a pinned branch. An approval covers a head
             that only brings the base into the approved one: the approved
             head is its ancestor, every commit it adds is a merge, and its
             change against its merge base with the base branch is the
@@ -472,7 +469,11 @@ its key first in the detail):
             that one pull request is the desk's from then on, reviewed and
             given the go as its own team's; any other answer goes to the
             worker word for word
-  end       a reviewed pull request merged or closed: its tracking ends
+  end       a reviewed pull request merged or closed: its tracking ends.
+            New review parks declare remaining work with --post-merge: the
+            loop wakes that worker for it; with no remaining work it closes
+            the task and records its report without a wake. Older parks
+            retain their release-containment behavior.
   done      agents.done: once its turn ends, the agent leaves the roster
             (agents remove); the loop retires a session beekeeper started
             the same way, once its turn ends: a reviewer once the loop
@@ -491,7 +492,7 @@ its key first in the detail):
             under agents.archiveAgreement and stopping finished or relieved
             background sessions). A session its person started is never
             retired
-  next      after a done, and every pass below capacity.floor while capacity
+  next      after a done, and every pass below capacity.ceiling while capacity
             has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none
@@ -928,7 +929,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	for _, e := range answers {
-		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name {
+		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) && an.unverified(answerQuery{Note: an.ID, About: an.About}, a.central, a.now) == "" {
 			in.Answers = append(in.Answers, superloop.Answer{Ref: an.About, Note: an.ID, Question: an.Question, Text: an.Answer, By: an.For, At: an.At})
 		}
 	}
@@ -961,6 +962,28 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 				l.merged = map[string]superloop.Pull{}
 			}
 			l.merged[ref] = p
+		}
+	}
+	// A merge may have landed before its completion record was saved. The
+	// planner sees a merged PR then, so reconcile its pending claim before
+	// planning the end and retaining its worker for any post-merge work.
+	if !l.dryRun {
+		for key, c := range claims {
+			tuple, ok := strings.CutPrefix(key, "go ")
+			if !ok {
+				continue
+			}
+			ref, head, ok := strings.Cut(tuple, "@")
+			p, present := in.Pulls[ref]
+			if !ok || !present || p.State != superloop.Merged || p.Head != head {
+				continue
+			}
+			act := superloop.Action{Key: key, Kind: superloop.KindGo, Ref: ref, URL: p.URL, Head: head, Agent: c.target}
+			if err := l.record(act, "merged before an interruption; confirmed at "+head); err != nil {
+				return err
+			}
+			in.Taken = append(in.Taken, superloop.Taken{Key: key, Kind: superloop.KindGo, Ref: ref, Agent: c.target, At: a.now})
+			delete(claims, key)
 		}
 	}
 	l.postMerge = superloop.ReleaseWorkers(in)
@@ -999,7 +1022,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		in.Release = l.newerRelease(ctx)
 	}
 	planned := map[string]bool{}
-	for _, act := range superloop.Plan(in) {
+	for _, act := range append(superloop.Plan(in), orphanedReviewClaims(claims, in)...) {
 		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
 			planned[act.Agent] = true
 		}
@@ -1127,7 +1150,9 @@ func would(act superloop.Action) string {
 		return fmt.Sprintf("send its %s to the guide", act.Event.Verb)
 	case superloop.KindIntake:
 		return fmt.Sprintf("put %s on the board in Backlog and rank it", act.URL)
-	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
+	case superloop.KindGo:
+		return "merge " + act.URL + " at " + act.Head
+	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
 	return truncate(oneLine(act.Message), 300)
@@ -1136,10 +1161,14 @@ func would(act superloop.Action) string {
 // record logs act taken, which no pass takes again, and says it.
 func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	detail := superloop.Detail(act, what)
-	if err := l.a.store.Record(about(event(loopParty, "supervisor."+act.Kind, "%s", detail), act.Ref)); err != nil {
+	kind := act.Kind
+	if kind == superloop.KindGo {
+		kind = superloop.KindMerge
+	}
+	if err := l.a.store.Record(about(event(loopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(act.Kind), escapedLine(detail))
+	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(kind), escapedLine(detail))
 	return err
 }
 
@@ -1148,6 +1177,42 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 type loopClaim struct {
 	at     time.Time
 	target string
+}
+
+// orphanedReviewClaims reports a pending review whose verified park is gone.
+// Claims remain in the event log, so the warning must be durable across loop
+// restarts too. It does not complete the claim: a later park can still use it.
+func orphanedReviewClaims(claims map[string]loopClaim, in superloop.Input) []superloop.Action {
+	keys := make([]string, 0, len(claims))
+	for key := range claims {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	var out []superloop.Action
+	for _, key := range keys {
+		pending, ok := strings.CutPrefix(key, "review ")
+		if !ok {
+			continue
+		}
+		ref, head, ok := strings.Cut(pending, "@")
+		pr, valid := parseRef(ref)
+		if !ok || !valid || head == "" {
+			continue
+		}
+		if slices.ContainsFunc(in.Workers, func(w superloop.Worker) bool {
+			return w.ReviewRequested && strings.EqualFold(w.ParkedOn, ref)
+		}) {
+			continue
+		}
+		warning := "leave " + key + " orphaned"
+		if slices.ContainsFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == warning }) {
+			continue
+		}
+		url := fmt.Sprintf("https://github.com/%s/pull/%d", pr.Repo, pr.N)
+		out = append(out, superloop.Action{Key: warning, Kind: superloop.KindLeave, Ref: ref, URL: url,
+			Message: fmt.Sprintf("%s head %s: orphaned pending review claim; no worker holds a verified review park; claim retained for a new park", url, head)})
+	}
+	return out
 }
 
 // keyed reads a loop line's detail: "[<key>] <rest>".
@@ -1184,8 +1249,16 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	switch act.Kind {
 	case superloop.KindReview, superloop.KindNext:
 		done = logged(verbStart, opens)
-	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
+	case superloop.KindGo:
+		p, err := readLoopPull(ctx, act.Ref)
+		if err != nil {
+			return "", false, err
+		}
+		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens)
+	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		done = logged("agents.wake", opens)
+	case superloop.KindEnd:
+		done = logged("agents.wake", opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done })
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
@@ -1392,24 +1465,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindReview:
 		return l.startReviewer(ctx, act)
 	case superloop.KindGo:
-		for _, worker := range st.Agents {
-			if worker.Name != act.Agent || worker.Execution == nil {
-				continue
-			}
-			ref, ok := parseRef(act.Ref)
-			if !ok {
-				return "", errors.New("invalid remote merge pull request")
-			}
-			grant, err := a.issueExecutionMerge(ctx, *worker.Execution, ref.Repo, ref.N, act.Head, loopParty)
-			if err != nil {
-				return "", err
-			}
-			act.Message = fmt.Sprintf("Merge %s at reviewed head %s using: beekeeper agents merge %s %d --head %s --authorization %s. The grant expires at %s; if it expires, park for a new supervisor go.", act.URL, act.Head, ref.Repo, ref.N, act.Head, grant.ID, grant.ExpiresAt.Format(time.RFC3339))
-		}
-		if err := l.wake(ctx, act); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("merge go for %s at %s, told", act.URL, act.Head), nil
+		return l.mergePull(ctx, st, act)
 	case superloop.KindForward:
 		if err := l.wake(ctx, act); err != nil {
 			return "", err
@@ -1452,7 +1508,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindLeave, superloop.KindOverride:
 		return act.Message, nil
 	case superloop.KindEnd:
-		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
+		return l.endMerged(ctx, st, act)
 	case superloop.KindDone:
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent })
 		if i < 0 {
