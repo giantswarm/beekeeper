@@ -225,3 +225,25 @@ func TestServerError(t *testing.T) {
 		}
 	}
 }
+
+// A wait that ended on checks that never reported while the head carries no
+// Actions run is a head whose workflows never started; one with an Actions
+// run, or any other verdict, is not.
+func TestNoRuns(t *testing.T) {
+	for _, c := range []struct {
+		doc  string
+		want bool
+	}{
+		{`{"exitCode":4,"verdict":"required_missing","reason":"required status context build never reported","checks":[]}`, true},
+		{`{"exitCode":4,"verdict":"required_missing","checks":[{"name":"gate","source":"check_run"},{"name":"ci","source":"status"}]}`, true},
+		{`{"exitCode":4,"verdict":"no_checks","reason":"workflows ci never started: close and reopen the pull request"}`, true},
+		{`{"exitCode":4,"verdict":"required_missing","checks":[{"name":"test","source":"check_run","workflow":"ci"}]}`, false},
+		{`{"exitCode":4,"verdict":"approval_required","checks":[]}`, false},
+		{`{"exitCode":1,"verdict":"red","checks":[]}`, false},
+		{``, false},
+	} {
+		if got := NoRuns([]byte(c.doc)); got != c.want {
+			t.Errorf("NoRuns(%s) = %v, want %v", c.doc, got, c.want)
+		}
+	}
+}
