@@ -551,7 +551,10 @@ kube guard is off and `beekeeper snapshot` says so):
   `kubectl gs update app …` are refused; a plugin subcommand that reads (`get`, `list`, `describe`,
   `logs`, `top`, `status`, `version`, `template`, …) and the read-only plugins (`tree`,
   `access-matrix`, `resource-capacity`, `who-can`, `neat`, `krew`, `oidc-login`, `ns`) pass. Every other
-  plugin subcommand counts as a write.
+  plugin subcommand counts as a write. `kubectl-gs template cluster` passes against any
+  context, including with value-taking global flags before `template` (`--cache-dir`,
+  `--certificate-authority`, `--client-certificate`, `--client-key`, `--as-uid`,
+  `--tls-server-name`). Those values never select a read or write subcommand.
 
 Each guard sees through prefix commands, pipelines and lists, `$( )`, shell `-c` strings and
 here-documents fed to a shell, and kubectl or a kubectl plugin run through a shell function or a variable. Quoted text
