@@ -222,7 +222,7 @@ func TestWatchBatchDoctorFailuresAreImmediate(t *testing.T) {
 		name, line string
 		chore      bool
 	}{
-		{name: "stale state writer", line: staleLine(&proc.Process{PID: 123, Args: []string{"beekeeper", "serve"}})},
+		{name: "stale state writer", line: staleLine(&proc.Process{PID: 123, Args: []string{pluginName, agentsName, agentStartName}})},
 		{name: "failed unit reset", line: "the failed units beekeeper-worker.service stay failed: access denied", chore: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
