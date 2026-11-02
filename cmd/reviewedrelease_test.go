@@ -48,7 +48,7 @@ func TestReviewFixReleaseMetadataSettlesLanesAndToolHolds(t *testing.T) {
 				}
 				return []byte(tc.raw), nil
 			}
-			result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.repo, Number: g.pr, MergeCommitSha: "abc"}, true)
+			result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.repo, Number: g.pr, MergeCommitSha: loopFixed}, true)
 			raw, err := json.Marshal(result)
 			if err != nil {
 				t.Fatal(err)
@@ -78,7 +78,7 @@ func TestReviewFixReleaseMetadataRequiresTheInstallationRoll(t *testing.T) {
 	waitReviewedRelease = func(context.Context, string, int) ([]byte, error) {
 		return []byte(`{"verdict":"available","tag":"v1.2.4"}`), nil
 	}
-	result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.repo, Number: g.pr, MergeCommitSha: "abc"}, true)
+	result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: g.repo, Number: g.pr, MergeCommitSha: loopFixed}, true)
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func TestReviewFixUnconfirmedReleaseRemainsExplicit(t *testing.T) {
 	was := waitReviewedRelease
 	t.Cleanup(func() { waitReviewedRelease = was })
 	waitReviewedRelease = func(context.Context, string, int) ([]byte, error) { return nil, errors.New("release read unavailable") }
-	result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: scratchRepo, Number: 7, MergeCommitSha: "abc"}, true)
+	result := completeReviewedRelease(t.Context(), github.SquashDoc{Repo: scratchRepo, Number: 7, MergeCommitSha: loopFixed}, true)
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)

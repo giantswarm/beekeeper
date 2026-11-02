@@ -64,7 +64,7 @@ func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 				if !roster {
 					me = offSession
 				}
-				line, err := w.park(me, refOne, "waiting", "")
+				line, err := w.park(me, refOne, deskReviewWait, "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -155,7 +155,7 @@ func TestReviewFixQueuedMergeIsNotSubmittedAgain(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				return "queued", ExitGateQueued
+				return "", ExitGateQueued
 			}
 			r.pass(t)
 			for range 2 {
@@ -181,7 +181,7 @@ func TestReviewFixGateRefusalsNeverRequestBranchRepair(t *testing.T) {
 		code    int
 		message string
 	}{
-		{ExitGateQueued, "queued"},
+		{ExitGateQueued, "gate queued"},
 		{ExitGateDuplicate, "is already queued in lane"},
 		{ExitGateDuplicate, "is already merging"},
 		{ExitGateRefused, "waited for its turn behind the running merge"},
