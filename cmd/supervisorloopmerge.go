@@ -24,11 +24,16 @@ func pullNeedsBranchRepair(p superloop.Pull) bool {
 	return p.Draft || p.Mergeable == "CONFLICTING" || p.MergeState == "BEHIND"
 }
 
+func ghMergeNeedsBranchRepair(reason string) bool {
+	lower := strings.ToLower(reason)
+	return strings.Contains(lower, "conflict") || strings.Contains(lower, "behind") || strings.Contains(lower, "out of date") || strings.Contains(lower, "out-of-date") || strings.Contains(lower, "cannot be cleanly created")
+}
+
 // mergePull executes the planner's exact-head decision in the coordinator,
 // including for workers on an execution host. When the coordinator's pinned
 // merge step is broken on an open, green, approved head, it falls back
-// automatically to a gated devctl pr merge and then to directing the worker
-// session to merge that exact head, never asking the person.
+// automatically to directing the worker session to merge that exact head,
+// never asking the person.
 func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act superloop.Action) (string, error) {
 	a := l.a
 	ref, ok := parseRef(act.Ref)
@@ -103,7 +108,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
-	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
+	if mutationResult && code == github.SquashNotApplicable {
 		if reply.Reason != "" {
 			out = reply.Reason
 		}
@@ -115,39 +120,24 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		}
 		return "merge failed; branch repair requested", nil
 	}
-	if !pullNeedsBranchRepair(p) {
-		out, code, err = beekeeperRun(ctx, l.as(gateCmdName, "--limit", "0", "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))...)
-		p, readErr = readLoopPull(ctx, act.Ref)
-		if readErr != nil {
-			return "", readErr
+	if !pullNeedsBranchRepair(p) && act.Agent != "" && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent && ag.Execution != nil }) {
+		if err := l.record(act, loopWorkerMergeGo); err != nil {
+			return "", err
 		}
-		if p.State == superloop.Merged {
-			if p.Head != act.Head {
-				return "", refused("merged head differs from the reviewed head; reconciliation required")
-			}
-			return fmt.Sprintf("merged %s at %s (merge commit %s)", act.URL, p.Head, p.MergeCommit), nil
+		if err := l.wake(ctx, act); err != nil {
+			_ = a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", act.Key, err.Error()), act.Ref))
+			return "", err
 		}
-		if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate) {
-			return "", errLoopLater
-		}
-		if err == nil && (code == ExitGateUnread || code == ExitGateRefused) {
-			return "", refused("merge gate refused: %s", oneLine(out))
-		}
-		if p.State != superloop.Open || p.Head != act.Head || !p.Green {
-			return "", refused("merge head moved or current CI is not green")
-		}
-		if !pullNeedsBranchRepair(p) && act.Agent != "" && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent && ag.Execution != nil }) {
-			if err := l.wake(ctx, act); err != nil {
-				return "", err
-			}
-			return loopWorkerMergeGo, nil
-		}
+		return loopWorkerMergeGo, nil
 	}
 	if err != nil {
 		return "", err
 	}
 	if code == 0 {
 		return "", refused("merge command ended without a confirmed merge")
+	}
+	if mutationResult && reply.Reason != "" {
+		out = reply.Reason
 	}
 	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
 }
@@ -328,9 +318,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	out, stderr, code, runErr := loopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
-	doc.ExitCode = code
 	if runErr != nil {
-		doc.ExitCode = github.SquashTooling
 		doc.Reason = runErr.Error()
 	}
 	p, err = readLoopPull(ctx, ref)
@@ -339,13 +327,26 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = err.Error()
 		return doc
 	}
-	if p.State == superloop.Merged && p.Head == head {
+	switch {
+	case p.State == superloop.Merged && p.Head == head:
 		doc.ExitCode = 0
 		doc.MergeCommitSha = p.MergeCommit
 		doc.Verdict = "merged"
-	} else if doc.ExitCode == 0 {
+	case p.State != superloop.Open || p.Head != head || !p.Green:
+		doc.ExitCode = github.SquashRefused
+		if doc.Reason == "" {
+			doc.Reason = "merge head moved or current CI is not green"
+		}
+	case pullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
+		doc.ExitCode = github.SquashNotApplicable
+		if doc.Reason == "" {
+			doc.Reason = "branch is draft, behind or conflicts with its base"
+		}
+	default:
 		doc.ExitCode = github.SquashTooling
-		doc.Reason = "merge not confirmed"
+		if code == 0 && runErr == nil && doc.Reason == "" {
+			doc.Reason = "merge not confirmed"
+		}
 	}
 	return doc
 }

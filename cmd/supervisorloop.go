@@ -928,6 +928,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			claims[key] = loopClaim{at: e.At, target: rest}
 		case e.Verb == loopClaimEndVerb:
 			delete(claims, key)
+			in.Taken = slices.DeleteFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == key })
 		case e.Verb == loopStageVerb:
 			stages[key] = true
 			stageDetail[key] = rest
@@ -1097,8 +1098,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := l.record(act, what); err != nil {
-			return err
+		if act.Kind != superloop.KindGo || what != loopWorkerMergeGo {
+			if err := l.record(act, what); err != nil {
+				return err
+			}
 		}
 	}
 	if !l.dryRun {
@@ -1210,7 +1213,7 @@ func would(act superloop.Action) string {
 func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	detail := superloop.Detail(act, what)
 	kind := act.Kind
-	if kind == superloop.KindGo && what != loopWorkerMergeGo {
+	if kind == superloop.KindGo && !strings.HasPrefix(what, loopWorkerMergeGo) {
 		kind = superloop.KindMerge
 	}
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
@@ -1302,7 +1305,16 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		if err != nil {
 			return "", false, err
 		}
-		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens)
+		if p.State == superloop.Merged && p.Head == act.Head {
+			done = true
+			break
+		}
+		if logged("agents.wake", opens) {
+			if p.State == superloop.Open && p.Head == act.Head && p.Green && !pullNeedsBranchRepair(p) {
+				return fmt.Sprintf("%s before an interruption: %s, as the log shows", loopWorkerMergeGo, c.target), true, nil
+			}
+			done = true
+		}
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		done = logged("agents.wake", opens)
 	case superloop.KindEnd:
