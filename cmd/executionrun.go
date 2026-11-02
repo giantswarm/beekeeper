@@ -19,7 +19,7 @@ func (a *app) executionRunOptions(ctx context.Context, options *guard.Options) e
 	if err != nil {
 		return err
 	}
-	if p.Digest() != j.Request.PolicyDigest {
+	if p.Digest() != j.BoundPolicy() {
 		return refused("execution policy changed before the capped run")
 	}
 	var authority executionAuthority

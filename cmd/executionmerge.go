@@ -212,7 +212,7 @@ func (a *app) executionMergeCmd() *cobra.Command {
 			return err
 		}
 		policy, policyErr := s.InstalledPolicy()
-		if policyErr != nil || policy.Digest() != j.Request.PolicyDigest || j.StopRequest != nil {
+		if policyErr != nil || policy.Digest() != j.BoundPolicy() || j.StopRequest != nil {
 			return refused("remote merge policy changed or execution stopped")
 		}
 		if !execution.SupportedHarness(j.Request.Harness) {
