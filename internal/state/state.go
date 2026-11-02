@@ -343,11 +343,13 @@ type Park struct {
 	ReviewHead string `json:"reviewHead,omitempty"`
 	// PostMerge is work remaining after merge; nil preserves older parks.
 	// An explicit empty string lets the loop close the task without a wake.
-	PostMerge *string   `json:"postMerge,omitempty"`
-	By        Party     `json:"by"`
-	At        time.Time `json:"at"`
-	On        string    `json:"on,omitempty"`
-	Waits     string    `json:"waits"`
+	PostMerge *string `json:"postMerge,omitempty"`
+	// Worktree is the local git worktree root the caller parked from.
+	Worktree string    `json:"worktree,omitempty"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	On       string    `json:"on,omitempty"`
+	Waits    string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -825,7 +827,17 @@ type ExecutionRecord struct {
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
 	Published *ExecutionPublication `json:"published,omitempty"`
-	rest      rest
+	// StartUnsent says no start request of this reservation has left the
+	// coordinator yet, so the host holds no journal of it. A reservation
+	// recorded before this field existed reads false: maybe sent.
+	StartUnsent bool `json:"startUnsent,omitempty"`
+	// StartSentAt is when the coordinator last sent its start request.
+	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// ReleasedAt is when a reservation the host never acknowledged was
+	// given up, ReleaseReason why: it holds no host or desk slot since.
+	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
+	ReleaseReason string    `json:"releaseReason,omitempty"`
+	rest          rest
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
@@ -847,11 +859,18 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if r.Released() {
+		return true
+	}
 	if r.StopRequest != nil && !r.Observation.StopAcknowledged {
 		return false
 	}
 	return r.Observation.StopAcknowledged || r.Observation.ProcessState == execution.Exited || r.Observation.ProcessState == execution.Failed
 }
+
+// Released says the reservation was given up before its host acknowledged
+// a start: no process of it can exist.
+func (r *ExecutionRecord) Released() bool { return !r.ReleasedAt.IsZero() }
 
 // Archive is the desktop session of an agent that left the roster while
 // its archive could not be done (its CLI ran a turn, no steward recorded
@@ -1084,6 +1103,7 @@ type State struct {
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
 	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
+	ReviewParks   []ReviewPark   `json:"reviewParks,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.

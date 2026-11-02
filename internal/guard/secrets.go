@@ -177,6 +177,10 @@ var kubectlValue = map[string]bool{
 	"-l": true, "--selector": true, "-o": true, flagOutput: true, "--field-selector": true, flagTemplate: true,
 	"-f": true, "--filename": true, "-c": true, "--container": true, "--sort-by": true, "--chunk-size": true, "--label-columns": true, "-L": true,
 	"--raw": true,
+	// Global flags shared with kubectl-gs: values before a verb or plugin
+	// subcommand must not select it, including read-looking values.
+	"--as-uid": true, "--cache-dir": true, "--certificate-authority": true,
+	"--client-certificate": true, "--client-key": true, "--tls-server-name": true,
 }
 
 // secretGuard is the Secret guard of one call: the commands that unlock the
@@ -267,12 +271,19 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	// dirs: where a relative path may point, the working directory and
 	// every directory the command line changes to.
 	dirs := []string{g.cwd}
+	// Keep hypothetical cd targets too: fixtures and paths created by this
+	// command need not exist yet for a later read to require inspection.
 	for _, m := range cdArg.FindAllStringSubmatch(sc.plain, -1) {
 		d := wordPath(strings.Trim(m[1], `'"`), g.cwd)
 		if d == "" {
 			d = within(g.cwd, m[1])
 		}
 		dirs = append(dirs, d)
+	}
+	for _, st := range walkSegments(sc, g.cwd, false) {
+		if st.dir != "" && !slices.Contains(dirs, st.dir) {
+			dirs = append(dirs, st.dir)
+		}
 	}
 	vars := scanVars(sc, segs)
 	metadata, funcs := metadataFunctions(cmd), functionBodies(cmd)

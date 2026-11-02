@@ -141,7 +141,7 @@ func handoverPrompt(t *testing.T, a *app, out *bytes.Buffer) string {
 	return out.String()
 }
 
-// standing.md reaches the guide's hand-over verbatim, and a desk without
+// standing.md reaches the guide's prompt by reference, and a desk without
 // one prints no section for it.
 func TestStandingInstructionsReachTheHandover(t *testing.T) {
 	a, out := noteApp(t)
@@ -152,8 +152,8 @@ func TestStandingInstructionsReachTheHandover(t *testing.T) {
 	if err := os.WriteFile(a.standingPath(), []byte(standingText+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if p := handoverPrompt(t, a, out); !strings.Contains(p, "### Standing instructions") || !strings.Contains(p, standingText) {
-		t.Errorf("the standing instructions are not carried verbatim:\n%s", p)
+	if p := handoverPrompt(t, a, out); !strings.Contains(p, "### Standing instructions") || !strings.Contains(p, a.standingPath()) || strings.Contains(p, standingText) {
+		t.Errorf("the standing instructions are not referenced:\n%s", p)
 	}
 }
 
