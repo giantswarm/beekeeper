@@ -118,6 +118,11 @@ func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUs
 	if current.Author != result.Author || current.Head != use.Head || current.Commit != use.Head || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
 		return refused("authenticated independent review changed; new supervisor approval required")
 	}
+	// The loop's own merge presents no grant: it is the merge authority, so
+	// only a worker's grant is checked against the review it was issued for.
+	if use.ID == "" {
+		return nil
+	}
 	grant, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID)
 	if err == nil && (grant.DeskReviewID != round.ID || grant.ReviewID != result.ID || grant.ReviewDigest != result.BodyDigest) {
 		return refused("merge authorization belongs to a different independent review result")
