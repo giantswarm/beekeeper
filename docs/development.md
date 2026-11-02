@@ -534,12 +534,14 @@ relay still does not verify. The central instance retains its authenticated iden
 
 `agents.models` is an ordered list of `{match: <name regexp>, model: <selector>}`,
 optionally restricted by `kind`. A start's `--kind` defaults to `worker`, or
-`review` with `--review`. The first matching rule selects the model before
+`review` with `--review`. The first matching rule with a nonempty model selects it before
 provider capacity is evaluated. `--model` overrides the rules. Without a match,
 Claude uses `agents.model`, Codex uses `codex.model`, and omp uses `omp.model`;
 with capacity choices and no explicit model, the capacity pick supplies both
 harness and model. `agents.requireModel: true` refuses an unresolved model with
 exit 3, including dry runs, rather than allowing a harness default.
+Rules without a model are skipped for model selection, allowing independent
+settings to match without masking a later model rule or the fallback.
 
 `guide.model` selects the model for both relayed and standby-started successors,
 ahead of the previous holder's model. Without it the holder's model is retained,

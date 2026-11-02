@@ -929,7 +929,7 @@ type Agents struct {
 	// Model is the model of a session beekeeper starts when the start names
 	// none (--model, a successor's holder's); empty: Claude Code's default.
 	Model string `yaml:"model"`
-	// Models is ordered: the first name regexp (and optional task kind) wins.
+	// Models is ordered: the first matching nonempty model wins.
 	Models []AgentModelRule `yaml:"models"`
 	// RequireModel refuses omission rather than using a harness default.
 	RequireModel bool `yaml:"requireModel"`
@@ -942,9 +942,13 @@ type AgentModelRule struct {
 	Model string `yaml:"model"`
 }
 
-// ModelFor returns the first matching model, then the desk-wide fallback.
+// ModelFor returns the first matching nonempty model, then the desk-wide
+// fallback. A rule may leave the model unset for independent settings.
 func (a Agents) ModelFor(name, kind string) string {
 	for _, r := range a.Models {
+		if strings.TrimSpace(r.Model) == "" {
+			continue
+		}
 		if r.Kind != "" && r.Kind != kind {
 			continue
 		}
@@ -3646,8 +3650,8 @@ func (c *Config) validate() error {
 		if _, err := regexp.Compile(r.Match); err != nil {
 			return fmt.Errorf("agents.models[%d].match: %w", i, err)
 		}
-		if strings.TrimSpace(r.Match) == "" || strings.TrimSpace(r.Model) == "" {
-			return fmt.Errorf("agents.models[%d]: match and model are required", i)
+		if strings.TrimSpace(r.Match) == "" {
+			return fmt.Errorf("agents.models[%d]: match is required", i)
 		}
 	}
 	for kind, p := range c.Capacity.TaskPolicies {

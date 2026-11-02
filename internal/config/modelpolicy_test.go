@@ -12,6 +12,8 @@ func TestAgentModelRules(t *testing.T) {
   requireModel: true
   model: fallback
   models:
+    - {match: '^scan'}
+    - {match: '^fix', model: '  '}
     - {match: '^scan', kind: audit, model: careful}
     - {match: '^scan', model: small}
 guide: {model: guide-model}
@@ -35,7 +37,11 @@ guide: {model: guide-model}
 	if !c.Agents.RequireModel || c.Guide.Model != "guide-model" {
 		t.Fatalf("config did not retain guard and guide model")
 	}
-	for _, bad := range []string{`agents: {models: [{match: '[', model: small}]}`, `agents: {models: [{match: scan}]}`, `capacity: {taskPolicies: {audit: {minClass: -1}}}`} {
+	c.Agents.Model = ""
+	if got := c.Agents.ModelFor("fix", "worker"); got != "" {
+		t.Fatalf("model-free rule invented a model: %q", got)
+	}
+	for _, bad := range []string{`agents: {models: [{match: '[', model: small}]}`, `agents: {models: [{model: small}]}`, `capacity: {taskPolicies: {audit: {minClass: -1}}}`} {
 		if err := os.WriteFile(p, []byte(bad), 0o600); err != nil {
 			t.Fatal(err)
 		}
