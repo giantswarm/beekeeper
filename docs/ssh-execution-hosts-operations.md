@@ -241,7 +241,9 @@ read-and-review path. A review waits when coordinator review capacity is full.
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against
 their host's `maxBusy`, never against it; local self-hosted sessions count.
-Every local start, the loop's and one by hand, is refused at it. A retired remote worker is
+Every local start, the loop's and one by hand, is refused at it; a review may
+use `capacity.reviewHeadroom` above it, since reviews run only on the
+coordinator. A retired remote worker is
 stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable
