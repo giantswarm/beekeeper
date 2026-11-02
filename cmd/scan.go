@@ -249,6 +249,11 @@ func (a *app) redactResult(raw []byte) []byte {
 		ix = &guard.Index{} // the token patterns still run
 	}
 	out, r, found := guard.PostToolUse(raw, ix)
+	if len(found) == 0 {
+		if err := a.observeGuideDialog(raw); err != nil {
+			fmt.Fprintln(os.Stderr, "guide dialog result not recorded:", err)
+		}
+	}
 	if out == nil {
 		return nil
 	}

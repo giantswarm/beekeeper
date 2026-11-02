@@ -25,6 +25,7 @@ var squashPoll = 30 * time.Second
 
 func (a *app) squashMergeCmd() *cobra.Command {
 	var timeout time.Duration
+	var head string
 	c := &cobra.Command{
 		Use:    squashMergeCmd + " <owner/repo> <n>",
 		Short:  "The gate's plain squash merge for a repository devctl does not serve",
@@ -38,6 +39,15 @@ func (a *app) squashMergeCmd() *cobra.Command {
 			if err != nil || n <= 0 {
 				return exitCode(github.SquashTooling)
 			}
+			if head != "" {
+				if err := a.load(); err != nil {
+					return err
+				}
+				doc := a.reviewedMerge(cmd.Context(), args[0], n, head)
+				raw, _ := json.Marshal(doc)
+				_, _ = os.Stdout.Write(append(raw, '\n'))
+				return exitCode(doc.ExitCode)
+			}
 			doc := github.Squash{GH: github.RunGH, Repo: args[0], Number: n, Timeout: timeout, Poll: squashPoll,
 				Progress: os.Stderr, Now: time.Now, Sleep: time.Sleep}.Run(cmd.Context())
 			raw, _ := json.MarshalIndent(doc, "", "  ")
@@ -45,6 +55,7 @@ func (a *app) squashMergeCmd() *cobra.Command {
 			return exitCode(doc.ExitCode)
 		},
 	}
+	c.Flags().StringVar(&head, "head", "", "the supervisor reviewed head, merged once with the repository method and flags")
 	c.Flags().DurationVar(&timeout, "timeout", squashTimeout, "how long to wait for the head's checks")
 	return c
 }
