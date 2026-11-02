@@ -447,7 +447,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 	var reg registration
 	var holder, lastTask, harness, model string
 	var keep *state.Keep
-	var reportedProblems *state.WorkerProblems
+	var reportedProblems, ownProblems *state.WorkerProblems
 	var ownAssignedAt time.Time
 	for _, x := range st.Agents {
 		own := x.Is(me)
@@ -455,7 +455,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 			continue
 		}
 		if own {
-			reportedProblems = x.ReportedProblems
+			ownProblems = x.ReportedProblems
 			ownAssignedAt = x.AssignedAt
 		}
 		if x.Execution != nil {
@@ -487,10 +487,12 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 				holder, x.Session, reg.task, x.Task)
 		}
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
+		reportedProblems = x.ReportedProblems
 	}
 	if reg.task == "" {
 		// Idle registration keeps the last assignment's finding receipts valid.
 		reg.assignedAt = ownAssignedAt
+		reportedProblems = ownProblems
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
 	st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })

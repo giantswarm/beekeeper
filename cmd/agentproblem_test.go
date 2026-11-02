@@ -1,15 +1,21 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 const midtaskFinding = "giantswarm/beekeeper: fixture probe failed; the command returned exit 1"
@@ -58,24 +64,39 @@ func TestAgentProblemCanonicalFindings(t *testing.T) {
 }
 
 func TestAgentProblemReregisterAssignment(t *testing.T) {
-	for _, idle := range []bool{false, true} {
-		t.Run(fmt.Sprintf("idle=%t", idle), func(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		idle     bool
+		replaced bool
+	}{
+		{name: "own-open"},
+		{name: "own-idle", idle: true},
+		{name: "replacement-open", replaced: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			a, _ := noteApp(t)
 			assignedAt := a.now
+			original := state.Party{Name: agentOne, Session: "original-session"}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: sshTestTask, AssignedAt: assignedAt}}
+				st.Agents = []state.Agent{{Party: original, Task: sshTestTask, AssignedAt: assignedAt}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			runProblemTestCommand(t, a, "problem", midtaskFinding)
-			if idle {
+			if tc.idle {
 				runProblemTestCommand(t, a, verbIdle, flagProblem, midtaskFinding)
 			}
 			a.now = a.now.Add(time.Second)
+			nextParty := original
+			live := func(state.Party) bool { return true }
+			if tc.replaced {
+				nextParty = state.Party{Name: agentOne, Session: "replacement-session"}
+				live = func(p state.Party) bool { return !p.Is(original) }
+			}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				firePending(st, nil, a.now)
-				_, err := registerAgent(st, st.Agents[0].Party, func(state.Party) bool { return true }, a.now)
+				_, err := registerAgent(st, nextParty, live, a.now)
 				return nil, err
 			}); err != nil {
 				t.Fatal(err)
@@ -189,13 +210,58 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 
 func TestAgentProblemRemoteCoordinator(t *testing.T) {
 	a, request := executionTestApp(t)
-	control := execution.ControlRequest{Ref: request.Ref, ID: "problem-one", Sequence: 1, Operation: "problem", Data: mustExecutionJSON(t, strings.ReplaceAll(midtaskFinding, " ", "\n\t"))}
-	var result execution.ControlResult
-	if err := coordinatorTestCall(t, a, request, "control", control, &result, true); err == nil {
+	s := hostUpdateServer(t, a, hostNewRelease)
+	request.PolicyDigest = s.Policy().Digest()
+	j := execution.Journal{Request: request, Digest: request.Digest(), Handle: execution.Handle{Ref: request.Ref, Unit: execution.UnitName(request.Ref), ConversationID: request.ConversationID}}
+	rawJournal, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Root, string(request.Ref.Execution)+".json"), rawJournal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.OwnUnit = func() string { return j.Handle.Unit }
+	drop := true
+	s.Callback = func(ctx context.Context, _ []string, raw []byte) ([]byte, error) {
+		var out bytes.Buffer
+		if err := a.serveExecutionCoordinator(ctx, string(request.Ref.Host), bytes.NewReader(raw), &out); err != nil {
+			return nil, err
+		}
+		if drop {
+			drop = false
+			return nil, errors.New("fixture reply lost after apply")
+		}
+		return out.Bytes(), nil
+	}
+	t.Setenv(execution.EnvID, string(request.Ref.Execution))
+	runManagedCLI := func(args ...string) (string, error) {
+		t.Helper()
+		var out bytes.Buffer
+		a.out = &out
+		root := &cobra.Command{
+			Use:           project.Name,
+			SilenceUsage:  true,
+			SilenceErrors: true,
+			PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+				return a.checkExecutionCommand(cmd)
+			},
+		}
+		root.AddCommand(a.agentsCmd())
+		root.SetArgs(args)
+		root.SetOut(&out)
+		root.SetErr(&out)
+		err := root.Execute()
+		return out.String(), err
+	}
+	if _, err := runManagedCLI(agentsName, "assign", request.Name, sshTestTask); err == nil {
+		t.Fatal("disallowed command accepted in managed execution worker")
+	}
+	rawFinding := strings.ReplaceAll(midtaskFinding, " ", "\n\t")
+	if _, err := runManagedCLI(agentsName, "problem", rawFinding); err == nil {
 		t.Fatal("lost reply reported success")
 	}
-	if err := coordinatorTestCall(t, a, request, "control", control, &result, false); err != nil || result.Error != "" {
-		t.Fatal(err, result.Error)
+	if out, err := runManagedCLI(agentsName, "problem", rawFinding); err != nil || !strings.Contains(out, "problem acknowledged by coordinator") {
+		t.Fatalf("remote CLI problem failed: %v, out=%q", err, out)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		lines, events := firePending(st, nil, a.now)
@@ -206,8 +272,8 @@ func TestAgentProblemRemoteCoordinator(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	control.ID, control.Sequence, control.Operation = "report-after-problem", 2, execution.ControlReport
-	control.Data = mustExecutionJSON(t, executionReport{Finished: true, Text: "fixture completed", Problems: []string{midtaskFinding}})
+	var result execution.ControlResult
+	control := execution.ControlRequest{Ref: request.Ref, ID: "report-after-problem", Sequence: 2, Operation: execution.ControlReport, Data: mustExecutionJSON(t, executionReport{Finished: true, Text: "fixture completed", Problems: []string{midtaskFinding}})}
 	if err := coordinatorTestCall(t, a, request, "control", control, &result, false); err != nil || result.Error != "" {
 		t.Fatal(err, result.Error)
 	}

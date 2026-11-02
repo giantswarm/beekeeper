@@ -60,7 +60,7 @@ func (a *app) remoteControl(ctx context.Context, op string, data any) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.SendControl(ctx, j, op, data, a.executionRequestID, nil)
+	result, err := s.SendControl(ctx, j, op, data, a.executionRequestID, s.Callback)
 	if err != nil {
 		if result.ID != "" && result.Error != "" {
 			return refused("coordinator acknowledged and refused request %q: %s; use a new request ID for corrected input", result.ID, result.Error)
