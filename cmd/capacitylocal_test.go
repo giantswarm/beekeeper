@@ -198,9 +198,10 @@ func TestLocalCeilingRefusesAHandStart(t *testing.T) {
 	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	startArgs := []string{busyOne, brief, "--dir", dir}
 	start := a.agentStartCmd()
 	start.SilenceErrors, start.SilenceUsage = true, true
-	start.SetArgs([]string{busyOne, brief, "--dir", dir})
+	start.SetArgs(startArgs)
 	if err := start.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), block) {
 		t.Errorf("agents start at the local ceiling = exit %d (%v), want a refusal naming it", Code(err), err)
 	}
@@ -222,14 +223,14 @@ func TestLocalCeilingRefusesAHandStart(t *testing.T) {
 	const reviewBlock = "no start: 3 busy locally at capacity.local.ceiling 1 plus review headroom 2"
 	reviewer := a.agentStartCmd()
 	reviewer.SilenceErrors, reviewer.SilenceUsage = true, true
-	reviewer.SetArgs([]string{busyOne, brief, "--dir", dir, "--" + reviewFlag})
+	reviewer.SetArgs(append(slices.Clone(startArgs), "--"+reviewFlag))
 	if err := reviewer.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), reviewBlock) {
 		t.Errorf("agents start --review with the local review headroom used = exit %d (%v), want a refusal naming it", Code(err), err)
 	}
 	stubBackground(t, "backgrounded · "+bgShortID+" · "+busyOne+"\n", bgSession{ID: bgShortID, SessionID: bgID, Name: busyOne})
 	force := a.agentStartCmd()
 	force.SilenceErrors, force.SilenceUsage = true, true
-	force.SetArgs([]string{busyOne, brief, "--dir", dir, modeFlag, config.ModeBackground, "--force"})
+	force.SetArgs(append(slices.Clone(startArgs), modeFlag, config.ModeBackground, "--force"))
 	if err := force.Execute(); err != nil {
 		t.Fatalf("agents start --force at the local ceiling = %v", err)
 	}
