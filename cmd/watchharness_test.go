@@ -10,7 +10,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -29,7 +31,21 @@ func (h *watchHarness) Discover(*config.Config, *proc.Table, time.Time) []*claud
 	return []*claude.Session{h.session}
 }
 
+// harnessJournal supplies repeatable OOM history without consulting the host.
+type harnessJournal struct{ platform.Machine }
+
+func (harnessJournal) OOMKills(context.Context, time.Time) ([]machine.OOMKill, error) {
+	return []machine.OOMKill{{PID: 42, At: relayNow, Task: "oom-victim"}}, nil
+}
+
+func (harnessJournal) OomdKills(context.Context, time.Time) ([]string, error) {
+	return []string{"fixture oomd kill"}, nil
+}
+
 func TestWatchTracksEveryHarnessRunner(t *testing.T) {
+	savedMachine := plat.Machine
+	plat.Machine = harnessJournal{savedMachine}
+	t.Cleanup(func() { plat.Machine = savedMachine })
 	const stopped = "AGENTS STOPPED"
 	const ended = "SESSION ENDED"
 	for _, name := range []string{codex.Harness, omp.Harness, agy.Harness} {
@@ -53,6 +69,9 @@ func TestWatchTracksEveryHarnessRunner(t *testing.T) {
 			poll := func() { w.pollSessions(context.Background(), relayNow, table) }
 			poll()
 			poll()
+			if got := out.String(); strings.Count(got, "KERNEL OOM:") != 1 || strings.Count(got, "SYSTEMD-OOMD:") != 1 {
+				t.Fatalf("OOM history not reported once:\n%s", got)
+			}
 			// A replacement watch must rediscover the same still-running worker.
 			restarted, _, restartOut := notifyingWatch(t, dir, false)
 			restarted.pollSessions(context.Background(), relayNow, table)
