@@ -29,6 +29,7 @@ type fakeDeps struct {
 
 func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
 	q := args[3]
+	checkedQuery(f.t, q)
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
 	for i := 4; i+1 < len(args); i += 2 {

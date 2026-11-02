@@ -376,9 +376,7 @@ const metaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"n
 
 func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	q := args[3]
-	if strings.Contains(q, "ProjectV2Owner{login}") {
-		f.t.Fatalf("ProjectV2Owner has no login field in GitHub GraphQL; use User and Organization inline fragments: %s", q)
-	}
+	checkedQuery(f.t, q)
 	f.queries = append(f.queries, q)
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
