@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Priority-list reads omit candidate-only label and assignee connections, keeping the large-board regression at 37 GraphQL points without changing ranks or blocker holds.
+- Initialize notification-test watchers through the production constructor and supply deterministic OOM history in harness tracking tests, preventing a host-dependent nil-map panic (https://github.com/giantswarm/beekeeper/issues/2102).
+- Read devctl GitHub metadata even when another provider requires authentication; fall back to the stored gh identity with a warning when App metadata is unreadable, retaining known unexpired App budget observations. Probe the App through its pinned repository instead of the personal login’s configured probe (https://github.com/giantswarm/beekeeper/issues/2108).
+
 - GitHub budgets name and probe the stored gh login and devctl App login separately, preserve each identity's cache and reset, and gate on the lowest REST and GraphQL balances. Changing checkout or minimum identity cannot hide a depleted window or replenish the supervisor's hourly allowance.
 
 - The supervisor loop holds GitHub observations under the GraphQL floor, shares a durable 1,500-point hourly allowance across board queries and PR reads, and reuses unchanged PR reads for five minutes. Fresh probes, per-request reservations and a cross-process lock protect headroom; `budget --json` reports conservative spend by step ([https://github.com/giantswarm/beekeeper/issues/2042](https://github.com/giantswarm/beekeeper/issues/2042)).
@@ -79,6 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `beekeeper run` without `--class` runs a command that cannot build at once, uncapped and outside the build slot queue: a single `true`, `false`, `echo` or `printf`, or a command that only prints its help or version (`go version`, `make help`, `kubectl --help`). It waited for a build slot like a build ([#919](https://github.com/giantswarm/beekeeper/issues/919)).
 
 - PR parks request desk review only when made from the PR's published worktree, with matching branch and HEAD. Other parks remain plain waits and resume on merge or close. After upgrading, reissue existing PR review parks from their published worktrees: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` ([https://github.com/giantswarm/beekeeper/issues/1824](https://github.com/giantswarm/beekeeper/issues/1824)).
+- The Kubernetes hook parses kubectl-gs global value flags before selecting its subcommand: `template cluster` stays allowed against production, and a read-looking flag value cannot exempt a production write.
+
 - `browse --help` says a sign-in on the lab's identity provider at `localhost` needs no fallback: the lab's certificate authority is trusted by Chrome, and clicks, keys and screenshots that do nothing there are a tab behind another or a window not drawn, which the front-tab and draw checks handle. Regression tests pin the flow: a localhost Dex authorization-code sign-in runs with the lab's rule and the hook allows its email login page ([https://github.com/giantswarm/beekeeper/issues/923](https://github.com/giantswarm/beekeeper/issues/923)).
 
 - `watch` discovers codex, omp and agy runners as well as Claude Code sessions, so a running worker no longer produces false `AGENTS STOPPED` and `SESSION ENDED` alerts. Stopped workers of those harnesses get an `agents wake` command instead of a Claude desktop link ([https://github.com/giantswarm/beekeeper/issues/1965](https://github.com/giantswarm/beekeeper/issues/1965)).

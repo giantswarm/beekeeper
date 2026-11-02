@@ -298,7 +298,7 @@ func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 // formula: the walk of board next reads it once. Each epic's sub-issues are
 // read by a page of its own size: a page of 50 for every epic cost this
 // board of 426 candidates 92 points, 53 of them for sub-issue slots no epic
-// filled; it costs 39.
+// filled; the read stays below 40.
 func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 	b := &largeBoard{t: t, progress: 40, planning: 10, tail: 255, subs: 6, open: 4, ranked: 20}
 	c := &Client{GH: b.run, Board: b.order(), Plans: []string{plansRepo}}
@@ -348,5 +348,22 @@ func TestSubIssuePageIsTheEpicsSizeUpToItsLimit(t *testing.T) {
 	}
 	if pages != 2 {
 		t.Errorf("%d epic pages read, want 2", pages)
+	}
+}
+
+func TestPriorityPagesKeepTheirGraphQLCostLow(t *testing.T) {
+	b := &largeBoard{t: t, progress: 40, planning: 10, ranked: 20}
+	c := &Client{GH: b.run, Board: b.order()}
+	p, err := c.Priorities(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != b.ranked || p[0].Rank != 1 || p[len(p)-1].Rank != b.ranked {
+		t.Fatalf("priority list changed: %+v", p)
+	}
+	// One metadata request and two team/label pages; each page needs
+	// blockers but no candidate labels or assignees.
+	if b.cost > 3 {
+		t.Fatalf("priority list costs %d GraphQL points, want at most 3", b.cost)
 	}
 }
