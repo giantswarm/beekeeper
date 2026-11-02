@@ -145,7 +145,7 @@ the build slots and their caps (`memcap.slots`, `memcap.max`, `memcap.cpuQuota`,
 them on the host is a digest mismatch in `agents hosts check` until a matching
 bundle is prepared and pinned again. What stays host-local on purpose is the
 machine's own watch and desk pacing, which never bounds a pinned remote worker:
-the supervisor's target and pace (`capacity.floor`, `capacity.ceiling` and the
+the supervisor's target and pace (`capacity.ceiling` and the
 rest of `capacity` beyond the guards above), watch's alert thresholds and
 cadence (its `interval`, `repeat`, `availMinMiB`, `swapMaxMiB`, `oomdHeadroomMinMiB`,
 `scopeAnonMaxMiB`, `gttMaxMiB`, `psiMax`, `cpuPSIMax`, `forkRateMax`, `stackMax`,
@@ -241,7 +241,9 @@ read-and-review path. A review waits when coordinator review capacity is full.
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against
 their host's `maxBusy`, never against it; local self-hosted sessions count.
-Every local start, the loop's and one by hand, is refused at it. A retired remote worker is
+Every local start, the loop's and one by hand, is refused at it; a review may
+use `capacity.reviewHeadroom` above it, since reviews run only on the
+coordinator. A retired remote worker is
 stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable

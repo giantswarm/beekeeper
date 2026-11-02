@@ -383,6 +383,9 @@ func skipReason(it Item, b config.Board, now time.Time) string {
 	return ""
 }
 
+// ContainsFold says whether list holds s, without regard to case.
+func ContainsFold(list []string, s string) bool { return containsFold(list, s) }
+
 func containsFold(list []string, s string) bool {
 	return slices.ContainsFunc(list, func(x string) bool { return strings.EqualFold(x, s) })
 }

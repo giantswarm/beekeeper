@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,11 +24,30 @@ type fillPause struct {
 	until    time.Time
 }
 
-// fillCapacityKey is the configured floor and ceiling. Room and the busy
-// count move with every park, resume and wait; none of them can turn an
-// empty board answer into a pick, and no room already stops a read.
+// fillCapacityKey is the configured ceiling. Room and the busy count move
+// with every park, resume and wait; none of them can turn an empty board
+// answer into a pick, and no room already stops a read.
 func fillCapacityKey(cap *capacityView) string {
-	return fmt.Sprintf("%d/%d", cap.Floor, cap.Ceiling)
+	return strconv.Itoa(cap.Ceiling)
+}
+
+// fillRoom is how many worker slots this pass can fill toward capacity.ceiling.
+// Local room bounds the pass only when no start can be placed on an execution
+// host; with supervisor.hosts, a hold across all providers (no choice picked
+// and no local machine headroom block) also yields 0 so the pass does not
+// query the board while every provider is held by pace, usage or its ceiling.
+func (l *supervisorLoop) fillRoom(cap *capacityView) int {
+	if cap == nil || cap.Stopped != "" || cap.Ceiling <= len(cap.Busy) {
+		return 0
+	}
+	room := cap.Ceiling - len(cap.Busy)
+	if !l.placesRemotely() {
+		return min(room, cap.Room)
+	}
+	if cap.Choice != nil && cap.Choice.Harness == "" && (cap.Headroom == nil || len(cap.Headroom.blocks(cap.Builds)) == 0) {
+		return 0
+	}
+	return room
 }
 
 // fillLive is the names of the roster's agents not done. A park, a resume,
@@ -75,14 +95,7 @@ func (l *supervisorLoop) fillCapacity(ctx context.Context) *capacityView {
 }
 
 func (l *supervisorLoop) previewFill(ctx context.Context) error {
-	cap := l.fillCapacity(ctx)
-	if cap == nil || cap.Floor <= len(cap.Busy) {
-		return nil
-	}
-	room := cap.Floor - len(cap.Busy)
-	if !l.placesRemotely() {
-		room = min(room, cap.Room)
-	}
+	room := l.fillRoom(l.fillCapacity(ctx))
 	if room <= 0 {
 		return nil
 	}
@@ -98,17 +111,18 @@ func (l *supervisorLoop) previewFill(ctx context.Context) error {
 	if next != nil {
 		count, first = room, next.URL
 	}
-	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR WOULD NEXT fill %d to capacity.floor (first: %s)\n", count, first)
+	_, err = fmt.Fprintf(l.a.out, "SUPERVISOR WOULD NEXT fill %d to capacity.ceiling (first: %s)\n", count, first)
 	return err
 }
 
-// fill repairs a shortfall without waiting for a done event. Each start
-// checks live capacity again; the first shortfall also bounds this pass
-// if a capacity read has not yet caught up with a start. The local room
-// bounds the pass only when no start can be placed on an execution host:
-// with supervisor.hosts each start's placement judges the local machine
-// and every host itself, so a full coordinator still fills onto hosts. Claims are per
-// board item, so an interrupted start is reconciled before another start.
+// fill fills every free slot up to capacity.ceiling without waiting for a
+// done event. Each start checks live capacity again; the first pass room
+// also bounds this pass if a capacity read has not yet caught up with a
+// start. The local room bounds the pass only when no start can be placed on
+// an execution host: with supervisor.hosts each start's placement judges
+// the local machine and every host itself, so a full coordinator still
+// fills onto hosts. Claims are per board item, so an interrupted start is
+// reconciled before another start.
 func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[string]loopClaim, taken []superloop.Taken) error {
 	if l.a.cfg.Supervisor.WorkerBrief == "" {
 		return nil
@@ -158,11 +172,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			l.fillPause = fillPause{}
 		}
 		pause := func() { l.pauseFill(capacity, alive) }
-		shortfall := cap.Floor - len(cap.Busy)
-		room := shortfall
-		if !l.placesRemotely() {
-			room = min(room, cap.Room)
-		}
+		room := l.fillRoom(cap)
 		if room <= 0 {
 			return nil
 		}

@@ -656,7 +656,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	// Outside the lock: the transcript's context and the log's answers.
 	c := roleContext(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
 	q := quietness{checked: c > 0, context: c, relayAt: a.cfg.Guide.RelayAt}
-	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == "supervisor.file" })
+	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == loopFileVerb })
 	if err != nil {
 		return nil, err
 	}
