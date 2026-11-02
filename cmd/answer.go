@@ -284,7 +284,7 @@ func answerEvent(by state.Party, rec *recordedAnswer, n *state.Note) state.Event
 	}
 	note := ""
 	if n != nil {
-		note = fmt.Sprintf(", note #%d asked by %q: %q", n.ID, n.By.Name, n.Text)
+		note = fmt.Sprintf(", note #%d asked by %q for %q: %q", n.ID, n.By.Name, n.For, n.Text)
 	}
 	return event(by, answerRecorded, "%s answered by %q via %s%s%s: %s", rec.About, rec.By, rec.Channel, at, note, rec.Answer)
 }

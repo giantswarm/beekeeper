@@ -35,6 +35,12 @@ files together, so a change that adds or removes a string in `cmd/snapshot.go` c
 in an untouched `cmd/*_test.go`: that finding is the change's, and CI reports it too. A lint of a
 worktree of `origin/main` tells main's findings from a change's.
 
+Run `gitleaks detect --redact --log-opts=--all` from the repository root to scan the full
+history, or `gitleaks detect --redact --no-git` to scan the working tree. Both load
+`.gitleaks.toml`, which extends all default detection rules. Its signing-test exception
+requires the exact fake GPG key ID and `cmd/sandboxsign_test.go` together, and applies
+only to `generic-api-key`; other values and files remain scanned.
+
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
@@ -56,6 +62,17 @@ without either status or spec provenance remain visible with their namespace's t
 creation time, without an invented filer identity. Listing does not repair status during
 another object's update. Apply the generated Note CRD before running the new server so
 Kubernetes preserves these optional spec fields.
+
+`note show <id>` reads one note in full, with its status, audience and retained answer;
+`--json` returns the note fields plus `status`, `answer` and `closure`. Open central
+notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
+while `#<n>` selects the local record. The central instance's own CLI can also
+read retained closed Note resources. File-backed stores can recover answered
+notes while their full `answer.recorded` event remains, without a record-size cap.
+New answer events retain the original audience separately from the answerer;
+older events without that audience show it as unknown rather than naming the
+answerer as the addressee. Other removed or expired
+records are reported as unavailable, never reconstructed from a truncated log.
 
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
 successful filing followed by an empty listing can mean it was answered between those
