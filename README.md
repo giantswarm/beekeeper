@@ -1561,14 +1561,18 @@ merge.py`), read relative to the call's working directory and followed into the 
 turn, a script the call writes before it runs it judged by the call's own text; one in an
 interpreter's code (`python3 -c`, `node -e`, `perl -e`, …); and one in the program a shell or an
 interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < merge.sh`, `python3 -
-<<'EOF'`); and one a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec
-devctl pr merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …), named with the gate written in after
-the runner (`xargs <this binary> gate -- devctl pr merge o/r`). That refusal fails closed: an
-unquoted merge the rewrite did not gate is refused whatever command it is an argument of (an
-unlisted wrapper, `busybox`), unless a text command reads it (`echo`, `grep`, `gh`, `git commit`); a
-quoted one is refused where a runner runs its quoted argument (`parallel 'devctl pr merge o/r {}'`),
-and a text command the runner runs (`find … -exec grep 'devctl pr merge' {} +`) reads it as text; and one in a backquote substitution
-(`` x=`devctl pr wait o/r 7` ``), where `$(…)` is gated in place. Only what the call runs is read: a file after the program (`python3 -c '…' log.txt`,
+<<'EOF'`).
+
+A merge a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec devctl pr
+merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …) or a backquote substitution runs (`` x=`devctl
+pr wait o/r 7` ``) is refused too, on the command line, in a here-document or here-string a shell
+reads and in a script the call runs. The refusal names the call with the gate written in before
+devctl (`xargs <this binary> gate -- devctl pr merge o/r`), except under `ssh`, whose remote host
+has no gate. It fails closed: an unquoted merge the rewrite did not gate is refused whatever command
+it is an argument of (an unlisted wrapper, `busybox`). A text command that reads it passes (`echo`,
+`grep`, `gh`, `git commit`, `beekeeper note`, `xargs echo`, `find … -exec grep`).
+
+Only what the call runs is read: a file after the program (`python3 -c '…' log.txt`,
 `bash x.sh log.txt`, `python3 - log.txt <<'EOF'`), a module's argument (`python3 -m json.tool
 log.txt`), a read-only command's argument (`grep merge log.txt`) and a file read into a quoted
 argument (`--report "$(<report.txt)"`) are the program's data, whatever they say; a refusal a file

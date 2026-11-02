@@ -1,16 +1,14 @@
 package guard
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
 )
 
-// TestHookRefusesRunnerMerges: a merge, promote or wait that a runner runs
-// from its arguments (xargs, find -exec, parallel, sudo, watch) is at no
-// command position the gate rewrite reaches: the call is refused, naming it
-// with the gate written in after the runner, and that form passes.
 // The runners the refusals name.
 const (
 	xargsRunner     = "xargs"
@@ -18,6 +16,10 @@ const (
 	backquoteRunner = "a backquote substitution"
 )
 
+// TestHookRefusesRunnerMerges: a merge, promote or wait that a runner runs
+// from its arguments (xargs, find -exec, parallel, sudo, watch) is at no
+// command position the gate rewrite reaches: the call is refused, naming it
+// with the gate written in after the runner, and that form passes.
 func TestHookRefusesRunnerMerges(t *testing.T) {
 	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	g := self + " gate -- "
@@ -43,7 +45,11 @@ func TestHookRefusesRunnerMerges(t *testing.T) {
 		{`time -v devctl pr merge o/r 7`, "`time`", `time -v ` + g + `devctl pr merge o/r 7`, false},
 		// A shell's -c named only in a quoted argument is no -c string.
 		{`wrap --note 'sh -c' devctl pr merge o/r 7`, "`wrap`", `wrap --note 'sh -c' ` + g + `devctl pr merge o/r 7`, false},
-		{`xargs echo devctl pr merge o/r < prs`, "`xargs`", `xargs echo ` + g + `devctl pr merge o/r < prs`, false},
+		// A here-document a shell reads is a command line: the runner check reads it too.
+		{"bash <<'EOF'\nxargs -n1 devctl pr merge o/r < prs\nEOF", xargsRunner, "xargs -n1 " + g + "devctl pr merge o/r < prs\nEOF", false},
+		{"bash <<'EOF'\nfind . -exec devctl pr merge o/r {} +\nEOF", "find -exec", "find . -exec " + g + "devctl pr merge o/r {} +\nEOF", false},
+		{"cat <<'EOF' | sh\nparallel devctl pr merge o/r ::: 7 8\nEOF", parallelRunner, "parallel " + g + "devctl pr merge o/r ::: 7 8\nEOF", false},
+		{"bash <<'EOF'\nsudo devctl pr merge o/r 7\nEOF", "sudo", "sudo " + g + "devctl pr merge o/r 7\nEOF", false},
 		// A backquote substitution is a command the gate rewrite does not reach either.
 		{"x=`devctl pr wait o/r 7`", backquoteRunner, "x=`" + g + "devctl pr wait o/r 7`", false},
 		{"echo \"done: ` devctl pr merge o/r 7`\"", backquoteRunner, "echo \"done: ` " + g + "devctl pr merge o/r 7`\"", false},
@@ -68,6 +74,10 @@ func TestHookRefusesRunnerMerges(t *testing.T) {
 		`seq 1 3 | xargs -n1 devctl pr view o/r`,
 		`find . -name '*.go' -exec grep -l 'devctl pr merge' {} +`,
 		`xargs -n1 echo < prs.txt; devctl pr view o/r 7`,
+		`xargs echo devctl pr merge o/r < prs`,
+		// A beekeeper note, park or report is text for a person.
+		`beekeeper note add devctl pr merge o/r 7 needs a look`,
+		`beekeeper agents idle --done --report merged with devctl pr merge o/r 7`,
 		"cat <<'EOF' >| notes.md\nxargs devctl pr merge o/r\nEOF",
 		// An escaped backquote is text.
 		"gh pr comment 7 --repo o/r --body \"ran \\`devctl pr merge o/r 7\\` by hand\"",
@@ -75,5 +85,40 @@ func TestHookRefusesRunnerMerges(t *testing.T) {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
 		}
+	}
+}
+
+// TestHookRefusesRunnerMergesInScripts: a runner's merge in a script the call
+// runs or in a here-string a shell reads is refused like one on the command
+// line, the refusal naming the script and the line; a merge a remote host runs
+// (ssh) is refused with no gated form, since this binary's path names no gate
+// there.
+func TestHookRefusesRunnerMergesInScripts(t *testing.T) {
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	dir := t.TempDir()
+	var exe os.FileMode = 0o700 // ./f.sh runs by its path
+	for name, body := range map[string]string{
+		"x.sh": "#!/usr/bin/env bash\nset -e\nxargs -n1 devctl pr merge o/r < prs\n",
+		"f.sh": "#!/usr/bin/env bash\nfind . -name '*.pr' -exec devctl pr merge o/r {} +\n",
+		"p.sh": "#!/usr/bin/env bash\nparallel devctl pr merge o/r ::: 7 8\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), exe); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct{ cmd, want string }{
+		{"bash x.sh", "the script " + filepath.Join(dir, "x.sh") + " runs outside the gate (line 3: xargs -n1 devctl pr merge o/r < prs)"},
+		{"./f.sh", "the script " + filepath.Join(dir, "f.sh") + " runs outside the gate (line 2: find . -name '*.pr' -exec devctl pr merge o/r {} +)"},
+		{"sh p.sh", "the script " + filepath.Join(dir, "p.sh") + " runs outside the gate (line 2: parallel devctl pr merge o/r ::: 7 8)"},
+		{"sh <<< 'xargs devctl pr merge o/r < prs'", "the here-string sh reads runs outside the gate"},
+	} {
+		d := decide(t, h, dir, c.cmd, nil)
+		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, c.want) {
+			t.Errorf("%q: got %+v, want a refusal naming %q", c.cmd, d, c.want)
+		}
+	}
+	d := decide(t, h, dir, "ssh host 'devctl pr merge o/r 7'", nil)
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "ssh runs "+ownedWhat) || strings.Contains(d.Reason, " gate -- ") {
+		t.Errorf("ssh: got %+v, want a refusal with no gated form", d)
 	}
 }
