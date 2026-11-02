@@ -1867,6 +1867,9 @@ nothing; it makes no GitHub call.`,
 				if err != nil {
 					return err
 				}
+				if err := a.admitExecution(host, h); err != nil {
+					return err
+				}
 				caps, err := a.probeExecution(cmd.Context(), h)
 				if err != nil {
 					return err

@@ -540,6 +540,15 @@ its key first in the detail):
             supervisor.postInstall once, then self-update --check must
             find it the latest. A loop whose binary was replaced
             re-executes the installed one at its next pass
+  hosts     every pass, each execution host (agents.hosts) whose pin is
+            not this coordinator's release: agents hosts update installs
+            the release there, verified, and pins the policy digest it
+            prepared in beekeeper's state. A host with executions drains
+            first (no new start); a host whose update fails is held (no
+            start there), handed on once as a finding like file's, and
+            tried again hourly; the other hosts keep running. A
+            development build updates none, and nothing while beekeeper
+            stop stands
   classify  a report or park the rules cannot place: agents.report without
             agents.done; a park on nothing of an agent still parked
             on nothing, with no timer that wakes it (timer add --wake), no
@@ -867,6 +876,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.tidy(ctx, st)
+		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
@@ -1364,14 +1374,28 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 }
 
 // loopFailure persists identical failures across passes and restarts. Two
-// consecutive failures defer the action for five minutes, keeping it pending.
+// consecutive failures defer the action for five minutes, keeping it pending;
+// each further identical failure doubles the deferral up to an hour, so a
+// refusal that does not change is not retried every five minutes all day.
 type loopFailure struct {
 	Message string    `json:"message"`
 	Count   int       `json:"count"`
 	RetryAt time.Time `json:"retryAt"`
 }
 
-const loopFailureBackoff = 5 * time.Minute
+const (
+	loopFailureBackoff    = 5 * time.Minute
+	loopFailureBackoffCap = time.Hour
+)
+
+// loopFailureDelay is the deferral after count identical failures.
+func loopFailureDelay(count int) time.Duration {
+	d := loopFailureBackoff
+	for i := 2; i < count && d < loopFailureBackoffCap; i++ {
+		d *= 2
+	}
+	return min(d, loopFailureBackoffCap)
+}
 
 func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
 	f := loopFailure{Message: cause.Error(), Count: 1}
@@ -1381,7 +1405,7 @@ func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, caus
 		f.Count = previous.Count + 1
 	}
 	if f.Count >= 2 {
-		f.RetryAt = l.a.now.Add(loopFailureBackoff)
+		f.RetryAt = l.a.now.Add(loopFailureDelay(f.Count))
 	}
 	b, err := json.Marshal(f)
 	if err != nil {

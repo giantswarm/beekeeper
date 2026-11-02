@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -358,3 +359,73 @@ func TestReadUsageReviewR1Regressions(t *testing.T) {
 		}
 	})
 }
+
+func TestParseRateLimitsToleratesInformationalFieldShapes(t *testing.T) {
+	at := time.Date(2026, 10, 28, 14, 20, 0, 0, time.UTC)
+	windows := `"primary":{"used_percent":18.5,"window_minutes":300,"resets_at":1793215200},"secondary":{"used_percent":42.0,"window_minutes":10080,"resets_at":1793726400}`
+
+	cases := []struct {
+		name        string
+		extra       string
+		wantPlan    string
+		wantCredits bool
+		wantBalance *float64
+	}{
+		{
+			name:        "balance as a numeric string",
+			extra:       `"credits":{"has_credits":true,"unlimited":false,"balance":"25.5"},"plan_type":"business"`,
+			wantPlan:    "business",
+			wantCredits: true,
+			wantBalance: ptrFloat(25.5),
+		},
+		{
+			name:        "balance as an empty string",
+			extra:       `"credits":{"has_credits":false,"unlimited":false,"balance":""},"plan_type":"team"`,
+			wantPlan:    "team",
+			wantCredits: true,
+		},
+		{
+			name:        "balance as a non-numeric string",
+			extra:       `"credits":{"has_credits":true,"unlimited":true,"balance":"unlimited"}`,
+			wantCredits: true,
+		},
+		{
+			name:  "credits of an unexpected shape",
+			extra: `"credits":"none","plan_type":7`,
+		},
+		{
+			name:        "credits flags of an unexpected shape",
+			extra:       `"credits":{"has_credits":"yes","unlimited":1,"balance":{"amount":3}},"plan_type":"pro"`,
+			wantPlan:    "pro",
+			wantCredits: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := ParseRateLimits(json.RawMessage(`{`+windows+`,`+tc.extra+`}`), at)
+			if err != nil {
+				t.Fatalf("ParseRateLimits: %v", err)
+			}
+			if r.SevenDay == nil || r.SevenDay.UsedPercent != 42.0 || r.FiveHour == nil || r.FiveHour.UsedPercent != 18.5 {
+				t.Fatalf("windows = %+v / %+v", r.FiveHour, r.SevenDay)
+			}
+			if r.PlanType != tc.wantPlan {
+				t.Fatalf("PlanType = %q, want %q", r.PlanType, tc.wantPlan)
+			}
+			if (r.Credits != nil) != tc.wantCredits {
+				t.Fatalf("Credits = %+v, want present=%v", r.Credits, tc.wantCredits)
+			}
+			if r.Credits == nil {
+				return
+			}
+			switch {
+			case tc.wantBalance == nil && r.Credits.Balance != nil:
+				t.Fatalf("Balance = %v, want nil", *r.Credits.Balance)
+			case tc.wantBalance != nil && (r.Credits.Balance == nil || *r.Credits.Balance != *tc.wantBalance):
+				t.Fatalf("Balance = %v, want %v", r.Credits.Balance, *tc.wantBalance)
+			}
+		})
+	}
+}
+
+func ptrFloat(f float64) *float64 { return &f }
