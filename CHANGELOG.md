@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The hook's refusal of work in the guide's session no longer tells the guide to `SendMessage` the supervisor, which is the supervisor loop and no session a message reaches: it names the route that arrives, an issue in the work's owning repository put on the board with `beekeeper board move` (https://github.com/giantswarm/beekeeper/issues/1776).
 - Log an orphaned pending review once when its worker leaves the roster, preserving the claim for a new review park. Regression coverage retains a worker parked on a third pull request after two earlier merges (https://github.com/giantswarm/beekeeper/issues/1975).
 - The supervisor loop ignores cancelled checks superseded by a newer check on the same head when waking workers and requiring green CI; pending replacements still block the go (https://github.com/giantswarm/beekeeper/issues/1958).
 
