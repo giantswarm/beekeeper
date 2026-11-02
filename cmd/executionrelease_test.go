@@ -90,7 +90,7 @@ func TestExecutionFailedUnacknowledgedStartsReleaseTheirSlots(t *testing.T) {
 					t.Fatal(err)
 				}
 				rec, _ := executionRecord(st, ref)
-				if !rec.Released() || !rec.Terminal() || executionHostBusy(st, host.Identity) != 0 || len(countAgents(st, nil, a.now).Busy) != 0 || len(st.Agents) != 0 || len(st.Records) != 0 {
+				if !rec.Released() || !rec.Terminal() || executionHostBusy(st, host.Identity) != 0 || len(countAgents(st, nil, a.now, a.cfg).Busy) != 0 || len(st.Agents) != 0 || len(st.Records) != 0 {
 					t.Fatalf("start %d: the unacknowledged reservation kept a host or desk slot", n)
 				}
 				if executionNeedsSync(st, rec) {
@@ -183,7 +183,7 @@ func TestExecutionSyncReleasesStaleUnacknowledgedReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec, _ := executionRecord(st, ref); !rec.Released() || executionHostBusy(st, ref.Host) != 0 || len(st.Agents) != 0 || len(countAgents(st, nil, a.now).Busy) != 0 {
+	if rec, _ := executionRecord(st, ref); !rec.Released() || executionHostBusy(st, ref.Host) != 0 || len(st.Agents) != 0 || len(countAgents(st, nil, a.now, a.cfg).Busy) != 0 {
 		t.Fatal("the stale unacknowledged reservation kept its slots")
 	}
 }
