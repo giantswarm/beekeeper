@@ -245,6 +245,10 @@ func ParsePromoteDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
+// stateFailed is devctl release promote's repository state for a failed read
+// or dispatch.
+const stateFailed = "failed"
+
 // ParsePromoteCandidate reads the candidate of devctl release promote
 // --dry-run's JSON document for one repository: the release candidate a
 // promotion would dispatch now, "" when there is none. ok is false when the
@@ -256,7 +260,7 @@ func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
 			State     string `json:"state"`
 		} `json:"repositories"`
 	}
-	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 || doc.Repositories[0].State == "failed" {
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 || doc.Repositories[0].State == stateFailed {
 		return "", false
 	}
 	return doc.Repositories[0].Candidate, true
@@ -276,7 +280,7 @@ func PromoteFailure(raw []byte) string {
 	if json.Unmarshal(raw, &doc) != nil {
 		return ""
 	}
-	if len(doc.Repositories) == 1 && doc.Repositories[0].State == "failed" && doc.Repositories[0].Message != "" {
+	if len(doc.Repositories) == 1 && doc.Repositories[0].State == stateFailed && doc.Repositories[0].Message != "" {
 		return doc.Repositories[0].Message
 	}
 	return doc.Reason

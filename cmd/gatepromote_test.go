@@ -57,7 +57,11 @@ exit 1`)
 	if candidate != "" || err == nil {
 		t.Fatalf("candidate %q, error %v; want failed dry-run document rejected", candidate, err)
 	}
-	for _, want := range []string{"devctl release promote " + scratchRepo + " --dry-run", "exit status 1", cause} {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("error %v does not retain exit status 1", err)
+	}
+	for _, want := range []string{"devctl release promote " + scratchRepo + " --dry-run", cause} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
