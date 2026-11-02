@@ -694,7 +694,7 @@ func TestAgyBareCommandWordAndEscapedBackticks(t *testing.T) {
 
 	// Create `./agy/` in the repository root holding a guarded tool, a script
 	// that invokes it, and a secret file.
-	agyDir := filepath.Join(dir, "agy")
+	agyDir := filepath.Join(dir, agyHarness)
 	if err := os.MkdirAll(agyDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +712,7 @@ func TestAgyBareCommandWordAndEscapedBackticks(t *testing.T) {
 	// `agy` that invokes the guarded helper, to verify a bare command word
 	// `agy` without a `/` is never resolved against cwd.
 	fileDir := initGitRepo(t, "feat-branch", "https://github.com/giantswarm/beekeeper.git")
-	if err := os.WriteFile(filepath.Join(fileDir, "agy"), []byte("#!/bin/sh\n"+helper+"\n"), 0o755); err != nil { //nolint:gosec // test fixture
+	if err := os.WriteFile(filepath.Join(fileDir, agyHarness), []byte("#!/bin/sh\n"+helper+"\n"), 0o755); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
 	}
 
