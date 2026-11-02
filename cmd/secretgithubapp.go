@@ -36,9 +36,9 @@ type githubAppResult struct {
 
 func (a *app) secretGitHubAppCmd() *cobra.Command {
 	var code string
-	var replace bool
+	var replace, dryRun bool
 	c := &cobra.Command{
-		Use:   "github-app <installation> --code <code>",
+		Use:   "github-app <installation> [--code <code> | --dry-run]",
 		Short: "Convert a GitHub App manifest's one-time code and write the App's private key and client secret into the installation's SOPS Secret",
 		Long: `github-app finishes GitHub's manifest flow for an App created on GitHub's
 page: GitHub redirects to the manifest's redirect_url with a one-time code
@@ -51,6 +51,13 @@ Kubernetes Secret of the SOPS file apps.secrets names for <installation>,
 under stringData, in one sops write (the creation rules of the nearest
 .sops.yaml; an absent file starts as the Secret of the entry's name and
 namespace).
+
+--dry-run checks the existing Secret and creation-rule age recipients and
+prints the file, Secret metadata and planned key paths, without contacting
+GitHub, accessing the vault, decrypting or writing. It needs no --code and
+ignores one if supplied. webhook-secret is conditional on GitHub returning
+it. An absent file is an error; create a Secret skeleton first. This checks
+configuration, not access to a recipient’s private identity.
 
 Every check runs before the code is spent: the installation's entry, the
 file a Secret or absent with a name, each key under a creation rule that
@@ -70,12 +77,59 @@ redirect. beekeeper log records the installation,
 the file, the App's id, client id and slug, and the fingerprints.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				return a.dryRunGitHubApp(cmd, args[0], replace)
+			}
 			return a.secretGitHubApp(cmd, args[0], code, replace)
 		},
 	}
 	c.Flags().StringVar(&code, "code", "", "the manifest flow's one-time code, or the redirect URL that carries it")
 	c.Flags().BoolVar(&replace, "replace", false, "overwrite keys the Secret holds already")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "check the existing target Secret and its creation-rule recipients, without converting a code or writing")
 	return c
+}
+
+// dryRunGitHubApp reads public metadata only: no credential operations,
+// conversion, fingerprint key or audit write.
+func (a *app) dryRunGitHubApp(cmd *cobra.Command, installation string, replace bool) error {
+	target, err := a.appSecret(installation)
+	if err != nil {
+		return err
+	}
+	if err := a.sandboxFiles([]secret.Ref{{File: target.File}}, nil); err != nil {
+		return err
+	}
+	plan, err := secret.PlanSecretKeys(target.File, []string{githubPrivateKey, githubClientSecret, appWebhookSecret}, replace)
+	if err != nil {
+		return refused("%v", err)
+	}
+	if a.json {
+		return a.printJSON(plan)
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "dry-run %s\nfile %s\nsecret %s/%s\nrecipients %s\nwould write %s (webhook-secret only when returned by GitHub)\n", installation, plan.File, plan.Namespace, plan.Name, strings.Join(plan.Recipients, ", "), strings.Join(plan.Keys, ", "))
+	return err
+}
+
+// githubAppDryRun parses flags just as execution does, including =false
+// and repeated flags, so a metadata check never needs a vault identity.
+func (a *app) githubAppDryRun(args []string) bool {
+	if len(args) == 0 || args[0] != githubAppOp {
+		return false
+	}
+	c := a.secretGitHubAppCmd()
+	c.Flags().ParseErrorsWhitelist.UnknownFlags = true
+	if err := c.Flags().Parse(args[1:]); err != nil {
+		return false
+	}
+	return githubAppDryCommand(c)
+}
+
+func githubAppDryCommand(cmd *cobra.Command) bool {
+	if cmd.Name() != githubAppOp {
+		return false
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	return dryRun
 }
 
 // secretGitHubApp is secret github-app: the checks, the conversion and the
