@@ -105,7 +105,7 @@ func (a *app) status() (*statusView, error) {
 	if err != nil && !missing {
 		return nil, err
 	}
-	v.Busy = len(countAgents(st, sessions, a.now).Busy)
+	v.Busy = len(countAgents(st, sessions, a.now, a.cfg).Busy)
 	v.Serving = a.serveModeStatusLine()
 	v.SupervisorLoop = a.loopPID()
 	for _, h := range holders {
