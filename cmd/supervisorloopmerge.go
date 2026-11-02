@@ -20,6 +20,10 @@ import (
 
 const loopWorkerMergeGo = "merge go given"
 
+func pullNeedsBranchRepair(p superloop.Pull) bool {
+	return p.Draft || p.Mergeable == "CONFLICTING" || p.MergeState == "BEHIND"
+}
+
 // mergePull executes the planner's exact-head decision in the coordinator,
 // including for workers on an execution host. When the coordinator's pinned
 // merge step is broken on an open, green, approved head, it falls back
@@ -111,7 +115,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		}
 		return "merge failed; branch repair requested", nil
 	}
-	if !p.Draft && p.Mergeable != "CONFLICTING" && p.MergeState != "BEHIND" {
+	if !pullNeedsBranchRepair(p) {
 		out, code, err = beekeeperRun(ctx, l.as(gateCmdName, "--limit", "0", "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))...)
 		p, readErr = readLoopPull(ctx, act.Ref)
 		if readErr != nil {
@@ -132,7 +136,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 			return "", refused("merge head moved or current CI is not green")
 		}
-		if !p.Draft && p.Mergeable != "CONFLICTING" && p.MergeState != "BEHIND" && act.Agent != "" && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent && ag.Execution != nil }) {
+		if !pullNeedsBranchRepair(p) && act.Agent != "" && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent && ag.Execution != nil }) {
 			if err := l.wake(ctx, act); err != nil {
 				return "", err
 			}
@@ -241,7 +245,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "merge head moved or current CI is not green"
 		return doc
 	}
-	if p.Draft || p.Mergeable == "CONFLICTING" || p.MergeState == "BEHIND" {
+	if pullNeedsBranchRepair(p) {
 		doc.Reason = "branch is draft, behind or conflicts with its base"
 		return doc
 	}
