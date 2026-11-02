@@ -350,6 +350,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
+		} else {
+			v.PostMerge = nil
 		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {

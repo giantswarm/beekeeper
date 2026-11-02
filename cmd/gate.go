@@ -1595,7 +1595,11 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []string{self, squashMergeCmd, g.repo, fmt.Sprint(g.pr), "--head", g.reviewedHead}, nil
+		argv := []string{self, squashMergeCmd, g.repo, fmt.Sprint(g.pr), "--head", g.reviewedHead}
+		if g.release != nil && g.release.Auto {
+			argv = append(argv, "--release-wait")
+		}
+		return argv, nil
 	}
 	argv := g.argv
 	if !g.runsDevctl() {

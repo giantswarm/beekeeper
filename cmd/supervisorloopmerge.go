@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -45,6 +46,13 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
+	// A detached gate owns the queued/running mutation. Observe its result
+	// on later passes; do not submit another command for the same PR.
+	if slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+		return m.Repo == ref.Repo && m.PR == ref.N && (m.Phase == state.Waiting || m.Phase == state.Running) && merge.Runs(m, proc.Alive)
+	}) {
+		return "", errLoopLater
+	}
 	for _, worker := range st.Agents {
 		if worker.Name == act.Agent && worker.Execution != nil {
 			use := execution.MergeUse{Ref: *worker.Execution, Repository: ref.Repo, PR: ref.N, Head: act.Head}
@@ -75,23 +83,21 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err != nil {
 		return "", err
 	}
-	if code == ExitGateQueued || code == ExitGateDuplicate && strings.Contains(out, "already runs") {
+	var reply github.SquashDoc
+	mutationResult := json.NewDecoder(strings.NewReader(out)).Decode(&reply) == nil && reply.Route == reviewedMergeRoute && reply.Repo == ref.Repo && reply.Number == ref.N && reply.HeadSha == act.Head
+	if code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult {
 		return "", errLoopLater
 	}
-	if code == ExitGateUnread || code == ExitGateRefused && !strings.Contains(strings.ToLower(out), "conflict") && !strings.Contains(strings.ToLower(out), "behind") {
+	if code == ExitGateUnread || code == ExitGateRefused {
 		return "", refused("merge gate refused: %s", oneLine(out))
-	}
-	if code == ExitGateRefused {
-		code = github.SquashNotApplicable
 	}
 	if code == 0 {
 		return "", refused("merge command ended without a confirmed merge")
 	}
-	if code != github.SquashNotApplicable && code != github.SquashRed {
+	if !mutationResult || code != github.SquashNotApplicable && code != github.SquashRed {
 		return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
 	}
-	var reply github.SquashDoc
-	if json.Unmarshal([]byte(out), &reply) == nil && reply.Reason != "" {
+	if reply.Reason != "" {
 		out = reply.Reason
 	}
 
@@ -108,16 +114,23 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 // wakes only tasks with a remaining release, rollout or proof. Older parks
 // retain the existing release-containment and retirement behavior.
 func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if act.Message != strings.ToLower(superloop.Merged) {
-		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
-	}
-	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.PostMerge != nil })
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
+	})
 	if i < 0 {
-		return fmt.Sprintf("%s merged: tracking ends", act.URL), nil
+		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
 	}
 	ag := st.Agents[i]
 	if err := l.claim(act, ag.Name); err != nil {
 		return "", err
+	}
+	if act.Message == strings.ToLower(superloop.Closed) {
+		act.Agent = ag.Name
+		act.Message = fmt.Sprintf("%s closed without merging. Continue or finish the owning task, and report what remains open.", act.URL)
+		if err := l.wake(ctx, act); err != nil {
+			return "", err
+		}
+		return "closed; worker told to continue its task", nil
 	}
 	if work := strings.TrimSpace(*ag.Park.PostMerge); work != "" {
 		act.Agent = ag.Name
@@ -130,7 +143,12 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 	// Do not finish a task serving other open work merely because one PR merged.
 	serves := loopServes(st, ag)
 	if serves != "" && serves != act.Ref && l.open(ctx, serves) {
-		return "merged; worker retained for open work", nil
+		act.Agent = ag.Name
+		act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(serves))
+		if err := l.wake(ctx, act); err != nil {
+			return "", err
+		}
+		return "merged; worker woken for remaining open work", nil
 	}
 	if serves != "" && serves != act.Ref && l.a.cfg.Board.Owner != "" {
 		if _, err := l.run(ctx, loopBoard, "move", serves, "Done"); err != nil {
@@ -158,7 +176,7 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 // waits for a different head, or retries a mutation. The gate retains its
 // ordinary holds, queue, readiness, review and release settlement policy.
 func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head string) github.SquashDoc {
-	doc := github.SquashDoc{Repo: repo, Number: number, HeadSha: head, SchemaVersion: 1, Command: "pr merge", Route: "reviewed merge", ExitCode: github.SquashNotApplicable}
+	doc := github.SquashDoc{Repo: repo, Number: number, HeadSha: head, SchemaVersion: 1, Command: "pr merge", Route: reviewedMergeRoute, ExitCode: github.SquashNotApplicable}
 	method := a.cfg.Merge.Methods[repo]
 	if method == "" {
 		method = "squash"

@@ -211,7 +211,7 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
 		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
-		if len(postMerge) > 0 {
+		if i >= 0 && reviewHead != "" && len(postMerge) > 0 {
 			park.PostMerge = &postMerge[0]
 		}
 		name, counted, resume := me.Name, "off the roster, woken by its session id", fmt.Sprintf("beekeeper agents resume %s", wakeID(me))
@@ -247,7 +247,11 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			}
 		}
 		if _, ok := parseRef(on); ok {
-			back += "; " + parkReviewMode(reviewHead)
+			if i < 0 && reviewHead != "" {
+				back += "; plain wait off the roster; no supervisor review requested"
+			} else {
+				back += "; " + parkReviewMode(reviewHead)
+			}
 		}
 		line = fmt.Sprintf("%s: %s; %s, and %s. End your turn now.", name, parkedText(park, a.now), counted, back)
 		if k := st.StartIndex(me); k >= 0 && st.Starts[k].Background {
@@ -495,7 +499,10 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	var out []settledPark
 	for _, ag := range parkedAgents(st) {
 		p := ag.Park
-		if p == nil || p.On == "" || !p.Resumable.IsZero() || p.ReviewHead != "" && p.PostMerge != nil {
+		if p == nil || p.On == "" || !p.Resumable.IsZero() {
+			continue
+		}
+		if p.ReviewHead != "" && p.PostMerge != nil && slices.ContainsFunc(st.Agents, func(registered state.Agent) bool { return registered.Is(ag.Party) }) {
 			continue
 		}
 		if res, ok := parkLease(p.On); ok {
