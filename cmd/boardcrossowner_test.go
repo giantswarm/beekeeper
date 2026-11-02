@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	crossOwner   = "personal"
 	crossHome    = "personal/tasks#1"
 	crossForeign = "org/engine#1"
 	crossEpic    = "org/engine#10"
@@ -53,7 +54,7 @@ func crossOwnerSnapshot(t *testing.T, now time.Time) *board.Snapshot {
 }
 
 func crossOwnerCandidates(snap *board.Snapshot, now time.Time) []board.Candidate {
-	cands := board.Rank(snap, config.Board{Owner: "personal"}, now)
+	cands := board.Rank(snap, config.Board{Owner: crossOwner}, now)
 	board.Annotate(cands, snap.Priorities.Ranks(), snap.Parent)
 	return cands
 }
@@ -143,7 +144,7 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 
 func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.T) {
 	r, busy := fillRig(t)
-	r.a.cfg.Board = config.Board{Owner: "personal", Project: 1}
+	r.a.cfg.Board = config.Board{Owner: crossOwner, Project: 1}
 	snap := crossOwnerSnapshot(t, r.a.now)
 	// Place crossHome (priority 1) at the top of the board and crossBacklog
 	// (unranked) at the bottom, where an unranked backlog item sits.
@@ -262,8 +263,8 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 
 func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Board = config.Board{Owner: "personal", Project: 1}
-	r.a.cfg.GitHub.AllowedOrgs = []string{"personal", "org"}
+	r.a.cfg.Board = config.Board{Owner: crossOwner, Project: 1}
+	r.a.cfg.GitHub.AllowedOrgs = []string{crossOwner, "org"}
 	const (
 		reportIssue = "org/engine#89"
 		restartRef  = "org/engine#90"
