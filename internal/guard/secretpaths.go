@@ -82,7 +82,7 @@ func lnOperands(args []string) (sources []string, dest string, into, ok bool) {
 		switch {
 		case options && a == "--":
 			options = false
-		case options && (a == "-t" || a == "--target-directory"):
+		case options && (a == "-t" || a == targetDirOpt):
 			if i+1 >= len(args) {
 				ok = false
 				break
