@@ -38,7 +38,7 @@ func TestNoteShow(t *testing.T) {
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				switch {
 				case tc.answered:
-					return []state.Event{{Verb: "unrelated", Detail: strings.Repeat("z", 1_100_000)}, answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Channel: viaCLI, Answer: answer}, &n)}, nil
+					return []state.Event{{Verb: "note-show.unrelated", Detail: strings.Repeat("z", 1_100_000)}, answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Channel: viaCLI, Answer: answer}, &n)}, nil
 				case tc.defaulted:
 					st.Defaulted = []state.Note{n}
 				default:
@@ -112,12 +112,13 @@ func TestNoteShowAnsweredAudience(t *testing.T) {
 			t.Run(fmt.Sprintf("legacy=%t/json=%t", legacy, asJSON), func(t *testing.T) {
 				a, out := noteApp(t)
 				const audience = "team:ops"
+				const words = "approved"
 				n := state.Note{ID: 1, For: audience, Text: laneQuestion, By: state.Party{Name: agentOne}}
-				e := answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: "Ada", Channel: viaCLI, Answer: "approved"}, &n)
+				e := answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Channel: viaCLI, Answer: words}, &n)
 				if legacy {
 					e.Detail = strings.Replace(e.Detail, ` for "team:ops"`, "", 1)
 				}
-				if err := a.store.Log(state.Event{Verb: "unrelated", Detail: strings.Repeat("z", 1_100_000)}, e); err != nil {
+				if err := a.store.Log(state.Event{Verb: "note-show.unrelated", Detail: strings.Repeat("z", 1_100_000)}, e); err != nil {
 					t.Fatal(err)
 				}
 				a.json = asJSON
@@ -135,7 +136,7 @@ func TestNoteShowAnsweredAudience(t *testing.T) {
 					if legacy {
 						wantFor = ""
 					}
-					if got.For != wantFor || got.Text != n.Text || got.Answer != "approved" {
+					if got.For != wantFor || got.Text != n.Text || got.Answer != words {
 						t.Fatalf("recovered note: %+v", got)
 					}
 				} else {
