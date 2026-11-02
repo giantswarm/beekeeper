@@ -1544,8 +1544,8 @@ included, refuses and wakes its owner, as for a merge's place taken out with `la
 <owner/repo> <n>`.
 The PreToolUse hook rewrites the call to `<this binary> gate -- devctl pr merge …` (a background
 call gets `--wait 30m`), and the gate decides. The hook finds the merge wherever it runs as a
-command: in any part of a pipeline or a `;`, `&&` or `||` list, in a subshell or a loop, behind the
-prefix commands that run their arguments (`flock <lock>`, `nohup`, `setsid`, `stdbuf`, `ionice`,
+command: in any part of a pipeline or a `;`, `&&` or `||` list, in a subshell, a loop, a group or a
+condition (`if`, `while`, `until`, `!`, `{`), behind the prefix commands that run their arguments (`flock <lock>`, `nohup`, `setsid`, `stdbuf`, `ionice`,
 `chrt`, `nice`, `timeout`, `env`, `time`, `command`, `exec`, `VAR=value`, each with its options), and
 with devctl named by path (`~/bin/devctl`, `./devctl`, `$HOME/bin/devctl`). It wraps only the devctl
 invocation: `flock m.lock devctl pr merge o/r 7 | tee m.json | jq .verdict` becomes `flock m.lock
@@ -1561,7 +1561,18 @@ merge.py`), read relative to the call's working directory and followed into the 
 turn, a script the call writes before it runs it judged by the call's own text; one in an
 interpreter's code (`python3 -c`, `node -e`, `perl -e`, …); and one in the program a shell or an
 interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < merge.sh`, `python3 -
-<<'EOF'`). Only what the call runs is read: a file after the program (`python3 -c '…' log.txt`,
+<<'EOF'`).
+
+A merge a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec devctl pr
+merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …) or a backquote substitution runs (`` x=`devctl
+pr wait o/r 7` ``) is refused too, on the command line, in a here-document or here-string a shell
+reads and in a script the call runs. The refusal names the call with the gate written in before
+devctl (`xargs <this binary> gate -- devctl pr merge o/r`), except under `ssh`, whose remote host
+has no gate. It fails closed: an unquoted merge the rewrite did not gate is refused whatever command
+it is an argument of (an unlisted wrapper, `busybox`). A text command that reads it passes (`echo`,
+`grep`, `gh`, `git commit`, `beekeeper note`, `xargs echo`, `find … -exec grep`).
+
+Only what the call runs is read: a file after the program (`python3 -c '…' log.txt`,
 `bash x.sh log.txt`, `python3 - log.txt <<'EOF'`), a module's argument (`python3 -m json.tool
 log.txt`), a read-only command's argument (`grep merge log.txt`) and a file read into a quoted
 argument (`--report "$(<report.txt)"`) are the program's data, whatever they say; a refusal a file

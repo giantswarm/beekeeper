@@ -1229,6 +1229,75 @@ func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 	}
 }
 
+// A path is printed only for a file written: none taken, or none saved with
+// the reason, prints no shot path; saved files print the line naming
+// beekeeper's record, then their paths.
+func TestShotLines(t *testing.T) {
+	if got := shotLines(nil, nil); !slices.Equal(got, []string{noShots}) {
+		t.Errorf("shotLines(none) = %q", got)
+	}
+	if got := shotLines(nil, errors.New("disk full")); !slices.Equal(got, []string{"screenshot: none saved: disk full"}) {
+		t.Errorf("shotLines(none, err) = %q", got)
+	}
+	if got := shotLines([]string{"/s/shot-1.jpg"}, errors.New("disk full")); !slices.Equal(got, []string{shotsSaved, "screenshot: /s/shot-1.jpg"}) {
+		t.Errorf("shotLines(one, err) = %q", got)
+	}
+}
+
+// A turn's report is printed as the turn wrote it, a finding that something
+// on the page was not saved included. A turn that took a screenshot and
+// reports it not saved prints beekeeper's record line, which says the turn
+// writes no file, and the saved shot's path; a turn that took none prints no
+// shot path.
+func TestBrowseReportsSavedShots(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	transcript, reportFile := filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "report")
+	script := "#!/bin/sh\nid=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\ncat \"$BROWSE_REPORT\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_REPORT", reportFile)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	const steps = "Open the demo page and take a screenshot."
+	const unsaved = "Opened the page and took a screenshot (not saved to disk). The page says deployed."
+	// What the page showed as not saved stays the turn's finding.
+	pageUnsaved := []string{
+		"The agent settings were not saved, as the screenshot shows.",
+		"The avatar image was not saved: the form shows an error.",
+		"Screenshot: the change was never persisted to the cluster.",
+	}
+	writeFile(t, reportFile, unsaved+"\n"+strings.Join(pageUnsaved, "\n")+"\n")
+
+	jpg := base64.StdEncoding.EncodeToString([]byte("jpg-bytes"))
+	writeFile(t, transcript, chromeUse("t1", "computer", `{"action":"screenshot"}`)+
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Successfully captured screenshot"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"`+jpg+`"}}]}]}}`+"\n")
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse with a screenshot: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 7 || got[0] != unsaved || !slices.Equal(got[1:4], pageUnsaved) || !strings.HasPrefix(got[4], "transcript: ") ||
+		got[5] != shotsSaved || !strings.HasPrefix(got[6], "screenshot: ") || !strings.HasSuffix(got[6], "shot-1.jpg") {
+		t.Fatalf("browse with a screenshot printed %q", got)
+	}
+	if b, err := os.ReadFile(strings.TrimPrefix(got[6], "screenshot: ")); err != nil || string(b) != "jpg-bytes" {
+		t.Errorf("the printed shot holds %q, %v", b, err)
+	}
+
+	out.Reset()
+	writeFile(t, transcript, chromeUse("t1", "navigate", `{"url":"https://example.test/"}`)+chromeAnswer("t1", "Navigated to https://example.test/"))
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse without a screenshot: %v\n%s", err, out.String())
+	}
+	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
+		t.Errorf("browse without a screenshot printed %q", got)
+	}
+}
+
 // A browse turn gets the same UI-only description that the hook accepts,
 // before it attempts its first click on a permissions section.
 func TestBrowseDisclosureInstructions(t *testing.T) {
