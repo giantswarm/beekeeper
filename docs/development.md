@@ -86,6 +86,12 @@ observation is persisted across watch restarts and reset by a claim.
 Unmapped clusters are never stopped. A failed Docker read or stop is reported
 and retried on the next doctor tick; `doctor --dry-run` changes nothing.
 
+A handover successor's recorded start protects inherited leases throughout
+the five-minute first-reply startup window, including when the doctor's
+process snapshot predates the handover or launch. The original claim time
+stays intact; after the startup window an absent successor's lease is
+eligible for normal cleanup.
+
 A successful lab claim starts existing stopped kind nodes (`lab.start`)
 before returning the kubeconfig. It does not create a missing cluster. A
 failed restart fails the command while retaining ownership for a claim retry.

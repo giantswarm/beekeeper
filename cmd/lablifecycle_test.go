@@ -235,3 +235,59 @@ func TestLabLifecycleRestartHonorsClusterLimit(t *testing.T) {
 		t.Fatalf("restart exceeded the cluster limit: %v, starts %d", err, *starts)
 	}
 }
+
+// Handover preserves Since and records the successor before launching it.
+// An older process snapshot therefore cannot judge that successor gone.
+func TestDoctorProtectsHandoverAfterSnapshot(t *testing.T) {
+	for _, successor := range []state.Party{
+		claimMe,
+		{HostSession: "codex_successor", Name: "Codex successor"},
+	} {
+		for _, tc := range []struct {
+			name        string
+			startOffset time.Duration
+			wantHeld    bool
+		}{
+			{"after snapshot", time.Second, true},
+			{"before launch", -time.Minute, true},
+			{"startup boundary", -replyWait, true},
+			{"failed startup expired", -replyWait - time.Second, false},
+		} {
+			t.Run(successor.Name+"/"+tc.name, func(t *testing.T) {
+				a := claimApp(t)
+				_, _, stops := lifecycleDocker(t, a)
+				holdLease(t, a, labOne, claimOther)
+				dir := lease.Dir(a.cfg.LeaseDir)
+				before, err := dir.Get(labOne)
+				if err != nil || before == nil {
+					t.Fatalf("predecessor's lease: %v, %v", before, err)
+				}
+				// The doctor only saw the predecessor. Both start paths
+				// record and transfer under the lock, then launch outside it.
+				snapshot := []*claude.Session{{ID: claimOther.Session, Name: claimOther.Name}}
+				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Starts = append(st.Starts, state.Start{Party: successor, At: a.now.Add(tc.startOffset)})
+					_, err := handClaims(st, dir, claimOther, successor)
+					return nil, err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				lines := a.doctorLabs(context.Background(), snapshot, doctorRun{by: watchParty})
+				h, err := dir.Get(labOne)
+				if err != nil || (h != nil) != tc.wantHeld {
+					t.Fatalf("holder=%+v, error=%v, chores=%v; want held %v", h, err, lines, tc.wantHeld)
+				}
+				if h != nil && (!h.Party().Is(successor) || h.Since != before.Since) {
+					t.Fatalf("inherited claim changed: %+v", h)
+				}
+				st, err := a.store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.wantHeld && (len(st.LabIdle) != 0 || !st.Released[labOne].IsZero()) || *stops != 0 {
+					t.Fatalf("handover lifecycle state: idle=%v, releases=%v, stops=%d, error=%v", st.LabIdle, st.Released, *stops, err)
+				}
+			})
+		}
+	}
+}
