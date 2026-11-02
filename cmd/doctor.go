@@ -702,7 +702,9 @@ line:
   from the ones this binary embeds, with the plugin's version, the
   binary's and the commands that update it (beekeeper self-update does);
 - checks the agy PreInvocation and PreToolUse hooks in
-  ~/.gemini/config/hooks.json and the agy skills entry in
+  ~/.gemini/config/hooks.json, failing when agy would reject the beekeeper
+  entry (a PreInvocation item that is a matcher, a command hook without a
+  command), and the agy skills entry in
   ~/.gemini/config/skills.json (and the skill files it points at) when agy
   is installed.
 

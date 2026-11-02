@@ -221,6 +221,15 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 	return nil
 }
 
+// agyHooks is a named hook entry as agy reads it: PreInvocation, an event
+// of no tool, lists the commands themselves, and PreToolUse lists matchers,
+// each with its commands. agy rejects the whole entry when a PreInvocation
+// item is a matcher entry: "command hook must specify 'command'".
+type agyHooks struct {
+	PreInvocation []hookCommand `json:"PreInvocation"`
+	PreToolUse    []hookEntry   `json:"PreToolUse"`
+}
+
 // AgyHook is the named hook entry install writes under project.Name in
 // agy's hooks.json (~/.gemini/config/hooks.json): PreInvocation for mid-turn
 // message injection and PreToolUse for the tool guards.
@@ -228,16 +237,13 @@ func AgyHook(exe string) json.RawMessage {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(map[string][]hookEntry{
-		"PreInvocation": {{
-			Matcher: "*",
-			Hooks: []hookCommand{{
-				Type:    hookTypeCommand,
-				Command: shellQuote(exe) + " " + hookWord + " preinvocation",
-				Timeout: 30,
-			}},
+	_ = enc.Encode(agyHooks{
+		PreInvocation: []hookCommand{{
+			Type:    hookTypeCommand,
+			Command: shellQuote(exe) + " " + hookWord + " preinvocation",
+			Timeout: 30,
 		}},
-		"PreToolUse": {{
+		PreToolUse: []hookEntry{{
 			Matcher: "*",
 			Hooks: []hookCommand{{
 				Type:    hookTypeCommand,
@@ -247,6 +253,53 @@ func AgyHook(exe string) json.RawMessage {
 		}},
 	})
 	return bytes.TrimSpace(b.Bytes())
+}
+
+// agyRejects is why agy refuses the named hook entry raw as it parses
+// hooks.json, or "" when agy accepts the events beekeeper writes:
+// PreInvocation items are commands, PreToolUse items matchers with
+// commands, and every command of type "command" (or of no type) names its
+// command.
+func agyRejects(raw json.RawMessage) string {
+	var events map[string][]json.RawMessage
+	if err := json.Unmarshal(raw, &events); err != nil {
+		return "not an object of hook lists: " + err.Error()
+	}
+	command := func(event string, item json.RawMessage) string {
+		var h struct {
+			Type    *string `json:"type"`
+			Command string  `json:"command"`
+		}
+		if err := json.Unmarshal(item, &h); err != nil {
+			return event + ": " + err.Error()
+		}
+		if (h.Type == nil || *h.Type == hookTypeCommand) && strings.TrimSpace(h.Command) == "" {
+			return event + ": command hook must specify 'command'"
+		}
+		return ""
+	}
+	for _, item := range events["PreInvocation"] {
+		if why := command("PreInvocation", item); why != "" {
+			return why
+		}
+	}
+	for _, item := range events["PreToolUse"] {
+		var e struct {
+			Hooks []json.RawMessage `json:"hooks"`
+		}
+		if err := json.Unmarshal(item, &e); err != nil {
+			return "PreToolUse: " + err.Error()
+		}
+		if len(e.Hooks) == 0 {
+			return "PreToolUse: a matcher without hooks"
+		}
+		for _, h := range e.Hooks {
+			if why := command("PreToolUse", h); why != "" {
+				return why
+			}
+		}
+	}
+	return ""
 }
 
 const pretooluseWord = "pretooluse"
@@ -273,27 +326,38 @@ func agyHookBinary(raw json.RawMessage) (string, int) {
 	return "", 0
 }
 
+// agyPreInvocationBinary returns the binary path and timeout of an agy hook
+// entry whose PreInvocation list is the one command "<exe> hook
+// preinvocation", or ("", 0) when raw is not such an entry.
 func agyPreInvocationBinary(raw json.RawMessage) (string, int) {
-	var events map[string][]hookEntry
+	var events struct {
+		PreInvocation []hookCommand `json:"PreInvocation"`
+	}
 	if json.Unmarshal(raw, &events) != nil {
 		return "", 0
 	}
-	list := events["PreInvocation"]
-	if len(list) != 1 || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
+	list := events.PreInvocation
+	if len(list) != 1 || list[0].Type != hookTypeCommand {
 		return "", 0
 	}
-	f := strings.Fields(list[0].Hooks[0].Command)
+	f := strings.Fields(list[0].Command)
 	if len(f) == 3 && f[1] == hookWord && f[2] == "preinvocation" {
-		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
+		return strings.Trim(f[0], `'"`), list[0].Timeout
 	}
 	return "", 0
 }
 
 // planAgyHooks writes or updates the project.Name entry in agy's hooks.json
 // when e.AgyHooks is set, leaving any other named hooks in that file
-// untouched.
+// untouched. An entry of an earlier install that agy rejects (PreInvocation
+// as matcher entries) is replaced, and a hooks.json that is a link is kept.
 func (e Env) planAgyHooks(p *plan, m *Manifest) error {
 	if e.AgyHooks == "" {
+		return nil
+	}
+	if symlink(e.AgyHooks) {
+		p.add("keep", e.AgyHooks, "a symlink to "+resolve(e.AgyHooks)+": install never writes through a link; "+
+			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
 		return nil
 	}
 	s, err := readSettings(e.AgyHooks)
@@ -337,7 +401,7 @@ func (e Env) planAgyHooks(p *plan, m *Manifest) error {
 // planAgyUnhooks removes the project.Name entry install added to agy's
 // hooks.json, leaving any other named hooks in place.
 func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error {
-	if len(m.AgyHook) == 0 || e.AgyHooks == "" {
+	if len(m.AgyHook) == 0 || e.AgyHooks == "" || symlink(e.AgyHooks) {
 		return nil
 	}
 	s, err := readSettings(e.AgyHooks)
@@ -360,39 +424,47 @@ func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error 
 	return nil
 }
 
-// CheckAgyHooks checks that agy's hooks.json at path holds the PreToolUse
-// entry for project.Name (running exe when exe is non-empty); it returns a
-// one-line finding for `beekeeper doctor`, or "" when healthy or path is
-// empty.
+// CheckAgyHooks checks that agy's hooks.json at path holds the PreInvocation
+// and PreToolUse entry for project.Name in a shape agy accepts (running exe
+// when exe is non-empty); it returns a one-line finding for `beekeeper
+// doctor`, or "" when healthy or path is empty. A hooks.json that is a link
+// install never writes through, so its finding says to edit the target.
 func CheckAgyHooks(path, exe, home string) string {
 	if path == "" {
 		return ""
 	}
 	short := (&plan{home: home}).tilde
+	fix := "run `beekeeper install`"
+	if symlink(path) {
+		fix = "edit " + short(resolve(path)) + ", which install never writes through the link"
+	}
 	s, err := readSettings(path)
 	if err != nil {
-		return fmt.Sprintf("agy hooks: %s: %v; run `beekeeper install`", short(path), err)
+		return fmt.Sprintf("agy hooks: %s: %v; %s", short(path), err, fix)
 	}
 	if !s.existed {
 		return fmt.Sprintf("agy hooks: %s is missing; run `beekeeper install`", short(path))
 	}
 	cur, ok := s.top.get(project.Name)
 	if !ok {
-		return fmt.Sprintf("agy hooks: %s lacks the %s PreToolUse hook; run `beekeeper install`", short(path), project.Name)
+		return fmt.Sprintf("agy hooks: %s lacks the %s PreToolUse hook; %s", short(path), project.Name, fix)
 	}
 	if exe != "" && sameJSON(cur, AgyHook(exe)) {
 		return ""
 	}
+	if why := agyRejects(cur); why != "" {
+		return fmt.Sprintf("agy hooks: %s: agy rejects the %s entry, so none of its hooks runs (%s); %s", short(path), project.Name, why, fix)
+	}
 	gotExe, timeout := agyHookBinary(cur)
 	if gotExe == "" || timeout <= 0 {
-		return fmt.Sprintf("agy hooks: %s: the %s PreToolUse hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
+		return fmt.Sprintf("agy hooks: %s: the %s PreToolUse hook differs from what install writes; %s", short(path), project.Name, fix)
 	}
 	preExe, preTimeout := agyPreInvocationBinary(cur)
 	if preExe == "" || preTimeout <= 0 || preExe != gotExe {
-		return fmt.Sprintf("agy hooks: %s: the %s PreInvocation hook differs from what install writes; run `beekeeper install`", short(path), project.Name)
+		return fmt.Sprintf("agy hooks: %s: the %s PreInvocation hook differs from what install writes; %s", short(path), project.Name, fix)
 	}
 	if exe != "" && gotExe != exe {
-		return fmt.Sprintf("agy hooks: %s runs %s instead of %s; run `beekeeper install`", short(path), short(gotExe), short(exe))
+		return fmt.Sprintf("agy hooks: %s runs %s instead of %s; %s", short(path), short(gotExe), short(exe), fix)
 	}
 	return ""
 }
