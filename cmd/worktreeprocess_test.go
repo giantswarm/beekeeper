@@ -66,9 +66,9 @@ func TestWorktreeOrphans(t *testing.T) {
 		{name: "shared worktree", st: state.State{Starts: []state.Start{start, {Party: active, Dir: dir}}, Agents: []state.Agent{{Party: active}}}},
 		{name: "live unregistered CLI", st: state.State{Starts: []state.Start{start}}, sessions: []*claude.Session{{Cwd: dir}}},
 		{name: "unknown worktree", st: state.State{}},
-		{name: "removed manually registered agent", st: state.State{EndedWorkers: []state.Start{{Party: ended, At: start.At}}}, env: func(int) (map[string]string, error) {
+		{name: "manually registered agent with servers started before registration", st: state.State{EndedWorkers: []state.Start{{Party: ended, At: now}}}, env: func(int) (map[string]string, error) {
 			return map[string]string{orphanSessionEnv: ended.Session}, nil
-		}, want: []int{10, 11, 13, 14}},
+		}, want: []int{10, 11, 12, 13, 14}},
 		{name: "different session identity", st: state.State{Starts: []state.Start{start}}, env: func(int) (map[string]string, error) {
 			return map[string]string{orphanSessionEnv: "unknown-other-session"}, nil
 		}},
@@ -78,7 +78,7 @@ func TestWorktreeOrphans(t *testing.T) {
 		}},
 		{name: "ended worker changed directory", st: state.State{Starts: []state.Start{{Party: ended, Dir: other, At: start.At}}}, env: func(int) (map[string]string, error) {
 			return map[string]string{orphanSessionEnv: ended.Session}, nil
-		}, want: []int{10, 11, 13, 14}},
+		}, want: []int{10, 11, 12, 13, 14}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

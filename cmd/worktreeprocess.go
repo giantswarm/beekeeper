@@ -109,10 +109,14 @@ func worktreeOrphans(st *state.State, tb *proc.Table, sessions []*claude.Session
 			if identities[pid] != "" && identities[pid] != s.Session {
 				continue
 			}
-			if s.Execution != nil || rostered(s.Party) || s.At.IsZero() || p.Start.Before(s.At) {
+			if s.Execution != nil || rostered(s.Party) || s.At.IsZero() {
 				continue
 			}
-			if (s.Session == "" || identities[pid] != s.Session) && worktreeRoot(s.Dir) != d {
+			// MCP servers may predate manual registration. An exact inherited
+			// session identity is evidence even then; directory-only matches
+			// must postdate the recorded start.
+			identified := s.Session != "" && identities[pid] == s.Session
+			if !identified && (p.Start.Before(s.At) || worktreeRoot(s.Dir) != d) {
 				continue
 			}
 			out = append(out, worktreeOrphan{process: p, owner: s.Party, dir: d})
