@@ -527,7 +527,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 					case isAgy:
 						_, _ = w.Write(guard.DenyAgy(reason))
 					default:
-						_ = json.NewEncoder(w).Encode(map[string]any{"hookSpecificOutput": map[string]string{"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}})
+						_ = json.NewEncoder(w).Encode(map[string]any{"hookSpecificOutput": map[string]string{"hookEventName": guard.PreToolUseEvent, "permissionDecision": "deny", "permissionDecisionReason": reason}})
 					}
 				}
 			}()

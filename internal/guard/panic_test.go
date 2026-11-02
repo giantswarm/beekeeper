@@ -7,24 +7,21 @@ import (
 )
 
 func TestGuardPanicNamesCheckAndLogsStack(t *testing.T) {
-	for _, format := range []string{"claude", "codex", "agy"} {
+	for _, format := range []string{"claude", "codex", transcriptAgyHarness} {
 		t.Run(format, func(t *testing.T) {
 			lt := newLiveTree(t)
 			var check, stack string
 			h := Hook{Self: self, Shell: testShell, LiveDirs: func() []string { panic("injected") }, Panic: func(c string, s []byte) { check, stack = c, string(s) }}
 			ev := toolEvent(bashTool, map[string]any{commandKey: "git worktree move " + lt.live + " /aside"})
 			ev["cwd"] = lt.root
-			ev["hook_event_name"] = "PreToolUse"
-			if format == "agy" {
-				ev = map[string]any{"conversationId": "test", "workspacePaths": []string{lt.root}, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": "git worktree move " + lt.live + " /aside", "Cwd": lt.root}}}
-			}
+			ev[hookEventKey] = PreToolUseEvent
 			raw, _ := json.Marshal(ev)
 			var out []byte
 			switch format {
 			case "codex":
 				out = h.DecideCodex(raw)
-			case "agy":
-				out = h.DecideAgy(raw)
+			case transcriptAgyHarness:
+				out, _ = json.Marshal(decideAgyCmd(t, h, lt.root, "git worktree move "+lt.live+" /aside"))
 			default:
 				out = h.Decide(raw)
 			}
