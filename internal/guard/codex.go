@@ -143,6 +143,10 @@ func extractCodexShellCommand(toolInput map[string]any) (cmd, key string, ok boo
 // object, and required tool arguments, and contains no NUL bytes. Returns a
 // non-empty refusal reason when invalid.
 func ValidateCodexInput(input []byte) string {
+	return validateCodexInput(input, false)
+}
+
+func validateCodexInput(input []byte, coordinatorMCP bool) string {
 	if len(bytes.TrimSpace(input)) == 0 {
 		return codexFailClosedMsg
 	}
@@ -170,6 +174,8 @@ func ValidateCodexInput(input []byte) string {
 		}
 	}
 	switch {
+	case coordinatorMCP && strings.HasPrefix(toolName, coordinatorMCPPrefix):
+		return ""
 	case isCodexShellTool(toolName):
 		if _, _, ok := extractCodexShellCommand(toolInput); !ok {
 			return "Refused: " + toolName + " call is missing a string `command` in tool_input; failing closed."
@@ -432,7 +438,7 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 	if h.ConfigErr != nil {
 		return DenyCodex("Refused: cannot load beekeeper configuration (" + h.ConfigErr.Error() + "); failing closed.")
 	}
-	if reason := ValidateCodexInput(input); reason != "" {
+	if reason := validateCodexInput(input, h.ExecutionMCP); reason != "" {
 		return DenyCodex(reason)
 	}
 	var ev event

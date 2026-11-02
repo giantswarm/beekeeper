@@ -17,7 +17,8 @@ supervisor use the same binary.
 The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
-stops. Remote wakes and resumes use durable ordered message receipts; inspect
+stops. Selected coordinator [MCP tools and connectors](docs/remote-mcp.md)
+are available through the worker's authenticated SSH callback. Remote wakes and resumes use durable ordered message receipts; inspect
 them with `agents messages` and reconcile with `agents hosts sync`. Hosts
 follow the coordinator's release: `agents hosts update` installs it there,
 verified, and pins the prepared policy digest in beekeeper's state, which the
