@@ -118,7 +118,9 @@ type Pull struct {
 	// Red are the checks on Head that concluded red (failure, cancelled,
 	// timed out, startup failure, action required; a commit status's
 	// failure or error), by name. Superseded cancellations are excluded.
-	Red     []Check
+	Red []Check
+	// Checks are the names of the non-superseded checks on Head.
+	Checks  []string
 	Reviews []Review // oldest first
 	// Author is the login that opened it; Title, Branch (its head branch)
 	// and Files (the paths it changes, ChangedFiles of them in all, which
@@ -972,17 +974,18 @@ func Plan(in Input) []Action {
 			// --update-branch, the worker's merge of the base and its
 			// conflicts' resolution, a rebase onto it); any other change
 			// gets a review while one of MaxReviews is left, else goes to
-			// the person. A park since the round opened asks for the
-			// newest head.
+			// the person. A base merge needs no new park: it brings no
+			// change of the worker's. Any other head asks for a park
+			// since the round opened.
 			if !p.Green || !isParked {
-				continue
-			}
-			if !w.ParkedAt.After(last.at) {
-				leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 				continue
 			}
 			if in.baseMerged(p, reviewed) {
 				add(goAction(in, base, fmt.Sprintf("review round %d approved head %s; head %s only brings %s into it", len(rs), short(reviewed), short(p.Head), baseName(p))))
+				continue
+			}
+			if !w.ParkedAt.After(last.at) {
+				leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 				continue
 			}
 			if len(rs) < MaxReviews {
