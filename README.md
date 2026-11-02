@@ -64,11 +64,14 @@ skips its read, without a failure or a pause.
 The loop also holds ownership and PR observations under the GraphQL floor
 or while the reading is unknown or stale. Board queries and tracked PR reads
 check a fresh budget against a durable allowance of 1,500 points per GitHub
-window, reserving 500 points before each request. Concurrent timer commands
+window, keeping 200 points for budget probes and reserving 500 points before
+each work request. Budget probes run at most every 30 seconds. Concurrent timer commands
 share its lock. An interrupted request keeps its reservation. Traffic between
 observations counts conservatively toward the allowance as `shared`; a busy
 desk can therefore pause the loop early. `budget --json` exposes the window,
-spent points and `board`, `pull`, `pass` and `shared` totals under `loop`.
+spent points and `board`, `pull`, `watch`, `timers`, `pass` and `shared` totals
+under `loop`. The embedded watch's note and parked-PR reads and GitHub timer
+conditions share the allowance; local timer jobs remain independent.
 Unchanged PR observations last five minutes; a new park, a report from that
 PR's reviewer or an answer on its thread invalidates them immediately.
 `supervisor loop --dry-run` previews refill intent with read-only capacity

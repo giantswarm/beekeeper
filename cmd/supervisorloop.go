@@ -2616,7 +2616,7 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	}
 	githubHeld := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
 		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now)
-	found := checkTimers(ctx, acting, a.now, githubHeld || a.resetFirst(st))
+	found := a.loopTimerChecks(ctx, acting, a.now, githubHeld || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
 	_, _, _, changed := settleTimersMatching(st, found, a.now, timerActs)
 	if !changed {

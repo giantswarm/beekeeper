@@ -16,6 +16,10 @@ import (
 const loopGraphQLFile = "loop-graphql.json"
 const loopGraphQLLimit = 1500
 
+// The loop-owned watch samples the budget at most every 30 seconds. Keep
+// 200 points outside the work allowance for those probes and boundaries.
+const loopGraphQLProbeReserve = 200
+
 // Keep room for an admitted query and for concurrent callers. The large
 // board regression checks a whole walk below this per-request reserve.
 const loopGraphQLReserve = 500
@@ -42,6 +46,13 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if a.cfg.GitHub.Floor <= 0 {
 		return run()
 	}
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	if st.Budget == nil || st.Budget.GraphQL == nil || boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		return fmt.Errorf("loop GitHub budget unknown or low: %w", errLoopLater)
+	}
 	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
 	held, err := lock.TryLockContext(ctx, 100*time.Millisecond)
 	if err != nil {
@@ -57,7 +68,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	// Once this window is held, another budget probe cannot release it.
 	// Repeated held attempts must cost zero GraphQL until its reset.
-	if a.now.Before(spend.Reset) && (spend.Spent+loopGraphQLReserve > loopGraphQLLimit || spend.Remaining < a.cfg.GitHub.Floor+loopGraphQLReserve) {
+	if a.now.Before(spend.Reset) && (spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.Remaining < a.cfg.GitHub.Floor+loopGraphQLReserve) {
 		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, errLoopLater)
 	}
 	b, err := readLoopGraphQLBudget(a, ctx)
@@ -72,7 +83,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	spend.Spent += shared
 	spend.Steps["shared"] += shared
 	spend.Remaining = g.Remaining
-	if b.Remaining <= a.cfg.GitHub.Floor || g.Remaining < a.cfg.GitHub.Floor+loopGraphQLReserve || spend.Spent+loopGraphQLReserve > loopGraphQLLimit {
+	if b.Remaining <= a.cfg.GitHub.Floor || g.Remaining < a.cfg.GitHub.Floor+loopGraphQLReserve || spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve {
 		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 			return err
 		}
@@ -166,4 +177,31 @@ func loopBudgetUnknownOrLow(b *state.Budget, floor int, now time.Time) bool {
 	g := b.GraphQL
 	return boardBudgetLow(b, floor, now) || g.Remaining <= floor ||
 		now.Sub(g.At) > time.Minute || (!g.Reset.IsZero() && !now.Before(g.Reset))
+}
+
+// Shell probes and local conditions stay outside the GitHub lock. Only
+// checks the timer parser identifies as GitHub reads spend this allowance.
+func (a *app) loopTimerChecks(ctx context.Context, timers []state.Timer, now time.Time, held bool) map[int]checkResult {
+	var local, remote []state.Timer
+	for _, t := range timers {
+		if checkOf(t).github {
+			remote = append(remote, t)
+		} else {
+			local = append(local, t)
+		}
+	}
+	found := checkTimers(ctx, local, now, held)
+	if held || len(remote) == 0 {
+		return found
+	}
+	var checked map[int]checkResult
+	if err := a.loopGitHub(ctx, "timers", func() error {
+		checked = checkTimers(ctx, remote, now, false)
+		return nil
+	}); err == nil {
+		for id, result := range checked {
+			found[id] = result
+		}
+	}
+	return found
 }

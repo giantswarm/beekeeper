@@ -14,6 +14,7 @@ import (
 func TestLoopGraphQLAllowancePersistsAndProtectsFloor(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 2500
+	healthyLoopBudget(t, r)
 	remaining := 5000
 	reset := r.a.now.Add(time.Hour)
 	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
@@ -21,7 +22,12 @@ func TestLoopGraphQLAllowancePersistsAndProtectsFloor(t *testing.T) {
 		return github.Budget{Remaining: 4900, GraphQL: &github.GraphQL{Remaining: remaining, Limit: 5000, Reset: reset}}, nil
 	}
 	runs := 0
-	for range 200 {
+	start := r.a.now
+	for attempt := range 200 {
+		r.a.now = start.Add(time.Duration(attempt) * 18 * time.Second)
+		if attempt%5 == 0 {
+			remaining -= 3
+		} // 120 watch probes across the hour
 		// Every attempt uses a new app, as parent/child commands and a
 		// restarted loop do. The allowance is shared through the store.
 		a := *r.a
@@ -47,6 +53,38 @@ func TestLoopGraphQLAllowancePersistsAndProtectsFloor(t *testing.T) {
 	}
 }
 
+func TestLoopTimerChecksHoldGitHubButKeepLocalProbes(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = 2500
+	healthyLoopBudget(t, r)
+	if err := r.a.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{
+		Reset: r.a.now.Add(time.Hour), Remaining: 4900, Spent: loopGraphQLLimit,
+		Steps: map[string]int{"board": loopGraphQLLimit},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+		t.Fatal("held allowance issued another budget probe")
+		return github.Budget{}, nil
+	}
+	fakeRead(t, func(cmd string) ([]byte, error) {
+		if cmd != probeHolds {
+			t.Fatalf("GitHub timer ran under held allowance: %s", cmd)
+		}
+		return nil, nil
+	})
+	found := r.a.loopTimerChecks(context.Background(), []state.Timer{
+		{ID: 1, Due: r.a.now.Add(-time.Minute), When: prMerged7},
+		{ID: 2, Due: r.a.now.Add(-time.Minute), Probe: probeHolds},
+	}, r.a.now, false)
+	if _, ok := found[1]; ok {
+		t.Fatal("GitHub condition was checked")
+	}
+	if _, ok := found[2]; !ok {
+		t.Fatal("local probe was swallowed by GitHub hold")
+	}
+}
+
 func TestLoopPullInvalidationIsSpecificToItsThread(t *testing.T) {
 	now := time.Now()
 	in := superloop.Input{Workers: []superloop.Worker{{ParkedOn: loopPR, ParkedAt: now}}, Events: []superloop.Event{
@@ -64,6 +102,7 @@ func TestLoopPullInvalidationIsSpecificToItsThread(t *testing.T) {
 func TestLoopRetainsReservationWhenSpendCannotBeRead(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.GitHub.Floor = 2500
+	healthyLoopBudget(t, r)
 	probes := 0
 	readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
 		probes++
@@ -81,6 +120,17 @@ func TestLoopRetainsReservationWhenSpendCannotBeRead(t *testing.T) {
 	}
 	if spend.Spent != loopGraphQLReserve || spend.Steps["board"] != loopGraphQLReserve {
 		t.Fatalf("lost interrupted request's reservation: %+v", spend)
+	}
+}
+
+func healthyLoopBudget(t *testing.T, r *loopRig) {
+	t.Helper()
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget = &state.Budget{Remaining: 4900, Reset: r.a.now.Add(time.Hour), At: r.a.now,
+			GraphQL: &state.GraphQL{Remaining: 4900, Limit: 5000, Reset: r.a.now.Add(time.Hour), At: r.a.now}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

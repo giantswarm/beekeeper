@@ -1909,13 +1909,31 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
-	over, kept := w.overtakenNow(ctx, st)
-	parks := w.settledParks(ctx, st)
+	var over, kept []overtake
+	var parks []settledPark
+	readRefs := func() error {
+		over, kept = w.overtakenNow(ctx, st)
+		parks = w.settledParks(ctx, st)
+		return nil
+	}
+	if w.loopOwned {
+		if err := w.app.loopGitHub(ctx, "watch", readRefs); err != nil {
+			over, kept, parks = nil, nil, nil
+		}
+	} else {
+		_ = readRefs()
+	}
 	if !w.chores {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st))
+	githubHeld := boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
+	var found map[int]checkResult
+	if w.loopOwned {
+		found = w.app.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)
+	} else {
+		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
+	}
 	var settles func(state.Timer) bool // nil: a running watch settles every timer
 	if !w.chores {
 		w.wouldFireTimers(st, found)
