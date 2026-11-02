@@ -395,9 +395,10 @@ type Board struct {
 	// supervisor loop runs board tidy (default 1h; negative: never).
 	ArchiveAfter Duration `yaml:"archiveAfter"`
 	TidyEvery    Duration `yaml:"tidyEvery"`
-	// EscalateEvery is how long board escalate waits before it checks an
-	// escalated blocked item again and, while it stays blocked, escalates
-	// it to the person once more (default 24h; negative: never escalate).
+	// EscalateEvery is how long board escalate waits before it looks at a
+	// blocked item again; it asks the person once more only when what holds
+	// the item changed since its note (default 168h, a week; negative: never
+	// escalate).
 	EscalateEvery Duration `yaml:"escalateEvery"`
 	// Claims publishes the desk's session records on their issues, for
 	// the other desks working the same repositories.
@@ -3295,7 +3296,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
 	setDur(&c.Board.TidyEvery, time.Hour)
-	setDur(&c.Board.EscalateEvery, 24*time.Hour)
+	setDur(&c.Board.EscalateEvery, 7*24*time.Hour)
 	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
 	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 

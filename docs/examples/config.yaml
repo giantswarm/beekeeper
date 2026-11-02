@@ -409,7 +409,7 @@ board:                      # the project board `beekeeper board next` picks wor
     go: in progress         # the go: its open sub-issues offered in their order; board move records the plan head
   archiveAfter: 336h        # the default; board tidy archives a closed item after this long (its Status set to Done first); negative: never
   tidyEvery: 1h             # the default; how often the supervisor loop runs board tidy; negative: never
-  escalateEvery: 24h        # the default; board escalate (after each tidy) asks the person about a blocked item, and again this long later while it stays blocked; negative: never
+  escalateEvery: 168h       # the default; board escalate (after each tidy) asks the person about a blocked item with what holds it, looks again this long later and asks again only when that changed; skips teammates' items, answered threads and open notes; negative: never
   claims:                   # the desk's session records as marker comments on their issues, for other desks on the same repositories (defaults but desk)
     off: false              # true: publish no claim and read none
     desk: platform-desk     # the neutral name the desk's claims carry, seen on (possibly public) issues; unset: no claim published, the other desks' still honoured
