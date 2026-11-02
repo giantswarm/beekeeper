@@ -1,7 +1,8 @@
 # Operating SSH execution hosts
 
 Managed, headless Claude Code sessions run on an explicitly selected SSH host.
-Each execution gets an isolated clone, an owned user service,
+Each execution gets its own linked worktree and branch backed by an isolated
+bare repository copy, an owned user service,
 a conversation identifier, and one coordinator roster registration. Omitting
 `--host`, or selecting `--host local`, keeps the local launch path.
 

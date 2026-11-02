@@ -85,6 +85,8 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		return errors.New("workspace escapes its execution root")
 	}
 	workspace := filepath.Join(parent, "workspace")
+	repository := filepath.Join(parent, "repository.git")
+	branch := "beekeeper-worker/" + string(j.Request.Ref.Execution)
 	if j.Handle.Workspace != "" && j.Handle.Workspace != workspace {
 		return errors.New("workspace identity mismatch")
 	}
@@ -109,22 +111,27 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		if !mapped {
 			cloneSource = fetchSource
 		}
-		if _, err := s.git(ctx, "", "clone", "--no-local", "--no-hardlinks", "--", cloneSource, workspace); err != nil {
+		if _, err := s.git(ctx, "", "clone", "--bare", "--no-local", "--no-hardlinks", "--", cloneSource, repository); err != nil {
 			return errors.New("isolated workspace clone failed; partial work is preserved")
 		}
-		if _, err := s.git(ctx, workspace, "remote", "set-url", "origin", strings.TrimSpace(string(origin))); err != nil {
+		if _, err := s.git(ctx, repository, "remote", "set-url", "origin", strings.TrimSpace(string(origin))); err != nil {
 			return errors.New("cannot establish workspace repository identity")
 		}
-		if _, err := s.git(ctx, workspace, "fetch", "--no-tags", "--", fetchSource, fetchRef); err != nil {
+		if _, err := s.git(ctx, repository, "fetch", "--no-tags", "--", fetchSource, fetchRef); err != nil {
 			return errors.New("cannot resolve the requested ref on the execution host")
 		}
-		commit, err := s.git(ctx, workspace, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+		commit, err := s.git(ctx, repository, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
 		if err != nil {
 			return errors.New("requested ref is not a commit")
 		}
 		j.Handle.Commit = strings.TrimSpace(string(commit))
 		if j.Request.SourceDigest != "" && j.Handle.Commit != j.Request.GitRef {
 			return errors.New("source bundle does not match pinned commit")
+		}
+		// Keep writable Git metadata execution-owned, while giving the worker
+		// a real linked worktree and an execution-specific branch.
+		if _, err := s.git(ctx, repository, "worktree", "add", "-b", branch, "--", workspace, j.Handle.Commit); err != nil {
+			return errors.New("cannot create execution worktree; partial work is preserved")
 		}
 		p, err := s.journalPath(j.Handle.Ref)
 		if err != nil {
@@ -139,23 +146,27 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		return errors.New("workspace is not an isolated directory")
 	}
 	common, err := s.git(ctx, workspace, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil || strings.TrimSpace(string(common)) != filepath.Join(workspace, ".git") {
+	if err != nil || strings.TrimSpace(string(common)) != repository {
 		return errors.New("workspace shares writable Git metadata")
 	}
-	if _, err := os.Lstat(filepath.Join(workspace, ".git", "objects", "info", "alternates")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(repository, "objects", "info", "alternates")); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("workspace borrows another repository's object store")
 	}
 	status, err := s.git(ctx, workspace, "status", "--porcelain", "--untracked-files=all")
 	if err != nil || len(status) != 0 {
 		return errors.New("workspace has uncommitted work; it is preserved")
 	}
-	if _, err := s.git(ctx, workspace, "checkout", "--detach", j.Handle.Commit, "--"); err != nil {
+	head, err := s.git(ctx, workspace, "rev-parse", "--verify", "refs/heads/"+branch)
+	if err != nil || strings.TrimSpace(string(head)) != j.Handle.Commit {
+		return errors.New("workspace branch changed; existing work is preserved")
+	}
+	if _, err := s.git(ctx, workspace, "checkout", branch, "--"); err != nil {
 		return errors.New("cannot check out the pinned commit without changing existing work")
 	}
 	if err := os.MkdirAll(filepath.Join(workspace, ".beekeeper-scratch"), 0o700); err != nil {
 		return err
 	}
-	exclude := filepath.Join(workspace, ".git", "info", "exclude")
+	exclude := filepath.Join(repository, "info", "exclude")
 	contents, err := readRegular(exclude, MaxWire)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
