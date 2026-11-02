@@ -663,4 +663,3 @@ func TestCodexExecCommandWorkdirBodyFile(t *testing.T) {
 		t.Errorf("non-string workdir: got %+v, want deny", d)
 	}
 }
-
