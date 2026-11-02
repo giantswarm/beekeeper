@@ -318,13 +318,30 @@ type Outcome struct {
 	// State is a promotion's state in devctl release promote's document
 	// (dispatched, nothing_to_promote, not_built, …), empty for a merge.
 	State string
+	// MergedAt is when GitHub reports the pull request merged, zero unless
+	// GitHub judged the run (Judged).
+	MergedAt time.Time
 }
 
 // Judged is the outcome of a run that ended without its document or by a
 // signal (exit 128+n): GitHub's state of the pull request decides whether it
 // merged, never the exit code, and a merge's release is unconfirmed.
 func Judged(p github.Pull) Outcome {
-	return Outcome{Merged: p.State == github.Merged, Unconfirmed: p.State == github.Merged}
+	o := Outcome{Merged: p.State == github.Merged, Unconfirmed: p.State == github.Merged}
+	if o.Merged {
+		o.MergedAt = p.MergedAt.UTC()
+	}
+	return o
+}
+
+// SettlesFrom is when a merge recorded at now settles its lane from: GitHub's
+// merge time when the run was recorded after it (a hung merge dropped or
+// recorded late), now otherwise.
+func (o Outcome) SettlesFrom(now time.Time) time.Time {
+	if o.Merged && !o.MergedAt.IsZero() && o.MergedAt.Before(now) {
+		return o.MergedAt
+	}
+	return now
 }
 
 // NeedsJudging says whether a run's outcome is GitHub's to decide: devctl
@@ -359,6 +376,8 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 			o.NoRelease = true
 		case "ci_failed":
 			o.Release, o.ReleaseFailed = doc.Release.Tag, true
+		case "unconfirmed":
+			o.Unconfirmed = true
 		}
 	}
 	return o, true
@@ -384,6 +403,8 @@ func ParseReleaseWait(raw []byte) (o Outcome, reason string, ok bool) {
 		o.Release = doc.Tag
 	case "ci_failed", "status_failed":
 		o.Release, o.ReleaseFailed = doc.Tag, true
+	case "no_release":
+		o.NoRelease = true
 	default:
 		o.Unconfirmed = true
 	}
