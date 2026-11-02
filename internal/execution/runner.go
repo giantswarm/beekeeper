@@ -194,6 +194,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 					_ = c.Wait()
 					return err
 				}
+				if stream != nil {
+					stream.signal()
+				}
 			}
 		}
 		if stream != nil && acceptedMessage(line, j.Handle.ConversationID, j.Request.RequestID) {

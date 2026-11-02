@@ -14,6 +14,7 @@ const (
 	forWord       = "for"
 	pushSubcmd    = "push"
 	branchesFlag  = "--branches"
+	allFlag       = "--all"
 	gitHeadRef    = "HEAD"
 	namespaceFlag = "--namespace"
 	homeVar       = "HOME"
@@ -168,6 +169,10 @@ func (h Hook) scanPush(cmd, cwd string, forceUnknown, noInitialCWD bool, depth i
 				}
 			case "gh":
 				if r := h.checkGHCommand(exp, c, st.dir, known); r != "" {
+					return r
+				}
+			case executionCurl, executionWget, "xh", "xhs", executionHTTP, executionHTTPS:
+				if r := h.httpMerge(name, exp[c+1:]); r != "" {
 					return r
 				}
 			}

@@ -20,7 +20,11 @@ const start = `(?:^[ \t]*|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
 
 // pos is a command position: a start with optional wrappers (timeout 600,
 // time, nice, env, VAR=val, command).
-const pos = start + `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
+const pos = start + posWrappers
+
+// posWrappers are the prefix commands and assignments pos allows in front of a
+// command.
+const posWrappers = `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
 
 // mergePos is a command position for the merge gate: a start with any of the
 // reserved words that start a command (if, elif, while,
@@ -108,7 +112,10 @@ const (
 // Hook decides one PreToolUse event.
 type Hook struct {
 	// MergeGo checks the durable supervisor go for this session and exact head.
-	MergeGo      func(session, repo string, pr int, head string) string
+	MergeGo func(session, repo string, pr int, head string) string
+	// GatedOwners are merge.devctlOwners: a merge of their repositories is
+	// the gate's devctl pr merge, never gh pr merge, gh api or curl.
+	GatedOwners  []string
 	mergeSession string
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
@@ -229,6 +236,10 @@ type Hook struct {
 	// main working tree of a checkout that sits directly in one (folders.go);
 	// empty, the guard is off.
 	PersonFolders []string
+	// LiveDirs lists the folders live sessions and processes work in,
+	// read only for a command that moves or removes an existing directory
+	// (liveworktrees.go); nil guards no worktree.
+	LiveDirs func() []string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
@@ -377,6 +388,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := deleteRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.liveWorktreeRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {

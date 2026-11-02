@@ -35,7 +35,9 @@ func (a *app) budgetCmd() *cobra.Command {
 independent of the working directory or a gh link. Name both identities and
 their account logins, counters and reset times (JSON identities). Cache each
 identity separately; the top-level REST and GraphQL counters each select the
-lowest balance. An unreadable identity holds the gate, as does any refusal.
+lowest balance. Unreadable App provider metadata falls back to the stored gh
+login with a warning, retaining known unexpired App observations. Unreadable
+credentials or GitHub probes hold the gate, as does any refusal.
 
 Read each identity's GitHub core budget from the rate-limit headers of a real,
 conditional request (a 304 costs nothing; /rate_limit is exempt and lies),
@@ -113,6 +115,9 @@ unread core budget:
 					Pollers []poller          `json:"pollers"`
 				}{b, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
+				for _, warning := range b.Warnings {
+					_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
+				}
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
 				var identities []string
 				for id := range b.Identities {
