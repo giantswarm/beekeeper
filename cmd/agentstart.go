@@ -425,8 +425,15 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
+			// A timer's start says what the gate did to it in the log.
+			tm, byTimer := timerOfStart()
+			gateFrom := time.Now()
 			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, kind)
+			gateWait := time.Since(gateFrom)
 			if err != nil {
+				if byTimer {
+					a.recordTimerRefusal(name, tm, err)
+				}
 				return err
 			}
 			if harness == harnessAuto {
@@ -482,6 +489,13 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
+			if byTimer {
+				line, err := a.recordTimerStart(name, tm, gateWait)
+				if err != nil {
+					return err
+				}
+				sp.brief = line + "\n\n" + sp.brief
+			}
 			h, _ := harnessByName(harness)
 			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			return h.Start(cmd.Context(), a, sp)
