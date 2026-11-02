@@ -109,7 +109,10 @@ func (w *watcher) publishBudget(held bool) { w.publishLevel("budget-state", held
 func (w *watcher) publishMachine() {
 	w.mu.Lock()
 	active := map[string]string{}
-	for _, key := range []string{loopDiskKind, "diskfull", "diskfill", "load", "cpupsi", "avail", "psi", "swap", "oomd"} {
+	// diskfill is absent on purpose: DISK FILLING is a forecast from the
+	// write rate, and a forecast never holds starts; only the disk-state
+	// reading's Low (free space under watch.diskMinMiB) does.
+	for _, key := range []string{loopDiskKind, "diskfull", "load", "cpupsi", "avail", "psi", "swap", "oomd"} {
 		if c, ok := w.active[key]; ok {
 			active[key] = c.Label
 		}
@@ -119,7 +122,12 @@ func (w *watcher) publishMachine() {
 }
 
 type watchDiskReading struct {
-	Low     bool
+	Low bool
+	// Filling says / would run full within watch.diskFillWithin at its
+	// recent rate. It is a forecast: it triggers an early disk step and
+	// is said in the watch, but it never holds starts on its own — only
+	// Low (free space under the floor) does.
+	Filling bool
 	Writers string
 	FreeMiB int
 	MinMiB  int
@@ -151,7 +159,7 @@ func (a *app) watchDisk() *watchDiskReading {
 // to start workers. Thresholds and all source reads stay in watch.
 func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	evs, err := l.a.store.Events(0, func(e state.Event) bool {
-		return strings.HasPrefix(e.Verb, "watch.") || e.Verb == "supervisor.disk" || e.Verb == loopClaimVerb || e.Verb == "disk.prune"
+		return strings.HasPrefix(e.Verb, "watch.") || e.Verb == "supervisor.disk" || e.Verb == loopFileVerb || e.Verb == loopClaimVerb || e.Verb == "disk.prune"
 	})
 	if err != nil {
 		return err
@@ -163,7 +171,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	var diskKey string
 	var diskAt time.Time
 	pruned := map[string]time.Time{}
-	noted := map[string]bool{}
+	filed := map[string]bool{}
 	claims := map[string]time.Time{}
 	var lastPrune time.Time
 	for _, e := range evs {
@@ -189,8 +197,17 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			if ok && what == "pruned" {
 				pruned[key] = e.At
 			}
+			// "noted" is the verb of the person notes an older loop filed
+			// for an episode; it counts as filed, so an upgrade does not
+			// file the same episode's finding again.
 			if ok && what == "noted" {
-				noted[key] = true
+				filed[key] = true
+			}
+		case loopFileVerb:
+			// The finding this loop files for an episode whose prune freed
+			// nothing arrives here (KindFile); its key names the episode.
+			if key, _, ok := keyed(e.Detail); ok && strings.HasPrefix(key, loopDiskKind+" ") {
+				filed[key] = true
 			}
 		case "watch.budget-state":
 			budgetAt, budgetHeld = e.At, e.Detail != "false"
@@ -203,7 +220,9 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 		case "watch.clear":
 			machineAt = e.At
 			delete(active, e.Detail)
-		case "watch.disk", "watch.diskfull", "watch.diskfill", "watch.load", "watch.cpupsi", "watch.avail", "watch.psi", "watch.swap", "watch.oomd":
+		// watch.diskfill is absent: a fill forecast never holds starts,
+		// not even one an older watch said (see publishMachine).
+		case "watch.disk", "watch.diskfull", "watch.load", "watch.cpupsi", "watch.avail", "watch.psi", "watch.swap", "watch.oomd":
 			machineAt = e.At
 			active[e.Verb[6:]] = e.Detail
 		}
@@ -246,20 +265,23 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			if err := l.record(act, "pruned"); err != nil {
 				return err
 			}
-		} else if diskAt.After(at) && !noted[diskKey] {
-			if l.a.cfg.Guide.Person == "" {
-				l.sayOnce(diskKey+" note", "SUPERVISOR DISK guide.person is unset: cannot report low disk; starts remain held")
-			} else if err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.NextNote++
-				text := "Disk remains low after pruning; starts are held. Writers: " + disk.Writers
-				var holding diskHolding
-				if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.now.Sub(holding.At) < time.Hour {
-					text += ". Holding the space: " + holding.Text
-				}
-				st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: l.a.cfg.Guide.Person, By: loopParty, At: l.a.now, Text: text, Kind: noteDecision, Question: "Investigate remaining disk writers (no decision)", StatusQuo: text, Default: "the guide investigates the writers and reclaims disposable data; keep starts held until the watch reports disk recovery"})
-				return []state.Event{event(loopParty, "note.add", "#%d %s", st.NextNote, text), event(loopParty, "supervisor.disk", "%s", superloop.Detail(act, "noted"))}, nil
-			}); err != nil {
-				l.sayOnce(diskKey+" note", "SUPERVISOR DISK note failed; starts remain held: %v", err)
+		} else if diskAt.After(at) && !filed[diskKey] {
+			// The prune freed nothing the desk can reclaim: what remains
+			// is a finding, never a decision for the person — disk is not
+			// theirs to decide. The finding goes through the loop's file
+			// channel to the guide, which files it in its owning
+			// repository. The hold stays while free space stays under the
+			// floor; it lifts on its own once the watch reports recovery.
+			text := "Disk remains low after pruning; starts are held. Writers: " + disk.Writers
+			var holding diskHolding
+			if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.now.Sub(holding.At) < time.Hour {
+				text += ". Holding the space: " + holding.Text
+			}
+			text += ". Own the reclaim gap to the beekeeper disk step, the writer's free-space need to its repository."
+			fileAct := superloop.Action{Kind: superloop.KindFile, Key: diskKey}
+			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+			if err := l.record(fileAct, line); err != nil {
+				l.sayOnce(diskKey+" file", "SUPERVISOR DISK finding failed; starts remain held: %v", err)
 			}
 		}
 	}

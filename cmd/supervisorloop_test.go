@@ -1134,7 +1134,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 				if note := r.called(loopNote, loopAdd); note != nil {
 					t.Fatalf("finding sent as decision: %v", note)
 				}
-				files := r.logged(t, "supervisor.file")
+				files := r.logged(t, loopFileVerb)
 				if len(files) != 1 || !strings.Contains(files[0].Detail, finding) {
 					t.Fatalf("file events: %+v", files)
 				}
@@ -1142,7 +1142,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 					t.Fatal("worker removed before finding settled")
 				}
 				r.pass(t)
-				if len(r.logged(t, "supervisor.file")) != 1 {
+				if len(r.logged(t, loopFileVerb)) != 1 {
 					t.Fatal("file repeated after loop restart")
 				}
 				if done && r.called(agentsName, loopRemove, loopWorker) == nil {
@@ -1152,7 +1152,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 					t.Fatal(err)
 				}
 				r.pass(t)
-				if len(r.logged(t, "supervisor.file")) != 1 || len(r.stdin) != 0 {
+				if len(r.logged(t, loopFileVerb)) != 1 || len(r.stdin) != 0 {
 					t.Fatal("filed finding rerouted or classifier called")
 				}
 
@@ -1196,7 +1196,7 @@ func TestLoopAndGuidePrintAProblemOnOneLine(t *testing.T) {
 	if out := r.out.String(); strings.Count(out, "\n") != 1 || strings.Contains(out, "\r") || !strings.Contains(out, encoded) {
 		t.Fatalf("supervisor output is not one complete line: %q", out)
 	}
-	events := r.logged(t, "supervisor.file")
+	events := r.logged(t, loopFileVerb)
 	if len(events) != 1 || !strings.HasSuffix(events[0].Detail, report) {
 		t.Fatalf("raw event: %+v", events)
 	}
@@ -2160,7 +2160,7 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 		return "", 0
 	}
 	r.pass(t)
-	if evs := r.logged(t, "supervisor.file"); len(evs) != 1 {
+	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
 		t.Fatalf("KindFile was refused by note add: %+v\n%s", evs, r.out)
 	}
 	r.pass(t)

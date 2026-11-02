@@ -205,3 +205,52 @@ func TestAPromotionBehindAMergeWithoutItsOutcomeWaitsForItsJudgement(t *testing.
 		})
 	}
 }
+
+// A merge recorded after its pull request merged (a hung run dropped or
+// recorded late) settles its installation-less lane from GitHub's mergedAt:
+// a promotion behind it starts at mergedAt plus merge.settle, not at the
+// record time plus merge.settle.
+func TestALateRecordedMergeSettlesItsLaneFromMergedAt(t *testing.T) {
+	noSystemd(t)
+	stubGitHub(t, github.Merged, "")
+	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"dispatched"}]}'`)
+	newest := candidateA
+	stubCandidate(t, &newest)
+	a, g := promotePlace(t)
+	settle := 5 * time.Minute
+	a.cfg.Merge.Settle = config.Duration{Duration: settle}
+	mergedAt := time.Now().Add(-3 * time.Minute).UTC().Truncate(time.Second)
+	pullState = func(context.Context, string, int) (github.Pull, error) {
+		return github.Pull{State: github.Merged, MergedAt: mergedAt}, nil
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = append([]state.Merge{{Repo: scratchRepo, PR: 889, Lane: scratchRepo, By: state.Party{Name: aheadName},
+			Phase: state.Running, Joined: mergedAt.Add(-20 * time.Minute), Started: mergedAt.Add(-20 * time.Minute)}}, st.Merges...)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Its devctl was ended without its document, three minutes after the merge.
+	endDevctl(t, a, scratchRepo, 889, "", "143")
+
+	until := mergedAt.Add(settle)
+	g.now = until.Add(-time.Second)
+	why, err := g.step()
+	if err != nil || why != "next in lane o/r, o/r#889's release is unknown: the lane settles until "+until.Local().Format("15:04") {
+		t.Fatalf("before mergedAt plus settle: %q, %v", why, err)
+	}
+	st, _ := a.store.Read()
+	i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 889 })
+	if i < 0 || st.Merges[i].Phase != state.Settling || !st.Merges[i].Finished.Equal(mergedAt) {
+		t.Fatalf("the late-recorded merge: %+v, want settling from %s", st.Merges, mergedAt)
+	}
+
+	// Past mergedAt plus settle, still well before the record time plus settle.
+	g.now = until.Add(time.Second)
+	if why, err := g.step(); err != nil || why != "" {
+		t.Fatalf("after mergedAt plus settle: %q, %v", why, err)
+	}
+	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0") {
+		t.Errorf("not promoted at mergedAt plus settle: %q", d)
+	}
+}
