@@ -340,11 +340,14 @@ type Park struct {
 	RefChecked time.Time `json:"refChecked,omitzero"`
 	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
 	// Empty (including parks written by older versions) is a plain wait.
-	ReviewHead string    `json:"reviewHead,omitempty"`
-	By         Party     `json:"by"`
-	At         time.Time `json:"at"`
-	On         string    `json:"on,omitempty"`
-	Waits      string    `json:"waits"`
+	ReviewHead string `json:"reviewHead,omitempty"`
+	// PostMerge is work remaining after merge; nil preserves older parks.
+	// An explicit empty string lets the loop close the task without a wake.
+	PostMerge *string   `json:"postMerge,omitempty"`
+	By        Party     `json:"by"`
+	At        time.Time `json:"at"`
+	On        string    `json:"on,omitempty"`
+	Waits     string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
