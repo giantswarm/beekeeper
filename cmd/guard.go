@@ -490,10 +490,15 @@ Register it in ~/.claude/settings.json:
   "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]
 
-And in ~/.gemini/config/hooks.json for agy:
+And in ~/.gemini/config/hooks.json for agy, where PreInvocation lists the
+commands themselves and PreToolUse matchers with their commands (agy
+rejects the whole entry when a PreInvocation item is a matcher):
 
-  {"beekeeper": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}
+  {"beekeeper": {
+    "PreInvocation": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook preinvocation", "timeout": 30}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}
 
 And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 
