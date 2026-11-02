@@ -243,7 +243,8 @@ process generation.
 
 On the host, resolve the repository identity from its own mapping and verify
 the checkout's origin against the allowlist. Do not send or reuse local paths.
-Create a per-execution isolated clone below `workspaceRoot`, using no shared
+Create a per-execution bare repository copy and linked worktree on a unique
+`beekeeper-worker/<execution-id>` branch below `workspaceRoot`, using no shared
 writable Git metadata, hardlinks, object alternates or borrowed object stores.
 Fetch and resolve the requested ref in that clone, recording its commit. Do
 not reset, clean, stash, switch or update the source checkout; its uncommitted

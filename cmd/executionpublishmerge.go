@@ -37,7 +37,7 @@ func mergePublicationBase(ctx context.Context, workspace string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := runPublicationGit(ctx, workspace, identity, "merge", "--no-edit", "FETCH_HEAD"); err != nil {
+	if _, err := runPublicationGit(ctx, workspace, identity, "merge", "--no-edit", "-m", "Merge upstream default branch", "FETCH_HEAD"); err != nil {
 		conflicts, readErr := publishGit(ctx, workspace, "diff", "--name-only", "--diff-filter=U")
 		if readErr == nil && conflicts != "" {
 			return errors.New("base merge has conflicts in the owned workspace; resolve, commit and publish")
