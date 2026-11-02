@@ -2,6 +2,8 @@ package guard
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -160,5 +162,30 @@ func TestPermissionDisclosureDoesNotReuseRefsAfterBatchNavigation(t *testing.T) 
 	d := decideEvent(t, Hook{Apps: func() []App { return changeRecorded }}, ev)
 	if d == nil || d.PermissionDecision != Deny {
 		t.Fatalf("decision = %+v, want evidence invalidated by batch navigation", d)
+	}
+}
+
+// A read started before a navigation cannot restore old refs by finishing
+// after the navigation was issued.
+func TestPermissionDisclosureRejectsLateRead(t *testing.T) {
+	path := drawsTranscript(t,
+		disclosureRead(permissionsPage, disclosureButton),
+		drawsCall{chromeNavigation, map[string]any{urlKey: permissionsPage, tabKey: 7}, "Reloaded", permissionsPage},
+		drawResult(Drawn, permissionsPage))
+	data, err := os.ReadFile(path) //nolint:gosec // the test's own temporary transcript
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	// Both calls were issued before the read's delayed result arrived.
+	lines[1], lines[2] = lines[2], lines[1]
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil { //nolint:gosec // the test's own temporary transcript
+		t.Fatal(err)
+	}
+	ev := toolEvent(browserTools+chromeComputer, tabInput(leftClick, map[string]any{refKey: refTwelve, summaryKey: expandsPermissions}))
+	ev["transcript_path"] = path
+	d := decideEvent(t, Hook{Apps: func() []App { return nil }}, ev)
+	if d == nil || d.PermissionDecision != Deny {
+		t.Fatalf("decision = %+v, want delayed old evidence refused", d)
 	}
 }

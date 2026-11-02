@@ -207,20 +207,26 @@ func permissionRef(transcript, tab, rawURL, ref string) string {
 		return ""
 	}
 	var target string
-	calls := map[string]chromeAction{}
+	var revision int
+	type readCall struct {
+		chromeAction
+		revision int
+	}
+	calls := map[string]readCall{}
 	scanLines(transcript, func(line []byte) {
 		for _, c := range toolCalls(line) {
 			if !isBrowserTool(c.name) {
 				continue
 			}
-			calls[c.id] = c.chromeAction
 			if changesPage(c.name, c.input, tab) {
+				revision++
 				target = ""
 			}
+			calls[c.id] = readCall{c.chromeAction, revision}
 		}
 		for _, r := range resultGroups(line) {
 			c, ok := calls[r.id]
-			if !ok || tabOf(c.input[tabKey]) != tab || (chromeTool(c.name) != chromeReadPage && chromeTool(c.name) != chromeFind) {
+			if !ok || c.revision != revision || tabOf(c.input[tabKey]) != tab || (chromeTool(c.name) != chromeReadPage && chromeTool(c.name) != chromeFind) {
 				continue
 			}
 			target = ""
