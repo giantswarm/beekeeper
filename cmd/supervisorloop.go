@@ -1995,9 +1995,9 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		tmpl = defaultContinuationBrief
 		merged := l.merged[act.Ref]
 		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
-		branch = cmp.Or(place.Ref, merged.Base, mainBranch)
+		branch = cmp.Or(place.Ref, merged.Base, head)
 		if place.remote() && place.Ref == "" {
-			place.Ref = cmp.Or(merged.Base, merged.MergeCommit, mainBranch)
+			place.Ref = cmp.Or(merged.Base, merged.MergeCommit)
 		}
 	} else {
 		if p, err := readLoopPull(ctx, act.Ref); err == nil {
