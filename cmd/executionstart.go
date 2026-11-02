@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -31,6 +30,9 @@ type executionStartOptions struct {
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
 	host, err := a.executionHost(o.Host)
 	if err != nil {
+		return err
+	}
+	if err := a.admitExecution(o.Host, host); err != nil {
 		return err
 	}
 	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != "headless" {
@@ -113,7 +115,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
 	prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. To merge upstream changes without a GitHub credential on this host, use `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
-	r := execution.StartRequest{LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	r := execution.StartRequest{MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
@@ -144,7 +146,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if executionHostBusy(current, host.Identity) >= host.MaxBusy {
 			return nil, refused("execution host maxBusy reached")
 		}
-		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
+		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Execution: rec}
 		if _, err := recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
@@ -197,10 +199,10 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
-	counts := countAgents(st, sessions, a.now)
+	counts := countAgents(st, sessions, a.now, a.cfg)
 	var v *capacityView
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
-		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now), k, readings, h, false, exclude, kind, a.now)
+		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), k, readings, h, false, exclude, kind, a.now)
 	} else {
 		v = newStartCapacity(counts, k, h, false, kind).withUsage(legacy, a.now)
 	}
@@ -269,19 +271,29 @@ func executionReserved(st *state.State, ag state.Agent) bool {
 
 func executionHostBusy(st *state.State, host execution.HostID) int {
 	n := 0
+	now := time.Now()
 	for _, s := range st.Starts {
-		if r := s.Execution; r != nil && r.Handle.Ref.Host == host && !r.Terminal() {
+		if r := s.Execution; r != nil && r.Handle.Ref.Host == host && !r.Terminal() && !executionAgentKept(st, r.Handle.Ref, now) {
 			n++
 		}
 	}
 	for _, ag := range st.Agents {
-		if ag.Execution != nil && ag.Execution.Host == host {
+		if ag.Execution != nil && ag.Execution.Host == host && keptBy(st, ag, now) == "" {
 			if rec, _ := executionRecord(st, *ag.Execution); rec == nil {
 				n++
 			}
 		}
 	}
 	return n
+}
+
+func executionAgentKept(st *state.State, ref execution.Ref, now time.Time) bool {
+	for _, ag := range st.Agents {
+		if ag.Execution != nil && *ag.Execution == ref && keptBy(st, ag, now) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
@@ -304,60 +316,27 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 	if rec.StopRequest != nil {
 		return a.stopExecution(ctx, ref, rec.StopRequest.Reason)
 	}
+	if rec.Released() {
+		return refused("execution reservation was released before its host acknowledged a start (%s); start a new one", rec.ReleaseReason)
+	}
 	if rec.Terminal() {
 		return refused("execution is terminal; its workspace and unfinished task are preserved")
 	}
 	r := rec.Request
 	if rec.Phase == executionPending {
-		if uploader, ok := client.(execution.SourceUploader); ok {
-			// A pending coordinator may have lost a legacy preparation reply.
-			// Preserve its original request/digest whenever the host journal
-			// already exists. Only confirmed absence permits source pinning.
-			existing := false
-			if r.SourceDigest == "" {
-				_, inspectErr := client.Inspect(ctx, ref)
-				switch {
-				case inspectErr == nil:
-					existing = true
-				case errors.Is(inspectErr, execution.ErrNotFound):
-				default:
-					a.executionFailure(ref, inspectErr)
-					return fmt.Errorf("cannot reconcile pending preparation: %w", inspectErr)
-				}
-			}
-			if !existing {
-				var data []byte
-				r, data, err = a.prepareExecutionSource(ctx, r)
-				if err != nil {
-					return err
-				}
-				if err := uploader.UploadSource(ctx, ref, data); err != nil {
-					return err
-				}
-			}
-		}
-		handle, err := client.Start(ctx, r)
+		var sentAt time.Time
+		r, sentAt, err = a.preparePendingExecution(ctx, client, host, rec)
 		if err != nil {
-			a.executionFailure(ref, err)
-			return fmt.Errorf("remote preparation failed or was interrupted: %w; recover the recorded execution", err)
-		}
-		if err := execution.ValidateHandle(host, r, handle); err != nil {
-			return err
-		}
-		if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
-			x, i := executionRecord(current, ref)
-			if x == nil {
-				return nil, refused("registration disappeared")
+			// A start the host never acknowledged holds no slot past its
+			// failure: the reservation is released, and a new start runs
+			// under the host's current policy.
+			released, releaseErr := a.releaseFailedStart(ctx, client, ref, sentAt, err)
+			switch {
+			case releaseErr != nil:
+				return fmt.Errorf("%w; releasing the reservation failed: %v", err, releaseErr)
+			case released:
+				return fmt.Errorf("%w; the start never reached its host and its reservation is released: it holds no host or desk slot, start anew", err)
 			}
-			if err := a.refuseStopped(current, "activating an SSH execution"); err != nil {
-				return nil, err
-			}
-			if x.StopRequest != nil {
-				return nil, refused("execution has a stop request")
-			}
-			x.Handle, x.Phase, current.Starts[i].Dir = handle, execution.Prepared, handle.Workspace
-			return []state.Event{event(current.Starts[i].By, "execution.prepared", "%s: registered handle on %s", current.Starts[i].Name, ref.Host)}, nil
-		}); err != nil {
 			return err
 		}
 	}

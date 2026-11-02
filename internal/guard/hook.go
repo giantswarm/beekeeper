@@ -20,12 +20,19 @@ const start = `(?:^[ \t]*|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
 
 // pos is a command position: a start with optional wrappers (timeout 600,
 // time, nice, env, VAR=val, command).
-const pos = start + `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
+const pos = start + posWrappers
+
+// posWrappers are the prefix commands and assignments pos allows in front of a
+// command.
+const posWrappers = `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
 
 // mergePos is a command position for the merge gate: a start with any of the
-// prefix commands that run their arguments as a command, with their options.
-// The build rewrite keeps pos: a wider one would change what it wraps.
-const mergePos = start + `(?:(?:` +
+// reserved words that start a command (if, elif, while,
+// until, !, {) and the prefix commands that run their arguments as a
+// command, with their options. A command a runner runs from its arguments
+// (xargs, find -exec, parallel) is no command position: runnerMerges refuses
+// it. The build rewrite keeps pos: a wider one would change what it wraps.
+const mergePos = start + `(?:(?:if|elif|while|until|!|\{)\s+)*(?:(?:` +
 	`flock(?:\s+(?:-[wE]\s*\S+|--(?:timeout|wait|conflict-exit-code)(?:=|\s+)\S+|-[a-zA-Z]+|--[\w-]+))*\s+[^\s;&|()-]\S*` +
 	`|timeout(?:\s+(?:-[ks]\s*\S+|-\S+))*\s+\d\S*` +
 	`|nice(?:\s+(?:-n\s*-?\d+|-\d+|--adjustment=-?\d+))?` +
@@ -104,8 +111,13 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// ExecutionMCP admits only the authenticated coordinator proxy namespace.
+	ExecutionMCP bool
 	// MergeGo checks the durable supervisor go for this session and exact head.
-	MergeGo      func(session, repo string, pr int, head string) string
+	MergeGo func(session, repo string, pr int, head string) string
+	// GatedOwners are merge.devctlOwners: a merge of their repositories is
+	// the gate's devctl pr merge, never gh pr merge, gh api or curl.
+	GatedOwners  []string
 	mergeSession string
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
@@ -226,6 +238,10 @@ type Hook struct {
 	// main working tree of a checkout that sits directly in one (folders.go);
 	// empty, the guard is off.
 	PersonFolders []string
+	// LiveDirs lists the folders live sessions and processes work in,
+	// read only for a command that moves or removes an existing directory
+	// (liveworktrees.go); nil guards no worktree.
+	LiveDirs func() []string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
@@ -376,6 +392,9 @@ func (h Hook) decide(ev event) []byte {
 	if r := deleteRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if r := h.liveWorktreeRefusal(cmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
@@ -396,6 +415,9 @@ func (h Hook) decide(ev event) []byte {
 	if unread {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a shell's -c or eval string names devctl in a form the merge gate cannot read " +
 			"(a command substitution, a quote left open), so a merge, promote or wait in it would run outside the gate. Run devctl as its own command."})
+	}
+	if r := h.runnerRefusal(cmd, bg); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := heldMerges(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})

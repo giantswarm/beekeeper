@@ -84,6 +84,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	MCP            bool   `json:"mcp,omitempty"`
 	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
 	Messaging      bool   `json:"messaging,omitempty"`
 	Builds         bool   `json:"builds"`
@@ -312,7 +313,9 @@ type Capabilities struct {
 	// Unavailable names each configured harness that failed its version,
 	// login or guard probe. The host advertises only the passing ones.
 	Unavailable map[string]string `json:"unavailable,omitempty"`
-	Resources   Resources         `json:"resources"`
+	// Tools names each provisioned worker tool and its pinned version.
+	Tools     map[string]string `json:"tools,omitempty"`
+	Resources Resources         `json:"resources"`
 }
 
 // ControlRequest is a host-to-coordinator mutation. Its sequence and receipt

@@ -145,6 +145,10 @@ func (an answered) unverified(q answerQuery, central bool, now time.Time) string
 		if !central || rec.Person == "" || !strings.EqualFold(rec.Person, an.For) || !strings.EqualFold(rec.Name, rec.Person) {
 			return fmt.Sprintf("it names %s, but %s on this log is not %s's verified call: a forged attribution", an.Via, partyName(rec), an.For)
 		}
+	case channelGuideDialog:
+		if central || an.ID == 0 || rec.Session == "" {
+			return "guide dialog answer lacks its local note or guide session"
+		}
 	case channelSession:
 		return fmt.Sprintf("%s relayed it from an agent session: not %s's own answer", partyName(rec), an.For)
 	case channelScript:
@@ -187,6 +191,8 @@ func (an answered) attribution() string {
 // verify's output weighs.
 func (an answered) strength() string {
 	switch an.Via {
+	case channelGuideDialog:
+		return "the person's selection in the guide's question dialog, bound to this note"
 	case channelCentral, channelSlack:
 		return "the central instance's verified identity " + an.Recorder.Person
 	case channelTerminal:

@@ -65,11 +65,16 @@ func (a *app) inspectExecution(ctx context.Context, ref execution.Ref) (executio
 
 func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason string) error {
 	// Intent is durable before contacting the host. An unreachable host never
-	// releases a reservation or clears a task.
+	// releases a reservation or clears a task. A released reservation has no
+	// host process to stop.
+	released := false
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		r, i := executionRecord(st, ref)
 		if r == nil {
 			return nil, refused("execution is not owned")
+		}
+		if released = r.Released(); released {
+			return nil, nil
 		}
 		if r.StopRequest == nil {
 			r.StopRequest = &execution.StopRequest{ID: uuid.NewString(), Reason: reason}
@@ -79,9 +84,19 @@ func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason strin
 	if err != nil {
 		return err
 	}
+	if released {
+		return nil
+	}
 	r, h, err := a.recordedExecution(ref)
 	if err != nil {
 		return err
+	}
+	// A reservation its host never acknowledged has no host journal to
+	// stop: it is released instead, unless a start it sent may still land.
+	if r.Phase == executionPending {
+		if done, err := a.releaseStoppedReservation(ctx, a.executionClient(h), r, time.Now()); done || err != nil {
+			return err
+		}
 	}
 	ack, err := a.executionClient(h).Stop(ctx, ref, *r.StopRequest)
 	if err != nil {
@@ -222,13 +237,25 @@ func activeExecution(st *state.State, ref execution.Ref) bool {
 }
 
 func executionNeedsSync(st *state.State, r *state.ExecutionRecord) bool {
-	if r == nil {
+	if r == nil || r.Released() {
 		return false
 	}
 	if !r.Terminal() || r.Observation.Reachability != execution.Reachable {
 		return true
 	}
 	return !r.Settled && !r.Completed && !r.Observation.StopAcknowledged && activeExecution(st, r.Handle.Ref)
+}
+
+// pendingStopReason is the reason a stop of r stands on, "" for none: its
+// own stop request, else the desk's stop.
+func pendingStopReason(st *state.State, r *state.ExecutionRecord) string {
+	switch {
+	case r.StopRequest != nil:
+		return r.StopRequest.Reason
+	case st.Stop != nil:
+		return st.Stop.Reason
+	}
+	return ""
 }
 
 func isUnreachable(err error) bool {
@@ -281,6 +308,37 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		}
 		r := st.Starts[idx].Execution
 		ref := r.Handle.Ref
+		// A reservation its host never acknowledged, past its start's
+		// window, is released when no host journal backs it: it holds
+		// no host or desk slot from then on.
+		opCtx, cancel := withTimeout(ctx)
+		released, releaseErr := a.releaseStaleReservation(opCtx, a.executionClient(h), r, time.Now())
+		cancel()
+		if released {
+			continue
+		}
+		if releaseErr != nil {
+			a.executionFailure(ref, releaseErr)
+			failures = append(failures, releaseErr.Error())
+			if isUnreachable(releaseErr) || ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		if r.Phase == executionPending && r.StartUnsent {
+			// No start left the coordinator: the host holds nothing to
+			// reconcile. The starting process or the release above settles
+			// it, and a stop releases it.
+			if reason := pendingStopReason(st, r); reason != "" {
+				opCtx, cancel = withTimeout(ctx)
+				stopErr := a.stopExecution(opCtx, ref, reason)
+				cancel()
+				if stopErr != nil {
+					failures = append(failures, stopErr.Error())
+				}
+			}
+			continue
+		}
 		if st.Stop != nil && !r.Terminal() && r.StopRequest == nil {
 			opCtx, cancel := withTimeout(ctx)
 			stopErr := a.stopExecution(opCtx, ref, st.Stop.Reason)
@@ -292,7 +350,7 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 				}
 			}
 		}
-		opCtx, cancel := withTimeout(ctx)
+		opCtx, cancel = withTimeout(ctx)
 		_, syncErr := syncer.SyncControl(opCtx, ref)
 		cancel()
 		if syncErr != nil {
