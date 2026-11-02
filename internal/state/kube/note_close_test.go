@@ -79,6 +79,10 @@ func checkNoteClose(t *testing.T, c client.Client) {
 	if err != nil || closed == nil || closed.Verb != noteDefaultedEvent {
 		t.Fatalf("closure after expiry: %+v %v", closed, err)
 	}
+	note, closure, err := store.LookupNote(1)
+	if err != nil || note == nil || note.Text != asked || closure == nil || closure.Verb != noteDefaultedEvent {
+		t.Fatalf("full retained note: %+v %+v %v", note, closure, err)
+	}
 	raw := &v1alpha1.Note{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(NoteObject(team, 1)), raw); err != nil || raw.Status.State != noteClosed || raw.Status.Closure == nil {
 		t.Fatalf("retained note: %+v %v", raw, err)

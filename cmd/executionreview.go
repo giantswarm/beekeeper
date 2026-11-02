@@ -26,8 +26,8 @@ func sameReviewSession(a, b state.Party) bool {
 // worker-selected name or a review's prose. Reconciliation is idempotent.
 func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		workerIndex := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent })
-		if workerIndex < 0 || st.Agents[workerIndex].Execution == nil {
+		worker, ok := executionReviewWorker(st, act)
+		if !ok {
 			return nil, nil
 		}
 		for _, round := range st.DeskReviews {
@@ -43,10 +43,10 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 				start = candidate
 			}
 		}
-		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, st.Agents[workerIndex].Party) {
+		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, worker) {
 			return nil, refused("independent reviewer start identity is unavailable")
 		}
-		st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: uuid.NewString(), Ref: act.Ref, Head: act.Head, Round: act.Round, Worker: st.Agents[workerIndex].Party, Reviewer: start.Party, AssignedAt: start.At})
+		st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: uuid.NewString(), Ref: act.Ref, Head: act.Head, Round: act.Round, Worker: worker, Reviewer: start.Party, AssignedAt: start.At})
 		for _, report := range st.WorkerReports {
 			if report.Finished && sameReviewSession(report.By, start.Party) {
 				if err := a.captureExecutionReviewReport(ctx, st, report.By, report.Text, report.At, true); err != nil {
@@ -56,6 +56,21 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 		}
 		return []state.Event{event(loopParty, "execution.review-assigned", "%s for %s at %s", name, act.URL, act.Head)}, nil
 	})
+}
+
+func executionReviewWorker(st *state.State, act superloop.Action) (state.Party, bool) {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 && st.Agents[i].Execution != nil {
+		return st.Agents[i].Party, true
+	}
+	if rp, ok := st.ReviewParkFor(act.Ref); ok && rp.Execution != nil {
+		return rp.Party, true
+	}
+	for i := len(st.Starts) - 1; i >= 0; i-- {
+		if st.Starts[i].Name == act.Agent && st.Starts[i].Execution != nil {
+			return st.Starts[i].Party, true
+		}
+	}
+	return state.Party{}, false
 }
 
 func executionReviewRound(st *state.State, use execution.MergeUse) *state.DeskReview {
@@ -103,7 +118,13 @@ var readDeskReview = func(ctx context.Context, repository string, pr int, id str
 func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUse, pull superloop.Pull) error {
 	round := executionReviewRound(st, use)
 	_, workerIndex := executionRecord(st, use.Ref)
-	if round == nil || round.Head != use.Head || workerIndex < 0 || !sameReviewSession(round.Worker, st.Starts[workerIndex].Party) || sameReviewSession(round.Worker, round.Reviewer) {
+	workerOK := workerIndex >= 0 && round != nil && sameReviewSession(round.Worker, st.Starts[workerIndex].Party)
+	if !workerOK && use.ID == "" && workerIndex >= 0 && round != nil {
+		workerOK = slices.ContainsFunc(st.Starts, func(s state.Start) bool {
+			return s.Execution != nil && s.Execution.Request.Repository == use.Repository && sameReviewSession(round.Worker, s.Party)
+		})
+	}
+	if round == nil || round.Head != use.Head || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
 		return refused("no assigned independent review round for this execution and head")
 	}
 	result := round.Result
@@ -117,6 +138,11 @@ func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUs
 	current := pull.Reviews[currentIndex]
 	if current.Author != result.Author || current.Head != use.Head || current.Commit != use.Head || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
 		return refused("authenticated independent review changed; new supervisor approval required")
+	}
+	// The loop's own merge presents no grant: it is the merge authority, so
+	// only a worker's grant is checked against the review it was issued for.
+	if use.ID == "" {
+		return nil
 	}
 	grant, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID)
 	if err == nil && (grant.DeskReviewID != round.ID || grant.ReviewID != result.ID || grant.ReviewDigest != result.BodyDigest) {

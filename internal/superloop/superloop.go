@@ -16,8 +16,10 @@ import (
 
 // The kinds of action, each logged as "supervisor.<kind>".
 const (
-	KindReview  = "review"
-	KindGo      = "go"
+	KindReview = "review"
+	KindGo     = "go"
+	// KindMerge records a coordinator mutation, never a worker grant.
+	KindMerge   = "merge"
 	KindForward = "forward"
 	// KindRework tells the worker that parked again on the head whose
 	// findings stand, with no change-request round left, to fix them: the
@@ -74,7 +76,7 @@ const (
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
 	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
-		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake}
+		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindMerge}
 }
 
 // The verbs of the events the rules act on.
@@ -101,10 +103,12 @@ const (
 
 // Pull is a tracked pull request as GitHub reports it.
 type Pull struct {
-	Ref   string // owner/repo#n
-	URL   string
-	State string
-	Head  string
+	Draft                 bool
+	Mergeable, MergeState string
+	Ref                   string // owner/repo#n
+	URL                   string
+	State                 string
+	Head                  string
 	// Base is the branch it merges into.
 	Base        string
 	MergeCommit string
@@ -151,7 +155,8 @@ type Review struct {
 
 // MaxReviews is how many reviews the loop starts for one pull request,
 // whatever happens: one, and a second only for a change an approval does
-// not cover. A third need is the guide's person's decision.
+// not cover. A later change that stays in the reviews' findings and tests
+// merges; one past them is the guide's person's decision.
 const MaxReviews = 2
 
 // verdictSlack is how much earlier than its round's start a verdict may
@@ -284,6 +289,11 @@ type Input struct {
 	// resolving the merge's conflicts or not, or rebases onto it
 	// (github.ApprovalCovers); nil: never, every new head is a new review.
 	BaseMerged func(p Pull, approved string) bool
+	// ChangedPast lists the files whose change p's head makes differs from
+	// the one reviewed made, the base's own changes left out
+	// (github.ChangedPast); nil, or an error: not known, and a head past
+	// the last review goes to the person.
+	ChangedPast func(p Pull, reviewed string) ([]string, error)
 	// Open reports whether an issue or pull request (owner/repo#n) is
 	// open; one it cannot read counts as open. nil: none is, so a merged
 	// pull request's worker is retired as before.
@@ -341,6 +351,71 @@ func (in Input) baseMerged(p Pull, approved string) bool {
 	return in.BaseMerged != nil && approved != "" && !sameHead(approved, p.Head) && in.BaseMerged(p, approved)
 }
 
+// fixesOnly reports whether p's head changes, past the change of the
+// reviewed head, only what the reviews of p asked for, and says why or why
+// not: every file whose change differs is a test (testFile) or one a
+// review's findings name, by its path or its base name.
+func (in Input) fixesOnly(p Pull, reviewed string, findings []string) (bool, string) {
+	if in.ChangedPast == nil {
+		return false, "what it changes since is not known"
+	}
+	files, err := in.ChangedPast(p, reviewed)
+	if err != nil {
+		return false, "what it changes since cannot be read: " + err.Error()
+	}
+	text := strings.Join(findings, "\n")
+	var beyond []string
+	for _, f := range files {
+		if !testFile(f) && !named(text, f) {
+			beyond = append(beyond, f)
+		}
+	}
+	switch {
+	case len(beyond) > 0:
+		return false, fmt.Sprintf("it changes %s, which no review finding names", strings.Join(beyond, ", "))
+	case len(files) == 0:
+		return true, fmt.Sprintf("head %s makes the reviewed change", short(p.Head))
+	}
+	return true, fmt.Sprintf("head %s changes only %s, the files of the reviews' findings and tests", short(p.Head), strings.Join(files, ", "))
+}
+
+// testFile reports whether path holds tests or their fixtures alone.
+func testFile(path string) bool {
+	return strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, "testdata/") || strings.Contains(path, "/testdata/")
+}
+
+// named reports whether text names path, by its path or its base name,
+// each as a whole token (token): loop.go is not named by a finding on
+// cmd/supervisorloop.go. A base name stands for the file in any directory.
+func named(text, path string) bool {
+	return token(text, path) || token(text, path[strings.LastIndex(path, "/")+1:])
+}
+
+// token reports whether s occurs in text as a whole token: no path or
+// identifier character right before it, and none right after it but a
+// sentence's closing dot.
+func token(text, s string) bool {
+	for i := 0; s != ""; {
+		j := strings.Index(text[i:], s)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(s)
+		before := start == 0 || !pathChar(text[start-1])
+		after := end == len(text) || !pathChar(text[end]) || text[end] == '.' && (end+1 == len(text) || !pathChar(text[end+1]))
+		if before && after {
+			return true
+		}
+		i = start + 1
+	}
+	return false
+}
+
+// pathChar reports whether c can be part of a file path or an identifier.
+func pathChar(c byte) bool {
+	return c == '/' || c == '.' || c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
 // gated reports whether the gate's devctl pr merge serves repo. A
 // repository in Admin merges with gh pr merge --admin instead.
 func (in Input) gated(repo string) bool {
@@ -391,6 +466,10 @@ func (a Action) Line(what string) string { return "[" + a.Key + "] " + what }
 // "[<key>] <agent>: …") back; false for another line.
 func ParseTaken(at time.Time, verb, subject, detail string) (Taken, bool) {
 	kind, ok := strings.CutPrefix(verb, "supervisor.")
+	// New loops execute a merge; old go records remain readable for recovery.
+	if kind == KindMerge {
+		kind = KindGo
+	}
 	if !ok || !slices.Contains(Verbs(), kind) {
 		return Taken{}, false
 	}
@@ -827,14 +906,14 @@ func Plan(in Input) []Action {
 		}
 		// escalate hands a head that needs a review past MaxReviews to the
 		// person, once: one answered already goes on as its answer says.
-		escalate := func(reviewed string) {
+		escalate := func(reviewed, why string) {
 			if escalated && sameHead(esc.head, p.Head) {
 				return
 			}
 			a := base
 			a.Key, a.Kind = escalateKey(ref, p.Head), KindEscalate
 			a.Question = EscalationQuestion(p.URL, p.Head)
-			a.Message = fmt.Sprintf("%s: its %d reviews are used, the last on head %s, and head %s changes more than the base since: it gets no third review", p.URL, len(rs), short(reviewed), short(p.Head))
+			a.Message = fmt.Sprintf("%s: its %d reviews are used, the last on head %s, and head %s changes more than the base since (%s): it gets no third review", p.URL, len(rs), short(reviewed), short(p.Head), why)
 			add(a)
 		}
 		// cycles is how many of the rounds asked for changes: the rounds
@@ -870,7 +949,7 @@ func Plan(in Input) []Action {
 				review()
 				continue
 			}
-			escalate(last.head)
+			escalate(last.head, "its last reviewer finished without a verdict")
 			continue
 		}
 		left := cycles < rounds && len(rs) < MaxReviews
@@ -910,7 +989,23 @@ func Plan(in Input) []Action {
 				review()
 				continue
 			}
-			escalate(reviewed)
+			// The reviews are used: a head whose new changes stay inside
+			// what the reviews asked for (the findings' files, tests)
+			// merges as the desk's standing rule says, one review, then the
+			// fixes and the merge; the person hears only of a change past
+			// them.
+			var findings []string
+			for _, rd := range rs {
+				if fv := p.verdict(rd, l.pushed(p)); fv != nil {
+					findings = append(findings, fv.Body)
+				}
+			}
+			ok, why := in.fixesOnly(p, reviewed, findings)
+			if ok {
+				add(goAction(in, base, fmt.Sprintf("its %d reviews are used, the last approving head %s; %s", len(rs), short(reviewed), why)))
+				continue
+			}
+			escalate(reviewed, why)
 		case ChangesRequested:
 			fk := forwardKey(ref, v.ID)
 			if !l.has(fk) {

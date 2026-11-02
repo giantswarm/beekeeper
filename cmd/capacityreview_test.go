@@ -191,7 +191,7 @@ func TestLoopStartsReviewAtWorkerCeilingInOnePass(t *testing.T) {
 			if slices.Contains(args, "--review") {
 				kind = forReview
 			}
-			v := newStartCapacity(countAgents(st, nil, r.a.now), r.a.cfg.Capacity, roomy(), false, kind)
+			v := newStartCapacity(countAgents(st, nil, r.a.now, r.a.cfg), r.a.cfg.Capacity, roomy(), false, kind)
 			if _, err := gateStart(v, false); err != nil {
 				return err.Error(), ExitRefused
 			}
@@ -206,7 +206,7 @@ func TestLoopStartsReviewAtWorkerCeilingInOnePass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := newStartCapacity(countAgents(st, nil, r.a.now), r.a.cfg.Capacity, roomy(), false, forWorker)
+	v := newStartCapacity(countAgents(st, nil, r.a.now, r.a.cfg), r.a.cfg.Capacity, roomy(), false, forWorker)
 	if _, err := gateStart(v, false); err == nil {
 		t.Fatal("ordinary worker passed the ceiling")
 	}
