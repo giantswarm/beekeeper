@@ -3462,6 +3462,20 @@ has, and every organisation or desk choice is unset until configured.
 [`docs/examples/config.yaml`](docs/examples/config.yaml) is a complete desk's configuration, every
 key annotated with what it guards and its default.
 
+`beekeeper config check` validates the selected file without opening state or changing it.
+It exits 0 and names the file when valid, or exits 1 with each finding's dotted key path
+(sequence entries use `[0]`). It checks unknown keys, YAML types, the loader's value rules,
+incomplete references, and explicitly configured local input files: the supervisor's briefs,
+the guide's instructions, the reporter's brief, harness configuration files, kubeconfigs,
+execution rules, token files and `file://` age identities. YAML merges follow their effective
+precedence: explicit keys override inherited values,
+and the first mapping in a merge sequence wins. Provider usage accepts both inline fields and
+nested `usage` mappings. Independent value-rule and incomplete-reference findings are collected
+alongside schema and file findings; malformed fields are isolated from valid siblings.
+It only stats these files; it reads no referenced content, resolves no secrets and runs no
+commands. Output paths, globs, remote paths and unconfigured defaults need not exist. The selected config file itself must exist,
+even at the default path. `--config` takes precedence over `$BEEKEEPER_CONFIG` as usual.
+
 Every session's hook loads this file on every tool call, so an edit is one write:
 `beekeeper config set <key> <value> [<key> <value>]…` sets dotted keys (`secret.store.read`) to YAML
 values in a single rename, validated before it replaces the file. A result that would not load is
