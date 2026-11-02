@@ -504,12 +504,22 @@ func argvs(calls []bgCall) [][]string {
 	return out
 }
 
+// parkedTurn is the transcript of a parked session whose last turn ended:
+// the first line names its directory, the second is its answer that closed
+// the turn (the proof stopParkedSession looks for).
+func parkedTurn(dir string) string {
+	return `{"type":"user","cwd":"` + dir + `"}` + "\n" +
+		`{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"parked"}]}}` + "\n"
+}
+
 // parkedBackground puts the background start p, parked on a desk review,
-// with its transcript in dir, on a's roster.
+// with its transcript in dir on a's roster: its last turn is answered and
+// ended (a parked session's state), which is what lets stopParkedSession
+// stop its session once the turn ended.
 func parkedBackground(t *testing.T, a *app, p state.Party, dir string) {
 	t.Helper()
 	// the transcript the resume continues
-	writeFile(t, filepath.Join(a.cfg.Claude.ProjectsDir, "-w", p.Session+".jsonl"), `{"type":"user","cwd":"`+dir+`"}`+"\n")
+	writeFile(t, filepath.Join(a.cfg.Claude.ProjectsDir, "-w", p.Session+".jsonl"), parkedTurn(dir))
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: dir, At: time.Now(), Background: true})
 		st.Agents = append(st.Agents, state.Agent{Party: p, Task: bgTask})
@@ -694,6 +704,8 @@ func TestParkedBackgroundStopFails(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	p := state.Party{Session: bgID, Name: bgName}
+	// its last turn ended: the transcript proves it (the parked session's state)
+	writeFile(t, filepath.Join(a.cfg.Claude.ProjectsDir, "-w", bgID+".jsonl"), parkedTurn(t.TempDir()))
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = append(st.Starts, state.Start{Party: p, Dir: t.TempDir(), Background: true})
 		st.Agents = append(st.Agents, state.Agent{Party: p, Task: bgTask, Park: &state.Park{Waits: "x"}})
@@ -715,5 +727,56 @@ func TestParkedBackgroundStopFails(t *testing.T) {
 	}
 	if tries != 2 || !strings.Contains(out.String(), `PARKED SESSION STAYS "`+bgName+`"`) || !strings.Contains(out.String(), "no such session") {
 		t.Errorf("tries %d, output:\n%s", tries, out)
+	}
+}
+
+// A wake to a parked background session is never silently undone: once its
+// message is in the transcript, the session stays stopped off for as long as
+// its turn runs — a model thinking over the message writes nothing, and the
+// quiet transcript must not read as a turn that ended. It stops only when the
+// transcript holds the turn's answer.
+func TestParkedBackgroundWakeIsNotUndone(t *testing.T) {
+	a, out := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	dir := t.TempDir()
+	p := state.Party{Session: bgID, Name: bgName}
+	parkedBackground(t, a, p, dir)
+	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	transcript := filepath.Join(a.cfg.Claude.ProjectsDir, "-w", bgID+".jsonl")
+	parkedTurn := `{"type":"user","cwd":"` + dir + `"}` + "\n" +
+		`{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"parked"}]}}` + "\n"
+	live := []*claude.Session{{ID: bgID, Name: bgName, Background: true, LastActive: a.now.Add(-time.Hour)}}
+	stubFresh(t, &live)
+	calls := stubBackground(t, "backgrounded · "+bgShortID+" · "+bgName+"\n")
+
+	// The wake resumes the session; the daemon writes the message as its
+	// turn into the transcript, and the model thinks. The transcript has
+	// been quiet longer than stewardQuiet (its LastActive is old, the wake's
+	// stamp will expire): the only proof that a turn runs is the wake's
+	// message without an answer after it.
+	if err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, bgName, "fix the red check", ""); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, transcript, parkedTurn+
+		`{"type":"user","message":{"content":"fix the red check"}}`+"\n")
+	a.now = time.Now().Add(stewardQuiet + time.Minute) // the wake's stamp expired
+	pollStop(t, w, live)
+	if len(*calls) != 1 || (*calls)[0].argv[1] != bgFlag {
+		t.Fatalf("the stop undid the wake's turn: %q", argvs(*calls))
+	}
+	if strings.Contains(out.String(), "PARKED SESSION STOPPED") {
+		t.Errorf("output:\n%s", out)
+	}
+
+	// The turn answers and stops: the park's session is stopped for memory.
+	writeFile(t, transcript, parkedTurn+
+		`{"type":"user","message":{"content":"fix the red check"}}`+"\n"+
+		`{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"pushed the fix"}]}}`+"\n")
+	pollStop(t, w, live)
+	if len(*calls) != 2 || !slices.Equal((*calls)[1].argv[1:], []string{bgStopCmd, bgShortID}) {
+		t.Fatalf("calls %q, want the wake then the stop", argvs(*calls))
+	}
+	if !strings.Contains(out.String(), `PARKED SESSION STOPPED "`+bgName+`"`) {
+		t.Errorf("output:\n%s", out)
 	}
 }
