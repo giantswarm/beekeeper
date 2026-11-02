@@ -42,8 +42,8 @@ func notifyingWatch(t *testing.T, dir string, standby bool) (*watcher, *desktop,
 	}
 	var out bytes.Buffer
 	d := &desktop{}
-	w := &watcher{app: &app{cfg: cfg, store: store, out: &out, now: relayNow}, standby: standby, last: map[string]time.Time{}, reported: map[string]bool{},
-		readHeadroom: func(context.Context, *swapReading) *headroom { return tight() }}
+	w := (&app{cfg: cfg, store: store, out: &out, now: relayNow}).newWatcher(standby, false)
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { return tight() }
 	w.notifier = notify.New(cfg.Notify.Policy(), dir, d, func(l string) { w.emitNow("notify", "%s", l) })
 	w.doctoring.Store(true) // background maintenance is not under test in this output fixture
 	t.Cleanup(func() {
@@ -89,8 +89,8 @@ func TestStatusBar(t *testing.T) {
 		want string
 	}{
 		{statusView{}, "beekeeper\t!loop\t0\t0\t0\t0/0"},
-		{statusView{SupervisorLoop: 42, Leases: []string{"a", "b"}, Holds: []string{"merges"}, Due: 3, Busy: 3, Floor: 5, Ceiling: 10}, "beekeeper\tloop\t2\t1\t3\t3/5"},
-		{statusView{Floor: 5}, "beekeeper\t!loop\t0\t0\t0\t0/5"},
+		{statusView{SupervisorLoop: 42, Leases: []string{"a", "b"}, Holds: []string{"merges"}, Due: 3, Busy: 3, Ceiling: 10}, "beekeeper\tloop\t2\t1\t3\t3/10"},
+		{statusView{Ceiling: 5}, "beekeeper\t!loop\t0\t0\t0\t0/5"},
 	} {
 		if got := c.v.bar(); got != c.want {
 			t.Errorf("bar() = %q, want %q", got, c.want)

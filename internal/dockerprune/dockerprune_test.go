@@ -3,7 +3,9 @@ package dockerprune
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +86,11 @@ type fake struct {
 	crictl  map[string]string
 	removed [][]string
 	refuse  string
+	// du is the `builder du` rows; pruneArgs are the per-record prunes
+	// run, and pruneRefused names the records they refuse.
+	du           string
+	pruneArgs    [][]string
+	pruneRefused map[string]bool
 	// tagged are the images' tag times by ID; an image without one was
 	// never tagged.
 	tagged map[string]string
@@ -95,6 +102,14 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(f.df), nil
 	case slices.Equal(args, []string{"system", "df", "-v", "--format", "{{json .}}"}):
 		return []byte(f.dfv), nil
+	case args[0] == "builder" && args[1] == "du":
+		return []byte(f.du), nil
+	case args[0] == "builder" && args[1] == "prune":
+		f.pruneArgs = append(f.pruneArgs, slices.Clone(args[2:]))
+		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], "id=")] {
+			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
+		}
+		return []byte("Total:\t0B\n"), nil
 	case args[0] == image && args[1] == "inspect":
 		var out string
 		for _, id := range args[4:] {
@@ -226,5 +241,107 @@ func TestReadUsage(t *testing.T) {
 	f.df = `{"Size":"1GB","Type":"Images"}`
 	if _, err := ReadUsage(context.Background(), f.run); err == nil {
 		t.Error("a df without the build cache row read")
+	}
+}
+
+// The builder prune flags and one fixture age, named once so a fixture
+// row differs only by the record it describes.
+const (
+	pruneForce  = "--force"
+	pruneFilter = "--filter"
+	age2d       = "2 days ago"
+)
+
+// duRow is one `docker builder du` record; duRows renders them as the
+// daemon's json lines do. gib sizes the record in whole gigabytes.
+type duRow struct {
+	id      string
+	gib     int
+	free    bool
+	usedAgo string
+}
+
+func duRows(rows ...duRow) string {
+	var out string
+	for _, r := range rows {
+		out += fmt.Sprintf(`{"ID":%q,"Size":%q,"Reclaimable":%t,"LastUsedAt":%q}`+"\n", r.id, strconv.Itoa(r.gib)+"GB", r.free, r.usedAgo)
+	}
+	return out
+}
+
+// The trim takes the reclaimable record used longest ago first, stops at
+// the target, and never asks for a record Docker does not call
+// reclaimable; the daemon's own --max-used-space pass, which frees nothing
+// while its reserved-space floor sits above the target, is gone.
+func TestPruneBuildCacheRemovesTheOldestReclaimableToTheTarget(t *testing.T) {
+	f := &fake{du: duRows(
+		duRow{"old", 2, true, "5 days ago"},
+		duRow{"mid", 1, true, age2d},
+		duRow{"new", 3, true, "1 hour ago"},
+		duRow{"busy", 2, false, "3 minutes ago"},
+	)}
+	// 8 GB total, target 3 GB: old (2) and mid (1) still leave 5 GB, so
+	// new goes too (2 GB left); the non-reclaimable busy record is never
+	// asked for and is what stays.
+	trimmed, err := PruneBuildCache(context.Background(), f.run, 3_000_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.pruneArgs) != 3 {
+		t.Fatalf("prunes = %v; want the target reached after three", f.pruneArgs)
+	}
+	for i, want := range [][]string{
+		{pruneForce, pruneFilter, "id=old"},
+		{pruneForce, pruneFilter, "id=mid"},
+		{pruneForce, pruneFilter, "id=new"},
+	} {
+		if !slices.Equal(f.pruneArgs[i], want) {
+			t.Errorf("prune %d = %v; want %v", i, f.pruneArgs[i], want)
+		}
+	}
+	if trimmed.Removed != 3 || trimmed.Freed != 6e9 {
+		t.Errorf("trim = %+v; want 3 records, 6 GB", trimmed)
+	}
+	if trimmed.Kept != 1 || trimmed.KeptBytes != 2e9 {
+		t.Errorf("trim = %+v; want the busy record kept with 2 GB", trimmed)
+	}
+}
+
+// A cache under its target needs no prune; a non-reclaimable or
+// unreadable-age record is never asked for, and a trim that only meets
+// refusals says so by the record it could not remove.
+func TestPruneBuildCacheUnderTheTargetAndWithRefusals(t *testing.T) {
+	f := &fake{du: duRows(duRow{"a", 1, true, age2d})}
+	if trimmed, err := PruneBuildCache(context.Background(), f.run, 3<<30); err != nil || trimmed.Removed != 0 || len(f.pruneArgs) != 0 {
+		t.Errorf("under target: %+v, %v, %v", trimmed, err, f.pruneArgs)
+	}
+	f = &fake{du: duRows(duRow{"a", 2, true, age2d}, duRow{"b", 2, true, "9 days ago"}),
+		pruneRefused: map[string]bool{"a": true}}
+	trimmed, err := PruneBuildCache(context.Background(), f.run, 0)
+	if err != nil || trimmed.Removed != 1 || trimmed.Freed != 2e9 {
+		t.Errorf("partly refused trim = %+v, %v; want b removed", trimmed, err)
+	}
+	f = &fake{du: duRows(duRow{"a", 2, true, age2d}),
+		pruneRefused: map[string]bool{"a": true}}
+	if trimmed, err := PruneBuildCache(context.Background(), f.run, 0); err == nil || !strings.Contains(err.Error(), "a") || trimmed.Removed != 0 {
+		t.Errorf("all-refused trim = %+v, %v; want an error naming a", trimmed, err)
+	}
+}
+
+func TestParseUsedAgo(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want time.Duration
+	}{
+		{"10 minutes ago", 10 * time.Minute},
+		{"26 hours ago", 26 * time.Hour},
+		{"5 days ago", 5 * 24 * time.Hour},
+		{"3 weeks ago", 3 * 7 * 24 * time.Hour},
+		{"Less than a second ago", -1},
+		{"", -1},
+	} {
+		if got := parseUsedAgo(c.in); got != c.want {
+			t.Errorf("parseUsedAgo(%q) = %v; want %v", c.in, got, c.want)
+		}
 	}
 }

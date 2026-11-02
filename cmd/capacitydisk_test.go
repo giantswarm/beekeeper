@@ -15,7 +15,7 @@ func TestCapacityLowDiskReadingHoldsStarts(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"disk":{"Low":true,"FreeMiB":1,"MinMiB":100}}`), h); err != nil {
 		t.Fatal(err)
 	}
-	k := config.Capacity{Floor: 1, Ceiling: 3}
+	k := config.Capacity{Ceiling: 3}
 	for _, builds := range []bool{false, true} {
 		v := newCapacity(agentCount{}, k, h, builds)
 		if v.Room != 0 || !strings.Contains(v.verdict(), "disk pressure") {
