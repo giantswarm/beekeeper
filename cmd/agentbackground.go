@@ -296,7 +296,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 	if err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w", sp.name, err)
 	}
-	s := state.Start{Party: state.Party{Session: id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Background: true}
+	s := state.Start{Party: state.Party{Session: id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort, Background: true}
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -304,7 +304,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		if reg, err = recordStart(st, s, sp.task, sp.serves, live); err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, bypassPermissions, busy with %q%s", sp.name, id, dir, reg.task, effortText(sp.effort))}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {

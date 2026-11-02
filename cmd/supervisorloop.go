@@ -1449,6 +1449,14 @@ func (l *supervisorLoop) as(args ...string) []string {
 // run runs a beekeeper command as the loop; a non-zero exit is an error
 // with its output.
 func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error) {
+	if len(args) >= 4 && args[0] == agentsName && args[1] == agentStartName && !slices.Contains(args, effortFlag) {
+		kind := "worker"
+		if slices.Contains(args, "--review") {
+			kind = reviewFlag
+		}
+		args = append(args, l.startEffort(args[2], kind)...)
+	}
+
 	out, code, err := beekeeperRun(ctx, l.as(args...)...)
 	if err != nil {
 		return out, err
@@ -2409,7 +2417,7 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 			agent = st.Agents[i].Name
 			from = agentRef(st, agent)
 		} else if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(p) {
-			agent = "guide"
+			agent = guideName
 		}
 		if from == "" {
 			for _, list := range [][]string{w.Refs, w.Mentioned} {
@@ -2652,4 +2660,12 @@ func (l *supervisorLoop) wakeReleased(ctx context.Context, release superloop.Act
 		l.stages[stage] = true
 	}
 	return nil
+}
+
+// startEffort keeps a kind's explicit effort ahead of the loop's default.
+func (l *supervisorLoop) startEffort(_ string, kind string) []string {
+	if l.a.cfg.Agents.Models[kind].Effort != "" {
+		return nil
+	}
+	return effortFlags(l.a.cfg.Supervisor.Effort)
 }

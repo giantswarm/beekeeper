@@ -17,7 +17,7 @@ import (
 
 // ExecArgv is the command line for a codex session's first turn, reading the
 // prompt from stdin.
-func ExecArgv(bin, model string) []string {
+func ExecArgv(bin, model string, effort ...string) []string {
 	argv := []string{
 		bin,
 		"exec",
@@ -28,12 +28,12 @@ func ExecArgv(bin, model string) []string {
 	if strings.TrimSpace(model) != "" {
 		argv = append(argv, "-m", strings.TrimSpace(model))
 	}
-	return append(argv, "-")
+	return append(withEffort(argv, effort), "-")
 }
 
 // ResumeArgv is the command line for a codex session's subsequent turns,
 // resuming threadID and reading the prompt from stdin.
-func ResumeArgv(bin, model, threadID string) []string {
+func ResumeArgv(bin, model, threadID string, effort ...string) []string {
 	argv := []string{
 		bin,
 		"exec",
@@ -45,7 +45,14 @@ func ResumeArgv(bin, model, threadID string) []string {
 	if strings.TrimSpace(model) != "" {
 		argv = append(argv, "-m", strings.TrimSpace(model))
 	}
-	return append(argv, strings.TrimSpace(threadID), "-")
+	return append(withEffort(argv, effort), strings.TrimSpace(threadID), "-")
+}
+
+func withEffort(argv, effort []string) []string {
+	if len(effort) > 0 && effort[0] != "" {
+		return append(argv, "-c", fmt.Sprintf("model_reasoning_effort=%q", effort[0]))
+	}
+	return argv
 }
 
 func stateDirFromInbox(inbox string) string {
@@ -62,7 +69,7 @@ func stateDirFromInbox(inbox string) string {
 // `codex exec resume --json ... <thread_id> -`. Messages arriving while a turn
 // is running stay in the persistent queue and run as the next turn as soon as
 // the active turn finishes.
-func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Writer) error {
+func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Writer, effort ...string) error {
 	ctx, stopSig := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSig()
 
@@ -135,7 +142,7 @@ func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Write
 			}
 		}
 		WriteState(inbox, StateBusy)
-		if err := runTurn(ctx, stateDir, inbox, logFile, bin, model, &threadID, msgs[0], stderr); err != nil {
+		if err := runTurn(ctx, stateDir, inbox, logFile, bin, model, &threadID, msgs[0], stderr, effort...); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -154,12 +161,12 @@ type streamEvent struct {
 	ThreadID string `json:"thread_id"`
 }
 
-func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin, model string, threadID *string, prompt string, stderr io.Writer) error {
+func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin, model string, threadID *string, prompt string, stderr io.Writer, effort ...string) error {
 	var argv []string
 	if *threadID == "" {
-		argv = ExecArgv(bin, model)
+		argv = ExecArgv(bin, model, effort...)
 	} else {
-		argv = ResumeArgv(bin, model, *threadID)
+		argv = ResumeArgv(bin, model, *threadID, effort...)
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // argv is built from the configured codex binary and model
 	configureTurnCmd(cmd)

@@ -182,6 +182,7 @@ type handover struct {
 	given string
 	// dir and model are the follow-up's.
 	dir, model string
+	effort     string
 }
 
 func (a *app) readHandover(q string) (handover, error) {
@@ -223,6 +224,7 @@ func (a *app) readHandover(q string) (handover, error) {
 		}
 	}
 	if s, ok := st.BypassStartOf(p); ok {
+		h.effort = s.Effort
 		if h.dir == "" {
 			h.dir = s.Dir
 		}
@@ -416,7 +418,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if note := gapsNote(gaps); note != "" {
 		a.say("%s", note)
 	}
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, effort: h.effort, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}

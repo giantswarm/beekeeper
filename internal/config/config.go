@@ -865,7 +865,20 @@ type Stop struct {
 }
 
 // Agents configures the hand-over of registered agents.
+// AgentModel selects the model and effort for an explicitly named task kind.
+type AgentModel struct {
+	Model  string `yaml:"model"`
+	Effort string `yaml:"effort"`
+}
+
+// ValidEffort reports whether a level is unset or a supported effort selector.
+func ValidEffort(level string) bool {
+	return slices.Contains([]string{"", "low", "medium", "high", "xhigh", "max"}, level)
+}
+
 type Agents struct {
+	Models map[string]AgentModel `yaml:"models"`
+
 	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
 	// the existing local launch path. Execution configures this machine only
 	// when it is itself an execution host; authentication is provisioned there.
@@ -2102,6 +2115,8 @@ type Guide struct {
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
 type Supervisor struct {
+	// Effort is the default for sessions started by the supervisor loop.
+	Effort string `yaml:"effort"`
 	// ReviewRounds is how many review rounds asking for changes `supervisor
 	// loop` runs for a pull request (default 1): after the last one's
 	// request for changes the worker fixes them and merges on the loop's go
@@ -2221,6 +2236,7 @@ func (o Ownership) validate() error {
 // successor's session prompt (the instructions it follows, a skill or a
 // file, not both) and the relay.
 type Role struct {
+	Effort string `yaml:"effort"`
 	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
@@ -3598,6 +3614,17 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	for key, level := range map[string]string{"guide.effort": c.Guide.Effort, "supervisor.effort": c.Supervisor.Effort} {
+		if !ValidEffort(level) {
+			return fmt.Errorf("%s: invalid effort %q (low, medium, high, xhigh, max)", key, level)
+		}
+	}
+	for kind, entry := range c.Agents.Models {
+		if strings.TrimSpace(kind) == "" || !ValidEffort(entry.Effort) {
+			return fmt.Errorf("agents.models.%s: invalid kind or effort %q", kind, entry.Effort)
+		}
+	}
+
 	if err := c.Run.Remote.Validate(); err != nil {
 		return err
 	}

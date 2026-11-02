@@ -529,3 +529,29 @@ verbatim text. `answer` verifies that receipt before recording channel `guide_di
 command-line flag alone cannot select the channel. The guide keeps the note's option labels
 and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
 relay still does not verify. The central instance retains its authenticated identity checks.
+
+
+## Session effort
+
+`agents start --effort low|medium|high|xhigh|max` overrides the effort of
+its selected `agents.models` entry. Without either setting, no effort
+option is sent and the harness keeps its own default. Effort is independent
+of the model override: `--model` alone keeps the matching entry's effort.
+The `agents.start` event includes an explicitly selected effort.
+
+Claude Code receives `--effort`, omp receives `--thinking`, and Codex receives
+`-c 'model_reasoning_effort="<level>"'` on both its first and resumed turns.
+The selected model must support the level. agy has no session effort option:
+an explicit effort is refused instead of silently ignored. SSH Claude and
+Codex starts carry effort in the owned execution request and reuse it for
+later turns.
+
+A Claude desktop-mode start with explicit effort runs its task headless,
+with its normal tool profile and sidebar import. Its wakes stay headless
+on that effort, since a desktop-spawned CLI cannot be given this override.
+Background starts keep Remote Control. Start records persist effort for
+wakes and handovers; no user settings file is changed.
+
+`guide.effort` selects the guide's session effort. The supervisor is a loop,
+so `supervisor.effort` supplies the default for sessions it starts; a matching
+task-kind entry's effort wins. Both settings are optional.

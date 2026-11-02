@@ -107,7 +107,7 @@ var desktopInput = func(ctx context.Context) (func() time.Time, error) { return 
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var nameFlag, model, dir, task, harness, mode, choiceLine string
-	var host, repository, gitRef string
+	var host, repository, gitRef, effortLevel, taskKind string
 	var exclude []string
 	var desktop, builds, force, dryRun, review, ofSelfHosted bool
 	c := &cobra.Command{
@@ -295,6 +295,17 @@ work, which takes no choice on a self-hosted provider.`,
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
+			if taskKind == "" {
+				taskKind = "worker"
+				if review {
+					taskKind = reviewFlag
+				}
+			}
+			entry, err := a.startSelection(taskKind, model, effortLevel)
+			if err != nil {
+				return err
+			}
+			model, effortLevel = entry.Model, entry.Effort
 			harness = a.defaultStartHarness(harness, model)
 			kind := startKind(review, ofSelfHosted)
 			if host != "" && host != "local" {
@@ -305,11 +316,11 @@ work, which takes no choice on a self-hosted provider.`,
 				if !ok {
 					return validateStartHarness(harness, mode)
 				}
-				h, err := executionHarness(base, executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, ReviewOfSelfHosted: ofSelfHosted, Exclude: exclude}, briefFile)
+				h, err := executionHarness(base, executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Effort: effortLevel, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, ReviewOfSelfHosted: ofSelfHosted, Exclude: exclude}, briefFile)
 				if err != nil {
 					return err
 				}
-				sp := agentStart{name: name, task: task, model: model}
+				sp := agentStart{name: name, task: task, model: model, effort: effortLevel}
 				if dryRun {
 					return h.DryRun(cmd.Context(), a, sp, nil)
 				}
@@ -419,7 +430,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
+				sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -481,7 +492,7 @@ work, which takes no choice on a self-hosted provider.`,
 					return err
 				}
 			}
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
+			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
 			h, _ := harnessByName(harness)
 			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			return h.Start(cmd.Context(), a, sp)
@@ -489,6 +500,8 @@ work, which takes no choice on a self-hosted provider.`,
 	}
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
+	c.Flags().StringVar(&effortLevel, "effort", "", "session effort: low, medium, high, xhigh, max (default: task kind, else harness default)")
+	c.Flags().StringVar(&taskKind, "kind", "", "task kind in agents.models (default: worker, or review with --review)")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
 	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host")
 	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
@@ -640,6 +653,7 @@ func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
 // agentStart is a session `agents start` or `agents handover` starts.
 type agentStart struct {
 	name, brief, dir, model string
+	effort                  string
 	// role is the role whose profile the session gets (workerRole, or a
 	// relayed role's name); empty: none.
 	role string
@@ -730,15 +744,23 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		return startedAgent{}, err
 	}
 	sp.model = cmp.Or(sp.model, a.cfg.Agents.Model)
+	if sp.role == guideName {
+		sp.effort = cmp.Or(sp.effort, a.cfg.Guide.Effort)
+	}
 	// A profiled session's task runs as a headless turn under its profile:
 	// the desktop spawns its own CLI for a desktop turn, with the person's
 	// whole tool surface, and no seed turn is needed before it.
 	profile := profileName(a.cfg, sp.role)
-	var profiled []string
+	profiled := effortFlags(sp.effort)
 	if profile != "" {
-		if profiled, err = a.profileFlags(ctx, profile); err != nil {
-			return startedAgent{}, err
+		flags, ferr := a.profileFlags(ctx, profile)
+		if ferr != nil {
+			return startedAgent{}, ferr
 		}
+		profiled = append(profiled, flags...)
+		sp.headless = true
+	}
+	if sp.effort != "" {
 		sp.headless = true
 	}
 	var by state.Party
@@ -778,7 +800,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		id = uuid.NewString()
 	}
 	sp.brief = fillScratchpad(sp.brief, dir, id)
-	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model}
+	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort}
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -790,7 +812,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		if sp.desktop {
 			st.Agents[len(st.Agents)-1].DesktopTurn = s.At
 		}
-		evs := []state.Event{event(by, verbStart, "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: session %s in %s, bypassPermissions, busy with %q%s", sp.name, id, dir, reg.task, effortText(sp.effort))}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -830,8 +852,8 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task, handed: handed, want: a.chosenModel(id)}
 	d.urgent = a.asksDesktop(id)
-	if profile != "" {
-		sa.turn = profiledTurn(profile)
+	if profile != "" || sp.effort != "" {
+		sa.turn = startTurnLine(profile, sp.effort)
 		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		// its row shows from its first turn, as a desktop turn's does
 		d.urgent = func() bool { return true }
@@ -1991,7 +2013,7 @@ func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
 	}
 	sp.brief = projectPrompt(dir, sp.brief)
 	model := cmp.Or(sp.model, a.cfg.Omp.Model, "<model>")
-	argv := ompArgv(omp.Comm, model)
+	argv := ompArgv(omp.Comm, model, sp.effort)
 	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as an omp agent on %s, yolo, no desktop import\nstart: %s\n",
 		sp.name, dir, model, strings.Join(argv, " ")); err != nil {
 		return err
@@ -2017,6 +2039,9 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 		return err
 	}
 	sp.model = cmp.Or(sp.model, a.cfg.Agents.Model)
+	if sp.role == guideName {
+		sp.effort = cmp.Or(sp.effort, a.cfg.Guide.Effort)
+	}
 	profile := profileName(a.cfg, sp.role)
 	if mode == config.ModeBackground {
 		var flags []string
@@ -2025,24 +2050,28 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 				return err
 			}
 		}
-		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", flags...)
+		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", append(flags, effortFlags(sp.effort)...)...)
 		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s as a background session with Remote Control under %s, none of the caller's CLAUDE* variables, no desktop import\nstart: %s\n",
 			sp.name, dir, cmp.Or(profile, "no profile"), strings.Join(argv, " "))
 		return err
 	}
-	if profile == "" {
+	if profile == "" && sp.effort == "" {
 		argv := agentArgv("claude", id, sp.name, sp.model, "<rules and brief>\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
 		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under no profile: a seed turn without tools, then its task as a desktop turn with the person's whole tool surface\nseed turn: %s\n",
 			sp.name, dir, strings.Join(argv, " "))
 		return err
 	}
-	flags, err := a.profileFlags(ctx, profile)
-	if err != nil {
-		return err
+	flags := effortFlags(sp.effort)
+	if profile != "" {
+		pf, err := a.profileFlags(ctx, profile)
+		if err != nil {
+			return err
+		}
+		flags = append(flags, pf...)
 	}
 	argv := headlessStartArgv("claude", id, sp.name, sp.model, "<rules and brief>", flags...)
 	_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under profile %s: %s, no seed turn\nfirst turn: %s\n",
-		sp.name, dir, profile, profiledTurn(profile), strings.Join(argv, " "))
+		sp.name, dir, cmp.Or(profile, "none"), startTurnLine(profile, sp.effort), strings.Join(argv, " "))
 	return err
 }
 
