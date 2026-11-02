@@ -550,3 +550,6 @@ remote starts, older processes and changed working directories.
 Removed manually registered workers retain their identity and registration time
 in `endedWorkers`, so their inherited session ID also identifies leftovers.
 This cleanup history grants no permissions to the start or permission hooks.
+Ownership and roster protection both use Claude session IDs or normalized
+Codex, omp and agy host-session IDs; a hosted harness takes precedence over
+a launching Claude session inherited in the same environment.

@@ -47,6 +47,22 @@ type worktreeOrphan struct {
 	dir     string
 }
 
+// orphanIdentity uses the same identity shape as each harness's start and
+// roster entry. A hosted harness takes precedence over a launching Claude
+// session inherited in its environment.
+func orphanIdentity(env map[string]string) state.Party {
+	for _, harness := range []struct{ key, prefix string }{
+		{codex.EnvAgent, codex.HostPrefix},
+		{omp.EnvAgent, omp.HostPrefix},
+		{agy.EnvAgent, agy.HostPrefix},
+	} {
+		if id := env[harness.key]; id != "" {
+			return state.Party{HostSession: harness.prefix + id}
+		}
+	}
+	return state.Party{Session: env[orphanSessionEnv]}
+}
+
 // worktreeOrphans ties reparented trees to known local starts, by inherited
 // session identity or the start's worktree. Every roster entry (including
 // done entries awaiting removal) and every live CLI protects its worktree.
@@ -71,7 +87,7 @@ func worktreeOrphans(st *state.State, tb *proc.Table, sessions []*claude.Session
 			protect(s.Dir)
 		}
 	}
-	identities := map[int]string{}
+	identities := map[int]state.Party{}
 	dirs := map[int]string{}
 	for pid := range tb.ByPID {
 		dirs[pid] = worktreeRoot(cwd(pid))
@@ -79,15 +95,9 @@ func worktreeOrphans(st *state.State, tb *proc.Table, sessions []*claude.Session
 		if err != nil {
 			continue
 		}
-		for _, key := range []string{codex.EnvAgent, omp.EnvAgent, agy.EnvAgent, orphanSessionEnv} {
-			if e[key] == "" {
-				continue
-			}
-			identities[pid] = e[key]
-			break
-		}
+		identities[pid] = orphanIdentity(e)
 		for _, ag := range st.Agents {
-			if ag.Session != "" && ag.Session == identities[pid] {
+			if identities[pid].Is(ag.Party) {
 				protected[dirs[pid]] = true
 			}
 		}
@@ -106,7 +116,9 @@ func worktreeOrphans(st *state.State, tb *proc.Table, sessions []*claude.Session
 			continue
 		}
 		for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
-			if identities[pid] != "" && identities[pid] != s.Session {
+			identity := identities[pid]
+			identified := identity.Is(s.Party)
+			if (identity.Session != "" || identity.HostSession != "") && !identified {
 				continue
 			}
 			if s.Execution != nil || rostered(s.Party) || s.At.IsZero() {
@@ -115,7 +127,6 @@ func worktreeOrphans(st *state.State, tb *proc.Table, sessions []*claude.Session
 			// MCP servers may predate manual registration. An exact inherited
 			// session identity is evidence even then; directory-only matches
 			// must postdate the recorded start.
-			identified := s.Session != "" && identities[pid] == s.Session
 			if !identified && (p.Start.Before(s.At) || worktreeRoot(s.Dir) != d) {
 				continue
 			}

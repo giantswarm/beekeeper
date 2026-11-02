@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -191,5 +194,67 @@ func TestRemoveAgentKeepsOrphanIdentity(t *testing.T) {
 	removeAgent(st, 0)
 	if len(st.EndedWorkers) != 1 || !st.EndedWorkers[0].Is(owner) || len(st.Starts) != 0 {
 		t.Fatalf("removed identity: %+v", st.EndedWorkers)
+	}
+}
+
+func TestWorktreeOrphansHarnessIdentities(t *testing.T) {
+	const rawID = "worker-id"
+	for _, harness := range []struct{ name, env, prefix string }{
+		{name: codex.Harness, env: codex.EnvAgent, prefix: codex.HostPrefix},
+		{name: omp.Harness, env: omp.EnvAgent, prefix: omp.HostPrefix},
+		{name: agy.Harness, env: agy.EnvAgent, prefix: agy.HostPrefix},
+		{name: claudeComm, env: orphanSessionEnv},
+	} {
+		t.Run(harness.name, func(t *testing.T) {
+			target, origin := orphanWorktree(t), orphanWorktree(t)
+			now := time.Now()
+			owner := state.Party{HostSession: harness.prefix + rawID}
+			if harness.prefix == "" {
+				owner = state.Party{Session: rawID}
+			}
+			tb := proc.NewTable(&proc.Process{PID: 10, PPID: 1, Start: now.Add(-time.Minute)}, &proc.Process{PID: 11, PPID: 10, Start: now.Add(-time.Minute)})
+			cwd := func(int) string { return target }
+			env := func(pid int) (map[string]string, error) {
+				if pid == 11 {
+					return map[string]string{}, nil
+				}
+				// A hosted harness may inherit its launching Claude session too.
+				e := map[string]string{orphanSessionEnv: "launching-session"}
+				e[harness.env] = rawID
+				return e, nil
+			}
+			for _, dir := range []string{target, origin} {
+				t.Run("ended-"+filepath.Base(dir), func(t *testing.T) {
+					st := &state.State{Starts: []state.Start{{Party: owner, Dir: dir, At: now.Add(-time.Hour)}}}
+					got := worktreeOrphans(st, tb, nil, cwd, env)
+					// The identified parent is owned even after changing worktree; a
+					// child without identity needs the recorded directory as evidence.
+					want := 1
+					if dir == target {
+						want = 2
+					}
+					if len(got) != want || !got[0].owner.Is(owner) {
+						t.Fatalf("ended %s: %+v, want %d", harness.name, got, want)
+					}
+				})
+			}
+			t.Run("active-changed-directory-cleared-child", func(t *testing.T) {
+				st := &state.State{Agents: []state.Agent{{Party: owner}}, Starts: []state.Start{
+					{Party: state.Party{Session: "previous-worker"}, Dir: target, At: now.Add(-time.Hour)},
+					{Party: owner, Dir: origin, At: now.Add(-time.Hour)},
+				}}
+				if got := worktreeOrphans(st, tb, nil, cwd, env); len(got) != 0 {
+					t.Fatalf("rostered %s's cleared child selected: %+v", harness.name, got)
+				}
+			})
+			t.Run("manual-removed-identity", func(t *testing.T) {
+				st := &state.State{Agents: []state.Agent{{Party: owner, Registered: now}}}
+				removeAgent(st, 0)
+				got := worktreeOrphans(st, tb, nil, cwd, env)
+				if len(got) != 1 || !got[0].owner.Is(owner) {
+					t.Fatalf("removed %s: %+v", harness.name, got)
+				}
+			})
+		})
 	}
 }

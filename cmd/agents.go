@@ -467,7 +467,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 // waits on anyone.
 func removeAgent(st *state.State, i int) {
 	ag := st.Agents[i]
-	if ag.Execution == nil && ag.Session != "" && !slices.ContainsFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }) {
+	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") && !slices.ContainsFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }) {
 		st.EndedWorkers = append(st.EndedWorkers, state.Start{Party: ag.Party, At: ag.Registered})
 	}
 	for j := range st.Records {
