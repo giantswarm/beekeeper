@@ -841,6 +841,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Wall-clock timer jobs keep running while GitHub observations are
+	// held. Board commands they invoke still share the query admission gate.
+	if !l.dryRun {
+		if err := l.fireTimers(ctx, st); err != nil {
+			return err
+		}
+	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
 	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
@@ -856,9 +863,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		delete(l.said, "graphql allowance")
 	}
 	if !l.dryRun {
-		if err := l.fireTimers(ctx, st); err != nil {
-			return err
-		}
 		l.tidy(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
@@ -2610,7 +2614,9 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 			acting = append(acting, t)
 		}
 	}
-	found := checkTimers(ctx, acting, a.now, lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st))
+	githubHeld := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
+		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now)
+	found := checkTimers(ctx, acting, a.now, githubHeld || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
 	_, _, _, changed := settleTimersMatching(st, found, a.now, timerActs)
 	if !changed {

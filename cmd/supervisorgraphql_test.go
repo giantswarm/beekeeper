@@ -143,6 +143,25 @@ func TestLoopGraphQLFloorHoldsAllGitHubObservations(t *testing.T) {
 	}
 }
 
+func TestLoopGraphQLFloorKeepsWallClockTimers(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.GitHub.Floor = 2500
+	wakes := 0
+	old := wakeOwner
+	t.Cleanup(func() { wakeOwner = old })
+	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error { wakes++; return nil }
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Timers = []state.Timer{{ID: 1, Due: r.a.now.Add(-time.Minute), Wake: loopWorker, What: "local result ready"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if wakes != 1 {
+		t.Fatalf("GitHub hold swallowed a wall-clock timer: %d wakes", wakes)
+	}
+}
+
 func TestLoopRequiresFreshGraphQLRecovery(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
