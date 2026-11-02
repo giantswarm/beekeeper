@@ -204,7 +204,7 @@ supervisor:                 # the supervisor loop, which beekeeper install alway
   # An unresumable parked session is replaced on its original task. Every
   # watch poll reads the budget; the loop holds starts on low/stale budget
   # or machine pressure. Watch lines are durable watch.* events.
-  fillRetryEvery: 5m        # retry an empty/failed board read; roster or capacity changes retry immediately
+  fillRetryEvery: 5m        # retry an empty/failed board read, doubled per further empty read up to 4x; roster or capacity changes retry immediately
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   model: ""                 # guide successors: overrides the previous holder's model
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
