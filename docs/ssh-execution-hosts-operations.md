@@ -155,6 +155,50 @@ reports the host's live resource observation (available memory, load, disk, slot
 and lab pressure), so a coordinator can compare what the host runs with against
 its own view of the machine.
 
+## omp on an execution host
+
+The host catalogue may list `omp` alongside `claude` and `codex`. Configure
+`agents.execution.harnesses.omp` on the host with an absolute `executable`, an
+exact installed `version` in `>= 18.14.2, < 19.0.0`, and `configDir` naming
+that host's own `PI_CODING_AGENT_DIR`. Never copy a coordinator credential
+store. For a provider requiring login, the operator signs in once on that
+host with `PI_CODING_AGENT_DIR=<configDir> omp login`; follow that provider's
+device/browser flow. A keyless self-hosted provider needs its host-local model
+configuration instead. Provider credentials and model configuration remain on
+that host.
+
+Prepare and pin a matching policy bundle before running `agents hosts check`.
+The bundle binds an explicit omp extension. The check validates the pinned
+version, asks `omp models --json --no-extensions` for available model metadata
+without a model call, and starts a bounded RPC session without sending a
+prompt to verify the extension starts. A missing login/model, extension error
+or absent readiness event leaves omp unavailable. No credential value is
+returned. As with other adapters, a passing check advertises the version;
+`unavailable.omp` explains a refused check.
+
+The runner disables ambient extensions, explicitly installs the prepared
+guard and enables only `bash`, `read` and `write`. Use foreground bash for
+edits and searches; PTYs, services, asynchronous bash, URL reads and every
+other tool are refused. The extension blocks on command failure, timeout,
+invalid JSON and guard rewrites it cannot apply. Each allowed call passes the
+shared workspace and execution guards and live coordinator authority check.
+Hooks are not an OS sandbox for arbitrary code executed inside an allowed
+shell command.
+
+No task prompt is sent until the guard extension starts and the runner binds
+its actual conversation identifier. A wake uses the same RPC process and
+message id; an admission response, rather than a successful pipe write,
+commits its receipt. Lost admission evidence remains uncertain for explicit
+recovery. Prompt failures end the execution as failed. Inspect, logs, stop,
+leases, publication and exact-head merge authorization use the shared
+execution lifecycle. Provider usage readers and ceilings stay on the
+coordinator; the host contributes machine room only.
+
+Agy remains unavailable until its native hooks work and its remote adapter
+is implemented; the dependency is
+https://github.com/giantswarm/beekeeper/issues/1785. It is never advertised as
+an unguarded fallback.
+
 ## Codex on an execution host
 
 A host may run Codex workers next to or instead of Claude. Install a pinned

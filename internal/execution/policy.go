@@ -47,7 +47,7 @@ const CodexVersions = ">= 0.165.0, < 1.0.0"
 
 func (c HostConfig) Validate() error {
 	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
-		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude or codex")
+		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex or omp")
 	}
 	for repo, p := range c.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
@@ -77,9 +77,9 @@ func (c HostConfig) Validate() error {
 }
 
 func (h HarnessConfig) validate(name string) error {
-	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions}[name]
+	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions, HarnessOmp: OmpVersions}[name]
 	if constraint == "" {
-		return errors.New("execution host harnesses must be claude or codex")
+		return errors.New("execution host harnesses must be claude, codex or omp")
 	}
 	v, err := semver.StrictNewVersion(h.Version)
 	rangeOK, _ := semver.NewConstraint(constraint)
@@ -88,8 +88,8 @@ func (h HarnessConfig) validate(name string) error {
 	}
 	// Codex keeps its login in the person's own CODEX_HOME on the host; the
 	// managed home links only that file and never receives a copied credential.
-	if name == HarnessCodex && h.ConfigDir == "" {
-		return errors.New("codex requires configDir, the host CODEX_HOME holding its own login")
+	if (name == HarnessCodex || name == HarnessOmp) && h.ConfigDir == "" {
+		return errors.New(name + " requires configDir holding its independently provisioned host login")
 	}
 	return nil
 }
@@ -111,6 +111,7 @@ type Policy struct {
 	// CodexDigest binds the managed CODEX_HOME's config, hooks and rules. It
 	// is empty on a host that runs no codex, leaving its policy unchanged.
 	CodexDigest string `json:"codexDigest,omitempty"`
+	OmpDigest   string `json:"ompDigest,omitempty"`
 }
 
 func (p Policy) Digest() string { b, _ := json.Marshal(p); return Digest(b) }
@@ -125,6 +126,9 @@ func (s *Server) Policy() Policy {
 	p := Policy{Protocol: Protocol, Version: s.Version, ConfigurationDigest: Digest(b), RulesDigest: Digest(s.Rules), SettingsDigest: Digest(s.settings())}
 	if _, ok := s.Config.Harnesses[HarnessCodex]; ok {
 		p.CodexDigest = Digest(mustJSON(s.codexFiles()))
+	}
+	if _, ok := s.Config.Harnesses[HarnessOmp]; ok {
+		p.OmpDigest = Digest(s.ompGuardBytes())
 	}
 	return p
 }
@@ -240,6 +244,11 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 	}
+	if p.OmpDigest != "" {
+		if err := atomicFile(s.ompGuardFile(), s.ompGuardBytes()); err != nil {
+			return "", err
+		}
+	}
 	// The manifest comes last: a host is prepared only once every file is.
 	if err := atomicFile(filepath.Join(s.Root, "policy.json"), mustJSON(p)); err != nil {
 		return "", err
@@ -270,6 +279,12 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 			if err != nil || Digest(b) != Digest(want) {
 				return p, errors.New("installed codex rules, configuration or hooks do not match the policy")
 			}
+		}
+	}
+	if p.OmpDigest != "" {
+		b, err := readRegular(s.ompGuardFile(), MaxWire)
+		if err != nil || Digest(b) != p.OmpDigest {
+			return p, errors.New("installed omp guard does not match the policy")
 		}
 	}
 	return p, nil
@@ -305,6 +320,9 @@ func (s *Server) workerExecutable() error {
 func (s *Server) probe(ctx context.Context, name string, h HarnessConfig) error {
 	if name == HarnessCodex {
 		return s.probeCodex(ctx, h)
+	}
+	if name == HarnessOmp {
+		return s.probeOmp(ctx, h)
 	}
 	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))

@@ -188,6 +188,11 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 		return false
 	}
 	f := parseStartArgsForVault(args)
+	// Remote harnesses authenticate on their execution host. The coordinator
+	// still reads provider usage, but never hands its vault credential over.
+	if f.host != "" && f.host != executionLocal {
+		return false
+	}
 	switch f.harness {
 	case omp.Harness:
 		return a.ompNeedsVault(f.model)
@@ -198,6 +203,7 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 }
 
 type startVaultFlags struct {
+	host         string
 	harness      string
 	model        string
 	excludes     []string
@@ -216,6 +222,11 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 			break
 		}
 		switch {
+		case strings.HasPrefix(arg, "--host="):
+			f.host = strings.TrimPrefix(arg, "--host=")
+		case arg == "--host" && i+1 < len(args):
+			i++
+			f.host = args[i]
 		case strings.HasPrefix(arg, "--harness="):
 			f.harness = strings.TrimPrefix(arg, "--harness=")
 		case arg == "--harness" && i+1 < len(args):

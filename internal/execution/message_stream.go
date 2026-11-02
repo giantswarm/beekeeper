@@ -23,6 +23,7 @@ type messageStream struct {
 	done      chan struct{}
 	listening chan struct{}
 	started   bool
+	encode    func(Envelope, string) []byte
 }
 
 func (s *Server) openMessageStream(ctx context.Context, ref Ref) (*messageStream, error) {
@@ -49,6 +50,9 @@ func (m *messageStream) signal() {
 }
 
 func (m *messageStream) Start(r StartRequest) {
+	if m.encode == nil {
+		m.encode = userMessage
+	}
 	m.started = true
 	go func() {
 		defer close(m.listening)
@@ -65,7 +69,7 @@ func (m *messageStream) Start(r StartRequest) {
 		defer close(m.done)
 		defer func() { _ = m.writer.Close() }()
 		initial := Envelope{ID: r.RequestID, Text: r.Prompt}
-		if _, err := m.writer.Write(userMessage(initial, r.ConversationID)); err != nil {
+		if _, err := m.writer.Write(m.encode(initial, r.ConversationID)); err != nil {
 			return
 		}
 		m.signal()
@@ -146,7 +150,7 @@ func (m *messageStream) sendNext() error {
 	if err != nil || next.ID == "" {
 		return err
 	}
-	_, err = m.writer.Write(userMessage(next, session))
+	_, err = m.writer.Write(m.encode(next, session))
 	return err
 }
 

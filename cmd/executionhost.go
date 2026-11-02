@@ -122,6 +122,14 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("execution hook conformance probe failed")
 			}
+			if _, ok := cfg.Harnesses[execution.HarnessOmp]; ok {
+				ompRaw, _ := json.Marshal(map[string]any{"session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "bash", "tool_input": map[string]any{"command": command}})
+				b = h.DecideExecutionOmp(ompRaw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
+				out.Hook.Decision = ""
+				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
+					return errors.New("omp execution hook conformance probe failed")
+				}
+			}
 			if _, ok := cfg.Harnesses[execution.HarnessCodex]; !ok {
 				continue
 			}
@@ -159,6 +167,30 @@ func (a *app) executionHook() guard.Hook {
 // execution: it is denied in the format asked for, never translated. A codex
 // hook binds its calls to the thread the runner recorded.
 func executionGuardDecision(h guard.Hook, format string, j execution.Journal, protected []string) func([]byte) []byte {
+	if format == execution.HarnessOmp {
+		return func(raw []byte) []byte {
+			if j.Request.Harness != execution.HarnessOmp {
+				return []byte(`{"allow":false,"reason":"hook format does not match the execution harness"}`)
+			}
+			b := h.DecideExecutionOmp(raw, j.Thread, j.Handle.Workspace, protected)
+			var answer struct {
+				Output struct {
+					Decision string         `json:"permissionDecision"`
+					Reason   string         `json:"permissionDecisionReason"`
+					Updated  map[string]any `json:"updatedInput"`
+				} `json:"hookSpecificOutput"`
+			}
+			if len(b) > 0 && json.Unmarshal(b, &answer) != nil {
+				return []byte(`{"allow":false,"reason":"invalid guard answer"}`)
+			}
+			// A guard rewrite must never be silently dropped by the extension.
+			out, _ := json.Marshal(map[string]any{"allow": answer.Output.Decision != guardDeny && answer.Output.Updated == nil, "reason": answer.Output.Reason})
+			return out
+		}
+	}
+	if j.Request.Harness == execution.HarnessOmp {
+		return func([]byte) []byte { return guard.ExecutionDeny("hook format does not match the execution harness") }
+	}
 	codexHook := format == execution.HarnessCodex
 	if codexHook != (j.Request.Harness == execution.HarnessCodex) {
 		deny := guard.ExecutionDeny
@@ -305,6 +337,9 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		if guardFormat == execution.HarnessCodex {
 			denial = guard.ExecutionDenyCodex
 		}
+		if guardFormat == execution.HarnessOmp {
+			denial = guard.ExecutionDenyOmp
+		}
 		defer func() {
 			if recover() != nil {
 				_, _ = cmd.OutOrStdout().Write(denial("execution guard failed; denied"))
@@ -314,7 +349,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 			_, err := cmd.OutOrStdout().Write(denial("execution identity, policy or coordinating authority could not be verified"))
 			return err
 		}
-		if guardFormat != "" && guardFormat != execution.HarnessCodex {
+		if guardFormat != "" && guardFormat != execution.HarnessCodex && guardFormat != execution.HarnessOmp {
 			return deny()
 		}
 		if err := a.load(); err != nil {
@@ -346,7 +381,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		}
 		return err
 	}}
-	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex")
+	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex, omp")
 	run := &cobra.Command{Use: "execution-run <execution>", Hidden: true, Args: cobra.ExactArgs(1), PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return a.load() }, RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := a.hostRuntime()
 		if err != nil {

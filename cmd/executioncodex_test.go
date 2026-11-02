@@ -105,12 +105,12 @@ func TestExecutionAutoPicksRemoteCodex(t *testing.T) {
 
 func TestExecutionHarnessAcceptsCodexOnly(t *testing.T) {
 	o := executionStartOptions{Host: sshTestSelector}
-	for _, base := range []Harness{claudeHarness{}, codexHarness{}} {
+	for _, base := range []Harness{claudeHarness{}, codexHarness{}, ompHarness{}} {
 		if _, err := executionHarness(base, o, "brief.md"); err != nil {
 			t.Fatalf("%q: %v", base.Name(), err)
 		}
 	}
-	for _, base := range []Harness{ompHarness{}, agyHarness{}} {
+	for _, base := range []Harness{agyHarness{}} {
 		if _, err := executionHarness(base, o, "brief.md"); err == nil {
 			t.Fatalf("%q has no remote adapter yet", base.Name())
 		}
@@ -122,18 +122,18 @@ func TestExecutionPublicationAndMergeAcceptRemoteCodex(t *testing.T) {
 	owner, _, _ := strings.Cut(sshTestRepository, "/")
 	a.cfg.GitHub.AllowedOrgs = []string{owner}
 	ref := execution.Ref{Host: sshTestSelector, Execution: "3aa27721-fb1e-4f07-b0aa-bdf100e0fdd9", Generation: 1}
-	for _, harness := range []string{codex.Harness, omp.Harness} {
+	for _, harness := range []string{codex.Harness, omp.Harness, harnessAgy} {
 		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: ref, Commit: strings.Repeat("a", 40)}, Request: execution.StartRequest{Ref: ref, Repository: sshTestRepository, Harness: harness, LeaseRequired: true}, Lease: &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}}
 		st := &state.State{Starts: []state.Start{{Party: state.Party{Name: "remote-codex-worker"}, Execution: rec}}}
 		_, err := a.executionPublicationLive(st, ref)
-		if (err == nil) != (harness == codex.Harness) {
+		if (err == nil) != (harness != harnessAgy) {
 			t.Fatalf("publication for %s: %v", harness, err)
 		}
 		err = a.executionMergeLive(context.Background(), st, execution.MergeUse{Ref: ref, Repository: sshTestRepository, PR: 1, Head: strings.Repeat("b", 40)})
-		if harness == codex.Harness && err != nil && strings.Contains(err.Error(), "authority stopped or mismatched") {
+		if harness != harnessAgy && err != nil && strings.Contains(err.Error(), "authority stopped or mismatched") {
 			t.Fatalf("merge refused remote codex by harness: %v", err)
 		}
-		if harness != codex.Harness && (err == nil || !strings.Contains(err.Error(), "authority stopped or mismatched")) {
+		if harness == harnessAgy && (err == nil || !strings.Contains(err.Error(), "authority stopped or mismatched")) {
 			t.Fatalf("merge accepted %s: %v", harness, err)
 		}
 	}
@@ -185,7 +185,7 @@ func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 		t.Fatalf("a codex host does not offer the codex choice: room %d, %+v, %v", v.Room, v.Choice, v.Blocks)
 	}
 	// The check's verdict narrows the catalogue: a codex the host failed is no choice.
-	if got := hostUnoffered(execution.Capabilities{Harnesses: map[string]string{claudeComm: codexTestClaudeVer}}); len(got) != 1 || got[0] != codex.Harness {
+	if got := hostUnoffered(execution.Capabilities{Harnesses: map[string]string{claudeComm: codexTestClaudeVer}}); len(got) != 2 || got[0] != codex.Harness || got[1] != omp.Harness {
 		t.Fatalf("unoffered harnesses: %v", got)
 	}
 
