@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Report local leases held past their purpose’s duration (or `leaseRound`, default `1h`) in the watch and queued claims, with the holder, claim time and overrun.
+- A gated merge whose head got no workflow runs, as the base-merge commit of `--update-branch` can, no longer ends on a bare devctl exit 4 (`required_missing` or `no_checks`): with no GitHub Actions run among the head's checks, its reason says that another wait will not start them and that an empty commit or a close and reopen of the pull request retriggers them before the same merge runs again (https://github.com/giantswarm/beekeeper/issues/1562).
+
 - `board move <epic> "In Progress"` records the go when the epic's plan pull request is already merged: with no open plan found, it searches the plans repositories' merged pull requests for the epic's number, takes the latest whose Epic line names it (its URL or `owner/repo#n`), and records the go at its merge commit. A merged plan's head is its merge commit wherever an epic's plan is shown; a go recorded earlier at the merged branch's head counts as unmoved. With neither an open nor a merged plan, the move says so and records no go (https://github.com/giantswarm/beekeeper/issues/1540).
 - Secret-file checks track `pushd`/`popd`, refuse directory copies and `find` moves that expose guarded files, and recognize helper paths split across arguments. Codex also checks split protected-home paths (https://github.com/giantswarm/beekeeper/issues/1902).
 
