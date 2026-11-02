@@ -3011,3 +3011,13 @@ func TestLoopLogsAnOrphanedPendingReviewOnce(t *testing.T) {
 		t.Fatalf("review lost after re-park: %v", r.calls)
 	}
 }
+
+// An unchanged refusal is retried less and less often, never every five
+// minutes all day.
+func TestLoopFailureDelayGrowsToAnHour(t *testing.T) {
+	for count, want := range map[int]time.Duration{2: 5 * time.Minute, 3: 10 * time.Minute, 4: 20 * time.Minute, 5: 40 * time.Minute, 6: time.Hour, 50: time.Hour} {
+		if got := loopFailureDelay(count); got != want {
+			t.Fatalf("delay after %d failures: %s, want %s", count, got, want)
+		}
+	}
+}
