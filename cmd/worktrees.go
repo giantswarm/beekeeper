@@ -543,6 +543,27 @@ func removeWorktree(ctx context.Context, git worktrees.Git, dir string) error {
 	return err
 }
 
+func (a *app) cleanRemovedWorktree(ctx context.Context, dir, publishedHead string) {
+	if dir == "" {
+		return
+	}
+	dir = filepath.Clean(dir)
+	if !worktrees.Linked(dir) {
+		return
+	}
+	if nested, err := worktrees.NestedCheckout(dir); err != nil || nested {
+		return
+	}
+	t, err := worktrees.InspectBuildDirs(ctx, runGit, dir, a.cfg.Disk.BuildDirs)
+	if err != nil || t.Locked || len(t.Work) > 0 {
+		return
+	}
+	if t.Unpushed > 0 && (publishedHead == "" || t.Head != publishedHead) {
+		return
+	}
+	_ = removeWorktree(ctx, runGit, t.Dir)
+}
+
 // moveAside moves the orphaned worktree dir to the same path under its
 // root's orphansDir, the root being the one of roots it lies under (its
 // parent for none); a path taken there gets the time appended.

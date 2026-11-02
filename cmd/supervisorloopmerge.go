@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -67,12 +68,22 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}) {
 		return "", errLoopLater
 	}
+	var execRef *execution.Ref
 	for _, worker := range st.Agents {
 		if worker.Name == act.Agent && worker.Execution != nil {
-			use := execution.MergeUse{Ref: *worker.Execution, Repository: ref.Repo, PR: ref.N, Head: act.Head}
-			if err := a.executionMergeLive(ctx, st, use); err != nil {
-				return "", err
-			}
+			execRef = worker.Execution
+			break
+		}
+	}
+	if execRef == nil {
+		if rp, ok := st.ReviewParkFor(act.Ref); ok && rp.Execution != nil {
+			execRef = rp.Execution
+		}
+	}
+	if execRef != nil {
+		use := execution.MergeUse{Ref: *execRef, Repository: ref.Repo, PR: ref.N, Head: act.Head}
+		if err := a.executionMergeLive(ctx, st, use); err != nil {
+			return "", err
 		}
 	}
 	if err := l.claim(act, act.Agent); err != nil {
@@ -113,18 +124,18 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 			out = reply.Reason
 		}
 		// A confirmed open pull request needs repair. Recording this action after
-		// the wake prevents repeated repair wakes for the same failed head.
+		// the wake or fixer start prevents repeated repair wakes for the same failed head.
 		act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s (exit %d): %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again. The supervisor performs the merge.", act.URL, act.Head, code, oneLine(out))
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return "merge failed; branch repair requested", nil
 	}
-	if !pullNeedsBranchRepair(p) && act.Agent != "" && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent && ag.Execution != nil }) {
+	if !pullNeedsBranchRepair(p) && act.Agent != "" && execRef == nil {
 		if err := l.record(act, loopWorkerMergeGo); err != nil {
 			return "", err
 		}
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			_ = a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", act.Key, err.Error()), act.Ref))
 			return "", err
 		}
@@ -150,12 +161,76 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
 	})
 	if i < 0 {
-		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
+		rp, ok := st.ReviewParkFor(act.Ref)
+		if !ok || rp.PostMerge == nil {
+			_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+				current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+				return nil, nil
+			})
+			return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
+		}
+		if err := l.claim(act, rp.Agent); err != nil {
+			return "", err
+		}
+		clearReviewPark := func() {
+			_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+				current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+				return nil, nil
+			})
+		}
+		if act.Message == strings.ToLower(superloop.Closed) {
+			act.Agent = rp.Agent
+			act.Message = fmt.Sprintf("%s closed without merging. Continue or finish the owning task, and report what remains open.", act.URL)
+			if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+				return "", err
+			}
+			clearReviewPark()
+			return "closed; worker told to continue its task", nil
+		}
+		if work := strings.TrimSpace(*rp.PostMerge); work != "" {
+			act.Agent = rp.Agent
+			act.Message = fmt.Sprintf("The supervisor merged %s. Complete the remaining post-merge work: %s. Report the version, proof, live facts and open items with agents idle --done --report and --problem.", act.URL, work)
+			if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+				return "", err
+			}
+			clearReviewPark()
+			return "merged; post-merge work requested", nil
+		}
+		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
+			act.Agent = rp.Agent
+			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
+			if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+				return "", err
+			}
+			clearReviewPark()
+			return "merged; worker woken for remaining open work", nil
+		}
+		if rp.Serves != "" && rp.Serves != act.Ref && l.a.cfg.Board.Owner != "" {
+			if _, err := l.run(ctx, loopBoard, "move", rp.Serves, "Done"); err != nil {
+				return "", err
+			}
+		}
+		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			endNotes(current, rp.Party, l.a.now)
+			clearRecords(current, rp.Party)
+			report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
+			task := cmp.Or(rp.Serves, act.Ref)
+			current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: rp.Party, At: l.a.now, Task: task, Text: report})
+			return []state.Event{event(rp.Party, superloop.VerbDone, "%s done: %s", rp.Agent, task), event(rp.Party, superloop.VerbReport, "%s: %s", rp.Agent, report)}, nil
+		})
+		return "merged; task closed without waking worker", err
 	}
 	ag := st.Agents[i]
 	if err := l.claim(act, ag.Name); err != nil {
 		return "", err
 	}
+	defer func() {
+		_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			return nil, nil
+		})
+	}()
 	if act.Message == strings.ToLower(superloop.Closed) {
 		act.Agent = ag.Name
 		act.Message = fmt.Sprintf("%s closed without merging. Continue or finish the owning task, and report what remains open.", act.URL)
@@ -281,20 +356,38 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			claimed = false
 		}
 	}
+	var execRef *execution.Ref
 	for _, worker := range st.Agents {
 		if worker.Name == claimAgent && worker.Execution != nil {
-			use := execution.MergeUse{Ref: *worker.Execution, Repository: repo, PR: number, Head: head}
-			record, _ := executionRecord(st, *worker.Execution)
-			if record == nil || record.StopRequest != nil || record.Terminal() {
-				doc.ExitCode = github.SquashRefused
-				doc.Reason = "execution stopped"
-				return doc
+			execRef = worker.Execution
+			break
+		}
+	}
+	if execRef == nil {
+		if rp, ok := st.ReviewParkFor(ref); ok && rp.Execution != nil {
+			execRef = rp.Execution
+		}
+	}
+	if execRef == nil {
+		for i := len(st.Starts) - 1; i >= 0; i-- {
+			if st.Starts[i].Name == claimAgent && st.Starts[i].Execution != nil {
+				execRef = &st.Starts[i].Execution.Handle.Ref
+				break
 			}
-			if err := a.authenticateExecutionReview(st, use, p); err != nil {
-				doc.ExitCode = github.SquashRefused
-				doc.Reason = err.Error()
-				return doc
-			}
+		}
+	}
+	if execRef != nil {
+		use := execution.MergeUse{Ref: *execRef, Repository: repo, PR: number, Head: head}
+		record, _ := executionRecord(st, *execRef)
+		if record == nil {
+			doc.ExitCode = github.SquashRefused
+			doc.Reason = "execution stopped"
+			return doc
+		}
+		if err := a.authenticateExecutionReview(st, use, p); err != nil {
+			doc.ExitCode = github.SquashRefused
+			doc.Reason = err.Error()
+			return doc
 		}
 	}
 	if !claimed {

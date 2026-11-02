@@ -272,19 +272,29 @@ func executionReserved(st *state.State, ag state.Agent) bool {
 
 func executionHostBusy(st *state.State, host execution.HostID) int {
 	n := 0
+	now := time.Now()
 	for _, s := range st.Starts {
-		if r := s.Execution; r != nil && r.Handle.Ref.Host == host && !r.Terminal() {
+		if r := s.Execution; r != nil && r.Handle.Ref.Host == host && !r.Terminal() && !executionAgentKept(st, r.Handle.Ref, now) {
 			n++
 		}
 	}
 	for _, ag := range st.Agents {
-		if ag.Execution != nil && ag.Execution.Host == host {
+		if ag.Execution != nil && ag.Execution.Host == host && keptBy(st, ag, now) == "" {
 			if rec, _ := executionRecord(st, *ag.Execution); rec == nil {
 				n++
 			}
 		}
 	}
 	return n
+}
+
+func executionAgentKept(st *state.State, ref execution.Ref, now time.Time) bool {
+	for _, ag := range st.Agents {
+		if ag.Execution != nil && *ag.Execution == ref && keptBy(st, ag, now) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {

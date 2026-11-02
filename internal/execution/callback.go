@@ -237,17 +237,27 @@ func (s *Server) SendControl(ctx context.Context, j Journal, op string, data any
 	return result, controlError(result)
 }
 
-// A completed report closes the input stream after its durable coordinator
-// acknowledgement. The current turn can finish, then its owned unit exits;
-// completion must not leave a permanently reserved idle streaming process.
+// A completed report or desk-review park closes the input stream after its
+// durable coordinator acknowledgement. The current turn can finish, then its
+// owned unit exits; completion must not leave a permanently reserved idle
+// streaming process.
 func (s *Server) finishControl(ctx context.Context, ref Ref, want ControlRequest, result ControlResult) error {
-	if want.Operation != ControlReport || result.Error != "" {
+	if result.Error != "" {
 		return nil
 	}
-	var report struct {
-		Finished bool `json:"finished"`
-	}
-	if json.Unmarshal(want.Data, &report) != nil || !report.Finished {
+	switch want.Operation {
+	case ControlReport:
+		var report struct {
+			Finished bool `json:"finished"`
+		}
+		if json.Unmarshal(want.Data, &report) != nil || !report.Finished {
+			return nil
+		}
+	case ControlPark:
+		if !strings.Contains(result.Output, "review request recorded for pushed HEAD ") {
+			return nil
+		}
+	default:
 		return nil
 	}
 	if err := s.update(ctx, ref, func(j *Journal) error { j.Completed = true; return nil }); err != nil {
