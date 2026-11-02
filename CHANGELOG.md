@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Codex usage reader no longer turns a whole reading unknown over a field no capacity decision reads. Codex can send `credits.balance` as a string; the reader decoded it as a number only, so every reading failed with `invalid codex rate_limits JSON` and the codex provider got no start. `credits.balance` is now read as a number or a numeric string, and a `credits` section or `plan_type` of any other shape is dropped instead of failing the reading; the windows, the reached limits and the spend control still fail closed ([https://github.com/giantswarm/beekeeper/issues/2057](https://github.com/giantswarm/beekeeper/issues/2057)).
 - Queued merges behind a live gate sleep with bounded backoff and only read their local queue position, avoiding repeated state rewrites, lane recovery and GitHub reads while waiting, and renew their queue place once before a detached handoff (https://github.com/giantswarm/beekeeper/issues/2049).
 - Full-history and working-tree gitleaks scans allow the fake GPG key ID in the signing argument parser test, scoped to its exact value, file and detection rule.
 
