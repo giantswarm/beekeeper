@@ -343,7 +343,7 @@ func TestCodexRunnerRefusesForeignThread(t *testing.T) {
 	}
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled runner returned %v", err)
+		t.Fatalf("cancelled runner: %v", err)
 	}
 }
 
