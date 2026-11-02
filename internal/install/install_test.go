@@ -841,7 +841,7 @@ func TestAgyHooksNeverWritesThroughALink(t *testing.T) {
 	if err := Install(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
-	if raw, _ := os.ReadFile(target); string(raw) != priorAgyHooks {
+	if raw, _ := os.ReadFile(filepath.Clean(target)); string(raw) != priorAgyHooks {
 		t.Errorf("install wrote through the link:\n%s", raw)
 	}
 	if !symlink(e.AgyHooks) {
