@@ -70,7 +70,7 @@ func TestExecutionStartsCodexOnAHostThatOffersIt(t *testing.T) {
 	}
 	// The one codex subscription now counts the remote worker: its single
 	// slot is busy, while claude's own slot stays free.
-	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, a.cfg)
 	if len(counts[codex.Harness].Busy) != 1 || len(counts[claudeComm].Busy) != 0 {
 		t.Fatalf("remote codex is not counted against its subscription: %+v", counts)
 	}
