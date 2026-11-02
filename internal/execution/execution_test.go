@@ -407,3 +407,52 @@ func TestCallerUsesServiceIdentityAndCallbackProof(t *testing.T) {
 		t.Fatal("callback proof was not generation-bound")
 	}
 }
+
+func TestStopCleansWorkspaceAndReviewParkCompletesExecution(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	h, err := f.s.Start(ctx, f.r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(h.Workspace); err != nil {
+		t.Fatalf("workspace missing after start: %v", err)
+	}
+	sourceDir := filepath.Join(f.s.Root, "sources", string(f.r.Ref.Execution))
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.s.OwnUnit = func() string { return UnitName(f.r.Ref) }
+	j, err := f.s.Caller(string(f.r.Ref.Execution))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.s.SendControl(ctx, j, ControlPark, map[string]string{"on": "giantswarm/beekeeper#7", "waits": "desk review"}, "", func(_ context.Context, _ []string, raw []byte) ([]byte, error) {
+		var cb CallbackRequest
+		if Decode(raw, &cb) != nil {
+			t.Fatal("invalid callback request")
+		}
+		var ctl ControlRequest
+		if Decode(cb.Payload, &ctl) != nil {
+			t.Fatal("invalid control payload")
+		}
+		payload, _ := json.Marshal(ControlResult{ID: ctl.ID, Sequence: ctl.Sequence, Digest: ctl.ContentDigest(), Output: "park recorded on coordinator; review request recorded for pushed HEAD " + h.Commit + "; end your turn now"})
+		return json.Marshal(WireResponse{Protocol: Protocol, RequestID: cb.RequestID, Ref: cb.Ref, Payload: payload})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := f.s.Read(f.r.Ref)
+	if err != nil || !saved.Completed {
+		t.Fatalf("desk review park did not complete execution: %+v, %v", saved, err)
+	}
+	ack, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: "desk review"})
+	if err != nil || ack.Stage != Applied {
+		t.Fatalf("stop failed: %+v, %v", ack, err)
+	}
+	for _, p := range []string{h.Workspace, filepath.Dir(h.Workspace), sourceDir} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stop left path %s behind: %v", p, err)
+		}
+	}
+}

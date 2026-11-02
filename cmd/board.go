@@ -917,6 +917,15 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 			out[strings.ToLower(r.Issue)] = fmt.Sprintf("%s (busy, no CLI)", name(r.Session))
 		}
 	}
+	for _, rp := range st.ReviewParks {
+		who := fmt.Sprintf("%s (reviewing %s)", name(rp.Party), rp.On)
+		if rp.Serves != "" && out[strings.ToLower(rp.Serves)] == "" {
+			out[strings.ToLower(rp.Serves)] = who
+		}
+		if rp.On != "" && out[strings.ToLower(rp.On)] == "" {
+			out[strings.ToLower(rp.On)] = who
+		}
+	}
 	named := func(text, who string) {
 		for _, ref := range namedRefs(text, sc.owner) {
 			if _, ok := out[ref]; !ok {
