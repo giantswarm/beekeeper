@@ -529,6 +529,10 @@ func TestInstallVersionUsesPrivilegeOnlyForVerifiedReplacement(t *testing.T) {
 			src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
 			setup(t, running, src)
 			exe, content := installed(t)
+			resolved, err := filepath.EvalSymlinks(exe)
+			if err != nil {
+				t.Fatal(err)
+			}
 			newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
 			originalInstall, originalPrivileged := installVerified, privilegedInstall
 			t.Cleanup(func() { installVerified, privilegedInstall = originalInstall, originalPrivileged })
@@ -545,7 +549,7 @@ func TestInstallVersionUsesPrivilegeOnlyForVerifiedReplacement(t *testing.T) {
 			}
 			privilegedInstall = func(_ context.Context, source, target, mode string) error {
 				privileged++
-				if target != exe || mode != "750" {
+				if target != resolved || mode != "750" {
 					t.Fatalf("destination %q mode %q", target, mode)
 				}
 				got, err := os.ReadFile(filepath.Clean(source))
