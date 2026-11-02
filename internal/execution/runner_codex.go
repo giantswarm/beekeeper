@@ -232,7 +232,7 @@ func (s *Server) codexEnd(ctx context.Context, ref Ref, phase, detail string) er
 func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []string, log io.Writer, j Journal, prompt, thread string, onStart func() error) (string, bool, error) {
 	args := codexArgs(j.Request.Model, j.Handle.Workspace, thread)
 	if j.Request.MCP {
-		proxyArgs, _ := json.Marshal([]string{"--config", s.ConfigPath, "agents", "mcp-proxy"})
+		proxyArgs, _ := json.Marshal([]string{configFlag, s.ConfigPath, agentsCommand, mcpProxyCommand})
 		command, _ := json.Marshal(s.Executable)
 		envVars, _ := json.Marshal([]string{EnvID, EnvCoordinator})
 		args = append([]string{"-c", "mcp_servers.coordinator.command=" + string(command), "-c", "mcp_servers.coordinator.args=" + string(proxyArgs), "-c", "mcp_servers.coordinator.env_vars=" + string(envVars)}, args...)

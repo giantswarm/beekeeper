@@ -14,6 +14,8 @@ import (
 )
 
 const proxyEchoTool = "fixture__echo"
+const mcpFixtureName = "fixture"
+const mcpEchoName = "echo"
 
 func TestMCPProxyListsAndCallsCoordinator(t *testing.T) {
 	var called bool
@@ -43,7 +45,7 @@ func TestMCPProxyListsAndCallsCoordinator(t *testing.T) {
 	defer func() { _ = c.Close() }()
 	req := mcp.InitializeRequest{}
 	req.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	req.Params.ClientInfo = mcp.Implementation{Name: "fixture", Version: "1"}
+	req.Params.ClientInfo = mcp.Implementation{Name: mcpFixtureName, Version: "1"}
 	if _, err := c.Initialize(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +72,8 @@ func TestMCPProxyListsAndCallsCoordinator(t *testing.T) {
 }
 
 func TestMCPConfigRefusesBroadOrAmbiguousExposure(t *testing.T) {
-	for _, s := range []MCPServer{{}, {URL: "file:///private", Tools: []string{"echo"}}, {Command: "relative", Tools: []string{"echo"}}, {URL: "http://example.test/mcp", Tools: []string{"*"}}, {URL: "http://example.test/mcp", Command: "/bin/false"}} {
-		if ValidateMCP(map[string]MCPServer{"fixture": s}) == nil {
+	for _, s := range []MCPServer{{}, {URL: "file:///private", Tools: []string{mcpEchoName}}, {Command: "relative", Tools: []string{mcpEchoName}}, {URL: "http://example.test/mcp", Tools: []string{"*"}}, {URL: "http://example.test/mcp", Command: "/bin/false"}} {
+		if ValidateMCP(map[string]MCPServer{mcpFixtureName: s}) == nil {
 			t.Fatalf("accepted %+v", s)
 		}
 	}
@@ -82,8 +84,8 @@ func TestMCPStdioFixture(t *testing.T) {
 	if !slices.Contains(os.Args, "--mcp-fixture") {
 		t.Skip("subprocess fixture")
 	}
-	s := mcpserver.NewMCPServer("fixture", "1")
-	s.AddTool(mcp.NewTool("echo"), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s := mcpserver.NewMCPServer(mcpFixtureName, "1")
+	s.AddTool(mcp.NewTool(mcpEchoName), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultText("stdio proof"), nil
 	})
 	if err := mcpserver.NewStdioServer(s).Listen(context.Background(), os.Stdin, os.Stdout); err != nil {
@@ -97,7 +99,7 @@ func TestMCPGatewayStdioConnector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	servers := map[string]MCPServer{"fixture": {Command: executable, Args: []string{"-test.run=^TestMCPStdioFixture$", "--", "--mcp-fixture"}, Tools: []string{"echo"}}}
+	servers := map[string]MCPServer{mcpFixtureName: {Command: executable, Args: []string{"-test.run=^TestMCPStdioFixture$", "--", "--mcp-fixture"}, Tools: []string{mcpEchoName}}}
 	listed, err := GatewayMCP(context.Background(), servers, MCPList, MCPCallRequest{})
 	if err != nil {
 		t.Fatal(err)

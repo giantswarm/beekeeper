@@ -16,6 +16,10 @@ import (
 
 const MCPList = "mcp-list"
 const MCPCall = "mcp-call"
+const configFlag = "--config"
+const httpsScheme = "https"
+const agentsCommand = "agents"
+const mcpProxyCommand = "mcp-proxy"
 
 // MCPServer is coordinator-only configuration. Credentials and local commands
 // never travel to a worker. Empty Tools exposes nothing; wildcards are not used.
@@ -41,7 +45,7 @@ func ValidateMCP(servers map[string]MCPServer) error {
 		}
 		if s.URL != "" {
 			u, err := url.Parse(s.URL)
-			if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != httpsScheme) {
 				return errors.New("MCP URL must be HTTP(S) without user credentials")
 			}
 		}

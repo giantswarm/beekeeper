@@ -19,16 +19,18 @@ import (
 // Exercise the wire operations a worker's stdio gateway uses, through the
 // authenticated callback and a real upstream MCP HTTP transport.
 const remoteMCPEcho = "fixture__echo"
+const remoteMCPNameKey = "name"
+const remoteMCPFixture = "fixture"
 
 func TestExecutionMCPRemoteDiscoveryAndCall(t *testing.T) {
 	a, r := executionTestApp(t)
 	var calls atomic.Int32
-	upstream := mcpserver.NewMCPServer("fixture", "1")
+	upstream := mcpserver.NewMCPServer(remoteMCPFixture, "1")
 	handler := func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		calls.Add(1)
-		return mcp.NewToolResultText(req.GetString("text", "")), nil
+		return mcp.NewToolResultText(req.GetString(paramText, "")), nil
 	}
-	upstream.AddTool(mcp.NewTool("echo", mcp.WithString("text")), handler)
+	upstream.AddTool(mcp.NewTool("echo", mcp.WithString(paramText)), handler)
 	upstream.AddTool(mcp.NewTool("private"), handler)
 	httpServer := httptest.NewServer(mcpserver.NewStreamableHTTPServer(upstream, mcpserver.WithStateLess(true)))
 	defer httpServer.Close()
@@ -51,7 +53,7 @@ func TestExecutionMCPRemoteDiscoveryAndCall(t *testing.T) {
 	if len(listed.Tools) != 1 || listed.Tools[0].Name != remoteMCPEcho {
 		t.Fatalf("unexpected tools: %+v", listed.Tools)
 	}
-	call := map[string]any{"name": remoteMCPEcho, "arguments": map[string]any{"text": "remote proof"}}
+	call := map[string]any{remoteMCPNameKey: remoteMCPEcho, "arguments": map[string]any{paramText: "remote proof"}}
 	var result mcp.CallToolResult
 	if err := coordinatorTestCall(t, a, r, "mcp-call", call, &result, false); err != nil {
 		t.Fatal(err)
@@ -61,7 +63,7 @@ func TestExecutionMCPRemoteDiscoveryAndCall(t *testing.T) {
 		t.Fatalf("call result %s, calls %d", encoded, calls.Load())
 	}
 	for _, name := range []string{"fixture__private", "missing__echo", "fixture__*"} {
-		call["name"] = name
+		call[remoteMCPNameKey] = name
 		if err := coordinatorTestCall(t, a, r, "mcp-call", call, &result, false); err == nil {
 			t.Fatalf("unexposed tool %s accepted", name)
 		}
@@ -73,7 +75,7 @@ func TestExecutionMCPRemoteDiscoveryAndCall(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(strings.Replace(config, "tools: [echo]", "tools: []", 1)), &a.cfg.Agents); err != nil {
 		t.Fatal(err)
 	}
-	call["name"] = remoteMCPEcho
+	call[remoteMCPNameKey] = remoteMCPEcho
 	if err := coordinatorTestCall(t, a, r, "mcp-call", call, &result, false); err == nil {
 		t.Fatal("revoked tool accepted")
 	}
@@ -92,9 +94,11 @@ func TestExecutionMCPAuthority(t *testing.T) {
 	}{
 		{"wrong credential", func(_ *app, r *execution.StartRequest, _ *state.State) { r.ControlKey, _ = execution.NewControlKey() }},
 		{"wrong generation", func(_ *app, r *execution.StartRequest, _ *state.State) { r.Ref.Generation++ }},
-		{"desk stopped", func(_ *app, _ *execution.StartRequest, st *state.State) { st.Stop = &state.Stop{Reason: "fixture"} }},
+		{"desk stopped", func(_ *app, _ *execution.StartRequest, st *state.State) {
+			st.Stop = &state.Stop{Reason: remoteMCPFixture}
+		}},
 		{"worker stopped", func(_ *app, _ *execution.StartRequest, st *state.State) {
-			st.Starts[0].Execution.StopRequest = &execution.StopRequest{ID: "fixture", Reason: "fixture"}
+			st.Starts[0].Execution.StopRequest = &execution.StopRequest{ID: remoteMCPFixture, Reason: remoteMCPFixture}
 		}},
 		{"worker completed", func(_ *app, _ *execution.StartRequest, st *state.State) { st.Starts[0].Execution.Completed = true }},
 		{"worker terminal", func(_ *app, _ *execution.StartRequest, st *state.State) {
