@@ -71,15 +71,20 @@ func hostUpdateServer(t *testing.T, a *app, version string) *execution.Server {
 // hostInstall replaces the host's install, its rollback and the installed
 // release's prepare: install records its calls, prepare answers answer.
 type hostInstall struct {
-	installs, rollbacks []string
-	prepareArgs         []string
-	answer              execution.HostUpdate
+	installs, rollbacks, restarts []string
+	prepareArgs                   []string
+	answer                        execution.HostUpdate
 }
 
 func stubHostInstall(t *testing.T, h *hostInstall) {
 	t.Helper()
-	install, rollback, prepare := installVersion, rollbackInstall, runHostPrepare
-	t.Cleanup(func() { installVersion, rollbackInstall, runHostPrepare = install, rollback, prepare })
+	install, rollback, prepare, restart := installVersion, rollbackInstall, runHostPrepare, restartOnInstalled
+	t.Cleanup(func() {
+		installVersion, rollbackInstall, runHostPrepare, restartOnInstalled = install, rollback, prepare, restart
+	})
+	restartOnInstalled = func(_ context.Context, _ *app, path string, _ time.Time) {
+		h.restarts = append(h.restarts, path)
+	}
 	installVersion = func(_ context.Context, _ io.Writer, version string) (update.Result, error) {
 		h.installs = append(h.installs, version)
 		return update.Result{Latest: version, Path: sshTestExecutable, Updated: true}, nil
@@ -121,8 +126,8 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	if got != want {
 		t.Fatalf("self-update answered %+v, want the installed release's %+v", got, want)
 	}
-	if !slices.Equal(h.installs, []string{hostNewRelease}) || len(h.rollbacks) != 0 {
-		t.Errorf("installs %v, rollbacks %v", h.installs, h.rollbacks)
+	if !slices.Equal(h.installs, []string{hostNewRelease}) || len(h.rollbacks) != 0 || !slices.Equal(h.restarts, []string{sshTestExecutable}) {
+		t.Errorf("installs %v, rollbacks %v, restarts %v", h.installs, h.rollbacks, h.restarts)
 	}
 	wantArgs := []string{sshTestExecutable, "--" + configFlag, s.ConfigPath, agentsName, "hosts", "self-update", "--protocol", "1", "--" + hostVersionFlag, hostNewRelease}
 	if !slices.Equal(h.prepareArgs, wantArgs) {
@@ -149,8 +154,8 @@ func TestHostSelfUpdateRollsBackAReleaseThatDoesNotPrepare(t *testing.T) {
 			if !strings.Contains(got.Error, "rolled back to "+hostOldRelease) || got.PolicyDigest != "" {
 				t.Fatalf("self-update answered %+v, want a rollback", got)
 			}
-			if !slices.Equal(h.rollbacks, []string{sshTestExecutable}) {
-				t.Errorf("rollbacks %v", h.rollbacks)
+			if !slices.Equal(h.rollbacks, []string{sshTestExecutable}) || len(h.restarts) != 0 {
+				t.Errorf("rollbacks %v, restarts onto the rolled back release %v", h.rollbacks, h.restarts)
 			}
 			if _, err := s.InstalledPolicy(); err != nil {
 				t.Errorf("the rolled back release's policy is not prepared again: %v", err)

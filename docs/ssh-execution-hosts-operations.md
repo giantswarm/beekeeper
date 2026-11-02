@@ -142,7 +142,9 @@ over the host's SSH route and runs `agents hosts self-update --version
 admission, installs exactly that release once its Sigstore bundle verifies (as
 `self-update` does; the replaced binary is kept beside it as
 `.beekeeper.previous`), and has the installed release prepare its own policy.
-A release that does not prepare is rolled back and the old one prepares again.
+A release that does not prepare is rolled back and the old one prepares again;
+one that does moves the host's watches and sandbox broker onto it, as
+`self-update` does.
 The coordinator then runs `hosts check` with the digest the host answered and
 records the release and digest in its state (`hostPins`): every start on the
 host is pinned to it. No configuration change and no person is involved.

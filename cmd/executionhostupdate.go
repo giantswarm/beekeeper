@@ -16,13 +16,15 @@ import (
 	"golang.org/x/mod/module"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // Seams the tests replace: the coordinator's release, the host's install of
-// a release, its rollback and the installed release's prepare.
+// a release, its rollback, the installed release's prepare and the restarts
+// onto it.
 var (
 	coordinatorVersion = project.Version
 	installVersion     = update.InstallVersion
@@ -31,6 +33,17 @@ var (
 	// returns its standard output: its answer, never its diagnostics.
 	runHostPrepare = func(ctx context.Context, path string, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, path, args...).Output() //nolint:gosec // the release this update verified and installed
+	}
+	// restartOnInstalled moves this host's watches, waiting reopens and
+	// sandbox broker onto the release installed at path, as self-update
+	// does.
+	restartOnInstalled = func(ctx context.Context, a *app, path string, written time.Time) {
+		t, err := proc.Read()
+		if err != nil {
+			return
+		}
+		_, _ = a.restartReplaced(io.Discard, path, t, false)
+		restartBrokerOn(ctx, io.Discard, path, written, t, false, a.cfg.Secret.Session)
 	}
 )
 
@@ -134,6 +147,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 	// this binary's policy to find it replaced. Once released, a start
 	// finds the installed policy stale and fails closed until the new
 	// release prepared it.
+	written := time.Now()
 	res, err := installVersion(ctx, io.Discard, version)
 	release()
 	if err != nil {
@@ -152,6 +166,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 	case next.Version != version || !execution.ValidDigest(next.PolicyDigest):
 		reason = "no policy digest of " + version
 	default:
+		restartOnInstalled(ctx, a, res.Path, written)
 		return next
 	}
 	if !res.Updated {
