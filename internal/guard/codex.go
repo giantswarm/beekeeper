@@ -928,7 +928,7 @@ var (
 	anyRedirRe   = regexp.MustCompile(`(?:^|[\s;|&()])((?:\d+)?(?:>>|\|>|>\||<>|<<-|<<<|<<|>|<)|&>>|&>)\s*([^\s;|&()<>]+)`)
 	writeCmdsMap = map[string]bool{
 		"cp": true, "mv": true, "ln": true, "ins" + "tall": true, "dd": true,
-		"rm": true, "rmdir": true, "unlink": true, "shred": true, "trash": true, "trash-put": true,
+		"rm": true, "rmdir": true, "unlink": true, "shred": true, trashCmd: true, trashPutCmd: true,
 		teeCmd: true, "trun" + "cate": true, "touch": true, "mkdir": true, "chmod": true, "chown": true,
 		codexPatchKey: true,
 	}

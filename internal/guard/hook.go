@@ -226,6 +226,10 @@ type Hook struct {
 	// main working tree of a checkout that sits directly in one (folders.go);
 	// empty, the guard is off.
 	PersonFolders []string
+	// LiveDirs lists the folders live sessions and processes work in,
+	// read only for a command that moves or removes an existing directory
+	// (liveworktrees.go); nil guards no worktree.
+	LiveDirs func() []string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
@@ -374,6 +378,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := deleteRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.liveWorktreeRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {

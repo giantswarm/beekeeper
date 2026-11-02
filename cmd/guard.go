@@ -592,6 +592,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
 				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
+				h.LiveDirs = a.hookLiveDirs
 				if !inSandbox() {
 					h.FreshLabs = a.freshLabKubeconfigs
 				}
