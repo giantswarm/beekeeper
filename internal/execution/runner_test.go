@@ -25,8 +25,10 @@ func TestRunnerUsesOwnedConversationAndCleanEnvironment(t *testing.T) {
 	tests := []struct {
 		name, conversation string
 		ready              bool
+		mcp                bool
 	}{
 		{name: "accepted first task", ready: true},
+		{name: "coordinator MCP", ready: true, mcp: true},
 		{name: "foreign conversation", conversation: "foreign", ready: false},
 		{name: "ended before acceptance", conversation: "missing", ready: false},
 	}
@@ -38,7 +40,11 @@ func TestRunnerUsesOwnedConversationAndCleanEnvironment(t *testing.T) {
 			script := `#!/bin/sh
 set -eu
 session=''
+mcp=''
+allowed=''
 while [ "$#" -gt 0 ]; do
+ if [ "$1" = '--mcp-config' ]; then mcp="$2"; fi
+ if [ "$1" = '--allowedTools' ]; then allowed="$2"; fi
  if [ "$1" = '--session-id' ]; then session="$2"; shift; fi
  shift
 done
@@ -49,6 +55,12 @@ test -n "${BEEKEEPER_CONFIG}"
 input=$(cat)
 test "$input" = 'complete the fixture task'
 `
+			f.r.MCP = test.mcp
+			if test.mcp {
+				script += `case "$mcp" in *mcp-proxy*) ;; *) exit 10;; esac
+case "$allowed" in *mcp__coordinator*) ;; *) exit 11;; esac
+`
+			}
 			switch test.conversation {
 			case "foreign":
 				script += "printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"foreign\"}'\n"

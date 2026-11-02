@@ -230,7 +230,14 @@ func (s *Server) codexEnd(ctx context.Context, ref Ref, phase, detail string) er
 // turn on any other thread is killed. onStart runs once, when the turn has
 // started on that thread, and its failure ends the turn.
 func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []string, log io.Writer, j Journal, prompt, thread string, onStart func() error) (string, bool, error) {
-	c := exec.CommandContext(ctx, h.Executable, codexArgs(j.Request.Model, j.Handle.Workspace, thread)...) //nolint:gosec // pinned harness and typed arguments
+	args := codexArgs(j.Request.Model, j.Handle.Workspace, thread)
+	if j.Request.MCP {
+		proxyArgs, _ := json.Marshal([]string{configFlag, s.ConfigPath, agentsCommand, mcpProxyCommand})
+		command, _ := json.Marshal(s.Executable)
+		envVars, _ := json.Marshal([]string{EnvID, EnvCoordinator})
+		args = append([]string{"-c", "mcp_servers.coordinator.command=" + string(command), "-c", "mcp_servers.coordinator.args=" + string(proxyArgs), "-c", "mcp_servers.coordinator.env_vars=" + string(envVars)}, args...)
+	}
+	c := exec.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments
 	if !strings.HasSuffix(prompt, "\n") {
 		prompt += "\n"
 	}
