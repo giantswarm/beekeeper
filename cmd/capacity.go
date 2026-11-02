@@ -580,6 +580,12 @@ func ompChoiceModel(ch config.Choice, model string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "/"+id)
 }
 
+// choiceModelMatches compares a configured selector with a requested or
+// recorded model, including omp's provider-qualified form of a bare id.
+func choiceModelMatches(ch config.Choice, model string) bool {
+	return strings.EqualFold(strings.TrimSpace(ch.Model), strings.TrimSpace(model)) || ompChoiceModel(ch, model)
+}
+
 func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov, bucket string) {
 	h := cmp.Or(strings.TrimSpace(harness), claudeComm)
 	m := strings.TrimSpace(model)
@@ -2064,9 +2070,14 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 
 // gateStart judges capacity's verdict v for a start: room lets it through
 // (nothing to say), none refuses it (exit 3, the verdict's guards named)
-// unless force, which lets it through and returns the verdict overridden
-// for the event log.
+// unless force, which overrides capacity for the event log. Model policy
+// and the desk's stop remain refusals, including SSH reservation rechecks.
 func gateStart(v *capacityView, force bool) (string, error) {
+	for _, b := range v.Blocks {
+		if strings.HasPrefix(b, modelPolicyPrefix) {
+			return "", refused("%s", b)
+		}
+	}
 	switch {
 	case v.Stopped != "":
 		return "", refused("%s", v.verdict())
@@ -2099,11 +2110,6 @@ func (a *app) startGateWithOptions(ctx context.Context, name, harness, model str
 		return "", nil, err
 	}
 	latest := v
-	for _, b := range v.Blocks {
-		if strings.HasPrefix(b, modelPolicyPrefix) {
-			return "", v, refused("%s", b)
-		}
-	}
 	over, err := queueStart(v, builds, force, wait,
 		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
 		func() (*capacityView, error) {
@@ -2111,11 +2117,6 @@ func (a *app) startGateWithOptions(ctx context.Context, name, harness, model str
 			if err == nil {
 				next = next.forTarget(a.liveCapacity(), harness, effModel)
 				latest = next
-				for _, b := range next.Blocks {
-					if strings.HasPrefix(b, modelPolicyPrefix) {
-						return nil, refused("%s", b)
-					}
-				}
 			}
 			return next, err
 		})
@@ -2155,7 +2156,7 @@ func (v *capacityView) forPoolTarget(k config.Capacity, harness, model string) *
 	policy := k.TaskPolicies[task]
 	if policy.MinClass > 0 || policy.MaxCost > 0 || policy.DifferentFamily || k.AuthorModel != "" || v.Review && k.TaskPolicies[taskKindReview].DifferentFamily {
 		known := slices.ContainsFunc(k.Choices, func(ch config.Choice) bool {
-			return ch.Harness == harness && (strings.EqualFold(ch.Model, model) || ompChoiceModel(ch, model))
+			return ch.Harness == harness && choiceModelMatches(ch, model)
 		})
 		if !known {
 			v.Room, v.Blocks = 0, []string{"model policy: target has no configured capability, cost or family metadata"}
@@ -2164,7 +2165,7 @@ func (v *capacityView) forPoolTarget(k config.Capacity, harness, model string) *
 	}
 	if v.Choice != nil {
 		for _, cand := range v.Choice.Candidates {
-			if cand.Harness == harness && strings.EqualFold(cand.Model, model) && strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
+			if cand.Harness == harness && choiceModelMatches(config.Choice{Harness: cand.Harness, Model: cand.Model}, model) && strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
 				v.Room, v.Blocks = 0, []string{cand.Reason}
 				return v
 			}
@@ -2333,7 +2334,7 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 func choicesHaveModel(choices []config.Choice, model string) bool {
 	m := strings.TrimSpace(model)
 	return slices.ContainsFunc(choices, func(ch config.Choice) bool {
-		return strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m)
+		return choiceModelMatches(ch, m)
 	})
 }
 
@@ -2341,7 +2342,7 @@ func filterChoiceModel(k config.Capacity, model string) config.Capacity {
 	m := strings.TrimSpace(model)
 	if k.AuthorFamily == "" {
 		for _, ch := range k.Choices {
-			if strings.EqualFold(ch.Model, k.AuthorModel) {
+			if choiceModelMatches(ch, k.AuthorModel) {
 				k.AuthorFamily = ch.Family
 				break
 			}
@@ -2352,7 +2353,7 @@ func filterChoiceModel(k config.Capacity, model string) config.Capacity {
 	}
 	var filtered []config.Choice
 	for _, ch := range k.Choices {
-		if strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m) {
+		if choiceModelMatches(ch, m) {
 			filtered = append(filtered, ch)
 		}
 	}

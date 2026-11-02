@@ -48,7 +48,7 @@ func modelPolicyReason(k config.Capacity, ch config.Choice, pv *providerView, bu
 	if review && (k.AuthorModel != "" || p.DifferentFamily || k.TaskPolicies[taskKindReview].DifferentFamily) {
 		family := strings.TrimSpace(k.AuthorFamily)
 		for _, author := range k.Choices {
-			if strings.EqualFold(author.Model, k.AuthorModel) {
+			if choiceModelMatches(author, k.AuthorModel) {
 				family = strings.TrimSpace(author.Family)
 				break
 			}

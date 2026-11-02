@@ -1816,7 +1816,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			return "", refused("model policy: review requires the author's recorded model")
 		}
 	}
-	place, err := l.startPlacement(ctx, r.Repo, true, act.SelfHosted)
+	place, err := l.startPlacement(ctx, r.Repo, true, act.SelfHosted, authorFlags...)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
@@ -1993,11 +1993,12 @@ func (l *supervisorLoop) placesRemotely() bool {
 // choices no host has an adapter for, the host-run choices excluded (see
 // hostsFirstLocal). Without the preference the local machine attempts it,
 // whose own start gate makes it wait when it has none either.
-func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
+func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool, extra ...string) (startHost, error) {
+	flags := append(startFlags(review, selfHosted), extra...)
 	// Execution hosts have no relayed GitHub read-and-review path. Keep
 	// reviewers on the coordinator, without reserving any choices for hosts.
 	if review {
-		if !l.capacityRoom(ctx, startFlags(review, selfHosted)...) {
+		if !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
 		return startHost{}, nil
@@ -2009,7 +2010,6 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 		// room.
 		return startHost{}, nil
 	}
-	flags := startFlags(review, selfHosted)
 	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
 	if err != nil || code != 0 {
 		return startHost{}, errLoopLater
