@@ -2,12 +2,29 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestExecutionOmpMessageIsTaskText(t *testing.T) {
+	for _, text := range []string{"/retry", "/bash git push origin main", "!git push origin main"} {
+		var frame struct {
+			Type    string `json:"type"`
+			ID      string `json:"id"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(ompMessage(Envelope{ID: fixtureWorker, Text: text}, ""), &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.ID != fixtureWorker || frame.Type != ompPromptCommand || !strings.HasPrefix(frame.Message, "Task message:\n\n") || !strings.HasSuffix(frame.Message, text) {
+			t.Fatalf("task became interactive command: %+v", frame)
+		}
+	}
+}
 
 const ompScript = `#!/bin/sh
 set -eu
@@ -40,10 +57,10 @@ func ompFixture(t *testing.T) (fixture, string) {
 	f := testFixture(t)
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "omp")
-	if err := os.WriteFile(bin, []byte(ompScript), 0o700); err != nil {
+	if err := os.WriteFile(bin, []byte(ompScript), 0o700); err != nil { //nolint:gosec // executable fake harness in this test's temporary directory
 		t.Fatal(err)
 	}
-	f.s.Config.Harnesses[HarnessOmp] = HarnessConfig{Executable: bin, Version: "18.14.2", ConfigDir: filepath.Join(dir, "host-login")}
+	f.s.Config.Harnesses[HarnessOmp] = HarnessConfig{Executable: bin, Version: fixtureOmpVersion, ConfigDir: filepath.Join(dir, "host-login")}
 	digest, err := f.s.Prepare(f.s.Policy())
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +76,7 @@ func TestExecutionOmpPolicyAndReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	caps, err := f.s.Check(ctx)
-	if err != nil || caps.Harnesses[HarnessOmp] != "18.14.2" {
+	if err != nil || caps.Harnesses[HarnessOmp] != fixtureOmpVersion {
 		t.Fatalf("capabilities %+v: %v", caps, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "logged-out"), nil, 0o600); err != nil {
@@ -151,7 +168,7 @@ func TestExecutionOmpWakesAcknowledgedOnce(t *testing.T) {
 	}
 	cancel()
 	<-done
-	prompts, err := os.ReadFile(filepath.Join(dir, "prompts"))
+	prompts, err := os.ReadFile(filepath.Join(dir, "prompts")) //nolint:gosec // owned fake-harness output in the test temporary directory
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+const (
+	ompWorkingDir = "cwd"
+	ompReadTool   = "read"
+	ompWriteTool  = "write"
+)
+
 // ExecutionDenyOmp is the extension's explicit, fail-closed wire decision.
 func ExecutionDenyOmp(reason string) []byte {
 	b, _ := json.Marshal(map[string]any{"allow": false, "reason": reason})
@@ -22,14 +28,14 @@ func (h Hook) DecideExecutionOmp(raw []byte, session, workspace string, protecte
 	}
 	input := ev.ToolInput
 	switch ev.ToolName {
-	case "bash":
+	case bashCmd:
 		ev.ToolName = bashTool
-		for _, key := range []string{"async", "pty", "name", "ready"} {
+		for _, key := range []string{"async", "pty", nameKey, "ready"} {
 			if value, ok := input[key]; ok && value != nil && value != false && value != "" {
 				return ExecutionDeny("managed omp requires a foreground command without services or PTYs")
 			}
 		}
-		if dir, ok := input["cwd"]; ok {
+		if dir, ok := input[ompWorkingDir]; ok {
 			target, valid := dir.(string)
 			if !valid {
 				return ExecutionDeny("invalid omp command working directory")
@@ -41,21 +47,21 @@ func (h Hook) DecideExecutionOmp(raw []byte, session, workspace string, protecte
 				ev.CWD = target
 			}
 		}
-	case "read", "write":
-		if ev.ToolName == "read" {
+	case ompReadTool, ompWriteTool:
+		if ev.ToolName == ompReadTool {
 			ev.ToolName = readTool
 		} else {
 			ev.ToolName = writeTool
 		}
-		path, ok := input["path"].(string)
+		path, ok := input[pathKey].(string)
 		if !ok || path == "" || strings.Contains(path, ":") {
 			return ExecutionDeny("omp file tool requires a local path")
 		}
 		// Do not preserve provider-specific fields which the shared guard
 		// might interpret differently from the harness.
-		ev.ToolInput = map[string]any{"file_path": path}
+		ev.ToolInput = map[string]any{filePathKey: path}
 		if ev.ToolName == writeTool {
-			ev.ToolInput["content"] = input["content"]
+			ev.ToolInput[contentKey] = input[contentKey]
 		}
 	default:
 		return ExecutionDeny("tool is not supported by the managed omp adapter; use bash for edits and component commands")

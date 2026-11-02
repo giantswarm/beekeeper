@@ -15,11 +15,12 @@ func TestExecutionOmpExtensionFailsClosed(t *testing.T) {
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "guard")
-	if err := os.WriteFile(bin, []byte(`#!/bin/sh
+	script := []byte(`#!/bin/sh
 case "$1" in
 *) cat >/dev/null; cat "$(dirname "$0")/answer";;
 esac
-`), 0o700); err != nil {
+`)
+	if err := os.WriteFile(bin, script, 0o700); err != nil { //nolint:gosec // executable fake guard in the test's temporary directory
 		t.Fatal(err)
 	}
 	s := Server{Executable: bin, ConfigPath: filepath.Join(dir, "host.yaml")}
@@ -29,9 +30,12 @@ esac
 	}
 	harness := `import guard from './guard.mjs';
 const handlers = {};
-guard({on(name, callback) {handlers[name]=callback;}});
-const result = await handlers.tool_call({toolName:'bash', input:{command:'git status'}}, {cwd:'/workspace',sessionManager:{getSessionId(){return 'thread';}}});
-console.log(JSON.stringify({blocked:result?.block===true}));
+guard({on(name, callback) {handlers[name]=callback;}, setActiveTools(tools) {if (tools.join(',') !== 'bash,read,write') throw new Error('unexpected tool surface');}});
+let closed = false;
+const ctx = {cwd:'/workspace',sessionManager:{getSessionId(){return 'thread';}},shutdown(){closed=true;}};
+const result = await handlers.tool_call({toolName:'bash', input:{command:'git status'}}, ctx);
+await handlers.session_start({}, ctx);
+console.log(JSON.stringify({blocked:result?.block===true,closed}));
 `
 	path := filepath.Join(dir, "test.mjs")
 	if err := os.WriteFile(path, []byte(harness), 0o600); err != nil {
@@ -51,13 +55,16 @@ console.log(JSON.stringify({blocked:result?.block===true}));
 			if err := os.WriteFile(filepath.Join(dir, "answer"), []byte(tc.answer), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			output, err := exec.Command(node, path).CombinedOutput()
+			output, err := exec.Command(node, path).CombinedOutput() //nolint:gosec // installed Node runs the test's own fixed fixture script, without a shell
 			if err != nil {
 				t.Fatalf("extension failed: %v: %s", err, output)
 			}
-			want := `{"blocked":false}`
+			want := `{"blocked":false,"closed":true}`
 			if tc.blocked {
-				want = `{"blocked":true}`
+				want = `{"blocked":true,"closed":true}`
+			}
+			if tc.name == "deny" {
+				want = "{\"type\":\"beekeeper_guard_ready\",\"session_id\":\"thread\"}\n{\"blocked\":true,\"closed\":false}"
 			}
 			if strings.TrimSpace(string(output)) != want {
 				t.Fatalf("extension answer %s want %s", output, want)

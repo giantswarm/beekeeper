@@ -7,36 +7,41 @@ import (
 	"testing"
 )
 
+const (
+	ompDeniedMerge = "gh pr merge 7 --repo giantswarm/beekeeper"
+	ompDeniedPush  = "git push origin main"
+)
+
 func TestExecutionOmpGuard(t *testing.T) {
 	workspace, outside := t.TempDir(), t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	h := Hook{Upstream: Upstream{Orgs: []string{"giantswarm"}}}
+	h := Hook{Upstream: Upstream{Orgs: []string{allowedOrg}}}
 	for _, tc := range []struct {
 		name, tool string
 		input      map[string]any
 		denied     bool
 	}{
-		{"status", "bash", map[string]any{"command": "git status"}, false},
-		{"merge", "bash", map[string]any{"command": "gh pr merge 7 --repo giantswarm/beekeeper"}, true},
-		{"default branch", "bash", map[string]any{"command": "git push origin main"}, true},
-		{"cwd outside", "bash", map[string]any{"command": "git status", "cwd": outside}, true},
-		{"cwd symlink", "bash", map[string]any{"command": "git status", "cwd": "escape"}, true},
-		{"background", "bash", map[string]any{"command": "git status", "async": true}, true},
-		{"service", "bash", map[string]any{"command": "git status", "name": "fixture"}, true},
-		{"read", "read", map[string]any{"path": "file.go"}, false},
-		{"write", "write", map[string]any{"path": "file.go", "content": "fixture"}, false},
-		{"read outside", "read", map[string]any{"path": filepath.Join(outside, "file")}, true},
-		{"write symlink", "write", map[string]any{"path": "escape/file", "content": "fixture"}, true},
-		{"network read", "read", map[string]any{"path": "https://example.com"}, true},
-		{"internal read", "read", map[string]any{"path": "agent://other"}, true},
+		{"omp status", bashCmd, map[string]any{commandKey: codexGitStatus}, false},
+		{"omp merge", bashCmd, map[string]any{commandKey: ompDeniedMerge}, true},
+		{"default branch", bashCmd, map[string]any{commandKey: ompDeniedPush}, true},
+		{"cwd outside", bashCmd, map[string]any{commandKey: codexGitStatus, ompWorkingDir: outside}, true},
+		{"cwd symlink", bashCmd, map[string]any{commandKey: codexGitStatus, ompWorkingDir: "escape"}, true},
+		{"background", bashCmd, map[string]any{commandKey: codexGitStatus, "async": true}, true},
+		{"service", bashCmd, map[string]any{commandKey: codexGitStatus, nameKey: executionFixture}, true},
+		{ompReadTool, ompReadTool, map[string]any{pathKey: "file.go"}, false},
+		{ompWriteTool, ompWriteTool, map[string]any{pathKey: "file.go", contentKey: executionFixture}, false},
+		{"read outside", ompReadTool, map[string]any{pathKey: filepath.Join(outside, "file")}, true},
+		{"write symlink", ompWriteTool, map[string]any{pathKey: "escape/file", contentKey: executionFixture}, true},
+		{"network read", ompReadTool, map[string]any{pathKey: "https://example.com"}, true},
+		{"internal read", ompReadTool, map[string]any{pathKey: "agent://other"}, true},
 		{"subagent", "task", map[string]any{}, true},
 		{"python", "python", map[string]any{"code": "pass"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, _ := json.Marshal(event{ToolName: tc.tool, ToolInput: tc.input, CWD: workspace, Session: "fixture"})
-			answer := h.DecideExecutionOmp(raw, "fixture", workspace, nil)
+			raw, _ := json.Marshal(event{ToolName: tc.tool, ToolInput: tc.input, CWD: workspace, Session: executionFixture})
+			answer := h.DecideExecutionOmp(raw, executionFixture, workspace, nil)
 			var out struct {
 				Specific hookOutput `json:"hookSpecificOutput"`
 			}
@@ -52,7 +57,7 @@ func TestExecutionOmpGuard(t *testing.T) {
 		var out struct {
 			Specific hookOutput `json:"hookSpecificOutput"`
 		}
-		if json.Unmarshal(h.DecideExecutionOmp(raw, "fixture", workspace, nil), &out) != nil || out.Specific.PermissionDecision != decisionDeny {
+		if json.Unmarshal(h.DecideExecutionOmp(raw, executionFixture, workspace, nil), &out) != nil || out.Specific.PermissionDecision != decisionDeny {
 			t.Fatal("accepted invalid identity/input")
 		}
 	}

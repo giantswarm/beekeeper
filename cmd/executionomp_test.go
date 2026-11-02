@@ -11,9 +11,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/omp"
 )
 
+const (
+	executionOmpFixture = "fixture"
+	executionOmpStatus  = "git status"
+)
+
 func TestExecutionOmpCoordinatorAdmission(t *testing.T) {
 	a, brief, requests := sshCodexTestApp(t, map[string]string{omp.Harness: "18.14.2"})
-	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{"fixture": {Kind: config.KindSelfHosted, Ceiling: 1}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "fixture/model", Provider: "fixture"}}}
+	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{executionOmpFixture: {Kind: config.KindSelfHosted, Ceiling: 1}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "fixture/model", Provider: executionOmpFixture}}}
 	h := a.cfg.Agents.Hosts[sshTestSelector]
 	h.Harnesses = []string{omp.Harness}
 	a.cfg.Agents.Hosts[sshTestSelector] = h
@@ -27,18 +32,18 @@ func TestExecutionOmpCoordinatorAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Starts[0].Execution.Provider != "fixture" {
+	if st.Starts[0].Execution.Provider != executionOmpFixture {
 		t.Fatalf("provider = %q", st.Starts[0].Execution.Provider)
 	}
 	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
-	if len(counts["fixture"].Busy) != 1 {
+	if len(counts[executionOmpFixture].Busy) != 1 {
 		t.Fatal("remote worker escaped coordinator ceiling")
 	}
 }
 
 func TestExecutionOmpRemoteStartDoesNotReadCoordinatorCredentials(t *testing.T) {
 	a, _ := sshStartTestApp(t)
-	a.cfg.Omp.Providers = map[string]config.OmpProvider{"fixture": {APIKey: "op://fixture/item/key"}}
+	a.cfg.Omp.Providers = map[string]config.OmpProvider{executionOmpFixture: {APIKey: "op://fixture/item/key"}} //nolint:gosec // fixture vault reference, never a credential value
 	for _, host := range [][]string{{"--host", sshTestSelector}, {"--host=" + sshTestSelector}} {
 		for _, harness := range []string{omp.Harness, harnessAuto} {
 			args := append([]string{agentStartName, "--harness=" + harness, "--model=fixture/model"}, host...)
@@ -56,14 +61,14 @@ func TestExecutionOmpGuardFormat(t *testing.T) {
 		name, format, harness, tool, command string
 		allow                                bool
 	}{
-		{"status", omp.Harness, omp.Harness, "bash", "git status", true},
-		{"merge", omp.Harness, omp.Harness, "bash", "gh pr merge 7 --repo giantswarm/beekeeper", false},
-		{"foreign format", omp.Harness, execution.HarnessCodex, "bash", "git status", false},
+		{"omp status", omp.Harness, omp.Harness, executionOmpBash, executionOmpStatus, true},
+		{"omp merge", omp.Harness, omp.Harness, executionOmpBash, "gh pr merge 7 --repo giantswarm/beekeeper", false},
+		{"foreign format", omp.Harness, execution.HarnessCodex, executionOmpBash, executionOmpStatus, false},
 		{"unsupported", omp.Harness, omp.Harness, "python", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j.Request.Harness = tc.harness
-			raw, _ := json.Marshal(map[string]any{"session_id": j.Thread, "cwd": workspace, "tool_name": tc.tool, "tool_input": map[string]any{"command": tc.command}})
+			raw, _ := json.Marshal(map[string]any{executionOmpSession: j.Thread, executionOmpCwd: workspace, "tool_name": tc.tool, "tool_input": map[string]any{hookTypeCommand: tc.command}})
 			b := executionGuardDecision(guard.Hook{}, tc.format, j, nil)(raw)
 			var out struct {
 				Allow bool `json:"allow"`

@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+const (
+	ompPromptCommand   = "prompt"
+	ompFrameTypeKey    = "type"
+	ompFrameMessageKey = "message"
+)
+
 func (s *Server) probeOmpGuard(ctx context.Context, h HarnessConfig) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -49,7 +55,9 @@ func (s *Server) probeOmpGuard(ctx context.Context, h HarnessConfig) error {
 }
 
 func ompMessage(m Envelope, _ string) []byte {
-	return append(mustJSON(map[string]any{"id": m.ID, "type": "prompt", "message": codexMessageText(m), "streamingBehavior": "steer"}), '\n')
+	// RPC prompts also dispatch interactive slash commands. Component messages
+	// are task text, never a request to execute a local harness command.
+	return append(mustJSON(map[string]any{"id": m.ID, ompFrameTypeKey: ompPromptCommand, ompFrameMessageKey: "Task message:\n\n" + codexMessageText(m), "streamingBehavior": "steer"}), '\n')
 }
 
 // runOmp never submits a model prompt until the explicit guard extension has
@@ -113,7 +121,7 @@ func (s *Server) runOmp(ctx context.Context, ref Ref, j Journal) error {
 			ready = true
 			stream.Start(j.Request)
 		}
-		if ev.Type == "response" && ev.Command == "prompt" {
+		if ev.Type == "response" && ev.Command == ompPromptCommand {
 			if !ready || !ev.Success {
 				return s.codexEnd(ctx, ref, Failed, "omp rejected prompt admission")
 			}

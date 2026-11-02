@@ -112,7 +112,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 	s.GuardProbe = func() error {
 		h := a.executionHook()
 		for _, command := range []string{"git push origin main", "gh pr merge 1 --repo giantswarm/beekeeper", "gh issue create --repo forbidden/repository --title fixture --body fixture"} {
-			raw, _ := json.Marshal(map[string]any{"session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
+			raw, _ := json.Marshal(map[string]any{executionOmpSession: "probe", executionOmpCwd: cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
 			var out struct {
 				Hook struct {
 					Decision string `json:"permissionDecision"`
@@ -123,7 +123,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 				return errors.New("execution hook conformance probe failed")
 			}
 			if _, ok := cfg.Harnesses[execution.HarnessOmp]; ok {
-				ompRaw, _ := json.Marshal(map[string]any{"session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "bash", "tool_input": map[string]any{"command": command}})
+				ompRaw, _ := json.Marshal(map[string]any{executionOmpSession: "probe", executionOmpCwd: cfg.WorkspaceRoot, "tool_name": executionOmpBash, "tool_input": map[string]any{hookTypeCommand: command}})
 				b = h.DecideExecutionOmp(ompRaw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
 				out.Hook.Decision = ""
 				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
@@ -133,7 +133,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 			if _, ok := cfg.Harnesses[execution.HarnessCodex]; !ok {
 				continue
 			}
-			raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
+			raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", executionOmpSession: "probe", executionOmpCwd: cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
 			out.Hook.Decision = ""
 			b = h.DecideExecutionCodex(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
 			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
@@ -206,6 +206,12 @@ func executionGuardDecision(h guard.Hook, format string, j execution.Journal, pr
 		return h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, protected)
 	}
 }
+
+const (
+	executionOmpBash    = "bash"
+	executionOmpCwd     = "cwd"
+	executionOmpSession = "session_id"
+)
 
 // guardDeny is a hook's deny decision, in both harnesses' formats.
 const guardDeny = "deny"
