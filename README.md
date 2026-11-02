@@ -1741,8 +1741,9 @@ slot. Only a pid the run recorded is signalled. The watch records a run
 whose gate is gone once its devctl wrote its exit code, also while merge-child still hands the
 outcome over. A run that ends without its document or
 by a signal (exit 128+n) is judged by GitHub (`gh pr view`), never by its exit code: merged, it
-settles its lane with its release unconfirmed and the gate line names `devctl release wait
-<owner/repo> --pr <n>`; not merged, it leaves the lane; with
+settles its lane with its release unconfirmed, for `merge.settle` from the pull request's
+`mergedAt` when it is recorded after that (a hung run dropped or recorded late), and the gate
+line names `devctl release wait <owner/repo> --pr <n>`; not merged, it leaves the lane; with
 GitHub unanswered, the lane settles as for a lost merge.
 
 A unit beekeeper starts (a merge-child, a wake's turn, a reopen) fails in the user manager only
