@@ -312,6 +312,9 @@ type gateRun struct {
 	// placed says the merge had its place in the lane: a step that finds
 	// none, its place was taken out (lanes drop).
 	placed bool
+	// passive says a live predecessor owns the lane's checks. This step
+	// only read the queue and may sleep longer without refreshing its place.
+	passive bool
 	// candidate is the release candidate a promotion is for; read says this
 	// call read it (a fresh promote), else it is its place's.
 	candidate     string
@@ -441,6 +444,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	if !g.leaveAt.IsZero() && g.leaveAt.Before(deadline) {
 		deadline = g.leaveAt
 	}
+	pause := time.Duration(0)
 	for {
 		a.now = time.Now()
 		// Before the step saves: the new release may have written the
@@ -478,10 +482,14 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 			gateLine("waiting (up to %s): %s", deadline.Sub(a.now).Round(time.Second), why)
 			g.lastWhy = why
 		}
+		pause = gateQueuePause(pause, g.passive)
+		if g.central && g.cfg.Merge.QueueTTL.Duration > 0 {
+			pause = min(pause, g.cfg.Merge.QueueTTL.Duration/2)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(min(deadline.Sub(a.now), 5*time.Second)):
+		case <-time.After(min(time.Until(deadline), pause)):
 		}
 	}
 }
@@ -563,6 +571,21 @@ func (g *gateRun) enqueue(why string) error {
 	if g.pr == 0 && !g.pinned {
 		return g.refuse("%s, and only a pinned promotion waits on outside the call: unpinned, its turn would promote whatever candidate is newest by then. Nothing promoted, its place is dropped: run %s release promote %s --version <the candidate you proved> (the newest is %s now)",
 			why, merge.Tool, g.repo, cmp.Or(g.candidate, "none"))
+	}
+	// Passive waits do not refresh Seen. Renew the owned place once,
+	// before launching the successor: after this PID exits, the ordinary
+	// queue TTL must still cover the successor's registration.
+	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := g.mine(st, state.Waiting); i >= 0 && st.Merges[i].PID == g.pid {
+			st.Merges[i].Seen = time.Now().UTC()
+		}
+		return nil, nil
+	}); err != nil {
+		var stale *state.StaleWriterError
+		if errors.As(err, &stale) {
+			return g.staleRefused(stale)
+		}
+		return g.stateRefused(err)
 	}
 	queued := &exitError{code: ExitGateQueued}
 	self, err := selfExe()
@@ -652,14 +675,26 @@ func (g *gateRun) leave(pid int, cut bool) error {
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
-	g.pollToolWindow(g.ctx, g.me)
-	// A running merge whose devctl ended outside the gate (its gate left at
-	// the tool limit) is judged before the lane moves on, as the watch does:
-	// pruned as lost it would settle unjudged, and a lane without an
-	// installation would start the next at once.
-	g.recordGone(g.ctx)
-	if why := g.checkOutside(); why != "" {
-		return why, nil
+	g.passive = false
+	liveWait, claimed := g.waitBehindLive()
+	if liveWait != "" && claimed {
+		if g.central {
+			if _, err := g.centralTurn(); err != nil {
+				return "", err
+			}
+		}
+		g.passive = true
+		return liveWait, nil
+	}
+	if liveWait == "" {
+		g.pollToolWindow(g.ctx, g.me)
+		// Recover an ended devctl before pruning its place as lost. A
+		// queued handoff behind a live gate only registers its new PID;
+		// its predecessor still owns these checks.
+		g.recordGone(g.ctx)
+		if why := g.checkOutside(); why != "" {
+			return why, nil
+		}
 	}
 	var q merge.Lane
 	var hold state.Hold
@@ -760,6 +795,7 @@ func (g *gateRun) step() (string, error) {
 		}
 	}
 	if behind {
+		g.passive = liveWait != ""
 		if q.Running != nil {
 			ahead = *q.Running
 		}
@@ -776,6 +812,7 @@ func (g *gateRun) step() (string, error) {
 		return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", q.Position(g.repo, g.pr), g.lane.Name, ahead.Key(), ahead.By.Name, phase), nil
 	}
 	if q.Running != nil {
+		g.passive = liveWait != ""
 		return fmt.Sprintf("next in lane %s behind the running %s (%q, since %s)", g.lane.Name, q.Running.Key(), q.Running.By.Name,
 			clock(g.now, q.Running.Started)), nil
 	}
