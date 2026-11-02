@@ -173,8 +173,56 @@ func TestExecutionPublicationPushCreateRecoverAndReviewFix(t *testing.T) {
 	}
 	head = rig.commit(t, "different.txt", "divergent\n")
 	p = rig.publication(t, head)
-	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err == nil {
-		t.Fatal("non-fast-forward publication accepted")
+	err = coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
+	if err == nil || !strings.Contains(err.Error(), "publication Git push failed: the remote branch moved") {
+		t.Fatal("non-fast-forward publication accepted or undiagnosed", err)
+	}
+}
+
+func TestExecutionPublicationDiagnosesWorkflowScopeRejection(t *testing.T) {
+	rig := newPublicationRig(t)
+	// The remote rejects the push with GitHub's message for a credential
+	// without the workflow scope, after the transfer itself succeeded.
+	const remoteDetail = "fixture-credential at example.invalid/remote-detail"
+	hook := "#!/bin/sh\necho 'remote: " + remoteDetail + "' >&2\necho '! [remote rejected] HEAD -> branch (refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yaml` without `workflow` scope)' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(rig.remote, "hooks", "pre-receive"), []byte(hook), 0o700); err != nil { //nolint:gosec // executable fixture hook
+		t.Fatal(err)
+	}
+	head := rig.commit(t, "workflow.txt", "workflow change\n")
+	p := rig.publication(t, head)
+	var result executionPublicationResult
+	err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
+	if err == nil || rig.created {
+		t.Fatal("rejected push reported success or created a PR")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "publication Git push failed") || !strings.Contains(msg, "lacks the workflow scope") || !strings.Contains(msg, "authorization barrier") {
+		t.Fatal("workflow rejection lost its stage or diagnosis:", msg)
+	}
+	if strings.Contains(msg, "fixture-credential") || strings.Contains(msg, "example.invalid") || strings.Contains(msg, "remote rejected") {
+		t.Fatal("raw Git output leaked into the publication error:", msg)
+	}
+	evs, readErr := rig.a.store.Events(0, func(e state.Event) bool {
+		return e.Verb == "execution.publish-denied" && strings.Contains(e.Detail, "lacks the workflow scope")
+	})
+	if readErr != nil || len(evs) != 1 {
+		t.Fatal("publication denial event lost its diagnosis", readErr, len(evs))
+	}
+}
+
+func TestPublicationGitFailureNamesOnlyKnownStages(t *testing.T) {
+	err := publicationGitFailure(context.Background(), []string{"--upload-pack=/fixture", "x"}, "remote: fatal: Authentication failed for 'https://example.invalid/'")
+	if err.Error() != "publication Git operation failed: the coordinator's GitHub credential was not accepted" {
+		t.Fatal(err)
+	}
+	err = publicationGitFailure(context.Background(), []string{"bundle", "verify", "/fixture/path"}, "unexpected text")
+	if err.Error() != "publication Git bundle verify failed: unclassified Git failure" {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err = publicationGitFailure(ctx, []string{"push"}, ""); !strings.Contains(err.Error(), "ran out of time") {
+		t.Fatal(err)
 	}
 }
 

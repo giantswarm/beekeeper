@@ -164,7 +164,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
 			if publishErr != nil {
 				reply.Error = publishErr.Error()
-				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s", publication.Head))
+				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s: %s", publication.Head, publishErr))
 			} else {
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}

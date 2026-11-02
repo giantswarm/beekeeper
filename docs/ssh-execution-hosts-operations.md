@@ -511,7 +511,22 @@ credential workaround. Chunk retries verify existing bytes; partial or corrupt
 bundles cannot be published. Transfer files remain under the coordinator's
 `execution-publications/transfers` state directory for recovery and may be moved
 aside once the execution is retired. Failed staging directories remain for
-inspection; successful staging directories are removed.
+inspection under the coordinator's `execution-publications/transfer-*` state
+directories; successful staging directories are removed.
+
+A failed Git step reports its stage and a fixed diagnosis, never Git's raw
+output, which may carry URLs or credentials: for example `publication Git push
+failed: GitHub refused a workflow file change: the coordinator's GitHub
+credential lacks the workflow scope or permission`. That one is an
+authorization barrier, not a transfer, ancestry or execution-policy error: the
+coordinator neither retries it nor changes its authentication, and repeating
+the publication fails the same until the coordinator's credential may change
+workflow files. Other diagnoses name a protected branch or repository rule, a
+non-fast-forward push, a rejected or missing credential, denied write access,
+an unreachable GitHub or the 20-second limit; anything else is an
+unclassified Git failure. The coordinator's event log records each denial as
+`execution.publish-denied` with the head and the same diagnosis (`beekeeper
+log`).
 
 Every chunk and publication checks the exact execution generation, repository
 allowlist, current lease, completion, execution/global stop and GitHub hold.
