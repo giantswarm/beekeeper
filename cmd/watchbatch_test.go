@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func batchWatcher(t *testing.T) (*watcher, *strings.Builder, *fakeClock) {
@@ -211,5 +212,46 @@ func TestWatchBatchLoopRunsBetweenSlowPolls(t *testing.T) {
 	w.emitNow("pending", "WORKER REPORT: immediate-between-ticks")
 	if !strings.Contains(out.String(), "immediate-between-ticks") {
 		t.Fatal("action waited for a poll or batch tick")
+	}
+}
+
+// These production doctor messages describe unresolved failures, even
+// though their source also emits completed chores under the DOCTOR prefix.
+func TestWatchBatchDoctorFailuresAreImmediate(t *testing.T) {
+	for _, tc := range []struct {
+		name, line string
+		chore      bool
+	}{
+		{name: "stale state writer", line: staleLine(&proc.Process{PID: 123, Args: []string{"beekeeper", "serve"}})},
+		{name: "failed unit reset", line: "the failed units beekeeper-worker.service stay failed: access denied", chore: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, out, _ := batchWatcher(t)
+			if tc.chore {
+				w.sayChores(doctorReport{chores: []string{tc.line}})
+			} else {
+				w.check("doctor-stale 123", true, "DOCTOR %s", tc.line)
+			}
+			if !strings.Contains(out.String(), "DOCTOR "+tc.line) {
+				t.Fatalf("actionable doctor failure buffered before tick: %s", tc.line)
+			}
+			w.flushBatch()
+			if strings.Contains(out.String(), " BATCH: ") {
+				t.Fatal("failure also entered routine batch")
+			}
+		})
+	}
+}
+
+func TestWatchBatchDoctorSuccessfulUnitResetIsRoutine(t *testing.T) {
+	w, out, _ := batchWatcher(t)
+	line := "reset the failed units beekeeper-worker.service: their outcomes are in the event log"
+	w.sayChores(doctorReport{chores: []string{line}})
+	if out.Len() != 0 {
+		t.Fatal("completed reset woke the monitor before the tick")
+	}
+	w.flushBatch()
+	if !strings.Contains(out.String(), line) {
+		t.Fatal("completed reset missing from batch")
 	}
 }

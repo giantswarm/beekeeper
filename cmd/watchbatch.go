@@ -14,8 +14,14 @@ func (w *watcher) routineLine(line string) bool {
 	switch {
 	case strings.HasPrefix(line, "SESSIONS "):
 		return true
+	// These unresolved failures share the doctor source with its chores.
+	// In particular, a failed reset uses lowercase "failed"; a successful
+	// reset also names "failed units", so matching that word alone is wrong.
+	case strings.HasPrefix(line, "DOCTOR FAULT"), strings.HasPrefix(line, "DOCTOR stale binary:"),
+		strings.HasPrefix(line, "DOCTOR the failed units "):
+		return false
 	case strings.HasPrefix(line, "DOCTOR "):
-		return !strings.HasPrefix(line, "DOCTOR FAULT") && !strings.Contains(line, "FAILED")
+		return !strings.Contains(line, "FAILED")
 	case strings.HasPrefix(line, "ENDED HIGH LOAD"), strings.HasPrefix(line, "ENDED LOAD RISING"),
 		strings.HasPrefix(line, "ENDED CPU PRESSURE"), strings.HasPrefix(line, "ENDED MEMORY PRESSURE"),
 		strings.HasPrefix(line, "ENDED READS SLOWED"):
