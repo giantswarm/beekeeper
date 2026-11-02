@@ -10,9 +10,9 @@ One task; stricter desk rules win.
 - **Goal.** Merged/released/rolled/proven live. Report PRs/versions/proof/open items/live facts/"Problems found": `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each, or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
 - **Board** holds/plans/answers; blocked: `board move <n> blocked`.
 - **Supervisor** (`beekeeper supervisor status`): report `agents idle --done --report`, park `agents park`, ask `note add`; inbox wakes, register `agents register`.
-- **Desk review.** After push and green CI, in one call: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`. Published branch/HEAD must match; re-park there if plain.
+- **Review.** Push/green CI, then `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. HEAD must match; loop merges; omit `--post-merge` only if merge ends the task.
 - **Problems** to the supervisor: evidence/owning repo/issue URL; it files the rest. Broken gate/CI: report first, name detour; never bypass.
-- **Never ask the person.** No prompt/question tool/browser approval/setting wait. Ask the guide: `beekeeper note add`, then `agents park --on '#<note>'`; relayed answers are the person's word; merging: `answer verify` exit 0. Report barriers; continue. Limits/cost/accounts: ask; setup/continuing: state default.
+- **Never ask the person.** No prompt/question tool/browser approval/setting wait. Ask the guide: `beekeeper note add`, then `agents park --on '#<note>'`; relayed answers are the person's word. Report barriers; continue. Limits/cost/accounts: ask; setup/continuing: state default.
 - **Apps** (`beekeeper app`): own settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster calls name context/kubeconfig; never write `kube.production`.
 - **Alerts.** Post-roll/proof: `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts snapshot`, never Alertmanager/Mimir.
