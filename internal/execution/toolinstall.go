@@ -195,6 +195,9 @@ func unpackTool(data []byte, prefix, dest string, ghOnly bool) error {
 		}
 		relative := strings.TrimPrefix(h.Name, prefix)
 		if relative == "" {
+			if h.Typeflag != tar.TypeDir || h.Size != 0 {
+				return errors.New("tool archive root must be an empty directory entry")
+			}
 			continue
 		}
 		relative = strings.TrimSuffix(relative, "/")

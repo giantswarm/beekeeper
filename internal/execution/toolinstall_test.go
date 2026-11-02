@@ -22,10 +22,11 @@ func TestUnpackPinnedTool(t *testing.T) {
 		headers []*tar.Header
 		fail    bool
 	}{
-		{"complete Go root", []*tar.Header{{Name: "go/bin/go", Mode: 0755, Size: 3}, {Name: "go/src/runtime/runtime.go", Mode: 0644, Size: 3}}, false},
+		{"complete Go root", []*tar.Header{{Name: "go/", Typeflag: tar.TypeDir}, {Name: "go/bin/go", Mode: 0755, Size: 3}, {Name: "go/src/runtime/runtime.go", Mode: 0644, Size: 3}}, false},
 		{"traversal", []*tar.Header{{Name: "go/../outside", Size: 3}}, true},
 		{"absolute", []*tar.Header{{Name: "go//outside", Size: 3}}, true},
 		{"link", []*tar.Header{{Name: "go/bin/go", Typeflag: tar.TypeSymlink, Linkname: "/elsewhere"}}, true},
+		{"root link", []*tar.Header{{Name: "go/", Typeflag: tar.TypeSymlink, Linkname: "/elsewhere"}}, true},
 		{"missing executable", []*tar.Header{{Name: "go/README", Size: 3}}, true},
 		{"unexpected prefix", []*tar.Header{{Name: "other/bin/go", Size: 3}}, true},
 	} {
