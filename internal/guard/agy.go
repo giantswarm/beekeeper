@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -11,6 +12,10 @@ const (
 	decisionAsk       = "ask"
 	manageTaskTool    = "manage_task"
 	commandStatusTool = "command_status"
+	agyCwdKey         = "Cwd"
+	agyDirPathKey     = "DirectoryPath"
+	agySearchPathKey  = "SearchPath"
+	agySearchDirKey   = "SearchDirectory"
 )
 
 // agyPayload is the PreToolUse JSON agy passes on stdin.
@@ -62,11 +67,13 @@ func AgyPaths(input []byte) []string {
 		return nil
 	}
 	var out []string
-	out = append(out, p.WorkspacePaths...)
+	for _, wp := range p.WorkspacePaths {
+		out = append(out, expandHome(wp))
+	}
 	if p.ToolCall != nil && p.ToolCall.Args != nil {
-		for _, k := range []string{"Cwd", "DirectoryPath", "SearchPath", "SearchDirectory", "Path", "TargetFile", "AbsolutePath", "NotebookPath"} {
+		for _, k := range []string{agyCwdKey, agyDirPathKey, agySearchPathKey, agySearchDirKey, "Path", "TargetFile", "AbsolutePath", "NotebookPath"} {
 			if v, ok := p.ToolCall.Args[k].(string); ok && v != "" {
-				out = append(out, v)
+				out = append(out, expandHome(v))
 			}
 		}
 	}
@@ -96,7 +103,7 @@ func DecideUnsandboxedAgy(input []byte) []byte {
 
 // DecideSandboxAgy is DecideSandbox in agy's PreToolUse format.
 func (h Hook) DecideSandboxAgy(input []byte) []byte {
-	ev, _, errReason := parseAgyEvent(input)
+	ev, _, errReason := h.parseAgy(input)
 	if errReason != "" {
 		return DenyAgy(errReason)
 	}
@@ -112,7 +119,7 @@ func (h Hook) DecideSandboxAgy(input []byte) []byte {
 // DecideAgy reads an agy PreToolUse JSON event from input, runs the Hook's
 // checks on it, and returns the response in agy's PreToolUse JSON format.
 func (h Hook) DecideAgy(input []byte) []byte {
-	ev, origCmd, errReason := parseAgyEvent(input)
+	ev, origCmd, errReason := h.parseAgy(input)
 	if errReason != "" {
 		return DenyAgy(errReason)
 	}
@@ -171,6 +178,10 @@ var agyNonFileTools = map[string]bool{
 }
 
 func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
+	return (Hook{}).parseAgy(input)
+}
+
+func (h Hook) parseAgy(input []byte) (ev event, origCmd, errReason string) {
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	var p agyPayload
@@ -178,9 +189,15 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return event{}, "", "Refused: malformed PreToolUse payload."
 	}
 	args := p.ToolCall.Args
-	cwd := firstString(args, "Cwd", "DirectoryPath", "SearchPath", "SearchDirectory")
-	if cwd == "" && len(p.WorkspacePaths) > 0 {
-		cwd = p.WorkspacePaths[0]
+	base := expandHome(h.Project)
+	if len(p.WorkspacePaths) > 0 && p.WorkspacePaths[0] != "" {
+		base = expandHome(p.WorkspacePaths[0])
+	}
+	cwd := expandHome(firstString(args, agyCwdKey, agyDirPathKey, agySearchPathKey, agySearchDirKey))
+	if cwd == "" {
+		cwd = base
+	} else if !filepath.IsAbs(cwd) && filepath.IsAbs(base) {
+		cwd = filepath.Join(base, cwd)
 	}
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -274,7 +291,7 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return ev, "", ""
 
 	case name == "write_file" || name == "write_to_file":
-		fp := firstString(args, "Path", "TargetFile", filePathKey)
+		fp := expandHome(firstString(args, "Path", "TargetFile", filePathKey))
 		if fp == "" {
 			return event{}, "", "Refused: " + name + " without a Path string."
 		}
@@ -287,7 +304,7 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 
 	case name == "edit_file" || name == "replace_file_content" || name == "multi_replace_file_content" || name == "multi_edit_file":
 		const newStringKey = "new_string"
-		fp := firstString(args, "Path", "TargetFile", filePathKey)
+		fp := expandHome(firstString(args, "Path", "TargetFile", filePathKey))
 		if fp == "" {
 			return event{}, "", "Refused: " + name + " without a Path string."
 		}
@@ -311,7 +328,7 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return ev, "", ""
 
 	case name == "notebook_edit":
-		fp := firstString(args, "NotebookPath", "Path", "TargetFile", notebookPathKey, filePathKey)
+		fp := expandHome(firstString(args, "NotebookPath", "Path", "TargetFile", notebookPathKey, filePathKey))
 		if fp == "" {
 			return event{}, "", "Refused: notebook_edit without a NotebookPath string."
 		}
@@ -323,7 +340,7 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return ev, "", ""
 
 	case name == "read_file" || name == "view_file" || name == "view_file_outline" || name == "view_code_item":
-		fp := firstString(args, "Path", "AbsolutePath", "File", filePathKey)
+		fp := expandHome(firstString(args, "Path", "AbsolutePath", "File", filePathKey))
 		if fp == "" {
 			return event{}, "", "Refused: " + name + " without a Path string."
 		}
@@ -334,7 +351,7 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return ev, "", ""
 
 	case name == "grep_search":
-		sp := firstString(args, "SearchPath", "Path", "DirectoryPath", pathKey)
+		sp := expandHome(firstString(args, agySearchPathKey, "Path", agyDirPathKey, pathKey))
 		if sp == "" {
 			return event{}, "", "Refused: grep_search without a SearchPath string."
 		}
@@ -351,7 +368,7 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return ev, "", ""
 
 	case name == "find_by_name" || name == "list_dir" || name == "list_directory":
-		sp := firstString(args, "SearchDirectory", "DirectoryPath", "Path", pathKey)
+		sp := expandHome(firstString(args, agySearchDirKey, agyDirPathKey, "Path", pathKey))
 		if sp == "" {
 			return event{}, "", "Refused: " + name + " without a DirectoryPath string."
 		}

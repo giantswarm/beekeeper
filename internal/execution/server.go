@@ -551,6 +551,10 @@ func (s *Server) cleanWorkspace(r Ref) {
 		if within(s.Root, srcDir) {
 			_ = worktrees.RemoveAll(srcDir)
 		}
+		mcpHome := s.agyMCPHomeDir(r)
+		if within(s.Root, mcpHome) {
+			_ = worktrees.RemoveAll(mcpHome)
+		}
 	}
 }
 

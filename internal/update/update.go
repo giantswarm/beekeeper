@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -118,7 +116,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
-	if err := selfupdatecosign.Install(ctx, up, rel, res.Path); err != nil {
+	if err := installRelease(ctx, up, rel, res.Path); err != nil {
 		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
 	}
 	res.Updated = true
@@ -161,9 +159,8 @@ func prerelease(current string) bool {
 // InstallVersion installs exactly the release version (a tag, "v0.3.0")
 // over the running executable once its bundle verifies, as Run installs the
 // latest: an execution host follows its coordinator's release, never a newer
-// one. The replaced binary stays next to the executable (Previous) until
-// Rollback puts it back or the next install replaces it. The running
-// version is left as it is.
+// one. The verified download is staged beside the destination and renamed
+// over it atomically, with no backup or ownership-dependent hard link.
 func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, error) {
 	res := Result{Current: currentVersion(), Latest: version}
 	want, err := semver.StrictNewVersion(strings.TrimPrefix(version, "v"))
@@ -199,45 +196,10 @@ func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, e
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
-	target, err := filepath.EvalSymlinks(res.Path)
-	if err != nil {
-		return res, err
-	}
-	if err := keepPrevious(target); err != nil {
-		return res, fmt.Errorf("keeping %s for a rollback: %w", target, err)
-	}
-	if err := selfupdatecosign.Install(ctx, up, rel, res.Path); err != nil {
+	if err := installRelease(ctx, up, rel, res.Path); err != nil {
 		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
 	}
 	res.Updated = true
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s from %s to %s.\n", res.Path, res.Current, version)
 	return res, nil
-}
-
-// Previous is where InstallVersion keeps the binary it replaced at the
-// resolved executable path target: hidden beside it, so the directory's
-// bare beekeeper stays the one installed.
-func Previous(target string) string {
-	return filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+".previous")
-}
-
-// keepPrevious links the binary at target to Previous(target), replacing an
-// older one: the install renames over target, and the link keeps the
-// replaced file, mode included, without a copy.
-func keepPrevious(target string) error {
-	prev := Previous(target)
-	if err := os.Remove(prev); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Link(target, prev)
-}
-
-// Rollback puts the binary InstallVersion replaced back over the executable
-// at path in one rename.
-func Rollback(path string) error {
-	target, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return err
-	}
-	return os.Rename(Previous(target), target)
 }
