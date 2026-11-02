@@ -122,6 +122,7 @@ type answered struct {
 	Answer   string
 	Asker    string
 	Question string
+	Audience string // original note audience; empty in older audit events.
 	At       time.Time
 	By       string
 	// Recorder is the party that recorded it: Via is its channel.
@@ -130,7 +131,7 @@ type answered struct {
 
 // answeredDetail is answer.recorded's detail, as beekeeper answer writes it
 // (answerEvent).
-var answeredDetail = regexp.MustCompile(`(?s)^(\S+) answered by ("(?:[^"\\]|\\.)*") via (\w+)(?:, recorded at (\S+?))?(?:, note #(\d+) asked by ("(?:[^"\\]|\\.)*"): ("(?:[^"\\]|\\.)*"))?: (.*)$`)
+var answeredDetail = regexp.MustCompile(`(?s)^(\S+) answered by ("(?:[^"\\]|\\.)*") via (\w+)(?:, recorded at (\S+?))?(?:, note #(\d+) asked by ("(?:[^"\\]|\\.)*")(?: for ("(?:[^"\\]|\\.)*"))?: ("(?:[^"\\]|\\.)*"))?: (.*)$`)
 
 // parseAnswered reads an answer.recorded event; ok is false for another
 // one.
@@ -144,7 +145,7 @@ func parseAnswered(e state.Event) (answered, bool) {
 		u, _ := strconv.Unquote(s)
 		return u
 	}
-	return answered{About: m[1], For: unquote(m[2]), Via: m[3], Comment: m[4], ID: id, Asker: unquote(m[6]), Question: unquote(m[7]), Answer: m[8], At: e.At, By: e.By.Name, Recorder: e.By}, true
+	return answered{About: m[1], For: unquote(m[2]), Via: m[3], Comment: m[4], ID: id, Asker: unquote(m[6]), Audience: unquote(m[7]), Question: unquote(m[8]), Answer: m[9], At: e.At, By: e.By.Name, Recorder: e.By}, true
 }
 
 // answeredSince is the answers recorded since since, oldest first.

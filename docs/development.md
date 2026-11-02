@@ -35,6 +35,12 @@ files together, so a change that adds or removes a string in `cmd/snapshot.go` c
 in an untouched `cmd/*_test.go`: that finding is the change's, and CI reports it too. A lint of a
 worktree of `origin/main` tells main's findings from a change's.
 
+Run `gitleaks detect --redact --log-opts=--all` from the repository root to scan the full
+history, or `gitleaks detect --redact --no-git` to scan the working tree. Both load
+`.gitleaks.toml`, which extends all default detection rules. Its signing-test exception
+requires the exact fake GPG key ID and `cmd/sandboxsign_test.go` together, and applies
+only to `generic-api-key`; other values and files remain scanned.
+
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
@@ -56,6 +62,17 @@ without either status or spec provenance remain visible with their namespace's t
 creation time, without an invented filer identity. Listing does not repair status during
 another object's update. Apply the generated Note CRD before running the new server so
 Kubernetes preserves these optional spec fields.
+
+`note show <id>` reads one note in full, with its status, audience and retained answer;
+`--json` returns the note fields plus `status`, `answer` and `closure`. Open central
+notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
+while `#<n>` selects the local record. The central instance's own CLI can also
+read retained closed Note resources. File-backed stores can recover answered
+notes while their full `answer.recorded` event remains, without a record-size cap.
+New answer events retain the original audience separately from the answerer;
+older events without that audience show it as unknown rather than naming the
+answerer as the addressee. Other removed or expired
+records are reported as unavailable, never reconstructed from a truncated log.
 
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
 successful filing followed by an empty listing can mean it was answered between those
@@ -529,3 +546,27 @@ verbatim text. `answer` verifies that receipt before recording channel `guide_di
 command-line flag alone cannot select the channel. The guide keeps the note's option labels
 and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
 relay still does not verify. The central instance retains its authenticated identity checks.
+
+The doctor stops reparented process trees left in linked worktrees by known local
+workers that have left the roster. It sends SIGTERM, then SIGKILL after
+two seconds, checking the process start time, user and worktree before each
+signal. Each targeted PID and masked command is recorded as `agents.archive`.
+`doctor --dry-run` reports candidates without signalling; `ps` marks the same
+candidates `[orphan: <worktree>]` (JSON: `orphan`, `worktree`), beside their age.
+A roster entry, including a done worker awaiting removal, or a live CLI protects
+its worktree. Main checkouts, arbitrary directories, unknown starts and remote
+executions are excluded. Inherited worker IDs also identify servers whose tool
+shell changed into a different worktree after the session started. Cleanup is
+retried by later doctor runs if a live CLI still protects a finished worktree.
+
+`TestStopWorktreeOrphansLive` starts an adopted, TERM-ignoring server in a scratch
+worktree and proves dry-run preservation, escalation and archive logging.
+`TestWorktreeOrphans` covers shared worktrees, rostered/done sessions, live CLIs,
+remote starts, older processes and changed working directories.
+
+Removed manually registered workers retain their identity and registration time
+in `endedWorkers`, so their inherited session ID also identifies leftovers.
+This cleanup history grants no permissions to the start or permission hooks.
+Ownership and roster protection both use Claude session IDs or normalized
+Codex, omp and agy host-session IDs; a hosted harness takes precedence over
+a launching Claude session inherited in the same environment.
