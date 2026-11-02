@@ -3307,8 +3307,12 @@ subsequent turns with `codex exec resume --json --dangerously-bypass-approvals-a
 --dangerously-bypass-hook-trust [-m <model>] <thread-id> -`, recording the thread id in
 `<stateDir>/codex/<id>.thread` and `<stateDir>/codex/threads/<thread-id>`. `agents wake <name>
 <message>` writes to the agent's persistent FIFO inbox (`<stateDir>/codex/<id>.in`), and `codex-run`
-starts a `codex exec resume` turn with the queued message as soon as the current turn finishes (or at
-once when idle). Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
+delivers queued messages through `hook pretooluse --format codex` as model-visible
+`additionalContext` at the next tool call inside the running turn. The hook preserves guard
+decisions and consumes only pending wakes, never the runner’s inflight prompt. If there is no
+further tool call, delivery waits until the turn ends (whose remaining duration is unknown);
+`codex-run` then starts a `codex exec resume` turn with the queued message, or does so at once
+when idle. `agents wake` states this fallback explicitly. Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
 `beekeeper-codex-<id[:8]>` unit and removes its inbox, queue, lock, state, stream log and thread link
 files.
 
