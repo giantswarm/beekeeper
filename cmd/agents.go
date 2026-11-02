@@ -415,6 +415,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 	var holder, lastTask, harness, model string
 	var keep *state.Keep
 	var reportedProblems *state.WorkerProblems
+	var ownAssignedAt time.Time
 	for _, x := range st.Agents {
 		own := x.Is(me)
 		if !own && !strings.EqualFold(x.Name, me.Name) {
@@ -422,6 +423,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		}
 		if own {
 			reportedProblems = x.ReportedProblems
+			ownAssignedAt = x.AssignedAt
 		}
 		if x.Execution != nil {
 			return registration{}, refused("name belongs to a managed SSH execution; inspect or stop it before replacement")
@@ -452,6 +454,10 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 				holder, x.Session, reg.task, x.Task)
 		}
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
+	}
+	if reg.task == "" {
+		// Idle registration keeps the last assignment's finding receipts valid.
+		reg.assignedAt = ownAssignedAt
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
 	st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
@@ -512,7 +518,7 @@ func problemsFound(lines []string, finished bool) ([]string, error) {
 	var found []string
 	none := false
 	for _, l := range lines {
-		l = strings.Join(strings.Fields(l), " ")
+		l = oneLine(l)
 		switch {
 		case l == "":
 			return nil, refused("an empty --problem: one line per finding, or --problem none")

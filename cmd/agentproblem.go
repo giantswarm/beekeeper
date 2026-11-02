@@ -48,7 +48,7 @@ delivers it once per worker assignment.`,
 }
 
 func (a *app) recordWorkerProblem(st *state.State, ag *state.Agent, me state.Party, finding string) ([]state.Event, error) {
-	finding = strings.TrimSpace(finding)
+	finding = oneLine(finding)
 	if finding == "" || strings.EqualFold(finding, noProblems) {
 		return nil, refused("problem requires a finding with evidence and owning repository")
 	}
@@ -79,6 +79,7 @@ func freshWorkerProblems(ag *state.Agent, findings []string) []string {
 	}
 	var fresh []string
 	for _, finding := range findings {
+		finding = oneLine(finding)
 		if !slices.Contains(previous.Findings, finding) {
 			previous.Findings = append(previous.Findings, finding)
 			fresh = append(fresh, finding)

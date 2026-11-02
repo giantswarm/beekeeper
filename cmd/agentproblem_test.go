@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,91 @@ import (
 )
 
 const midtaskFinding = "giantswarm/beekeeper: fixture probe failed; the command returned exit 1"
+
+func runProblemTestCommand(t *testing.T, a *app, args ...string) {
+	t.Helper()
+	c := a.agentsCmd()
+	c.SetArgs(args)
+	c.SetOut(a.out)
+	c.SetErr(a.out)
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentProblemCanonicalFindings(t *testing.T) {
+	for name, whitespace := range map[string]string{"newline": "\n", "tab": "\t", "spaces": "   ", "mixed": " \r\n\t "} {
+		t.Run(name, func(t *testing.T) {
+			a, _ := noteApp(t)
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: sshTestTask, AssignedAt: a.now}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			finding := strings.ReplaceAll(midtaskFinding, " ", whitespace)
+			runProblemTestCommand(t, a, "problem", finding)
+			runProblemTestCommand(t, a, verbIdle, flagReport, "fixture finished", flagProblem, finding)
+			events, err := a.store.Events(0, func(ev state.Event) bool { return ev.Verb == agentProblemEvent })
+			if err != nil || len(events) != 1 || events[0].Detail != agentOne+": "+midtaskFinding {
+				t.Fatalf("canonical log: %+v, %v", events, err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var queued []string
+			for _, report := range st.WorkerReports {
+				queued = append(queued, report.Problems...)
+			}
+			if len(queued) != 1 || queued[0] != midtaskFinding {
+				t.Fatalf("canonical pending findings: %q", queued)
+			}
+		})
+	}
+}
+
+func TestAgentProblemReregisterAssignment(t *testing.T) {
+	for _, idle := range []bool{false, true} {
+		t.Run(fmt.Sprintf("idle=%t", idle), func(t *testing.T) {
+			a, _ := noteApp(t)
+			assignedAt := a.now
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: sshTestTask, AssignedAt: assignedAt}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runProblemTestCommand(t, a, "problem", midtaskFinding)
+			if idle {
+				runProblemTestCommand(t, a, verbIdle, flagProblem, midtaskFinding)
+			}
+			a.now = a.now.Add(time.Second)
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				firePending(st, nil, a.now)
+				_, err := registerAgent(st, st.Agents[0].Party, func(state.Party) bool { return true }, a.now)
+				return nil, err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runProblemTestCommand(t, a, verbIdle, flagProblem, midtaskFinding)
+			st, err := a.store.Read()
+			if err != nil || !st.Agents[0].AssignedAt.Equal(assignedAt) || len(st.WorkerReports) != 0 {
+				t.Fatalf("assignment identity or duplicate delivery: %+v, %v", st, err)
+			}
+			events, err := a.store.Events(0, func(ev state.Event) bool { return ev.Verb == agentProblemEvent })
+			if err != nil || len(events) != 1 {
+				t.Fatalf("duplicate after registration: %+v, %v", events, err)
+			}
+			runProblemTestCommand(t, a, "assign", agentOne, sshTestTask)
+			runProblemTestCommand(t, a, "problem", midtaskFinding)
+			events, err = a.store.Events(0, func(ev state.Event) bool { return ev.Verb == agentProblemEvent })
+			if err != nil || len(events) != 2 {
+				t.Fatalf("new assignment finding: %+v, %v", events, err)
+			}
+		})
+	}
+}
 
 func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 	a, out := noteApp(t)
@@ -100,7 +186,7 @@ func TestAgentProblemLogsAndDeliversOnce(t *testing.T) {
 
 func TestAgentProblemRemoteCoordinator(t *testing.T) {
 	a, request := executionTestApp(t)
-	control := execution.ControlRequest{Ref: request.Ref, ID: "problem-one", Sequence: 1, Operation: "problem", Data: mustExecutionJSON(t, midtaskFinding)}
+	control := execution.ControlRequest{Ref: request.Ref, ID: "problem-one", Sequence: 1, Operation: "problem", Data: mustExecutionJSON(t, strings.ReplaceAll(midtaskFinding, " ", "\n\t"))}
 	var result execution.ControlResult
 	if err := coordinatorTestCall(t, a, request, "control", control, &result, true); err == nil {
 		t.Fatal("lost reply reported success")
