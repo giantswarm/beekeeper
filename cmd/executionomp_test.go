@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -55,7 +56,10 @@ func TestExecutionOmpRemoteStartDoesNotReadCoordinatorCredentials(t *testing.T) 
 }
 
 func TestExecutionOmpGuardFormat(t *testing.T) {
-	workspace := t.TempDir()
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	j := execution.Journal{Request: execution.StartRequest{Harness: omp.Harness}, Handle: execution.Handle{Workspace: workspace}, Thread: "fixture-thread"}
 	for _, tc := range []struct {
 		name, format, harness, tool, command string
