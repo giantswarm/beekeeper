@@ -613,6 +613,10 @@ type supervisorLoop struct {
 	// fillPause defers an unproductive board read until capacity changes,
 	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
+	// fillEmpty counts the refill's unproductive board reads since its last
+	// start or a change that ended its pause; each one doubles the next
+	// pause, up to fillBackoff times.
+	fillEmpty int
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
@@ -2051,8 +2055,8 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 
 // boardBudgetLow reports whether a board walk, which costs a large share of
 // the GraphQL budget, must wait: the REST budget is under floor until its
-// reset, GraphQL refuses, or the last GraphQL reading, taken within its
-// hourly window, is under floor.
+// reset, GraphQL refuses, or the last GraphQL reading is under floor until
+// its window resets (its reset, else an hour after the reading).
 func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 	if lowBudget(b, floor, now) {
 		return true
@@ -2061,7 +2065,16 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 		return false
 	}
 	g := b.GraphQL
-	return g.Blocks(now) || (g.Remaining < floor && now.Sub(g.At) < time.Hour)
+	if g.Blocks(now) {
+		return true
+	}
+	if g.Remaining >= floor {
+		return false
+	}
+	if !g.Reset.IsZero() {
+		return now.Before(g.Reset)
+	}
+	return now.Sub(g.At) < time.Hour
 }
 
 // readNextItem reads board next --json. With nothing free board next exits

@@ -400,10 +400,10 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 			page = 1
 		}
 		return []byte(f.pages[page]), nil
-	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search(")):
+	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search(")):
 		return []byte(f.extrasBy(q)), nil
-	case strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search("):
-		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:50){nodes{...I projectItems(`) ||
+	case strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search("):
+		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:3){nodes{...I projectItems(`) ||
 			!strings.Contains(q, `s2:search(query:"repo:o/q is:issue is:open sort:created-asc"`) {
 			f.t.Errorf("extras query %s", q)
 		}
