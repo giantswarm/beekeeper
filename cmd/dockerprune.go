@@ -54,10 +54,9 @@ const (
 type dockerRun struct {
 	imagesMax, cacheMax int64
 	before, after       dockerprune.Usage
-	// removed are the images removed, which freed about freed bytes;
-	// pruned says the build cache was pruned.
+	// removed are the images removed; pruned says the build cache was
+	// pruned.
 	removed []string
-	freed   int64
 	pruned  bool
 	// blockers are the images that kept the images over their cap after
 	// a trim: in use, in flight or refused by Docker.
@@ -91,7 +90,7 @@ func (r dockerRun) String() string {
 		gibStr(r.before.Images), capStr(r.imagesMax), gibStr(r.before.BuildCache), capStr(r.cacheMax))
 	var did []string
 	if len(r.removed) > 0 {
-		did = append(did, fmt.Sprintf("%d unused images removed (about %s), images now %s", len(r.removed), gibStr(r.freed), gibStr(r.after.Images)))
+		did = append(did, fmt.Sprintf("%d unused images removed (%s freed), images now %s", len(r.removed), gibStr(r.before.Images-r.after.Images), gibStr(r.after.Images)))
 	}
 	if r.pruned {
 		did = append(did, "build cache pruned to "+gibStr(r.after.BuildCache))
@@ -132,21 +131,19 @@ func (r dockerRun) logLine() string {
 	return r.String() + "; removed: " + strings.Join(r.removed, ", ")
 }
 
-// blockerList names the largest blockers with what each holds and why,
-// and how many more hold how much.
+// blockerList names the largest blockers with each one's size, its
+// layers shared with other images included, and why it stays, and how many
+// more there are. The sizes overlap where blockers share layers, so the
+// rest is a count alone.
 func blockerList(bs []dockerprune.Blocker) string {
 	bs = slices.Clone(bs)
-	slices.SortStableFunc(bs, func(a, b dockerprune.Blocker) int { return cmp.Compare(b.Image.Unique, a.Image.Unique) })
+	slices.SortStableFunc(bs, func(a, b dockerprune.Blocker) int { return cmp.Compare(b.Image.Size, a.Image.Size) })
 	var parts []string
 	for _, b := range bs[:min(len(bs), dockerBlockersShown)] {
-		parts = append(parts, fmt.Sprintf("%s (%s, %s)", b.Image.Name(), gibStr(b.Image.Unique), b.Why))
+		parts = append(parts, fmt.Sprintf("%s (%s, %s)", b.Image.Name(), gibStr(b.Image.Size), b.Why))
 	}
-	if rest := bs[min(len(bs), dockerBlockersShown):]; len(rest) > 0 {
-		var n int64
-		for _, b := range rest {
-			n += b.Image.Unique
-		}
-		parts = append(parts, fmt.Sprintf("and %d more (%s)", len(rest), gibStr(n)))
+	if rest := len(bs) - dockerBlockersShown; rest > 0 {
+		parts = append(parts, fmt.Sprintf("and %d more", rest))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -298,7 +295,7 @@ func (a *app) trimDockerImages(ctx context.Context, d dockerprune.Docker, r *doc
 	}
 	keep := dockerKeep(a.heldLabs(), time.Now())
 	t, err := dockerprune.TrimImages(ctx, d, dockerprune.Candidates(images, held, keep), r.before.Images, r.imagesMax*3/4, size, busy)
-	r.freed, r.removed = t.Freed, t.Removed
+	r.removed = t.Removed
 	switch {
 	case errors.Is(err, dockerprune.ErrBusy):
 		return nil

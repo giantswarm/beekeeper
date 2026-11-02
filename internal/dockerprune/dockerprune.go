@@ -74,9 +74,12 @@ type Image struct {
 	// Tagged is when a tag was last put on it (docker build, tag or load):
 	// an image rebuilt from cache or retagged keeps its old Created.
 	Tagged time.Time
-	// Unique is what removing it frees: the layers no other image shares.
-	Unique     int64
-	Containers int
+	// Size is all its layers, the ones it shares with other images
+	// included: at most what removing it frees, once every image sharing
+	// them is gone. Unique is the layers no other image shares, what
+	// removing it alone frees for certain.
+	Size, Unique int64
+	Containers   int
 }
 
 // Active is when the image was last produced: created or tagged, the later.
@@ -96,8 +99,8 @@ func (i Image) Name() string {
 	return strings.Join(i.Refs, " ")
 }
 
-// ListImages reads every image with what removing it frees, from docker
-// system df -v, which lists an image once per tag, and when it was tagged
+// ListImages reads every image with its size and what removing it frees,
+// from docker system df -v, which lists an image once per tag, and when it was tagged
 // last, from docker image inspect.
 func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 	raw, err := d(ctx, "system", "df", "-v", "--format", "{{json .}}")
@@ -106,7 +109,7 @@ func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 	}
 	var doc struct {
 		Images []struct {
-			ID, Repository, Tag, Digest, CreatedAt, UniqueSize, Containers string
+			ID, Repository, Tag, Digest, CreatedAt, Size, UniqueSize, Containers string
 		}
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -118,13 +121,17 @@ func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 		i, ok := at[r.ID]
 		if !ok {
 			created, _ := time.Parse("2006-01-02 15:04:05 -0700 MST", r.CreatedAt)
+			size, err := ParseSize(r.Size)
+			if err != nil {
+				return nil, fmt.Errorf("docker system df -v: image %s: %w", r.ID, err)
+			}
 			unique, err := ParseSize(r.UniqueSize)
 			if err != nil {
 				return nil, fmt.Errorf("docker system df -v: image %s: %w", r.ID, err)
 			}
 			containers, _ := strconv.Atoi(r.Containers)
 			i, at[r.ID] = len(out), len(out)
-			out = append(out, Image{ID: r.ID, Digest: none(r.Digest), Created: created, Unique: unique, Containers: containers})
+			out = append(out, Image{ID: r.ID, Digest: none(r.Digest), Created: created, Size: size, Unique: unique, Containers: containers})
 		}
 		if repo, tag := none(r.Repository), none(r.Tag); repo != "" && tag != "" {
 			out[i].Refs = append(out[i].Refs, repo+":"+tag)
@@ -312,23 +319,23 @@ func Kept(images []Image, keep time.Time) []Blocker {
 	return out
 }
 
-// Trimmed is what a trim did: what it freed by the images' unique sizes,
-// the names of the images it removed, and the candidates Docker refused to
-// remove.
+// Trimmed is what a trim did: the names of the images it removed, and the
+// candidates Docker refused to remove.
 type Trimmed struct {
-	Freed   int64
 	Removed []string
 	Refused []Blocker
 }
 
 // TrimImages removes candidates in order until the images' size, from
-// total, is at most target, asking busy before each removal. Once the
-// unique sizes it freed say the target is reached, it reads the size again
-// (size, nil for none) and goes on while Docker still says more: layers
-// the removed images shared with others free nothing until the last of
-// them goes. An image Docker refuses to remove (a container started on it
-// since, a child image built on it) is skipped and, while the images stay
-// over target, tried once more after the others.
+// total, is at most target, asking busy before each removal. It counts
+// each removal by the image's whole size, more than it may free (a layer
+// another image shares stays), so the count never says more than Docker
+// does; once the count says the target may be reached it reads the size
+// again (size, nil for none) and goes on while Docker still says more. An
+// image Docker refuses to remove (a container started on it since, a child
+// image built on it) is skipped; while the images stay over target the
+// refused ones are tried again, the newest first so a child goes before
+// its parent, as long as a pass removes one.
 func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, size func() (int64, error), busy func() bool) (Trimmed, error) {
 	var t Trimmed
 	left := total
@@ -362,19 +369,21 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 				refused = append(refused, Blocker{Image: img, Why: "Docker refused its removal: " + err.Error()})
 				continue
 			}
-			t.Freed += img.Unique
-			left -= img.Unique
+			left -= max(img.Size, img.Unique)
 			t.Removed = append(t.Removed, img.Name())
 		}
 		return refused, nil
 	}
 	refused, err := pass(candidates)
-	if err == nil && len(refused) > 0 {
+	slices.Reverse(refused)
+	for removed := len(t.Removed); err == nil && len(refused) > 0 && removed > 0; {
 		retry := make([]Image, len(refused))
 		for i, b := range refused {
 			retry[i] = b.Image
 		}
+		before := len(t.Removed)
 		refused, err = pass(retry)
+		removed = len(t.Removed) - before
 	}
 	t.Refused = refused
 	return t, err

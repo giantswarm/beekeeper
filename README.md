@@ -2445,10 +2445,11 @@ ago (dangling ones first; the tag time is `docker image inspect`'s `LastTagTime`
 rebuilt from cache or retagged keeps its old Created) down to three quarters of it, and prunes the build cache with `docker builder prune
 --max-used-space` likewise. The images a running kind lab's node holds (`crictl images` in each
 node, by ID, tag or digest) go last: the node keeps its own copy, though a lab created again
-loads it anew. Once the removed images' sizes say the target is reached, `docker system df` is
-read again and the prune goes on while it says more (layers shared between images free nothing
-until the last of them goes); an image Docker refuses to remove is tried once more after the
-others. An image a container uses (a kind node's included) is never removed, nor one created or
+loads it anew. Each removal is counted by the image's whole size, shared layers included, which
+is at most what it frees, and once that count says the target may be reached `docker system df`
+is read again: the prune stops where Docker says the target is reached and goes on while it says
+more. The images Docker refuses to remove (a child image still built on one) are tried again,
+the newest first, as long as a pass removes one. An image a container uses (a kind node's included) is never removed, nor one created or
 tagged within the last 24 hours, or since the oldest held lab lease was claimed (72 hours back at
 most): a session's dev image waits for its lab. A prune that leaves the images over their cap
 names the largest images that kept them there, with why (a container uses it, in flight, or

@@ -37,11 +37,11 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 			`{"Type":"Build Cache","Size":"` + bytesStr(f.cache) + `"}` + "\n"), nil
 	case slices.Equal(args, []string{"system", "df", "-v", "--format", "{{json .}}"}):
 		return []byte(`{"Images":[
-{"Containers":"0","CreatedAt":"2026-10-14 01:00:00 +0000 UTC","ID":"sha256:new","Repository":"x","Tag":"dev-3","UniqueSize":"2147483648B"},
-{"Containers":"0","CreatedAt":"2026-10-12 01:00:00 +0000 UTC","ID":"sha256:mid","Repository":"x","Tag":"dev-2","UniqueSize":"2147483648B"},
-{"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0000 UTC","ID":"sha256:old","Repository":"x","Tag":"dev-1","UniqueSize":"2147483648B"},
-{"Containers":"0","CreatedAt":"2026-10-01 01:00:00 +0000 UTC","ID":"sha256:lab","Repository":"gsoci.azurecr.io/giantswarm/y","Tag":"dev","UniqueSize":"2147483648B"},
-{"Containers":"2","CreatedAt":"2026-09-01 01:00:00 +0000 UTC","ID":"sha256:node","Repository":"kindest/node","Tag":"v1","UniqueSize":"2147483648B"}
+{"Containers":"0","CreatedAt":"2026-10-14 01:00:00 +0000 UTC","ID":"sha256:new","Repository":"x","Tag":"dev-3","Size":"2147483648B","UniqueSize":"2147483648B"},
+{"Containers":"0","CreatedAt":"2026-10-12 01:00:00 +0000 UTC","ID":"sha256:mid","Repository":"x","Tag":"dev-2","Size":"2147483648B","UniqueSize":"2147483648B"},
+{"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0000 UTC","ID":"sha256:old","Repository":"x","Tag":"dev-1","Size":"2147483648B","UniqueSize":"2147483648B"},
+{"Containers":"0","CreatedAt":"2026-10-01 01:00:00 +0000 UTC","ID":"sha256:lab","Repository":"gsoci.azurecr.io/giantswarm/y","Tag":"dev","Size":"2147483648B","UniqueSize":"2147483648B"},
+{"Containers":"2","CreatedAt":"2026-09-01 01:00:00 +0000 UTC","ID":"sha256:node","Repository":"kindest/node","Tag":"v1","Size":"2147483648B","UniqueSize":"2147483648B"}
 ]}`), nil
 	case args[0] == dockerImage && args[1] == "inspect":
 		var out []byte
@@ -111,7 +111,7 @@ func TestPruneDockerKeepsUnderTheCapsAndLogs(t *testing.T) {
 		t.Errorf("builder prune %v; want %v", f.pruned, want)
 	}
 	want := "Docker: images 7.0 GiB, cap 4.0 GiB; build cache 6.0 GiB, cap 4.0 GiB (doctor.dockerImagesMaxGiB, doctor.dockerBuildCacheMaxGiB); " +
-		"2 unused images removed (about 4.0 GiB), images now 3.0 GiB; build cache pruned to 3.0 GiB"
+		"2 unused images removed (4.0 GiB freed), images now 3.0 GiB; build cache pruned to 3.0 GiB"
 	if got := r.String(); got != want {
 		t.Errorf("line =\n %q\nwant\n %q", got, want)
 	}
@@ -171,7 +171,7 @@ func TestPruneDockerRemovesAKindLabsCopyLast(t *testing.T) {
 }
 
 // The unused images share layers: each removal frees 1 GiB on disk though
-// its unique size says 2. One run still ends under the cap.
+// its size says 2. One run still ends under the cap.
 func TestPruneDockerReachesTheCapThroughSharedLayers(t *testing.T) {
 	a, f := dockerApp(t)
 	f.shrink = 1 << 30
@@ -196,7 +196,7 @@ func TestPruneDockerNamesWhatKeepsTheImagesOverTheCap(t *testing.T) {
 	}
 	line := r.String()
 	for _, want := range []string{
-		"2 unused images removed (about 4.0 GiB), images now 3.0 GiB; images stay over their cap: ",
+		"2 unused images removed (4.0 GiB freed), images now 3.0 GiB; images stay over their cap: ",
 		"x:dev-3 (2.0 GiB, created or tagged ", "x:dev-2 (2.0 GiB, created or tagged ", ", in flight)",
 		"kindest/node:v1 (2.0 GiB, a container uses it)",
 	} {
@@ -212,10 +212,10 @@ func TestPruneDockerNamesWhatKeepsTheImagesOverTheCap(t *testing.T) {
 func TestBlockerListNamesTheLargest(t *testing.T) {
 	var bs []dockerprune.Blocker
 	for i := range 7 {
-		bs = append(bs, dockerprune.Blocker{Image: dockerprune.Image{ID: "sha256:" + strconv.Itoa(i), Unique: int64(i+1) << 30}, Why: "a container uses it"})
+		bs = append(bs, dockerprune.Blocker{Image: dockerprune.Image{ID: "sha256:" + strconv.Itoa(i), Size: int64(i+1) << 30}, Why: "a container uses it"})
 	}
 	want := "sha256:6 (7.0 GiB, a container uses it), sha256:5 (6.0 GiB, a container uses it), sha256:4 (5.0 GiB, a container uses it), " +
-		"sha256:3 (4.0 GiB, a container uses it), sha256:2 (3.0 GiB, a container uses it), and 2 more (3.0 GiB)"
+		"sha256:3 (4.0 GiB, a container uses it), sha256:2 (3.0 GiB, a container uses it), and 2 more"
 	if got := blockerList(bs); got != want {
 		t.Errorf("blockers =\n %q\nwant\n %q", got, want)
 	}
