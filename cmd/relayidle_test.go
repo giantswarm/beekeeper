@@ -116,10 +116,7 @@ func TestGuideFeedRelaysOnANewLineAfterIdle(t *testing.T) {
 	projects := t.TempDir()
 	a.cfg.Claude.ProjectsDir = projects
 	transcript := filepath.Join(projects, "desk", "s1.jsonl")
-	raw, err := os.ReadFile(supervisorTranscript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(`{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"id":"idle-fixture","usage":{"input_tokens":1,"cache_read_input_tokens":163017}}}` + "\n")
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
 		t.Fatal(err)
 	}
