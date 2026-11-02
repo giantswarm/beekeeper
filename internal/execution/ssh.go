@@ -280,6 +280,14 @@ func (t SSHTransport) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	}
 	return x, err
 }
+func (t SSHTransport) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Observation, error) {
+	var x Observation
+	err := t.Call(ctx, rebindOperation, r, q, &x)
+	if err == nil && (x.Handle.Ref != r || x.PolicyDigest != q.To) {
+		err = errors.New("policy rebind is not acknowledged")
+	}
+	return x, err
+}
 func (t SSHTransport) Message(ctx context.Context, r Ref, m Envelope) (Ack, error) {
 	var x Ack
 	err := t.Call(ctx, "message", r, m, &x)

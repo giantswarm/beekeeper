@@ -412,6 +412,9 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 			return err
 		}
 		if observation.Ready && (observation.ProcessState == execution.Running || observation.ProcessState == execution.Exited) {
+			if observation, err = a.rebindExecutionPolicy(ctx, host, client, r.Name, ref, observation); err != nil {
+				return err
+			}
 			if a.json {
 				return a.printJSON(observation)
 			}
