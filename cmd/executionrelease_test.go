@@ -152,49 +152,75 @@ func TestExecutionWatchReleasesStaleNeverStartedReservations(t *testing.T) {
 
 // agents recover of a reservation the host confirms it holds nothing of
 // binds it to the host's current policy, rather than retry a request the
-// host now refuses.
+// host now refuses: also one whose start pinned its source and was sent,
+// then failed in the upload or the start before the host wrote a journal.
 func TestExecutionRecoverRebindsNeverStartedReservationToCurrentPolicy(t *testing.T) {
-	rig := newPublicationRig(t)
-	a := rig.a
-	pendingExecution(t, a, rig.request.Ref, false, a.now)
-	host := a.cfg.Agents.Hosts[sshTestSelector]
-	host.PolicyDigest = execution.Digest([]byte("replaced fixture policy"))
-	a.cfg.Agents.Hosts[sshTestSelector] = host
-	handle := execution.Handle{Ref: rig.request.Ref, Repository: rig.request.Repository, Commit: rig.base, Workspace: filepath.Join(host.WorkspaceRoot, string(rig.request.Ref.Execution), "workspace"), Unit: execution.UnitName(rig.request.Ref), ConversationID: rig.request.ConversationID}
-	prepared, running := false, false
-	fake := &testExecutionTransport{}
-	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
-		if !prepared {
-			return execution.Observation{}, execution.ErrNotFound
-		}
-		phase := execution.Prepared
-		if running {
-			phase = execution.Running
-		}
-		return execution.Observation{Handle: handle, ProcessState: phase, Ready: running}, nil
-	}
-	fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
-		if r.PolicyDigest != host.PolicyDigest {
-			return execution.Handle{}, errors.New("execution host policy does not match the request")
-		}
-		prepared = true
-		if r.RegistrationReceipt != "" {
-			running = true
-		}
-		return handle, nil
-	}
-	transport := &sourceRecoveryTransport{testExecutionTransport: fake, upload: func(context.Context, execution.Ref, []byte) error { return nil }}
-	a.executionTransport = func(execution.Host) execution.Transport { return transport }
-	a.out = &bytes.Buffer{}
-	if _, err := runAgents(a, loopRecover, rig.request.Name); err != nil {
-		t.Fatalf("recover: %v", err)
-	}
-	st, err := a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec, _ := executionRecord(st, rig.request.Ref)
-	if !running || rec.Request.PolicyDigest != host.PolicyDigest || rec.RequestDigest != rec.Request.Digest() || !rec.Observation.Ready {
-		t.Fatal("recovery did not rebind the never-started reservation to the current policy")
+	for _, failAt := range []string{"upload", "start"} {
+		t.Run(failAt, func(t *testing.T) {
+			rig := newPublicationRig(t)
+			a := rig.a
+			pendingExecution(t, a, rig.request.Ref, true, a.now)
+			host := a.cfg.Agents.Hosts[sshTestSelector]
+			handle := execution.Handle{Ref: rig.request.Ref, Repository: rig.request.Repository, Commit: rig.base, Workspace: filepath.Join(host.WorkspaceRoot, string(rig.request.Ref.Execution), "workspace"), Unit: execution.UnitName(rig.request.Ref), ConversationID: rig.request.ConversationID}
+			prepared, running, failed := false, false, false
+			fake := &testExecutionTransport{}
+			fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+				if !prepared {
+					return execution.Observation{}, execution.ErrNotFound
+				}
+				phase := execution.Prepared
+				if running {
+					phase = execution.Running
+				}
+				return execution.Observation{Handle: handle, ProcessState: phase, Ready: running}, nil
+			}
+			fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+				if failAt == "start" && !failed {
+					failed = true
+					return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: errors.New("fixture connection lost before the journal")}
+				}
+				if r.PolicyDigest != a.cfg.Agents.Hosts[sshTestSelector].PolicyDigest {
+					return execution.Handle{}, errors.New("execution host policy does not match the request")
+				}
+				prepared = true
+				if r.RegistrationReceipt != "" {
+					running = true
+				}
+				return handle, nil
+			}
+			transport := &sourceRecoveryTransport{testExecutionTransport: fake, upload: func(context.Context, execution.Ref, []byte) error {
+				if failAt == "upload" && !failed {
+					failed = true
+					return &execution.UnreachableError{Operation: "upload", Cause: errors.New("fixture connection lost mid-upload")}
+				}
+				return nil
+			}}
+			a.executionTransport = func(execution.Host) execution.Transport { return transport }
+			if err := a.activateExecution(context.Background(), rig.request.Ref); err == nil {
+				t.Fatal("the interrupted start succeeded")
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := executionRecord(st, rig.request.Ref)
+			if rec.Terminal() || rec.Unsent || rec.Request.SourceDigest == "" || executionHostBusy(st, sshTestSelector) != 1 {
+				t.Fatal("fixture is not a sent, pinned, still reserved start")
+			}
+			host.PolicyDigest = execution.Digest([]byte("replaced fixture policy"))
+			a.cfg.Agents.Hosts[sshTestSelector] = host
+			a.out = &bytes.Buffer{}
+			if _, err := runAgents(a, loopRecover, rig.request.Name); err != nil {
+				t.Fatalf("recover: %v", err)
+			}
+			st, err = a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, _ = executionRecord(st, rig.request.Ref)
+			if !running || rec.Request.PolicyDigest != host.PolicyDigest || rec.RequestDigest != rec.Request.Digest() || !rec.Observation.Ready {
+				t.Fatal("recovery did not rebind the never-started reservation to the current policy")
+			}
+		})
 	}
 }

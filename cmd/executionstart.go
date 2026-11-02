@@ -316,7 +316,11 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		absent := rec.Unsent
 		uploader, uploads := client.(execution.SourceUploader)
 		existing := false
-		if uploads && r.SourceDigest == "" {
+		// must: an unpinned source is pinned only on confirmed absence. A
+		// reservation already sent is inspected too, so that one its host
+		// confirms it holds nothing of is rebound like an unsent one.
+		must := uploads && r.SourceDigest == ""
+		if must || !rec.Unsent {
 			// A pending coordinator may have lost a legacy preparation reply.
 			// Preserve its original request/digest whenever the host journal
 			// already exists. Only confirmed absence permits source pinning.
@@ -326,6 +330,9 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 				existing, absent = true, false
 			case errors.Is(inspectErr, execution.ErrNotFound):
 				absent = true
+			case !must:
+				// Uncertain: the recorded request goes again unchanged, as
+				// a recovery always sent it.
 			default:
 				a.executionFailure(ref, inspectErr)
 				return a.releaseUnstarted(ref, absent, fmt.Errorf("cannot reconcile pending preparation: %w", inspectErr))
