@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// updateRelease is the release the coordinator updates the fixture host to.
+const updateRelease = "v0.6.0"
+
 func TestUpdateHostRunsSelfUpdateAndChecksTheAnswer(t *testing.T) {
 	f := testFixture(t)
 	digest := Digest([]byte("prepared"))
@@ -18,12 +21,12 @@ func TestUpdateHostRunsSelfUpdateAndChecksTheAnswer(t *testing.T) {
 		runErr error
 		ok     bool
 	}{
-		{"pinned", HostUpdate{Protocol: Protocol, Identity: fixtureHost, Version: "v0.6.0", PolicyDigest: digest}, nil, true},
+		{"pinned", HostUpdate{Protocol: Protocol, Identity: fixtureHost, Version: updateRelease, PolicyDigest: digest}, nil, true},
 		{"busy", HostUpdate{Protocol: Protocol, Identity: fixtureHost, Version: "v0.5.0", Busy: 1}, nil, true},
 		{"failed", HostUpdate{Protocol: Protocol, Identity: fixtureHost, Error: "no signed release"}, nil, false},
-		{"other host", HostUpdate{Protocol: Protocol, Identity: "host-z", Version: "v0.6.0", PolicyDigest: digest}, nil, false},
+		{"other host", HostUpdate{Protocol: Protocol, Identity: "host-z", Version: updateRelease, PolicyDigest: digest}, nil, false},
 		{"other release", HostUpdate{Protocol: Protocol, Identity: fixtureHost, Version: "v0.5.0", PolicyDigest: digest}, nil, false},
-		{"no digest", HostUpdate{Protocol: Protocol, Identity: fixtureHost, Version: "v0.6.0"}, nil, false},
+		{"no digest", HostUpdate{Protocol: Protocol, Identity: fixtureHost, Version: updateRelease}, nil, false},
 		{"older host", map[string]any{"error": "unknown command"}, nil, false},
 		{"unreachable", nil, errors.New("connection refused"), false},
 	} {
@@ -36,11 +39,11 @@ func TestUpdateHostRunsSelfUpdateAndChecksTheAnswer(t *testing.T) {
 				}
 				return json.Marshal(tc.answer)
 			}
-			x, err := UpdateHost(context.Background(), f.host, "v0.6.0", run)
+			x, err := UpdateHost(context.Background(), f.host, updateRelease, run)
 			if (err == nil) != tc.ok {
 				t.Fatalf("UpdateHost() = %+v, %v", x, err)
 			}
-			want := quote(f.host.Executable) + " --config " + quote(f.host.Config) + " agents hosts self-update --protocol 1 '--version' 'v0.6.0'"
+			want := quote(f.host.Executable) + " --config " + quote(f.host.Config) + " agents hosts self-update --protocol 1 '--version' '" + updateRelease + "'"
 			if len(argv) == 0 || argv[len(argv)-1] != want || argv[len(argv)-2] != f.host.SSH {
 				t.Errorf("ran %q, want the host's self-update %q", argv, want)
 			}

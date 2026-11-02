@@ -40,6 +40,9 @@ const hostUpdateRetry = time.Hour
 // hostUpdateCmdName is the coordinator's update of an execution host.
 const hostUpdateCmdName = "update"
 
+// hostVersionFlag names the release a host's self-update installs.
+const hostVersionFlag = "version"
+
 // releaseVersion says whether v is a release tag a host can install
 // ("v0.3.0", "v0.3.0-rc.2"), not a development or pseudo-version build.
 func releaseVersion(v string) bool {
@@ -85,7 +88,7 @@ policy digest, the executions still running (busy, nothing changed) or the
 error.`, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(a.hostSelfUpdate(cmd.Context(), protocol, version))
 	}}
-	selfUpdate.Flags().StringVar(&version, "version", "", "the release to install, the coordinator's")
+	selfUpdate.Flags().StringVar(&version, hostVersionFlag, "", "the release to install, the coordinator's")
 	selfUpdate.Flags().IntVar(&protocol, "protocol", 0, "execution protocol")
 	return []*cobra.Command{updateCmd, selfUpdate}
 }
@@ -136,7 +139,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 	if err != nil {
 		return fail(err)
 	}
-	raw, err := runHostPrepare(ctx, res.Path, "--"+configFlag, s.ConfigPath, agentsName, "hosts", "self-update", "--protocol", strconv.Itoa(execution.Protocol), "--version", version)
+	raw, err := runHostPrepare(ctx, res.Path, "--"+configFlag, s.ConfigPath, agentsName, "hosts", "self-update", "--protocol", strconv.Itoa(execution.Protocol), "--"+hostVersionFlag, version)
 	var next execution.HostUpdate
 	reason := ""
 	switch {

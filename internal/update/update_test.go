@@ -418,10 +418,17 @@ func TestReportsSourceInitializationFailure(t *testing.T) {
 	}
 }
 
+// installBundle is the bundle InstallVersion's release carries, and
+// windowsOS the platform that keeps no previous binary.
+const (
+	installBundle = "the release's bundle"
+	windowsOS     = "windows"
+)
+
 func TestInstallVersionInstallsThatReleaseAndKeepsThePrevious(t *testing.T) {
 	src := &fakeSource{
 		releases: []selfupdate.SourceRelease{release("v0.4.0"), release(latestV)},
-		assets:   map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte("its bundle")},
+		assets:   map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)},
 	}
 	setup(t, running, src)
 	exe, content := installed(t)
@@ -439,13 +446,13 @@ func TestInstallVersionInstallsThatReleaseAndKeepsThePrevious(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Clean(exe)); string(got) != newBinary {
 		t.Errorf("executable holds %q after the update", got)
 	}
-	if string(v.bundle) != "its bundle" {
+	if string(v.bundle) != installBundle {
 		t.Errorf("validated against bundle %q", v.bundle)
 	}
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsOS {
 		return
 	}
-	if got, err := os.ReadFile(Previous(exe)); err != nil || !bytes.Equal(got, content) {
+	if got, err := os.ReadFile(filepath.Clean(Previous(exe))); err != nil || !bytes.Equal(got, content) {
 		t.Fatalf("previous binary %q, %v; want the replaced one", got, err)
 	}
 	link, _ := executable()

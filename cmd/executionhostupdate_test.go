@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
@@ -24,6 +25,19 @@ import (
 const (
 	hostOldRelease = "v0.5.0"
 	hostNewRelease = "v0.6.0"
+)
+
+// The host fixture of the host update tests.
+const (
+	hostFixtureRules         = "fixture rules"
+	hostFixtureClaude        = "/usr/local/bin/claude"
+	hostFixtureClaudeVersion = "2.1.290"
+	hostFixtureWorkspaces    = "/srv/workspaces"
+	hostFixtureSource        = "/srv/source"
+	hostFixtureDraining      = "host-c"
+	hostDrainsWord           = "drains"
+	hostFixtureCoordinator   = "coordinator.example"
+	hostFixtureWorker        = "remote-worker"
 )
 
 // withCoordinatorVersion makes the coordinator run version.
@@ -45,8 +59,8 @@ func hostUpdateServer(t *testing.T, a *app, version string) *execution.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint := execution.Endpoint{SSH: "coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}
-	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: version, Executable: sshTestExecutable, ConfigPath: "/etc/beekeeper/host.yaml", Config: execution.HostConfig{Identity: sshTestSelector, RulesFile: filepath.Join(root, "host-rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{sshTestRepository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{claudeComm: {Executable: "/usr/local/bin/claude", Version: "2.1.290"}}, Coordinators: map[string]execution.Coordinator{sshTestCoordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
+	endpoint := execution.Endpoint{SSH: hostFixtureCoordinator, Executable: sshTestExecutable, Config: sshTestConfig}
+	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte(hostFixtureRules), Version: version, Executable: sshTestExecutable, ConfigPath: "/etc/beekeeper/host.yaml", Config: execution.HostConfig{Identity: sshTestSelector, RulesFile: filepath.Join(root, "host-rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{sshTestRepository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{claudeComm: {Executable: hostFixtureClaude, Version: hostFixtureClaudeVersion}}, Coordinators: map[string]execution.Coordinator{sshTestCoordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
 	if _, err := s.Prepare(s.Policy()); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +124,7 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	if !slices.Equal(h.installs, []string{hostNewRelease}) || len(h.rollbacks) != 0 {
 		t.Errorf("installs %v, rollbacks %v", h.installs, h.rollbacks)
 	}
-	wantArgs := []string{sshTestExecutable, "--" + configFlag, s.ConfigPath, agentsName, "hosts", "self-update", "--protocol", "1", "--version", hostNewRelease}
+	wantArgs := []string{sshTestExecutable, "--" + configFlag, s.ConfigPath, agentsName, "hosts", "self-update", "--protocol", "1", "--" + hostVersionFlag, hostNewRelease}
 	if !slices.Equal(h.prepareArgs, wantArgs) {
 		t.Errorf("the installed release ran %v, want %v", h.prepareArgs, wantArgs)
 	}
@@ -118,9 +132,9 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 
 func TestHostSelfUpdateRollsBackAReleaseThatDoesNotPrepare(t *testing.T) {
 	for name, answer := range map[string]execution.HostUpdate{
-		"error":     {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, Error: "policy bundle differs"},
-		"no digest": {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease},
-		"other":     {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostOldRelease, PolicyDigest: execution.Digest([]byte("x"))},
+		"the release refuses":   {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, Error: "policy bundle differs"},
+		"the release no digest": {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease},
+		"another release":       {Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostOldRelease, PolicyDigest: execution.Digest([]byte("x"))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, _ := executionTestApp(t)
@@ -173,13 +187,13 @@ func TestHostSelfUpdateRefusesAWorkerOrAnotherProtocol(t *testing.T) {
 	h := &hostInstall{}
 	stubHostInstall(t, h)
 	for name, run := range map[string]func() execution.HostUpdate{
-		"protocol": func() execution.HostUpdate {
+		"another protocol": func() execution.HostUpdate {
 			return a.hostSelfUpdate(context.Background(), execution.Protocol+1, hostNewRelease)
 		},
-		"version": func() execution.HostUpdate {
+		"no release": func() execution.HostUpdate {
 			return a.hostSelfUpdate(context.Background(), execution.Protocol, "latest")
 		},
-		"worker": func() execution.HostUpdate {
+		"a managed worker": func() execution.HostUpdate {
 			t.Setenv(execution.EnvID, string(r.Ref.Execution))
 			return a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
 		},
@@ -296,7 +310,7 @@ func TestHostsUpdateHoldsAFailingHostWhileTheOthersRun(t *testing.T) {
 	if err := os.WriteFile(brief, []byte(sshTestTask), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runAgents(a, agentStartName, "--name", "remote-worker", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--model", bgModel); Code(err) != ExitRefused {
+	if _, err := runAgents(a, agentStartName, "--name", hostFixtureWorker, brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--model", bgModel); Code(err) != ExitRefused {
 		t.Errorf("a start on a held host: %v", err)
 	}
 	if st, _ := a.store.Read(); len(st.Starts) != 0 {
@@ -319,7 +333,7 @@ func TestHostsUpdateDrainsAHostWithExecutions(t *testing.T) {
 			return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostOldRelease, Busy: 2}, nil
 		},
 	})
-	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), "drains") {
+	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) {
 		t.Fatalf("a busy host: %v", err)
 	}
 	st, err := a.store.Read()
@@ -332,7 +346,7 @@ func TestHostsUpdateDrainsAHostWithExecutions(t *testing.T) {
 	// Executions the coordinator recorded drain without an SSH call.
 	ref := execution.Ref{Host: sshTestSelector, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: "remote-worker"}, Execution: &state.ExecutionRecord{Selector: sshTestSelector, Handle: execution.Handle{Ref: ref}, Phase: execution.Running, Observation: execution.Observation{ProcessState: execution.Running}}})
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: hostFixtureWorker}, Execution: &state.ExecutionRecord{Selector: sshTestSelector, Handle: execution.Handle{Ref: ref}, Phase: execution.Running, Observation: execution.Observation{ProcessState: execution.Running}}})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -363,12 +377,12 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 	r := newLoopRig(t)
 	withCoordinatorVersion(t, hostNewRelease)
 	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{}
-	for _, selector := range []string{sshTestSelector, sshTestOtherSelector, "host-c"} {
-		r.a.cfg.Agents.Hosts[selector] = execution.Host{Endpoint: execution.Endpoint{SSH: selector + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: execution.HostID(selector), WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{sshTestRepository: "/srv/source"}, Harnesses: []string{claudeComm}, MaxBusy: 1}
+	for _, selector := range []string{sshTestSelector, sshTestOtherSelector, hostFixtureDraining} {
+		r.a.cfg.Agents.Hosts[selector] = execution.Host{Endpoint: execution.Endpoint{SSH: selector + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: execution.HostID(selector), WorkspaceRoot: hostFixtureWorkspaces, Repositories: map[string]string{sshTestRepository: hostFixtureSource}, Harnesses: []string{claudeComm}, MaxBusy: 1}
 	}
-	ref := execution.Ref{Host: "host-c", Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}
+	ref := execution.Ref{Host: hostFixtureDraining, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: "remote-worker"}, Execution: &state.ExecutionRecord{Selector: "host-c", Handle: execution.Handle{Ref: ref}, Phase: execution.Running}})
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: hostFixtureWorker}, Execution: &state.ExecutionRecord{Selector: hostFixtureDraining, Handle: execution.Handle{Ref: ref}, Phase: execution.Running}})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -414,15 +428,15 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 		t.Fatalf("updated %v, want host-a and host-b, host-c draining", updated)
 	}
 	out := r.out.String()
-	if strings.Count(out, "SUPERVISOR HOST HELD") != 1 || !strings.Contains(out, "SUPERVISOR HOST UPDATED "+sshTestOtherSelector) || !strings.Contains(out, "SUPERVISOR HOST DRAINS host-c") {
+	if strings.Count(out, "SUPERVISOR HOST HELD") != 1 || !strings.Contains(out, "SUPERVISOR HOST UPDATED "+sshTestOtherSelector) || !strings.Contains(out, "SUPERVISOR HOST DRAINS "+hostFixtureDraining) {
 		t.Fatalf("loop said:\n%s", out)
 	}
-	findings, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == "supervisor.file" })
+	findings, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == "supervisor."+superloop.KindFile })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(findings) != 1 || !strings.Contains(findings[0].Detail, fileReportSeparator) || !strings.Contains(findings[0].Detail, "unreachable") {
-		t.Fatalf("findings %+v", findings)
+		t.Fatalf("host hold findings %+v", findings)
 	}
 	// A later pass within the retry interval updates nothing again and
 	// hands the hold on no second time.
@@ -435,7 +449,7 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 			t.Errorf("updated %v again", c)
 		}
 	}
-	if findings, _ := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == "supervisor.file" }); len(findings) != 1 {
+	if findings, _ := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == "supervisor."+superloop.KindFile }); len(findings) != 1 {
 		t.Errorf("%d findings, want the one", len(findings))
 	}
 	// An hour on, the held host is tried again.
