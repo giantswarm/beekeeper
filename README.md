@@ -2081,8 +2081,10 @@ and a crash both start a fresh session.
   worker a reboot stopped, a desktop session closed) does not come back by itself. `watch` says
   `AGENTS STOPPED` once per agent, and the `handover` Agents section marks it, each with
   how to resume it: `claude --bg --resume <session> "…"` for a background worker, its
-  `claude://code/continue` link for a desktop session. Nothing is resumed automatically: a burst
-  of resumed workers after a login is the supervisor's call against the machine's memory. The
+  `claude://code/continue` link for a desktop session, or `beekeeper agents wake <name> <message>`
+  for codex, omp and agy workers. Those workers count as running while their harness runner
+  lives, including between turns and before their first transcript. Nothing is resumed automatically:
+  a burst of resumed workers after a login is the supervisor's call against the machine's memory. The
   line tells a worker parked on a person (its serve record's `--waits` names the person, a note,
   the supervisor or the guide: `parked on a person: …`) apart from one whose headless turn ended
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
@@ -2387,7 +2389,17 @@ open timer that wakes the agent by name (`timer add --wake`) keeps it the same w
 is done. `agents` shows what keeps an entry in its KEPT column, `doctor --dry-run` names each kept
 entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board next` counts its
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
-returns the entry to `agents.staleAfter`. The doctor also reopens a worker whose session the desktop
+returns the entry to `agents.staleAfter`.
+
+A task holder with no running CLI or turn and no transcript or roster activity
+for `agents.staleAfter` is **gone**. Kept and parked agents, agents with a wake
+timer, and remote executions are protected. `capacity` releases its busy and
+provider slots; `agents` and the watch show its last activity. The doctor retires
+it through the usual archive path, ends its serve record so the board can offer
+its item again, and logs its unfinished task and latest hand-over note as an
+`agents.gone` event without asking for a decision. Before retirement, a wake, resume or
+new activity restores its slot. Setting `agents.staleAfter` negative disables
+stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
 
 A park on a pull request requests the supervisor loop's independent review only
