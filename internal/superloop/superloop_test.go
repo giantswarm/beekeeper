@@ -1220,3 +1220,30 @@ func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
 		t.Fatalf("order = %+v, want intake actions before next", acts)
 	}
 }
+
+// The current park wins over two older merged pull requests and their
+// ended tracking records, even when both post-merge windows have elapsed.
+func TestTwoMergedPullsDoNotRetireTheWorkerOfAThird(t *testing.T) {
+	const second, current = "o/r#8", "o/r#9"
+	w := parked(t0)
+	w[0].Started = true
+	w[0].ParkedOn = current
+	in := Input{Workers: w, Now: t1.Add(3 * time.Hour), Open: func(ref string) bool { return ref == current }, Pulls: map[string]Pull{
+		pr:      {Ref: pr, URL: prURL, State: Merged},
+		second:  {Ref: second, URL: "https://github.com/o/r/pull/8", State: Merged},
+		current: {Ref: current, URL: "https://github.com/o/r/pull/9", State: Open, Head: head3, Green: true},
+	}}
+	for _, ref := range []string{pr, second} {
+		in.Taken = append(in.Taken, taken(t, t0, Action{Key: goKey(ref, head1), Kind: KindGo, Ref: ref, Agent: worker}, Action{Key: endKey(ref), Kind: KindEnd, Ref: ref})...)
+	}
+	for _, a := range Plan(in) {
+		if a.Kind == KindDone {
+			t.Fatalf("retired worker of pending third pull: %+v", a)
+		}
+	}
+	acts := Plan(in)
+	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindReview && a.Ref == current })
+	if i < 0 {
+		t.Fatalf("pending review lost: %+v", acts)
+	}
+}
