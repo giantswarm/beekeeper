@@ -12,7 +12,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const parkedCentralNote = "central#3"
+const (
+	parkedCentralNote = "central#3"
+	parkedHoldWait    = "hold fixture-hold"
+	parkedAlertWait   = "alert:ParkFixtureAlert"
+)
 
 // Replay eight hours of watch ticks without a model: every attempted turn
 // crosses wakeOwner, so zero deliveries means zero model calls or cost.
@@ -90,8 +94,8 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 		{name: "matching checks", on: claimIssue, when: "pr-checks o/r#7", wantWake: true},
 		{name: "another pull", on: claimIssue2, when: prMerged7},
 		{name: "lease wait", on: "lease agentlab-1"},
-		{name: "hold", on: holdParkOn("merges")},
-		{name: "alert", on: alertParkPrefix + "WorkloadDown"},
+		{name: "hold", on: parkedHoldWait},
+		{name: "alert", on: parkedAlertWait},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, _, _ := notifyingWatch(t, t.TempDir(), false)
@@ -174,7 +178,7 @@ func TestMailboxDefaultLeavesPersonParkAsleep(t *testing.T) {
 }
 
 func TestCommandOutcomeWaitsForCurrentNamedPark(t *testing.T) {
-	for _, on := range []string{"#3", parkedCentralNote, claimIssue, holdParkOn("merges"), "lease agentlab-1", alertParkPrefix + "WorkloadDown"} {
+	for _, on := range []string{"#3", parkedCentralNote, claimIssue, parkedHoldWait, "lease agentlab-1", parkedAlertWait} {
 		t.Run(on, func(t *testing.T) {
 			w, _, _ := notifyingWatch(t, t.TempDir(), false)
 			woke := stubWakes(t)
