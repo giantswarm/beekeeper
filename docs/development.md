@@ -520,8 +520,13 @@ uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` ma
 names to `squash` (the default), `rebase`, or `merge`; `merge.admin` controls `--admin`.
 The pinned path never updates the branch: a behind or conflicting branch goes back to its
 worker for repair and another green published head. A restart reads GitHub before repeating
-a mutation whose completion record was lost. Successful merge actions are `supervisor.merge`,
-not worker merge grants. An already queued or running gate is observed without submitting
+a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
+not worker merge grants; when the pinned merge step fails on an open, green, approved head
+for a tooling or internal reason rather than branch repair or gate refusal, the loop falls
+back automatically to `beekeeper gate --limit 0 -- devctl pr merge <repo> <n>` and, if the
+pull request remains open at that green head, directs the worker session with an exact-head
+`supervisor.go` grant instead of asking a person. Merge goes never go through `answer verify`.
+An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
 

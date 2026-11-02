@@ -959,7 +959,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	for _, e := range answers {
-		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) && an.unverified(answerQuery{Note: an.ID, About: an.About}, a.central, a.now) == "" {
+		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) {
 			in.Answers = append(in.Answers, superloop.Answer{Ref: an.About, Note: an.ID, Question: an.Question, Text: an.Answer, By: an.For, At: an.At})
 		}
 	}
@@ -1210,7 +1210,7 @@ func would(act superloop.Action) string {
 func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	detail := superloop.Detail(act, what)
 	kind := act.Kind
-	if kind == superloop.KindGo {
+	if kind == superloop.KindGo && what != loopWorkerMergeGo {
 		kind = superloop.KindMerge
 	}
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
