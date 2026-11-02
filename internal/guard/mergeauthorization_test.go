@@ -14,7 +14,7 @@ func TestAdminAndAPIMergesRequireExactHeadGoAcrossHarnesses(t *testing.T) {
 			calls := 0
 			h.MergeGo = func(_, repo string, pr int, gotHead string) string {
 				calls++
-				if repo != "person/project" || pr != 7 {
+				if repo != mergeGoTestRepo || pr != 7 {
 					t.Fatalf("wrong merge target: %s %d", repo, pr)
 				}
 				if !granted || gotHead != mergeGoTestHead {
