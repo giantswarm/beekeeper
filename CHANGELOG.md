@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The supervisor loop executes exact reviewed-head merges through the merge gate, applies configured methods and admin flags, reconciles interrupted merges, and wakes workers only for branch repair or declared post-merge work. Review parks are limited to rostered review requests; terminal pull requests wake remaining tasks, queued gates are not resubmitted, and the durable child retains auto-release verdicts for lane settlement and tool holds. A completed guide question dialog binds the selected option and verbatim text to its note, allowing the person’s answer to verify without a second terminal confirmation (https://github.com/giantswarm/beekeeper/issues/1978).
 - Log an orphaned pending review once when its worker leaves the roster, preserving the claim for a new review park. Regression coverage retains a worker parked on a third pull request after two earlier merges (https://github.com/giantswarm/beekeeper/issues/1975).
 - The supervisor loop ignores cancelled checks superseded by a newer check on the same head when waking workers and requiring green CI; pending replacements still block the go (https://github.com/giantswarm/beekeeper/issues/1958).
 

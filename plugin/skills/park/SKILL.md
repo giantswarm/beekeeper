@@ -9,7 +9,7 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
   comes parks and ends its turn, never sleeps on it: `beekeeper agents park --on <#note|owner/repo#n>
   "<what>"`. The inbox resume carries what settled it. A hold refusal (77) parks on that hold,
   `--on hold:<target>` as the refusal names it, and runs the same merge once the resume says it lifted.
-- **Desk review**, after push and green CI, in one shell call: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`. Only matching published branch/HEAD requests review. Other parks are plain waits, no review/go/forward; re-run there.
+- **Desk review**, after push/green CI: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. Matching published HEAD requests review; otherwise re-park there. The loop merges. Omit `--post-merge` only if merge ends the task without a wake.
 - **External state** (rollout, registry, CI outside `devctl`): set a wake timer, then park: `beekeeper timer add <time> "<what>" --when "<condition>"` (CI: `pr-checks <owner/repo#n>`, green or red)
   or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`. A rollout is
   checked once, when its timer falls due.
