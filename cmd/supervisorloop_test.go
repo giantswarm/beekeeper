@@ -500,7 +500,7 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 		t.Fatalf("no review of a head with its own change: %v\n%s", r.calls, r.out)
 	}
 	// A repository in merge.admin gets --admin --match-head-commit in its go.
-	r.a.cfg.Merge.Admin = []string{"o/r"}
+	r.a.cfg.Merge.Admin = []string{"O/R"}
 	r.verdict("R2", own, superloop.Approved, "")
 	r.pass(t)
 	wake = r.called(agentsName, agentWakeName, loopWorker)

@@ -462,8 +462,8 @@ func TestDevctlServes(t *testing.T) {
 			t.Errorf("%s: %v, want %v", repo, got, want)
 		}
 	}
-	c.Merge.Admin = []string{"example/beekeeper"}
-	for repo, want := range map[string]bool{"example/beekeeper": true, "Example/Beekeeper": true, "example/x": false, "someone/beekeeper": false} {
+	c.Merge.Admin = []string{"example/repo"}
+	for repo, want := range map[string]bool{"Example/Repo": true, "example/other": false, "someone/repo": false} {
 		if got := c.Merge.AdminMerge(repo); got != want {
 			t.Errorf("admin %s: %v, want %v", repo, got, want)
 		}
