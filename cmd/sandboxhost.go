@@ -152,7 +152,7 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 			}
 		}
 		if m := a.ruleModel(name, kind); m != "" {
-			if h, _ := cmd.Flags().GetString("harness"); h == "omp" {
+			if h, _ := cmd.Flags().GetString("harness"); h == config.OmpHarness {
 				m = a.ompQualified(m)
 			}
 			argv = append(argv, "--model="+m)

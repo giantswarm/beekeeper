@@ -258,33 +258,33 @@ func TestModelPolicyPlacementHonorsAgentsModelsRule(t *testing.T) {
 
 func TestModelPolicyOmpVaultAndScratchArgvHonorAgentsModels(t *testing.T) {
 	a := vaultApp(t, 20*time.Millisecond)
-	const qualified = "spidertron/qwen-x"
-	a.cfg.Omp = config.Omp{Providers: map[string]config.OmpProvider{"spidertron": {APIKey: sparkRef}}}
-	a.cfg.Agents.Models = []config.AgentModelRule{{Match: "^worker", Model: qualified}}
+	const qualified = sparkProvider + "/" + loopQwen
+	a.cfg.Omp = config.Omp{Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
+	a.cfg.Agents.Models = []config.AgentModelRule{{Match: "^" + workerRole, Model: qualified}}
 	a.cfg.Capacity = config.Capacity{
 		Providers: map[string]config.Provider{
-			claudeComm:   {Ceiling: 2},
-			"spidertron": {Kind: config.KindSelfHosted, Ceiling: 2},
+			claudeComm:    {Ceiling: 2},
+			sparkProvider: {Kind: config.KindSelfHosted, Ceiling: 2},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: pickOpus},
-			{Harness: config.OmpHarness, Model: "qwen-x", Provider: "spidertron"},
+			{Harness: config.OmpHarness, Model: loopQwen, Provider: sparkProvider},
 		},
 	}
-	if !a.ompStartNeedsVault([]string{agentStartName, "worker-1", briefMD, testHarnessFlag, config.OmpHarness}) {
+	if !a.ompStartNeedsVault([]string{agentStartName, workerRole, briefMD, testHarnessFlag, config.OmpHarness}) {
 		t.Fatal("ompStartNeedsVault ignored agents.models for --harness omp")
 	}
-	if !a.ompStartNeedsVault([]string{agentStartName, testHarnessFlag + "=omp", "--", "worker-1", briefMD}) {
+	if !a.ompStartNeedsVault([]string{agentStartName, testHarnessFlag + "=" + config.OmpHarness, "--", workerRole, briefMD}) {
 		t.Fatal("ompStartNeedsVault ignored agents.models after --")
 	}
-	if !a.ompStartNeedsVault([]string{agentStartName, "worker-1", briefMD, testHarnessFlag, harnessAuto}) {
+	if !a.ompStartNeedsVault([]string{agentStartName, workerRole, briefMD, testHarnessFlag, harnessAuto}) {
 		t.Fatal("ompStartNeedsVault ignored agents.models for --harness auto when non-vault choice ranked first")
 	}
 	c := a.agentStartCmd()
 	if err := c.ParseFlags([]string{testHarnessFlag, config.OmpHarness}); err != nil {
 		t.Fatal(err)
 	}
-	argv, err := a.scratchArgv(c, []string{"worker-1", briefMD})
+	argv, err := a.scratchArgv(c, []string{workerRole, briefMD})
 	if err != nil {
 		t.Fatal(err)
 	}
