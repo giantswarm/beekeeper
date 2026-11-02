@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -556,6 +559,9 @@ its key first in the detail):
   file      a problem found (agents.problem) that cites no issue URL:
             the full report is logged in supervisor.file and delivered once
             by guide watch as GUIDE PROBLEM, to file in its owning repository.
+            A step failing the same way for 30 minutes or on more than one
+            item is filed the same way, once per episode, naming the step,
+            the items it blocks and the error.
             A done report's problems arrive together before the done settles.
             No decision note or thread reference is needed. A problem naming
             its issue is already filed; the agent keeps its task
@@ -916,9 +922,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	claims, stages, stageDetail := map[string]loopClaim{}, map[string]bool{}, map[string]string{}
 	failures := map[string]loopFailure{}
+	stuckFiled := map[string]time.Time{}
 	for _, e := range taken {
 		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
 			in.Taken = append(in.Taken, t)
+			// A step taken is no longer failing.
+			delete(failures, t.Key)
+			if t.Kind == superloop.KindFile && strings.HasPrefix(t.Key, loopStuckKey) {
+				stuckFiled[t.Key] = e.At
+			}
 			continue
 		}
 		key, rest, ok := keyed(e.Detail)
@@ -934,6 +946,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case e.Verb == loopFailureVerb:
 			var f loopFailure
 			if json.Unmarshal([]byte(rest), &f) == nil {
+				// Failures an older loop logged carry neither time.
+				f.At = cmp.Or(f.At, e.At)
+				f.Since = cmp.Or(f.Since, e.At)
+				kind, _, _ := strings.Cut(key, " ")
+				f.Kind = cmp.Or(f.Kind, kind)
+				f.Ref = cmp.Or(f.Ref, e.Subject)
 				failures[key] = f
 			}
 		}
@@ -1081,9 +1099,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		if act.Kind == superloop.KindQuestion {
 			if err := l.readdress(act); err != nil {
-				if err := l.failed(act, failures[act.Key], err); err != nil {
+				if err := l.failed(act, failures, err); err != nil {
 					return err
 				}
+			} else {
+				delete(failures, act.Key)
 			}
 			continue
 		}
@@ -1092,7 +1112,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case errors.Is(err, errLoopLater):
 			continue
 		case err != nil:
-			if err := l.failed(act, failures[act.Key], err); err != nil {
+			if err := l.failed(act, failures, err); err != nil {
 				return err
 			}
 			continue
@@ -1100,8 +1120,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.record(act, what); err != nil {
 			return err
 		}
+		delete(failures, act.Key)
 	}
 	if !l.dryRun {
+		if err := l.stuck(failures, stuckFiled); err != nil {
+			return err
+		}
 		if err := l.roster(ctx, planned); err != nil {
 			return err
 		}
@@ -1365,21 +1389,46 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 
 // loopFailure persists identical failures across passes and restarts. Two
 // consecutive failures defer the action for five minutes, keeping it pending.
+// Since is when the step began failing this way, on this item or on another
+// item still failing the same way; At is the latest attempt.
 type loopFailure struct {
 	Message string    `json:"message"`
 	Count   int       `json:"count"`
 	RetryAt time.Time `json:"retryAt"`
+	Kind    string    `json:"kind,omitempty"`
+	Ref     string    `json:"ref,omitempty"`
+	Since   time.Time `json:"since,omitempty"`
+	At      time.Time `json:"at,omitempty"`
 }
 
 const loopFailureBackoff = 5 * time.Minute
 
-func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
-	f := loopFailure{Message: cause.Error(), Count: 1}
+// A step failing the same way for loopStuckAfter, or on more than one item,
+// is stuck: the guide hears of it once (stuck). Only failures attempted
+// within loopStuckRecent count, so an item no longer planned drops out.
+const (
+	loopStuckAfter  = 30 * time.Minute
+	loopStuckRecent = 3 * loopFailureBackoff
+	loopStuckKey    = "stuck "
+)
+
+// failed logs act's failure and keeps it in failures, by key.
+func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFailure, cause error) error {
+	previous := failures[act.Key]
+	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: l.a.now, At: l.a.now}
 	// Compare exact messages: a changing timestamp or PID is a different
 	// failure and starts a new count, rather than hiding a new cause.
 	if f.Message == previous.Message {
 		f.Count = previous.Count + 1
+		f.Since = cmp.Or(previous.Since, f.Since)
+	} else {
+		// The same failure of the same step on another item continues
+		// that episode rather than starting one.
+		for _, o := range l.stuckGroup(failures, f.Kind, f.Message) {
+			f.Since = minTime(f.Since, o.Since)
+		}
 	}
+	failures[act.Key] = f
 	if f.Count >= 2 {
 		f.RetryAt = l.a.now.Add(loopFailureBackoff)
 	}
@@ -1397,6 +1446,70 @@ func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, caus
 		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR BACKOFF %s: identical failures; retry after %s\n", act.Key, f.RetryAt.UTC().Format(time.RFC3339))
 	}
 	return err
+}
+
+// stuckGroup are the failures of kind with message attempted recently, by key.
+func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, message string) map[string]loopFailure {
+	group := map[string]loopFailure{}
+	for key, f := range failures {
+		if f.Kind == kind && f.Message == message && l.a.now.Sub(f.At) < loopStuckRecent {
+			group[key] = f
+		}
+	}
+	return group
+}
+
+// stuck files each step failing the same way for loopStuckAfter or on more
+// than one item, once per episode: the guide's feed says it as GUIDE
+// PROBLEM. An episode filed before it began (filed, by key) is a new one.
+func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string]time.Time) error {
+	keys := slices.Sorted(maps.Keys(failures))
+	done := map[string]bool{}
+	for _, key := range keys {
+		f := failures[key]
+		sum := sha256.Sum256([]byte(f.Kind + "\x00" + f.Message))
+		fileKey := loopStuckKey + f.Kind + " " + hex.EncodeToString(sum[:6])
+		if done[fileKey] {
+			continue
+		}
+		done[fileKey] = true
+		group := l.stuckGroup(failures, f.Kind, f.Message)
+		if len(group) == 0 {
+			continue
+		}
+		since, attempts := l.a.now, 0
+		var items []string
+		for _, k := range slices.Sorted(maps.Keys(group)) {
+			g := group[k]
+			since = minTime(since, g.Since)
+			attempts += g.Count
+			items = append(items, cmp.Or(g.Ref, k))
+		}
+		if len(group) < 2 && l.a.now.Sub(since) < loopStuckAfter {
+			continue
+		}
+		if at, ok := filed[fileKey]; ok && !at.Before(since) {
+			continue
+		}
+		slices.Sort(items)
+		items = slices.Compact(items)
+		text := fmt.Sprintf("The supervisor loop's %s step has failed the same way since %s, %d attempt(s), blocking %s: %s. "+
+			"It retries every %s; own the failure to the component its error names.",
+			f.Kind, since.UTC().Format(time.RFC3339), attempts, strings.Join(items, ", "), f.Message, loopFailureBackoff)
+		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+		if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: fileKey}, line); err != nil {
+			return err
+		}
+		filed[fileKey] = l.a.now
+	}
+	return nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // errLoopLater is an action that waits for a later pass, quietly: no room

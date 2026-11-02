@@ -1331,6 +1331,114 @@ func TestLoopBacksOffIdenticalFailuresAcrossRestarts(t *testing.T) {
 	}
 }
 
+// A step failing the same way for half an hour reaches the guide once, as
+// GUIDE PROBLEM naming the step, the item and the error, across restarts.
+func TestLoopFilesAStepStuckOnOneItemOnce(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			return "invalid authorization identity", ExitUsage
+		}
+		return "", 0
+	}
+	r.pass(t)
+	r.pass(t)
+	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+		t.Fatalf("filed before the failure lasted: %+v", evs)
+	}
+	// Backdate the episode and the retry, as half an hour of backoffs would.
+	failures := r.logged(t, loopFailureVerb)
+	key, detail, _ := keyed(failures[len(failures)-1].Detail)
+	var f loopFailure
+	if err := json.Unmarshal([]byte(detail), &f); err != nil {
+		t.Fatal(err)
+	}
+	f.Since = time.Now().Add(-loopStuckAfter - time.Minute)
+	f.RetryAt = time.Now().Add(-time.Second)
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Record(event(loopParty, loopFailureVerb, "[%s] %s", key, b)); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r.pass(t)
+	}
+	evs := r.logged(t, loopFileVerb)
+	if len(evs) != 1 {
+		t.Fatalf("filed %d times: %+v", len(evs), evs)
+	}
+	lines, _ := guideProblemLines(&state.State{}, evs)
+	if len(lines) != 1 || !strings.Contains(lines[0], "review step") || !strings.Contains(lines[0], loopPR) ||
+		!strings.Contains(lines[0], "invalid authorization identity") {
+		t.Fatalf("guide problem: %q", lines)
+	}
+}
+
+// The same failure of a step on a second item is stuck at once, and stays
+// one episode: filed once, again only after it ended and came back.
+func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now()
+	r.a.now = t0
+	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	cause := errors.New("invalid merge authorization identity")
+	a := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#1 aaa", Ref: "o/r#1"}
+	b := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#2 bbb", Ref: "o/r#2"}
+	other := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#3", Ref: "o/r#3"}
+	for _, act := range []superloop.Action{a, other} {
+		if err := l.failed(act, failures, cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+		t.Fatalf("one item per step filed at once: %+v", evs)
+	}
+	r.a.now = t0.Add(time.Minute)
+	if err := l.failed(b, failures, cause); err != nil {
+		t.Fatal(err)
+	}
+	if !failures[b.Key].Since.Equal(t0) {
+		t.Fatalf("the second item started its own episode: %v", failures[b.Key].Since)
+	}
+	for range 2 {
+		if err := l.stuck(failures, filed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evs := r.logged(t, loopFileVerb)
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "o/r#1, o/r#2") || strings.Contains(evs[0].Detail, "o/r#3") {
+		t.Fatalf("filed: %+v", evs)
+	}
+	// Both stop failing; the same failure on one item later is a new
+	// episode, filed once it lasts.
+	delete(failures, a.Key)
+	delete(failures, b.Key)
+	r.a.now = t0.Add(2 * time.Hour)
+	if err := l.failed(a, failures, cause); err != nil {
+		t.Fatal(err)
+	}
+	r.a.now = t0.Add(2*time.Hour + loopStuckAfter)
+	if err := l.failed(a, failures, cause); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 2 {
+		t.Fatalf("a new episode filed %d times in all", len(evs))
+	}
+}
+
 func TestLoopPutsAWorkersQuestionInTheGuidesQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, "", time.Now())
