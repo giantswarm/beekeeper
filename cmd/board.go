@@ -924,6 +924,11 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		}
 	}
 	for _, rp := range st.ReviewParks {
+		// Saved review metadata survives removal of its worker. It is
+		// enough to resume the review flow, but is no live ownership claim.
+		if !busy(rp.Party) && !alive(rp.Party) {
+			continue
+		}
 		who := fmt.Sprintf("%s (reviewing %s)", name(rp.Party), rp.On)
 		if rp.Serves != "" && out[strings.ToLower(rp.Serves)] == "" {
 			out[strings.ToLower(rp.Serves)] = who

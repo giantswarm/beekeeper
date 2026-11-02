@@ -909,3 +909,11 @@ func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T
 		t.Errorf("serving work:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+func TestBoardEndedReviewWorkerDoesNotServe(t *testing.T) {
+	st := &state.State{ReviewParks: []state.ReviewPark{{Agent: "ended worker", Party: state.Party{Name: "ended worker"}, On: "o/r#9", Serves: "o/r#1"}}}
+	res := nextFree(st, boardCandidates(1), pickScope{alive: func(state.Party) bool { return false }})
+	if res.Pick == nil || res.Pick.Ref != "o/r#1" {
+		t.Fatalf("ended review worker claimed issue: %+v", res)
+	}
+}
