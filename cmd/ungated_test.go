@@ -62,12 +62,15 @@ const ungatedWhat = "): runs with no beekeeper gate among its ancestors, outside
 // workerSession is the session id of the worker's CLI, pid 10.
 const workerSession = "s10"
 
+// ungatedWorker is the name of the worker's CLI, pid 10.
+const ungatedWorker = "Worker A"
+
 // The merges and the one-repository promotion with no gate or merge-child
 // among their ancestors are ungated, by pid, each naming its session and its
 // parent; a merge under a merge-child, the gate's own dry run, a --team
 // promotion, a pr wait and a test run's fake devctl merges are none.
 func TestUngatedMerges(t *testing.T) {
-	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: "Worker A"}}
+	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: ungatedWorker}}
 	got := ungatedMerges(sessions, ungatedTable())
 	want := []ungatedMerge{
 		{PID: 12, Line: `devctl pr merge o/r 1 (pid 12, session "Worker A", under bash /home/u/scratch/merge.sh (pid 11)` + ungatedWhat},
@@ -92,7 +95,7 @@ func TestUngatedMerges(t *testing.T) {
 func TestTheWatchSaysAnUngatedMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.now = time.Now()
-	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: "Worker A"}}
+	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: ungatedWorker}}
 	tb := ungatedTable()
 	w.ungated(sessions, tb)
 	w.ungated(sessions, tb)
@@ -179,5 +182,60 @@ func TestFindWaitsMarksAnUngatedMerge(t *testing.T) {
 		if !ok || w.Ungated != want {
 			t.Errorf("wait %d: listed %v, ungated %v, want %v", pid, ok, w.Ungated, want)
 		}
+	}
+}
+
+// runnerTable is a worker's CLI (pid 10) whose merges a runner started from
+// its arguments: xargs (61), find -exec (63) and parallel through its shell
+// (66), and one xargs started with the gate written in (69, under its gate's
+// merge-child).
+func runnerTable() *proc.Table {
+	p := func(pid, ppid int, comm string, args ...string) *proc.Process {
+		return &proc.Process{PID: pid, PPID: ppid, Comm: comm, Args: args, Start: time.Now().Add(-time.Hour), StartTicks: int64(pid) * 100}
+	}
+	tb := &proc.Table{ByPID: map[int]*proc.Process{}}
+	for _, pr := range []*proc.Process{
+		p(1, 0, "systemd", "/sbin/init"),
+		p(10, 1, claudeComm, claudeComm),
+		p(60, 10, "xargs", "xargs", "-n1", "devctl", "pr", "merge", "o/r"),
+		p(61, 60, merge.Tool, "devctl", "pr", "merge", "o/r", "11"),
+		p(62, 10, "find", "find", ".", "-name", "*.pr", "-exec", "devctl", "pr", "merge", "o/r", "{}", ";"),
+		p(63, 62, merge.Tool, "devctl", "pr", "merge", "o/r", "12"),
+		p(64, 10, "parallel", "perl", "/usr/bin/parallel", "devctl", "pr", "merge", "o/r", ":::", "13"),
+		p(65, 64, "sh", "/bin/sh", "-c", "devctl pr merge o/r 13"),
+		p(66, 65, merge.Tool, "devctl", "pr", "merge", "o/r", "13"),
+		p(67, 10, "xargs", "xargs", "-n1", "/home/u/.go/bin/beekeeper", "gate", "--", "devctl", "pr", "merge", "o/r"),
+		p(68, 67, project.Name, "/home/u/.go/bin/beekeeper", mergeChildCmd, "/home/u/.local/state/beekeeper/merges/o-r-14"),
+		p(69, 68, merge.Tool, "devctl", "pr", "merge", "o/r", "14"),
+	} {
+		tb.ByPID[pr.PID] = pr
+	}
+	return tb
+}
+
+// A merge a runner started from its arguments, which slipped past the hook,
+// is ungated in the watch and the doctor, naming the runner as its parent;
+// one the runner started through the gate is none.
+func TestUngatedMergesUnderRunners(t *testing.T) {
+	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: ungatedWorker}}
+	want := []string{
+		`devctl pr merge o/r 11 (pid 61, session "Worker A", under xargs -n (pid 60)` + ungatedWhat,
+		`devctl pr merge o/r 12 (pid 63, session "Worker A", under find . -n -e (pid 62)` + ungatedWhat,
+		`devctl pr merge o/r 13 (pid 66, session "Worker A", under sh -c (pid 65)` + ungatedWhat,
+	}
+	if got := ungatedLines(sessions, runnerTable()); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("doctor's ungated lines:\n got %q\nwant %q", got, want)
+	}
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.now = time.Now()
+	w.ungated(sessions, runnerTable())
+	s := out.String()
+	for _, l := range want {
+		if strings.Count(s, "UNGATED MERGE "+l) != 1 {
+			t.Errorf("the watch does not say once: %q\n%s", l, s)
+		}
+	}
+	if strings.Contains(s, "(pid 69,") {
+		t.Errorf("a merge under the gate is said:\n%s", s)
 	}
 }

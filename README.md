@@ -1544,8 +1544,8 @@ included, refuses and wakes its owner, as for a merge's place taken out with `la
 <owner/repo> <n>`.
 The PreToolUse hook rewrites the call to `<this binary> gate -- devctl pr merge …` (a background
 call gets `--wait 30m`), and the gate decides. The hook finds the merge wherever it runs as a
-command: in any part of a pipeline or a `;`, `&&` or `||` list, in a subshell or a loop, behind the
-prefix commands that run their arguments (`flock <lock>`, `nohup`, `setsid`, `stdbuf`, `ionice`,
+command: in any part of a pipeline or a `;`, `&&` or `||` list, in a subshell, a loop, a group or a
+condition (`if`, `while`, `until`, `!`, `{`), behind the prefix commands that run their arguments (`flock <lock>`, `nohup`, `setsid`, `stdbuf`, `ionice`,
 `chrt`, `nice`, `timeout`, `env`, `time`, `command`, `exec`, `VAR=value`, each with its options), and
 with devctl named by path (`~/bin/devctl`, `./devctl`, `$HOME/bin/devctl`). It wraps only the devctl
 invocation: `flock m.lock devctl pr merge o/r 7 | tee m.json | jq .verdict` becomes `flock m.lock
@@ -1561,7 +1561,11 @@ merge.py`), read relative to the call's working directory and followed into the 
 turn, a script the call writes before it runs it judged by the call's own text; one in an
 interpreter's code (`python3 -c`, `node -e`, `perl -e`, …); and one in the program a shell or an
 interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < merge.sh`, `python3 -
-<<'EOF'`). Only what the call runs is read: a file after the program (`python3 -c '…' log.txt`,
+<<'EOF'`); and one a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec
+devctl pr merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …), named with the gate written in after
+the runner (`xargs <this binary> gate -- devctl pr merge o/r`); a text command the runner runs
+(`find … -exec grep 'devctl pr merge' {} +`) reads it as text; and one in a backquote substitution
+(`` x=`devctl pr wait o/r 7` ``), where `$(…)` is gated in place. Only what the call runs is read: a file after the program (`python3 -c '…' log.txt`,
 `bash x.sh log.txt`, `python3 - log.txt <<'EOF'`), a module's argument (`python3 -m json.tool
 log.txt`), a read-only command's argument (`grep merge log.txt`) and a file read into a quoted
 argument (`--report "$(<report.txt)"`) are the program's data, whatever they say; a refusal a file
