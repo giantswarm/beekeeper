@@ -210,7 +210,7 @@ guide:                      # the guide's role: what guide handover --prompt tel
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
   waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
-  relayAt: 150k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
+  relayAt: 200k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
   relayGrace: 30m
   restartGrace: 1m
@@ -415,6 +415,7 @@ board:                      # the project board `beekeeper board next` picks wor
   epics:                    # the epic gate, whatever the order says (these are the defaults)
     kind: [epic]            # an epic
     planning: [up next]     # in planning: neither it nor its sub-issues offered, board next shows its plan
+                            # an epic in a status ahead of planning (Inbox, Backlog) is not scheduled for planning: neither it nor its sub-issues offered
     go: in progress         # the go: its open sub-issues offered in their order; board move records the plan head
   archiveAfter: 336h        # the default; board tidy archives a closed item after this long (its Status set to Done first); negative: never
   tidyEvery: 1h             # the default; how often the supervisor loop runs board tidy; negative: never

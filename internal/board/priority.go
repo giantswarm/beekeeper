@@ -134,6 +134,11 @@ const priorityFields = `id ` + boardFields + `
 priority:fieldValueByName(name:"` + PriorityField + `"){...on ProjectV2ItemFieldNumberValue{number updatedAt creator{login}}}
 team:fieldValueByName(name:"` + TeamField + `"){...on ProjectV2ItemFieldSingleSelectValue{name updatedAt creator{login}}}`
 
+// A ranked epic needs its identity, title and blockers. Labels and
+// assignees belong to picking candidates; their connections add points
+// to every priority page without supplying a field of RankedEpic.
+const priorityIssueFields = `fragment I on Issue{number url title state repository{nameWithOwner} ` + blockerFields + `}`
+
 // writtenBy is who wrote a field value and when.
 type writtenBy struct {
 	UpdatedAt time.Time               `json:"updatedAt"`
@@ -266,7 +271,7 @@ func (c *Client) rankedPages(ctx context.Context, q string, seen map[string]bool
 		}
 		err := c.graphql(ctx, &r, `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
 items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+priorityFields+`
-content{...I}}}}}}}`+issueFields, vs)
+content{...I}}}}}}}`+priorityIssueFields, vs)
 		if err != nil {
 			return fmt.Errorf("the priority list: %w", err)
 		}
