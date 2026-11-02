@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,78 @@ func TestLoopWakesAWorkerOnARedCheck(t *testing.T) {
 			}
 			if c := r.called(agentsName, agentWakeName); c != nil {
 				t.Errorf("a green head woke %v", c)
+			}
+		})
+	}
+}
+
+// Parsing feeds both the wake decision and the approved head's green gate.
+func TestLoopSupersededCancellations(t *testing.T) {
+	old := loopCheck{Name: "test-check", WorkflowName: "ci", Status: checkCompleted, Conclusion: "CANCELLED", StartedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), DetailsURL: "https://github.com/o/r/actions/runs/10/job/1"}
+	newer := old
+	newer.StartedAt = old.StartedAt.Add(time.Minute)
+	newer.Conclusion = checkSuccess
+	newer.DetailsURL = "https://github.com/o/r/actions/runs/11/job/2"
+	pending := newer
+	pending.Status, pending.Conclusion, pending.StartedAt = "QUEUED", "", time.Time{}
+	other := newer
+	other.Name, other.WorkflowName = "lint", "lint"
+	workflow := newer
+	workflow.Name = "renamed unit"
+	sameRun := workflow
+	sameRun.DetailsURL = "https://github.com/o/r/actions/runs/10/job/3"
+	older := newer
+	older.StartedAt = old.StartedAt.Add(-time.Minute)
+	older.DetailsURL = "https://github.com/o/r/actions/runs/9/job/2"
+	external := newer
+	external.DetailsURL = "https://ci.example/check/2"
+	externalOld := old
+	externalOld.DetailsURL = "https://ci.example/check/1"
+	failed := old
+	failed.Conclusion = checkFailure
+	timedOut := old
+	timedOut.Conclusion = "TIMED_OUT"
+	for _, tt := range []struct {
+		name       string
+		checks     []loopCheck
+		green, red bool
+	}{
+		{"newer success", []loopCheck{old, newer}, true, false},
+		{"reverse order", []loopCheck{newer, old}, true, false},
+		{"older success", []loopCheck{old, older}, false, true},
+		{"external check timestamp", []loopCheck{externalOld, external}, true, false},
+		{"commit status is not replacement", []loopCheck{old, {Name: "test-check", State: checkSuccess}}, false, true},
+		{"lone cancellation", []loopCheck{old}, false, true},
+		{"queued replacement", []loopCheck{old, pending}, false, false},
+		{"different check", []loopCheck{old, other}, false, true},
+		{"same workflow newer run", []loopCheck{old, workflow}, true, false},
+		{"same workflow same run", []loopCheck{old, sameRun}, false, true},
+		{"failure stays red", []loopCheck{failed, newer}, false, true},
+		{"timeout stays red", []loopCheck{timedOut, newer}, false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, time.Now())
+			r.pass(t)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			raw, err := json.Marshal(loopPullJSON{State: superloop.Open, Head: loopHead, Rollup: tt.checks})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := parseLoopPull(loopPR, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Green != tt.green || (len(p.Red) > 0) != tt.red {
+				t.Fatalf("green=%v red=%v", p.Green, p.Red)
+			}
+			r.pull.Green, r.pull.Red = p.Green, p.Red
+			r.pass(t)
+			if got := len(r.logged(t, "supervisor.red")) > 0; got != tt.red {
+				t.Errorf("red wake=%v, want %v", got, tt.red)
+			}
+			if got := len(r.logged(t, "supervisor.go")) > 0; got != tt.green {
+				t.Errorf("go=%v, want %v", got, tt.green)
 			}
 		})
 	}
