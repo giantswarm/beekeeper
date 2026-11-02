@@ -773,6 +773,73 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 	}
 }
 
+// A low GraphQL reading holds the refill's board read until the reading's
+// window resets, not an hour after the reading.
+func TestLoopReadsNoBoardUntilTheGraphQLReset(t *testing.T) {
+	r, l, reads := emptyBoardFill(t)
+	r.a.cfg.GitHub.Floor = 2500
+	reset := r.a.now.Add(20 * time.Minute)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		now := r.a.now
+		st.Budget = &state.Budget{Remaining: 4000, Limit: 5000, Reset: now.Add(time.Hour), At: now,
+			GraphQL: &state.GraphQL{Remaining: 100, Limit: 5000, Reset: reset, At: now}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for r.a.now.Before(reset.Add(-30 * time.Second)) {
+		r.loopPass(t, l)
+	}
+	if *reads != 0 {
+		t.Fatalf("read the board %d times before the GraphQL reset", *reads)
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR NEXT HELD") {
+		t.Errorf("the hold is not said:\n%s", r.out)
+	}
+	r.loopPass(t, l)
+	r.loopPass(t, l)
+	if *reads != 1 {
+		t.Fatalf("past the GraphQL reset: %d board reads, want 1", *reads)
+	}
+}
+
+// Consecutive empty reads double the refill's pause up to four times
+// supervisor.fillRetryEvery; a change that ends the pause starts it over.
+func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
+	r, l, reads := emptyBoardFill(t)
+	ceiling := 5
+	board := r.answer
+	var at []time.Duration
+	start := r.a.now
+	r.answer = func(args []string) (string, int) {
+		switch args[0] {
+		case fillCapacityCommand:
+			return fmt.Sprintf(`{"floor":3,"ceiling":%d,"room":5,"busy":[]}`, ceiling), 0
+		case loopBoard:
+			at = append(at, r.a.now.Sub(start))
+		}
+		return board(args)
+	}
+	passes := func(d time.Duration) {
+		t.Helper()
+		for end := r.a.now.Add(d); r.a.now.Before(end); r.a.now = r.a.now.Add(30 * time.Second) {
+			if err := l.pass(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	passes(56 * time.Minute)
+	m := time.Minute
+	if want := []time.Duration{0, 5 * m, 15 * m, 35 * m, 55 * m}; !slices.Equal(at, want) {
+		t.Fatalf("empty reads at %v, want %v", at, want)
+	}
+	ceiling = 6 // a change ends the pause and starts the backoff over
+	passes(6 * time.Minute)
+	if want := []time.Duration{56 * m, 61 * m}; *reads != 7 || !slices.Equal(at[5:], want) {
+		t.Fatalf("after the change: reads at %v, want %v next", at, want)
+	}
+}
+
 func TestLoopBoardNextRefusalWithoutNothingFreeFails(t *testing.T) {
 	for _, body := range []string{
 		"beekeeper: configuration refused\n",

@@ -479,7 +479,10 @@ content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
 // The sub-issues one request of extras reads: GitHub answers a request of
 // 304 sub-issues with their projectItems in full and one of 396 with
 // RESOURCE_LIMITS_EXCEEDED on every projectItems, so a request stays at
-// half the largest one measured whole.
+// half the largest one measured whole. An epic's page asks for its own
+// sub-issues, at most subIssuesRead: GitHub charges every connection under
+// it once per sub-issue the page could hold, whether the epic has them or
+// not.
 const (
 	extrasBudget  = 150
 	subIssuesRead = 50
@@ -534,9 +537,10 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				if err != nil {
 					return err
 				}
+				subs := min(it.subIssues, subIssuesRead)
 				parts = append(parts, extrasPart{
-					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subIssuesRead),
-					subs:  min(it.subIssues, subIssuesRead),
+					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subs),
+					subs:  subs,
 					repo:  owner + "/" + repo,
 				})
 			}

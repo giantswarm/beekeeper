@@ -1256,7 +1256,8 @@ type Budget struct {
 type GraphQL struct {
 	Remaining int `json:"remaining"`
 	Limit     int `json:"limit"`
-	// Reset is when a refusal ends; zero when GitHub named no time.
+	// Reset is when the window the reading counts resets and a refusal
+	// ends; zero when GitHub named no time.
 	Reset time.Time `json:"reset,omitzero"`
 	// Refused is GitHub's words while it refused GraphQL calls.
 	Refused   string    `json:"refused,omitempty"`
