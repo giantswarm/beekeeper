@@ -86,8 +86,14 @@ with its plan ("epic in planning (Up Next), plan <url> (draft): its
 sub-issues wait for the go") or without one (its planning session's), and
 never offered through its sub-issues; an issue whose nearest epic among its
 parents on the board is in planning is skipped as "sub-issue of epic
-<owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
-the go: from then its open sub-issues are offered, in their order. The
+<owner/repo#n>, in planning (Up Next)". An epic not yet scheduled for
+planning (in a status ahead of Up Next, Inbox or Backlog, or without a
+Status) has no plan and no go: it is skipped as "epic Backlog, not
+scheduled for planning: …", never offered through its sub-issues, and an
+issue whose nearest epic is one is skipped as "sub-issue of epic
+<owner/repo#n>, not scheduled for planning (Backlog)". Moving the epic to In
+Progress is the go: from then its open sub-issues are offered, in their
+order. The
 order is the steps' alone: their Status (board.order lists In Progress, then
 Up Next, then Backlog), and within a step the board's own order of its
 items. The person's priority list (beekeeper priority, the board's Priority
@@ -135,7 +141,7 @@ free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
 agent's task, a running session's work), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
-(the epic gate holds it), unknown (GitHub answered its board fields or an
+(the epic gate holds it: in planning or not scheduled for it), unknown (GitHub answered its board fields or an
 epic's sub-issues with an error), scope (outside the work scope) and order (a rule of board.order turns it
 away: an old Backlog item, one in Inbox, one without recorded blockers), and
 each epic in planning or past its go with its plan's URL, state and head,
@@ -634,7 +640,7 @@ func skipKind(reason string) string {
 		return kindLease
 	case strings.HasPrefix(reason, claimedPrefix):
 		return kindClaimed
-	case strings.Contains(reason, "in planning ("):
+	case strings.Contains(reason, "in planning ("), strings.Contains(reason, board.NotScheduled):
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
 		return kindUnknown
