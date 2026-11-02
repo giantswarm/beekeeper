@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - PR parks request desk review only when made from the PR's published worktree, with matching branch and HEAD. Other parks remain plain waits and resume on merge or close. After upgrading, reissue existing PR review parks from their published worktrees: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` ([https://github.com/giantswarm/beekeeper/issues/1824](https://github.com/giantswarm/beekeeper/issues/1824)).
 - The watch trims a Go build cache past its cap by a quarter while overlapping `beekeeper run`s hold it: the trim waits for them as `beekeeper cache clear go` does, up to five minutes, new runs waiting behind it, and logs the wait in its `gocache.trim` line; before, back-to-back runs held every trim off and the cache grew without bound.
+- `browse --help` says a sign-in on the lab's identity provider at `localhost` needs no fallback: the lab's certificate authority is trusted by Chrome, and clicks, keys and screenshots that do nothing there are a tab behind another or a window not drawn, which the front-tab and draw checks handle. Regression tests pin the flow: a localhost Dex authorization-code sign-in runs with the lab's rule and the hook allows its email login page ([https://github.com/giantswarm/beekeeper/issues/923](https://github.com/giantswarm/beekeeper/issues/923)).
 
 ### Changed
 
