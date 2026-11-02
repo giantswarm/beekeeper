@@ -54,6 +54,7 @@ const controlWords = "Click only the element a step names: a computer click by t
 	"Notifications buttons): such a click changes the person's own notifications, which no token restores. " +
 	"For a UI-only disclosure on an App permissions page, name the effect and role, for example 'Expands the Organization permissions section', " +
 	"'Collapses the Repository permissions section' or 'Switches to the Account permissions tab', without the App or permission name. " +
+	"First read_page or find on the clicked tab so the hook can verify that ref's button or tab role and label; read it again after a page-changing action. " +
 	"Use that description only for the disclosure itself, never for selecting a level or submitting a grant. "
 
 // lostLine is the line a turn ends its report with when the Chrome
@@ -271,7 +272,11 @@ permissions section" or "Switches to the Account permissions tab". These
 UI-only clicks need neither the App name nor a permission on record. Do not
 combine them with selecting a level, Save changes or Accept new permissions;
 those actions still need the corresponding grant record. Check that Chrome
-draws the page before a disclosure click, as for every other click.
+draws the page before a disclosure click, as for every other click. First
+use read_page or find on that tab: the hook requires the clicked ref's role
+and label to match the named section or tab on the current URL. Missing,
+stale or mismatched evidence retains the grant decision. Read again after
+a page-changing action; run the disclosure as its own call.
 
 Adding a callback URL to an App's settings is such a change too. One URL
 the person asked for, on a callback host the App's manifest declares, is
