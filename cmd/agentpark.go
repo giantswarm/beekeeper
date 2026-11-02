@@ -107,7 +107,9 @@ a new publication asks for that head's review. Every other park (including one w
 publication cannot be verified) records a plain wait: no reviewer, merge
 go or findings forwarded. The command says which it recorded. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
-park. A session off the roster parks too (any session that never
+park. --as <name> parks the registered agent of that name, whatever
+session registered it: a session of another harness or a wrapper script
+parks its agent that way, without a harness's session variables. A session off the roster parks too (any session that never
 registered): its park is kept apart from the roster,
 settles the same way and resumes it by its session id; one whose session
 is gone by then gets no wake and one line, and the issues it served go
@@ -193,7 +195,7 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 	reviewHead := parkReviewHead(on)
 	var line string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
+		i := a.callerAgent(st, me)
 		if i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done) {
 			return nil, refused("%q has no task: park keeps a task, an idle agent has nothing to wait for", st.Agents[i].Name)
 		}
@@ -214,7 +216,11 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		// One park per session: a new one replaces the last, also one it
 		// took off the roster before it registered.
 		st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
+		// self is the session that parks: under --as the agent's own,
+		// whose session record and start the park concerns.
+		self := me
 		if i >= 0 {
+			self = st.Agents[i].Party
 			st.Agents[i].Park = park
 			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
 		} else {
@@ -223,7 +229,7 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 			st.Parks = append(st.Parks, *park)
 		}
 		for j := range st.Records {
-			if st.Records[j].Session.Is(me) {
+			if st.Records[j].Session.Is(self) {
 				st.Records[j].Waits = waits
 			}
 		}
@@ -240,7 +246,7 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 			back += "; " + parkReviewMode(reviewHead)
 		}
 		line = fmt.Sprintf("%s: %s; %s, and %s. End your turn now.", name, parkedText(park, a.now), counted, back)
-		if k := st.StartIndex(me); k >= 0 && st.Starts[k].Background {
+		if k := st.StartIndex(self); k >= 0 && st.Starts[k].Background {
 			line += " The watch stops your background session once the turn ends, and the wake resumes it from its transcript."
 		}
 		return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
