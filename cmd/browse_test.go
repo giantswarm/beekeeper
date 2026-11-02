@@ -1228,3 +1228,89 @@ func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 		t.Errorf("the fake claude ran %s times without tabs, want 1", b)
 	}
 }
+
+// A report sentence about a screenshot that calls it not saved says it is
+// saved once beekeeper saved one, in each phrasing a turn uses; other
+// sentences, and every sentence when none was saved, stand as written.
+func TestShotWords(t *testing.T) {
+	for report, want := range map[string]string{
+		"Took a screenshot (not saved to disk).":                   "Took a screenshot (" + shotSaved + ").",
+		"The screenshot was not saved to disk. The page is green.": "The screenshot was " + shotSaved + ". The page is green.",
+		"Screenshot captured but wasn't saved.":                    "Screenshot captured but was " + shotSaved + ".",
+		"The image has not been stored on the filesystem!":         "The image has been " + shotSaved + "!",
+		"Proof: screenshot ss_1, never saved to a file.\nDone.":    "Proof: screenshot ss_1, " + shotSaved + ".\nDone.",
+		"The form was not saved. Screenshot taken.":                "The form was not saved. Screenshot taken.",
+		"Screenshot taken; the page says deployed.":                "Screenshot taken; the page says deployed.",
+	} {
+		if got := shotWords(report, 1); got != want {
+			t.Errorf("shotWords(%q, 1) = %q, want %q", report, got, want)
+		}
+	}
+	const unsaved = "The screenshot was not saved to disk."
+	if got := shotWords(unsaved, 0); got != unsaved {
+		t.Errorf("shotWords with none saved = %q", got)
+	}
+}
+
+// A path is printed only for a file written: none taken, or none saved with
+// the reason, prints no shot path.
+func TestShotLines(t *testing.T) {
+	if got := shotLines(nil, nil); !slices.Equal(got, []string{noShots}) {
+		t.Errorf("shotLines(none) = %q", got)
+	}
+	if got := shotLines(nil, errors.New("disk full")); !slices.Equal(got, []string{"screenshot: none saved: disk full"}) {
+		t.Errorf("shotLines(none, err) = %q", got)
+	}
+	if got := shotLines([]string{"/s/shot-1.jpg"}, errors.New("disk full")); !slices.Equal(got, []string{"screenshot: /s/shot-1.jpg"}) {
+		t.Errorf("shotLines(one, err) = %q", got)
+	}
+}
+
+// A turn that took a screenshot and reports it not saved prints the saved
+// shot's path and a report that calls it saved, never unsaved; a turn that
+// took none prints no shot path and its report as written.
+func TestBrowseReportsSavedShots(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	transcript, reportFile := filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "report")
+	script := "#!/bin/sh\nid=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\ncat \"$BROWSE_REPORT\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_REPORT", reportFile)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	const steps = "Open the demo page and take a screenshot."
+	const unsaved = "Opened the page and took a screenshot (not saved to disk). The page says deployed."
+	writeFile(t, reportFile, unsaved+"\n")
+
+	jpg := base64.StdEncoding.EncodeToString([]byte("jpg-bytes"))
+	writeFile(t, transcript, chromeUse("t1", "computer", `{"action":"screenshot"}`)+
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Successfully captured screenshot"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"`+jpg+`"}}]}]}}`+"\n")
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse with a screenshot: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 3 || got[0] != "Opened the page and took a screenshot ("+shotSaved+"). The page says deployed." ||
+		!strings.HasPrefix(got[1], "transcript: ") || !strings.HasPrefix(got[2], "screenshot: ") || !strings.HasSuffix(got[2], "shot-1.jpg") {
+		t.Fatalf("browse with a screenshot printed %q", got)
+	}
+	if b, err := os.ReadFile(strings.TrimPrefix(got[2], "screenshot: ")); err != nil || string(b) != "jpg-bytes" {
+		t.Errorf("the printed shot holds %q, %v", b, err)
+	}
+	if strings.Contains(out.String(), "not saved") {
+		t.Errorf("a turn that saved a screenshot reports it unsaved: %q", out.String())
+	}
+
+	out.Reset()
+	writeFile(t, transcript, chromeUse("t1", "navigate", `{"url":"https://example.test/"}`)+chromeAnswer("t1", "Navigated to https://example.test/"))
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse without a screenshot: %v\n%s", err, out.String())
+	}
+	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 3 || got[0] != unsaved || got[2] != noShots || strings.Contains(out.String(), "shot-") {
+		t.Errorf("browse without a screenshot printed %q", got)
+	}
+}

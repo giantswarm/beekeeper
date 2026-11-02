@@ -39,7 +39,8 @@ const browseWait = 8 * time.Minute
 const (
 	browsePreamble = "beekeeper browse: you run browser steps for another Claude session, with the Claude in Chrome tools only. " +
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
-		"Take a screenshot of each page the steps name as their proof. End with a short plain report of what you saw and did, " +
+		"Take a screenshot of each page the steps name as their proof; beekeeper saves each one and prints its path below your report, " +
+		"so your report never says whether a screenshot was saved or where. End with a short plain report of what you saw and did, " +
 		"or of what stopped you. " + controlWords
 
 	browseSteps = "The steps:\n\n"
@@ -218,7 +219,12 @@ Desktop holds such a session's navigate to a new site for a person's site
 approval, which neither bypassPermissions nor a hook answers (beekeeper
 hook pretooluse refuses those calls and names this command). The turn's
 report is printed, then its transcript and each screenshot it took, saved
-under <stateDir>/browse/<id>/ as an image file the caller reads.
+under <stateDir>/browse/<id>/ as an image file the caller reads
+("screenshot: <path>", a path only for a file written; "screenshot: none
+taken" or "screenshot: none saved: <why>" otherwise). The files saved are
+the one record of the screenshots: a report sentence calling a screenshot
+not saved, while beekeeper saved one, says it is saved and points to those
+lines.
 
 The turn shares the person's Chrome: hold the browser lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
@@ -632,8 +638,10 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		out = &blind.out
 	}
 	// turn runs one headless turn of the session under its own timeout,
-	// limit, and prints its report; a turn stopped at it is errTurnStopped,
-	// one that yielded the window to the person errPersonAtChrome.
+	// limit, and keeps its report for printing once the screenshots are
+	// saved; a turn stopped at it is errTurnStopped, one that yielded the
+	// window to the person errPersonAtChrome.
+	var reports []string
 	turn := func(ctx context.Context, argv []string, limit time.Duration) (string, error) {
 		if blind != nil {
 			argv = blind.shape(argv, self)
@@ -654,10 +662,19 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 			err = fmt.Errorf("%w within %s and was stopped: a page waiting on a person (a sign-in form, a dialog) is the usual cause", errTurnStopped, limit)
 		}
 		report := strings.TrimSpace(string(stdout))
-		if _, werr := fmt.Fprintln(out, report); werr != nil {
-			return report, werr
-		}
+		reports = append(reports, report)
 		return report, err
+	}
+	// printReports prints the turns' reports, each in order, with what they
+	// say of saving a screenshot answered by the files saved: shots, the
+	// paths printed below them, are the one record of that.
+	printReports := func(shots []string) error {
+		for _, r := range reports {
+			if _, err := fmt.Fprintln(out, shotWords(r, len(shots))); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	// The shared Chrome window is drawn off the person's screen for the
 	// turns and put back after them, a stopped browse included; the person
@@ -676,7 +693,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	report, err := turn(yctx, browseArgv(id, model, prompt, self, rules, false), wait)
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
-		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
+		return errors.Join(err, printReports(nil), fmt.Errorf("browse turn %s left no transcript", id))
 	}
 	found, ferr := readFindings(path)
 	// A connection the turn lost and did not get back is reconnected once:
@@ -702,14 +719,12 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	werr := win.restore(ctx)
 	found.Window = *win
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
+	if perr := printReports(shots); perr != nil {
+		return perr
+	}
 	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
 	lines = append(lines, "transcript: "+path)
-	for _, s := range shots {
-		lines = append(lines, "screenshot: "+s)
-	}
-	if len(shots) == 0 {
-		lines = append(lines, "screenshot: none taken")
-	}
+	lines = append(lines, shotLines(shots, serr)...)
 	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
@@ -1884,6 +1899,56 @@ func sharedLines(shared []sharedFile) []string {
 		out = append(out, "shared for upload: "+f.Named)
 	}
 	return out
+}
+
+// shotLines are the lines below the report for the screenshots: one per file
+// saved, or, with none saved, one saying none was taken or why none was
+// saved. A path is printed only for a file written.
+func shotLines(shots []string, err error) []string {
+	if len(shots) == 0 {
+		if err != nil {
+			return []string{"screenshot: none saved: " + err.Error()}
+		}
+		return []string{"screenshot: none taken"}
+	}
+	out := make([]string, 0, len(shots))
+	for _, s := range shots {
+		out = append(out, "screenshot: "+s)
+	}
+	return out
+}
+
+// shotSentence is one sentence of a report, up to its end mark or line end;
+// shotTopic marks one about a screenshot.
+var (
+	shotSentence = regexp.MustCompile(`[^.!?\n]+[.!?]*`)
+	shotTopic    = regexp.MustCompile(`(?i)\b(screen ?shots?|images?|captures?|shots?|proofs?)\b`)
+	// shotUnsavedAux is a claim with an auxiliary ("was not saved to disk",
+	// "hasn't been stored"), shotUnsaved one without ("not saved to disk").
+	shotUnsavedAux = regexp.MustCompile(`(?i)\b(was|were|is|are|has|have|had)(?:\s+not|n't|\s+never)\s+(been\s+)?(?:saved|stored|written|persisted)(?:\s+(?:to|on)\s+(?:the\s+)?(?:local\s+)?(?:disk|file ?system|a file))?`)
+	shotUnsaved    = regexp.MustCompile(`(?i)\b(?:not|never)\s+(?:saved|stored|written|persisted)(?:\s+(?:to|on)\s+(?:the\s+)?(?:local\s+)?(?:disk|file ?system|a file))?`)
+)
+
+// shotSaved replaces a claim that a screenshot is not saved.
+const shotSaved = "saved by beekeeper (the screenshot lines below)"
+
+// shotWords answers what a turn's report says of saving its screenshots with
+// the files beekeeper saved: the turn cannot write a file of its own, and its
+// Chrome tool keeps a screenshot in the transcript only, so a turn often
+// reports one as not saved. With saved files, a sentence about a screenshot
+// that calls it not saved says it is saved and points to the lines naming
+// the files; with none, the report stands as written.
+func shotWords(report string, saved int) string {
+	if saved == 0 {
+		return report
+	}
+	return shotSentence.ReplaceAllStringFunc(report, func(sentence string) string {
+		if !shotTopic.MatchString(sentence) {
+			return sentence
+		}
+		sentence = shotUnsavedAux.ReplaceAllString(sentence, "${1} ${2}"+shotSaved)
+		return shotUnsaved.ReplaceAllString(sentence, shotSaved)
+	})
 }
 
 // saveScreenshots writes every image a tool result in the transcript carries
