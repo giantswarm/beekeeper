@@ -184,7 +184,7 @@ func TestPartialExtrasKeepUnreadBlockersHeld(t *testing.T) {
 		name, blocker string
 		held, named   bool
 	}{
-		{"null node", "null", true, false},
+		{"null node", jsonNull, true, false},
 		{"unread state", `{"number":9,"repository":{"nameWithOwner":"o/r"},"closedAt":"2026-10-01T00:00:00Z"}`, true, true},
 		{"null state", `{"number":9,"repository":{"nameWithOwner":"o/r"},"state":null}`, true, true},
 		{"closed", `{"number":9,"repository":{"nameWithOwner":"o/r"},"state":"CLOSED","closedAt":"2026-10-01T00:00:00Z"}`, false, false},
