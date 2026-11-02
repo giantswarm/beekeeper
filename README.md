@@ -2399,9 +2399,12 @@ no headless turn, its transcript and its subagents' quiet for 30 seconds), the w
 (`claude stop`, which keeps its conversation; `PARKED SESSION STOPPED` and an `agents.parkstop`
 event), and the wake or resume that ends the park continues it from its transcript (`claude --bg
 --resume`). The stop and every wake of the session hold one lock per session: under it the
-stop looks again (the same park, still quiet, not woken in the last 30 seconds) and holds the lock
-until the CLI exited, so a wake that comes meanwhile waits and then resumes the stopped session. A
-stop that fails says `PARKED SESSION STAYS` and is tried again the next poll. The
+stop looks again (the same park, still quiet, not woken in the last 30 seconds, and the
+transcript's last message of its own answers the last message and stopped — a model thinking
+over a wake's or resume's message writes nothing, and that turn is never stopped) and holds the
+lock until the CLI exited, so a wake that comes meanwhile waits and then resumes the stopped
+session. A wake is never silently undone. A stop that fails says `PARKED SESSION STAYS` and is
+tried again the next poll. The
 supervisor's and the guide's sessions, a park already resumable and an agent on an execution
 host stay. An archive
 that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed, and
