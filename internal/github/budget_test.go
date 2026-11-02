@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -85,7 +86,7 @@ func TestProbeGraphQL(t *testing.T) {
 				t.Errorf("Reset = %v, want %v", got.Reset, tc.want.Reset)
 			}
 			got.Reset, tc.want.Reset = time.Time{}, time.Time{}
-			if got != tc.want {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("ProbeGraphQL = %+v, want %+v", got, tc.want)
 			}
 			if b := got.Blocks(now); b != tc.wantBlock {

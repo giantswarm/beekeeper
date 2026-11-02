@@ -552,3 +552,44 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
+	for _, exhausted := range []bool{false, true} {
+		t.Run(fmt.Sprint(exhausted), func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			w.loopOwned = true
+			w.cfg.GitHub.Floor = 2500
+			w.cfg.Agents.AutoResume = true
+			woke := stubWakes(t)
+			if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+				t.Fatal(err)
+			}
+			if exhausted {
+				if err := w.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{Reset: w.now.Add(time.Hour), Spent: loopGraphQLLimit}); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Budget = &state.Budget{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour), GraphQL: &state.GraphQL{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour)}}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} // Otherwise GraphQL is unknown and must fail closed.
+			previous := readLoopGraphQLBudget
+			t.Cleanup(func() { readLoopGraphQLBudget = previous })
+			readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+				t.Fatal("local-note settlement probed GitHub under a held budget")
+				return github.Budget{}, nil
+			}
+			answer(t, w)
+			w.pending(t.Context(), nil)
+			if p := agentOf(t, w).Park; p == nil || p.Resumable.IsZero() || !strings.Contains(p.Answer, parkAnswer) {
+				t.Fatalf("answered local note did not become resumable: %+v", p)
+			}
+			w.pending(t.Context(), nil)
+			if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) || agentOf(t, w).Park != nil {
+				t.Fatalf("answered local note did not wake once with answer: %v", *woke)
+			}
+		})
+	}
+}
