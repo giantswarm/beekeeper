@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,9 +116,10 @@ func TestAnUnpinnedPromotionIsNeverQueued(t *testing.T) {
 	}
 }
 
-// A newer candidate cut while a pinned promotion is queued changes nothing:
-// at its turn devctl runs with the pin and promotes the pinned candidate.
-func TestAPinnedPromotionPromotesItsCandidateWhenANewerOneAppears(t *testing.T) {
+// A newer candidate cut while a pinned promotion is queued refuses it at its
+// turn, so a stable release is never cut at an older release candidate; with
+// its pinned candidate still newest, devctl runs with the pin.
+func TestAPinnedPromotionRefusesWhenANewerCandidateAppears(t *testing.T) {
 	noSystemd(t)
 	stubGitHub(t, github.Open, "")
 	args := filepath.Join(t.TempDir(), "args")
@@ -127,11 +129,29 @@ func TestAPinnedPromotionPromotesItsCandidateWhenANewerOneAppears(t *testing.T) 
 
 	a, g := promotePlace(t)
 	g.argv, g.pinned = promoteArgv("--version", candidateA), true
-	if why, err := g.step(); err != nil || why != "" {
-		t.Fatalf("step: %q, %v", why, err)
+	why, err := g.step()
+	if Code(err) != ExitGateRefused || why != "" {
+		t.Fatalf("step: %q, exit %d (%v), want a refusal", why, Code(err), err)
 	}
-	if *asked != 0 {
-		t.Errorf("the pinned promotion was judged against the newest candidate")
+	if *asked == 0 {
+		t.Errorf("the pinned promotion was not judged against the newest candidate")
+	}
+	want := "o/r promote: o/r promote was queued for candidate " + candidateA + ", the newest is candidate " + candidateB + " now: nothing promoted"
+	if d := lastEventOf(t, a, "merge.refused"); !strings.HasPrefix(d, want) {
+		t.Errorf("refusal %q, want %q…", d, want)
+	}
+	if st, _ := a.store.Read(); len(st.Merges) != 0 {
+		t.Errorf("the refused promotion kept a place: %+v", st.Merges)
+	}
+	if _, err := os.Stat(args); err == nil {
+		t.Errorf("devctl ran for a stale pinned candidate")
+	}
+
+	a, g = promotePlace(t)
+	g.argv, g.pinned = promoteArgv("--version", candidateA), true
+	newest = candidateA
+	if why, err := g.step(); err != nil || why != "" {
+		t.Fatalf("step with current candidate: %q, %v", why, err)
 	}
 	if raw, _ := os.ReadFile(args); !strings.Contains(string(raw), "--version "+candidateA) { //nolint:gosec // the test's file
 		t.Errorf("devctl ran %q, want the pin", raw)
@@ -367,5 +387,125 @@ func TestAHoldAdmittingThePromoterLetsItsPromoteThrough(t *testing.T) {
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
 		t.Errorf("merged event %q", d)
+	}
+}
+
+// .github/release-gate.custom.sh and .github/workflows/zz_generated.auto_release.yaml
+// refuse cutting a stable release when a newer release candidate for the same
+// version is not an ancestor of HEAD or when HEAD is an ancestor of an existing
+// release or candidate tag (even when the detached candidate predates
+// .github/release-gate.custom.sh), and pass when promoting the newest candidate
+// or a new patch commit.
+func TestReleaseGateCustomScriptRefusesOlderCandidate(t *testing.T) {
+	script, err := filepath.Abs(filepath.Join("..", ".github", "release-gate.custom.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowPath, err := filepath.Abs(filepath.Join("..", ".github", "workflows", "zz_generated.auto_release.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowBytes, err := os.ReadFile(filepath.Clean(workflowPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(workflowBytes)
+	for _, want := range []string{
+		`if [ "$PROMOTE_VERSION" != "$rc" ]; then`,
+		`cp .github/release-gate.custom.sh "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh"`,
+		`if [ ! -f "$gate" ] && [ -f "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh" ]; then`,
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("auto_release workflow missing %q", want)
+		}
+	}
+
+	scriptBytes, err := os.ReadFile(filepath.Clean(script))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	runnerTemp := t.TempDir()
+	gitRun := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...) //nolint:gosec // test helper
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	runWorkflowGate := func(tag string) (string, error) {
+		t.Helper()
+		step := `set -euo pipefail
+gate=.github/release-gate.custom.sh
+if [ ! -f "$gate" ] && [ -f "${RUNNER_TEMP:-/tmp}/release-gate.custom.sh" ]; then
+  gate="${RUNNER_TEMP:-/tmp}/release-gate.custom.sh"
+fi
+if [ ! -f "$gate" ]; then
+  exit 0
+fi
+bash "$gate" "$TAG"
+`
+		cmd := exec.Command("bash", "-c", step) //nolint:gosec // test helper
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "RUNNER_TEMP="+runnerTemp, "TAG="+tag)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	gitRun("init")
+	gitRun("commit", "--allow-empty", "-m", "feat: first candidate before gate script existed")
+	gitRun("tag", "v0.171.0-rc.110")
+	if tree := strings.TrimSpace(gitRun("ls-tree", "v0.171.0-rc.110", ".github/release-gate.custom.sh")); tree != "" {
+		t.Fatalf("expected v0.171.0-rc.110 to predate .github/release-gate.custom.sh, got %q", tree)
+	}
+
+	if err := os.MkdirAll(filepath.Join(repo, ".github"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".github", "release-gate.custom.sh"), scriptBytes, 0o750); err != nil { //nolint:gosec // executable gate script in test repo
+		t.Fatal(err)
+	}
+	gitRun("add", ".github/release-gate.custom.sh")
+	gitRun("commit", "-m", "feat: add release gate on second candidate")
+	gitRun("tag", "v0.171.0-rc.111")
+
+	// Preserve the dispatch branch's gate script before detaching, as
+	// Resolve the candidate to promote does.
+	if err := os.WriteFile(filepath.Join(runnerTemp, "release-gate.custom.sh"), scriptBytes, 0o750); err != nil { //nolint:gosec // executable gate script in temp dir
+		t.Fatal(err)
+	}
+
+	if out, err := runWorkflowGate("v0.171.0"); err != nil {
+		t.Fatalf("promoting newest candidate v0.171.0-rc.111 failed: %v\n%s", err, out)
+	}
+
+	// Detaching to v0.171.0-rc.110 removes .github/release-gate.custom.sh from
+	// the working tree; the preserved gate from the dispatch branch still runs
+	// and refuses the stale candidate.
+	gitRun("checkout", "--detach", "v0.171.0-rc.110")
+	if _, err := os.Stat(filepath.Join(repo, ".github", "release-gate.custom.sh")); !os.IsNotExist(err) {
+		t.Fatalf("expected detached v0.171.0-rc.110 checkout to lack .github/release-gate.custom.sh, stat err=%v", err)
+	}
+	if out, err := runWorkflowGate("v0.171.0"); err == nil || !strings.Contains(out, "v0.171.0-rc.111") {
+		t.Fatalf("promoting older candidate v0.171.0-rc.110 predating gate script: err=%v out=%q; want refusal naming v0.171.0-rc.111", err, out)
+	}
+	if out, err := runWorkflowGate("v0.170.1"); err == nil || !strings.Contains(out, "HEAD is an ancestor of existing release tag") {
+		t.Fatalf("cutting stable release at ancestor of v0.171.0-rc.111: err=%v out=%q; want ancestor refusal", err, out)
+	}
+
+	gitRun("checkout", "--detach", "v0.171.0-rc.111")
+	gitRun("tag", "v0.171.0")
+	gitRun("commit", "--allow-empty", "-m", "fix: patch after stable")
+	if out, err := runWorkflowGate("v0.171.1"); err != nil {
+		t.Fatalf("patch release at new HEAD failed: %v\n%s", err, out)
 	}
 }

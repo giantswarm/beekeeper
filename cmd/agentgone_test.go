@@ -132,7 +132,6 @@ func TestGoneRetirementReleasesBoardAndPreservesHandover(t *testing.T) {
 	const issue = "o/r#21"
 	ag.Task = issue + ": unfinished work"
 	seed(t, a, func(st *state.State) {
-		st.Supervisor = nil
 		st.Agents = []state.Agent{ag}
 		st.Records = []state.Record{{Session: ag.Party, Issue: issue, At: ag.Registered}}
 	})
@@ -169,7 +168,7 @@ func TestGoneRetirementRechecksActivity(t *testing.T) {
 			runLive(t, a, nil)
 			ag := tasked("recheck-test")
 			ag.Registered = a.now.Add(-48 * time.Hour)
-			seed(t, a, func(st *state.State) { st.Supervisor = nil; st.Agents = []state.Agent{ag} })
+			seed(t, a, func(st *state.State) { st.Agents = []state.Agent{ag} })
 			st, _ := a.store.Read()
 			chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, a.now, a.cfg)
 			if change == "transcript" {
@@ -214,7 +213,7 @@ func TestGoneWakeAndResumeRestoreCapacity(t *testing.T) {
 			if err := os.Chtimes(path, old, old); err != nil {
 				t.Fatal(err)
 			}
-			seed(t, a, func(st *state.State) { st.Supervisor = nil; st.Agents = []state.Agent{ag} })
+			seed(t, a, func(st *state.State) { st.Agents = []state.Agent{ag} })
 			st, _ := a.store.Read()
 			if len(countAgents(st, nil, a.now, a.cfg).Gone) != 1 {
 				t.Fatal("precondition: not gone")
@@ -277,7 +276,7 @@ func TestGoneFailedWakeRestoresAge(t *testing.T) {
 	runLive(t, a, nil)
 	ag := tasked("failed-wake-test")
 	ag.Registered = a.now.Add(-48 * time.Hour)
-	seed(t, a, func(st *state.State) { st.Supervisor = nil; st.Agents = []state.Agent{ag} })
+	seed(t, a, func(st *state.State) { st.Agents = []state.Agent{ag} })
 	if err := a.wakeAgent(t.Context(), waker, ag.Name, "continue", ""); err == nil {
 		t.Fatal("wake without transcript succeeded")
 	}
@@ -294,7 +293,7 @@ func TestGoneProtectionAllowsWakeOffTheRoster(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(a.cfg.Claude.ProjectsDir, "off-roster-proof", offID+".jsonl")
 	writeFile(t, path, `{"type":"user","cwd":"`+filepath.ToSlash(dir)+`"}`+"\n")
-	seed(t, a, func(st *state.State) { st.Supervisor = nil; st.Agents = nil })
+	seed(t, a, func(st *state.State) { st.Agents = nil })
 	if err := a.wakeAgent(t.Context(), waker, offID, "continue", ""); err != nil {
 		t.Fatal(err)
 	}

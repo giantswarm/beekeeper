@@ -140,7 +140,7 @@ func rowlessState(now time.Time) *state.State {
 	st.Starts[2].At = now.Add(-time.Minute)
 	st.Agents[6].Done = true
 	st.Agents[7].Task = ""
-	st.Supervisor = &state.Supervisor{Party: state.Party{Session: holderID}, Since: now.Add(-time.Hour)}
+	st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: holderID}, Since: now.Add(-time.Hour)}}
 	// A registered session of the person's own, no start of beekeeper's.
 	st.Agents = append(st.Agents, state.Agent{Party: state.Party{Session: "own00001", Name: "the person's own"}, Task: rowlessTask})
 	return st

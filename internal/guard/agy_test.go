@@ -28,7 +28,6 @@ const (
 	nbPathField      = "NotebookPath"
 	newSourceField   = "NewSource"
 	sendInputAction  = "send_input"
-	yoursLabAMsg     = "yours " + labA
 )
 
 type agyDecision struct {
@@ -974,7 +973,6 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 		t.Errorf("TranscriptPath = %q, want /tmp/transcript.jsonl", ev.TranscriptPath)
 	}
 
-	var yoursSession, yoursTo, yoursMsg string
 	var stoppedSession, stoppedTask string
 	personDir := t.TempDir()
 	h := Hook{
@@ -991,10 +989,6 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 			}
 			return "", nil
 		},
-		Yours: func(session, to, message string) string {
-			yoursSession, yoursTo, yoursMsg = session, to, message
-			return "granted to " + to
-		},
 		StopTask: func(session, task string) string {
 			stoppedSession, stoppedTask = session, task
 			return "stopped " + task
@@ -1007,15 +1001,6 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 		messageField: "hello",
 	}); d.Decision != decisionAllow || d.Overwrite["Recipient"] != "Guide-1" {
 		t.Errorf("send_message to the guide: got %+v, want allow with Recipient=Guide-1", d)
-	}
-
-	// Because AgySession(input) == ev.Session == "conv-test", a send_message
-	// saying "yours lab-a" passes the exact conversationId to Yours.
-	if d := decideAgyCall(t, h, dir, "send_message", map[string]any{
-		"Recipient":  "worker-1",
-		messageField: yoursLabAMsg,
-	}); d.Decision != decisionAsk || yoursSession != testConvID || yoursTo != "worker-1" || yoursMsg != yoursLabAMsg {
-		t.Errorf("supervisor grant via send_message: decision=%+v, yours=%s/%s/%s", d, yoursSession, yoursTo, yoursMsg)
 	}
 
 	// manage_task send_input runs command refusal checks without rewriting CommandLine.

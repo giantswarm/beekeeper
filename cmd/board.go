@@ -49,7 +49,7 @@ dependency on another issue, which next reads; tidy moves closed items to
 Done and archives them after board.archiveAfter, which the supervisor loop
 runs every board.tidyEvery.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd())
+	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
 	return c
 }
 
@@ -78,16 +78,13 @@ never offered through its sub-issues; an issue whose nearest epic among its
 parents on the board is in planning is skipped as "sub-issue of epic
 <owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
 the go: from then its open sub-issues are offered, in their order. The
-person's priority list (beekeeper priority, the board's Priority field) comes
-first: the candidates are ordered by the rank of their epic, an issue's own
-or that of its nearest ranked ancestor through the sub-issue relation, the
-unranked after the ranked, each rank in the order above; the pick prints the
-rank it applied ("priority 2 of epic <owner/repo#n>", --json priority and
-priorityOf). A step with workScope offers only the work scope: an issue
-under an epic of the priority list, an order (an item a step without
-workScope offers) and an open recorded blocker of either; an item under an
-unranked epic or under none is skipped as "not in a priority epic", not
-ordered last. A plan is
+order is the steps' alone: their Status (board.order lists In Progress, then
+Up Next, then Backlog), and within a step the board's own order of its
+items. The person's priority list (beekeeper priority, the board's Priority
+field) neither orders nor gates anything: the pick only prints the rank of
+its epic, an issue's own or that of its nearest ranked ancestor through the
+sub-issue relation ("priority 2 of epic <owner/repo#n>", --json priority and
+priorityOf). A step's workScope is read and ignored. A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
@@ -214,8 +211,7 @@ the whole walk.`,
 			}
 			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			board.ByPriority(cands, snap.Priorities.Ranks(), snap.Parent)
-			snap.Scope(cands)
+			board.Annotate(cands, snap.Priorities.Ranks(), snap.Parent)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -610,7 +606,6 @@ const (
 	kindPlanning = "planning"
 	kindUnknown  = "unknown"
 	kindOrder    = "order"
-	kindScope    = "scope"
 )
 
 // skipKind names the kind of a skip reason: who holds the item, or what
@@ -633,8 +628,6 @@ func skipKind(reason string) string {
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
 		return kindUnknown
-	case reason == board.OutOfScope:
-		return kindScope
 	}
 	return kindOrder
 }
@@ -1044,7 +1037,8 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 }
 
 func (a *app) boardMoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var intake bool
+	c := &cobra.Command{
 		Use:   "move <owner/repo#n|URL> <status>",
 		Short: "Set a board item's Status by its canonical name, adding the issue to the board when it is missing",
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
@@ -1052,6 +1046,9 @@ board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
 Status. Issues from any accessible repository are added to the configured
 board, regardless of the repository's owner, subject to GitHub permissions.
+With --intake, the issue is put in the given status only when it has no
+Status on the configured board yet and does not sit on another board where
+it is already being worked.
 Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
@@ -1074,7 +1071,11 @@ anything is written. Exit 3 when refused.`,
 			}
 			me, _ := a.caller()
 			cl := a.boardClient()
-			mv, err := cl.Move(cmd.Context(), args[0], args[1])
+			move := cl.Move
+			if intake {
+				move = cl.Intake
+			}
+			mv, err := move(cmd.Context(), args[0], args[1])
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
 			}
@@ -1096,6 +1097,7 @@ anything is written. Exit 3 when refused.`,
 				team = " on the board " + mv.Board
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
 			case mv.Added:
 				_ = a.store.Log(event(me, "board.move", "%s: added to the board%s, → %s", mv.Ref, team, mv.To))
 			case mv.From != mv.To:
@@ -1105,6 +1107,8 @@ anything is written. Exit 3 when refused.`,
 				return a.printJSON(mv)
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
+				_, err = fmt.Fprintf(a.out, "left %s in %s%s\n", mv.Ref, mv.From, team)
 			case mv.Added:
 				_, err = fmt.Fprintf(a.out, "added %s to the board %s/%d%s: → %s\n", mv.Ref, a.cfg.Board.Owner, a.cfg.Board.Project, team, mv.To)
 			case mv.From == mv.To:
@@ -1122,6 +1126,8 @@ anything is written. Exit 3 when refused.`,
 			return err
 		},
 	}
+	c.Flags().BoolVar(&intake, "intake", false, "put the issue in this intake status only when it has no Status yet and is not being worked on another board")
+	return c
 }
 
 func (a *app) boardRankCmd() *cobra.Command {
@@ -1137,12 +1143,12 @@ Backlogs views). rank moves the issue's item to the top of the board, right
 before or right after the item of another issue (updateProjectV2ItemPosition),
 and prints the neighbours the move names. An issue without an item on the
 board is added first, as move adds it, with board.team as its Team and no
-Status; an issue of a repository outside the board's owner is never added.
+Status, whatever the owner of its repository (GitHub decides whether it may
+be added).
 The other issue must be on the board already. Only the items named are read,
 never the board's items. Every GitHub call acts on the repository of the
 issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
-exist, an issue outside the board's owner without an item, another issue
-that has no item on the board, an item placed against itself.`,
+exist, another issue that has no item on the board, an item placed against itself.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, r := range []string{args[0], at.Before, at.After} {

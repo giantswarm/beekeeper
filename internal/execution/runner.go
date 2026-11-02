@@ -47,7 +47,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		if j.Phase != Activating || j.StopRequest != nil {
 			return errors.New("execution was stopped or already launched")
 		}
-		j.Phase = Running
+		j.Phase, j.InTurn, j.LastActive = Running, true, s.now()
 		j.RunnerPID, j.RunnerStarted = os.Getpid(), started
 		return nil
 	}); err != nil {
@@ -71,12 +71,14 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		stopping := ctx.Err() != nil
 		stopped := false
 		err := s.update(cleanup, ref, func(j *Journal) error {
+			j.InTurn, j.LastActive = false, s.now()
 			if stopping && j.StopRequest != nil {
 				stopped = true
 				j.Phase, j.LastError = Exited, "stopped: "+j.StopRequest.Reason
 				return nil
 			}
-			if !j.StopAcknowledged && j.StopRequest == nil {
+			// A failure the runner already journaled keeps its own reason.
+			if !j.StopAcknowledged && j.StopRequest == nil && (j.Phase != Failed || j.LastError == "") {
 				j.Phase, j.LastError = Failed, "owned harness turn failed; inspect its process state and logs"
 			}
 			return nil
@@ -101,6 +103,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		go func() { defer close(leaseDone); s.maintainLease(leaseCtx, ref, leaseStarted, lease) }()
 		defer func() { stopLease(); <-leaseDone }()
 	}
+	if j.Request.Harness == HarnessCodex {
+		return s.runCodex(ctx, ref, j)
+	}
 	h := s.Config.Harnesses[j.Request.Harness]
 	env := append(cleanEnvironment(h.ConfigDir, s.Executable), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
 	tools := "Bash,Read,Write,Edit,Grep,Glob"
@@ -118,13 +123,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		defer stream.Close()
 		c.Stdin = stream.reader
 	}
-	logPath := filepath.Join(s.Root, string(ref.Execution)+".log")
-	if fi, e := os.Lstat(logPath); e == nil && !fi.Mode().IsRegular() {
-		return errors.New("invalid owned execution log")
-	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
-		return e
-	}
-	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // owned execution log
+	log, err := s.openLog(ref)
 	if err != nil {
 		return err
 	}
@@ -136,7 +135,10 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	// Authentication diagnostics must not leak values into logs or replies.
 	c.Stderr = io.Discard
 	if err := c.Start(); err != nil {
-		_ = s.update(ctx, ref, func(j *Journal) error { j.Phase, j.LastError = Failed, "harness process could not start"; return nil })
+		_ = s.update(ctx, ref, func(j *Journal) error {
+			j.Phase, j.InTurn, j.LastActive, j.LastError = Failed, false, s.now(), "harness process could not start"
+			return nil
+		})
 		return errors.New("harness process could not start")
 	}
 	if stream != nil {
@@ -164,19 +166,34 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 				return err
 			}
 		}
-		if json.Unmarshal(line, &ev) == nil && ev.Type == "system" && ev.Subtype == "init" {
-			if ev.SessionID != j.Handle.ConversationID {
-				_ = c.Process.Kill()
-				_ = c.Wait()
-				return errors.New("harness conversation identity mismatch")
-			}
-			if !ready && stream == nil {
-				if err := s.update(ctx, ref, func(j *Journal) error { j.Ready = true; return nil }); err != nil {
+		if json.Unmarshal(line, &ev) == nil {
+			switch {
+			case ev.Type == "system" && ev.Subtype == "init":
+				if ev.SessionID != j.Handle.ConversationID {
+					_ = c.Process.Kill()
+					_ = c.Wait()
+					return errors.New("harness conversation identity mismatch")
+				}
+				if !ready && stream == nil {
+					if err := s.update(ctx, ref, func(j *Journal) error {
+						j.Ready, j.InTurn, j.LastActive = true, true, s.now()
+						return nil
+					}); err != nil {
+						_ = c.Process.Kill()
+						_ = c.Wait()
+						return err
+					}
+					ready = true
+				}
+			case ev.Type == "result":
+				if err := s.update(ctx, ref, func(j *Journal) error {
+					j.InTurn, j.LastActive = j.Messages.hasUncertain(), s.now()
+					return nil
+				}); err != nil {
 					_ = c.Process.Kill()
 					_ = c.Wait()
 					return err
 				}
-				ready = true
 			}
 		}
 		if stream != nil && acceptedMessage(line, j.Handle.ConversationID, j.Request.RequestID) {
@@ -191,11 +208,25 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	if err != nil || scan.Err() != nil || !ready {
 		phase, detail = Failed, "harness failed or ended before first-task acceptance"
 	}
-	if updateErr := s.update(ctx, ref, func(j *Journal) error { j.Phase, j.LastError = phase, detail; return nil }); updateErr != nil {
+	if updateErr := s.update(ctx, ref, func(j *Journal) error {
+		j.Phase, j.InTurn, j.LastActive, j.LastError = phase, false, s.now(), detail
+		return nil
+	}); updateErr != nil {
 		return updateErr
 	}
 	if detail != "" {
 		return errors.New(detail)
 	}
 	return nil
+}
+
+// openLog opens the owned, append-only execution log.
+func (s *Server) openLog(ref Ref) (*os.File, error) {
+	logPath := filepath.Join(s.Root, string(ref.Execution)+".log")
+	if fi, e := os.Lstat(logPath); e == nil && !fi.Mode().IsRegular() {
+		return nil, errors.New("invalid owned execution log")
+	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return nil, e
+	}
+	return os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // owned execution log
 }

@@ -201,7 +201,7 @@ func planArchives(st *state.State, record func(host string) (*claude.Record, boo
 		case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(ar.Party) }):
 			o.drop = "it is on the roster again"
 		case roleKeeps(st, ar.Party):
-			o.drop = "it holds or held the supervisor's or the guide's role, and no relay relieved it"
+			o.drop = "it holds or held the guide's role, and no relay relieved it"
 		case givenUp(ar, now) != "":
 			o.drop = "the doctor gives it up: " + givenUp(ar, now)
 		case busy(ar.Party):

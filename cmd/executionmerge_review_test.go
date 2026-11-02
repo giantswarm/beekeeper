@@ -158,8 +158,8 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 	review.At = time.Now()
 	old := readDeskReview
 	t.Cleanup(func() { readDeskReview = old })
-	readDeskReview = func(_ context.Context, repository, id string) (superloop.Review, error) {
-		if repository != use.Repository || id != "100" {
+	readDeskReview = func(_ context.Context, repository string, pr int, id string) (superloop.Review, error) {
+		if repository != use.Repository || pr != use.PR || id != "100" {
 			t.Fatal("review fetched from a different repository or URL")
 		}
 		return *review, nil

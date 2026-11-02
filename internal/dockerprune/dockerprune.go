@@ -8,6 +8,7 @@ package dockerprune
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -299,11 +300,134 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 	return freed, removed, nil
 }
 
-// PruneBuildCache prunes the build cache down to keep bytes; the cache a
-// build uses stays.
-func PruneBuildCache(ctx context.Context, d Docker, keep int64) error {
-	_, err := d(ctx, "builder", "prune", "--force", "--max-used-space", strconv.FormatInt(keep, 10))
-	return err
+// CacheRecord is one build cache record of `docker builder du`.
+type CacheRecord struct {
+	ID string
+	// Size is what the record lists; shared layers may free less.
+	Size int64
+	// Reclaimable is Docker saying no build or container uses the record.
+	// A record that is not reclaimable stays, whoever asks.
+	Reclaimable bool
+	// UsedAgo is how long before the reading the record was last used;
+	// -1 when Docker's age is unreadable, which keeps the record.
+	UsedAgo time.Duration
+}
+
+// CacheRecords reads the build cache's records with their sizes and ages
+// from `docker builder du`.
+func CacheRecords(ctx context.Context, d Docker) ([]CacheRecord, error) {
+	raw, err := d(ctx, "builder", "du", "--format", "{{json .}}")
+	if err != nil {
+		return nil, err
+	}
+	var out []CacheRecord
+	for line := range bytes.Lines(raw) {
+		var r struct {
+			ID, Size, LastUsedAt string
+			Reclaimable          bool
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		if json.Unmarshal(line, &r) != nil {
+			continue
+		}
+		size, err := ParseSize(r.Size)
+		if err != nil {
+			return nil, fmt.Errorf("docker builder du: record %s: %w", r.ID, err)
+		}
+		out = append(out, CacheRecord{ID: r.ID, Size: size, Reclaimable: r.Reclaimable, UsedAgo: parseUsedAgo(r.LastUsedAt)})
+	}
+	return out, nil
+}
+
+// CacheTrim is one build cache trim's result.
+type CacheTrim struct {
+	// Freed is the listed size of the records removed; shared layers may
+	// free less, so the freed bytes of a run come from the df re-read.
+	Freed int64
+	// Removed names how many records went.
+	Removed int
+	// Kept counts the records that stay above the target because no
+	// removal may take them (a build or container uses them), and KeptBytes
+	// is what they hold.
+	Kept      int
+	KeptBytes int64
+}
+
+// PruneBuildCache brings the build cache down to keep bytes, removing the
+// reclaimable record used longest ago first. Docker's own
+// `builder prune --max-used-space` cannot be asked for this: it is a
+// best-effort pass of the daemon's GC policy and frees nothing while the
+// policy's reserved or min-free-space floor sits above the target, which
+// on a nearly full disk is always. A record Docker does not call
+// reclaimable is never touched and is counted in Kept.
+func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, error) {
+	var t CacheTrim
+	records, err := CacheRecords(ctx, d)
+	if err != nil {
+		return t, err
+	}
+	var total int64
+	for _, r := range records {
+		total += r.Size
+	}
+	if total <= keep {
+		return t, nil
+	}
+	candidates := slices.DeleteFunc(slices.Clone(records), func(r CacheRecord) bool { return !r.Reclaimable || r.UsedAgo < 0 })
+	// Oldest last use first, the daemon's own least-recently-used order;
+	// the ID breaks ties so a run is deterministic.
+	slices.SortStableFunc(candidates, func(a, b CacheRecord) int {
+		return cmp.Or(cmp.Compare(b.UsedAgo, a.UsedAgo), cmp.Compare(a.ID, b.ID))
+	})
+	var refused []error
+	removed := map[string]bool{}
+	for _, r := range candidates {
+		if total-t.Freed <= keep {
+			break
+		}
+		if _, err := d(ctx, "builder", "prune", "--force", "--filter", "id="+r.ID); err != nil {
+			refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
+			continue
+		}
+		t.Freed += r.Size
+		t.Removed++
+		removed[r.ID] = true
+	}
+	for _, r := range records {
+		if !removed[r.ID] {
+			t.Kept++
+			t.KeptBytes += r.Size
+		}
+	}
+	if len(refused) > 0 && t.Removed == 0 {
+		return t, errors.Join(refused...)
+	}
+	return t, nil
+}
+
+// parseUsedAgo reads `docker builder du`'s human age ("26 minutes ago",
+// "5 days ago") into a duration; -1 for an age it cannot read, which keeps
+// the record a trim would otherwise order.
+func parseUsedAgo(s string) time.Duration {
+	n, unit, ok := strings.Cut(strings.TrimSuffix(strings.TrimSpace(s), " ago"), " ")
+	if !ok {
+		return -1
+	}
+	v, err := strconv.ParseFloat(n, 64)
+	if err != nil {
+		return -1
+	}
+	mult, ok := map[string]time.Duration{
+		"second": time.Second, "minute": time.Minute, "hour": time.Hour,
+		"day": 24 * time.Hour, "week": 7 * 24 * time.Hour,
+		"month": 30 * 24 * time.Hour, "year": 365 * 24 * time.Hour,
+	}[strings.TrimSuffix(unit, "s")]
+	if !ok {
+		return -1
+	}
+	return time.Duration(v * float64(mult))
 }
 
 // Importer says an argument vector loads or builds images: kind load and

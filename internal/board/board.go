@@ -130,7 +130,7 @@ type Candidate struct {
 	Match string `json:"match,omitempty"`
 	// Skip says why it is not free, empty when it is.
 	Skip string `json:"skip,omitempty"`
-	// Priority is the rank ByPriority applied, 0 for none; PriorityOf the
+	// Priority is the rank Annotate recorded, 0 for none; PriorityOf the
 	// epic it is the rank of, the candidate itself or an ancestor.
 	Priority   int    `json:"priority,omitempty"`
 	PriorityOf string `json:"priorityOf,omitempty"`
@@ -382,6 +382,9 @@ func skipReason(it Item, b config.Board, now time.Time) string {
 	}
 	return ""
 }
+
+// ContainsFold says whether list holds s, without regard to case.
+func ContainsFold(list []string, s string) bool { return containsFold(list, s) }
 
 func containsFold(list []string, s string) bool {
 	return slices.ContainsFunc(list, func(x string) bool { return strings.EqualFold(x, s) })

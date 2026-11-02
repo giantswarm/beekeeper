@@ -96,7 +96,16 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		if _, err := s.git(ctx, workspace, "remote", "set-url", "origin", strings.TrimSpace(string(origin))); err != nil {
 			return errors.New("cannot establish workspace repository identity")
 		}
-		if _, err := s.git(ctx, workspace, "fetch", "--no-tags", "--", source, j.Request.GitRef); err != nil {
+		fetchSource, fetchRef := source, j.Request.GitRef
+		if j.Request.SourceDigest != "" {
+			fetchSource = s.sourcePath(j.Request.Ref)
+			data, err := readRegular(fetchSource, MaxSourceBundle)
+			if err != nil || Digest(data) != j.Request.SourceDigest {
+				return errors.New("pinned source bundle is missing or corrupt")
+			}
+			fetchRef = "refs/heads/execution-source"
+		}
+		if _, err := s.git(ctx, workspace, "fetch", "--no-tags", "--", fetchSource, fetchRef); err != nil {
 			return errors.New("cannot resolve the requested ref on the execution host")
 		}
 		commit, err := s.git(ctx, workspace, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
@@ -104,6 +113,9 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 			return errors.New("requested ref is not a commit")
 		}
 		j.Handle.Commit = strings.TrimSpace(string(commit))
+		if j.Request.SourceDigest != "" && j.Handle.Commit != j.Request.GitRef {
+			return errors.New("source bundle does not match pinned commit")
+		}
 		p, err := s.journalPath(j.Handle.Ref)
 		if err != nil {
 			return err

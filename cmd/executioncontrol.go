@@ -36,6 +36,7 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
+	PostMerge *string `json:"postMerge,omitempty"`
 	// Head is the HEAD of the execution's workspace when it parked. The
 	// coordinator checks it against the pull request itself (a host's own
 	// branch and GitHub view are no proof); ReviewHead is an older host's.
@@ -107,6 +108,16 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		}
 		var value any
 		var events []state.Event
+		touchActive := func() {
+			if r.StopRequest != nil || r.Terminal() {
+				return
+			}
+			now := a.now.UTC()
+			if now.IsZero() {
+				now = time.Now().UTC()
+			}
+			r.LastActive = now
+		}
 		switch req.Operation {
 		case "activate":
 			var request execution.StartRequest
@@ -141,12 +152,14 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			if transferErr != nil {
 				return nil, transferErr
 			}
+			touchActive()
 			value = result
 		case executionPublish:
 			var publication executionPublication
 			if execution.Decode(req.Payload, &publication) != nil {
 				return nil, errors.New("invalid publication request")
 			}
+			touchActive()
 			publishCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
@@ -165,6 +178,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			if execution.Decode(req.Payload, &use) != nil || use.Ref != req.Ref {
 				return nil, errors.New("invalid merge execution identity")
 			}
+			touchActive()
 			mergeCtx, stopMerge := context.WithTimeout(ctx, 20*time.Second)
 			defer stopMerge()
 			var result execution.MergeResult
@@ -187,6 +201,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			value = result
 		case "guard":
+			touchActive()
 			authority := executionAuthority{Stopped: st.Stop != nil || r.StopRequest != nil || r.Terminal()}
 			for _, hold := range st.Holds {
 				if hold.Target == holdGitHub && hold.Active(time.Now()) {
@@ -195,6 +210,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			value = authority
 		case executionStatus:
+			touchActive()
 			// Only public roster fields cross this boundary; journals contain a
 			// component credential and are never a status response.
 			type row struct {
@@ -205,11 +221,11 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 				Execution *execution.Ref `json:"execution,omitempty"`
 			}
 			rows := []row{}
-			supervisor := st.SupervisorRole().Holder
+			guide := st.GuideRole().Holder
 			for _, ag := range st.Agents {
 				role := ""
-				if supervisor != nil && supervisor.Is(ag.Party) {
-					role = supervisorRole.name
+				if guide != nil && guide.Is(ag.Party) {
+					role = guideRole.name
 				}
 				rows = append(rows, row{ag.Name, ag.Task, ag.Host, role, ag.Execution})
 			}
@@ -221,6 +237,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			ledger := execution.ControlLedger{Sequence: r.ControlSequence, Results: r.ControlResults}
 			result, applyErr := ledger.Apply(req.Ref, control, func() (string, error) {
+				touchActive()
 				text, evs, err := a.applyExecutionControl(ctx, st, st.Starts[i].Party, control)
 				if err == nil {
 					events = evs
@@ -333,8 +350,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
+		} else {
+			v.PostMerge = nil
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)
@@ -363,13 +382,13 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished
+		if ag.Execution != nil && v.Finished {
+			if r, _ := executionRecord(st, *ag.Execution); r != nil {
+				r.Completed = true
+			}
+		}
 		verb := "agents.idle"
 		if v.Finished {
-			if ag.Execution != nil {
-				if r, _ := executionRecord(st, *ag.Execution); r != nil {
-					r.Completed = true
-				}
-			}
 			verb = executionDone
 			clearRecords(st, me)
 		}

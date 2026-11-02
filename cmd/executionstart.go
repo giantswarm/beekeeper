@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -35,8 +36,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != "headless" {
 		return usageErr("remote starts require --repo and --ref, use headless mode and do not accept --dir or --desktop")
 	}
-	if o.Harness != claudeComm && o.Harness != harnessAuto {
-		return refused("execution host supports harness claude only")
+	if o.Harness != harnessAuto && (!execution.SupportedHarness(o.Harness) || !host.Supports(o.Harness)) {
+		return refused("execution host %s does not list harness %s; it lists %s", host.Identity, o.Harness, strings.Join(host.Harnesses, ", "))
 	}
 	if _, ok := host.Repositories[o.Repository]; !ok {
 		return refused("repository is not mapped on the selected execution host")
@@ -82,7 +83,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
-	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, o.Exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
+	if o.Harness != harnessAuto && caps.Harnesses[o.Harness] == "" {
+		return refused("execution host %s does not offer harness %s: %s", host.Identity, o.Harness, caps.Unavailable[o.Harness])
+	}
+	exclude := append(slices.Clone(o.Exclude), hostUnoffered(caps)...)
+	verdict := a.executionCapacity(st, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), o.Harness, o.Model)
 	if o.Harness == harnessAuto {
 		choice, err := pickAutoChoice(verdict, o.Force)
 		if err != nil {
@@ -90,8 +95,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		}
 		o.Harness, o.Model = choice.Harness, choice.Model
 	}
-	if o.Harness != claudeComm || o.Model == "" {
-		return usageErr("remote claude requires an explicit --model or a configured auto choice")
+	if !execution.SupportedHarness(o.Harness) || slices.Contains(exclude, o.Harness) || o.Model == "" {
+		return usageErr("remote %s requires an explicit --model or a configured auto choice this host offers", o.Harness)
 	}
 	if _, err := gateStart(verdict, o.Force); err != nil {
 		return err
@@ -126,7 +131,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if len(k.Providers) > 0 && !reflect.DeepEqual(k.Providers, a.liveCapacity().Providers) {
 			return nil, refused("provider configuration changed during admission; retry")
 		}
-		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, o.Exclude, startKind(o.Review, o.ReviewOfSelfHosted), r.Harness, r.Model)
+		v := a.executionCapacity(current, sessions, k, host, caps.Resources, readings, legacy, o.Builds, exclude, startKind(o.Review, o.ReviewOfSelfHosted), r.Harness, r.Model)
 		over, err := gateStart(v, o.Force)
 		if err != nil {
 			return nil, err
@@ -184,6 +189,11 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// weighs those choices alone, so a choice it cannot run never shows as
 	// its room.
 	exclude = append(slices.Clone(exclude), hostUnsupportedHarnesses...)
+	for _, name := range []string{claudeComm, codex.Harness} {
+		if !host.Supports(name) {
+			exclude = append(exclude, name)
+		}
+	}
 	// Machine admission is evaluated by the target host's component. This
 	// placeholder only carries summary figures into the shared pool builder.
 	h := &headroom{AvailableMiB: resources.AvailableMiB, Load1: resources.Load1, Slots: 1, SlotsFree: 1}
@@ -216,13 +226,37 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 }
 
 // hostUnsupportedHarnesses are the harnesses an execution host has no
-// adapter for: a remote start runs Claude Code only. hostRunsHarness is
-// the other side, a harness a host runs ("" is Claude Code).
-var hostUnsupportedHarnesses = []string{harnessAgy, omp.Harness, codex.Harness}
+// adapter for. Of the others, Claude Code and Codex, a host runs those its
+// catalogue entry lists (executionCapacity) and its check offers
+// (hostUnoffered). hostRunsHarness is the other side, a harness some host
+// runs ("" is Claude Code).
+var hostUnsupportedHarnesses = []string{harnessAgy, omp.Harness}
 
-func hostRunsHarness(harness string) bool {
+// hostUnoffered are the remote harnesses a host's check did not offer: a
+// harness whose version, login or guard failed there is no choice on it.
+func hostUnoffered(caps execution.Capabilities) []string {
+	var out []string
+	for _, name := range []string{claudeComm, codex.Harness} {
+		if caps.Harnesses[name] == "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// hostRunsHarness says whether one of hosts can run harness: Claude Code on
+// any host, as before, and Codex on a host whose entry lists it.
+func hostRunsHarness(harness string, hosts []execution.Host) bool {
 	h := strings.TrimSpace(harness)
-	return h == "" || h == claudeComm
+	if h == "" || h == claudeComm {
+		return true
+	}
+	for _, host := range hosts {
+		if execution.SupportedHarness(h) && host.Supports(h) {
+			return true
+		}
+	}
+	return false
 }
 
 func executionReserved(st *state.State, ag state.Agent) bool {
@@ -275,6 +309,33 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 	}
 	r := rec.Request
 	if rec.Phase == executionPending {
+		if uploader, ok := client.(execution.SourceUploader); ok {
+			// A pending coordinator may have lost a legacy preparation reply.
+			// Preserve its original request/digest whenever the host journal
+			// already exists. Only confirmed absence permits source pinning.
+			existing := false
+			if r.SourceDigest == "" {
+				_, inspectErr := client.Inspect(ctx, ref)
+				switch {
+				case inspectErr == nil:
+					existing = true
+				case errors.Is(inspectErr, execution.ErrNotFound):
+				default:
+					a.executionFailure(ref, inspectErr)
+					return fmt.Errorf("cannot reconcile pending preparation: %w", inspectErr)
+				}
+			}
+			if !existing {
+				var data []byte
+				r, data, err = a.prepareExecutionSource(ctx, r)
+				if err != nil {
+					return err
+				}
+				if err := uploader.UploadSource(ctx, ref, data); err != nil {
+					return err
+				}
+			}
+		}
 		handle, err := client.Start(ctx, r)
 		if err != nil {
 			a.executionFailure(ref, err)
@@ -374,7 +435,11 @@ func (a *app) executionFailure(ref execution.Ref, failure error) {
 		if r == nil {
 			return nil, nil
 		}
+		wasUnconfirmed := r.Observation.Reachability == execution.Unreachable || r.Observation.LastError != ""
 		r.Observation = r.Observation.FailedContact(failure, time.Now().UTC())
+		if wasUnconfirmed {
+			return nil, nil
+		}
 		return []state.Event{event(st.Starts[i].By, "execution.unconfirmed", "%s: %s", st.Starts[i].Name, failure.Error())}, nil
 	})
 }
@@ -413,6 +478,9 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		}
 		o.Reachability, o.ReachabilityAt = execution.Reachable, time.Now().UTC()
 		r.Observation = o
+		if o.LastActive.After(r.LastActive) {
+			r.LastActive = o.LastActive
+		}
 		var evs []state.Event
 		switch r.Phase {
 		case executionPending, execution.Preparing, execution.Prepared, execution.Activating:

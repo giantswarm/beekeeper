@@ -499,7 +499,7 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || !strings.Contains(line, parkReviewMode(head)) {
+		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || strings.Contains(line, "review request recorded") {
 			t.Fatalf("parks %+v, line %q", st.Parks, line)
 		}
 	}

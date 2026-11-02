@@ -31,7 +31,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   makes this session the guide or takes a relayed role; `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
   the person (`GUIDE WAITING`), each unfiled finding (`GUIDE PROBLEM`, the full report
-  to file in its owning repository or hand to the supervisor, without asking the person),
+  to file in its owning repository, put on the board in `Backlog` with `beekeeper board move <issue> backlog --intake` and rank from `beekeeper priority` with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
   each answered or closed note, and the guide's own relay (`GUIDE
   RELAY DUE` at `guide.relayAt`); `GUIDE WATCH STALE` or `GUIDE SAVE REFUSED` means re-arm the
   `Monitor` with the command the line names. `beekeeper guide next` serves the one decision to ask now, due
@@ -44,16 +44,16 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
 - **The owning session** of a decision is named in the queue. `beekeeper tail <session>` gives its
   last turns, `ListAgents` its messaging address.
-- **The supervisor** is another session (`/supervise`). It files decisions as `beekeeper note add
-  --for <person>` and never presents them itself; it schedules the work from the board and starts
-  the planning sessions for epics without a plan.
+- **The supervisor** is the supervisor loop (`beekeeper supervisor loop`), a service no session
+  holds. It files decisions as `beekeeper note add --for <person>` and never presents them itself;
+  it schedules the work from the board, reviews and gives the go to merge.
 
 ## Constraints
 
-- **Never in the supervisor's session.** The two roles always run in two sessions: `guide start` in
-  the supervisor's session is refused, and a guide never runs `supervisor start`. The operational
-  side — grants, holds, merges, sessions colliding, the machine — is the supervisor's; what the
-  guide learns about it, and any work, research or proof it meets, goes there in one line.
+- **Not the supervisor.** The supervisor is the supervisor loop, no session: the operational side —
+  holds, merges, sessions colliding, the machine — is the loop's, and a guide never runs it. What
+  the guide learns about it, and any work, research or proof it meets, it files as an issue in its
+  owning repository or hands to the board, in one line.
 - **One decision at a time, only what matters.** The queue is worked in order of what blocks work
   and what falls due first. A decision whose default is right and reversible, one that a decided
   direction or a standing rule already settles, or one that is not the person's to make, is not put
@@ -79,6 +79,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   conversation, the one they read, one at a time and without waiting for them to ask. A note in the
   queue is not the asking. A note that is work rather than a decision (a problem found to file in
   its owning repository) is carried out or handed to the supervisor, not put to the person.
+- **Dialog answers verify once.** Serve the local note with `beekeeper guide next` before asking. Keep its option labels and order in the question dialog, and show the thread URL and head from the note. The completed dialog result hook binds the person's selection and verbatim text to that note in this guide session. Record it with `beekeeper answer <thread> --note <id> --choice <n>` for a selected option, adding the verbatim text if any; free text uses no choice. This channel verifies as the person's word without a terminal confirmation. Cancelled dialogs, other sessions, changed choices and invented text do not verify.
 - **Answers travel word for word.** Each answer, given on a note, in this conversation or on Slack,
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session

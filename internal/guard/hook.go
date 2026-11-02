@@ -23,9 +23,12 @@ const start = `(?:^[ \t]*|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
 const pos = start + `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
 
 // mergePos is a command position for the merge gate: a start with any of the
-// prefix commands that run their arguments as a command, with their options.
-// The build rewrite keeps pos: a wider one would change what it wraps.
-const mergePos = start + `(?:(?:` +
+// reserved words that start a command (if, elif, while,
+// until, !, {) and the prefix commands that run their arguments as a
+// command, with their options. A command a runner runs from its arguments
+// (xargs, find -exec, parallel) is no command position: runnerMerges refuses
+// it. The build rewrite keeps pos: a wider one would change what it wraps.
+const mergePos = start + `(?:(?:if|elif|while|until|!|\{)\s+)*(?:(?:` +
 	`flock(?:\s+(?:-[wE]\s*\S+|--(?:timeout|wait|conflict-exit-code)(?:=|\s+)\S+|-[a-zA-Z]+|--[\w-]+))*\s+[^\s;&|()-]\S*` +
 	`|timeout(?:\s+(?:-[ks]\s*\S+|-\S+))*\s+\d\S*` +
 	`|nice(?:\s+(?:-n\s*-?\d+|-\d+|--adjustment=-?\d+))?` +
@@ -171,12 +174,6 @@ type Hook struct {
 	// socket; "" leaves the name as written, an error refuses the send.
 	// Nil reads every name as written.
 	Agent func(name string) (string, error)
-	// Yours records a `yours <resource>` in a message from the session
-	// holding the supervisor role as the resource's grant to the message's
-	// target (to, after the hook's own redirects) and returns what the
-	// sender is told: the grant recorded, or why none was; "" says nothing.
-	// Nil records nothing.
-	Yours func(session, to, message string) string
 	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
 	// instructions Claude Code loads itself; "" takes the call's cwd.
 	Project string
@@ -402,6 +399,9 @@ func (h Hook) decide(ev event) []byte {
 	if unread {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a shell's -c or eval string names devctl in a form the merge gate cannot read " +
 			"(a command substitution, a quote left open), so a merge, promote or wait in it would run outside the gate. Run devctl as its own command."})
+	}
+	if r := h.runnerRefusal(cmd, bg); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := heldMerges(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})

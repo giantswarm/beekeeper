@@ -187,15 +187,14 @@ const (
 	rosterParked = "parked"
 	rosterIdle   = "idle"
 
-	roleSupervisor = "supervisor"
-	roleGuide      = "guide"
-	roleSpare      = "spare"
+	roleGuide = "guide"
+	roleSpare = "spare"
 )
 
 // standing says what s is to the desk: its roster state (busy with a task,
 // parked on its person with one, idle without; "" off the roster) and the
-// agent's roster name, and its role (the supervisor, the guide, or the
-// spare an open relay of either names; "" for none). An unread state knows
+// agent's roster name, and its role (the guide, or the spare an open relay
+// of it names; "" for none). An unread state knows
 // neither.
 func standing(st *state.State, s *claude.Session, now time.Time) (roster, role, agent string) {
 	if st == nil {
@@ -214,16 +213,11 @@ func standing(st *state.State, s *claude.Session, now time.Time) (roster, role, 
 			roster = rosterBusy
 		}
 	}
-	sup, guide := st.SupervisorRole(), state.Role{}
-	if st.Guide != nil {
-		guide = *st.Guide
-	}
+	guide := st.GuideRole()
 	switch {
-	case sup.Holder != nil && sup.Holder.Is(p):
-		role = roleSupervisor
 	case guide.Holder != nil && guide.Holder.Is(p):
 		role = roleGuide
-	case sup.Relay.Open(now) && sup.Relay.To.Is(p), guide.Relay.Open(now) && guide.Relay.To.Is(p):
+	case guide.Relay.Open(now) && guide.Relay.To.Is(p):
 		role = roleSpare
 	}
 	return roster, role, agent

@@ -175,7 +175,6 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	if a.cfg.Teleport.Enabled() {
 		e.Spec.TeleportEvery = a.cfg.Teleport.Every.Duration
 	}
-	e.Spec.SupervisorLoop = a.cfg.Supervisor.Loop
 	e.Spec.ToolPath = os.Getenv("PATH")
 	if e.Spec.ConfigPath, err = filepath.Abs(e.Config); err != nil {
 		return err

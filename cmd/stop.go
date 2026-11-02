@@ -83,8 +83,8 @@ stopped until beekeeper resume:
   headless turn, its CLI and what it left running, a background session
   through claude stop so its daemon does not resume it.
 
-It never touches a session the person started, the guide's or the
-supervisor's session, or the session that runs it.
+It never touches a session the person started, the guide's session, or the
+session that runs it.
 
 While the stop stands, agents start (--force included), agents handover,
 agents wake, agents desktop, a timer's wake, a note answer's wake, a
@@ -121,7 +121,7 @@ it was (unless its time passed meanwhile), and starts, wakes, revives,
 reopens and imports run again. A unit that does not start again is named
 on a FAILED line and makes it exit 1: beekeeper stays stopped, with that
 unit still to start, and resume runs again once it is fixed. The capacity is what it was: the stop never
-changes capacity.floor or capacity.ceiling. A wake timer that fell due
+changes capacity.ceiling. A wake timer that fell due
 during the stop fires at the watch's next poll.
 
 It starts no session: it names the sessions the stop ended, which wait for
@@ -279,14 +279,11 @@ func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string
 	return said, failed
 }
 
-// spared are the sessions a stop leaves running: the supervisor's, the
-// guide's and the caller's own. A session the person started is spared
+// spared are the sessions a stop leaves running: the guide's and the
+// caller's own. A session the person started is spared
 // by not being one of beekeeper's starts.
 func spared(st *state.State, me state.Party) []state.Party {
 	out := []state.Party{me}
-	if st.Supervisor != nil {
-		out = append(out, st.Supervisor.Party)
-	}
 	if st.Guide != nil && st.Guide.Holder != nil {
 		out = append(out, st.Guide.Holder.Party)
 	}
@@ -485,7 +482,7 @@ func (a *app) resume(ctx context.Context) error {
 	for _, t := range lapsed {
 		p("resume: the hold on %s ended during the stop, not put back", t)
 	}
-	p("resume: capacity as configured: floor %d, ceiling %d", a.cfg.Capacity.Floor, a.cfg.Capacity.Ceiling)
+	p("resume: capacity as configured: ceiling %d", a.cfg.Capacity.Ceiling)
 	if len(rec.Sessions) > 0 {
 		p("resume: the sessions the stop ended wait for a wake (beekeeper agents wake): %s", strings.Join(rec.Sessions, ", "))
 	}

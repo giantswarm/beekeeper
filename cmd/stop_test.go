@@ -126,6 +126,11 @@ func (m cliMachine) Processes() (*proc.Table, error) {
 func stopDesk(t *testing.T) (*app, *haltLauncher, *[]string) {
 	t.Helper()
 	a, _ := stubApp(t)
+	// The stop runs in Agent one's own session, which it spares.
+	a.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s1")
+	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
 	a.cfg.Stop.Units = []string{deskTimer}
 	l := &haltLauncher{
 		active: []string{"beekeeper-agent-5a1b2c3d.service", "beekeeper-reopen-5a1b2c3d-11111111.service",
@@ -348,7 +353,6 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 		turning:   func(context.Context, string) bool { return false },
 		reopening: func(context.Context, string) bool { return false },
 		send:      func(context.Context, string, string) error { calls.Add(1); return nil },
-		open:      func(context.Context, string, bool) error { calls.Add(1); return nil },
 		revive:    func(context.Context, role, state.Party, string) error { calls.Add(1); return nil },
 		succeed: func(context.Context, role, state.Party) (state.Party, error) {
 			calls.Add(1)
@@ -358,13 +362,13 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	}
 	t.Cleanup(w.stand.inflight.Wait)
 	w.now = relayNow
-	gone := state.Party{Session: "sS9", HostSession: "local_sS9", Name: supervisorRole.runName(9)}
+	gone := state.Party{Session: "sS9", HostSession: "local_sS9", Name: guideRole.runName(9)}
 	worker := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: agentSeven}
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		// A supervisor gone past its restart grace, no start of beekeeper's:
+		// A guide gone past its restart grace, no start of beekeeper's:
 		// its successor is due.
-		st.Supervisor = &state.Supervisor{Party: gone, Since: relayNow.Add(-time.Hour)}
-		st.SupervisorCLI = &state.CLI{Supervisor: gone, Since: relayNow.Add(-time.Hour), PID: 90, Gone: relayNow.Add(-time.Hour)}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: gone, Since: relayNow.Add(-time.Hour)}}
+		st.Guide.CLI = &state.CLI{Supervisor: gone, Since: relayNow.Add(-time.Hour), PID: 90, Gone: relayNow.Add(-time.Hour)}
 		st.Starts = append(st.Starts, state.Start{Party: worker, At: relayNow.Add(-time.Hour)})
 		st.Agents = append(st.Agents, state.Agent{Party: worker, Task: rowlessTask})
 		st.Stop = &state.Stop{Reason: "the person said stop", By: state.Party{Name: "Agent one"}, At: relayNow.Add(-time.Minute)}
@@ -381,7 +385,7 @@ func TestNothingStartsWhileStopped(t *testing.T) {
 	if n := calls.Load(); n != 0 {
 		t.Errorf("%d starts, revives, sends or imports while stopped:\n%s", n, out)
 	}
-	if s := out.String(); !strings.Contains(s, "SUPERVISOR GONE") || !strings.Contains(s, stoppedNothing) || strings.Count(s, "STOPPED: beekeeper is stopped") != 1 {
+	if s := out.String(); !strings.Contains(s, "GUIDE GONE") || !strings.Contains(s, stoppedNothing) || strings.Count(s, "STOPPED: beekeeper is stopped") != 1 {
 		t.Errorf("watch lines:\n%s", s)
 	}
 
@@ -523,7 +527,7 @@ func TestStopRefusesDesktopReviveAndHandover(t *testing.T) {
 	if err := c.Execute(); !refusedStop(err) {
 		t.Errorf("agents desktop while stopped: %v", err)
 	}
-	if err := a.reviveFromWatch(context.Background(), supervisorRole, state.Party{Session: stopWorker, Name: agentSeven}, "resume"); !refusedStop(err) {
+	if err := a.reviveFromWatch(context.Background(), guideRole, state.Party{Session: stopWorker, Name: agentSeven}, "resume"); !refusedStop(err) {
 		t.Errorf("revive while stopped: %v", err)
 	}
 	st, _ := a.store.Read()

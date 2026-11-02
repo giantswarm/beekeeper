@@ -151,3 +151,17 @@ func TestOverlapsFromActedRefs(t *testing.T) {
 		t.Errorf("two sessions acting on %s: overlaps = %+v", quotedRef, got)
 	}
 }
+
+func TestWorkCreatedRecordsCreatedIssuesOnly(t *testing.T) {
+	w := work(
+		bash("a", `gh issue create --repo org/engine --title "bug"`),
+		resultOf("a", "https://github.com/org/engine/issues/55\n"),
+		bash("b", `gh pr create --repo org/engine --title "fix"`),
+		resultOf("b", "https://github.com/org/engine/pull/56\n"),
+		toolUse("c", "mcp__github__issue_write", `{"method":"create","owner":"org","repo":"engine","title":"x"}`),
+		resultOf("c", `{"url":"https://github.com/org/engine/issues/57"}`),
+	)
+	if !slices.Equal(w.Created, []string{"org/engine#57", "org/engine#55"}) {
+		t.Fatalf("Created = %v, want [org/engine#57 org/engine#55]", w.Created)
+	}
+}

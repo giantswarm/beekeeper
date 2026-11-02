@@ -72,7 +72,7 @@ func feedbackWatch(t *testing.T) (*watcher, *slackStandIn, *[]string, *bytes.Buf
 		return nil
 	}
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: state.Party{Name: "Supervisor run 1", Session: "sup"}}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: "Guide run 1", Session: "sup"}}}
 		st.Agents = []state.Agent{{Party: state.Party{Name: "Board pull 9", Session: "bp9"}}}
 		st.ReportThreads = []state.ReportThread{
 			{Report: "Status report 15:00", Channel: "C1", TS: reportTS, Posted: w.now.Add(-time.Hour)},
@@ -105,7 +105,7 @@ func TestFeedbackDeliversTheAuthorsReplies(t *testing.T) {
 		t.Errorf("threads %+v: want the day-old one dropped, the reply seen", st.ReportThreads)
 	}
 	if !strings.Contains(out.String(), "FEEDBACK to Board pull 9, a reply to Status report 15:00: look at the CI first") ||
-		!strings.Contains(out.String(), "FEEDBACK to the supervisor, a reply to Status report 15:00: slow down please") {
+		!strings.Contains(out.String(), "FEEDBACK to the guide, a reply to Status report 15:00: slow down please") {
 		t.Errorf("out:\n%s", out)
 	}
 	if verbs(t, w, "feedback.delivered") != 2 {

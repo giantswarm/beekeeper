@@ -80,7 +80,7 @@ func (p Party) Is(o Party) bool {
 	return false
 }
 
-// Supervisor is the session holding the watch.
+// Supervisor is the session holding a relayed role (the guide's).
 type Supervisor struct {
 	Party
 	Since time.Time `json:"since"`
@@ -88,9 +88,9 @@ type Supervisor struct {
 	rest rest
 }
 
-// Relay is the supervisor naming its successor: the successor's
-// `supervisor start` takes the role and the grants until Expires; the
-// outgoing supervisor keeps both meanwhile.
+// Relay is a role's holder (the guide) naming its successor: the
+// successor's start takes the role until Expires; the outgoing holder keeps
+// it meanwhile.
 type Relay struct {
 	From    Party     `json:"from"`
 	To      Party     `json:"to"`
@@ -171,8 +171,7 @@ func (r *RelayDue) At(sup *Supervisor, relayAt int64) bool {
 
 // Role is a relayed role's record: its holder and term, its last relay,
 // the holders relays relieved, what beekeeper saw of its CLI and the relay
-// due the watch reported. The supervisor's lives in State's own fields
-// (SupervisorRole), the guide's in Guide.
+// due the watch reported: the guide's, in Guide.
 type Role struct {
 	Holder   *Supervisor `json:"holder,omitempty"`
 	Relay    *Relay      `json:"relay,omitempty"`
@@ -192,16 +191,6 @@ type Role struct {
 	AskingFrom string `json:"askingFrom,omitempty"`
 
 	rest rest
-}
-
-// SupervisorRole is the supervisor's record.
-func (st *State) SupervisorRole() Role {
-	return Role{Holder: st.Supervisor, Relay: st.Relay, Relieved: st.Relieved, CLI: st.SupervisorCLI, RelayDue: st.RelayDue, Run: st.SupervisorRun}
-}
-
-// SetSupervisorRole stores the supervisor's record.
-func (st *State) SetSupervisorRole(r Role) {
-	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue, st.SupervisorRun = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue, r.Run
 }
 
 // LocalAsking is the machine's own note the guide asks now, 0 when it
@@ -351,11 +340,14 @@ type Park struct {
 	RefChecked time.Time `json:"refChecked,omitzero"`
 	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
 	// Empty (including parks written by older versions) is a plain wait.
-	ReviewHead string    `json:"reviewHead,omitempty"`
-	By         Party     `json:"by"`
-	At         time.Time `json:"at"`
-	On         string    `json:"on,omitempty"`
-	Waits      string    `json:"waits"`
+	ReviewHead string `json:"reviewHead,omitempty"`
+	// PostMerge is work remaining after merge; nil preserves older parks.
+	// An explicit empty string lets the loop close the task without a wake.
+	PostMerge *string   `json:"postMerge,omitempty"`
+	By        Party     `json:"by"`
+	At        time.Time `json:"at"`
+	On        string    `json:"on,omitempty"`
+	Waits     string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -574,6 +566,9 @@ type Timer struct {
 	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
 	// until marked done.
 	Repeat string `json:"repeat,omitempty"`
+	// Held is what kept a due timer from firing at its time (a beekeeper
+	// stop), said when it fires late; a re-armed timer starts without it.
+	Held string `json:"held,omitempty"`
 
 	rest rest
 }
@@ -811,6 +806,7 @@ type Start struct {
 type ExecutionRecord struct {
 	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
+	Settled         bool                               `json:"settled,omitempty"`
 	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
 	Handle          execution.Handle                   `json:"handle"`
 	Request         execution.StartRequest             `json:"request"`
@@ -820,6 +816,7 @@ type ExecutionRecord struct {
 	Provider        string                             `json:"provider"`
 	Bucket          string                             `json:"bucket,omitempty"`
 	ReservedAt      time.Time                          `json:"reservedAt"`
+	LastActive      time.Time                          `json:"lastActive,omitzero"`
 	Observation     execution.Observation              `json:"observation"`
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
@@ -979,7 +976,7 @@ func (s Start) of(p Party) bool {
 }
 
 // Knows reports whether p is a session beekeeper started (any mode), holds
-// the supervisor's or the guide's role, or is an agent on the roster: the
+// the guide's role, or is an agent on the roster: the
 // sessions the hooks act in wherever they run.
 func (st *State) Knows(p Party) bool {
 	if p.Session == "" && p.HostSession == "" {
@@ -990,10 +987,8 @@ func (st *State) Knows(p Party) bool {
 			return true
 		}
 	}
-	for _, h := range []*Supervisor{st.Supervisor, st.GuideRole().Holder} {
-		if h != nil && h.Is(p) {
-			return true
-		}
+	if h := st.GuideRole().Holder; h != nil && h.Is(p) {
+		return true
 	}
 	for _, a := range st.Agents {
 		if a.Is(p) {
@@ -1005,19 +1000,8 @@ func (st *State) Knows(p Party) bool {
 
 // State is the whole document.
 type State struct {
-	Supervisor *Supervisor `json:"supervisor,omitempty"`
-	// Relay is the supervisor's last relay: open, taken or expired.
-	Relay *Relay `json:"relay,omitempty"`
-	// Relieved are the supervisors relays relieved, one per party.
-	Relieved []Relief `json:"relieved,omitempty"`
-	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
-	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
-	// SupervisorRun is the highest supervisor run numbered.
-	SupervisorRun int `json:"supervisorRun,omitempty"`
-	// RelayDue is the relay due the watch reported to the supervisor.
-	RelayDue *RelayDue `json:"relayDue,omitempty"`
-	// Guide is the guide's role, the supervisor's counterpart for the
-	// person's decisions.
+	// Guide is the guide's role: the person's decisions. The supervisor is
+	// the supervisor loop, which holds no role record.
 	Guide *Role `json:"guide,omitempty"`
 	// Grants are queued per resource in the order given.
 	Grants []Grant `json:"grants,omitempty"`
@@ -1026,6 +1010,9 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
+	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// They grant no start permissions; Starts remains the authorization ledger.
+	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a
 	// session no roster entry names), one per session, its By: the watch
 	// settles and resumes them as it does a roster agent's.
@@ -1434,6 +1421,11 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteLookup is the optional complete history of a store that retains closed notes.
+type NoteLookup interface {
+	LookupNote(int) (*Note, *Event, error)
 }
 
 // NoteHistory is the optional history of a store that retains central note
@@ -1848,21 +1840,27 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
+	reader := bufio.NewReader(f)
+	for {
+		// A record can contain a complete note and answer of any length.
+		line, readErr := reader.ReadBytes('\n')
 		var e Event
 		// A write lost to an unclean shutdown leaves NUL bytes, and the next
 		// append lands right behind them on the same line.
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
+			if n > 0 && len(out) > n {
+				out = out[len(out)-n:]
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return out, nil
+		}
+		if readErr != nil {
+			return out, readErr
 		}
 	}
-	if n > 0 && len(out) > n {
-		out = out[len(out)-n:]
-	}
-	return out, sc.Err()
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under

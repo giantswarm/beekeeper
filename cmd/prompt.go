@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"cmp"
-	"context"
 	"fmt"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -16,70 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// liveCommands are the commands that read what the prompt leaves out: the
-// values that go stale within minutes.
-var liveCommands = [][2]string{
-	{"beekeeper sessions", "the running sessions, what each is on and runs, their memory"},
-	{"beekeeper capacity", "the busy agents against the floor and ceiling (parked and waiting ones apart), the headroom and whether a start fits"},
-	{"beekeeper snapshot", "the machine's memory, swap, load and OOM kills, and what changed"},
-	{"beekeeper watch", "one line per change, silent otherwise: the source of a Monitor"},
-	{"beekeeper lanes", "the merge lanes now: the running merge, the settling rollout, who is next"},
-	{"beekeeper lease list", "the leases and grant queues now"},
-	{"beekeeper alerts snapshot", "the installations' current alerts"},
-	{"beekeeper budget", "the GitHub budget and who draws on it"},
-	{"beekeeper priority", "the priority list now, with each epic's hold"},
-	{"beekeeper board next", "the next free board item, every held one above it with what holds it, each ranked epic without a worker (EPIC UNSTAFFED)"},
-	{"beekeeper log", "the latest events"},
-	{"beekeeper self-update --check", "whether a newer beekeeper is released"},
-	{"gh issue view / gh pr view <n> --repo <owner/repo>", "an issue's or a pull request's state"},
-}
-
-// printPrompt prints the successor's session prompt: the configured
-// instructions, the scope and the pending state with the priorities and
-// holds pv read from GitHub, then the commands that read the live values. It
-// carries no standing rule and no other live value (a version, a memory
-// figure, a pull request's state): those belong to the instructions and to
-// the commands, and a prompt that restates them goes stale.
-func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alertsView, ans answers, pv *prioritiesView) error {
-	intro, err := a.instructions(v.st)
-	if err != nil {
-		return err
-	}
-	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-	s, err := a.readStanding()
-	if err != nil {
-		return err
-	}
-	p("%s\n", intro)
-	p("## Scope\n\n%s\n", a.scope(al))
-	p("## Pending state, %s\n", a.stamp(a.now))
-	promptStanding(p, s)
-	a.promptPriorities(p, pv)
-	notes := a.splitNotes(v.st.Notes)
-	a.promptNotes(p, notes)
-	a.promptAnswers(p, ans)
-	a.promptTimers(p, v.st.Timers)
-	a.promptLeases(p, l)
-	a.promptHolds(p, a.activeHolds(v.st))
-	a.promptLanes(p, a.laneViews(v.st))
-	a.promptRecords(p, v.st, v.raw)
-	a.promptAgents(p, v.st.Agents, v.raw)
-	a.promptCapacity(p, v.st, v.raw)
-	a.promptAlerts(p, al)
-	p("## Live values\n\nRead them when you need them; this prompt holds none:\n")
-	for _, c := range liveCommands {
-		p("- `%s`: %s", c[0], c[1])
-	}
-	return ctx.Err()
-}
-
-// instructions opens the supervisor's prompt: the configured skill or file.
-func (a *app) instructions(st *state.State) (string, error) {
-	return a.roleInstructions(supervisorRole, st.SupervisorRole())
-}
-
 // roleSlash is the bare slash command that opens a prompt of rl as the
-// person would type it ("/supervise "), "" when rl runs no skill. A role
+// person would type it ("/guide "), "" when rl runs no skill. A role
 // skill carries disable-model-invocation, so the Skill tool refuses it: only
 // a prompt that starts with its slash command loads it.
 func roleSlash(cfg config.Role) string {
@@ -110,30 +46,6 @@ func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
 	return fmt.Sprintf("You take over %s%s. (No instructions are configured: set %s.skill or %s.instructions.)", rl.duty, from, rl.name, rl.name), nil
 }
 
-// scope is the configured scope, or what the configuration watches.
-func (a *app) scope(al *alertsView) string {
-	if a.cfg.Supervisor.Scope != "" {
-		return strings.TrimSpace(a.cfg.Supervisor.Scope)
-	}
-	parts := []string{"the Claude Code sessions on this machine"}
-	parts = append(parts, "the leases of "+strings.Join(a.cfg.Leasable(), ", "))
-	if len(a.cfg.Lanes) > 0 {
-		lanes := make([]string, len(a.cfg.Lanes))
-		for i, l := range a.cfg.Lanes {
-			lanes[i] = l.Name
-		}
-		parts = append(parts, "the merge lanes "+strings.Join(lanes, ", "))
-	}
-	if len(al.Targets) > 0 {
-		names := make([]string, len(al.Targets))
-		for i, t := range al.Targets {
-			names[i] = t.Name
-		}
-		parts = append(parts, "the alerts of "+strings.Join(names, ", "))
-	}
-	return "Supervise " + strings.Join(parts, "; ") + "."
-}
-
 // stamp is a time with its zone: the successor may read it in another one.
 func (a *app) stamp(t time.Time) string {
 	if t.IsZero() {
@@ -150,148 +62,6 @@ func section(p printer, title string, empty bool, none string) bool {
 		p("%s\n", none)
 	}
 	return !empty
-}
-
-// promptNotes lists the supervisor's own notes and the line for the
-// guide's.
-func (a *app) promptNotes(p printer, s noteSplit) {
-	if !section(p, "Decisions and notes", len(s.Own)+s.guided() == 0, "None open.") {
-		return
-	}
-	a.promptNoteLines(p, s.Own)
-	if s.guided() > 0 {
-		p("- %s", guidedText(s))
-	}
-	p("")
-}
-
-// promptAnswers lists the decisions answered since the last relay: they
-// are not to be asked again.
-func (a *app) promptAnswers(p printer, s answers) {
-	if !section(p, "Answered since the last relay", len(s.All) == 0, "None.") {
-		return
-	}
-	a.printAnswers(s, false)
-	p("")
-}
-
-func (a *app) promptNoteLines(p printer, notes []state.Note) {
-	for _, n := range notes {
-		var tags []string
-		if n.For != "" {
-			tags = append(tags, "for "+n.For)
-		}
-		if !n.Due.IsZero() {
-			due := "due " + a.stamp(n.Due)
-			if !n.Due.After(a.now) {
-				due += ", overdue"
-			}
-			tags = append(tags, due)
-		}
-		line := fmt.Sprintf("- #%d", n.ID)
-		if len(tags) > 0 {
-			line += " (" + strings.Join(tags, ", ") + ")"
-		}
-		line += ": " + oneLine(n.Text)
-		if n.Default != "" {
-			line += "; if unanswered: " + oneLine(n.Default)
-		}
-		p("%s", line)
-	}
-}
-
-func (a *app) promptTimers(p printer, timers []state.Timer) {
-	if !section(p, "Timers", len(timers) == 0, "None open.") {
-		return
-	}
-	for _, t := range timers {
-		due := "at " + a.stamp(t.Due)
-		if t.Auto() {
-			due = timerWhen(a.now, t)
-		} else if t.Looked(a.now) {
-			due += ", due"
-		}
-		p("- #%d (%s, set by %q): %s", t.ID, due, t.By.Name, oneLine(t.What))
-	}
-	p("")
-}
-
-func (a *app) promptLeases(p printer, l *leaseList) {
-	section(p, "Leases and grants", false, "")
-	for _, h := range l.Held {
-		gone := ""
-		if h.State == holderGone {
-			gone = ", its session has ended"
-		}
-		p("- %s held by %q since %s%s: %s", h.Label(), h.Name, a.stamp(h.SinceTime()), gone, oneLine(purposeText(h.Holder)))
-	}
-	if len(l.Free) > 0 {
-		p("- free: %s", strings.Join(l.Free, ", "))
-	}
-	for _, r := range a.cfg.Leasable() {
-		q := l.Queues[r]
-		if len(q) == 0 {
-			continue
-		}
-		names := make([]string, len(q))
-		for i, g := range q {
-			names[i] = fmt.Sprintf("%q (granted %s by %q%s)", g.To.Name, a.stamp(g.At), g.By.Name, unblockText(g))
-		}
-		p("- %s is granted to %s", r, strings.Join(names, ", then "))
-	}
-	p("")
-}
-
-func (a *app) promptHolds(p printer, holds []state.Hold) {
-	if !section(p, "Holds", len(holds) == 0, "Nothing is held.") {
-		return
-	}
-	for _, h := range holds {
-		until := "until lifted"
-		if !h.Until.IsZero() {
-			until = "until " + a.stamp(h.Until)
-		}
-		window := ""
-		if h.Tool != "" {
-			window = fmt.Sprintf(", the release window of %s (it closes once %s reports its new release)", h.Tool, h.Tool)
-		}
-		p("- %s, %s, by %q since %s%s: %s", holdTarget(h), until, h.By.Name, a.stamp(h.At), window, oneLine(h.Reason))
-	}
-	p("")
-}
-
-func (a *app) promptLanes(p printer, lanes []laneView) {
-	if !section(p, "Merge lanes", len(lanes) == 0, "No lane is configured and nothing merges.") {
-		return
-	}
-	for _, v := range lanes {
-		var parts []string
-		if v.Running != nil {
-			parts = append(parts, fmt.Sprintf("running %s by %q since %s", v.Running.Key(), v.Running.By.Name, a.stamp(v.Running.Started)))
-		}
-		for _, m := range v.AllSettling {
-			how := "until its release rolls"
-			if m.Outside {
-				how = "merged outside the gate, until its HelmReleases are Ready"
-			}
-			parts = append(parts, fmt.Sprintf("settling %s %s", m.Key(), how))
-		}
-		if v.Hold != nil {
-			parts = append(parts, "held (see Holds)")
-		}
-		for i, m := range v.Waiting {
-			parts = append(parts, fmt.Sprintf("%d. %s by %q, queued %s%s", i+1, m.Key(), m.By.Name, a.stamp(m.Joined), v.paired(m.Key())))
-		}
-		if len(parts) == 0 {
-			parts = append(parts, "free")
-		}
-		where := ""
-		if v.Installation != "" {
-			where = " (" + v.Installation + ")"
-		}
-		p("- %s%s: %s", v.Name, where, strings.Join(parts, "; "))
-	}
-	p("")
 }
 
 func (a *app) promptRecords(p printer, st *state.State, sessions []*claude.Session) {
@@ -350,53 +120,6 @@ func (a *app) promptCapacity(p printer, st *state.State, sessions []*claude.Sess
 		line += "; " + u.capacitySuffix(a.now)
 	}
 	p("%s; `beekeeper capacity` says whether a start fits.\n", line)
-}
-
-func (a *app) promptAlerts(p printer, al *alertsView) {
-	section(p, "Alerts", false, "")
-	if len(al.Targets) == 0 {
-		p("No installation is watched (alerts.installations is empty and no leased one has a kube context).")
-	}
-	for _, t := range al.Targets {
-		p("- %s (%s; context %s): %s", t.Name, t.Why, cmp.Or(t.Context, "none"), baselineText(a.now, al.Baselines[t.Name]))
-	}
-	p("\nThe baseline is %s: the next beekeeper watch compares against it and reads every %s.", alerts.NewStore(a.cfg.StateDir).Path(), al.Every)
-	p("Ignored alert names: %s.", strings.Join(al.Ignore, ", "))
-	if len(al.Quiet) > 0 {
-		p("%s", quietText(al.Quiet))
-	}
-	if al.Team != "" {
-		p("Marked team: %s; more than %d changes of one alertname are one line.", al.Team, al.Collapse)
-	}
-	p("")
-}
-
-// baselineText is an installation's baseline: its known alerts by name.
-func baselineText(now time.Time, b *alerts.Installation) string {
-	switch {
-	case b == nil:
-		return noBaseline
-	case b.Alerts == nil:
-		return neverRead
-	}
-	count := map[string]int{}
-	for _, al := range b.Alerts {
-		count[al.Alertname]++
-	}
-	names := slices.Sorted(maps.Keys(count))
-	for i, n := range names {
-		if count[n] > 1 {
-			names[i] = fmt.Sprintf("%s ×%d", n, count[n])
-		}
-	}
-	s := fmt.Sprintf("%d known", len(b.Alerts))
-	if !b.Reachable {
-		s = fmt.Sprintf("unreachable, %d known when last read%s", len(b.Alerts), lastRead(now, b))
-	}
-	if len(names) > 0 {
-		s += ": " + strings.Join(names, ", ")
-	}
-	return s
 }
 
 // lastRead is " at <clock>" of an installation's last reading, if known.

@@ -46,12 +46,29 @@ type Host struct {
 	OperationTimeout string            `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
 }
 
+// Supports reports whether the operator lists harness for this host.
+func (h Host) Supports(harness string) bool {
+	for _, name := range h.Harnesses {
+		if name == harness {
+			return true
+		}
+	}
+	return false
+}
+
 func (h Host) Validate() error {
 	if err := h.Endpoint.Validate(); err != nil {
 		return err
 	}
-	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) != 1 || h.Harnesses[0] != HarnessClaude {
-		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses [claude]")
+	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) == 0 {
+		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses (claude, codex)")
+	}
+	seen := map[string]bool{}
+	for _, name := range h.Harnesses {
+		if !SupportedHarness(name) || seen[name] {
+			return errors.New("host harnesses must be distinct entries of claude and codex")
+		}
+		seen[name] = true
 	}
 	for repo, p := range h.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
@@ -133,6 +150,9 @@ func SSHCommand(ctx context.Context, argv []string, stdin []byte) ([]byte, error
 	// into a protocol response or transcript.
 	c.Stdout, c.Stderr = out, io.Discard
 	if err := c.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("SSH command failed (%w): %w", context.DeadlineExceeded, err)
+		}
 		return nil, fmt.Errorf("SSH command failed: %w", err)
 	}
 	return out.Bytes(), nil
@@ -198,6 +218,9 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
+		if op == inspectOperation && reply.Code == "not-found" {
+			return ErrNotFound
+		}
 		if reply.Code == "unsupported" {
 			return ErrUnsupported
 		}
@@ -236,6 +259,9 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 	if x.Ref != r.Ref || x.ConversationID != r.ConversationID || x.Repository != r.Repository || x.Unit != UnitName(r.Ref) || x.Workspace != path.Join(h.WorkspaceRoot, string(r.Ref.Execution), "workspace") {
 		return errors.New("start handle identity or workspace mismatch")
 	}
+	if r.SourceDigest != "" && x.Commit != r.GitRef {
+		return errors.New("start handle does not match coordinator-pinned commit")
+	}
 	if len(x.Commit) != 40 && len(x.Commit) != 64 {
 		return errors.New("invalid pinned commit")
 	}
@@ -248,7 +274,7 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 }
 func (t SSHTransport) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	var x Observation
-	err := t.Call(ctx, "inspect", r, nil, &x)
+	err := t.Call(ctx, inspectOperation, r, nil, &x)
 	if err == nil && x.Handle.Ref != r {
 		err = errors.New("observation identity mismatch")
 	}

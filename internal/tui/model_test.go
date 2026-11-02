@@ -110,8 +110,8 @@ func fixtureData() *Data {
 	return &Data{
 		At: testAt,
 		Status: Status{
-			Supervisor: tSup, SupervisorLive: true,
-			LeaseCount: 1, HoldCount: 1, Due: 2,
+			SupervisorLoop: true,
+			LeaseCount:     1, HoldCount: 1, Due: 2,
 		},
 		Machine: Machine{
 			Load: [3]float64{1.5, 1, 0.5}, PSIFull60: 2.5,

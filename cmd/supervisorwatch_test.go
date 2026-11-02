@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -53,15 +52,41 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 func TestWatchRecognizesLoopWithoutSupervisorSession(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(true, false)
-	if err := r.a.store.WriteFile("supervisor-loop-pid.json", os.Getpid()); err != nil {
+	if err := r.a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
-	if !w.supervisorGone(context.Background(), &state.State{}, nil) {
+	if !w.checkLoop(context.Background(), &state.State{}) {
 		t.Fatal("standby ignored running loop")
 	}
 }
 
-func TestLoopWatchPrunesThenReportsPersistentLowDiskOnce(t *testing.T) {
+func TestLoopWatchFillForecastReleasesStartsWhenItStops(t *testing.T) {
+	r := newLoopRig(t)
+	w := r.a.newWatcher(false, false)
+	w.publishDisk(watchDiskReading{Low: true, Filling: true, Writers: "go build", FreeMiB: 1 * gibMiB, MinMiB: 18 * gibMiB})
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !l.startsHeld {
+		t.Fatal("low disk allowed starts")
+	}
+	// The writer finishes; the rate falls and the prune frees enough: the
+	// recovery in the reading lifts the hold on its own, no note closes,
+	// no person acts.
+	w.publishDisk(watchDiskReading{Low: false, Filling: false, Writers: stateIdle, FreeMiB: 25 * gibMiB, MinMiB: 18 * gibMiB})
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if l.startsHeld {
+		t.Fatal("the hold outlived the recovery")
+	}
+}
+
+func TestLoopWatchPrunesThenFilesPersistentLowDiskOnce(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
 	w.publishDisk(watchDiskReading{Low: true, Writers: "test-writer"})
@@ -79,13 +104,21 @@ func TestLoopWatchPrunesThenReportsPersistentLowDiskOnce(t *testing.T) {
 		t.Fatal("same disk episode pruned twice")
 	}
 	st, _ := r.a.store.Read()
-	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, "test-writer") || !strings.Contains(st.Notes[0].Text, "Holding the space: caches app 9 GiB") {
-		t.Fatalf("persistent low disk note: %+v", st.Notes)
+	if len(st.Notes) != 0 {
+		t.Fatalf("low disk filed a note for the person: %+v", st.Notes)
+	}
+	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("persistent low disk findings: %+v %v", evs, err)
+	}
+	if !strings.Contains(evs[0].Detail, "test-writer") || !strings.Contains(evs[0].Detail, "Holding the space: caches app 9 GiB") ||
+		!strings.Contains(evs[0].Detail, fileReportSeparator) {
+		t.Fatalf("persistent low disk finding: %q", evs[0].Detail)
 	}
 	r.pass(t)
-	st, _ = r.a.store.Read()
-	if len(st.Notes) != 1 {
-		t.Fatal("duplicate disk note across restart")
+	evs, err = r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("duplicate disk finding across restart: %+v %v", evs, err)
 	}
 }
 
@@ -152,54 +185,45 @@ func TestLoopWatchFreshMachineReadingClearsPreviousWatchPressure(t *testing.T) {
 }
 
 func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
-	for _, missingGuide := range []bool{false, true} {
-		t.Run(fmt.Sprint(missingGuide), func(t *testing.T) {
-			r := newLoopRig(t)
-			if missingGuide {
-				r.a.cfg.Guide.Person = ""
-			}
-			prunes := 0
-			r.answer = func(args []string) (string, int) {
-				if len(args) > 1 && args[0] == loopDiskKind && args[1] == "prune" {
-					prunes++
-					if !missingGuide {
-						return "partial prune failed", 1
-					}
-				}
-				return "", 0
-			}
-			w := r.a.newWatcher(false, false)
-			w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
-			l, err := r.a.newSupervisorLoop(false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for range 3 {
-				if err := l.pass(context.Background()); err != nil {
-					t.Fatalf("maintenance stopped pass: %v", err)
-				}
-				if !l.startsHeld {
-					t.Fatal("low disk allowed starts")
-				}
-				w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
-			}
-			restarted, err := r.a.newSupervisorLoop(false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := restarted.pass(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			if !restarted.startsHeld {
-				t.Fatal("restart lost disk hold")
-			}
-			if prunes != 1 {
-				t.Fatalf("prune attempts = %d, want 1", prunes)
-			}
-			if !strings.Contains(r.out.String(), "SUPERVISOR DISK") {
-				t.Fatal("maintenance failure not reported")
-			}
-		})
+	r := newLoopRig(t)
+	prunes := 0
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == loopDiskKind && args[1] == "prune" {
+			prunes++
+			return "partial prune failed", 1
+		}
+		return "", 0
+	}
+	w := r.a.newWatcher(false, false)
+	w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := l.pass(context.Background()); err != nil {
+			t.Fatalf("maintenance stopped pass: %v", err)
+		}
+		if !l.startsHeld {
+			t.Fatal("low disk allowed starts")
+		}
+		w.publishDisk(watchDiskReading{Low: true, Writers: loopWorker})
+	}
+	restarted, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !restarted.startsHeld {
+		t.Fatal("restart lost disk hold")
+	}
+	if prunes != 1 {
+		t.Fatalf("prune attempts = %d, want 1", prunes)
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR DISK") {
+		t.Fatal("maintenance failure not reported")
 	}
 }
 
@@ -225,13 +249,13 @@ func TestLoopWatchLevelsOnlyLogTransitions(t *testing.T) {
 	}
 }
 
-func TestLoopWatchDiskNoteFailureKeepsPassAlive(t *testing.T) {
+func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	r := newLoopRig(t)
 	w := r.a.newWatcher(false, false)
 	w.publishDisk(watchDiskReading{Low: true})
 	r.pass(t)
 	w.publishDisk(watchDiskReading{Low: true})
-	r.failRecord = func(e state.Event) bool { return e.Verb == loopNote+"."+loopAdd }
+	r.failRecord = func(e state.Event) bool { return e.Verb == loopFileVerb }
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
 		t.Fatal(err)
@@ -240,16 +264,20 @@ func TestLoopWatchDiskNoteFailureKeepsPassAlive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !l.startsHeld {
-		t.Fatal("failed note cleared hold")
+		t.Fatal("failed finding cleared hold")
 	}
-	if !strings.Contains(r.out.String(), "note failed") {
-		t.Fatal("note failure not reported")
+	if !strings.Contains(r.out.String(), "finding failed") {
+		t.Fatal("finding failure not reported")
 	}
 	if err := l.pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopFileVerb })
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("finding retry: %+v %v", evs, err)
+	}
 	st, _ := r.a.store.Read()
-	if len(st.Notes) != 1 {
-		t.Fatalf("note retry: %+v", st.Notes)
+	if len(st.Notes) != 0 {
+		t.Fatalf("low disk filed a note for the person: %+v", st.Notes)
 	}
 }

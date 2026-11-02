@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,14 +27,20 @@ type Journal struct {
 	ActivationAttempted bool          `json:"activationAttempted"`
 	RunnerPID           int           `json:"runnerPID,omitempty"`
 	RunnerStarted       time.Time     `json:"runnerStarted,omitempty"`
+	LastActive          time.Time     `json:"lastActive,omitzero"`
 	Request             StartRequest  `json:"request"`
 	Digest              string        `json:"digest"`
 	Handle              Handle        `json:"handle"`
 	Phase               string        `json:"phase"`
 	Ready               bool          `json:"ready"`
+	InTurn              bool          `json:"inTurn,omitempty"`
 	StopRequest         *StopRequest  `json:"stopRequest,omitempty"`
 	StopAcknowledged    bool          `json:"stopAcknowledged"`
 	LastError           string        `json:"lastError,omitempty"`
+	// Thread is the codex thread the first turn created; every later turn
+	// resumes it and the codex guard binds tool calls to it. Claude's
+	// conversation is the request's own identity and leaves it empty.
+	Thread string `json:"thread,omitempty"`
 }
 
 // Server operates only on journals it created. It never discovers or adopts
@@ -44,6 +51,7 @@ type Server struct {
 	Rules                                                 []byte
 	Launcher                                              platform.Launcher
 	Command                                               HostCommand
+	Combined                                              HostCommand
 	Resources                                             func(context.Context) (Resources, error)
 	GuardProbe                                            func() error
 	Authorize                                             func(context.Context, StartRequest) error
@@ -144,9 +152,24 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := s.workerExecutable(); err != nil {
 		return c, err
 	}
-	h := s.Config.Harnesses[HarnessClaude]
-	if err := s.probe(ctx, h); err != nil {
-		return c, err
+	harnesses, unavailable := map[string]string{}, map[string]string{}
+	for name, h := range s.Config.Harnesses {
+		if err := s.probe(ctx, name, h); err != nil {
+			unavailable[name] = err.Error()
+			continue
+		}
+		harnesses[name] = h.Version
+	}
+	if len(harnesses) == 0 {
+		var reasons []string
+		for name, reason := range unavailable {
+			reasons = append(reasons, name+": "+reason)
+		}
+		slices.Sort(reasons)
+		return c, errors.New(strings.Join(reasons, "; "))
+	}
+	if len(unavailable) == 0 {
+		unavailable = nil
 	}
 	if s.Resources == nil {
 		return c, errors.New("execution host resource observation is unavailable")
@@ -158,7 +181,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: map[string]string{HarnessClaude: h.Version}, Resources: resources}, nil
+	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -210,6 +233,9 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 	}
 	if caps.PolicyDigest != r.PolicyDigest {
 		return Handle{}, errors.New("execution policy digest mismatch")
+	}
+	if caps.Harnesses[r.Harness] == "" {
+		return Handle{}, errors.New("execution host does not offer harness " + r.Harness + ": " + caps.Unavailable[r.Harness])
 	}
 	blocks := caps.Resources.Blocks
 	if r.Builds {
@@ -316,7 +342,10 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
-	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), LastActive: j.LastActive, Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	if fi, err := os.Lstat(filepath.Join(s.Root, string(r.Execution)+".log")); err == nil && fi.Mode().IsRegular() && fi.ModTime().UTC().After(o.LastActive) {
+		o.LastActive = fi.ModTime().UTC()
+	}
 	o.Lease = j.Lease
 	o.Messages, o.MessageSequence = j.Messages.Status(), j.Messages.Sequence
 	if j.StopAcknowledged {
@@ -333,9 +362,13 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	switch s.Launcher.State(ctx, j.Handle.Unit) {
 	case unitActive, Activating, "reloading", "deactivating":
 		o.ProcessState = Running
+		o.InTurn = j.InTurn
 	case unitInactive, Failed:
 		if j.StopRequest != nil {
-			if err := s.update(ctx, r, func(current *Journal) error { current.StopAcknowledged, current.Phase = true, Exited; return nil }); err != nil {
+			if err := s.update(ctx, r, func(current *Journal) error {
+				current.StopAcknowledged, current.Phase, current.InTurn = true, Exited, false
+				return nil
+			}); err != nil {
 				return Observation{}, err
 			}
 			o.StopAcknowledged, o.ProcessState = true, Exited
@@ -393,7 +426,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 			return Ack{}, errors.New("stop requested; termination is not confirmed")
 		}
 	}
-	j.StopAcknowledged, j.Phase = true, Exited
+	j.StopAcknowledged, j.Phase, j.InTurn = true, Exited, false
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
@@ -461,6 +494,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			switch req.Operation {
 			case "check":
 				value, err = s.Check(ctx)
+			case "source-chunk":
+				var chunk SourceChunk
+				err = Decode(req.Payload, &chunk)
+				if err == nil {
+					err = s.ReceiveSource(ctx, req.Ref, chunk)
+				}
+				value = struct{}{}
 			case "start":
 				var r StartRequest
 				err = Decode(req.Payload, &r)
@@ -470,7 +510,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err == nil {
 					value, err = s.Start(ctx, r)
 				}
-			case "inspect":
+			case inspectOperation:
 				value, err = s.Inspect(ctx, req.Ref)
 			case "sync-control":
 				value, err = s.SyncControl(ctx, req.Ref, nil)
@@ -502,6 +542,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
+				if req.Operation == inspectOperation && errors.Is(err, os.ErrNotExist) {
+					reply.Code = "not-found"
+				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
 				}

@@ -66,8 +66,9 @@ type loopRig struct {
 	stderr string
 	// replaced says the loop's binary was replaced; execs counts its
 	// re-executions.
-	replaced bool
-	execs    int
+	lastMerged string
+	replaced   bool
+	execs      int
 	// broker answers the broker stage of a release.
 	broker func() (string, error)
 	// failRecord fails the store's Record of the first event it accepts.
@@ -138,6 +139,10 @@ func logs(args []string) (state.Event, bool) {
 		return event(loopParty, "agents.remove", "%s", args[2]), true
 	case args[0] == "note" && args[1] == loopAdd:
 		return event(loopParty, "note.add", "#1 %s", args[len(args)-1]), true
+	case args[0] == loopBoard && args[1] == "move":
+		return event(loopParty, "board.move", "%s: → %s", args[2], args[3]), true
+	case args[0] == loopBoard && args[1] == "rank":
+		return event(loopParty, "board.rank", "%s: %s %s", args[2], args[3], args[len(args)-1]), true
 	}
 	return state.Event{}, false
 }
@@ -169,6 +174,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
 	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
+	wasBehind := readReviewedBehind
+	t.Cleanup(func() { readReviewedBehind = wasBehind })
+	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
 	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
@@ -181,16 +189,27 @@ func newLoopRig(t *testing.T) *loopRig {
 		t.Fatal(err)
 	}
 	r.answer = func([]string) (string, int) { return "", 0 }
-	r.command = func([]string) (string, int) { return "", 0 }
+	r.command = func(argv []string) (string, int) {
+		if len(argv) > 2 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == superloop.KindMerge {
+			r.pull.State = superloop.Merged
+			r.pull.MergeCommit = loopFixed
+			r.lastMerged = r.pull.Head
+		}
+		return "", 0
+	}
 	r.pull = superloop.Pull{Ref: loopPR, URL: loopURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	r.pulls = map[string]superloop.Pull{}
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
-	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge
+	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge, changedPast := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge, readChangedPast
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge, readChangedPast = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge, changedPast
 	})
+	// No comparison by default: a head past the reviews goes to the person.
+	readChangedPast = func(context.Context, superloop.Pull, string) ([]string, error) {
+		return nil, errors.New("no comparison in this rig")
+	}
 	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
 		r.baseReads = append(r.baseReads, approved+".."+p.Head)
 		return r.baseMerge(p, approved)
@@ -200,7 +219,7 @@ func newLoopRig(t *testing.T) *loopRig {
 		r.teamReads++
 		return r.teams, r.teamsErr
 	}
-	loopInTurn = func(_ *app, p state.Party) bool { return r.inTurn(p) }
+	loopInTurn = func(a *app, p state.Party) bool { return r.inTurn(p) || a.executionInTurn(p) }
 	loopSessions = func(*app) ([]*claude.Session, *proc.Table, error) { return r.sessions, &proc.Table{}, nil }
 	loopBinary = func() replaceable { return loopFakeBinary{r} }
 	loopBroker = func(context.Context) (string, error) { return r.broker() }
@@ -210,7 +229,16 @@ func newLoopRig(t *testing.T) *loopRig {
 		}
 		r.calls = append(r.calls, args)
 		o, code := r.answer(args)
-		if e, ok := logs(args); ok && code == 0 {
+		if len(args) > 0 && args[0] == gateCmdName && code == 0 {
+			idx := slices.Index(args, "--reviewed-head")
+			if idx >= 0 && idx+1 < len(args) {
+				doc := r.a.reviewedMerge(context.Background(), r.pullRepo(), 7, args[idx+1])
+				code = doc.ExitCode
+				b, _ := json.Marshal(doc)
+				o = string(b)
+			}
+		}
+		if e, ok := logs(args); ok && code == 0 && !strings.HasPrefix(o, "left ") {
 			if err := store.Record(e); err != nil {
 				t.Fatal(err)
 			}
@@ -238,6 +266,9 @@ func newLoopRig(t *testing.T) *loopRig {
 // park puts the worker on the roster, parked on on at.
 func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 	t.Helper()
+	if r.lastMerged != "" && r.pull.Head != r.lastMerged && r.pull.State == superloop.Merged {
+		r.pull.State = superloop.Open
+	}
 	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
 		if i < 0 {
@@ -280,6 +311,8 @@ func (r *loopRig) called(prefix ...string) []string {
 	return nil
 }
 
+func (r *loopRig) pullRepo() string { repo, _, _ := strings.Cut(r.pull.Ref, "#"); return repo }
+
 func (r *loopRig) logged(t *testing.T, verb string) []state.Event {
 	t.Helper()
 	evs, err := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == verb })
@@ -311,11 +344,11 @@ func TestLoopTakesAParkedPullRequestFromReviewToTheMergeGo(t *testing.T) {
 	}
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopHead) {
+	wake := r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopHead) {
 		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
 	}
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "[go "+loopPR+"@"+loopHead+"]") {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "[go "+loopPR+"@"+loopHead+"]") {
 		t.Errorf("the go logged as %+v", evs)
 	}
 	r.pass(t)
@@ -388,8 +421,8 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopFixed) {
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Fatalf("no merge go for the fixed head: %v\n%s", r.calls, r.out)
 	}
 }
@@ -404,15 +437,16 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 	}
 }
 
-// A new head after an approval gets its own review round, whatever
-// supervisor.reviewRounds says: no escalation, no note.
+// A new head after an approval with a change of its own gets the second
+// review, whatever supervisor.reviewRounds says; a third need is one
+// decision for the person.
 func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+	if r.called(gateCmdName) == nil {
 		t.Fatalf("no merge go for the approved head: %v", r.calls)
 	}
 	// The worker pushes one more commit and parks again.
@@ -429,6 +463,26 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
 		t.Errorf("review logged as %+v", evs)
 	}
+	// The second review approves, and the worker pushes a change of its
+	// own once more: no third reviewer, one decision for the person.
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
+	const own = "3333333333333333333333333333333333333333"
+	r.pull.Head = own
+	r.park(t, loopPR, time.Now().Add(2*time.Minute))
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("a third review started: %v", start)
+	}
+	note := r.called("note", loopAdd)
+	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.EscalationQuestion(loopURL, own) ||
+		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
+		t.Fatalf("no decision for the person: %v\n%s", r.calls, r.out)
+	}
+	r.pass(t)
+	if c := r.called("note", loopAdd); c != nil {
+		t.Errorf("asked twice: %v", c)
+	}
 }
 
 // https://github.com/giantswarm/beekeeper/issues/1841: the gate's
@@ -443,8 +497,8 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "`devctl pr merge o/r 7 --update-branch`") || strings.Contains(wake[3], "--match-head-commit") {
+	wake := r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, "--reviewed-head") || !slices.Contains(wake, loopHead) {
 		t.Fatalf("no gated merge go: %v\n%s", r.calls, r.out)
 	}
 	r.pull.Head = loopFixed
@@ -456,11 +510,11 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Errorf("a base merge started a review: %v", c)
 	}
-	wake = r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "at head "+loopFixed) || !strings.Contains(wake[3], "only merges main into it") {
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Fatalf("no go for the base merge: %v\n%s", r.calls, r.out)
 	}
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
 		t.Errorf("the go logged as %+v", evs)
 	}
 	if !slices.Equal(r.baseReads, []string{loopHead + ".." + loopFixed}) {
@@ -477,6 +531,14 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	}
 	if start := r.called(agentsName, agentStartName); start == nil {
 		t.Fatalf("no review of a head with its own change: %v\n%s", r.calls, r.out)
+	}
+	// A repository in merge.admin gets --admin --match-head-commit in its go.
+	r.a.cfg.Merge.Admin = []string{"O/R"}
+	r.verdict("R2", own, superloop.Approved, "")
+	r.pass(t)
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, own) {
+		t.Fatalf("no admin merge go: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -498,11 +560,11 @@ func TestLoopGivesNoGoToABaseMergeOfFindings(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 0 {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 0 {
 		t.Fatalf("a base merge of unfixed findings got the go: %+v", evs)
 	}
 	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "only merges main into head") || !strings.Contains(wake[3], "stand unfixed") {
+	if wake == nil || !strings.Contains(wake[3], "only brings main into head") || !strings.Contains(wake[3], "stand unfixed") {
 		t.Fatalf("no rework for the base merge: %v\n%s", r.calls, r.out)
 	}
 }
@@ -536,8 +598,8 @@ func TestLoopGivesTheFixedHeadTheGoWithoutASecondReview(t *testing.T) {
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Errorf("a second review started: %v", c)
 	}
-	wake := r.called(agentsName, agentWakeName, loopWorker)
-	if wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopFixed) {
+	wake := r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Errorf("no go for the fixed head: %v", r.calls)
 	}
 }
@@ -780,42 +842,62 @@ func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
 	}
 }
 
-// TestLoopReviewersFollowTheHostPreference covers the review half: with no
-// room on the coordinator's machine, the reviewer starts on the host that
-// maps the pull request's repository.
-func TestLoopReviewersFollowTheHostPreference(t *testing.T) {
-	r := newLoopRig(t)
-	r.sshLoopHost(t, true)
-	pr := sshTestRepository + "#7"
-	r.park(t, pr, time.Now())
-	r.pulls[pr] = superloop.Pull{Ref: pr, URL: "https://github.com/" + sshTestRepository + "/pull/7", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
-	run, branch := beekeeperRun, ghDefaultBranch
-	t.Cleanup(func() { beekeeperRun, ghDefaultBranch = run, branch })
-	ghDefaultBranch = func(context.Context, string) (string, error) { return "trunk", nil }
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
-		args = splitAs(args)
-		r.calls = append(r.calls, args)
-		if args[0] == loopCapacity {
-			if slices.Contains(args, loopHostFlag) {
-				return loopRoomJSON, 0, nil
+// Reviews need the coordinator's GitHub read and public review path, even
+// when hostsFirst prefers a host and the host has room.
+func TestLoopReviewersStayOnCoordinator(t *testing.T) {
+	for _, first := range []bool{false, true} {
+		for _, room := range []bool{false, true} {
+			for _, selfHosted := range []bool{false, true} {
+				t.Run(fmt.Sprintf("first=%t/room=%t/selfHosted=%t", first, room, selfHosted), func(t *testing.T) {
+					r := newLoopRig(t)
+					r.sshLoopHost(t, true)
+					r.a.cfg.Supervisor.HostsFirst = first
+					r.answer = func(args []string) (string, int) {
+						if args[0] == loopCapacity {
+							if slices.Contains(args, loopHostFlag) {
+								t.Fatal("review placement probed an execution host")
+							}
+							if !slices.Contains(args, "--review") {
+								t.Fatal("review capacity lost its start kind")
+							}
+							if slices.Contains(args, "--"+reviewOfSelfHostedFlag) != selfHosted {
+								t.Fatal("review capacity lost self-hosted provenance")
+							}
+							if room {
+								return loopRoomJSON, 0
+							}
+							return loopNoRoomJSON, 0
+						}
+						return "", 0
+					}
+					act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "local-review", SelfHosted: selfHosted}
+					_, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act)
+					if !room {
+						if !errors.Is(err, errLoopLater) {
+							t.Fatalf("full coordinator: %v", err)
+						}
+						if start := r.called(agentsName, agentStartName); start != nil {
+							t.Fatalf("full coordinator started %v", start)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					start := r.called(agentsName, agentStartName)
+					if start == nil {
+						t.Fatal("no local reviewer started")
+					}
+					for _, flag := range []string{loopHostFlag, loopRepoFlag, loopRefFlag, "--" + excludeFlag} {
+						if slices.Contains(start, flag) {
+							t.Errorf("local review has placement flag %s: %v", flag, start)
+						}
+					}
+					if !slices.Contains(start, "--review") || !slices.Contains(start, harnessAuto) || slices.Contains(start, "--"+reviewOfSelfHostedFlag) != selfHosted {
+						t.Fatalf("review start lost capacity flags: %v", start)
+					}
+				})
 			}
-			return loopNoRoomJSON, 0, nil
-		}
-		if e, ok := logs(args); ok {
-			if err := r.a.store.Record(e); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return "", 0, nil
-	}
-	r.pass(t)
-	start := r.called(agentsName, agentStartName)
-	if start == nil {
-		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
-	}
-	for _, want := range []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, "trunk", "--review"} {
-		if !slices.Contains(start, want) {
-			t.Errorf("the remote reviewer names no %q: %v", want, start)
 		}
 	}
 }
@@ -899,7 +981,7 @@ func TestLoopRetiresTheReviewerAndRetainsTheMergedWorker(t *testing.T) {
 	r.started(t, reviewer, "reviewer-session")
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
 	}
 	// The reviewer still writes its report: the retirement waits.
@@ -1004,6 +1086,55 @@ func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 	}
 }
 
+// A park on nothing the loop cannot place files no note for the person,
+// who could weigh no option of it: the worker is woken, once for the
+// park, to park on a wait the loop watches. A park a sure classifier
+// places still reaches the guide with its class.
+func TestLoopWakesAWorkerWhoseParkItCannotPlace(t *testing.T) {
+	for name, c := range map[string]struct {
+		classifier []string
+		answer     string
+		note       string
+	}{
+		"no classifier":        {},
+		"an unsure classifier": {classifier: []string{loopClassifier}, answer: `{"class":"needs-person","confidence":0.5}`},
+		"a sure classifier":    {classifier: []string{loopClassifier}, answer: `{"class":"needs-person","confidence":0.9}`, note: "(needs-person)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Supervisor.Classifier = c.classifier
+			r.command = func([]string) (string, int) { return c.answer, 0 }
+			r.park(t, "", time.Now().Add(-time.Minute))
+			r.pull.State = superloop.Merged
+			if err := r.a.store.Record(event(state.Party{Name: loopWorker}, parkEvent, "%s: parked: live proof, waiting for the loop's first board escalate", loopWorker)); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			note, wake := r.called("note", loopAdd), r.called(agentsName, agentWakeName)
+			if c.note != "" {
+				if note == nil || !strings.Contains(note[len(note)-1], c.note) || wake != nil {
+					t.Fatalf("note %v, wake %v\n%s", note, wake, r.out)
+				}
+				return
+			}
+			if note != nil {
+				t.Fatalf("an unclassified park filed a note for the person: %v", note)
+			}
+			if wake == nil || wake[2] != loopWorker || !strings.Contains(wake[3], "names no wait the supervisor loop watches") || !strings.Contains(wake[3], "live proof") {
+				t.Fatalf("wake = %v\n%s", wake, r.out)
+			}
+			if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "no note for the person") {
+				t.Errorf("logged %+v", evs)
+			}
+			// Once for the park: the next pass wakes nobody again.
+			r.pass(t)
+			if again := r.called(agentsName, agentWakeName); again != nil {
+				t.Errorf("a second pass woke %v", again)
+			}
+		})
+	}
+}
+
 // Findings are status reports, including those the real note gate refuses.
 // Delivery through the guide's feed must preserve their words and settle
 // once, across loop and guide restarts, with or without a task thread.
@@ -1056,7 +1187,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 				if note := r.called(loopNote, loopAdd); note != nil {
 					t.Fatalf("finding sent as decision: %v", note)
 				}
-				files := r.logged(t, "supervisor.file")
+				files := r.logged(t, loopFileVerb)
 				if len(files) != 1 || !strings.Contains(files[0].Detail, finding) {
 					t.Fatalf("file events: %+v", files)
 				}
@@ -1064,7 +1195,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 					t.Fatal("worker removed before finding settled")
 				}
 				r.pass(t)
-				if len(r.logged(t, "supervisor.file")) != 1 {
+				if len(r.logged(t, loopFileVerb)) != 1 {
 					t.Fatal("file repeated after loop restart")
 				}
 				if done && r.called(agentsName, loopRemove, loopWorker) == nil {
@@ -1074,7 +1205,7 @@ func TestLoopFilesProblemsThroughGuideFeed(t *testing.T) {
 					t.Fatal(err)
 				}
 				r.pass(t)
-				if len(r.logged(t, "supervisor.file")) != 1 || len(r.stdin) != 0 {
+				if len(r.logged(t, loopFileVerb)) != 1 || len(r.stdin) != 0 {
 					t.Fatal("filed finding rerouted or classifier called")
 				}
 
@@ -1118,7 +1249,7 @@ func TestLoopAndGuidePrintAProblemOnOneLine(t *testing.T) {
 	if out := r.out.String(); strings.Count(out, "\n") != 1 || strings.Contains(out, "\r") || !strings.Contains(out, encoded) {
 		t.Fatalf("supervisor output is not one complete line: %q", out)
 	}
-	events := r.logged(t, "supervisor.file")
+	events := r.logged(t, loopFileVerb)
 	if len(events) != 1 || !strings.HasSuffix(events[0].Detail, report) {
 		t.Fatalf("raw event: %+v", events)
 	}
@@ -1276,7 +1407,7 @@ func TestLoopGivesNoGoToAnApprovedHeadWithoutGreenChecks(t *testing.T) {
 	}
 	r.pull.Green = true
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Errorf("no go once green: %v", r.calls)
 	}
 }
@@ -1320,7 +1451,7 @@ func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if wake := r.called(agentsName, agentWakeName, loopWorker); wake == nil || !strings.Contains(wake[3], "--match-head-commit "+loopFixed) {
+	if wake := r.called(gateCmdName); wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Errorf("no go for the fixes: %v", r.calls)
 	}
 }
@@ -1332,19 +1463,81 @@ func TestLoopDoesNotRepeatAnActionWhoseRecordWasLost(t *testing.T) {
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.failRecord = func(e state.Event) bool { return e.Verb == "supervisor.go" }
+	r.failRecord = func(e state.Event) bool { return e.Verb == "supervisor.merge" }
 	if err := r.passErr(); err == nil {
 		t.Fatal("the lost record was not an error")
 	}
-	if r.called(agentsName, agentWakeName) == nil {
-		t.Fatalf("no wake: %v", r.calls)
+	if r.called(gateCmdName) == nil {
+		t.Fatalf("no merge: %v", r.calls)
 	}
 	r.pass(t)
 	if c := r.called(agentsName, agentWakeName); c != nil {
 		t.Errorf("the go was sent again after the restart: %v", c)
 	}
-	if evs := r.logged(t, "supervisor.go"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
+	if evs := r.logged(t, "supervisor.merge"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
 		t.Errorf("the go logged as %+v", evs)
+	}
+}
+
+// unclassifiedPark parks the rig's worker on nothing and logs the park the
+// loop cannot place.
+func (r *loopRig) unclassifiedPark(t *testing.T) {
+	t.Helper()
+	r.park(t, "", time.Now().Add(-time.Minute))
+	r.pull.State = superloop.Merged
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, parkEvent, "%s: parked: live proof, waiting", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An unclassified park's wake whose record was lost is settled by its own
+// agents.wake line: the worker is not woken twice.
+func TestLoopDoesNotRepeatAnUnclassifiedParksWake(t *testing.T) {
+	r := newLoopRig(t)
+	r.unclassifiedPark(t)
+	r.failRecord = func(e state.Event) bool { return e.Verb == "supervisor.classify" }
+	if err := r.passErr(); err == nil {
+		t.Fatal("the lost record was not an error")
+	}
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("no wake: %v", r.calls)
+	}
+	r.failRecord = func(state.Event) bool { return false }
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName); c != nil {
+		t.Errorf("the wake was sent again after the restart: %v", c)
+	}
+	if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
+		t.Errorf("the wake logged as %+v", evs)
+	}
+}
+
+// A claimed wake that never ran is taken after the restart, whatever note
+// the loop filed about the worker meanwhile.
+func TestLoopWakesForAnUnclassifiedParkWhoseClaimedWakeNeverRan(t *testing.T) {
+	r := newLoopRig(t)
+	answer := r.answer
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentWakeName {
+			return "wake failed", 1
+		}
+		return answer(args)
+	}
+	r.unclassifiedPark(t)
+	_ = r.passErr()
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("no wake tried: %v", r.calls)
+	}
+	if err := r.a.store.Record(event(loopParty, "note.add", "#5 for %s: %s escalated on %s", loopPerson, loopWorker, loopURL)); err != nil {
+		t.Fatal(err)
+	}
+	r.answer = answer
+	r.pass(t)
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("the claimed wake was read as taken: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || strings.Contains(evs[0].Detail, "before an interruption") {
+		t.Errorf("the wake logged as %+v", evs)
 	}
 }
 
@@ -1358,7 +1551,7 @@ func TestLoopTakesAClaimedActionItNeverRan(t *testing.T) {
 	}
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.pass(t)
-	if c := r.called(agentsName, agentWakeName, loopWorker); c == nil {
+	if c := r.called(gateCmdName); c == nil {
 		t.Errorf("the claimed go never ran: %v", r.calls)
 	}
 }
@@ -1610,7 +1803,7 @@ func TestSupervisorLoopLeavesLineOnlyTimersForWatch(t *testing.T) {
 			}
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Timers = []state.Timer{timer, {ID: 2, Due: timer.Due, Wake: loopWorker, What: "wake worker"}}
-				st.Supervisor = &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}
+				st.Guide = &state.Role{Holder: &state.Supervisor{Party: four, Since: time.Now().Add(-time.Hour)}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -1645,33 +1838,41 @@ func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Board = config.Board{Owner: "o", Project: 7, TidyEvery: config.Duration{Duration: time.Hour}}
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, []string{loopBoard, boardTidyName}) {
+		switch {
+		case slices.Equal(args, []string{loopBoard, boardTidyName}):
 			return "https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done\n", 0
+		case slices.Equal(args, []string{loopBoard, boardEscalateName}):
+			return "escalated https://github.com/o/r/issues/2 (Status Blocked): re-checked in 24h0m0s\n", 0
 		}
 		return "", 0
 	}
 	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
 	st := &state.State{}
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 1 || !strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") {
+	// Each tidy escalates the board's blocked items after it.
+	if len(r.calls) != 2 || !slices.Equal(r.calls[1], []string{loopBoard, boardEscalateName}) ||
+		!strings.Contains(r.out.String(), "SUPERVISOR BOARD https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done") ||
+		!strings.Contains(r.out.String(), "SUPERVISOR BOARD escalated https://github.com/o/r/issues/2") {
 		t.Fatalf("calls %v, out %q", r.calls, r.out)
 	}
 	// Within tidyEvery: no second run.
 	r.a.now = r.a.now.Add(30 * time.Minute)
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 1 {
+	if len(r.calls) != 2 {
 		t.Fatalf("tidied again within tidyEvery: %v", r.calls)
 	}
 	// The GitHub budget under its floor: none.
 	r.a.now = r.a.now.Add(time.Hour)
 	r.a.cfg.GitHub.Floor = 100
 	l.tidy(context.Background(), &state.State{Budget: &state.Budget{Remaining: 10, Reset: r.a.now.Add(time.Hour)}})
-	if len(r.calls) != 1 {
+	if len(r.calls) != 2 {
 		t.Fatalf("tidied on a low budget: %v", r.calls)
 	}
+	// A negative escalateEvery tidies and escalates nothing.
+	r.a.cfg.Board.EscalateEvery.Duration = -1
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 2 {
-		t.Fatalf("no tidy past tidyEvery: %v", r.calls)
+	if len(r.calls) != 3 || !slices.Equal(r.calls[2], []string{loopBoard, boardTidyName}) {
+		t.Fatalf("no tidy past tidyEvery, or an escalation with escalating off: %v", r.calls)
 	}
 	// A negative tidyEvery, or no board: never.
 	r.a.now = r.a.now.Add(2 * time.Hour)
@@ -1679,7 +1880,7 @@ func TestLoopTidiesTheBoardEveryTidyEvery(t *testing.T) {
 	l.tidy(context.Background(), st)
 	r.a.cfg.Board = config.Board{TidyEvery: config.Duration{Duration: time.Hour}}
 	l.tidy(context.Background(), st)
-	if len(r.calls) != 2 {
+	if len(r.calls) != 3 {
 		t.Fatalf("tidied without a board or with tidying off: %v", r.calls)
 	}
 }
@@ -2074,7 +2275,7 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 		return "", 0
 	}
 	r.pass(t)
-	if evs := r.logged(t, "supervisor.file"); len(evs) != 1 {
+	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
 		t.Fatalf("KindFile was refused by note add: %+v\n%s", evs, r.out)
 	}
 	r.pass(t)
@@ -2426,9 +2627,9 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 	}
 }
 
-// The reviewer of a mixed queue under hostsFirst: no host room, the codex
-// reviewer starts locally with the Claude choice left to the hosts.
-func TestLoopHostsFirstReviewerStartsLocalOnlyKindsLocally(t *testing.T) {
+// Reviewers of a mixed queue retain every eligible local choice; hostsFirst
+// must not reserve the host-supported choices for remote reviews.
+func TestLoopHostsFirstReviewerKeepsAllLocalChoices(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.HostsFirst = true
 	r.sshLoopHost(t, true)
@@ -2455,8 +2656,8 @@ func TestLoopHostsFirstReviewerStartsLocalOnlyKindsLocally(t *testing.T) {
 	if start == nil {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) || !slices.Contains(start, claudeComm+"/"+bgModel) {
-		t.Errorf("the reviewer start = %v, want local with the Claude choice excluded", start)
+	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("the reviewer start = %v, want local without exclusions", start)
 	}
 }
 
@@ -2529,5 +2730,294 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	r.pass(t)
 	if c := r.called(agentsName, agentStartName); c != nil {
 		t.Errorf("one head got a second review: %v", c)
+	}
+}
+
+// TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses: a worker, here a
+// managed SSH execution, whose first pull request merged stays on the
+// roster while it serves an open issue and parks on its next open pull
+// request; once both closed it is stopped and removed.
+func TestLoopKeepsAMultiPullRemoteWorkerUntilItsWorkCloses(t *testing.T) {
+	const issue, next = "o/r#5", "o/r#8"
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-session")
+	r.pass(t)
+	reviewer := r.called(agentsName, agentStartName)[2]
+	r.started(t, reviewer, "reviewer-session")
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(gateCmdName); c == nil {
+		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
+	}
+	ref := execution.Ref{Host: execution.HostID(sshTestSelector), Execution: execution.ExecutionID("11112222-3333-4444-5555-666677778888"), Generation: 1}
+	err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+		st.Agents[i].Execution = &ref
+		st.Agents[i].Park = &state.Park{On: next, At: time.Now(), Waits: "desk review of the next pull request"}
+		st.Records = append(st.Records, state.Record{Session: st.Agents[i].Party, Issue: "https://github.com/o/r/issues/5", By: st.Agents[i].Party, At: time.Now()})
+		st.Starts = append(st.Starts, state.Start{Party: st.Agents[i].Party, By: loopParty, At: time.Now(), Execution: &state.ExecutionRecord{Handle: execution.Handle{Ref: ref}, Request: execution.StartRequest{Ref: ref}, Phase: execution.Running}})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := map[string]bool{issue: true, next: true}
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, p := range refs {
+			s := github.Closed
+			if open[refName(p)] {
+				s = github.Open
+			}
+			out[p] = github.RefState{Kind: github.RefPullRequest, State: s}
+		}
+		return out, nil
+	}
+	r.pull.State = superloop.Merged
+	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
+	for range 2 {
+		r.pass(t)
+		for _, verb := range []string{loopStop, loopRemove} {
+			if c := r.called(agentsName, verb, loopWorker); c != nil {
+				t.Fatalf("retired while it serves open work: %v\n%s", c, r.out)
+			}
+		}
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "stays on the roster") || !strings.Contains(evs[0].Detail, next) {
+		t.Fatalf("logged %+v", evs)
+	}
+	if evs := r.logged(t, "supervisor.done"); slices.ContainsFunc(evs, func(e state.Event) bool { return strings.Contains(e.Detail, loopWorker) }) {
+		t.Fatalf("done logged: %+v", evs)
+	}
+	// Its served issue and its next pull request close: it goes.
+	open[issue], open[next] = false, false
+	r.pass(t)
+	if c := r.called(agentsName, loopStop, loopWorker); c == nil {
+		t.Fatalf("the remote worker was not stopped: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("the remote worker stays: %v\n%s", r.calls, r.out)
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1921: a remote (SSH
+// execution) worker has no local session or process, so post-merge
+// retirement and KindDone must consult its execution record and host
+// observation rather than retiring it mid-turn once postMergeWindow passes.
+func TestLoopRetainsActiveOrInTurnRemoteWorkerAfterPostMergeWindow(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, r.a.now)
+	r.started(t, loopWorker, "worker-session")
+	r.pass(t)
+	reviewer := r.called(agentsName, agentStartName)[2]
+	r.started(t, reviewer, "reviewer-session")
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(gateCmdName); c == nil {
+		t.Fatalf("no merge go: %v\n%s", r.calls, r.out)
+	}
+
+	ref := execution.Ref{Host: execution.HostID(sshTestSelector), Execution: execution.ExecutionID("22223333-4444-5555-6666-777788889999"), Generation: 1}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+		st.Agents[i].Execution = &ref
+		st.Agents[i].Park = nil
+		for j := range st.Starts {
+			if st.Starts[j].Name == loopWorker {
+				st.Starts[j].Execution = &state.ExecutionRecord{
+					Handle:      execution.Handle{Ref: ref},
+					Request:     execution.StartRequest{Ref: ref},
+					Phase:       execution.Running,
+					LastActive:  old,
+					Observation: execution.Observation{Handle: execution.Handle{Ref: ref}, ProcessState: execution.Running, Reachability: execution.Reachable, ObservedAt: old, LastActive: old, Ready: true},
+				}
+			}
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r.pull.State = superloop.Merged
+	r.a.cfg.Supervisor.PostMergeWindow.Duration = time.Nanosecond
+	r.pass(t) // records [end o/r#7]
+
+	assertRetained := func(step string) {
+		t.Helper()
+		for _, verb := range []string{loopStop, loopRemove} {
+			if c := r.called(agentsName, verb, loopWorker); c != nil {
+				t.Fatalf("%s: remote worker retired early (%s): %v\n%s", step, verb, c, r.out)
+			}
+		}
+	}
+
+	// 1. Past end.At + postMergeWindow, but the execution recorded activity
+	// within postMergeWindow: Plan does not schedule retirement.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.LastActive = time.Now().Add(time.Minute)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("recent execution activity")
+
+	// 2. Past lastActive + postMergeWindow, but the host is unreachable:
+	// a failed observation never retires a post-merge worker.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.LastActive = old
+		rec.Observation.Reachability = execution.Unreachable
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("unreachable execution host")
+
+	// 3. Host reachable again and past lastActive + postMergeWindow, but the
+	// remote session is still in a turn (Observation.InTurn): KindDone waits.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.Observation.Reachability = execution.Reachable
+		rec.Observation.InTurn = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("host observation inTurn")
+	if !strings.Contains(r.out.String(), "SUPERVISOR DONE WAITS "+loopWorker+": its session runs a turn") {
+		t.Fatalf("missing in-turn wait message:\n%s", r.out)
+	}
+
+	// 4. Observation.InTurn is false, but an in-flight wake message is
+	// uncertain: KindDone still waits for the remote turn.
+	r.out.Reset()
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.Observation.InTurn = false
+		rec.Messages = []state.ExecutionMessage{{Key: "wake-1", Stage: execution.Uncertain}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("uncertain wake message")
+
+	// 5. No message is in flight, but the coordinator recorded turn activity
+	// within stewardQuiet (while PostMergeWindow=1ns has elapsed): KindDone waits.
+	r.out.Reset()
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.Messages = nil
+		rec.LastActive = time.Now().Add(-time.Millisecond)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("recent coordinator callback activity within stewardQuiet")
+
+	// 6. While in a turn (Observation.InTurn=true), the remote worker calls
+	// agents idle --done --report through the coordinator. A supervisor pass
+	// before the next host resync retains the worker while the harness
+	// finishes its final response.
+	r.out.Reset()
+	reportData := mustExecutionJSON(t, executionReport{
+		Finished: true,
+		Text:     "https://github.com/o/r/pull/7 merged; Problems found: none",
+		Problems: []string{ghNone},
+	})
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+		rec, _ := executionRecord(st, ref)
+		rec.Observation.InTurn = true
+		_, evs, err := r.a.applyExecutionControl(context.Background(), st, st.Agents[i].Party, execution.ControlRequest{
+			Operation: execution.ControlReport,
+			Data:      reportData,
+		})
+		return evs, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	assertRetained("in-turn remote worker after reporting done before host resync")
+	if !strings.Contains(r.out.String(), "SUPERVISOR DONE WAITS "+loopWorker+": its session runs a turn") {
+		t.Fatalf("missing in-turn wait message after report:\n%s", r.out)
+	}
+
+	// 7. A subsequent idle/terminal host observation clears InTurn: the loop
+	// stops the execution and removes the worker from the roster.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.Observation.InTurn = false
+		rec.LastActive = old
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if c := r.called(agentsName, loopStop, loopWorker); c == nil {
+		t.Fatalf("the remote worker was not stopped after its turn ended: %v\n%s", r.calls, r.out)
+	}
+	if c := r.called(agentsName, loopRemove, loopWorker); c == nil {
+		t.Fatalf("the remote worker was not removed after its turn ended: %v\n%s", r.calls, r.out)
+	}
+}
+
+// A claim waiting for review capacity must not disappear silently when its
+// parked worker is removed. The warning survives loop restarts.
+func TestLoopLogsAnOrphanedPendingReviewOnce(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, r.a.now)
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			return "capacity: no start", ExitRefused
+		}
+		return "", 0
+	}
+	for range 2 {
+		r.pass(t)
+	}
+	if evs := r.logged(t, "supervisor.leave"); len(evs) != 0 {
+		t.Fatalf("parked pending review reported as orphaned: %+v", evs)
+	}
+	if len(r.logged(t, loopClaimVerb)) == 0 || len(r.logged(t, "supervisor.review")) != 0 {
+		t.Fatal("expected an uncompleted review claim while capacity refuses")
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r.pass(t)
+	}
+	evs := r.logged(t, "supervisor.leave")
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "orphaned") || !strings.Contains(evs[0].Detail, loopURL) || !strings.Contains(evs[0].Detail, loopHead) {
+		t.Fatalf("pending review disappeared without one orphan warning: %+v", evs)
+	}
+	// Reporting an orphan must not consume the pending review: a new park
+	// still starts the original review when capacity becomes available.
+	r.answer = func([]string) (string, int) { return "", 0 }
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	if r.called(agentsName, agentStartName) == nil {
+		t.Fatalf("review lost after re-park: %v", r.calls)
+	}
+}
+
+// An unchanged refusal is retried less and less often, never every five
+// minutes all day.
+func TestLoopFailureDelayGrowsToAnHour(t *testing.T) {
+	for count, want := range map[int]time.Duration{2: 5 * time.Minute, 3: 10 * time.Minute, 4: 20 * time.Minute, 5: 40 * time.Minute, 6: time.Hour, 50: time.Hour} {
+		if got := loopFailureDelay(count); got != want {
+			t.Fatalf("delay after %d failures: %s, want %s", count, got, want)
+		}
 	}
 }

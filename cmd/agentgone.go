@@ -58,8 +58,8 @@ func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Tim
 // goneAgent is a local task holder with neither a running CLI nor recent
 // transcript or roster activity. Kept, parked, remote and role entries stay.
 func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, ag state.Agent, staleAfter time.Duration, now time.Time) (time.Time, bool) {
-	sup, guide := st.SupervisorRole(), st.GuideRole()
-	if sup.Relay.Open(now) && sup.Relay.To.Is(ag.Party) || guide.Relay.Open(now) && guide.Relay.To.Is(ag.Party) {
+	guide := st.GuideRole()
+	if guide.Relay.Open(now) && guide.Relay.To.Is(ag.Party) {
 		return time.Time{}, false
 	}
 	if ag.Execution != nil || ag.Task == "" || ag.Done || roleRun(st, ag.Party) || keptBy(st, ag, now) != "" || ag.Import.Pending(now) || staleAfter <= 0 {

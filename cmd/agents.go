@@ -337,7 +337,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 		Short: "Take an agent off the roster and archive or stop the session beekeeper started for it",
 		Long: `Takes an agent off the roster. When beekeeper started the agent's session,
 its desktop session is archived too (the desktop's Archived list brings it
-back), unless it runs a turn or holds the supervisor's or the guide's role: an idle desktop CLI of a session beekeeper started is asked to
+back), unless it runs a turn or holds the guide's role: an idle desktop CLI of a session beekeeper started is asked to
 archive it. A background session beekeeper started is stopped (claude stop;
 claude attach brings it back), unless it runs a turn. A session its person
 started is never archived nor stopped.`,
@@ -365,6 +365,15 @@ started is never archived nor stopped.`,
 			})
 			if err != nil {
 				return err
+			}
+			lines, err := a.stopWorktreeOrphans(me, false)
+			if err != nil {
+				return err
+			}
+			for _, line := range lines {
+				if _, err := fmt.Fprintln(a.out, line); err != nil {
+					return err
+				}
 			}
 			if _, err := fmt.Fprintf(a.out, "removed %s\n", gone.Name); err != nil || keepDesktop {
 				return err
@@ -466,6 +475,10 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 // removeAgent takes the agent at i off the roster; its session no longer
 // waits on anyone.
 func removeAgent(st *state.State, i int) {
+	ag := st.Agents[i]
+	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") && !slices.ContainsFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }) {
+		st.EndedWorkers = append(st.EndedWorkers, state.Start{Party: ag.Party, At: ag.Registered})
+	}
 	for j := range st.Records {
 		if st.Records[j].Session.Is(st.Agents[i].Party) {
 			st.Records[j].Waits = ""

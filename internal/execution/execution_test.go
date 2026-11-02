@@ -341,6 +341,18 @@ func TestPolicyAndTransportFailuresAreExplicit(t *testing.T) {
 	if _, err := tr.Check(ctx); err == nil {
 		t.Fatal("SSH option injection accepted")
 	}
+	tr = f.transport(t, nil)
+	deadCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	_, cmdErr := SSHCommand(deadCtx, []string{"/bin/sh", "-c", "sleep 1"}, nil)
+	if !errors.Is(cmdErr, context.DeadlineExceeded) {
+		t.Fatalf("SSHCommand killed by deadline did not preserve DeadlineExceeded: %v", cmdErr)
+	}
+	tr.Run = func(context.Context, []string, []byte) ([]byte, error) { return nil, cmdErr }
+	_, err = tr.Inspect(ctx, f.r.Ref)
+	if err == nil || !strings.Contains(err.Error(), "deadline exceeded during inspect") || strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("deadline error reported as unreachable: %v", err)
+	}
 }
 
 func TestLogsUseOwnedBoundedCursors(t *testing.T) {

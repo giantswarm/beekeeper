@@ -29,7 +29,7 @@ import (
 // probes and remedies the known faults of doctor.faults. Each is
 // reversible (the desktop's Archived list brings a session back, a worker
 // registers again), and it never archives or retitles a session a person
-// started or one that holds or held the supervisor's or the guide's role;
+// started or one that holds or held the guide's role;
 // a run a relay relieved it archives, and a handed-over session.
 
 // remedyTimeout bounds one run of a fault's remedy.
@@ -99,7 +99,7 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 	var out []chore
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
-			if why := stoppedExecutionWhy(st, ag); why != "" {
+			if why := stoppedExecutionWhy(st, ag); why != "" && !busy(ag.Party) {
 				out = append(out, chore{kind: choreRemove, agent: ag, why: why})
 			}
 			continue
@@ -316,7 +316,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return false // its only activity, the sleeping waits, is stopped
 		}
 		_, turn := turnRunning(sessions, t, p, a.now)
-		return turn || inFlight(p)
+		return turn || executionInTurn(st, p, a.now) || inFlight(p)
 	}
 	chores := planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg)
 	fix := func(f config.Fault) bool { return !r.dryRun && (f.Unattended || slices.Contains(r.attended, f.Name)) }
@@ -326,6 +326,11 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	}
 	rep.faults = checkFaults(ctx, a.cfg.Doctor.Faults, fix, run)
 	if r.dryRun {
+		lines, err := a.stopWorktreeOrphans(r.by, true)
+		if err != nil {
+			return rep, err
+		}
+		rep.chores = append(rep.chores, lines...)
 		for _, c := range chores {
 			if c.archive && (st.StartIndex(c.agent.Party) < 0 || !st.Starts[st.StartIndex(c.agent.Party)].Background) {
 				if host, why := a.archivable(st, c.agent.Party); why != "" {
@@ -366,6 +371,11 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, rosterLines...)
+	orphanLines, err := a.stopWorktreeOrphans(r.by, false)
+	if err != nil {
+		return rep, err
+	}
+	rep.chores = append(rep.chores, orphanLines...)
 	rep.unagreed += unagreed
 	st, err = a.store.Read()
 	if err != nil {
@@ -641,7 +651,7 @@ line:
 - takes an agent off the roster once it reported its work done (agents idle
   --done) and its CLI runs no turn, a turn that only sleeps in tool shells
   it left behind (a background wait loop) stopped first, once it was relieved of the
-  supervisor's or the guide's role, or once it stayed idle
+  guide's role, or once it stayed idle
   agents.staleAfter (24h) with no CLI running, including a task holder
   with no transcript or roster activity for that age (gone); its task and
   latest hand-over note are logged and its serve record ends. The desktop sessions
@@ -653,7 +663,7 @@ line:
   recorded it) on its later runs while the CLI runs no turn, until the
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
   so are archived the session an agents handover ended and the run of the
-  supervisor or the guide a relay relieved, which frees its desktop CLI;
+  guide a relay relieved, which frees its desktop CLI;
   the steward is an idle desktop CLI of another session; with none
   running, a finished worker's own desktop CLI archives it, warmed by
   showing the session in the desktop for a moment once the person's
@@ -661,7 +671,7 @@ line:
   -p --resume <id>, a wake's): that turn is its CLI; the watch leaves such
   a warmed CLI of a handed-over session running 5 minutes for
   its archive call instead of stopping it as REVIVED; a relieved run of the
-  supervisor or the guide archives itself the same way, its own CLI
+  guide archives itself the same way, its own CLI
   warmed when no other steward is idle; a steward that declined is asked for no archive for
   24h; a run that asks no steward counts no turn and waits 10 minutes;
 - gives a session beekeeper started the roster name back when the desktop
@@ -744,7 +754,7 @@ line:
   is installed.
 
 A session a person started is never archived or retitled, nor one that
-holds or held the supervisor's or the guide's role unless a relay
+holds or held the guide's role unless a relay
 relieved it. The watch runs the
 doctor every tick (beekeeper watch); --dry-run says what it would do,
 the archives it owes and the kept entries it leaves included, probing the
