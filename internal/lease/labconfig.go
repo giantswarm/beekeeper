@@ -173,12 +173,25 @@ func (d Dir) DropLabChange(res string) error {
 }
 
 // RestoreLabConfig writes the claim-time agentlab.yaml of res back to path
-// in one rename; the configuration it replaces is kept as path.released.
+// in one rename through any symlink; the link stays in place and the
+// configuration it replaces is kept as path.released.
 // It returns where that copy is.
 func (d Dir) RestoreLabConfig(res, path string) (string, error) {
 	raw, err := d.ClaimedLabConfig(res)
 	if err != nil {
 		return "", err
+	}
+	// Rename the resolved target, never the link agentlab uses to identify
+	// the canonical configuration. Resolve before writing anything so a
+	// broken link is refused without changing the lab.
+	target := path
+	if fi, err := os.Lstat(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	} else if err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		target, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return "", err
+		}
 	}
 	mode := os.FileMode(0o600)
 	if fi, err := os.Stat(path); err == nil {
@@ -190,7 +203,7 @@ func (d Dir) RestoreLabConfig(res, path string) (string, error) {
 			return "", err
 		}
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".agentlab-*.yaml")
+	f, err := os.CreateTemp(filepath.Dir(target), ".agentlab-*.yaml")
 	if err != nil {
 		return "", err
 	}
@@ -203,7 +216,7 @@ func (d Dir) RestoreLabConfig(res, path string) (string, error) {
 		err = os.Chmod(tmp, mode)
 	}
 	if err == nil {
-		err = os.Rename(tmp, path)
+		err = os.Rename(tmp, target)
 	}
 	if err != nil {
 		_ = os.Remove(tmp)

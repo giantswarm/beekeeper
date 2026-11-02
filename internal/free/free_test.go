@@ -228,7 +228,7 @@ func TestFreeKeepsTheLiveAndRemovesTheDead(t *testing.T) {
 		"a parked agent's dir":                           {SessionDirs, dead, 5 * time.Hour, desk(&state.State{Agents: []state.Agent{parked}}), true},
 		"a finished agent's dir":                         {SessionDirs, dead, 5 * time.Hour, desk(&state.State{Agents: []state.Agent{finished}}), false},
 		"every dir while the desk cannot be read":        {SessionDirs, dead, 5 * time.Hour, desk(nil), true},
-		"the supervisor's dir":                           {SessionDirs, dead, 5 * time.Hour, desk(&state.State{Supervisor: &state.Supervisor{Party: parked.Party}}), true},
+		"the guide's dir":                                {SessionDirs, dead, 5 * time.Hour, desk(&state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: parked.Party}}}), true},
 		"a dir of a desktop session that runs anew":      {SessionDirs, dead, 5 * time.Hour, restarted, true},
 		"a go-build dir whose go command runs":           {GoBuild, goDir, 2 * time.Hour, goCommand(3 * time.Hour), true},
 		"a go-build dir whose go command is gone":        {GoBuild, goDir, 2 * time.Hour, nil, false},

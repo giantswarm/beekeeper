@@ -41,9 +41,13 @@ type HostConfig struct {
 // contract. Pin an exact installed version inside this supported CLI family.
 const ClaudeVersions = ">= 2.1.268, < 3.0.0"
 
+// The codex adapter relies on `exec --json` thread events, `exec resume`,
+// PreToolUse hooks from CODEX_HOME and --dangerously-bypass-hook-trust.
+const CodexVersions = ">= 0.165.0, < 1.0.0"
+
 func (c HostConfig) Validate() error {
-	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) != 1 {
-		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude")
+	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
+		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude or codex")
 	}
 	for repo, p := range c.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
@@ -53,11 +57,10 @@ func (c HostConfig) Validate() error {
 			return errors.New("workspace root and source checkouts must be disjoint")
 		}
 	}
-	h, ok := c.Harnesses[HarnessClaude]
-	v, err := semver.StrictNewVersion(h.Version)
-	rangeOK, _ := semver.NewConstraint(ClaudeVersions)
-	if !ok || !HostPath(h.Executable) || err != nil || !rangeOK.Check(v) || h.ConfigDir != "" && !HostPath(h.ConfigDir) {
-		return errors.New("claude requires an absolute executable and a pinned version in " + ClaudeVersions)
+	for name, h := range c.Harnesses {
+		if err := h.validate(name); err != nil {
+			return err
+		}
 	}
 	for id, co := range c.Coordinators {
 		if !ValidIdentity(id) {
@@ -69,6 +72,24 @@ func (c HostConfig) Validate() error {
 		if err := co.Callback.Validate(); err != nil {
 			return fmt.Errorf("coordinator callback: %w", err)
 		}
+	}
+	return nil
+}
+
+func (h HarnessConfig) validate(name string) error {
+	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions}[name]
+	if constraint == "" {
+		return errors.New("execution host harnesses must be claude or codex")
+	}
+	v, err := semver.StrictNewVersion(h.Version)
+	rangeOK, _ := semver.NewConstraint(constraint)
+	if !HostPath(h.Executable) || err != nil || !rangeOK.Check(v) || h.ConfigDir != "" && !HostPath(h.ConfigDir) {
+		return errors.New(name + " requires an absolute executable and a pinned version in " + constraint)
+	}
+	// Codex keeps its login in the person's own CODEX_HOME on the host; the
+	// managed home links only that file and never receives a copied credential.
+	if name == HarnessCodex && h.ConfigDir == "" {
+		return errors.New("codex requires configDir, the host CODEX_HOME holding its own login")
 	}
 	return nil
 }
@@ -87,6 +108,9 @@ type Policy struct {
 	ConfigurationDigest string `json:"configurationDigest"`
 	RulesDigest         string `json:"rulesDigest"`
 	SettingsDigest      string `json:"settingsDigest"`
+	// CodexDigest binds the managed CODEX_HOME's config, hooks and rules. It
+	// is empty on a host that runs no codex, leaving its policy unchanged.
+	CodexDigest string `json:"codexDigest,omitempty"`
 }
 
 func (p Policy) Digest() string { b, _ := json.Marshal(p); return Digest(b) }
@@ -98,13 +122,80 @@ func (s *Server) Policy() Policy {
 		Host     HostConfig
 		Security string
 	}{s.Config, s.SecurityDigest})
-	return Policy{Protocol: Protocol, Version: s.Version, ConfigurationDigest: Digest(b), RulesDigest: Digest(s.Rules), SettingsDigest: Digest(s.settings())}
+	p := Policy{Protocol: Protocol, Version: s.Version, ConfigurationDigest: Digest(b), RulesDigest: Digest(s.Rules), SettingsDigest: Digest(s.settings())}
+	if _, ok := s.Config.Harnesses[HarnessCodex]; ok {
+		p.CodexDigest = Digest(mustJSON(s.codexFiles()))
+	}
+	return p
+}
+
+// codexHomeDir is the managed CODEX_HOME of every remote codex worker on
+// this host: policy-owned config, hooks and rules, never the person's own.
+func (s *Server) codexHomeDir() string { return filepath.Join(s.Root, "codex-home") }
+
+// codexConfig is the managed home's config.toml, the local worker's settings
+// without any person's project trust: the hook surface is the only extension,
+// and browser, computer, code-mode, image and plugin tools are off.
+const codexConfig = `project_doc_max_bytes = 262144
+
+[shell_environment_policy]
+inherit = "all"
+
+[features]
+hooks = true
+daemon_auto_start = false
+plugins = false
+apps = false
+multi_agent = false
+multi_agent_v2 = false
+unified_exec_tty = false
+browser_use = false
+browser_use_external = false
+browser_use_full_cdp_access = false
+computer_use = false
+code_mode_host = false
+image_generation = false
+remote_plugin = false
+skill_mcp_dependency_install = false
+`
+
+// codexFiles are the policy-bound files of the managed CODEX_HOME. Hooks
+// enabled, every plugin, app and sub-agent surface disabled; the hook is the
+// execution guard in its codex format, bound to this host's configuration.
+func (s *Server) codexFiles() map[string][]byte {
+	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard --format codex"
+	hooks := mustJSON(map[string]any{hooksKey: preToolUse(cmd)})
+	return map[string][]byte{"config.toml": []byte(codexConfig), "hooks.json": hooks, "AGENTS.md": s.Rules}
+}
+
+// linkCodexLogin links the person's own host login into the managed home. A
+// refreshed login codex already rewrote in place is left as it is.
+func (s *Server) linkCodexLogin() error {
+	h, ok := s.Config.Harnesses[HarnessCodex]
+	if !ok {
+		return nil
+	}
+	link := filepath.Join(s.codexHomeDir(), "auth.json")
+	if _, err := os.Lstat(link); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Symlink(filepath.Join(h.ConfigDir, "auth.json"), link)
+}
+
+const hooksKey = "hooks"
+
+// preToolUse is the hook table both harnesses read: one command for every tool.
+func preToolUse(command string) map[string]any {
+	const kind = "command"
+	return map[string]any{"PreToolUse": []any{map[string]any{"matcher": ".*", hooksKey: []any{map[string]any{"type": kind, kind: command, "timeout": 30}}}}}
 }
 
 func (s *Server) settings() []byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard"
 	b, _ := json.Marshal(map[string]any{
-		"hooks":       map[string]any{"PreToolUse": []any{map[string]any{"matcher": ".*", "hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 30}}}}},
+		hooksKey:      preToolUse(cmd),
 		"permissions": map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent", "mcp__*"}},
 	})
 	return b
@@ -131,10 +222,27 @@ func (s *Server) Prepare(p Policy) (string, error) {
 	if err := ownedDirectory(s.Config.WorkspaceRoot); err != nil {
 		return "", err
 	}
-	for name, b := range map[string][]byte{"policy.json": mustJSON(p), "settings.json": s.settings(), "CLAUDE.md": s.Rules} {
+	for name, b := range map[string][]byte{"settings.json": s.settings(), "CLAUDE.md": s.Rules} {
 		if err := atomicFile(filepath.Join(s.Root, name), b); err != nil {
 			return "", err
 		}
+	}
+	if p.CodexDigest != "" {
+		if err := ownedDirectory(s.codexHomeDir()); err != nil {
+			return "", err
+		}
+		for name, b := range s.codexFiles() {
+			if err := atomicFile(filepath.Join(s.codexHomeDir(), name), b); err != nil {
+				return "", err
+			}
+		}
+		if err := s.linkCodexLogin(); err != nil {
+			return "", err
+		}
+	}
+	// The manifest comes last: a host is prepared only once every file is.
+	if err := atomicFile(filepath.Join(s.Root, "policy.json"), mustJSON(p)); err != nil {
+		return "", err
 	}
 	return p.Digest(), nil
 }
@@ -154,6 +262,14 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 		b, err := readRegular(filepath.Join(s.Root, name), MaxWire)
 		if err != nil || Digest(b) != digest {
 			return p, errors.New("installed execution rules or hooks do not match the policy")
+		}
+	}
+	if p.CodexDigest != "" {
+		for name, want := range s.codexFiles() {
+			b, err := readRegular(filepath.Join(s.codexHomeDir(), name), MaxWire)
+			if err != nil || Digest(b) != Digest(want) {
+				return p, errors.New("installed codex rules, configuration or hooks do not match the policy")
+			}
 		}
 	}
 	return p, nil
@@ -186,7 +302,10 @@ func (s *Server) workerExecutable() error {
 
 // Probe runs no model call and returns no authentication values. Its output is
 // only metadata. No provider credential from the SSH login shell is inherited.
-func (s *Server) probe(ctx context.Context, h HarnessConfig) error {
+func (s *Server) probe(ctx context.Context, name string, h HarnessConfig) error {
+	if name == HarnessCodex {
+		return s.probeCodex(ctx, h)
+	}
 	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) == 0 || parts[0] != h.Version {
@@ -206,6 +325,30 @@ func (s *Server) probe(ctx context.Context, h HarnessConfig) error {
 	}
 	if h.ConfigDir != "" && filepath.Clean(auth.ConfigDirectory) != filepath.Clean(h.ConfigDir) {
 		return errors.New("harness authentication belongs to another configuration directory")
+	}
+	return nil
+}
+
+// codexEnvironment runs codex against the managed CODEX_HOME only.
+func (s *Server) codexEnvironment() []string {
+	return append(cleanEnvironment("", s.Executable), "CODEX_HOME="+s.codexHomeDir())
+}
+
+// probeCodex checks the pinned version and a ChatGPT subscription login in
+// the managed home. `login status` reports on stderr; only its first words
+// are compared, never printed: an API-key line can carry a masked key.
+func (s *Server) probeCodex(ctx context.Context, h HarnessConfig) error {
+	if err := s.linkCodexLogin(); err != nil {
+		return errors.New("codex login link in the managed home is unavailable")
+	}
+	version, err := s.command(ctx, "", s.codexEnvironment(), h.Executable, "--version")
+	parts := strings.Fields(string(version))
+	if err != nil || len(parts) != 2 || parts[0] != "codex-cli" || parts[1] != h.Version {
+		return errors.New("unsupported or mismatched codex version")
+	}
+	status, err := s.combined(ctx, "", s.codexEnvironment(), h.Executable, "login", "status")
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(status)), "Logged in using ChatGPT") {
+		return errors.New("execution host needs an independently provisioned Codex ChatGPT login: run `CODEX_HOME=<configDir> codex login --device-auth` on the host")
 	}
 	return nil
 }

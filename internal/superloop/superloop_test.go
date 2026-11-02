@@ -17,6 +17,8 @@ const (
 	release = "v1.2.0"
 	// guidePerson is the guide's person.
 	guidePerson = "pat"
+	// mergeAnswer is the label of an escalation's releasing option.
+	mergeAnswer = "Merge"
 )
 
 var (
@@ -26,7 +28,7 @@ var (
 )
 
 func parked(at time.Time) []Worker {
-	return []Worker{{Name: worker, ParkedOn: pr, ParkedAt: at}}
+	return []Worker{{Name: worker, ReviewRequested: true, ParkedOn: pr, ParkedAt: at}}
 }
 
 func pull(head string, green bool, reviews ...Review) map[string]Pull {
@@ -152,6 +154,78 @@ func TestANewHeadAfterAnApprovalGetsItsOwnReview(t *testing.T) {
 	}
 }
 
+// A head that only merges the base into the approved one (the gate's
+// --update-branch) gets the go without a review; any other new head gets
+// its review and no go.
+func TestABaseMergeAfterAnApprovalGetsTheGo(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	var asked []string
+	baseMerged := func(only bool) func(Pull, string) bool {
+		return func(p Pull, from string) bool {
+			asked = append(asked, from+".."+p.Head)
+			return only
+		}
+	}
+	in := Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	a := only(t, Plan(in), KindGo)
+	if a.Head != head2 || !strings.Contains(a.Message, "approved head "+short(head1)+"; head "+short(head2)+" only brings the base into it") {
+		t.Errorf("go = %+v", a)
+	}
+	if !slices.Equal(asked, []string{head1 + ".." + head2}) {
+		t.Errorf("asked %v", asked)
+	}
+	// Taken once: the next pass gives no second go.
+	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Hour), a)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a second pass took %+v", got)
+	}
+	// Any other change is a new head with its own review.
+	in = Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(false)}
+	if a := only(t, Plan(in), KindReview); a.Head != head2 {
+		t.Errorf("review = %+v", a)
+	}
+	// Red checks on the merged head: no go, and no read of GitHub.
+	asked = nil
+	in = Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, false, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	if got := Plan(in); len(got) != 0 || len(asked) != 0 {
+		t.Errorf("a red base merge got %+v after asking %v", got, asked)
+	}
+}
+
+// The go names the merge command of the repository's path.
+func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	in := Input{Workers: parked(t0), Pulls: pull(head1, true, approved), Rounds: 1, Taken: tk, DevctlOwners: []string{"O"}}
+	a := only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`devctl pr merge o/r 7 --update-branch`") || !strings.Contains(a.Message, "merging the base alone") || strings.Contains(a.Message, "--match-head-commit") {
+		t.Errorf("a devctl repository's go = %q", a.Message)
+	}
+	in.DevctlOwners = []string{"giantswarm"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") || strings.Contains(a.Message, "--admin") {
+		t.Errorf("a gh repository's go = %q", a.Message)
+	}
+	in.Admin = []string{"O/R"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --admin --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") {
+		t.Errorf("an admin repository's go = %q", a.Message)
+	}
+	// A repository in merge.admin takes gh pr merge --admin even when its
+	// owner is in merge.devctlOwners; another repository never gets --admin.
+	in.DevctlOwners = []string{"O"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --admin --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") {
+		t.Errorf("an admin repository under devctlOwners go = %q", a.Message)
+	}
+	in.Admin = []string{"o/other"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`devctl pr merge o/r 7 --update-branch`") || strings.Contains(a.Message, "--admin") {
+		t.Errorf("a non-admin repository under devctlOwners go = %q", a.Message)
+	}
+}
+
 // An approved round leaves the change-request round for the next head's
 // review: its findings go back with one more round, the fixes then merge.
 func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
@@ -270,31 +344,149 @@ func TestOpenFindingsPastTheLastRoundGoBackToTheWorker(t *testing.T) {
 	}
 }
 
+// A head that only merges the base into the head a review asked changes on
+// carries no fixes: the worker reworks, with or without a round left, and
+// no go comes; a head with fixes after it is judged as before.
+func TestABaseMergeAfterAChangeRequestGetsNoGo(t *testing.T) {
+	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
+	tk := taken(t, t0,
+		Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
+		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
+	baseMerged := func(p Pull, from string) bool { return from == head1 && p.Head == head2 }
+	for rounds, next := range map[int]string{1: "the merge go for the new head follows", 2: "the next review round starts then"} {
+		p := pull(head2, true, rev)
+		pp := p[pr]
+		pp.Base = "main"
+		p[pr] = pp
+		in := Input{Workers: parked(t0.Add(time.Hour)), Pulls: p, Rounds: rounds, Taken: tk, BaseMerged: baseMerged}
+		rw := only(t, Plan(in), KindRework)
+		if rw.Head != head2 || !strings.Contains(rw.Message, "only brings main into head "+short(head1)) || !strings.Contains(rw.Message, "stand unfixed") || !strings.Contains(rw.Message, next) {
+			t.Errorf("rounds %d: rework = %+v", rounds, rw)
+		}
+		// Its fixes on top: the go (no round left) or the next round.
+		in.Pulls = pull(head3, true, rev)
+		want := map[int]string{1: KindGo, 2: KindReview}[rounds]
+		if a := only(t, Plan(in), want); a.Head != head3 {
+			t.Errorf("rounds %d: %s = %+v", rounds, want, a)
+		}
+	}
+}
+
 // An approved head the worker moved past with more commits is reviewed
-// again; even when that review asks for changes with no round left and the
-// worker parks on it again, the loop never asks the person to merge.
-func TestAnApprovedHeadWithLaterCommitsNeverEscalates(t *testing.T) {
+// again, once: a change past MaxReviews is the person's decision (merge it
+// without a third review, or rework), asked once per head, whatever
+// supervisor.reviewRounds says.
+func TestAThirdReviewIsThePersonsDecision(t *testing.T) {
 	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	r2 := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(2*time.Hour + time.Minute)}
 	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
 		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
 	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
-	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 2, Person: guidePerson, Taken: acts}
-	a := only(t, Plan(in), KindReview)
-	if a.Head != head3 || a.Round != 3 {
-		t.Errorf("review of the head after the approval = %+v", a)
+	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 5, Person: guidePerson, Taken: acts}
+	a := only(t, Plan(in), KindEscalate)
+	if a.Head != head3 || a.Question != EscalationQuestion(prURL, head3) || !strings.Contains(a.Message, "2 reviews are used") {
+		t.Errorf("escalation = %+v", a)
 	}
-	r3 := Review{ID: "R3", Head: head3, Verdict: ChangesRequested, At: t0.Add(4*time.Hour + time.Minute)}
+	// The answer carries an option's label: Merge releases, Rework not.
+	opts := EscalationOptions(head3)
+	labels := make([]string, len(opts))
+	for i, o := range opts {
+		labels[i], _, _ = strings.Cut(o, ":")
+	}
+	if len(labels) != 2 || labels[0] != mergeAnswer || !Releases(labels[0]) || Releases(labels[1]) {
+		t.Errorf("options %q", opts)
+	}
+	// Asked once: the next pass, and one with the person's answer still
+	// out, ask nothing again.
 	in.Taken = append(in.Taken, taken(t, t0.Add(4*time.Hour), a)...)
-	in.Pulls = pull(head3, true, r1, r2, r3)
-	in.Taken = append(in.Taken, taken(t, t0.Add(5*time.Hour), only(t, Plan(in), KindForward))...)
-	in.Workers = parked(t0.Add(6 * time.Hour))
-	for _, got := range Plan(in) {
-		if got.Kind == KindEscalate || got.Question != "" {
-			t.Errorf("used-up rounds reached the person: %+v", got)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a second pass took %+v", got)
+	}
+	// The person releases it: the go for that head.
+	in.Answers = []Answer{{Ref: pr, Note: 9, Question: a.Question, Text: mergeAnswer, By: guidePerson, At: t0.Add(5 * time.Hour)}}
+	if g := only(t, Plan(in), KindGo); g.Head != head3 || !strings.Contains(g.Message, "note #9") {
+		t.Errorf("go = %+v", g)
+	}
+	// A rework answer goes to the worker; its next head is asked about
+	// again, never reviewed a third time.
+	in.Answers[0].Text = "Rework — split it out"
+	an := only(t, Plan(in), KindAnswer)
+	in.Taken = append(in.Taken, taken(t, t0.Add(6*time.Hour), an)...)
+	in.Workers = parked(t0.Add(7 * time.Hour))
+	in.Pulls = pull("4444444444444444444444444444444444444444", true, r1, r2)
+	if e := only(t, Plan(in), KindEscalate); e.Head != "4444444444444444444444444444444444444444" {
+		t.Errorf("escalation of the reworked head = %+v", e)
+	}
+}
+
+// A second review that asks for changes is forwarded; its fixed head gets
+// the go, never a third review, whatever supervisor.reviewRounds says.
+func TestFindingsOfASecondReviewAreFixedWithoutAThird(t *testing.T) {
+	r1 := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	r2 := Review{ID: "R2", Head: head2, Verdict: ChangesRequested, At: t0.Add(2*time.Hour + time.Minute)}
+	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker},
+		Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
+	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 5, Taken: acts}
+	if g := only(t, Plan(in), KindGo); g.Head != head3 || !strings.Contains(g.Message, "2 of 2 review(s)") {
+		t.Errorf("go = %+v", g)
+	}
+	// Parked again on the head the findings were about: rework, with no
+	// next round promised.
+	in.Pulls = pull(head2, true, r1, r2)
+	if rw := only(t, Plan(in), KindRework); !strings.Contains(rw.Message, "the merge go for the new head follows") {
+		t.Errorf("rework = %+v", rw)
+	}
+}
+
+// One review per pull request: a merge that fails after its go and the
+// worker's conflict resolution, again and again, never starts a new
+// reviewer; each covered head gets its go.
+func TestAnApprovedHeadResolvedAgainAndAgainGetsNoNewReview(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	in := Input{Workers: parked(t0), Pulls: pull(head1, true), Rounds: 1, BaseMerged: func(Pull, string) bool { return true }}
+	r := only(t, Plan(in), KindReview)
+	in.Taken = taken(t, t0, r)
+	in.Pulls = pull(head1, true, approved)
+	in.Taken = append(in.Taken, taken(t, t0.Add(time.Hour), only(t, Plan(in), KindGo))...)
+	for i, head := range []string{head2, head3, "4444444444444444444444444444444444444444"} {
+		at := t0.Add(time.Duration(2+i) * time.Hour)
+		in.Workers = parked(at)
+		in.Pulls = pull(head, true, approved)
+		g := only(t, Plan(in), KindGo)
+		if g.Head != head {
+			t.Errorf("head %d: go = %+v", i+2, g)
+		}
+		in.Taken = append(in.Taken, taken(t, at.Add(time.Minute), g)...)
+	}
+	starts := 0
+	for _, tk := range in.Taken {
+		if tk.Kind == KindReview {
+			starts++
 		}
 	}
-	only(t, Plan(in), KindRework)
+	if starts != 1 {
+		t.Errorf("%d review starts, want 1", starts)
+	}
+}
+
+// Findings are forwarded once and the worker's fixed head gets the go on
+// green checks, with no second review, under the default rounds.
+func TestForwardedFindingsGetTheGoOnTheFixedHead(t *testing.T) {
+	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
+	in := Input{Workers: parked(t0), Pulls: pull(head1, true), Taken: nil}
+	in.Taken = taken(t, t0, only(t, Plan(in), KindReview))
+	in.Pulls = pull(head1, true, changes)
+	in.Taken = append(in.Taken, taken(t, t0.Add(time.Hour), only(t, Plan(in), KindForward))...)
+	in.Workers = parked(t0.Add(2 * time.Hour))
+	in.Pulls = pull(head2, false, changes)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a fixed head with red checks got %+v", got)
+	}
+	in.Pulls = pull(head2, true, changes)
+	if g := only(t, Plan(in), KindGo); g.Head != head2 {
+		t.Errorf("go = %+v", g)
+	}
 }
 
 func TestAMergedPullRequestEndsItsTracking(t *testing.T) {
@@ -365,57 +557,63 @@ func TestAForwardedVerdictRetiresItsReviewer(t *testing.T) {
 	}
 }
 
-func TestAMergedWorkerLeavesWhetherItReportedOrNot(t *testing.T) {
+func TestAMergedWorkerWaitsForItsReportOrInactivityWindow(t *testing.T) {
 	w := parked(t0)
 	w[0].Started = true
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
 	tk = append(tk, taken(t, t1, Action{Key: goKey(pr, head1), Kind: KindGo, Ref: pr, Agent: worker})...)
-	merged := map[string]Pull{pr: {Ref: pr, URL: prURL, State: Merged, Head: head1}}
-	in := Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk}
-	acts := Plan(in)
-	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone })
-	if len(acts) != 2 || i < 0 || acts[i].Agent != worker || acts[i].Ref != pr {
-		t.Fatalf("want the end and the worker's done, got %+v", acts)
+	merged := map[string]Pull{pr: {Ref: pr, URL: prURL, State: Merged, Head: head1, MergeCommit: head2}}
+	in := Input{Workers: w, Pulls: merged, Taken: tk, Now: t1}
+	end := only(t, Plan(in), KindEnd)
+	in.Taken = append(in.Taken, taken(t, t1, end)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("retired at merge: %+v", got)
 	}
-	// Its turn ran on past the end: the merged pull request stays read
-	// until the worker left.
-	in.Taken = append(in.Taken, taken(t, t1, acts[1-i])...)
-	if got := Tracked(w, in.Taken, nil, Desk{}); len(got) != 1 || got[0] != pr {
-		t.Fatalf("tracked after the end = %v", got)
+	for _, park := range []string{pr, "", "release v1.2.3", "#12"} {
+		in.Workers[0].ParkedOn = park
+		if got := Tracked(in.Workers, in.Taken, nil, Desk{}); len(got) != 1 {
+			t.Fatalf("lost retained worker on %q: %v", park, got)
+		}
+		if got := ReleaseWorkers(in); len(got) != 1 || got[0].Head != head2 {
+			t.Fatalf("no release recipient: %+v", got)
+		}
 	}
+	in.Now = t1.Add(2*time.Hour - time.Second)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("retired before window: %+v", got)
+	}
+	in.Now = t1.Add(2 * time.Hour)
 	d := only(t, Plan(in), KindDone)
-	in.Taken = append(in.Taken, taken(t, t1, d)...)
-	if got := Tracked(w, in.Taken, nil, Desk{}); len(got) != 0 {
-		t.Errorf("tracked after the worker left = %v", got)
+	if !strings.Contains(d.Message, "no report after merge") || !strings.Contains(d.Message, prURL) {
+		t.Fatalf("missing evidence: %+v", d)
 	}
-	// A worker its person started stays; one that reported done leaves by
-	// its own done.
-	if got := Plan(Input{Workers: parked(t0), Pulls: merged, Rounds: 1, Taken: tk}); len(got) != 1 || got[0].Kind != KindEnd {
-		t.Errorf("a person's worker: %+v", got)
+	// Activity extends the window, including across loop restarts.
+	in.Workers[0].LastActive = t1.Add(time.Hour)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("retired active worker: %+v", got)
 	}
-	done := Event{At: t1, Verb: VerbDone, Agent: worker, Detail: worker + " done: merged"}
-	acts = Plan(Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk, Events: []Event{done}})
-	if n := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone && a.Event == nil }); n >= 0 {
-		t.Errorf("a reported worker was retired too: %+v", acts)
+	in.PostMergeWindow = 30 * time.Minute
+	only(t, Plan(in), KindDone)
+	// A done report retires immediately through the normal report path.
+	in.Events = []Event{{At: in.Now, Verb: VerbDone, Agent: worker, Detail: worker + " done: proven"}}
+	d = only(t, Plan(in), KindDone)
+	if d.Event == nil {
+		t.Fatal("ignored worker report")
 	}
-	// A worker parked on anything but its pull request still works (its
-	// release, a timer); one parked on the pull request is done.
-	busy := parked(t0)
-	busy[0].Started, busy[0].ParkedOn = true, "release v1.2.3"
-	if got := Plan(Input{Workers: busy, Pulls: merged, Rounds: 1, Taken: tk}); len(got) != 1 || got[0].Kind != KindEnd {
-		t.Errorf("a worker parked on its release: %+v", got)
+	if got := ReleaseWorkers(in); len(got) != 0 {
+		t.Fatalf("wake after done: %+v", got)
 	}
-	if got := Tracked(busy, append(tk, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr})...), nil, Desk{}); len(got) != 0 {
-		t.Errorf("tracked for a worker parked on its release = %v", got)
+	in.Events = nil
+	in.Taken = append(in.Taken, taken(t, in.Now, Action{Key: retireKey(pr, retiredWorker), Kind: KindDone, Ref: pr, Agent: worker})...)
+	if got := Tracked(in.Workers, in.Taken, nil, Desk{}); len(got) != 0 {
+		t.Fatalf("tracked retired worker: %v", got)
 	}
-	free := parked(t0)
-	free[0].Started, free[0].ParkedOn = true, ""
-	if d := Plan(Input{Workers: free, Pulls: merged, Rounds: 1, Taken: tk}); !slices.ContainsFunc(d, func(a Action) bool { return a.Kind == KindDone && a.Agent == worker }) {
-		t.Errorf("an idle worker stays: %+v", d)
+	// No merge go and no beekeeper start mean no automatic retirement.
+	if got := Plan(Input{Workers: parked(t0), Pulls: merged, Taken: tk, Now: in.Now}); len(got) != 1 || got[0].Kind != KindEnd {
+		t.Fatalf("person's worker: %+v", got)
 	}
-	// No go, no retirement.
-	if got := Plan(Input{Workers: w, Pulls: merged, Rounds: 1, Taken: tk[:1]}); len(got) != 1 || got[0].Kind != KindEnd {
-		t.Errorf("without the go: %+v", got)
+	if got := Plan(Input{Workers: w, Pulls: merged, Taken: tk[:1], Now: in.Now}); len(got) != 1 || got[0].Kind != KindEnd {
+		t.Fatalf("no merge go: %+v", got)
 	}
 }
 
@@ -521,7 +719,7 @@ func TestEventAgent(t *testing.T) {
 
 // A problem of a done report reaches whoever files it: one naming its
 // issue is filed and rides with the done; one filed nowhere goes to the
-// guide's queue to file first, and the done follows.
+// guide's feed to file first, and the done follows.
 func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 	done := Event{At: t0, Verb: VerbDone, Agent: worker, Detail: worker + " done: fix it"}
 	filed := Event{At: t0.Add(20 * time.Microsecond), Verb: VerbProblem, Agent: worker, Detail: worker + ": CI flakes in o/r, filed as https://github.com/o/r/issues/9"}
@@ -537,7 +735,7 @@ func TestAProblemOfADoneReportReachesItsFiler(t *testing.T) {
 	}
 	in.Taken = taken(t, t1, f)
 	a = only(t, Plan(in), KindDone)
-	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's queue") {
+	if !strings.Contains(a.Message, "1 problem(s) filed nowhere are in the guide's feed") {
 		t.Errorf("done message after the file = %q", a.Message)
 	}
 	late := Event{At: t0.Add(time.Hour), Verb: VerbProblem, Agent: worker, Detail: worker + ": the lab is gone"}
@@ -635,7 +833,7 @@ func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
 	if got := Tracked(unanswered.Workers, unanswered.Taken, nil, Desk{}); !slices.Equal(got, []string{pr}) {
 		t.Errorf("an unanswered escalation is not tracked: %v", got)
 	}
-	for _, words := range []string{"Merge", "Merge — the findings are cosmetic", "you can merge", "OK, merge it."} {
+	for _, words := range []string{mergeAnswer, "Merge — the findings are cosmetic", "you can merge", "OK, merge it."} {
 		in := escalated(t, words)
 		if got := Tracked(in.Workers, in.Taken, in.Answers, Desk{}); len(got) != 1 || got[0] != pr {
 			t.Errorf("%q: an answered escalation is not tracked: %v", words, got)
@@ -650,13 +848,20 @@ func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
 			t.Errorf("%q: a red head got %+v", words, got)
 		}
 	}
+	// A head that only merges the base into the released one has the go.
+	in := escalated(t, mergeAnswer)
+	in.Pulls = pull(head2, true, in.Pulls[pr].Reviews...)
+	in.BaseMerged = func(Pull, string) bool { return true }
+	if a := only(t, Plan(in), KindGo); a.Head != head2 || !strings.Contains(a.Message, "only merges the base into the released head "+short(head1)) {
+		t.Errorf("a base merge of the released head: go = %+v", a)
+	}
 	// An answer to an older escalation, or to another note, counts not.
-	in := escalated(t, "Merge")
+	in = escalated(t, mergeAnswer)
 	in.Answers[0].At = t0.Add(time.Hour)
 	if got := only(t, Plan(in), KindRework); got.Head != head1 {
 		t.Errorf("an answer from before the escalation got %+v", got)
 	}
-	in = escalated(t, "Merge")
+	in = escalated(t, mergeAnswer)
 	in.Answers[0].Question = "Decide what worker one does next about its problem (blocker)?"
 	if got := only(t, Plan(in), KindRework); got.Head != head1 {
 		t.Errorf("an answer to another note got %+v", got)
@@ -702,7 +907,7 @@ func TestReleases(t *testing.T) {
 // An escalation logged before its key named a head is on the last
 // round's head: its release is the go, and no second note follows.
 func TestAnEscalationWithoutAHeadIsOnTheLastRoundsHead(t *testing.T) {
-	in := escalated(t, "Merge")
+	in := escalated(t, mergeAnswer)
 	in.Taken[len(in.Taken)-1].Key = "escalate " + pr
 	if a := only(t, Plan(in), KindGo); a.Head != head1 {
 		t.Errorf("go = %+v", a)
@@ -714,5 +919,331 @@ func TestAnEscalationWithoutAHeadIsOnTheLastRoundsHead(t *testing.T) {
 	in.Workers = parked(t0.Add(5 * time.Hour))
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("the same head after the answer got %+v", got)
+	}
+}
+
+// Two desks may share the same GitHub author. A park without publication
+// evidence is a wait even with green CI or an old round in this desk's log.
+func TestPlainPullWaitNeverReviewsOrForwards(t *testing.T) {
+	w := parked(t0)
+	w[0].ReviewRequested = false
+	in := Input{Workers: w, Pulls: pull(head1, true), Rounds: 1}
+	if got := Tracked(w, nil, nil, Desk{}); len(got) != 0 {
+		t.Fatalf("plain wait tracked: %v", got)
+	}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("plain wait: %+v", got)
+	}
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	in.Taken = taken(t, t0, started)
+	for _, verdict := range []string{Approved, ChangesRequested} {
+		in.Pulls = pull(head1, true, Review{ID: "R1", Head: head1, Verdict: verdict, At: t1})
+		if got := Plan(in); len(got) != 0 {
+			t.Fatalf("plain wait with prior %s: %+v", verdict, got)
+		}
+	}
+}
+
+func TestPlainWaiterCannotTakeAnotherWorkersReview(t *testing.T) {
+	in := Input{Workers: append(parked(t0), Worker{Name: "waiter", ParkedOn: pr, ParkedAt: t1}), Pulls: pull(head1, true)}
+	a := only(t, Plan(in), KindReview)
+	if a.Agent != worker {
+		t.Fatalf("review routed to %+v", a)
+	}
+	in.Taken = taken(t, t0, a)
+	in.Pulls = pull(head1, true, Review{ID: "R1", Head: head1, Verdict: Approved, At: t1})
+	if a := only(t, Plan(in), KindGo); a.Agent != worker {
+		t.Fatalf("go routed to %+v", a)
+	}
+}
+
+// A plain waiter on another worker's PR cannot hold up a review already
+// started for that owner, even while the owner is no longer parked.
+func TestPlainWaiterDoesNotBlockAnUnparkedOwnersRound(t *testing.T) {
+	workers := []Worker{{Name: worker, Started: true}, {Name: "waiter", ParkedOn: pr, ParkedAt: t1}}
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	for _, tc := range []struct{ verdict, kind string }{{Approved, KindGo}, {ChangesRequested, KindForward}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			in := Input{Workers: workers, Pulls: pull(head1, true, Review{ID: "R1", Head: head1, Verdict: tc.verdict, At: t1}), Rounds: 1, Taken: taken(t, t0, started)}
+			if a := only(t, Plan(in), tc.kind); a.Agent != worker {
+				t.Fatalf("action routed to %+v, want the round's owner", a)
+			}
+		})
+	}
+	for _, tc := range []struct{ answer, kind string }{{"Rework — address the remaining findings", KindAnswer}, {"Merge — the answer releases this head", KindGo}} {
+		t.Run("answer/"+tc.answer, func(t *testing.T) {
+			in := escalated(t, tc.answer)
+			in.Workers = workers
+			if a := only(t, Plan(in), tc.kind); a.Agent != worker {
+				t.Fatalf("answer routed to %+v, want the round's owner", a)
+			}
+		})
+	}
+}
+
+func TestAReplacedParkIsNoDecision(t *testing.T) {
+	in := Input{Workers: []Worker{{Name: worker, ParkedAt: t1}}, Events: []Event{{At: t0, Verb: VerbPark, Agent: worker, Detail: worker + ": parked: CI pending for " + prURL}}}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("replaced park became a decision: %+v", got)
+	}
+}
+
+// A worker that pushes while round 1 runs has its newer head reviewed: a
+// verdict on the head the worker parks on is the round's, never ignored.
+func TestAHeadPushedDuringTheRoundGetsItsGo(t *testing.T) {
+	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
+	tk := taken(t, t0, started)
+	approved := Review{ID: "R1", Head: head2, Verdict: Approved, At: t1}
+	for _, at := range []time.Time{t0.Add(-time.Minute), t0.Add(30 * time.Second)} {
+		in := Input{Workers: parked(at), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+		a := only(t, Plan(in), KindGo)
+		if a.Head != head2 || !strings.Contains(a.Message, "review round 1 approved head "+short(head2)+" (the round opened on head "+short(head1)+")") {
+			t.Errorf("parked %s: go = %+v", at, a)
+		}
+	}
+	// No verdict yet on either head: the round runs.
+	if got := Plan(Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head2, true), Rounds: 1, Taken: tk}); len(got) != 0 {
+		t.Errorf("a running round got %+v", got)
+	}
+	// Findings on the pushed head go to the worker and count as round 1's.
+	changes := Review{ID: "R1", Head: head2, Verdict: ChangesRequested, Body: "fix x", At: t1}
+	in := Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head2, true, changes), Rounds: 2, Taken: tk}
+	if a := only(t, Plan(in), KindForward); !strings.Contains(a.Message, "changes on head "+head2) || !strings.HasSuffix(a.Message, "fix x") {
+		t.Errorf("forward = %+v", a)
+	}
+	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Minute), Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})...)
+	in.Workers = parked(t0.Add(time.Hour))
+	in.Pulls = pull(head3, true, changes)
+	if a := only(t, Plan(in), KindReview); a.Round != 2 || a.Head != head3 {
+		t.Errorf("round two = %+v", a)
+	}
+	// Parked again on the head the findings are about: unfixed.
+	in.Pulls, in.Rounds = pull(head2, true, changes), 1
+	if a := only(t, Plan(in), KindRework); a.Head != head2 {
+		t.Errorf("rework = %+v", a)
+	}
+}
+
+// A verdict on a head between the round's and the one the worker parks on
+// now is no verdict of the round: once the round's reviewer reports done
+// without one on the newest head, the newest head gets its round.
+func TestAVerdictOnAnOlderPushedHeadIsFollowedByARoundForTheParkedHead(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	approved := Review{ID: "R1", Head: head2, Verdict: Approved, At: t1}
+	in := Input{Workers: parked(t0.Add(30 * time.Second)), Pulls: pull(head3, true, approved), Rounds: 1, Taken: tk}
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a running round got %+v", got)
+	}
+	// The reviewer's done is the loop's to take as well.
+	in.Events = []Event{{At: t1.Add(time.Minute), Verb: VerbDone, Agent: ReviewerName(pr, 1)}}
+	got := Plan(in)
+	i := slices.IndexFunc(got, func(a Action) bool { return a.Kind == KindReview })
+	if i < 0 || got[i].Round != 2 || got[i].Head != head3 {
+		t.Fatalf("want round 2 on head 3, got %+v", got)
+	}
+	a := got[i]
+	// Round 2 runs on head 3: a late verdict on round 1's head is not its.
+	in.Taken = append(slices.Clone(tk), taken(t, t0.Add(2*time.Hour), a)...)
+	late := Review{ID: "R2", Head: head1, Verdict: Approved, At: t0.Add(3 * time.Hour)}
+	in.Events = nil
+	in.Pulls = pull(head3, true, approved, late)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("round 1's head's verdict gave round 2 %+v", got)
+	}
+	// Round 2's own verdict is the go.
+	in.Pulls = pull(head3, true, approved, late, Review{ID: "R3", Head: head3, Verdict: Approved, At: t0.Add(4 * time.Hour)})
+	if g := only(t, Plan(in), KindGo); g.Head != head3 {
+		t.Errorf("go = %+v", g)
+	}
+}
+
+// A verdict on a head from before the round (a teammate's late review, a
+// stale bot's) is nothing while the round runs: no forward, no cycle, and
+// the round's reviewer stays.
+func TestAPreRoundHeadsVerdictLeavesTheRoundRunning(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})
+	workers := append(parked(t0.Add(-time.Minute)), Worker{Name: ReviewerName(pr, 1), Started: true})
+	stale := Review{ID: "S1", Head: head1, Verdict: ChangesRequested, Body: "old", At: t0.Add(5 * time.Minute)}
+	in := Input{Workers: workers, Pulls: pull(head2, true, stale), Rounds: 2, Taken: tk}
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a pre-round head's verdict got %+v", got)
+	}
+}
+
+// A green head past its approval whose park is from before the round gets
+// a leave line with the reason, once, never silence.
+func TestAnUnreviewedHeadWithAnOldParkIsLeftWithAReason(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	in := Input{Workers: parked(t0.Add(-time.Minute)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+	a := only(t, Plan(in), KindLeave)
+	if a.Key != leaveKey(pr, leftUnreviewed(head2)) || a.Agent != worker || !strings.Contains(a.Message, "park on the pull request again") {
+		t.Errorf("leave = %+v", a)
+	}
+	in.Taken = append(in.Taken, taken(t, t0.Add(time.Hour), a)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a second pass took %+v", got)
+	}
+	// Parked again: the new head's review.
+	in.Workers = parked(t0.Add(2 * time.Hour))
+	if r := only(t, Plan(in), KindReview); r.Head != head2 {
+		t.Errorf("review = %+v", r)
+	}
+}
+
+// TestAMultiPullWorkerStaysWhileItServesOpenWork: a merged pull request's
+// tracking ends, but its worker stays while it serves an open issue or is
+// parked on another open pull request; its done, the close of that work or
+// a day's quiet with no park or wake timer retires it.
+func TestAMultiPullWorkerStaysWhileItServesOpenWork(t *testing.T) {
+	const issue, next = "o/r#70", "o/r#90"
+	open := map[string]bool{issue: true, next: true}
+	w := parked(t0)
+	w[0].Started = true
+	w[0].Serves = issue
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	tk = append(tk, taken(t, t1, Action{Key: goKey(pr, head1), Kind: KindGo, Ref: pr, Agent: worker})...)
+	merged := map[string]Pull{pr: {Ref: pr, URL: prURL, State: Merged, Head: head1, MergeCommit: head2}}
+	in := Input{Workers: w, Pulls: merged, Taken: tk, Now: t1, Open: func(ref string) bool { return open[ref] }}
+	end := only(t, Plan(in), KindEnd)
+	in.Taken = append(in.Taken, taken(t, t1, end)...)
+	in.Now = t1.Add(3 * time.Hour)
+
+	// Its first pull request merged; it parks on its second, still open.
+	in.Workers[0].ParkedOn, in.Workers[0].ParkedAt = next, t1
+	keep := only(t, Plan(in), KindLeave)
+	if keep.Agent != worker || !strings.Contains(keep.Message, next) {
+		t.Fatalf("keep = %+v", keep)
+	}
+	in.Taken = append(in.Taken, taken(t, in.Now, keep)...)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("kept worker: %+v", got)
+	}
+	// Plain waits on its open issue keep it too.
+	in.Workers[0].ParkedOn = "#12"
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("worker serving an open issue: %+v", got)
+	}
+	// Quiet a day with no park or wake timer: it goes.
+	in.Workers[0].ParkedOn, in.Workers[0].ParkedAt = "", time.Time{}
+	in.Now = t1.Add(25 * time.Hour)
+	if d := only(t, Plan(in), KindDone); d.Agent != worker {
+		t.Fatalf("stale worker: %+v", d)
+	}
+	in.Workers[0].Waking = true
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("worker with a wake timer: %+v", got)
+	}
+	in.Workers[0].Waking = false
+	in.StaleAfter = 48 * time.Hour
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("agents.staleAfter ignored: %+v", got)
+	}
+	// Its served issue closes, its second pull request merged: it goes.
+	in.Workers[0].ParkedOn, in.Workers[0].ParkedAt = next, t1
+	open[issue], open[next] = false, false
+	if d := only(t, Plan(in), KindDone); d.Agent != worker || !strings.Contains(d.Message, "no report after merge") {
+		t.Fatalf("served work closed: %+v", d)
+	}
+	// Its done report retires it at once, whatever it serves.
+	open[issue], open[next] = true, true
+	in.Events = []Event{{At: in.Now, Verb: VerbDone, Agent: worker, Detail: worker + " done: proven"}}
+	if d := only(t, Plan(in), KindDone); d.Event == nil {
+		t.Fatalf("done report: %+v", d)
+	}
+	in.Events = nil
+
+	// A single-pull-request worker serves nothing else: retired as before,
+	// a serve record naming its own pull request included.
+	for _, serves := range []string{"", pr} {
+		in.Workers[0].Serves, in.Workers[0].ParkedOn = serves, pr
+		if d := only(t, Plan(in), KindDone); d.Agent != worker {
+			t.Fatalf("single pull request worker serving %q: %+v", serves, d)
+		}
+	}
+}
+
+// TestAReviewerIsRetiredWhateverItsWorkerServes: a reviewer the loop
+// started for one round goes once its verdict is acted on.
+func TestAReviewerIsRetiredWhateverItsWorkerServes(t *testing.T) {
+	reviewer := ReviewerName(pr, 1)
+	workers := append(parked(t0), Worker{Name: reviewer, Started: true, Serves: "o/r#70", ParkedOn: "o/r#90"})
+	workers[0].Serves = "o/r#70"
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	in := Input{Workers: workers, Pulls: pull(head1, true, Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}), Rounds: 2, Taken: tk,
+		Open: func(string) bool { return true }}
+	f := only(t, Plan(in), KindForward)
+	in.Taken = append(in.Taken, taken(t, t1, f)...)
+	if d := only(t, Plan(in), KindDone); d.Agent != reviewer {
+		t.Errorf("done = %+v", d)
+	}
+}
+
+func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
+	const task1 = "personal/tasks#1"
+	in := Input{
+		Board: true,
+		Desk:  Desk{Orgs: []string{"personal", "org"}},
+		Workers: []Worker{
+			{Name: worker, Started: true, Serves: task1},
+		},
+		Events: []Event{
+			{At: t1, Verb: VerbDone, Agent: worker, Detail: worker + " done: finished"},
+			{At: t1, Verb: VerbProblem, Agent: worker, Detail: worker + ": filed https://github.com/org/engine/issues/42 for the blocker"},
+			{At: t1, Verb: VerbReport, Agent: worker, Detail: worker + ": closed https://github.com/personal/tasks/issues/1. Filed follow-up https://github.com/org/engine.io/issues/44 after v0.174.0; Problems found: none"},
+		},
+		Filed: []FiledIssue{
+			{Ref: "org/engine#43", URL: "https://github.com/org/engine/issues/43", Agent: "guide", From: task1},
+			{Ref: "stranger/repo#9", URL: "https://github.com/stranger/repo/issues/9", Agent: "guide"},
+		},
+	}
+	acts := Plan(in)
+	var keys, origins []string
+	for _, a := range acts {
+		if a.Kind == KindIntake {
+			keys = append(keys, a.Key)
+			origins = append(origins, a.Message)
+		}
+	}
+	if !slices.Equal(keys, []string{"intake org/engine#42", "intake org/engine.io#44", "intake org/engine#43"}) ||
+		!slices.Equal(origins, []string{task1, task1, task1}) {
+		t.Fatalf("intake actions = %+v", acts)
+	}
+	// Once done is taken, intake still precedes KindNext in the pass.
+	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindDone })
+	if i < 0 {
+		t.Fatalf("no done action in %+v", acts)
+	}
+	in.Taken = taken(t, t1, acts[i])
+	acts = Plan(in)
+	if len(acts) < 4 || acts[0].Kind != KindIntake || acts[1].Kind != KindIntake || acts[2].Kind != KindIntake || acts[3].Kind != KindNext {
+		t.Fatalf("order = %+v, want intake actions before next", acts)
+	}
+}
+
+// The current park wins over two older merged pull requests and their
+// ended tracking records, even when both post-merge windows have elapsed.
+func TestTwoMergedPullsDoNotRetireTheWorkerOfAThird(t *testing.T) {
+	const second, current = "o/r#8", "o/r#9"
+	w := parked(t0)
+	w[0].Started = true
+	w[0].ParkedOn = current
+	in := Input{Workers: w, Now: t1.Add(3 * time.Hour), Open: func(ref string) bool { return ref == current }, Pulls: map[string]Pull{
+		pr:      {Ref: pr, URL: prURL, State: Merged},
+		second:  {Ref: second, URL: "https://github.com/o/r/pull/8", State: Merged},
+		current: {Ref: current, URL: "https://github.com/o/r/pull/9", State: Open, Head: head3, Green: true},
+	}}
+	for _, ref := range []string{pr, second} {
+		in.Taken = append(in.Taken, taken(t, t0, Action{Key: goKey(ref, head1), Kind: KindGo, Ref: ref, Agent: worker}, Action{Key: endKey(ref), Kind: KindEnd, Ref: ref})...)
+	}
+	for _, a := range Plan(in) {
+		if a.Kind == KindDone {
+			t.Fatalf("retired worker of pending third pull: %+v", a)
+		}
+	}
+	acts := Plan(in)
+	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindReview && a.Ref == current })
+	if i < 0 {
+		t.Fatalf("pending review lost: %+v", acts)
 	}
 }

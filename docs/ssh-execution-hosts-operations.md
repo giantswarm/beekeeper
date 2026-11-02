@@ -6,10 +6,10 @@ a conversation identifier, and one coordinator roster registration. Omitting
 `--host`, or selecting `--host local`, keeps the local launch path.
 
 Read the [design](ssh-execution-hosts.md) for the ownership and failure contract.
-Remote wake and resume use durable message receipts as described below. The expiring coordinator lease
-is tracked in https://github.com/giantswarm/beekeeper/issues/1715, and live remote merge
-authorization to https://github.com/giantswarm/beekeeper/issues/1716. Every remote
-merge is refused in this slice, including when a local approval exists.
+Remote wake and resume use durable message receipts as described below. New
+executions require expiring coordinator leases and live supervisor merge grants.
+The component command below is the supported remote merge path; local approvals
+and raw merge commands do not authorize an SSH execution.
 
 ## Provision the components independently
 
@@ -24,7 +24,8 @@ not resolve to the very executable the prepared policy binds (missing, not
 executable, or shadowed by a stale sibling), because that worker could not
 report or park. The host needs Linux with a working user service manager,
 Git, and a pinned Claude Code version
-in the supported family (`>= 2.1.268, < 3.0.0`). Provision its subscription login
+in the supported family (`>= 2.1.268, < 3.0.0`), a pinned Codex CLI (see
+"Codex on an execution host"), or both. Provision its subscription login
 there independently. `agents hosts check` reads version and authentication
 metadata; it makes no model request. Starting a session never copies a provider
 credential store or forwards an authentication agent.
@@ -133,6 +134,77 @@ Changing the host binary, rules, settings, or protected host configuration inval
 the policy. Prepare and pin a matching bundle again before starting new work.
 Do not weaken a required guard to make a check pass.
 
+The pinned digest covers every host setting that changes what a worker may start
+under or how much it may consume: the security sections, the execution host
+configuration (`execution.maxBusy` included), and the start guards — the memory
+floor (`capacity.availMinMiB`), the swap guard (`capacity.swapGrowthMaxMiB` and
+`capacity.swapPSIMax` over `watch.swapWindow`), the load and disk limits
+(`watch.loadMax`, `watch.loadPerCoreMax`, `watch.diskMinMiB`, `watch.diskFillWithin`),
+the build slots and their caps (`memcap.slots`, `memcap.max`, `memcap.cpuQuota`,
+`memcap.cpuWeight`) and the kind lab cap (`maxKindClusters`). Weakening one of
+them on the host is a digest mismatch in `agents hosts check` until a matching
+bundle is prepared and pinned again. What stays host-local on purpose is the
+machine's own watch and desk pacing, which never bounds a pinned remote worker:
+the supervisor's target and pace (`capacity.floor`, `capacity.ceiling` and the
+rest of `capacity` beyond the guards above), watch's alert thresholds and
+cadence (its `interval`, `repeat`, `availMinMiB`, `swapMaxMiB`, `oomdHeadroomMinMiB`,
+`scopeAnonMaxMiB`, `gttMaxMiB`, `psiMax`, `cpuPSIMax`, `forkRateMax`, `stackMax`,
+`toolProcsMax`, `tmpMaxMiB`, `diskCriticalMiB` and quiet/notify settings), and
+memcap's slot location and hold bound (`slotDir`, `holdBound`). `hosts check`
+reports the host's live resource observation (available memory, load, disk, slot
+and lab pressure), so a coordinator can compare what the host runs with against
+its own view of the machine.
+
+## Codex on an execution host
+
+A host may run Codex workers next to or instead of Claude. Install a pinned
+Codex CLI in the supported family (`>= 0.165.0, < 1.0.0`) and add it to the
+host's `harnesses`:
+
+```yaml
+agents:
+  execution:
+    harnesses:
+      codex:
+        executable: /usr/local/bin/codex
+        version: 0.165.0
+        configDir: /srv/beekeeper/codex
+```
+
+`configDir` is the host's own `CODEX_HOME` holding its login, and it is
+required. Logging in is a one-time step for the person, on the host, with
+the device flow; credentials are never copied from the coordinator:
+
+```sh
+CODEX_HOME=/srv/beekeeper/codex codex login --device-auth
+```
+
+Workers never run in that home. `prepare` installs a managed `CODEX_HOME`
+inside the policy directory with the embedded worker rules as `AGENTS.md`, a
+`config.toml` with hooks on and the browser, computer, code-mode, image and
+plugin tools off, and a `hooks.json` whose PreToolUse hook is the execution
+guard in Codex's format. It links only `auth.json` from `configDir`. The policy
+binds those files; a changed one fails `hosts check` until a matching bundle is
+prepared again. Use a ChatGPT subscription login: an API-key login is refused.
+
+`hosts check` probes each configured harness's version, login and guard
+without a model call. It advertises only the harnesses that pass and names
+the others, with their reason, under `unavailable`. The coordinator lists the
+harnesses it may start there, for example `harnesses: [claude, codex]`, and
+starts a harness only when both list it and the host's check passes; `--harness
+auto` chooses among those.
+
+A remote Codex worker runs one `codex exec --json` turn per message. The first
+turn carries the brief and creates the thread; the runner records it, binds the
+guard to it, and runs each stored wake as `codex exec resume` on that thread. A
+wake is accepted once its turn has started on the recorded thread; a turn on
+another thread, or one that ends before it starts, leaves the receipt uncertain
+for explicit resolution. A finished report ends the runner after its turn.
+Lease, publication, review, merge, stop and recovery are the same as for
+Claude. Codex usage stays on the coordinator: the remote worker counts against
+the configured `codex` provider's ceiling, and the coordinator's own usage
+reading covers the shared subscription; a host adds machine room only.
+
 ## Start, inspect, and recover
 
 Run the coordinator's commands against its configuration:
@@ -150,6 +222,27 @@ reservation, workspace, or process. Remote starts require `--repo` and `--ref`;
 `--dir`, desktop, and background modes are refused. Capacity uses the
 coordinator's existing provider and bucket pool across hosts and the selected
 host's physical guards. A host does not create another subscription budget.
+
+`supervisor loop` places its worker starts on execution hosts. With
+`supervisor.hosts` naming execution hosts (in order of preference), a start
+whose repository a host maps, and for which `capacity --host <selector>` has
+room, runs there pinned to the repository's default branch — while the
+coordinator is out of room, or always with `supervisor.hostsFirst`. A host's
+check weighs only the choices it can run (Claude Code). `hostsFirst` prefers
+hosts only for what a host can run: without room on any host a Claude start
+waits, while a repository no host maps, or a choice of a harness no host has
+an adapter for (agy, omp, codex), starts on the coordinator within its local
+room; for the latter the local start excludes the choices a host runs. A desk
+without `capacity.choices` never places remotely. Reviewers stay on the
+coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
+read-and-review path. A review waits when coordinator review capacity is full.
+
+`capacity.local.ceiling` caps the busy agents the coordinator itself runs,
+apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
+too sets it to the coordinator's own share. Remote agents count against
+their host's `maxBusy`, never against it; local self-hosted sessions count.
+Every local start, the loop's and one by hand, is refused at it. A retired remote worker is
+stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable
 execution reference and handle, then signs a short-lived registration receipt.
@@ -198,8 +291,7 @@ The component does not adopt or archive personal sessions. Interactive remote
 tools and remote transcript reads through coordinator-local paths are unavailable. Use owned execution
 logs for output. Hooks inspect the supported tool surface and deny unavailable
 authority; arbitrary code and account-owner changes require OS isolation for a
-stronger boundary. A disconnected stop has no automatic lease expiry until its
-linked follow-up ships.
+stronger boundary. New executions stop on coordinator lease expiry as described below.
 
 ## Deliver and reconcile messages
 
@@ -269,3 +361,178 @@ execution. Journal admission refuses before exceeding its bounded storage.
 Executions created before streaming-message support retain their original
 single-turn behavior and explicitly refuse remote wakes. Recovery does not
 upgrade or restart them.
+
+## Coordinator leases and disconnected stops
+
+New starts require a signed 90-second coordinator lease, renewed every 20 seconds.
+The grant names the coordinator, execution host, execution ID and process generation.
+The coordinator stores its sequence before replying; a lost reply retries the same
+nonce and receives the original deadline. Stop intent and global stop revoke renewal
+in the same coordinating state transaction. An unreachable stop keeps its capacity
+reservation and unfinished task until termination is observed.
+
+The runner measures its deadline from before sending the renewal using elapsed
+monotonic time. A retry retains that original start time, so a delayed or repeated
+reply cannot extend authority. Host/coordinator wall-clock offset does not extend
+runtime. The signed issue/expiry times shown by inspection use coordinator UTC.
+The runner checks expiry once per second, records stop intent, and asks the user
+service manager to stop only its owned service and dependent build scopes. With a
+responsive service manager, the disconnected bound is 90 seconds plus the one-second
+check interval and the service's 60-second termination timeout. Service-manager
+failure remains explicitly unconfirmed; it is not a termination acknowledgement.
+A stop of its own unit is an orderly owned stop, not a crash: the runner records
+the journal as `exited` with the recorded stop reason and exits 0, so a lease-expiry
+stop leaves no failed unit to mistake for a harness crash.
+Host suspension pauses monotonic elapsed time on platforms where the OS does so;
+this bound assumes a running host and functioning user service manager.
+
+A runner restart cannot reuse runtime authority: the recorded phase refuses another
+runner, and systemd ends the original service's child processes when it exits.
+Coordinator restarts retain the signed sequence and stop intent. Reconnection uses
+`agents hosts sync <host>` and `agents recover <worker>` to inspect the same execution;
+it does not replace an uncertain process. Inspection exposes the last grant, expiry,
+reachability and stop acknowledgement. Older executions remain unchanged and require
+an acknowledged explicit stop; recovery does not silently upgrade their contract.
+
+## Live merge authorizations
+
+Only the supervisor loop, or a person on the coordinator (`--as <person>`), issues or
+revokes authorizations; a session never does. A green exact
+head and an authenticated independent desk review result are prerequisites. The
+component records the exact reviewer session when the supervisor starts the round.
+That session must complete with the same `Review: approved` or
+`Review: changes requested` verdict on the first report line, followed by the
+exact public review URL. The reported verdict must match the public review.
+An identical completion retry retains the original captured result; a later
+shared-account edit cannot rebind that retry to another verdict. The
+coordinator persists the GitHub review ID, author, head and body digest before
+report delivery can prune the report. A shared GitHub login or a worker-authored
+approval comment alone grants nothing; `--as` cannot submit the reviewer's result.
+Issuance and live use require that same persisted result, and grants pin the
+round ID, review ID and authenticated body digest. Edited reviews and new rounds invalidate old grants. Older
+rounds without component-recorded reviewer provenance need a fresh review. The supervisor loop issues a two-minute grant when it gives a
+remote worker merge go; a person can also issue or revoke it explicitly:
+
+```sh
+beekeeper --as <person> agents authorizations grant worker example/repository 42 --head <reviewed-head>
+beekeeper --as <person> agents authorizations inspect <authorization-id>
+beekeeper --as <person> agents authorizations revoke <authorization-id>
+```
+
+The remote worker uses the component command supplied with its go:
+
+```sh
+beekeeper agents merge example/repository 42 --head <reviewed-head> --authorization <authorization-id>
+```
+
+The command verifies owned process and repository identity on the execution host,
+then authenticates its exact execution and generation to the live coordinating
+service. It uses the coordinator's independently provisioned GitHub login: no host
+credential is copied or forwarded. The actual merge runs synchronously at the
+coordinator. Host hooks continue to deny raw `gh`/`devctl` merges and API mutations.
+This narrow component path is the only supported remote merge surface; unsupported
+harnesses and older executions remain denied.
+
+The service checks the exact tuple, unexpired and unrevoked grant, current head,
+CI, authenticated review, execution lease and stop state immediately before the
+attempt. Holds use the same repository, lane and installation scope, PR/session
+exceptions and explicit repair-window readiness waiver as the existing merge gate. It retains the coordinating state lock through a bounded synchronous
+attempt (at most 20 seconds, also bounded by grant expiry), serializing stop,
+hold changes and revocation against use. Those operations may report a busy state
+lock during that interval and must be retried; they are never reported committed
+early. The service consumes the grant durably before calling GitHub once and
+never retries a merge mutation. A moved head needs a fresh review and go. A cached
+grant provides no authority without this live service. Both host and coordinator
+retain the authorization ID in their audit evidence.
+
+A lost reply is an uncertain outcome, not permission to retry a merge. A person on the
+coordinator queries the result and retains the consumed authorization:
+
+```sh
+beekeeper --as <person> agents authorizations reconcile <authorization-id>
+```
+
+Reconciliation never issues another merge. If GitHub cannot confirm the exact merged
+head, the outcome remains unconfirmed and needs operator investigation. A failed or
+consumed grant does not become reusable. Hooks cannot constrain arbitrary unhooked
+programs or an account owner changing binaries, configuration or state. Dedicated
+accounts or OS isolation are required for a stronger same-account boundary.
+
+## Publish a branch and pull request
+
+A managed Claude worker needs no GitHub write credential on the execution host.
+Commit changes in the owned workspace, then run:
+
+```sh
+beekeeper agents publish --title "fix: resolve the defect" --body-file /srv/beekeeper/workspaces/<execution>/workspace/.beekeeper-scratch/pr.md
+```
+
+The coordinator receives a Git bundle over the authenticated callback, verifies
+its HEAD and ancestry from the pinned execution commit, and pushes with its own
+GitHub login. The remote branch is always
+`beekeeper-execution/<execution-id>/<generation>` in the execution's repository;
+a worker cannot select a repository, remote, destination ref, default branch,
+force option or arbitrary GitHub API operation. The coordinator resolves the
+repository's default branch and creates the PR against it. Both PR text and
+new commit text pass the ordinary outbound rules; complete commit messages are
+scanned separately from patch content, so message bullets are never mistaken
+for patch deletions. PR text cannot ping accounts.
+
+The first publication requires a title and body file. Once a PR exists, review
+fixes need only `beekeeper agents publish`: the same branch advances by a normal
+fast-forward push and the existing PR is returned without changing its text or
+discussion. Closed PRs cannot be reused. For a lost push, create or callback reply,
+repeat the publication: Git rejects history rewrites, and the coordinator looks
+up the exact owned branch before creating a PR. A create attempt is never retried
+blindly. PR editing and commenting continue to use coordinating workflows;
+this command grants no general GitHub API authority.
+
+To bring the latest default branch into the workspace before publishing again:
+
+```sh
+beekeeper agents publish --sync-base
+```
+
+This transfers upstream commits through the same coordinator, fetches them into
+the owned workspace and merges them with hooks disabled. The merge resolves
+the worker's usual author and committer identities, including global Git identity,
+and supplies only those identity fields to the isolated Git operation. Other
+global configuration stays disabled. Resolve conflicts and
+commit locally, then publish. No source checkout is modified and no host GitHub
+credential or SSH agent is forwarded. This command creates no review or merge
+authorization; park on the returned PR and follow the independent review gate.
+
+Each transfer uses authenticated 256 KiB chunks, within the existing wire bound,
+and a SHA-256 digest over the complete bundle. A bundle is bounded to 64 MiB;
+a larger transfer is explicitly refused rather than truncated or sent with a
+credential workaround. Chunk retries verify existing bytes; partial or corrupt
+bundles cannot be published. Transfer files remain under the coordinator's
+`execution-publications/transfers` state directory for recovery and may be moved
+aside once the execution is retired. Failed staging directories remain for
+inspection; successful staging directories are removed.
+
+Every chunk and publication checks the exact execution generation, repository
+allowlist, current lease, completion, execution/global stop and GitHub hold.
+Publishing holds the coordinating state lock through a synchronous attempt of
+at most 20 seconds; it returns an explicit uncertainty on disconnect. Stops and
+holds serialize with that attempt. `agents hosts check` refuses hosts that do
+not advertise publication support; upgrade and prepare an older host before
+starting workers there. Existing raw merge and API guards remain in force.
+
+### Source freshness at start
+
+The coordinator fetches the requested `--ref` from GitHub before host preparation,
+records its exact commit and a bundle digest in the start request, and transfers
+the objects over the authenticated SSH route in bounded chunks. The host checks
+the digest and commit before checking out the workspace. Its configured source
+checkout stays unchanged and needs no GitHub credential. Recovery reuses the
+saved commit and bundle even if the branch has advanced meanwhile. Both ends
+must support source transfer; an older host refuses preparation rather than
+starting from its stale ref. Bundles have a 64 MiB limit; oversized sources fail
+before activation and preserve the reservation for inspection.
+
+A pending reservation from before source transfer may already have a prepared
+host journal whose reply was lost. Recovery inspects that journal before
+pinning source and reuses its original request and commit. Only an explicit
+missing-journal response permits a new source pin; an unreadable journal or
+uncertain connection preserves the reservation for another recovery attempt.

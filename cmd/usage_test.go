@@ -33,10 +33,11 @@ func (tightMachine) Mem() (machine.Mem, error) {
 }
 
 const (
-	usageDirFlag   = "--dir"
-	usageForceFlag = "--force"
-	usageVerbStart = "agents.start"
-	usageCaller    = "usage-sup"
+	usageDirFlag    = "--dir"
+	usageForceFlag  = "--force"
+	usageVerbStart  = "agents.start"
+	usageCaller     = "usage-sup"
+	usageTestReader = "reader"
 )
 
 func isolateUsageTestEnv(t *testing.T) (dir, cfgPath string) {
@@ -54,6 +55,12 @@ func isolateUsageTestEnv(t *testing.T) (dir, cfgPath string) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("MEMCAP_STATE", filepath.Join(dir, "memcap"))
 	t.Setenv("PATH", dir+":/bin:/usr/bin")
+	// A command-less agy provider reads with the built-in `agy -p /usage`:
+	// never the host's agy, which CI has not either. A test that wants a
+	// reading writes its own fake agy over this one or stubs readUsage.
+	if err := os.WriteFile(filepath.Join(dir, config.AgyHarness), []byte("#!/bin/sh\necho 'agy: not available in tests' >&2\nexit 127\n"), 0o700); err != nil { //nolint:gosec // executable test stub in the test-owned temporary directory
+		t.Fatal(err)
+	}
 	return dir, cfgPath
 }
 
@@ -154,7 +161,7 @@ cat "` + outFile + `"
 	if err := os.WriteFile(codeFile, []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a.now = a.now.Add(6 * time.Minute)
+	a.now = a.now.Add(16 * time.Minute)
 	var capOut bytes.Buffer
 	a.out = &capOut
 	if err := a.capacityCmd().Execute(); err != nil {
@@ -387,7 +394,7 @@ capacity:
 	parkedManual.Park = &state.Park{By: parkedManual.Party, At: t0.UTC(), Waits: "manual go", Told: t0.UTC()}
 	waitingWorker := tasked("Waiter")
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup.Party, Since: t0.UTC()}}
 		st.Agents = []state.Agent{sup, tasked(busyOne), tasked(busyTwo), parkedAuto, parkedManual, waitingWorker}
 		st.Notes = []state.Note{{ID: 1, At: t0.UTC(), Text: "ship it?", Due: t0.Add(time.Hour).UTC()}}
 		return nil, nil
@@ -1189,6 +1196,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
       sevenDay:
         - {upTo: 95, floor: 1, ceiling: 1}
     omp:
+      kind: self-hosted
       floor: 1
       ceiling: 1
   choices:
@@ -1787,12 +1795,12 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 	w.providerUsageErr = map[string]string{claudeComm: "endpoint timeout"}
 
 	kw, uw := w.currentUsage(cfg.Capacity, t0)
-	if kw.Floor != 1 || kw.Ceiling != 2 || uw == nil || !strings.Contains(uw.Error, "claude: endpoint timeout") {
+	if kw.Floor != 3 || kw.Ceiling != 6 || uw != nil {
 		t.Fatalf("watcher.currentUsage with providerUsageErr: kw=(%d,%d), uw=%+v", kw.Floor, kw.Ceiling, uw)
 	}
-	w.capacity(context.Background(), &state.State{}, nil)
-	if strings.Contains(watchOut.String(), "CAPACITY LOW") {
-		t.Fatalf("watcher.capacity emitted CAPACITY LOW on unreadable provider usage:\n%s", watchOut.String())
+	w.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
+	if !strings.Contains(watchOut.String(), "last good read 1m") || !strings.Contains(watchOut.String(), "endpoint timeout") {
+		t.Fatalf("watch lost fallback: %s", watchOut.String())
 	}
 
 	// 4. Nit check: watchProvidersUsage with !w.chores and w.store == nil reuses the in-memory reading.
@@ -1893,7 +1901,7 @@ capacity:
 	parkedAgyGemini.Park = &state.Park{By: parkedAgyGemini.Party, At: t0.UTC(), On: "#3", Waits: "note 3", Told: t0.UTC(), Resumable: t0.UTC(), Answer: "go"}
 
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup.Party, Since: t0.UTC()}}
 		st.Agents = []state.Agent{sup, busyClaude, busyAgyClaude, busyAgyGemini, parkedClaude, parkedAgyClaude, parkedAgyGemini}
 		return nil, nil
 	}); err != nil {
@@ -2054,6 +2062,17 @@ func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
 
 	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+	// Both providers read with their built-in commands: agy's buckets have room.
+	a.readUsage = func(_ context.Context, command []string, _ time.Duration) (usageReading, error) {
+		if slices.Equal(command, config.DefaultAgyUsageCommand) {
+			w := func() *usageWindow { return &usageWindow{ResetsAt: t0.Add(2 * time.Hour)} }
+			return usageReading{
+				Buckets:     map[string]usageBucket{config.DefaultAgyGeminiBucket: {FiveHour: w(), SevenDay: w()}},
+				BucketOrder: []string{config.DefaultAgyGeminiBucket},
+			}, nil
+		}
+		return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
+	}
 
 	// 1. scratchArgv serializes --exclude without square brackets so a brokered child
 	//    agentStartCmd excludes claude and dispatches agy.
@@ -2110,6 +2129,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
   ceiling: 4
   providers:
     shared-agy:
+      command: [read-agy]
       floor: 1
       ceiling: 1
   choices:
@@ -2132,7 +2152,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	busyGemini := tasked("BusyGemini")
 	busyGemini.Harness, busyGemini.Model = harnessAgy, testModelGemini
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: sup.Party, Since: t0.UTC()}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: sup.Party, Since: t0.UTC()}}
 		st.Agents = []state.Agent{sup, busyGemini}
 		return nil, nil
 	}); err != nil {
@@ -2148,6 +2168,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	// Requesting --harness auto --model claude-opus-4-6-thinking must still attribute BusyGemini to
 	// shared-agy before filtering candidate choices to claude-opus-4-6-thinking, and refuse the start.
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+	stubSubscriptionUsage(a)
 	cmd := a.agentStartCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
@@ -3604,7 +3625,7 @@ func TestIdleFiveHourProviderCapacity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		provider := config.Provider{Floor: 1, Ceiling: 2, Usage: config.Usage{Command: []string{"reader"}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}}
+		provider := config.Provider{Floor: 1, Ceiling: 2, Usage: config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}}
 		view := buildSingleProviderView("claude", provider, providerAgents{}, providerReadingResult{reading: r, ok: true}, keepNow)
 		want := 2
 		if weekly > 80 {
@@ -3613,5 +3634,107 @@ func TestIdleFiveHourProviderCapacity(t *testing.T) {
 		if view.Error != "" || view.High || view.Ceiling != want || view.Room != want {
 			t.Fatalf("weekly %g: idle capacity %+v", weekly, view)
 		}
+	}
+}
+
+func TestUsageLastGoodFallback(t *testing.T) {
+	for _, cause := range []string{"claude timed out after 90s", "reader failed"} {
+		t.Run(cause, func(t *testing.T) {
+			store, err := state.OpenVersion(t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := keepNow
+			u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}
+			original := usageReading{At: now.Add(-6 * time.Minute), SevenDay: &usageWindow{UsedPercent: 80, ResetsAt: now.Add(6 * 24 * time.Hour)}}
+			if err := store.WriteFile(usageProviderFile("claude"), original); err != nil {
+				t.Fatal(err)
+			}
+			a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
+				return usageReading{}, errors.New(cause)
+			}}
+			r, err := a.resolveReading(context.Background(), usageProviderFile("claude"), u)
+			if err != nil || r.Fallback != cause || !r.At.Equal(original.At) {
+				t.Fatalf("fallback: %+v %v", r, err)
+			}
+			p := config.Provider{Usage: u, Floor: 1, Ceiling: 3}
+			pv := buildSingleProviderView("claude", p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+			if pv.Ceiling != 0 {
+				t.Fatalf("fallback bypassed pace: %+v", pv)
+			}
+			if !strings.Contains(pv.watchSummary(now), "last good read 6m") || !strings.Contains(pv.line(now), cause) {
+				t.Fatalf("fallback missing from output: %s", pv.line(now))
+			}
+			r.SevenDay = &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}
+			pv = buildSingleProviderView("claude", p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
+			if pv.Ceiling != 3 {
+				t.Fatalf("below-pace fallback blocked: %+v", pv)
+			}
+			a.now = now.Add(10 * time.Minute)
+			if _, err := a.resolveReading(context.Background(), usageProviderFile("claude"), u); err == nil {
+				t.Fatal("expired reading accepted")
+			}
+			a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+				return usageReading{SevenDay: &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
+			}
+			r, err = a.resolveReading(context.Background(), usageProviderFile("claude"), u)
+			if err != nil || r.Fallback != "" || !r.At.Equal(a.now) {
+				t.Fatalf("recovery: %+v %v", r, err)
+			}
+		})
+	}
+}
+
+func TestUsageReaderDeadline(t *testing.T) {
+	_, err := runUsageCommand(context.Background(), []string{sleepComm, "60"}, 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out after") {
+		t.Fatalf("deadline: %v", err)
+	}
+	u := config.Usage{Command: []string{usageTestReader}, Timeout: config.Duration{Duration: 2 * time.Minute}}
+	k := config.Capacity{Providers: map[string]config.Provider{"one": {Usage: u}, "two": {Usage: u}}}
+	if usageRefreshTimeout(k) != 4*time.Minute {
+		t.Fatalf("refresh cancels provider deadline: %s", usageRefreshTimeout(k))
+	}
+}
+
+func TestUsageFallbackReportedAgeExpires(t *testing.T) {
+	const readFailure = "reader timeout"
+	store, err := state.OpenVersion(t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := keepNow
+	age := 14.0
+	u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0}}}
+	a := &app{store: store, now: now, readUsage: func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{AgeMinutes: &age, SevenDay: &usageWindow{UsedPercent: 1, ResetsAt: now.Add(24 * time.Hour)}}, nil
+	}}
+	file := usageProviderFile(claudeComm)
+	r, err := a.resolveReading(context.Background(), file, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReadingAt(r, u, now.Add(30*time.Second)); err != nil {
+		t.Fatalf("valid source rejected: %v", err)
+	}
+	a.now = now.Add(6 * time.Minute)
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{}, errors.New(readFailure)
+	}
+	if _, err := a.resolveReading(context.Background(), file, u); err == nil {
+		t.Fatal("accepted 20-minute source as fallback")
+	}
+	p := config.Provider{Floor: 1, Ceiling: 3, Usage: u}
+	k := config.Capacity{Floor: 1, Ceiling: 3, Providers: map[string]config.Provider{claudeComm: p}}
+	derived, view := a.cachedProvidersCapacityAt(k, a.now, map[string]string{claudeComm: readFailure})
+	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
+		t.Fatalf("cached provider: %+v %+v", derived, view)
+	}
+	w := &watcher{app: a}
+	w.now = a.now
+	w.providerUsageErr = map[string]string{claudeComm: readFailure}
+	derived, view = w.currentUsage(k, a.now)
+	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
+		t.Fatalf("watch cache: %+v %+v", derived, view)
 	}
 }

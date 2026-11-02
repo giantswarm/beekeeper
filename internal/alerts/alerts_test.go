@@ -253,6 +253,30 @@ func TestStepTeamAlertInhibitedByWorkingHoursIsNew(t *testing.T) {
 	equal(t, lines, []string{"ALERT NEW alpha PAGE BUMBLEBEE AgentPlatformContainerRestartingTooOften agent-platform/mcp-capi since 18:34Z"})
 }
 
+// A silenced alert is never read, whoever's it is and whatever its severity:
+// beekeeper silences nothing, so every silence is another person's or team's.
+func TestNormalizeDropsSilencedAlerts(t *testing.T) {
+	silenced := func(r Raw) Raw {
+		r.Status.SilencedBy = []string{"silence-by-another-author"}
+		return r
+	}
+	hours := alert("wh", "InhibitionOutsideWorkingHours", "none", "atlas", "")
+	team := alert("tm", "AgentPlatformPodNotReady", "page", ourTeam, "")
+	inhibited := alert("ih", "AgentPlatformPodPending", "page", ourTeam, "")
+	inhibited.Status.InhibitedBy = []string{"wh"}
+	got := rules.Normalize([]Raw{hours, silenced(gateway), silenced(fluxWC), silenced(inhibited), team}, instA)
+	if len(got) != 1 {
+		t.Fatalf("silenced alerts read: %+v", got)
+	}
+	if _, ok := got["tm"]; !ok {
+		t.Fatalf("unsilenced team alert dropped: %+v", got)
+	}
+	got = rules.Normalize([]Raw{hours, inhibited}, instA)
+	if _, ok := got["ih"]; !ok || len(got) != 1 {
+		t.Fatalf("team alert under the working-hours inhibition dropped: %+v", got)
+	}
+}
+
 func TestStepFirstRunUnreachableThenFirstLook(t *testing.T) {
 	lines, st := rules.Step(instD, nil, Answer{Why: "no kube context for delta"}, now)
 	equal(t, lines, []string{"ALERTS delta unreachable, alerts never read: no kube context for delta"})

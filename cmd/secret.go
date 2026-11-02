@@ -65,7 +65,14 @@ source too, one value of a plain file on the host
 mapping or a line of its dotenv lines): a credential a CLI writes as a
 plain file (the Codex CLI's auth.json, for one) is read in beekeeper's
 process, the file under a directory of secret.fileRoots and never written,
-moved or deleted. A SOPS
+moved or deleted. A credential-store source (store://<entry>[#<field>]) is
+read with secret.store.read in the broker with secret.session or in the
+agent sandbox, otherwise in beekeeper's own process. No shared vault is
+required. The
+default field is the secret/password, an explicit field adds --attributes
+<field> before the entry. A {field} argument template in secret.store.read
+selects it for other adapters instead (password when omitted). These
+sources work with copy, compare and fingerprint. A SOPS
 file is encrypted under the creation rules of the .sops.yaml nearest above
 it.
 
@@ -156,7 +163,11 @@ anything is not equal.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
-			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, args)...)) {
+			beforeConsumer := args
+			if dash := cmd.ArgsLenAtDash(); cmd.Name() == "copy" && dash >= 0 {
+				beforeConsumer = args[:dash]
+			}
+			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -712,14 +723,22 @@ func (a *app) secretCopyToRemote(ctx context.Context, src secret.Ref, enc secret
 	if err != nil && !errors.Is(err, secret.ErrVault) {
 		err = refused("%v", err)
 	}
-	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(enc), f, outcome(err, fmt.Sprintf("%d bytes, mode %s, %s", res.Bytes, res.Mode, res.Fingerprint))); err != nil {
+	summary := fmt.Sprintf("%d bytes, mode %s", res.Bytes, res.Mode)
+	if res.Fingerprint != "" {
+		summary += ", " + res.Fingerprint
+	}
+	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(enc), f, outcome(err, summary)); err != nil {
 		return err
 	}
 	own := ""
 	if res.Owner != "" {
 		own = ", owner " + res.Owner
 	}
-	return a.secretPrint(res, fmt.Sprintf("wrote %s: %d bytes, mode %s%s, value %d bytes, fingerprint %s\n", res.File, res.Bytes, res.Mode, own, res.Length, res.Fingerprint))
+	fingerprint := ""
+	if res.Fingerprint != "" {
+		fingerprint = ", fingerprint " + res.Fingerprint
+	}
+	return a.secretPrint(res, fmt.Sprintf("wrote %s: %d bytes, mode %s%s, value %d bytes%s\n", res.File, res.Bytes, res.Mode, own, res.Length, fingerprint))
 }
 
 // copyPairs are the <ref>=<path> pairs of copy into a new file: every
@@ -1404,7 +1423,7 @@ func (a *app) secretArgsNeedVault(args []string) bool {
 // age identity secret.ageIdentities names, a file's included, which the
 // broker alone reads.
 func (a *app) secretNeedsBroker(args []string) bool {
-	return secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", a.secretFileArgs(args)) || a.recipientsNeedVault(args)
+	return secret.NeedsStore(args) || secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", a.secretFileArgs(args)) || a.recipientsNeedVault(args)
 }
 
 // ageOps decide where a SOPS file's age identity lives.

@@ -267,7 +267,7 @@ var secretCorpus = []struct{ cmd, safe string }{
 
 func TestSecretGuardCorpus(t *testing.T) {
 	for _, c := range secretCorpus {
-		d := decide(t, hook(), "/", c.cmd, nil)
+		d := decide(t, hook(), t.TempDir(), c.cmd, nil)
 		refused := d != nil && d.PermissionDecision == decisionDeny
 		switch {
 		case c.safe == "" && refused:

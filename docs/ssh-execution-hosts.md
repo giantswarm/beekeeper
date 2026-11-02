@@ -467,9 +467,13 @@ for each deferred line below and link it from PR 2. The parent remains open.
 The implementation's [operator guide](ssh-execution-hosts-operations.md) gives
 the concrete configuration and commands. The messaging follow-up in
 https://github.com/giantswarm/beekeeper/issues/1714 adds an ordered durable outbox,
-host inbox, streaming runner and UUID-bearing harness acceptance. Deferred capabilities remain in
-https://github.com/giantswarm/beekeeper/issues/1715 (coordinator lease), and
-https://github.com/giantswarm/beekeeper/issues/1716 (merge authorization).
+host inbox, streaming runner and UUID-bearing harness acceptance. The remaining
+slices add expiring coordinator leases
+(https://github.com/giantswarm/beekeeper/issues/1715) and live supervisor merge
+authorization (https://github.com/giantswarm/beekeeper/issues/1716). The latter
+uses the host component as a relay to a bounded synchronous coordinator merge;
+raw host merge commands remain denied. See the operator guide for the supported
+surface, disconnected-stop bound and same-account limitations.
 
 | Acceptance line | First slice | Required follow-up if deferred |
 | --- | --- | --- |
@@ -477,10 +481,11 @@ https://github.com/giantswarm/beekeeper/issues/1716 (merge authorization).
 | Per-host checkouts and workspaces; preserve dirty work; isolated Git metadata | Complete for the Claude adapter | None |
 | User supervisor; stable handle; one registration; interrupted startup recovery | Complete, including before-activation receipt and recovery command | None |
 | Durable ordered acknowledged messaging; identity; notes/reports/parks/resumes; no duplicate process | Durable controls and wake envelopes; ID-bearing harness acceptance, ordered cursors, retained parks and explicit uncertain delivery | None; crash-atomic model execution remains a harness limitation |
-| Shared capacity and holds; reachability; stop acknowledgement/unreachable state | Shared provider counts and reservations, host guards, explicit placement and acknowledged stop | Expiring coordinator lease and automatic recovery after a disconnected global stop |
-| Matching host rules/hooks and bound revocable audited merge authorization | Validate installed bundle; enforce host guards; deny all remote merges | Supervisor authorization service, grant consumption and host merge guard |
+| Shared capacity and holds; reachability; stop acknowledgement/unreachable state | Shared reservations, signed expiring coordinator lease, owned service stop and acknowledged reconciliation | None for new starts; older executions retain explicit-stop behavior |
+| Matching host rules/hooks and bound revocable audited merge authorization | Installed policy and host guards; live coordinator validates, consumes and audits exact-tuple grants before a bounded synchronous merge | None for supported Claude component commands; raw remote merge commands remain denied |
+| Credential-free branch and PR publication | Coordinator callback transfers verified bundles, pushes only an execution-owned branch, recovers its PR and synchronizes the default branch | None for the Claude publication component; see the operations guide for transfer bounds |
 | Separate authentication and ownership restrictions | Complete; no copying credentials or adopting personal sessions | None |
-| Failure tests, operator status and recovery | Lifecycle, identity, policy, ownership and refusal cases below | Message acceptance/reconnect, authorization lifecycle and control-lease tests |
+| Failure tests, operator status and recovery | Lifecycle, messaging, identity, policy, ownership, lease expiry/replay/lost replies and authorization lifecycle tests | Real hosts, paid models and real merges are intentionally excluded from these tests |
 
 ## Verification matrix
 

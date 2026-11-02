@@ -11,7 +11,7 @@ import (
 
 func TestSupervisorLoopLaunchAgent(t *testing.T) {
 	var spec SetupSpec
-	if err := json.Unmarshal([]byte(`{"Home":"/home","Exe":"/opt/my & bin/beekeeper","ConfigPath":"/config/my <desk>.yaml","SupervisorLoop":true}`), &spec); err != nil {
+	if err := json.Unmarshal([]byte(`{"Home":"/home","Exe":"/opt/my & bin/beekeeper","ConfigPath":"/config/my <desk>.yaml"}`), &spec); err != nil {
 		t.Fatal(err)
 	}
 	files, _ := (launchdSetup{}).Files(spec)
@@ -33,7 +33,7 @@ func TestSupervisorLoopLaunchAgent(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("opt-in supervisor loop launch agent missing")
+	t.Fatal("the supervisor loop launch agent is missing: install always writes it")
 }
 
 type anyXML struct{ XMLName xml.Name }

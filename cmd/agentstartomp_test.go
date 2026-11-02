@@ -186,13 +186,14 @@ func TestOmpStartNeedsVault(t *testing.T) {
 		Ceiling: 2,
 		Providers: map[string]config.Provider{
 			claudeComm:  {Floor: 1, Ceiling: 1},
-			omp.Harness: {Floor: 1, Ceiling: 1},
+			omp.Harness: {Kind: config.KindSelfHosted, Floor: 1, Ceiling: 1},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: testModelOpus47},
 			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
 		},
 	}
+	stubSubscriptionUsage(a)
 	for _, tc := range []struct {
 		args []string
 		want bool

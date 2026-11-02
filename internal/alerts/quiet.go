@@ -73,6 +73,12 @@ const Repeat = "repeat of an alert that never ended (same start)"
 // the damper has no window.
 const resolvedKeep = time.Hour
 
+// Wakes reports whether a firing alert belongs in the watch's event feed.
+// Keep the same quiet rules for live lines and durable supervisor events.
+func (r Rules) Wakes(installation string, a Alert) bool {
+	return r.quiet(installation, New, a.fp, a, nil) == ""
+}
+
 // quiet is why an alert's change wakes nobody, or "" when it does. kind is
 // the line's kind; resolved is what the installation's baseline remembers
 // of resolved alerts.

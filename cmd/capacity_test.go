@@ -46,30 +46,28 @@ func tasked(name string) state.Agent {
 	return state.Agent{Party: state.Party{Session: "s-" + name, Name: name}, Task: "fix o/r#1"}
 }
 
-// capacityRoster is a roster with every kind of entry: the supervisor and
-// the guide registered as agents, two busy workers, a kept one, one a timer
-// wakes, one waiting on its person, an idle one, a done one and two role
-// runs relieved since.
+// capacityRoster is a roster with every kind of entry: the guide registered
+// as an agent, two busy workers, a kept one, one a timer wakes, one waiting
+// on its person, an idle one, a done one and a guide run relieved since.
 func capacityRoster() (*state.State, []*claude.Session) {
-	sup, guide, kept, woken, waits := tasked("Supervisor run 68"), tasked("Guide run 9"), tasked("Judge"), tasked("BK 3"), tasked("BK 4")
+	guide, kept, woken, waits := tasked("Guide run 9"), tasked("Judge"), tasked("BK 3"), tasked("BK 4")
 	kept.Keep = &state.Keep{Reason: "a person returns to it"}
 	done := tasked("BK 5")
 	done.Done = true
-	relieved, guideRun := tasked("Supervisor run 60"), tasked("Guide run 8")
-	relieved.Task, guideRun.Task = "the supervisor's watch as Supervisor run 60", "the guide's role as Guide run 8"
+	guideRun := tasked("Guide run 8")
+	guideRun.Task = "the guide's role as Guide run 8"
 	st := &state.State{
-		Supervisor: &state.Supervisor{Party: sup.Party},
-		Guide:      &state.Role{Holder: &state.Supervisor{Party: guide.Party}},
-		Agents:     []state.Agent{sup, guide, tasked(busyOne), tasked(busyTwo), kept, woken, waits, {Party: state.Party{Session: "s-spare", Name: "spare"}}, done, relieved, guideRun},
-		Timers:     []state.Timer{{ID: 7, Due: keepNow.Add(time.Hour), What: "the batch job ended", Wake: "BK 3"}},
+		Guide:  &state.Role{Holder: &state.Supervisor{Party: guide.Party}},
+		Agents: []state.Agent{guide, tasked(busyOne), tasked(busyTwo), kept, woken, waits, {Party: state.Party{Session: "s-spare", Name: "spare"}}, done, guideRun},
+		Timers: []state.Timer{{ID: 7, Due: keepNow.Add(time.Hour), What: "the batch job ended", Wake: "BK 3"}},
 	}
 	sessions := []*claude.Session{{ID: "s-" + busyOne}, {ID: "s-BK 4", Waiting: &claude.Waiting{Action: "approve the plan"}}}
 	return st, sessions
 }
 
 // Busy is a roster agent with a task that is neither kept, woken by a timer
-// nor waiting on its person; the supervisor, the guide and their relieved
-// runs are not counted.
+// nor waiting on its person; the guide and its relieved runs are not
+// counted.
 func TestCountAgents(t *testing.T) {
 	st, sessions := capacityRoster()
 	c := countAgents(st, sessions, keepNow)
@@ -82,7 +80,7 @@ func TestCountAgents(t *testing.T) {
 		t.Errorf("count %+v, want %+v", c, want)
 	}
 	// The successor of an open relay is the role's, not a worker.
-	st.Relay = &state.Relay{To: st.Agents[2].Party, Expires: keepNow.Add(time.Minute)}
+	st.Guide.Relay = &state.Relay{To: st.Agents[1].Party, Expires: keepNow.Add(time.Minute)}
 	if c := countAgents(st, sessions, keepNow); !slices.Equal(c.Busy, []string{busyTwo}) {
 		t.Errorf("busy with a relay open to %s: %v", busyOne, c.Busy)
 	}
@@ -268,9 +266,9 @@ func TestWatchCapacitySlotBusy(t *testing.T) {
 	}
 }
 
-// supervised is a roster of n busy workers under a supervisor.
+// supervised is a roster of n busy workers.
 func supervised(n int) *state.State {
-	st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Session: "s-sup", Name: "Supervisor run 68"}}}
+	st := &state.State{}
 	for i := range n {
 		st.Agents = append(st.Agents, tasked(fmt.Sprint("BK ", i)))
 	}
@@ -439,7 +437,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	t.Cleanup(func() { plat = orig })
 
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgPath := emptyTestConfig(t, filepath.Join(dir, "config.yaml"))
 	t.Setenv("HOME", dir)
 	t.Setenv("BEEKEEPER_CONFIG", cfgPath)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
@@ -613,5 +611,31 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	}
 	if got := wFromZero.liveCapacity(); got.Floor != zero.Floor || got.Ceiling != zero.Ceiling {
 		t.Errorf("liveCapacity on broken file = %+v, want fallback %+v", got, zero)
+	}
+}
+
+func TestSubscriptionWithoutReaderRefusesStart(t *testing.T) {
+	for _, name := range []string{config.CodexHarness, config.ClaudeHarness, config.AgyHarness, "custom"} {
+		t.Run(name, func(t *testing.T) {
+			p := config.Provider{Floor: 0, Ceiling: 2}
+			v := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{}, time.Now())
+			if v.Room != 0 || v.Ceiling != 0 || !strings.Contains(v.Error, "usage not read") || len(v.Blocks) == 0 {
+				t.Fatalf("unknown subscription usage allowed: %+v", v)
+			}
+		})
+	}
+}
+
+// Subscription admission fixtures provide an explicit healthy reading instead
+// of relying on the former unpaced fallback for providers without a reader.
+func stubSubscriptionUsage(a *app) {
+	for name, p := range a.cfg.Capacity.Providers {
+		if !p.SelfHosted() && !p.Enabled() {
+			p.Command = []string{"fixture-usage"}
+			a.cfg.Capacity.Providers[name] = p
+		}
+	}
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return usageReading{FiveHour: &usageWindow{}, SevenDay: &usageWindow{}}, nil
 	}
 }

@@ -80,7 +80,7 @@ func (p Party) Is(o Party) bool {
 	return false
 }
 
-// Supervisor is the session holding the watch.
+// Supervisor is the session holding a relayed role (the guide's).
 type Supervisor struct {
 	Party
 	Since time.Time `json:"since"`
@@ -88,9 +88,9 @@ type Supervisor struct {
 	rest rest
 }
 
-// Relay is the supervisor naming its successor: the successor's
-// `supervisor start` takes the role and the grants until Expires; the
-// outgoing supervisor keeps both meanwhile.
+// Relay is a role's holder (the guide) naming its successor: the
+// successor's start takes the role until Expires; the outgoing holder keeps
+// it meanwhile.
 type Relay struct {
 	From    Party     `json:"from"`
 	To      Party     `json:"to"`
@@ -171,8 +171,7 @@ func (r *RelayDue) At(sup *Supervisor, relayAt int64) bool {
 
 // Role is a relayed role's record: its holder and term, its last relay,
 // the holders relays relieved, what beekeeper saw of its CLI and the relay
-// due the watch reported. The supervisor's lives in State's own fields
-// (SupervisorRole), the guide's in Guide.
+// due the watch reported: the guide's, in Guide.
 type Role struct {
 	Holder   *Supervisor `json:"holder,omitempty"`
 	Relay    *Relay      `json:"relay,omitempty"`
@@ -192,16 +191,6 @@ type Role struct {
 	AskingFrom string `json:"askingFrom,omitempty"`
 
 	rest rest
-}
-
-// SupervisorRole is the supervisor's record.
-func (st *State) SupervisorRole() Role {
-	return Role{Holder: st.Supervisor, Relay: st.Relay, Relieved: st.Relieved, CLI: st.SupervisorCLI, RelayDue: st.RelayDue, Run: st.SupervisorRun}
-}
-
-// SetSupervisorRole stores the supervisor's record.
-func (st *State) SetSupervisorRole(r Role) {
-	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue, st.SupervisorRun = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue, r.Run
 }
 
 // LocalAsking is the machine's own note the guide asks now, 0 when it
@@ -345,10 +334,17 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
-	By    Party     `json:"by"`
-	At    time.Time `json:"at"`
-	On    string    `json:"on,omitempty"`
-	Waits string    `json:"waits"`
+	// RefKind caches GitHub's Issue or PullRequest type for this park.
+	RefKind string `json:"refKind,omitempty"`
+	// RefChecked is the last lookup attempt; issues and unresolved references retry every five minutes.
+	RefChecked time.Time `json:"refChecked,omitzero"`
+	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
+	// Empty (including parks written by older versions) is a plain wait.
+	ReviewHead string    `json:"reviewHead,omitempty"`
+	By         Party     `json:"by"`
+	At         time.Time `json:"at"`
+	On         string    `json:"on,omitempty"`
+	Waits      string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -632,6 +628,19 @@ type Record struct {
 	rest rest
 }
 
+// Claim is a record published on its issue as a marker comment other desks
+// read: the comment, the session it names, since when and when this desk
+// last refreshed it.
+type Claim struct {
+	Issue   string    `json:"issue"`
+	Comment int64     `json:"comment"`
+	Session Party     `json:"session"`
+	At      time.Time `json:"at"`
+	Seen    time.Time `json:"seen"`
+
+	rest rest
+}
+
 // AlertOwner is the session that owns a firing alert (alerts own), until the
 // session ends or the alert resolves. A party without a session id is a
 // person, who owns it until it resolves.
@@ -787,7 +796,9 @@ type Start struct {
 // Request includes the private component callback credential and must never
 // be returned by an operator status or logs command.
 type ExecutionRecord struct {
+	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
+	Settled         bool                               `json:"settled,omitempty"`
 	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
 	Handle          execution.Handle                   `json:"handle"`
 	Request         execution.StartRequest             `json:"request"`
@@ -797,11 +808,24 @@ type ExecutionRecord struct {
 	Provider        string                             `json:"provider"`
 	Bucket          string                             `json:"bucket,omitempty"`
 	ReservedAt      time.Time                          `json:"reservedAt"`
+	LastActive      time.Time                          `json:"lastActive,omitzero"`
 	Observation     execution.Observation              `json:"observation"`
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
-	rest            rest
+	// Published is the execution's last publication (agents publish): its
+	// owned branch, the head it pushed and its pull request. Handle.Commit
+	// stays the commit the execution started from.
+	Published *ExecutionPublication `json:"published,omitempty"`
+	rest      rest
+}
+
+// ExecutionPublication is one publication of an SSH execution's branch.
+type ExecutionPublication struct {
+	At     time.Time `json:"at"`
+	Branch string    `json:"branch"`
+	Head   string    `json:"head"`
+	URL    string    `json:"url,omitempty"`
 }
 
 type ExecutionMessage struct {
@@ -944,7 +968,7 @@ func (s Start) of(p Party) bool {
 }
 
 // Knows reports whether p is a session beekeeper started (any mode), holds
-// the supervisor's or the guide's role, or is an agent on the roster: the
+// the guide's role, or is an agent on the roster: the
 // sessions the hooks act in wherever they run.
 func (st *State) Knows(p Party) bool {
 	if p.Session == "" && p.HostSession == "" {
@@ -955,10 +979,8 @@ func (st *State) Knows(p Party) bool {
 			return true
 		}
 	}
-	for _, h := range []*Supervisor{st.Supervisor, st.GuideRole().Holder} {
-		if h != nil && h.Is(p) {
-			return true
-		}
+	if h := st.GuideRole().Holder; h != nil && h.Is(p) {
+		return true
 	}
 	for _, a := range st.Agents {
 		if a.Is(p) {
@@ -970,19 +992,8 @@ func (st *State) Knows(p Party) bool {
 
 // State is the whole document.
 type State struct {
-	Supervisor *Supervisor `json:"supervisor,omitempty"`
-	// Relay is the supervisor's last relay: open, taken or expired.
-	Relay *Relay `json:"relay,omitempty"`
-	// Relieved are the supervisors relays relieved, one per party.
-	Relieved []Relief `json:"relieved,omitempty"`
-	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
-	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
-	// SupervisorRun is the highest supervisor run numbered.
-	SupervisorRun int `json:"supervisorRun,omitempty"`
-	// RelayDue is the relay due the watch reported to the supervisor.
-	RelayDue *RelayDue `json:"relayDue,omitempty"`
-	// Guide is the guide's role, the supervisor's counterpart for the
-	// person's decisions.
+	// Guide is the guide's role: the person's decisions. The supervisor is
+	// the supervisor loop, which holds no role record.
 	Guide *Role `json:"guide,omitempty"`
 	// Grants are queued per resource in the order given.
 	Grants []Grant `json:"grants,omitempty"`
@@ -1004,6 +1015,9 @@ type State struct {
 	NextTimer int     `json:"nextTimer,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
+	// Claims are the records this desk published on GitHub as claims
+	// other desks read (board.claims).
+	Claims []Claim `json:"claims,omitempty"`
 	// Starts are the sessions beekeeper started, what the permission hook
 	// answers for.
 	Starts []Start `json:"starts,omitempty"`
@@ -1058,6 +1072,7 @@ type State struct {
 	// WorkerReports are the reports workers finished with (agents idle
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
+	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
@@ -1183,6 +1198,7 @@ func (s *State) PairOf(key string) int {
 // follow-ups). The supervisor's watch prints it once and drops it; the event
 // log keeps it (agents.report, agents.problem).
 type WorkerReport struct {
+	Finished bool      `json:"finished,omitempty"`
 	By       Party     `json:"by"`
 	At       time.Time `json:"at"`
 	Task     string    `json:"task,omitempty"`
@@ -1394,6 +1410,12 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteHistory is the optional history of a store that retains central note
+// closures beyond the late-answer window. File-backed stores need not implement it.
+type NoteHistory interface {
+	NoteClosure(int) (*Event, error)
 }
 
 // Store is the seam every command reads and changes the state through.

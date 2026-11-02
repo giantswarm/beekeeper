@@ -128,7 +128,10 @@ reading again. A
 cluster whose release changes begins an upgrade: its release label differs
 from the one cluster-api-events recorded, cluster-api-events marks it
 upgrading, or its scheduled upgrade is due. It ends once none of that holds
-and its control plane and node pools have rolled. While it runs, the
+and its control plane and node pools have rolled; a marked one once the
+cluster reports the release cluster-api-events recorded and has rolled out
+for an hour from its start stamp, or that start is a day ago; a rollout
+after the mark cleared a day after its hold began. While it runs, the
 installation is held (hold upgrade:<installation>/<cluster>): the gate
 refuses the merges of its lanes and lease claims of its name are refused.
 "UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and
@@ -137,12 +140,10 @@ line and keeps its holds. The installations whose kube context is not in the
 kubeconfig kubectl reads are not read, keep their holds and alert baselines,
 and are named once per watch in one line each for UPGRADES and ALERTS.
 
-Once the supervisor session's context (its transcript's last request, the
-CTX column) reaches supervisor.relayAt, RELAY DUE is said at the first
-quiet moment: no gated merge running or settling, no grant waiting to be
-claimed, no claim queued and no relay open. It is said once per supervisor
-and supervisor.relayAt, again after a relay is cancelled or expires, and
-once more by every watch that did not say it yet (a restarted watch).
+The supervisor is the supervisor loop, no session. Once the loop has not
+run for two minutes every watch says SUPERVISOR LOOP DOWN once, and
+SUPERVISOR LOOP BACK when it runs again; on Linux the standby watch
+restarts its systemd service meanwhile (see --standby).
 
 Every poll but --once's runs beekeeper doctor in the background (its last
 run still going, the poll skips it): one DOCTOR line per agent it took off
@@ -185,8 +186,8 @@ open (no-supervisor, critical) and an unowned page (page-unowned, critical). The
 IMMINENT, OOM kills, load, processes) never notify: the supervisor acts on
 them, and its watch says them. Each
 event is one notification however many watches notify: the first to claim
-it in notify.json sends it. A lasting condition and a supervisor gone
-notify again after notify.repeat (30m); notify.quietHours hold
+it in notify.json sends it. A lasting condition and the supervisor loop
+down notify again after notify.repeat (30m); notify.quietHours hold
 everything but a critical one and send what they held as one notification
 when they end. Nothing routine notifies. With no notification service the
 watch runs on, prints its lines and says so once.
@@ -199,17 +200,20 @@ claims each event once across the machine's watches; a dispatch is logged
 (sink.dispatched), a failed one said (SINK FAILED, sink.failed) and tried
 again by the next poll.
 
---standby is for a watch that runs when no supervisor does (the
-beekeeper-notify user unit): while a supervisor's session runs it leaves
-the notes, timers, session records and relays to the supervisor's watch,
-and it never reads the alerts, so it takes nothing from the supervisor's
-view. It reads the upgrades and sets and lifts their holds only while no
-supervisor's watch has begun an upgrade cycle within five watch.interval
-(upgrades-watch.json), and says so once. It relays a supervisor or guide
-that is still over its relayAt <role>.relayGrace (30m) after its relay
-due, with no relay open and, for the supervisor, at a quiet moment: it
-starts the successor as the holder's own relay does (RELAYED), and the
-successor's start takes the role.
+--standby is for a watch that runs beside the supervisor loop (the
+beekeeper-notify user unit): while the loop runs it leaves the notes,
+timers, session records and relays to the loop's watch, and it never reads
+the alerts, so it takes nothing from the loop's view. While the loop does
+not run, it starts the beekeeper-supervisor-loop systemd service again
+(Linux only: on macOS launchd restarts a failed loop itself), at most once
+a minute and never during a stop (SUPERVISOR LOOP RESTARTED); it never
+starts a session for the supervisor. A scratch configuration's watch
+restarts no service. It reads the upgrades and sets and lifts their holds
+only while no loop's watch has begun an upgrade cycle within five
+watch.interval (upgrades-watch.json), and says so once. It relays a guide
+that is still over its relayAt guide.relayGrace (30m) after its relay due,
+with no relay open: it starts the successor as the holder's own relay does
+(GUIDE RELAYED), and the successor's start takes the role.
 
 The quiet rules keep what is noise for the supervisor out of the output:
 other teams' alerts matching alerts.quiet (by default, once alerts.team is
@@ -284,6 +288,12 @@ it reads a watch on the host, and stopping it stops the watch.`,
 			for {
 				w := a.newWatcher(standby, !once)
 				w.restart = restart
+				if standby && a.explicitConfig() == "" {
+					// The standby restarts the machine's own loop service
+					// while the loop is down; a scratch configuration's
+					// watch restarts none, nor does any other watch.
+					w.stand.loopUnit = launchedLoop()
+				}
 				err := a.runWatcher(ctx, w, once, notifyDesktop)
 				if !errors.Is(err, errRestart) {
 					return err
@@ -314,8 +324,10 @@ func (a *app) runWatcher(ctx context.Context, w *watcher, once, notifyDesktop bo
 
 type watcher struct {
 	*app
-	mu   sync.Mutex
-	last map[string]time.Time
+	// loopOwned leaves event actions to the deterministic supervisor.
+	loopOwned bool
+	mu        sync.Mutex
+	last      map[string]time.Time
 	// active are the lasting conditions said and not yet ENDED.
 	active map[string]condition
 	// markFile keeps active and reported for a restarted watch; dirty is
@@ -352,9 +364,6 @@ type watcher struct {
 	// noContextSaid are the readers (ALERTS, UPGRADES) whose installations
 	// without a kube context this watch said.
 	noContextSaid map[string]bool
-	// gap is the term of the gone supervisor this watch said, until a
-	// supervisor is back.
-	gap string
 	// records are the session records of the last poll: their sessions'
 	// ends get the record's line instead of the SESSIONS ended one.
 	records []state.Record
@@ -367,9 +376,6 @@ type watcher struct {
 	// waits are the reopen waits this watch said, by agent session and the
 	// wait's start, until they end.
 	waits map[string]time.Time
-	// dues are the supervisor's relay dues this watch said; nil in a watch
-	// --once.
-	dues relayDues
 	// stand is the standby watch's memory of its messages, successors and
 	// reopens; table the last poll's process table.
 	stand standbyWatch
@@ -427,6 +433,7 @@ type watcher struct {
 	usageReported                  time.Time
 	providerLastUsage              map[string]time.Time
 	providerUsageErr               map[string]string
+	executionSyncFailures          map[string]int
 	// sinkPending are the events of the sink's verbs within sink.Window,
 	// sinking is set while their dispatch runs, sinkLedger claims each one
 	// once across the machine's watches.
@@ -593,7 +600,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.timerActs.Wait()      // nor a timer's wake or command
 		return w.onceErr()
 	}
-	w.diskPruneOn = true
+	w.diskPruneOn = !w.loopOwned
 	w.goCacheOn = true
 	w.dockerOn = true
 	w.freeOn = true
@@ -643,16 +650,16 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 			cancel(errRestart)
 		}
 	})
-	if w.restartFor == nil {
-		return nil
-	}
-	// The restart stops the watch as a SIGTERM does and waits for every run
-	// it started: a save under way ends before the new binary starts, and
-	// the restarted watch's mark says nothing twice.
+	// Every shutdown waits for the runs the watch started, including saves
+	// still writing its state after cancellation.
 	wg.Wait()
 	w.bg.Wait()
 	w.stand.inflight.Wait()
 	w.timerActs.Wait()
+	if w.restartFor == nil {
+		return nil
+	}
+	// A restarted watch's mark says nothing twice.
 	w.saveMark()
 	return errRestart
 }
@@ -763,6 +770,9 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 		case err != nil:
 			w.emit("alerts", "ALERTS baseline unusable: %v", err)
 		case !owned:
+			if base, err := store.Load(); err == nil {
+				w.publishAlerts(base.Firing(""))
+			}
 			reader.Close()
 			w.clear("alerts")
 			if owner.PID != other {
@@ -776,6 +786,9 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 				w.emitNow("alerts", "ALERTS taken over by this watch")
 			}
 			lines, noContext := w.alertCycle(ctx, store, reader)
+			if base, err := store.Load(); err == nil {
+				w.publishAlerts(base.Firing(""))
+			}
 			for _, l := range lines {
 				w.emitNow("alerts", "%s", l)
 			}
@@ -846,6 +859,9 @@ func (w *watcher) clear(key string) {
 	w.dirty = w.dirty || active
 	w.mu.Unlock()
 	if active {
+		if w.store != nil {
+			_ = w.store.Record(event(watchParty, "watch.clear", "%s", key))
+		}
 		w.emitNow("ended", "ENDED %s (since %s)", c.Label, c.Since.Local().Format("15:04"))
 	}
 }
@@ -916,12 +932,11 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{}, doctored: map[string]bool{},
 		upgrades: upgrade.Readings{}}
 	if keep {
-		w.dues = relayDues{}
 		// A poll reads every session's transcript (RUNAWAY): an idle
 		// session's read stays good for a few polls.
 		a.transcripts = claude.NewTranscriptCache(transcriptFresh)
 	}
-	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
+	w.stand = standbyWatch{send: a.peerSend, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1085,8 +1100,12 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 }
 
 // emitNow prints an event that is never folded away.
-func (w *watcher) emitNow(_ string, format string, args ...any) {
-	w.emitLine(time.Now().Format("15:04:05") + " " + fmt.Sprintf(format, args...))
+func (w *watcher) emitNow(key string, format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	if w.store != nil {
+		_ = w.store.Record(event(watchParty, "watch."+key, "%s", line))
+	}
+	w.emitLine(time.Now().Format("15:04:05") + " " + line)
 }
 
 // emitLine prints one complete line.
@@ -1173,6 +1192,9 @@ func (w *watcher) sample(ctx context.Context) {
 		}
 	}
 	w.saveMark()
+	if w.loopOwned {
+		w.publishMachine()
+	}
 }
 
 // sampleCPU says the CPU lines: HIGH LOAD over watch.loadMax (or
@@ -1553,6 +1575,10 @@ func (w *watcher) exposures() {
 // when GitHub refuses GraphQL calls, with the callers drawing on it.
 func (w *watcher) budget(ctx context.Context, now time.Time) {
 	b, err := w.probeBudget(ctx)
+	if ctx.Err() == nil {
+		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
+		w.publishBudget(held)
+	}
 	switch {
 	case err != nil && ctx.Err() != nil:
 	case err != nil:
@@ -1849,9 +1875,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	w.clear("state-read")
+	if w.chores {
+		defer w.claims(ctx)
+	}
 	st = w.syncExecutions(ctx, st)
 	w.records = st.Records
-	supervised := w.supervisorGone(ctx, st, sessions)
+	supervised := w.checkLoop(ctx, st)
 	if w.standby {
 		w.guideGone(ctx, st, sessions)
 		w.resumeRestarted(ctx, guideRole, st, sessions)
@@ -1861,8 +1890,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.importRows(ctx, st)
 	}
 	if w.standby && supervised {
-		w.resumeRestarted(ctx, supervisorRole, st, sessions)
-		return // the supervisor's watch reports them
+		return // the supervisor loop's watch reports them
 	}
 	w.sayStop(st)
 	w.noteAnswers(st)
@@ -1880,7 +1908,6 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
 	w.rowlessAgents(st)
-	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
@@ -1900,7 +1927,6 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	var fires []timerFire
 	var defaulted, overtaken []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
-		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
 		hl, he := liftProbed(st, probed)
 		lines, evs = append(lines, hl...), append(evs, he...)
@@ -1915,18 +1941,11 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, kl...), append(evs, ke...)
 		tl, te, tf, touched := settleTimersMatching(st, found, w.now, settles)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
-		seen = seen || touched
+		seen := touched
 		pl, pe := firePending(st, sessions, w.now)
 		lines, evs = append(lines, pl...), append(evs, pe...)
 		ppl, ppe := parkedNews(st, w.cfg.Guide.Person, w.now)
 		lines, evs = append(lines, ppl...), append(evs, ppe...)
-		for _, e := range ce {
-			lines = append(lines, fmt.Sprintf("SUPERVISOR RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
-		}
-		evs = append(evs, ce...)
-		rl, re := fireRelay(st, w.now)
-		dl, de := fireRelayDue(st, q, w.dues, w.now)
-		lines, evs = append(append(lines, rl...), dl...), append(append(evs, re...), de...)
 		return lines, evs, seen || len(lines) > 0 || len(evs) > 0
 	}
 	if _, _, changed := fire(st); !changed {
@@ -2130,78 +2149,95 @@ func firedNow(st *state.State, now time.Time) []dueItem {
 	return out
 }
 
-// supervisorGone says once, and notifies, when the recorded supervisor's
-// CLI stayed gone past the restart grace with no relay open: its grant rule
-// holds, so every claim waits for a successor. The notification repeats
-// after notify.repeat while the gap lasts; a supervisor back is one line.
-// It reports whether a supervisor runs (a restarting one does not: its
-// watch restarts with it).
-func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions []*claude.Session) bool {
-	s := st.Supervisor
-	sv := readSupervision(st, sessions, w.now, w.cfg.Supervisor.RestartGrace.Duration)
-	var key string
-	if s != nil {
-		key = s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
-	}
-	if sv.live {
-		w.stand.liveTerm, w.stand.liveAt = key, w.now
-		w.upAgain(supervisorRole, s.Party)
-	}
-	if !sv.down() || relayPending(st, st.SupervisorRole(), w.now) || w.firstTurn(ctx, st, s.Party) {
-		switch {
-		case s == nil:
-			w.gap = ""
-		case sv.live && w.gap != "":
-			w.gap = ""
-			w.emitNow("supervisor", "SUPERVISOR BACK: %q supervises since %s", s.Name, clock(w.now, s.Since))
+// loopDownGrace is how long the supervisor loop may be down before a watch
+// says so: a restart of its service, or one the standby watch makes, is
+// back within it.
+const loopDownGrace = 2 * time.Minute
+
+// loopRestartEvery is how often the standby watch restarts the supervisor
+// loop's service while the loop stays down.
+const loopRestartEvery = time.Minute
+
+// checkLoop checks the supervisor, which is the supervisor loop, and
+// reports whether it runs. While it does not the standby watch restarts
+// its service (never during a stop) at most every loopRestartEvery, and
+// once it stayed down past loopDownGrace every watch says SUPERVISOR LOOP
+// DOWN and notifies (no-supervisor) until it runs again. No session is
+// ever started or relayed for it.
+func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
+	if w.loopRunning() {
+		if w.stand.loopDown {
+			w.emitNow("supervisor", "SUPERVISOR LOOP BACK: the supervisor loop runs again (down since %s)", clock(w.now, w.stand.loopSince))
 		}
-		return sv.live
+		w.stand.loopDown, w.stand.loopSince = false, time.Time{}
+		return true
 	}
-	successor := ""
-	if w.standby && !w.reopenAfterAppStart(ctx, st, sv.gone, key) {
-		successor = w.standIn(ctx, supervisorRole, st, s.Party, key)
+	if st.Stop != nil {
+		// A stop holds the loop too: nothing restarts it, sayStop reports.
+		w.stand.loopSince = time.Time{}
+		return false
 	}
-	l := fmt.Sprintf("SUPERVISOR GONE: %q (supervising since %s) is gone since %s; claims stay gated until a successor's beekeeper supervisor start (beekeeper handover --prompt)%s",
-		s.Name, clock(w.now, s.Since), clock(w.now, sv.gone), successor)
-	if w.gap != key {
-		w.gap = key
+	if w.stand.loopSince.IsZero() {
+		w.stand.loopSince = w.now
+	}
+	restart := ""
+	if w.standby {
+		restart = w.restartLoop(ctx)
+	}
+	if w.now.Sub(w.stand.loopSince) < loopDownGrace {
+		return false
+	}
+	key := "loop@" + w.stand.loopSince.UTC().Format(time.RFC3339)
+	l := fmt.Sprintf("SUPERVISOR LOOP DOWN: the supervisor loop does not run since %s; no pull request is reviewed or merged on its go and no worker starts until it runs (%s)%s",
+		clock(w.now, w.stand.loopSince), loopServiceHint(), restart)
+	if !w.stand.loopDown {
+		w.stand.loopDown = true
 		w.emitNow("supervisor", "%s", l)
 	}
-	w.notify(ctx, notify.NoSupervisor, key, "beekeeper: no supervisor, claims gated", l)
+	w.notify(ctx, notify.NoSupervisor, key, "beekeeper: the supervisor loop is down", l)
 	return false
 }
 
-// quietness reads whether the machine is at a quiet moment, once the
-// supervisor's context reached relayAt and this watch did not say its relay
-// due yet.
-func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*claude.Session) quietness {
-	relayAt := w.cfg.Supervisor.RelayAt
-	c := relayContext(st, sessions, w.now, relayAt, w.dues)
-	if c == 0 {
-		return quietness{}
+// restartLoop starts the supervisor loop's service again (standby watch),
+// at most every loopRestartEvery and only while the service is not
+// starting already. It returns what the DOWN line adds.
+func (w *watcher) restartLoop(ctx context.Context) string {
+	unit := w.stand.loopUnit
+	if unit == nil {
+		return "; this watch restarts no service here (only the standby, on Linux with systemd)"
 	}
-	return quietness{checked: true, context: c, relayAt: relayAt, busy: w.busyNow(ctx, st)}
+	switch unit.state(ctx) {
+	case unitActive, "activating", "reloading":
+		return "; its service is starting"
+	}
+	if !w.stand.loopRestart.IsZero() && w.now.Sub(w.stand.loopRestart) < loopRestartEvery {
+		return fmt.Sprintf("; the standby watch restarted its service at %s", clock(w.now, w.stand.loopRestart))
+	}
+	w.stand.loopRestart = w.now
+	if err := unit.start(ctx); err != nil {
+		w.emitNow("supervisor-restart", "SUPERVISOR LOOP RESTART FAILED: %s: %v (beekeeper install installs it)", loopUnit, err)
+		return fmt.Sprintf("; restarting its service failed: %v", err)
+	}
+	w.emitNow("supervisor-restart", "SUPERVISOR LOOP RESTARTED: the standby watch started %s again", loopUnit)
+	return "; the standby watch restarted its service"
 }
 
-// busyNow says what keeps the machine from a quiet moment for a relay
-// (busyWith), "" when quiet: outside the state lock, since a settling
-// merge's installation is read with kubectl.
-func (w *watcher) busyNow(ctx context.Context, st *state.State) string {
-	holders, err := lease.Dir(w.cfg.LeaseDir).List()
-	if err != nil {
-		return fmt.Sprintf("the leases cannot be read: %v", err)
+// loopService reads and starts the supervisor loop's user service.
+type loopService struct {
+	state func(ctx context.Context) string
+	start func(ctx context.Context) error
+}
+
+// launchedLoop is the loop's service on plat's launcher, nil where this
+// machine has none.
+func launchedLoop() *loopService {
+	if !plat.Launcher.Available() {
+		return nil
 	}
-	hrs := map[string][]merge.HelmRelease{}
-	rolled := func(m state.Merge, lane config.Lane) bool {
-		h, ok := hrs[lane.Name]
-		if !ok {
-			h, _ = w.helmReleases(ctx, lane) // unreadable: not rolled, not quiet
-			hrs[lane.Name] = h
-		}
-		ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration)
-		return h != nil && ready
+	return &loopService{
+		state: func(ctx context.Context) string { return plat.Launcher.State(ctx, loopUnit) },
+		start: func(ctx context.Context) error { return plat.Launcher.Resume(ctx, loopUnit) },
 	}
-	return busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)
 }
 
 // firePending marks what is due or ended in st as reported and returns its

@@ -803,12 +803,19 @@ func TestHookGatesRealMerges(t *testing.T) {
 		var c struct {
 			Command string `json:"command"`
 			Merges  int    `json:"merges"`
+			Refused bool   `json:"refused"`
 		}
 		if err := json.Unmarshal([]byte(line), &c); err != nil {
 			t.Fatal(err)
 		}
 		n++
 		d := decide(t, h, t.TempDir(), c.Command, nil)
+		if c.Refused {
+			if d == nil || d.PermissionDecision != decisionDeny {
+				t.Errorf("unsafe raw merge passed: %s (%+v)", c.Command, d)
+			}
+			continue
+		}
 		if d == nil || d.PermissionDecision != decisionAllow {
 			t.Errorf("%q: not gated: %+v", c.Command, d)
 			continue

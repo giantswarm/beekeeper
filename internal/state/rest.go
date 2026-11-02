@@ -107,6 +107,7 @@ type (
 	plainNote         Note
 	plainTimer        Timer
 	plainRecord       Record
+	plainClaim        Claim
 	plainAlertOwner   AlertOwner
 	plainStart        Start
 	plainApp          App
@@ -130,8 +131,25 @@ type (
 	plainStop         Stop
 )
 
-func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
-func (v State) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainState(v), v.rest) }
+func (v *State) UnmarshalJSON(b []byte) error {
+	if err := decodeKeeping(b, (*plainState)(v), &v.rest); err != nil {
+		return err
+	}
+	for _, k := range retiredStateKeys {
+		delete(v.rest, k)
+	}
+	if len(v.rest) == 0 {
+		v.rest = nil
+	}
+	return nil
+}
+
+// retiredStateKeys are the members of the supervisor session's role that
+// older binaries wrote: the supervisor is the supervisor loop, so a state
+// read drops them and the next write leaves them out.
+var retiredStateKeys = []string{"supervisor", "relay", "relieved", "supervisorCLI", "supervisorRun", "relayDue"}
+
+func (v State) MarshalJSON() ([]byte, error) { return encodeKeeping(plainState(v), v.rest) }
 func (v *Supervisor) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainSupervisor)(v), &v.rest)
 }
@@ -168,6 +186,8 @@ func (v *Timer) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*pl
 func (v Timer) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainTimer(v), v.rest) }
 func (v *Record) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainRecord)(v), &v.rest) }
 func (v Record) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainRecord(v), v.rest) }
+func (v *Claim) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainClaim)(v), &v.rest) }
+func (v Claim) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainClaim(v), v.rest) }
 func (v *AlertOwner) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainAlertOwner)(v), &v.rest)
 }

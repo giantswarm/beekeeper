@@ -73,8 +73,13 @@ func parseClaudeUsage(raw []byte, now time.Time) (usageReading, error) {
 		}
 		return usageReading{}, fmt.Errorf("claude /usage has no plan windows: %s", doc.Result)
 	}
-	if r.FiveHour == nil || r.SevenDay == nil {
-		return usageReading{}, errors.New("claude /usage omits Current session or Current week (all models)")
+	if r.SevenDay == nil {
+		return usageReading{}, errors.New("claude /usage omits Current week (all models)")
+	}
+	if r.FiveHour == nil {
+		// No Current session line next to the aggregate week is an idle
+		// 5-hour window: none opens until the next request.
+		r.FiveHour = &usageWindow{UsedPercent: 0}
 	}
 	return r, nil
 }

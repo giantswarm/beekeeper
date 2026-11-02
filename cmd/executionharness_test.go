@@ -17,7 +17,7 @@ func TestExecutionHarnessKeepsLocalDispatchAndRefusesUnsupportedRemoteCalls(t *t
 			t.Fatal("local harness dispatch changed")
 		}
 	}
-	if _, err := executionHarness(codexHarness{}, executionStartOptions{Host: sshTestSelector}, ""); err == nil {
+	if _, err := executionHarness(ompHarness{}, executionStartOptions{Host: sshTestSelector}, ""); err == nil {
 		t.Fatal("unsupported remote harness admitted")
 	}
 	h, err := executionHarness(base, executionStartOptions{Host: sshTestSelector}, "")

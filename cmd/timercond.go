@@ -146,7 +146,12 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 		case !t.Conditional():
 			f.reason = "due " + clock(now, t.Due)
 		case r.holds:
+			// A condition that says how it settled (pr-checks: green or
+			// red) tells the woken agent.
 			f.reason = timerCond(t) + " holds"
+			if r.reason != "" {
+				f.reason += ": " + r.reason
+			}
 		case over && t.Expire:
 			changed = true
 			lines = append(lines, fmt.Sprintf("TIMER EXPIRED: #%d, %s did not hold by %s%s: %s", t.ID, timerCond(t), clock(now, t.Until), lastFound(t), truncate(t.What, 200)))

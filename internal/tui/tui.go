@@ -84,15 +84,11 @@ type Data struct {
 	Errors []string
 }
 
-// Status is the one-line summary: who supervises and what is pending.
+// Status is the one-line summary: whether the supervisor loop runs and
+// what is pending.
 type Status struct {
-	// Supervisor is the recorded supervisor's name, "" when none is.
-	Supervisor string
-	// SupervisorLive is whether its session runs.
-	SupervisorLive bool
-	// SupervisorGone says the supervisor is recorded but its session is
-	// gone: claims wait for a successor.
-	SupervisorGone bool
+	// SupervisorLoop is whether the supervisor loop runs.
+	SupervisorLoop bool
 	// LeaseCount, HoldCount count what is held; Due counts the notes and
 	// timers whose time has come.
 	LeaseCount int
@@ -399,7 +395,7 @@ type Merge struct {
 	Roll     []string
 }
 
-// Role is the supervisor's or the guide's record as the screen reads it.
+// Role is the guide's record as the screen reads it.
 type Role struct {
 	// Name is "supervisor" or "guide".
 	Name   string

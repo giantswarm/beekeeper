@@ -41,7 +41,7 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 		name, as, session, want string
 	}{
 		{"no --as outside a session", "", "", "a call without --as: only the person changes priorities; the guide relays the person's word with --as Timo"},
-		{"the supervisor without --as", "", supSession, "the supervisor without --as: only the person changes priorities"},
+		{"the guide without --as", "", supSession, "the guide without --as: only the person changes priorities"},
 		{"a worker without --as", "", "w1", "the worker without --as: only the person changes priorities"},
 		{"another name", supervisorName, supSession, `--as "supervisor" is no configured person (Timo): only the person changes priorities`},
 	} {
@@ -50,7 +50,7 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 			a, store := priorityApp(t, tc.as)
 			if err := store.Update(func(st *state.State) ([]state.Event, error) {
-				st.SetSupervisorRole(state.Role{Holder: &state.Supervisor{Party: sup}})
+				guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: sup}})
 				st.Agents = append(st.Agents, state.Agent{Party: worker, Task: refOne})
 				return nil, nil
 			}); err != nil {

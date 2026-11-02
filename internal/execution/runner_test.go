@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
@@ -305,6 +308,103 @@ func TestCheckRefusesShadowedBoundExecutable(t *testing.T) {
 	}
 	if _, err := tr.Check(ctx); err != nil {
 		t.Fatalf("host with the bound installation under the worker command name refused: %v", err)
+	}
+}
+
+// A lease-expiry stop (and any stop of the runner's own unit) reaches the
+// runner as SIGTERM while its harness is still streaming. The runner must
+// record the stop as an orderly exit and return success, not lose the
+// terminal journal write to "execution journal is busy" and exit 1.
+func TestRunnerStopsOrderlyWhenItsUnitIsStoppedDuringATurn(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	f := testFixture(t)
+	ctx := context.Background()
+	child := filepath.Join(t.TempDir(), "fake-harness")
+	script := `#!/bin/sh
+set -eu
+session=''
+while [ "$#" -gt 0 ]; do
+ if [ "$1" = '--session-id' ]; then session="$2"; shift; fi
+ shift
+done
+input=$(cat)
+test "$input" = 'complete the fixture task'
+printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$session"
+exec sleep 30
+`
+	if err := os.WriteFile(child, []byte(script), 0o700); err != nil { //nolint:gosec // executable fake harness in the test's own temporary directory
+		t.Fatal(err)
+	}
+	h := f.s.Config.Harnesses[HarnessClaude]
+	h.Executable = child
+	f.s.Config.Harnesses[HarnessClaude] = h
+	original := f.s.Command
+	f.s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+		if bin == child {
+			bin = fixtureClaudeExecutable
+		}
+		return original(ctx, dir, env, bin, args...)
+	}
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	f.r.RegistrationReceipt = Sign(f.r, f.key, f.s.now())
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runnerDone := make(chan error, 1)
+	go func() { runnerDone <- f.s.Run(runCtx, f.r.Ref) }()
+	readyAt := time.Now().Add(10 * time.Second)
+	for {
+		j, err := f.s.Read(f.r.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.Ready {
+			break
+		}
+		if time.Now().After(readyAt) {
+			t.Fatal("fixture harness never became ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The expiry records its stop intent durably before stopping the owned
+	// unit, exactly as maintainLease does; the SIGTERM then arrives while the
+	// harness is still streaming.
+	grant, err := IssueLease(f.r.Ref, f.r.Coordinator, nil, LeaseRequest{Nonce: uuid.NewString()}, f.key, f.s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.expireLease(ctx, f.r.Ref, &grant); err != nil {
+		t.Fatal(err)
+	}
+	cancelRun()
+	var runErr error
+	select {
+	case runErr = <-runnerDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("runner never returned after its unit was stopped")
+	}
+	if runErr != nil {
+		t.Fatalf("lease-expiry stop failed the runner: %v", runErr)
+	}
+	j, err := f.s.Read(f.r.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Phase != Exited {
+		t.Fatalf("lease-expiry stop left phase %q, want %q (lastError %q)", j.Phase, Exited, j.LastError)
+	}
+	if j.StopRequest == nil || !strings.Contains(j.LastError, "coordinator lease expired") {
+		t.Fatalf("expiry not recorded in the journal: stop=%v lastError=%q", j.StopRequest, j.LastError)
 	}
 }
 

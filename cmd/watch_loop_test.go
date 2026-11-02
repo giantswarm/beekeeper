@@ -226,10 +226,6 @@ func eventually(within time.Duration, cond func() bool) bool {
 func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 	needsPlatform(t)
 	release := make(chan struct{})
-	// Registered first, so it runs last: the hung read returns only after
-	// the watch has stopped and its state directory is gone, and writes
-	// nothing into the directory while it is being removed.
-	t.Cleanup(func() { close(release) })
 	var reads atomic.Int32
 	w, out := loopWatcher(t, "200ms", ", availMinMiB: 1000000000", func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
 		// A hung read ignores its context, like a kubectl whose credential
@@ -241,6 +237,9 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 	clk := newFakeClock(t)
 	w.clock = clk
 	runWatch(t, w)
+	// Release the context-ignoring fixture before shutdown waits for it,
+	// and before the state directory is removed.
+	t.Cleanup(func() { close(release) })
 	clk.settle(loopTimers)
 	if !strings.Contains(out.String(), "LOW RAM") {
 		t.Fatalf("no LOW RAM line within one watch.interval while a lane read hangs:\n%s", out.String())
