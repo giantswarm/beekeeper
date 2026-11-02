@@ -1894,10 +1894,12 @@ capacity:
 
 	parkedAgyClaude := tasked("ParkedAgyClaude")
 	parkedAgyClaude.Harness, parkedAgyClaude.Model = harnessAgy, testModelOpus46
+	parkedAgyClaude.HostSession = agy.HostPrefix + "parked-agy-claude" // an agy start's, which its wake routes to
 	parkedAgyClaude.Park = &state.Park{By: parkedAgyClaude.Party, At: t0.UTC(), On: "#2", Waits: "note 2", Told: t0.UTC(), Resumable: t0.UTC(), Answer: "go"}
 
 	parkedAgyGemini := tasked("ParkedAgyGemini")
 	parkedAgyGemini.Harness, parkedAgyGemini.Model = harnessAgy, testModelGemini
+	parkedAgyGemini.HostSession = agy.HostPrefix + "parked-agy-gemini"
 	parkedAgyGemini.Park = &state.Park{By: parkedAgyGemini.Party, At: t0.UTC(), On: "#3", Waits: "note 3", Told: t0.UTC(), Resumable: t0.UTC(), Answer: "go"}
 
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {

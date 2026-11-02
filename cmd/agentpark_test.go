@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -197,6 +198,114 @@ func TestResumeByHand(t *testing.T) {
 	want := resumer + " → " + agentOne + ": Your park on the supervisor's go is over: " + resumer + " resumed you by hand. Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q", *woke)
+	}
+}
+
+// resume runs agents resume as the calling session (agentOne) with args.
+func resume(t *testing.T, w *watcher, args ...string) error {
+	t.Helper()
+	c := w.agentResumeCmd()
+	c.SetArgs(args)
+	c.SetOut(w.out)
+	c.SetErr(w.out)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	return c.Execute()
+}
+
+// A parked agent leaves its own park once the wait settled: agents resume
+// without an agent, or naming itself, ends the park, wakes nobody and prints
+// what settled it.
+func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
+	for _, args := range [][]string{nil, {agentOne}} {
+		w := parkingWatch(t, nil)
+		woke := stubWakes(t)
+		if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+			t.Fatal(err)
+		}
+		answer(t, w)
+		w.pending(context.Background(), nil)
+		w.out.(*bytes.Buffer).Reset()
+		if err := resume(t, w, args...); err != nil {
+			t.Fatalf("resume %q: %v", args, err)
+		}
+		out := w.out.(*bytes.Buffer).String()
+		want := agentOne + ": your park ended, nobody is woken. Your park on #3 (Timo's answer) is over: note #3 answered by Timo: " + parkAnswer
+		if !strings.Contains(out, want) {
+			t.Errorf("resume %q said:\n%s\nwant %q", args, out, want)
+		}
+		if len(*woke) > 0 {
+			t.Errorf("resume %q woke %q", args, *woke)
+		}
+		if ag := agentOf(t, w); ag.Park != nil || ag.Task != parkTask {
+			t.Errorf("resume %q: task %q park %+v", args, ag.Task, ag.Park)
+		}
+		if err := resume(t, w, args...); err == nil || !strings.Contains(err.Error(), "is not parked") {
+			t.Errorf("second resume %q: %v", args, err)
+		}
+	}
+}
+
+// An agent of a harness beekeeper has no message route to (one that
+// registered itself, not started under its harness's host prefix) is never
+// woken headless: agents resume ends its park and says so, and the watch's
+// agents.autoResume leaves it resumable for the agent's own resume.
+func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
+	w := parkingWatch(t, nil)
+	w.cfg.Agents.AutoResume = true
+	woke := stubWakes(t)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Harness = omp.Harness
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+		t.Fatal(err)
+	}
+	answer(t, w)
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if ag := agentOf(t, w); len(*woke) > 0 || ag.Park == nil || ag.Park.Resumable.IsZero() {
+		t.Fatalf("autoResume of an unrouted harness: woke %q park %+v", *woke, ag.Park)
+	}
+	w.out.(*bytes.Buffer).Reset()
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
+		t.Fatal(err)
+	}
+	out := w.out.(*bytes.Buffer).String()
+	if !strings.Contains(out, agentOne+": its park ended; it runs on omp, which beekeeper has no message route to, so nobody is woken") ||
+		!strings.Contains(out, parkAnswer) {
+		t.Errorf("resume said:\n%s", out)
+	}
+	if ag := agentOf(t, w); len(*woke) > 0 || ag.Park != nil {
+		t.Errorf("after the resume: woke %q park %+v", *woke, ag.Park)
+	}
+}
+
+// A session off the roster leaves its own park too, waking nobody.
+func TestOffRosterSessionLeavesItsOwnPark(t *testing.T) {
+	w := parkingWatch(t, nil)
+	woke := stubWakes(t)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		st.Parks = []state.Park{{By: state.Party{Name: agentOne}, At: relayNow, Waits: "the supervisor's go"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := resume(t, w); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, agentOne+": your park ended, nobody is woken.") {
+		t.Errorf("resume said:\n%s", out)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*woke) > 0 || len(st.Parks) > 0 {
+		t.Errorf("woke %q parks %+v", *woke, st.Parks)
 	}
 }
 
