@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "The fake GPG key ID in the signing argument parser test"
+condition = "AND"
+paths = ['''^cmd/sandboxsign_test\.go$''']
+regexTarget = "secret"
+regexes = ['''^ABCDEF0123456789$''']

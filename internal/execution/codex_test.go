@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -341,7 +342,9 @@ func TestCodexRunnerRefusesForeignThread(t *testing.T) {
 		t.Fatal("a foreign thread was accepted or replaced the recorded one")
 	}
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled runner: %v", err)
+	}
 }
 
 // A turn that fails after its acceptance ends a messaging runner as failed:
@@ -413,4 +416,25 @@ func TestCodexRunnerSurfacesFailedTurns(t *testing.T) {
 			t.Fatalf("wake turn failure recorded as %s, receipt %s", j.Phase, j.Messages.Entries[m.ID].Stage)
 		}
 	})
+}
+
+func TestCodexRunnerCoordinatorMCP(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	f, dir := codexFixture(t)
+	f.r.MCP = true
+	ctx := startCodex(t, f)
+	if err := f.s.Run(ctx, f.r.Ref); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // test-owned fake harness log
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"mcp_servers.coordinator.command=", "mcp_servers.coordinator.args=", "mcp_servers.coordinator.env_vars=", EnvID, EnvCoordinator, "mcp-proxy", f.s.Executable, f.s.ConfigPath} {
+		if !strings.Contains(string(calls), part) {
+			t.Fatalf("proxy setting %q missing in %s", part, calls)
+		}
+	}
 }
