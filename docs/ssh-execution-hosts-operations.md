@@ -614,8 +614,9 @@ this command grants no general GitHub API authority.
 
 To bring the latest default branch into the workspace before publishing again
 (before the desk review approves the PR; after approval only the merge moves the
-head: the supervisor's reviewed merge updates a behind branch itself, and a
-sync is left for a conflict the supervisor reports):
+head: the supervisor's reviewed merge takes a behind branch as it stands, or
+updates it itself where the base requires up-to-date branches and the desk has
+no admin merge, and a sync is left for a conflict the supervisor reports):
 
 ```sh
 beekeeper agents publish --sync-base

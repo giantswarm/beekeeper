@@ -551,14 +551,19 @@ The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed
 The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
 uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
 names to `squash` (the default), `rebase`, or `merge`; `merge.admin` controls `--admin`.
-After approval only the merge moves the head. A branch behind its base is updated by the
-mutation child itself, once its authority, stop and hold checks pass: GitHub's update-branch
+After approval only the merge moves the head. A branch that is only behind its base merges
+at the reviewed head as it stands: GitHub merges it onto the current base, with no branch
+update and no second CI run. Only a base that requires up-to-date branches refuses that
+merge (GitHub's merge state `BEHIND`); `merge.admin` passes the requirement. Without it, the
+mutation child updates the branch itself, once its authority, stop and hold checks pass:
+GitHub's update-branch
 merges the base into it, pinned to the reviewed head, and the child waits up to the squash
 timeout for the new head's checks (every check the reviewed head had, all green), confirms
 that the approval covers the new head (`github.ApprovalCovers`: it only merges the base),
 checks the stop and holds again and merges that head. The loop accepts a merged head the
 approval covers; its planner gives the go for such a head without a fresh park. A rebase
-merge method cannot take a base merge, so its behind branch, a conflicting or draft branch,
+merge method cannot take a base merge, so its branch behind such a base, a conflicting or
+draft branch,
 red checks on the updated head or an updated head the approval does not cover go back to the
 worker for repair and another green published head. A restart reads GitHub before repeating
 a mutation whose completion record was lost. Successful merge actions are `supervisor.merge`,
