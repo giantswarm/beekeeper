@@ -3396,6 +3396,7 @@ The organisation and desk keys, and their defaults:
 | `github.allowedOrgs` | `[giantswarm]` | The organizations and accounts an agent writes to; the hook refuses every GitHub write to any other repository, `[]` turns it off ([Writes outside the allowed organizations](#writes-outside-the-allowed-organizations)) |
 | `github.upstreamReview` | unset: "the team's upstream review list" | Where a change meant for upstream is queued (`owner/repo#n`), named in the refusal |
 | `merge.devctlOwners` | none: every merge is the plain squash merge | The owners whose repositories `devctl pr merge` serves |
+| `merge.admin` | none | The repositories (`owner/repo`) the desk merges with `--admin` past their branch ruleset after the approved desk review; only their merge go names `--admin --match-head-commit <head>` |
 | `guide.skill`, `guide.person` | unset | The guide's skill and the person it walks through their notes |
 | `claude.desktopApp` | `claude-desktop` | The desktop app's executable, which opens `claude://` links and starts the app |
 | `shell` | `$SHELL`, else `sh` | The shell the hook runs a rewritten build, test or lint command in |
