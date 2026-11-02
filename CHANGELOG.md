@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Priority-list reads omit candidate-only label and assignee connections, keeping the large-board regression at 37 GraphQL points without changing ranks or blocker holds.
+- Initialize notification-test watchers through the production constructor and supply deterministic OOM history in harness tracking tests, preventing a host-dependent nil-map panic (https://github.com/giantswarm/beekeeper/issues/2102).
 
 - GitHub budgets name and probe the stored gh login and devctl App login separately, preserve each identity's cache and reset, and gate on the lowest REST and GraphQL balances. Changing checkout or minimum identity cannot hide a depleted window or replenish the supervisor's hourly allowance.
 
