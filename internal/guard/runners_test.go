@@ -41,6 +41,8 @@ func TestHookRefusesRunnerMerges(t *testing.T) {
 		{`busybox xargs devctl pr merge o/r < prs`, xargsRunner, `busybox xargs ` + g + `devctl pr merge o/r < prs`, false},
 		{`"xargs" -n1 devctl pr merge o/r < prs`, "`\"xargs\"`", `"xargs" -n1 ` + g + `devctl pr merge o/r < prs`, false},
 		{`time -v devctl pr merge o/r 7`, "`time`", `time -v ` + g + `devctl pr merge o/r 7`, false},
+		// A shell's -c named only in a quoted argument is no -c string.
+		{`wrap --note 'sh -c' devctl pr merge o/r 7`, "`wrap`", `wrap --note 'sh -c' ` + g + `devctl pr merge o/r 7`, false},
 		{`xargs echo devctl pr merge o/r < prs`, "`xargs`", `xargs echo ` + g + `devctl pr merge o/r < prs`, false},
 		// A backquote substitution is a command the gate rewrite does not reach either.
 		{"x=`devctl pr wait o/r 7`", backquoteRunner, "x=`" + g + "devctl pr wait o/r 7`", false},

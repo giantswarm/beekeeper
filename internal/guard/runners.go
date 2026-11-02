@@ -63,11 +63,11 @@ func runnerMerges(cmd string) (how string, at []int) {
 			if m[0] < sg.start || m[0] >= sg.end {
 				continue
 			}
-			before := cmd[sg.start:m[0]]
-			if textStage(sc, segs, i) || shellCArg.MatchString(before) {
+			before, plain := cmd[sg.start:m[0]], sc.masked[sg.start:m[0]]
+			if textStage(sc, segs, i) || shellCArg.MatchString(plain) {
 				break
 			}
-			r := runnerBefore(sc.masked[sg.start:m[0]])
+			r := runnerBefore(plain)
 			if r == "" && bare {
 				r = "`" + firstWord(before) + "`"
 			}
