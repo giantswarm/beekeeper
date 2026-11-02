@@ -35,6 +35,9 @@ type HostConfig struct {
 	Harnesses     map[string]HarnessConfig `yaml:"harnesses" json:"harnesses"`
 	Coordinators  map[string]Coordinator   `yaml:"coordinators" json:"coordinators"`
 	MaxBusy       int                      `yaml:"maxBusy" json:"maxBusy"`
+	// Tools pins the worker toolchain (go, gh) a worker calls by bare name.
+	// Omitted, it leaves the configuration digest of a host without it as is.
+	Tools map[string]ToolConfig `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
 // The adapter relies on restricted settings and auth status's configDirectory
@@ -59,6 +62,11 @@ func (c HostConfig) Validate() error {
 	}
 	for name, h := range c.Harnesses {
 		if err := h.validate(name); err != nil {
+			return err
+		}
+	}
+	for name, t := range c.Tools {
+		if err := t.validate(name); err != nil {
 			return err
 		}
 	}
@@ -196,7 +204,7 @@ func (s *Server) settings() []byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard"
 	b, _ := json.Marshal(map[string]any{
 		hooksKey:      preToolUse(cmd),
-		"permissions": map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent", "mcp__*"}},
+		"permissions": map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent"}},
 	})
 	return b
 }

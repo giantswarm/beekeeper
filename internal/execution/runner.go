@@ -107,9 +107,25 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		return s.runCodex(ctx, ref, j)
 	}
 	h := s.Config.Harnesses[j.Request.Harness]
-	env := append(cleanEnvironment(h.ConfigDir, s.Executable), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
+	env := append(s.toolPath(cleanEnvironment(h.ConfigDir, s.Executable)), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
 	tools := "Bash,Read,Write,Edit,Grep,Glob"
 	args := []string{"--restricted", "--print", "--session-id", j.Handle.ConversationID, "--model", j.Request.Model, "--name", j.Request.Name, "--permission-mode", "acceptEdits", "--tools", tools, "--allowedTools", tools, "--settings", filepath.Join(s.Root, "settings.json"), "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--output-format", "stream-json", "--verbose", "--append-system-prompt-file", filepath.Join(s.Root, "CLAUDE.md")}
+	if j.Request.MCP {
+		config, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"coordinator": map[string]any{"command": s.Executable, "args": []string{configFlag, s.ConfigPath, agentsCommand, mcpProxyCommand}}}})
+		if err != nil {
+			return err
+		}
+		for i := range args {
+			if args[i] == "--mcp-config" {
+				args[i+1] = string(config)
+			}
+		}
+		for i := range args {
+			if args[i] == "--allowedTools" {
+				args[i+1] += ",mcp__coordinator"
+			}
+		}
+	}
 	c := exec.CommandContext(ctx, h.Executable, args...) //nolint:gosec // pinned harness and typed arguments; no daemon or resume
 	c.Dir, c.Env, c.Stdin = j.Handle.Workspace, env, strings.NewReader(j.Request.Prompt)
 	var stream *messageStream
@@ -193,6 +209,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 					_ = c.Process.Kill()
 					_ = c.Wait()
 					return err
+				}
+				if stream != nil {
+					stream.signal()
 				}
 			}
 		}

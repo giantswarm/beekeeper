@@ -65,7 +65,14 @@ import of the calling session when one is pending; note again.`,
 			if a.managedExecutionID() != "" {
 				return a.remoteControl(cmd.Context(), "handover", executionEvent{Text: text})
 			}
-			if err := a.store.RecordWithin(noteLockWait, event(me, verbNote, "%s", text)); err != nil {
+			if err := a.store.UpdateWithin(noteLockWait, func(st *state.State) ([]state.Event, error) {
+				for i := range st.Agents {
+					if st.Agents[i].Is(me) {
+						st.Agents[i].ActivityAt = a.now.UTC()
+					}
+				}
+				return []state.Event{event(me, verbNote, "%s", text)}, nil
+			}); err != nil {
 				return a.noteBusy(me, err)
 			}
 			_, err = fmt.Fprintf(a.out, "noted for the hand-over of %s\n", me.Name)

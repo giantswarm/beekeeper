@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -62,7 +63,7 @@ func (g MergeAuthorization) Admits(use MergeUse, now time.Time) error {
 // merge. Reconciliation may read GitHub but never repeats a consumed attempt.
 func WriteMergeAuthorization(root string, grant MergeAuthorization, action string, now time.Time) error {
 	if !ValidIdentity(grant.ID) {
-		return errors.New("invalid merge authorization identity")
+		return invalidMergeIdentity(grant.ID)
 	}
 	if err := ownedDirectory(root); err != nil {
 		return err
@@ -77,16 +78,25 @@ func WriteMergeAuthorization(root string, grant MergeAuthorization, action strin
 func ReadMergeAuthorization(root, id string) (MergeAuthorization, error) {
 	var grant MergeAuthorization
 	if !ValidIdentity(id) {
-		return grant, errors.New("invalid merge authorization identity")
+		return grant, invalidMergeIdentity(id)
 	}
 	if err := ownedDirectory(root); err != nil {
 		return grant, err
 	}
 	err := readJSON(filepath.Join(root, id+".json"), &grant)
 	if err == nil && grant.ID != id {
-		err = errors.New("merge authorization identity mismatch")
+		err = fmt.Errorf("merge authorization identity mismatch: presented %q, the stored grant is %q", id, grant.ID)
 	}
 	return grant, err
+}
+
+// invalidMergeIdentity names the presented identity and the expected form, so
+// a refusal says what to fix: an empty one is no supervisor-issued grant.
+func invalidMergeIdentity(id string) error {
+	if id == "" {
+		return errors.New("invalid merge authorization identity: none presented, expected the ID of a supervisor-issued grant (--authorization)")
+	}
+	return fmt.Errorf("invalid merge authorization identity %q: expected the ID of a supervisor-issued grant (1-128 letters, digits, '.', '_' or '-')", id)
 }
 
 // UseMerge performs one synchronous attempt under the caller's coordinating
