@@ -80,10 +80,10 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 	}
 	env := append(s.codexEnvironment(), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
 	first := func() error {
-		if err := s.update(ctx, ref, func(j *Journal) error { j.Ready = true; return nil }); err != nil {
-			return err
-		}
-		return nil
+		return s.update(ctx, ref, func(j *Journal) error {
+			j.Ready, j.InTurn, j.LastActive = true, true, s.now()
+			return nil
+		})
 	}
 	thread, accepted, turnErr := s.codexTurn(ctx, ref, h, env, log, j, j.Request.Prompt, "", first)
 	if ctx.Err() != nil {
@@ -100,6 +100,12 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 	}
 	if !j.Request.Messaging {
 		return s.codexEnd(ctx, ref, Exited, "")
+	}
+	if err := s.update(ctx, ref, func(j *Journal) error {
+		j.InTurn, j.LastActive = false, s.now()
+		return nil
+	}); err != nil {
+		return err
 	}
 	for {
 		if ctx.Err() != nil {
@@ -141,7 +147,11 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 			if j.StopRequest != nil {
 				return errors.New("execution stopped before message delivery")
 			}
-			return j.Messages.Attempt(next)
+			if err := j.Messages.Attempt(next); err != nil {
+				return err
+			}
+			j.InTurn, j.LastActive = true, s.now()
+			return nil
 		}); err != nil {
 			return err
 		}
@@ -157,6 +167,7 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 			// The write's outcome is unknown: the receipt stays uncertain and
 			// blocks replay until the coordinator resolves it.
 			if err := s.update(ctx, ref, func(j *Journal) error {
+				j.InTurn, j.LastActive = false, s.now()
 				j.LastError = "wake turn ended before acceptance; resolve its uncertain receipt"
 				return nil
 			}); err != nil {
@@ -167,6 +178,13 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 				return ctx.Err()
 			case <-wake:
 			}
+			continue
+		}
+		if err := s.update(ctx, ref, func(j *Journal) error {
+			j.InTurn, j.LastActive = false, s.now()
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 }
@@ -185,11 +203,20 @@ func (s *Server) acceptCodexMessage(ctx context.Context, ref Ref, session, id st
 	if err := atomicFile(filepath.Join(s.Root, string(ref.Execution)+"-"+id+".accepted"), mustJSON(evidence)); err != nil {
 		return err
 	}
-	return s.update(ctx, ref, func(j *Journal) error { return j.Messages.Accept(id) })
+	return s.update(ctx, ref, func(j *Journal) error {
+		if err := j.Messages.Accept(id); err != nil {
+			return err
+		}
+		j.InTurn, j.LastActive = true, s.now()
+		return nil
+	})
 }
 
 func (s *Server) codexEnd(ctx context.Context, ref Ref, phase, detail string) error {
-	if err := s.update(ctx, ref, func(j *Journal) error { j.Phase, j.LastError = phase, detail; return nil }); err != nil {
+	if err := s.update(ctx, ref, func(j *Journal) error {
+		j.Phase, j.InTurn, j.LastActive, j.LastError = phase, false, s.now(), detail
+		return nil
+	}); err != nil {
 		return err
 	}
 	if detail != "" {

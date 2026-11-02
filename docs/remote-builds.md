@@ -64,7 +64,9 @@ connection attempts, and the command's exact exit code is relayed. An
 unrecoverable connection returns 125. Interrupts stop the remote process group
 and return 130; inability to confirm cancellation is reported. The watchdog
 reclaims abandoned uploads and stops orphaned process groups. Remote stdout and
-stderr form one ordered stream on the caller's stdout.
+stderr form one ordered stream on the caller's stdout. A failed remote command
+keeps the tail of that stream in the caller's run record as the local slot
+keeps its scope's (`beekeeper run tail`, `remote-<id>.log`).
 
 ## Builder image contract
 

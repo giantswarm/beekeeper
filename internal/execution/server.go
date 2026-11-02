@@ -27,11 +27,13 @@ type Journal struct {
 	ActivationAttempted bool          `json:"activationAttempted"`
 	RunnerPID           int           `json:"runnerPID,omitempty"`
 	RunnerStarted       time.Time     `json:"runnerStarted,omitempty"`
+	LastActive          time.Time     `json:"lastActive,omitzero"`
 	Request             StartRequest  `json:"request"`
 	Digest              string        `json:"digest"`
 	Handle              Handle        `json:"handle"`
 	Phase               string        `json:"phase"`
 	Ready               bool          `json:"ready"`
+	InTurn              bool          `json:"inTurn,omitempty"`
 	StopRequest         *StopRequest  `json:"stopRequest,omitempty"`
 	StopAcknowledged    bool          `json:"stopAcknowledged"`
 	LastError           string        `json:"lastError,omitempty"`
@@ -340,7 +342,10 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
-	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), LastActive: j.LastActive, Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	if fi, err := os.Lstat(filepath.Join(s.Root, string(r.Execution)+".log")); err == nil && fi.Mode().IsRegular() && fi.ModTime().UTC().After(o.LastActive) {
+		o.LastActive = fi.ModTime().UTC()
+	}
 	o.Lease = j.Lease
 	o.Messages, o.MessageSequence = j.Messages.Status(), j.Messages.Sequence
 	if j.StopAcknowledged {
@@ -357,9 +362,13 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	switch s.Launcher.State(ctx, j.Handle.Unit) {
 	case unitActive, Activating, "reloading", "deactivating":
 		o.ProcessState = Running
+		o.InTurn = j.InTurn
 	case unitInactive, Failed:
 		if j.StopRequest != nil {
-			if err := s.update(ctx, r, func(current *Journal) error { current.StopAcknowledged, current.Phase = true, Exited; return nil }); err != nil {
+			if err := s.update(ctx, r, func(current *Journal) error {
+				current.StopAcknowledged, current.Phase, current.InTurn = true, Exited, false
+				return nil
+			}); err != nil {
 				return Observation{}, err
 			}
 			o.StopAcknowledged, o.ProcessState = true, Exited
@@ -417,7 +426,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 			return Ack{}, errors.New("stop requested; termination is not confirmed")
 		}
 	}
-	j.StopAcknowledged, j.Phase = true, Exited
+	j.StopAcknowledged, j.Phase, j.InTurn = true, Exited, false
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
@@ -485,6 +494,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			switch req.Operation {
 			case "check":
 				value, err = s.Check(ctx)
+			case "source-chunk":
+				var chunk SourceChunk
+				err = Decode(req.Payload, &chunk)
+				if err == nil {
+					err = s.ReceiveSource(ctx, req.Ref, chunk)
+				}
+				value = struct{}{}
 			case "start":
 				var r StartRequest
 				err = Decode(req.Payload, &r)
@@ -494,7 +510,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err == nil {
 					value, err = s.Start(ctx, r)
 				}
-			case "inspect":
+			case inspectOperation:
 				value, err = s.Inspect(ctx, req.Ref)
 			case "sync-control":
 				value, err = s.SyncControl(ctx, req.Ref, nil)
@@ -526,6 +542,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
+				if req.Operation == inspectOperation && errors.Is(err, os.ErrNotExist) {
+					reply.Code = "not-found"
+				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
 				}

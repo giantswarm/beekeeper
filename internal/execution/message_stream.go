@@ -137,7 +137,11 @@ func (m *messageStream) sendNext() error {
 			return nil
 		}
 		session = j.Handle.ConversationID
-		return j.Messages.Attempt(next)
+		if err := j.Messages.Attempt(next); err != nil {
+			return err
+		}
+		j.InTurn, j.LastActive = true, m.s.now()
+		return nil
 	})
 	if err != nil || next.ID == "" {
 		return err
@@ -169,7 +173,10 @@ func (s *Server) authorizeMessage(ctx context.Context, j Journal) error {
 
 func (m *messageStream) Accept(line []byte, original Journal) error {
 	if acceptedMessage(line, original.Handle.ConversationID, original.Request.RequestID) {
-		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error { j.Ready = true; return nil }); err != nil {
+		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error {
+			j.Ready, j.InTurn, j.LastActive = true, true, m.s.now()
+			return nil
+		}); err != nil {
 			return err
 		}
 		m.signal()
@@ -190,7 +197,13 @@ func (m *messageStream) Accept(line []byte, original Journal) error {
 		if err := atomicFile(p, mustJSON(evidence)); err != nil {
 			return err
 		}
-		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error { return j.Messages.Accept(d.Envelope.ID) }); err != nil {
+		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error {
+			if err := j.Messages.Accept(d.Envelope.ID); err != nil {
+				return err
+			}
+			j.InTurn, j.LastActive = true, m.s.now()
+			return nil
+		}); err != nil {
 			return err
 		}
 		m.signal()
