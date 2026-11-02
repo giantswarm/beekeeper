@@ -445,11 +445,11 @@ func readBoard() config.Board {
 func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 	f := &fakeGH{t: t, pages: []string{
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"C"},"nodes":[` +
-			node(inProgress, "null", issue(1, `,"assignees":{"nodes":[{"login":"pat"}]}`)) + "," +
+			node(inProgress, jsonNull, issue(1, `,"assignees":{"nodes":[{"login":"pat"}]}`)) + "," +
 			node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":3,"completed":1}`)) + "," +
 			`{"status":{"name":"Up Next ➡️"},"content":{}}]}}}}}`,
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[` +
-			node(upNext, "null", strings.Replace(issue(3, ""), "OPEN", "CLOSED", 1)) + "," + node(upNext, "null", issue(4, `,"parent":{"number":2,"repository":{"nameWithOwner":"o/r"}}`)) + `]}}}}}`,
+			node(upNext, jsonNull, strings.Replace(issue(3, ""), "OPEN", "CLOSED", 1)) + "," + node(upNext, jsonNull, issue(4, `,"parent":{"number":2,"repository":{"nameWithOwner":"o/r"}}`)) + `]}}}}}`,
 	}, extras: `{"data":{"e1":{"issue":{"subIssues":{"nodes":[` +
 		// 20 is on another board only, 22 on this one in Inbox without a Team.
 		issue(20, `,"projectItems":{"nodes":[{"project":{"id":"Q"},"status":{"name":"Inbox 📥"}}]}`) + "," +
@@ -560,7 +560,7 @@ const labIssue7 = "teemow/lab#7"
 
 // homeItem is an item of the issue on project number of owner.
 func homeItem(id, project, owner string, number int, status string) string {
-	st := "null"
+	st := jsonNull
 	if status != "" {
 		st = fmt.Sprintf(`{"name":%q}`, status)
 	}
@@ -891,7 +891,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 			f := &fakeGH{t: t, pages: []string{
 				`{"data":{"repositoryOwner":{"projectV2":{"items":{"nodes":[` +
 					node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":1,"completed":0}`)) + "," +
-					node(upNext, "null", issue(4, deps)) + `]}}}}}`,
+					node(upNext, jsonNull, issue(4, deps)) + `]}}}}}`,
 			}, extras: `{"data":{"e0":{"issue":{"subIssues":{"nodes":[` + issue(20, deps) + `]}}},"s2":{"nodes":[` + issue(30, deps) + `]}}}`}
 			// This fixture's epic is at index 0 rather than fakeGH's index 1.
 			f.extrasBy = func(string) string { return f.extras }
