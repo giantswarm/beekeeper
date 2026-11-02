@@ -2447,12 +2447,14 @@ cache, which dev images loaded into kind labs pile up, are kept under `doctor.do
 (40 GiB) and `doctor.dockerBuildCacheMaxGiB` (20 GiB): every `doctor.dockerEvery` (1h) a watch
 reads `docker system df` and, over a cap, removes the unused images created or last tagged longest
 ago (dangling ones first; the tag time is `docker image inspect`'s `LastTagTime`, as an image
-rebuilt from cache or retagged keeps its old Created) down to three quarters of it, and prunes the build cache with `docker builder prune
---max-used-space` likewise. An image a container uses (a kind node's included) or a kind lab's
+rebuilt from cache or retagged keeps its old Created) down to three quarters of it, and trims the build cache record by
+record (`docker builder du` by last use, `docker builder prune --filter id=…`) likewise: Docker's own `builder prune --max-used-space` is
+a best-effort pass of the daemon's GC policy and frees nothing while the policy's reserved-space or min-free-space floor sits above the
+target, which on a nearly full disk is always. An image a container uses (a kind node's included) or a kind lab's
 node holds (`crictl images` in each node, by ID, tag or digest) is never removed; a node that is
 not running leaves every image in place. Nor is one created or tagged within the last 24 hours, or
 since the oldest held lab lease was claimed (72 hours back at most): a session's dev image waits
-for its lab. Nothing is pruned while an image import or build runs
+for its lab; what stays above a cap is named on the line (so many records or images in use or recent, so much space). Nothing is pruned while an image import or build runs
 (`kind load` or `create`, `docker build`, `load`, `save` or `import`, buildx, `ctr … import`),
 and none while a lab lease was claimed within the hour, its holder possibly mid-load; the prune
 tries again five minutes later and stops between images when an import begins. One process
