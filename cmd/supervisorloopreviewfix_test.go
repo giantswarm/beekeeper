@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -55,7 +56,7 @@ func TestReviewFixTerminalParksWakeRemainingTasks(t *testing.T) {
 func TestReviewFixMetadataBelongsOnlyToRosterReviewParks(t *testing.T) {
 	for _, roster := range []bool{false, true} {
 		for _, head := range []string{"", loopHead} {
-			t.Run(strings.Join([]string{map[bool]string{true: "roster", false: "off roster"}[roster], head}, "/"), func(t *testing.T) {
+			t.Run(fmt.Sprintf("registered=%t/head=%s", roster, head), func(t *testing.T) {
 				w := parkingWatch(t, map[string]string{refOne: github.Open})
 				was := parkReviewHead
 				t.Cleanup(func() { parkReviewHead = was })
