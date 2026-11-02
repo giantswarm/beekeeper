@@ -6,7 +6,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const noteDeliveryEvent = "note.delivery"
+const (
+	noteDeliveryEvent   = "note.delivery"
+	noteDeliveryFailed  = "failed"
+	noteDeliveryWaiting = "waiting"
+)
 
 // noteDelivery retains the notification outcome independently of the answer:
 // recording an answer does not mean its session received it.

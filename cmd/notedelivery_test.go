@@ -45,7 +45,7 @@ func TestNoteAnswerOffRosterDelivery(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := noteCommand(a, verbAnswer, "1", "yes"); err != nil {
+			if _, err := noteCommand(a, verbAnswer, "1", noteDeliveryWords); err != nil {
 				t.Fatal(err)
 			}
 			answerOutput := out.String()
@@ -56,11 +56,11 @@ func TestNoteAnswerOffRosterDelivery(t *testing.T) {
 			if len(st.Agents) != 0 || len(st.Notes) != 0 {
 				t.Fatal("answer registered the filer or left the note open")
 			}
-			wantStatus := "failed"
+			wantStatus := noteDeliveryFailed
 			if tc.reader {
 				wantStatus = "delivered"
 				msgs, err := codex.Drain(inbox)
-				if err != nil || len(msgs) != 1 || !strings.Contains(msgs[0], "NOTE ANSWERED #1") || !strings.Contains(msgs[0], "yes") {
+				if err != nil || len(msgs) != 1 || !strings.Contains(msgs[0], "NOTE ANSWERED #1") || !strings.Contains(msgs[0], noteDeliveryWords) {
 					t.Fatalf("answer inbox: %q, %v", msgs, err)
 				}
 			} else if !strings.Contains(answerOutput, "notification failed") {
@@ -76,11 +76,14 @@ func TestNoteAnswerOffRosterDelivery(t *testing.T) {
 					t.Fatal(err)
 				}
 				if asJSON {
-					var got shownNote
+					var got struct {
+						Status, Answer string
+						Delivery       *noteDelivery
+					}
 					if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 						t.Fatal(err)
 					}
-					if got.Status != closedAnswered || got.Delivery == nil || got.Delivery.Status != wantStatus || got.Answer != "yes" {
+					if got.Status != closedAnswered || got.Delivery == nil || got.Delivery.Status != wantStatus || got.Answer != noteDeliveryWords {
 						t.Fatalf("retained status: %+v", got)
 					}
 					if !tc.reader && (got.Delivery.Detail == "" || !strings.Contains(got.Delivery.Detail, "no longer runs")) {

@@ -202,7 +202,7 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 		}
 	}()
 	fail := func(err error) string {
-		delivery.Status, delivery.Detail = "failed", err.Error()
+		delivery.Status, delivery.Detail = noteDeliveryFailed, err.Error()
 		return fmt.Sprintf("note #%d: notification failed (%v): %s", n.ID, err, line)
 	}
 
@@ -222,7 +222,7 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	// The supervisor loop is no session: it reads the answer from the log
 	// at its next pass.
 	if n.By.Name == loopParty.Name && n.By.Session == "" {
-		delivery.Status = "waiting"
+		delivery.Status = noteDeliveryWaiting
 		return fmt.Sprintf("note #%d: the supervisor loop acts on the answer at its next pass", n.ID)
 	}
 	quiet := *a
@@ -253,7 +253,7 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	if err := a.keepRoleLine(rl, line); err != nil {
 		return fail(fmt.Errorf("keeping the line for the %s: %w", rl.name, err))
 	}
-	delivery.Status, delivery.Detail = "waiting", why
+	delivery.Status, delivery.Detail = noteDeliveryWaiting, why
 	return fmt.Sprintf("note #%d: %s: the answer waits for its next start (beekeeper %s start)", n.ID, why, rl.name)
 }
 

@@ -9,6 +9,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const noteDeliveryWords = "Use the fixture"
+
 func TestNoteDeliveryKeepsAnswerOutcome(t *testing.T) {
 	a, _ := noteApp(t)
 	n := state.Note{ID: 1, By: state.Party{Session: offID, Name: agentOne}, Text: laneQuestion}
@@ -22,7 +24,7 @@ func TestNoteDeliveryKeepsAnswerOutcome(t *testing.T) {
 	t.Cleanup(func() { wakeOwner = previous })
 	failure := errors.New("session unavailable")
 	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error { return failure }
-	line := answeredLine(n.ID, notePerson, "yes")
+	line := answeredLine(n.ID, notePerson, noteDeliveryWords)
 	if got := a.tellFiler(t.Context(), state.Party{}, &n, line); !strings.Contains(got, failure.Error()) {
 		t.Fatalf("failure not reported: %q", got)
 	}
@@ -46,7 +48,7 @@ func TestNoteDeliveryMailboxFailure(t *testing.T) {
 	a.central = true
 	n := state.Note{ID: 1, By: state.Party{Name: agentOne, Host: "test-machine", Team: "test-team"}}
 	a.mailFiler = func(context.Context, *state.Note, string) error { return errors.New("mailbox unavailable") }
-	got := a.tellFiler(t.Context(), state.Party{}, &n, answeredLine(1, notePerson, "yes"))
+	got := a.tellFiler(t.Context(), state.Party{}, &n, answeredLine(1, notePerson, noteDeliveryWords))
 	if !strings.Contains(got, "notification failed") {
 		t.Fatalf("mailbox failure: %q", got)
 	}
