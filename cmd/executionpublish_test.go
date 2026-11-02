@@ -513,6 +513,10 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if err != nil || len(strings.Fields(parents)) != 3 {
 		t.Fatal("base synchronization did not create a divergent merge", err)
 	}
+	message, messageErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%B")
+	if messageErr != nil || message != "Merge upstream default branch" {
+		t.Fatalf("base synchronization must use a neutral merge message: %q (%v)", message, messageErr)
+	}
 	name, nameErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%cn")
 	email, emailErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%ce")
 	if nameErr != nil || emailErr != nil || name != fixtureName || email != fixtureEmail {
