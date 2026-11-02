@@ -17,7 +17,7 @@ func TestWithInboxContext(t *testing.T) {
 	if err := MakeInbox(inbox); err != nil {
 		t.Fatal(err)
 	}
-	fifo, err := os.OpenFile(inbox, os.O_RDWR, 0)
+	fifo, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // temporary test FIFO
 	if err != nil {
 		t.Fatal(err)
 	}
