@@ -235,7 +235,11 @@ evidence and owning repository, or --problem none. beekeeper delivers both
 itself: the supervisor's watch prints the report once (WORKER REPORT) and
 each finding as a line of its own (PROBLEM FOUND), for the supervisor to
 file; a finding filed already names its issue's URL. The log keeps them
-(agents.report, agents.problem).`,
+(agents.report, agents.problem).
+
+--as <name> reports for the registered agent of that name, whatever
+session registered it, as agents park does; an independent reviewer's
+completion is refused under --as.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			found, err := problemsFound(problems, finished)
@@ -261,7 +265,7 @@ file; a finding filed already names its issue's URL. The log keeps them
 				return err
 			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) })
+				i := a.callerAgent(st, me)
 				if i < 0 {
 					return nil, refused("this session is not registered: `beekeeper agents register` first")
 				}
