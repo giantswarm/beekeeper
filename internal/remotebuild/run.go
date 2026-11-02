@@ -238,7 +238,7 @@ func (r Runner) Try(ctx context.Context, argv []string) (handled bool, code int)
 		}
 	}
 	_ = cleanup(interrupt)
-	end(125, "remote journal lost: the command was not retried locally")
+	end(125, "remote journal lost; the command was not retried locally")
 	_, _ = fmt.Fprintln(r.Stderr, "beekeeper run: remote journal unavailable; command was not retried locally")
 	return true, 125
 }

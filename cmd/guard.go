@@ -131,11 +131,12 @@ refuses (exit 1) rather than run a build uncapped.
 
 Every run records itself in the event log as run.start / run.end, local and
 remote alike: where it ran (its scope, or the builder pod), what it built
-(repository and HEAD), the command, its duration and exit, and for a failed
-remote run the tail of its output. beekeeper log --verb run. shows the
-records; beekeeper run stats [--since WHEN] counts them per repository:
-local vs remote, minutes, failures and the builder pods' cache. A remote
-attempt that fell back records run.fallback with its reason.
+(repository and HEAD), the command, its duration and exit, and, of a failed
+run, the file its output tail was kept in (beekeeper run tail). beekeeper
+log --verb run. shows the records; beekeeper run stats [--since WHEN]
+counts them per repository: local vs remote, minutes, failures and the
+builder pods' cache. A remote attempt that fell back records run.fallback
+with its reason.
 
 For the length of the command a run holds the Go build cache's use lock
 shared, so no trim of the cache (doctor.goCacheMaxGiB) removes an entry a
