@@ -50,6 +50,8 @@ type Config struct {
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
 	LeaseDir string `yaml:"leaseDir"`
+	// LeaseRound is the default round when a lease purpose names no duration (1h).
+	LeaseRound Duration `yaml:"leaseRound"`
 	// Identity is whose agents run here: every party this machine's
 	// commands record carries it.
 	Identity Identity `yaml:"identity"`
@@ -3162,6 +3164,7 @@ func (c *Config) defaults() error {
 	}
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
+	setDur(&c.LeaseRound, time.Hour)
 	if c.Identity.Host == "" {
 		if h, err := os.Hostname(); err == nil {
 			c.Identity.Host, _, _ = strings.Cut(h, ".")
@@ -3597,6 +3600,9 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	if c.LeaseRound.Duration < 0 {
+		return errors.New("leaseRound: want a positive duration")
+	}
 	if err := c.Run.Remote.Validate(); err != nil {
 		return err
 	}

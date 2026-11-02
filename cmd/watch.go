@@ -59,7 +59,10 @@ last one, grouped by whose limit they hit; a cap kill whose scope no
 run.start names says its cap is unknown. A kill in a test run's scope
 (memcap-test-…, MEMCAP_TEST=1) is one quiet "test kill" line, never a
 KERNEL OOM. Sessions that start, end or
-restart are reported, and so is a lease whose holder is gone. A run
+restart are reported, and so is a lease whose holder is gone. A lease held
+past the first duration in its purpose (or leaseRound, default 1h) is one
+LEASE HELD PAST ROUND line naming its holder, since when and its overrun.
+A run
 holding a build slot past memcap.holdBound (30m) is one SLOT HELD LONG
 line naming the slot, its holder and since when, and one ENDED line once
 the slot is free. A session
@@ -2416,9 +2419,14 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 	if err != nil {
 		return
 	}
+	found := map[string]bool{}
 	for _, h := range holders {
 		v := w.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
+		if overrun := w.leaseOverrun(h); overrun != "" {
+			found["lease-round:"+key] = true
+			w.emit("lease-round:"+key, "LEASE HELD PAST ROUND: %s held by %q since %s: %s%s", h.Env, v.Name, clock(w.now, h.SinceTime()), oneLine(h.Purpose), overrun)
+		}
 		if v.State == holderGone && !w.reported["lease "+key] {
 			w.reported["lease "+key], w.dirty = true, true
 			l := fmt.Sprintf("STALE LEASE: %s is held by %q, whose session no longer runs (%s)", h.Env, v.Name, truncate(h.Purpose, 60))
@@ -2426,4 +2434,5 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 			w.notify(ctx, notify.StaleLease, key, "beekeeper: stale lease "+h.Env, l+"\nbeekeeper lease status "+h.Env)
 		}
 	}
+	w.clearMissing("lease-round:", found)
 }

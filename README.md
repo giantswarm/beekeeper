@@ -3297,6 +3297,13 @@ Prometheus export: nothing on the lab machine scrapes one.
 
 ## The central instance
 
+A local lease's purpose may name its round, for example `60m`, `1h30m`, or
+`60-minute round`. The first positive duration is used; without one,
+`leaseRound` defaults to `1h`. Once past that round, `watch` prints
+`LEASE HELD PAST ROUND` once for the claim, naming the holder, claim time,
+purpose and overrun. Queued claims include the same overrun, including when
+`--wait` ends queued. This is a report only: the holder keeps the lease.
+
 The leases of the installations a team shares live in one place, `beekeeper serve` behind
 muster, so two people's machines see one holder; its tools, as a model reads them, are in
 [docs/tools.md](docs/tools.md). `central: {context: <muster context>}` turns it
