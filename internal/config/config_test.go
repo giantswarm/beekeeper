@@ -1233,3 +1233,31 @@ func TestCapacityLocalCeiling(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
+	for _, raw := range []string{"capacity: {providers: {codex: {floor: 0, ceiling: 2}}}", "capacity: {providers: {codex: {}}}"} {
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers[CodexHarness]
+		if !p.Enabled() || !slices.Equal(p.Command, DefaultCodexUsageCommand) || p.EffectiveEvery() != DefaultUsageEvery {
+			t.Fatalf("Codex default reader missing: %+v", p)
+		}
+	}
+	c, err := Load(writeTemp(t, "capacity: {providers: {codex: {floor: 0, ceiling: 2, command: [custom-reader]}}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Capacity.Providers[CodexHarness]
+	if !slices.Equal(p.Command, []string{"custom-reader"}) || p.Floor != 0 || p.Ceiling != 2 {
+		t.Fatalf("explicit Codex settings changed: %+v", p)
+	}
+	c, err = Load(writeTemp(t, "{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Capacity.Providers[CodexHarness]; ok {
+		t.Fatal("created an unconfigured Codex provider")
+	}
+}

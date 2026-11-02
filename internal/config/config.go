@@ -3453,7 +3453,7 @@ func (c *Config) defaults() error {
 		if name == AgyHarness && len(p.Command) == 0 && !p.SelfHosted() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
-		if name == CodexHarness && len(p.Command) == 0 && p.hasFields() {
+		if name == CodexHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultCodexUsageCommand)
 		}
 		baseFloor := c.Capacity.Floor
