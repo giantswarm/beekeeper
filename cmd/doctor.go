@@ -648,7 +648,8 @@ line:
 - with disk.prune: ask, trims the Go build cache once it is over
   doctor.goCacheMaxGiB (20), least recently used entries first, down to
   three quarters of the cap, while no go build runs or once it is past the
-  cap by a quarter (the watch does it every doctor.goCacheEvery, 1h, and
+  cap by a quarter, then waiting up to 5m for the beekeeper runs that hold
+  it, new runs behind it (the watch does it every doctor.goCacheEvery, 1h, and
   says GO CACHE with the size, the cap and the wait when the cache stayed
   over the cap that long, or a trim failed); each trim is logged
   (gocache.trim);
