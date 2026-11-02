@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/runrecord"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -142,7 +143,11 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 	for _, e := range events {
 		switch e.Verb {
 		case guard.VerbStart:
-			open[guard.RunScope(e.Detail)] = e
+			// A remote build has no local scope to watch: only a local
+			// run.start opens one.
+			if !runrecord.Remote(e.Detail) {
+				open[guard.RunScope(e.Detail)] = e
+			}
 			continue
 		case guard.VerbEnd:
 			delete(open, guard.RunScope(e.Detail))

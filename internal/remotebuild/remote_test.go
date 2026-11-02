@@ -156,15 +156,24 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 	t.Setenv("GOFLAGS", "")
 	t.Setenv("RUSTFLAGS", "")
 	t.Setenv("CARGO_ENCODED_RUSTFLAGS", "")
-	for _, mode := range []string{testDisabled, "unreachable", "full", "admission", "placement", "upload", testExit, "reconnect", "lost-launch", "lost-journal"} {
+	for _, mode := range []string{testDisabled, "unreachable", "full", "admission", "placement", "upload", testExit, "reconnect", "lost-launch", "lost-journal", "warm-run"} {
 		t.Run(mode, func(t *testing.T) {
 			c := validConfig()
 			if mode == testDisabled {
 				c.Enabled = false
 			}
 			var output, diagnostic bytes.Buffer
+			var events []string
 			calls, streams, launches := 0, 0, 0
-			r := Runner{Config: c, StateDir: t.TempDir(), Stdout: &output, Stderr: &diagnostic}
+			var keptID string
+			keptExit := -1
+			r := Runner{Config: c, StateDir: t.TempDir(), Stdout: &output, Stderr: &diagnostic,
+				Name: "go test ./...", Repo: "giantswarm/beekeeper", Head: "16a89d963f2a9c1b",
+				Record: func(verb, detail string) { events = append(events, verb+" "+detail) },
+				KeepFailure: func(runID string, exit int) string {
+					keptID, keptExit = runID, exit
+					return "state/run-tails/remote-" + runID + ".log"
+				}}
 			r.Command = func(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
 				calls++
 				if !slices.Equal(args[:6], []string{"--kubeconfig", c.Kubeconfig, "--context", c.Context, "--namespace", c.Namespace}) {
@@ -177,6 +186,9 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 						return errors.New("offline")
 					}
 					if a[1] == "job" {
+						if mode == "warm-run" {
+							return json.NewEncoder(out).Encode(Job(c, "bkb-test", "builder:test"))
+						}
 						return nil
 					}
 					pods := corev1.PodList{}
@@ -246,7 +258,7 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 				return nil
 			}
 			handled, rc := r.Try(context.Background(), []string{"go", "test", testPackages})
-			remote := slices.Contains([]string{testExit, "reconnect", "lost-launch", "lost-journal"}, mode)
+			remote := slices.Contains([]string{testExit, "reconnect", "lost-launch", "lost-journal", "warm-run"}, mode)
 			if handled != remote {
 				t.Fatalf("handled=%v code=%d: %s", handled, rc, diagnostic.String())
 			}
@@ -268,6 +280,46 @@ func TestRemoteFallbackAndExitRelay(t *testing.T) {
 					t.Fatalf("rc=%d output=%q", rc, output.String())
 				}
 			}
+			// The record: a remote run writes start and end like a local
+			// one, naming where it ran, what it built and its cache; a
+			// fallback writes one event with its reason and no start.
+			switch {
+			case remote:
+				if len(events) != 2 {
+					t.Fatalf("events %q", events)
+				}
+				start, end := events[0], events[1]
+				if !strings.HasPrefix(start, "run.start remote:builder-pod.") || !strings.Contains(start, " giantswarm/beekeeper@16a89d96 ns build-test cache "+map[bool]string{true: "warm", false: "cold"}[mode == "warm-run"]+": go test ./...") {
+					t.Fatalf("start %q", start)
+				}
+				if !strings.HasPrefix(end, "run.end remote:builder-pod.") {
+					t.Fatalf("end %q", end)
+				}
+				if mode == "lost-journal" {
+					if !strings.Contains(end, "exit 125 after ") || !strings.Contains(end, "remote journal lost") {
+						t.Fatalf("end %q", end)
+					}
+					break
+				}
+				// The failed run's end names the tail the caller's keeper
+				// kept, printed from the tee'd stream (issue #796), and
+				// the keeper saw the command's exit.
+				want := "exit 37 after "
+				if !strings.Contains(end, want) || !strings.Contains(end, "tail state/run-tails/remote-"+keptID+".log: go test ./...") || keptExit != 37 {
+					t.Fatalf("end %q, keeper saw %d", end, keptExit)
+				}
+			case mode == testDisabled:
+				if len(events) != 0 {
+					t.Fatalf("disabled recorded %q", events)
+				}
+			default:
+				if len(events) != 1 {
+					t.Fatalf("events %q", events)
+				}
+				if !strings.HasPrefix(events[0], "run.fallback local giantswarm/beekeeper@16a89d96 fell back (") || !strings.HasSuffix(events[0], "): go test ./...") {
+					t.Fatalf("fallback %q", events[0])
+				}
+			}
 		})
 	}
 }
@@ -286,7 +338,7 @@ func TestRemoteFailureKeepsTail(t *testing.T) {
 		var ring bytes.Buffer
 		kept := -1
 		r := Runner{Config: c, StateDir: t.TempDir(), Stdout: &output, Stderr: &diagnostic,
-			Tail: &ring, KeepFailure: func(runID string, exit int) { kept = exit }}
+			Tail: &ring, KeepFailure: func(runID string, exit int) string { kept = exit; return "" }}
 		r.Command = func(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
 			a := args[7:]
 			switch a[0] {
@@ -373,7 +425,7 @@ func TestRemoteExistingBuilder(t *testing.T) {
 				t.Fatalf("unexpected %v", a)
 				return nil
 			}
-			pod, err := r.ensurePod(context.Background(), "bkb-test", "builder:test")
+			pod, _, err := r.ensurePod(context.Background(), "bkb-test", "builder:test")
 			if mode == "warm" {
 				if err != nil || pod != "warm-pod" {
 					t.Fatalf("%s %v", pod, err)

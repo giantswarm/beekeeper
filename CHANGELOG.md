@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Allow repository Python edits that use harness directory names as replacement text. Constructed harness paths that cannot be resolved now receive an explicit unresolved-path diagnostic instead of being classified as transcript reads (https://github.com/giantswarm/beekeeper/issues/1968).
+
 - `supervisor loop` names `--admin` in the merge go (`gh pr merge <n> --repo <owner/repo> --squash --admin --match-head-commit <head>`) for the repositories listed in `merge.admin` (`owner/repo`), where the desk merges past the branch ruleset after the approved desk review; a repository not in `merge.admin` never gets `--admin` in its go ([https://github.com/giantswarm/beekeeper/issues/1970](https://github.com/giantswarm/beekeeper/issues/1970)).
 - Recognize Codex `webrun` calls as read-only web tools in local and managed workers, applying the shared hook rules instead of refusing them as unknown ([https://github.com/giantswarm/beekeeper/issues/1972](https://github.com/giantswarm/beekeeper/issues/1972)).
 
