@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -94,9 +95,17 @@ func TestExecutionOmpPolicyAndReadiness(t *testing.T) {
 	}
 }
 
+func startOmpFixture(t *testing.T, f fixture) context.Context {
+	t.Helper()
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("omp runner requires Linux process identity")
+	}
+	return startCodex(t, f)
+}
+
 func TestExecutionOmpRunnerSingleTurn(t *testing.T) {
 	f, _ := ompFixture(t)
-	ctx := startCodex(t, f)
+	ctx := startOmpFixture(t, f)
 	if err := f.s.Run(ctx, f.r.Ref); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +117,7 @@ func TestExecutionOmpRunnerSingleTurn(t *testing.T) {
 
 func TestExecutionOmpRefusesMissingGuardBeforePrompt(t *testing.T) {
 	f, dir := ompFixture(t)
-	ctx := startCodex(t, f)
+	ctx := startOmpFixture(t, f)
 	if err := os.WriteFile(filepath.Join(dir, "extension-error"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +131,7 @@ func TestExecutionOmpRefusesMissingGuardBeforePrompt(t *testing.T) {
 
 func TestExecutionOmpTurnFailureAfterAdmission(t *testing.T) {
 	f, dir := ompFixture(t)
-	ctx := startCodex(t, f)
+	ctx := startOmpFixture(t, f)
 	if err := os.WriteFile(filepath.Join(dir, "fail-turn"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +147,7 @@ func TestExecutionOmpTurnFailureAfterAdmission(t *testing.T) {
 func TestExecutionOmpWakesAcknowledgedOnce(t *testing.T) {
 	f, dir := ompFixture(t)
 	f.r.Messaging = true
-	ctx := startCodex(t, f)
+	ctx := startOmpFixture(t, f)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	done := make(chan error, 1)
