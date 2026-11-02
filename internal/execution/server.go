@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 type Journal struct {
@@ -171,6 +172,13 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if len(unavailable) == 0 {
 		unavailable = nil
 	}
+	tools, missing, err := s.probeTools(ctx)
+	if err != nil {
+		return c, err
+	}
+	if len(missing) > 0 {
+		return c, toolsError(missing)
+	}
 	if s.Resources == nil {
 		return c, errors.New("execution host resource observation is unavailable")
 	}
@@ -181,7 +189,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Resources: resources}, nil
+	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -406,6 +414,7 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 			}); err != nil {
 				return Observation{}, err
 			}
+			s.cleanWorkspace(r)
 			o.StopAcknowledged, o.ProcessState = true, Exited
 			return o, nil
 		}
@@ -440,6 +449,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
+		s.cleanWorkspace(r)
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -465,7 +475,25 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
+	s.cleanWorkspace(r)
 	return Ack{ID: q.ID, Stage: Applied}, nil
+}
+
+func (s *Server) cleanWorkspace(r Ref) {
+	if s.Config.WorkspaceRoot != "" {
+		if root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot); err == nil && root == filepath.Clean(s.Config.WorkspaceRoot) {
+			parent := filepath.Join(root, string(r.Execution))
+			if within(root, parent) {
+				_ = worktrees.RemoveAll(parent)
+			}
+		}
+	}
+	if s.Root != "" {
+		srcDir := filepath.Dir(s.sourcePath(r))
+		if within(s.Root, srcDir) {
+			_ = worktrees.RemoveAll(srcDir)
+		}
+	}
 }
 
 func (s *Server) Logs(_ context.Context, r Ref, q LogRequest) (LogPage, error) {

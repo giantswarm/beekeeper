@@ -243,7 +243,8 @@ process generation.
 
 On the host, resolve the repository identity from its own mapping and verify
 the checkout's origin against the allowlist. Do not send or reuse local paths.
-Create a per-execution isolated clone below `workspaceRoot`, using no shared
+Create a per-execution bare repository copy and linked worktree on a unique
+`beekeeper-worker/<execution-id>` branch below `workspaceRoot`, using no shared
 writable Git metadata, hardlinks, object alternates or borrowed object stores.
 Fetch and resolve the requested ref in that clone, recording its commit. Do
 not reset, clean, stash, switch or update the source checkout; its uncommitted
@@ -303,6 +304,25 @@ the receipt and resumes the same handshake. If remote absence cannot be
 proved, retain the reservation and report unknown outcome. Never start a
 replacement. A known preparation failure may release the reservation after
 recording the terminal failure; retain its workspace and audit record.
+
+A reservation its host never acknowledged holds no host or desk slot past
+its failure. The record says whether a start request ever left the
+coordinator. One that never did, or one the host answered with an error and
+holds no journal of (a typed not-found inspection), is released at once: the
+record keeps `releasedAt` and its reason, counts as terminal, and its agent
+and serve record leave the roster, so the name and the board item are free
+for a new start. A lost start reply is not released, since the host may hold
+its journal. The loop's host sync releases a reservation still unacknowledged
+15 minutes after its reservation and last start send once the host confirms
+it holds no journal. `agents recover` binds a reservation the host never
+acknowledged to the host's current `policyDigest` (checked against the host
+first) before sending the start, and refuses to change one the host already
+holds a journal of. A stop (desk or execution) recorded before the start
+leaves keeps it from being sent. Stopping an unacknowledged reservation
+releases it instead of asking a host that holds no journal of it; a start
+sent inside its window with no journal yet refuses the stop until it
+settles. Host sync asks the host nothing about a reservation whose start
+never left, and a released reservation is never stopped or synced again.
 
 ## Worker control and durable delivery
 

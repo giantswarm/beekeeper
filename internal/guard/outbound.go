@@ -457,7 +457,7 @@ func pushRefs(args []string) []string {
 	var pos []string
 	for _, a := range args {
 		switch {
-		case a == "--all" || a == "--mirror" || a == "--branches":
+		case a == allFlag || a == "--mirror" || a == "--branches":
 			return []string{"--branches"}
 		case a == "--tags":
 			pos = append(pos, "--tags")
