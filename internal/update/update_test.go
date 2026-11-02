@@ -85,7 +85,7 @@ const (
 // binaryName is the asset architect publishes for this platform.
 func binaryName() string {
 	name := "beekeeper-" + runtime.GOOS + "-" + runtime.GOARCH
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsOS {
 		name += ".exe"
 	}
 	return name
@@ -292,7 +292,7 @@ func TestReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
 	if v.asset != binaryName() || string(v.binary) != newBinary || string(v.bundle) != "its bundle" {
 		t.Errorf("validated %q (%q) against bundle %q", v.asset, v.binary, v.bundle)
 	}
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsOS {
 		return
 	}
 	// The link still names the file, which keeps its mode, and nothing is
@@ -508,10 +508,10 @@ func TestInstallVersionDoesNotTouchBackupPath(t *testing.T) {
 	if err != nil || !res.Updated {
 		t.Fatalf("InstallVersion() = %+v, %v", res, err)
 	}
-	if got, err := os.ReadFile(exe); err != nil || string(got) != newBinary {
+	if got, err := os.ReadFile(filepath.Clean(exe)); err != nil || string(got) != newBinary {
 		t.Fatalf("installed %q, %v", got, err)
 	}
-	if got, err := os.ReadFile(marker); err != nil || string(got) != "keep" {
+	if got, err := os.ReadFile(filepath.Clean(marker)); err != nil || string(got) != "keep" {
 		t.Fatalf("backup path touched: %q, %v", got, err)
 	}
 }
@@ -548,7 +548,7 @@ func TestInstallVersionUsesPrivilegeOnlyForVerifiedReplacement(t *testing.T) {
 				if target != exe || mode != "750" {
 					t.Fatalf("destination %q mode %q", target, mode)
 				}
-				got, err := os.ReadFile(source)
+				got, err := os.ReadFile(filepath.Clean(source))
 				if err != nil || string(got) != newBinary {
 					t.Fatalf("staged %q, %v", got, err)
 				}
@@ -577,20 +577,20 @@ func TestInstallVersionUsesPrivilegeOnlyForVerifiedReplacement(t *testing.T) {
 }
 
 func TestPrivilegedInstallReplacesAtomicallyWithoutBackup(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsOS {
 		t.Skip("sudo installation is Unix only")
 	}
 	dir := t.TempDir()
 	// Exercise the actual installer script without privileges. The fake sudo
 	// accepts only noninteractive invocation and executes its exact argv.
 	sudo := filepath.Join(dir, "sudo")
-	if err := os.WriteFile(sudo, []byte("#!/bin/sh\n[ \"$1\" = -n ] && [ \"$2\" = -- ] || exit 1\nshift 2\nexec \"$@\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(sudo, []byte("#!/bin/sh\n[ \"$1\" = -n ] && [ \"$2\" = -- ] || exit 1\nshift 2\nexec \"$@\"\n"), 0o700); err != nil { //nolint:gosec // executable fixture in a test-owned directory
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	target := filepath.Join(dir, "installed binary")
 	source := filepath.Join(dir, "verified binary")
-	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil { //nolint:gosec // executable fixture whose mode the install preserves
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(source, []byte(newBinary), 0o600); err != nil {
@@ -599,7 +599,7 @@ func TestPrivilegedInstallReplacesAtomicallyWithoutBackup(t *testing.T) {
 	if err := privilegedInstall(context.Background(), source, target, "750"); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(target); err != nil || string(got) != newBinary {
+	if got, err := os.ReadFile(filepath.Clean(target)); err != nil || string(got) != newBinary {
 		t.Fatalf("installed %q, %v", got, err)
 	}
 	info, err := os.Stat(target)

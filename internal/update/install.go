@@ -15,6 +15,8 @@ import (
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
 )
 
+const windowsOS = "windows"
+
 var installVerified = selfupdatecosign.Install
 var privilegedInstall = func(ctx context.Context, source, target, mode string) error {
 	// Only the final filesystem operations need privilege. No shell input is
@@ -28,7 +30,7 @@ trap 'rm -f -- "$dir/beekeeper"; rmdir -- "$dir"' EXIT
 install -m "$mode" -- "$source" "$dir/beekeeper"
 mv -f -- "$dir/beekeeper" "$target"
 `
-	out, err := exec.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput() //nolint:gosec // fixed installer script; verified paths are positional arguments
 	if err != nil {
 		return fmt.Errorf("privileged atomic install: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -40,7 +42,7 @@ mv -f -- "$dir/beekeeper" "$target"
 // update account, and sudo never prompts or downloads anything.
 func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
 	err := installVerified(ctx, up, rel, path)
-	if !errors.Is(err, os.ErrPermission) || runtime.GOOS == "windows" {
+	if !errors.Is(err, os.ErrPermission) || runtime.GOOS == windowsOS {
 		return err
 	}
 	target, err := filepath.EvalSymlinks(path)
