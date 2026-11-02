@@ -24,7 +24,7 @@ func TestNoteDoneClosesOnlyTheCallersTeamsNote(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	noteCmdRun(t, a, "done", "3", "--reason", withdrawalReason)
+	noteCmdRun(t, a, verbDone, "3", flagNoteReason, withdrawalReason)
 	st, _ := a.store.Read()
 	if len(st.Notes) != 1 || st.Notes[0].By.Team != piaTeam {
 		t.Fatalf("open notes %+v", st.Notes)
@@ -42,7 +42,7 @@ func TestNoteDoneRetainsReason(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		for _, args := range [][]string{{"done", "1"}, {"done", "1", "--reason", " \n "}, {"done", "1", "--reason", reason, "--overtaken", "settled"}} {
+		for _, args := range [][]string{{verbDone, "1"}, {verbDone, "1", flagNoteReason, " \n "}, {verbDone, "1", flagNoteReason, reason, "--overtaken", "settled"}} {
 			if _, err := noteCommand(a, args...); err == nil {
 				t.Fatalf("accepted invalid withdrawal %q", args)
 			}
@@ -50,7 +50,7 @@ func TestNoteDoneRetainsReason(t *testing.T) {
 				t.Fatal("invalid withdrawal removed the note")
 			}
 		}
-		noteCmdRun(t, a, "done", "1", "--reason", reason)
+		noteCmdRun(t, a, verbDone, "1", flagNoteReason, reason)
 		if st, _ := a.store.Read(); len(st.Notes) != 0 {
 			t.Fatal("withdrawn note stays open")
 		}
@@ -65,7 +65,7 @@ func TestNoteDoneRetainsReason(t *testing.T) {
 			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.Reason != reason || got.Text != n.Text || got.For != n.For || got.Status != "closed" || got.Closure == nil || got.Closure.Verb != noteDone {
+			if got.Reason != reason || got.Text != n.Text || got.For != n.For || got.Status != noteStatusClosed || got.Closure == nil || got.Closure.Verb != noteDone {
 				t.Fatalf("lost withdrawal: %+v", got)
 			}
 		} else if !strings.Contains(out.String(), "reason: "+reason) || !strings.Contains(out.String(), n.Text) {

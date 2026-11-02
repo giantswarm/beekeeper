@@ -297,7 +297,7 @@ func TestNoteDoneReleasesItsHold(t *testing.T) {
 		args []string
 		how  string
 	}{
-		{[]string{verbDone, "1", "--reason", withdrawalReason}, closedDone},
+		{[]string{verbDone, "1", flagNoteReason, withdrawalReason}, closedDone},
 		{[]string{verbDone, "1", "--overtaken", "merged meanwhile"}, closedOvertaken},
 	} {
 		t.Run(tc.how, func(t *testing.T) {

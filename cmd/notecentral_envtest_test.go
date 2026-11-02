@@ -127,13 +127,13 @@ func TestEnvtestCentralNotesTwoPersons(t *testing.T) {
 	}
 
 	// The filer withdraws hers by its bare number; the addressee cannot.
-	if out, code = bo.run("note", "done", portalRef, "--reason", withdrawalReason); code != ExitRefused {
+	if out, code = bo.run("note", "done", portalRef, flagNoteReason, withdrawalReason); code != ExitRefused {
 		t.Fatalf("bo's done of ana's note: exit %d: %s", code, out)
 	}
 	if out, code = bo.run("note", "done", portalRef, "--overtaken", "settled"); code != ExitUsage {
 		t.Fatalf("bo's done --overtaken of a central note: exit %d: %s", code, out)
 	}
-	if out, code = ana.run("note", "done", strconv.Itoa(portal), "--reason", withdrawalReason); code != 0 || !strings.Contains(out, "note "+portalRef+" done") {
+	if out, code = ana.run("note", "done", strconv.Itoa(portal), flagNoteReason, withdrawalReason); code != 0 || !strings.Contains(out, "note "+portalRef+" done") {
 		t.Fatalf("ana's done: exit %d: %s", code, out)
 	}
 	closure, err := e.store.NoteClosure(portal)
@@ -155,7 +155,7 @@ func TestEnvtestCentralNotesTwoPersons(t *testing.T) {
 	if out, code = bo.run("guide", "queue", "--full"); code != 0 || !strings.Contains(out, "warning: ") || !strings.Contains(out, fmt.Sprintf("#%d for bo", lane)) {
 		t.Fatalf("bo's guide queue, central down: exit %d: %s", code, out)
 	}
-	if out, code = bo.run("note", "done", strconv.Itoa(lane), "--reason", withdrawalReason); code != 0 {
+	if out, code = bo.run("note", "done", strconv.Itoa(lane), flagNoteReason, withdrawalReason); code != 0 {
 		t.Fatalf("bo's done of his own note, central down: exit %d: %s", code, out)
 	}
 }
@@ -292,7 +292,7 @@ func TestEnvtestCentralNoteListingLifecycle(t *testing.T) {
 	if out, code := ana.run("note", "list"); code != 0 || !strings.Contains(out, "no open notes") {
 		t.Fatalf("first listing after answer: %d %s", code, out)
 	}
-	if out, code := ana.run("note", "done", ref, "--reason", withdrawalReason); code != ExitRefused {
+	if out, code := ana.run("note", "done", ref, flagNoteReason, withdrawalReason); code != ExitRefused {
 		t.Fatalf("withdraw answered: %d %s", code, out)
 	}
 	scheme, err := kube.Scheme()

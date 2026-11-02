@@ -183,7 +183,7 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 }
 
 func TestPassiveDefaultsCloseOnceAndStayAnswerable(t *testing.T) {
-	for _, dflt := range []string{"wait", "none", "nothing happens", "", "ask again"} {
+	for _, dflt := range []string{"wait", ghNone, "nothing happens", "", "ask again"} {
 		t.Run(dflt, func(t *testing.T) {
 			n := state.Note{ID: 1, Kind: noteDecision, For: notePerson, Default: dflt, Due: relayNow.Add(-time.Minute)}
 			st := &state.State{Notes: []state.Note{n}}

@@ -376,7 +376,7 @@ func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	c.concern = kube.HoldObject(target)
-	args := []string{"set", target, "--reason", req.GetString(paramReason, "")}
+	args := []string{"set", target, flagNoteReason, req.GetString(paramReason, "")}
 	if u := req.GetString("until", ""); u != "" {
 		args = append(args, "--until", u)
 	}
@@ -865,7 +865,7 @@ func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.verb(c.app.noteCmd(), "done", strconv.Itoa(id), "--reason", reason); err != nil {
+	if err := c.verb(c.app.noteCmd(), "done", strconv.Itoa(id), flagNoteReason, reason); err != nil {
 		return nil, err
 	}
 	c.s.closeDecision(c.ctx, n, outcomeWithdrawn, reason)

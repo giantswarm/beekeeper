@@ -149,7 +149,7 @@ func (a *app) localNote(id int) (*shownNote, error) {
 		if n != nil {
 			shown = &shownNote{Note: *n, Status: noteStatusOpen, Closure: closure}
 			if closure != nil {
-				shown.Status = "closed"
+				shown.Status = noteStatusClosed
 				switch closure.Verb {
 				case noteDone:
 					if withdrawn := withdrawnNote(*closure); withdrawn != nil {
