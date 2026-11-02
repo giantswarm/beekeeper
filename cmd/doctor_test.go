@@ -420,33 +420,53 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 	}
 }
 
-// The stale binaries are the other beekeeper processes whose file was
-// replaced, by pid; the doctor leaves the watches to WATCH STALE.
+// The stale binaries are the other beekeeper processes whose file an
+// install replaced after they started, by pid, each line naming that
+// install; the doctor leaves the watches to WATCH STALE.
 func TestStaleBinaries(t *testing.T) {
-	p := func(pid int, comm, cmdline string) *proc.Process {
-		return &proc.Process{PID: pid, Comm: comm, Args: strings.Fields(cmdline)}
+	const path = "/home/u/.go/bin/beekeeper"
+	installed := time.Date(2026, 11, 2, 3, 0, 0, 0, time.UTC)
+	before, after := installed.Add(-time.Hour), installed.Add(time.Hour)
+	p := func(pid int, comm, cmdline string, start time.Time) *proc.Process {
+		return &proc.Process{PID: pid, Comm: comm, Args: strings.Fields(cmdline), Start: start}
 	}
 	tab := &proc.Table{ByPID: map[int]*proc.Process{
-		5: p(5, project.Name, "beekeeper agents reopen"),
-		3: p(3, project.Name, "beekeeper gate -- devctl pr merge o/r 1"),
-		4: p(4, project.Name, "beekeeper watch"),
-		6: p(6, project.Name, "beekeeper snapshot"),
-		7: p(7, merge.Tool, "devctl pr merge o/r 1"),
-		8: p(8, project.Name, "beekeeper doctor"),
+		5: p(5, project.Name, "beekeeper agents reopen", before),
+		3: p(3, project.Name, "beekeeper gate -- devctl pr merge o/r 1", before),
+		4: p(4, project.Name, "beekeeper watch", before),
+		6: p(6, project.Name, "beekeeper snapshot", before),
+		7: p(7, merge.Tool, "devctl pr merge o/r 1", before),
+		8: p(8, project.Name, "beekeeper doctor", before),
+		// A gate started after the install: whatever file it runs, that
+		// install did not replace it.
+		9: p(9, project.Name, "beekeeper gate -- devctl pr merge o/r 2", after),
+		// Within the start's second of slack.
+		10: p(10, project.Name, "beekeeper gate -- devctl pr merge o/r 3", installed.Add(-startSlack/2)),
 	}}
-	replaced := func(pid int) bool { return pid != 6 }
+	replaced := func(pid int) (platform.Install, bool) {
+		return platform.Install{Path: path, At: installed}, pid != 6
+	}
 	got := staleBinaries(tab, 8, replaced)
 	if len(got) != 3 || got[0].PID != 3 || got[1].PID != 4 || got[2].PID != 5 {
 		t.Fatalf("stale binaries = %v", got)
 	}
-	rest := slices.DeleteFunc(got, isWatch)
-	if len(rest) != 2 || staleLine(rest[0]) != "stale binary: pid 3 (beekeeper gate --) runs a beekeeper an install replaced; "+
-		"it re-executes the installed one at its next step" {
+	rest := slices.DeleteFunc(got, isStaleWatch)
+	if len(rest) != 2 || staleLine(rest[0]) != "stale binary: pid 3 (beekeeper gate --) runs a beekeeper an install at "+path+
+		" at 2026-11-02T03:00:00Z replaced; it re-executes the installed one at its next step" {
 		t.Errorf("without the watches = %v: %q", rest, staleLine(rest[0]))
 	}
-	if len(rest) == 2 && staleLine(rest[1]) != "stale binary: pid 5 (beekeeper agents reopen) runs a beekeeper an install replaced; "+
-		"its saves of the state are refused until it ends or is restarted" {
+	if len(rest) == 2 && staleLine(rest[1]) != "stale binary: pid 5 (beekeeper agents reopen) runs a beekeeper an install at "+path+
+		" at 2026-11-02T03:00:00Z replaced; its saves of the state are refused until it ends or is restarted" {
 		t.Errorf("a reopen: %q", staleLine(rest[1]))
+	}
+	// Where the platform cannot say when the install came, or when the
+	// process started, the replaced file alone counts.
+	unknown := func(int) (platform.Install, bool) { return platform.Install{Path: path}, true }
+	if got := staleBinaries(tab, 8, unknown); len(got) != 6 {
+		t.Errorf("with no install time, stale binaries = %v", got)
+	}
+	if got := staleBinaries(tab, 8, unknown); len(got) == 6 && !strings.Contains(staleLine(got[0]), "an install at "+path+" replaced;") {
+		t.Errorf("with no install time: %q", staleLine(got[0]))
 	}
 }
 

@@ -257,7 +257,7 @@ type doctorReport struct {
 	// stale are the running beekeeper processes of a binary an install
 	// replaced, the watches apart (WATCH STALE names them): their saves of
 	// the state are refused.
-	stale []*proc.Process
+	stale []staleBinary
 	// sameTitles are the titles more than one live session carries.
 	sameTitles []sameTitle
 	// ungated are the devctl merges and promotions running with no beekeeper
@@ -266,14 +266,19 @@ type doctorReport struct {
 	ungated []string
 }
 
-// staleLine says a process of a replaced binary and what ends it: a gate
-// call or a merge-child re-executes the installed binary by itself.
-func staleLine(p *proc.Process) string {
+// staleLine says a process of a replaced binary, the install that replaced
+// it (its path and when) and what ends it: a gate call or a merge-child
+// re-executes the installed binary by itself.
+func staleLine(s staleBinary) string {
 	what := "its saves of the state are refused until it ends or is restarted"
-	if reexecs(p) {
+	if reexecs(s.Process) {
 		what = "it re-executes the installed one at its next step"
 	}
-	return fmt.Sprintf("stale binary: pid %d (%s) runs a beekeeper an install replaced; %s", p.PID, display(p.Args), what)
+	by := "an install at " + s.by.Path
+	if !s.by.At.IsZero() {
+		by += " at " + s.by.At.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("stale binary: pid %d (%s) runs a beekeeper %s replaced; %s", s.PID, display(s.Args), by, what)
 }
 
 // doctor finds the chores and the faults, and fixes what it may.
@@ -287,7 +292,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
+	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isStaleWatch)
 	rep.sameTitles = sameTitles(sessions)
 	rep.ungated = ungatedLines(sessions, t)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
@@ -686,10 +691,13 @@ line:
   negative: off); each run is logged with the paths and bytes
   (worktrees.trim);
 - reports a stale binary: a running beekeeper process of a binary an
-  install replaced (a start's reopen), whose saves of the state the newer
-  release refuses (state.stale-writer in the log) until it ends or is
-  restarted; a gate call or a merge-child re-executes the installed binary
-  at its next step by itself; a watch is named by WATCH STALE instead;
+  install replaced after it started (a start's reopen), named with the
+  install's path and time, whose saves of the state the newer release
+  refuses (state.stale-writer in the log) until it ends or is restarted;
+  the path is read as the process resolves it, so a copy elsewhere on the
+  PATH or a re-executed call is not stale; a gate call or a merge-child
+  re-executes the installed binary at its next step by itself; a watch is
+  named by WATCH STALE instead;
 - reports an ungated merge: a running devctl pr merge, or release promote
   of one repository, with no beekeeper gate among its ancestors (one a
   script ran, say), which runs outside the lanes, the holds and the budget
