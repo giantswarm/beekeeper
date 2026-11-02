@@ -122,14 +122,23 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("execution hook conformance probe failed")
 			}
-			if _, ok := cfg.Harnesses[execution.HarnessCodex]; !ok {
-				continue
+			if _, ok := cfg.Harnesses[execution.HarnessCodex]; ok {
+				raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
+				out.Hook.Decision = ""
+				b = h.DecideExecutionCodex(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
+				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
+					return errors.New("codex execution hook conformance probe failed")
+				}
 			}
-			raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
-			out.Hook.Decision = ""
-			b = h.DecideExecutionCodex(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
-			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
-				return errors.New("codex execution hook conformance probe failed")
+			if _, ok := cfg.Harnesses[execution.HarnessAgy]; ok {
+				raw, _ = json.Marshal(map[string]any{"conversationId": "probe", "workspacePaths": []string{cfg.WorkspaceRoot}, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": command}}})
+				var agyOut struct {
+					Decision string `json:"decision"`
+				}
+				b = h.DecideExecutionAgy(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
+				if json.Unmarshal(b, &agyOut) != nil || agyOut.Decision != guardDeny {
+					return errors.New("agy execution hook conformance probe failed")
+				}
 			}
 		}
 		return nil
@@ -154,25 +163,38 @@ func (a *app) executionHook() guard.Hook {
 	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
 
-// executionGuardDecision picks the guard for the hook's format. A hook in the
-// other harness's format is configuration that does not belong to this
+// executionGuardDecision picks the guard for the hook's format. A hook in
+// another harness's format is configuration that does not belong to this
 // execution: it is denied in the format asked for, never translated. A codex
-// hook binds its calls to the thread the runner recorded.
+// or agy hook binds its calls to the thread the runner recorded.
 func executionGuardDecision(h guard.Hook, format string, j execution.Journal, protected []string) func([]byte) []byte {
 	h.ExecutionMCP = j.Request.MCP
-	codexHook := format == execution.HarnessCodex
-	if codexHook != (j.Request.Harness == execution.HarnessCodex) {
-		deny := guard.ExecutionDeny
-		if codexHook {
-			deny = guard.ExecutionDenyCodex
-		}
+	deny := guard.ExecutionDeny
+	switch format {
+	case execution.HarnessCodex:
+		deny = guard.ExecutionDenyCodex
+	case execution.HarnessAgy:
+		deny = guard.ExecutionDenyAgy
+	}
+	wantFormat := ""
+	switch j.Request.Harness {
+	case execution.HarnessCodex:
+		wantFormat = execution.HarnessCodex
+	case execution.HarnessAgy:
+		wantFormat = execution.HarnessAgy
+	}
+	if format != wantFormat {
 		return func([]byte) []byte { return deny("hook format does not match the execution's harness") }
 	}
-	if codexHook {
+	switch format {
+	case execution.HarnessCodex:
 		return func(raw []byte) []byte { return h.DecideExecutionCodex(raw, j.Thread, j.Handle.Workspace, protected) }
-	}
-	return func(raw []byte) []byte {
-		return h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, protected)
+	case execution.HarnessAgy:
+		return func(raw []byte) []byte { return h.DecideExecutionAgy(raw, j.Thread, j.Handle.Workspace, protected) }
+	default:
+		return func(raw []byte) []byte {
+			return h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, protected)
+		}
 	}
 }
 
@@ -303,8 +325,11 @@ func (a *app) executionHostCmds() []*cobra.Command {
 	guardCmd := &cobra.Command{Use: "execution-guard", Hidden: true, Args: cobra.NoArgs, PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return nil }, RunE: func(cmd *cobra.Command, _ []string) error {
 		var out []byte
 		denial := guard.ExecutionDeny
-		if guardFormat == execution.HarnessCodex {
+		switch guardFormat {
+		case execution.HarnessCodex:
 			denial = guard.ExecutionDenyCodex
+		case execution.HarnessAgy:
+			denial = guard.ExecutionDenyAgy
 		}
 		defer func() {
 			if recover() != nil {
@@ -315,7 +340,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 			_, err := cmd.OutOrStdout().Write(denial("execution identity, policy or coordinating authority could not be verified"))
 			return err
 		}
-		if guardFormat != "" && guardFormat != execution.HarnessCodex {
+		if guardFormat != "" && guardFormat != execution.HarnessCodex && guardFormat != execution.HarnessAgy {
 			return deny()
 		}
 		if err := a.load(); err != nil {
@@ -347,7 +372,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		}
 		return err
 	}}
-	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex")
+	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex or agy")
 	run := &cobra.Command{Use: "execution-run <execution>", Hidden: true, Args: cobra.ExactArgs(1), PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return a.load() }, RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := a.hostRuntime()
 		if err != nil {

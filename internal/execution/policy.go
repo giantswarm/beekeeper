@@ -48,9 +48,14 @@ const ClaudeVersions = ">= 2.1.268, < 3.0.0"
 // PreToolUse hooks from CODEX_HOME and --dangerously-bypass-hook-trust.
 const CodexVersions = ">= 0.165.0, < 1.0.0"
 
+// The agy adapter relies on `--input-format stream-json --output-format
+// stream-json`, `--conversation` resume, and PreToolUse hooks from
+// `~/.gemini/config/hooks.json` under the project name key (agy >= 1.4.7).
+const AgyVersions = ">= 1.4.7, < 2.0.0"
+
 func (c HostConfig) Validate() error {
 	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
-		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude or codex")
+		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex or agy")
 	}
 	for repo, p := range c.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
@@ -85,9 +90,9 @@ func (c HostConfig) Validate() error {
 }
 
 func (h HarnessConfig) validate(name string) error {
-	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions}[name]
+	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions, HarnessAgy: AgyVersions}[name]
 	if constraint == "" {
-		return errors.New("execution host harnesses must be claude or codex")
+		return errors.New("execution host harnesses must be claude, codex or agy")
 	}
 	v, err := semver.StrictNewVersion(h.Version)
 	rangeOK, _ := semver.NewConstraint(constraint)
@@ -98,6 +103,11 @@ func (h HarnessConfig) validate(name string) error {
 	// managed home links only that file and never receives a copied credential.
 	if name == HarnessCodex && h.ConfigDir == "" {
 		return errors.New("codex requires configDir, the host CODEX_HOME holding its own login")
+	}
+	// Agy keeps its OAuth login in the host's own agy configuration directory;
+	// the managed home links only the token file and never copies credentials.
+	if name == HarnessAgy && h.ConfigDir == "" {
+		return errors.New("agy requires configDir, the host directory holding its own login")
 	}
 	return nil
 }
@@ -119,6 +129,9 @@ type Policy struct {
 	// CodexDigest binds the managed CODEX_HOME's config, hooks and rules. It
 	// is empty on a host that runs no codex, leaving its policy unchanged.
 	CodexDigest string `json:"codexDigest,omitempty"`
+	// AgyDigest binds the managed agy home's config, hooks and rules. It is
+	// empty on a host that runs no agy, leaving its policy unchanged.
+	AgyDigest string `json:"agyDigest,omitempty"`
 }
 
 func (p Policy) Digest() string { b, _ := json.Marshal(p); return Digest(b) }
@@ -133,6 +146,9 @@ func (s *Server) Policy() Policy {
 	p := Policy{Protocol: Protocol, Version: s.Version, ConfigurationDigest: Digest(b), RulesDigest: Digest(s.Rules), SettingsDigest: Digest(s.settings())}
 	if _, ok := s.Config.Harnesses[HarnessCodex]; ok {
 		p.CodexDigest = Digest(mustJSON(s.codexFiles()))
+	}
+	if _, ok := s.Config.Harnesses[HarnessAgy]; ok {
+		p.AgyDigest = Digest(mustJSON(s.agyFiles()))
 	}
 	return p
 }
@@ -192,6 +208,84 @@ func (s *Server) linkCodexLogin() error {
 	return os.Symlink(filepath.Join(h.ConfigDir, "auth.json"), link)
 }
 
+const agyLoginToken = "antigravity-oauth-token"
+
+// agyHomeDir is the managed HOME of every remote agy worker on this host:
+// policy-owned config, hooks and rules under .gemini, never the person's own.
+func (s *Server) agyHomeDir() string { return filepath.Join(s.Root, "agy-home") }
+
+func (s *Server) agyConfigDir() string {
+	return filepath.Join(s.agyHomeDir(), ".gemini", "config")
+}
+
+func (s *Server) agyAppDir() string {
+	return filepath.Join(s.agyHomeDir(), ".gemini", "antigravity-cli")
+}
+
+// agyFiles are the policy-bound files of the managed agy home (under
+// .gemini/config). Hooks are enabled under the project name in the shape agy
+// >= 1.4.7 requires, user MCP servers and skills are cleared, and embedded
+// worker rules are installed as GEMINI.md.
+func (s *Server) agyFiles() map[string][]byte {
+	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard --format agy"
+	hooks := mustJSON(map[string]any{managedBinary: agyPreToolUse(cmd)})
+	mcp := mustJSON(map[string]any{"mcpServers": map[string]any{}})
+	skills := mustJSON(map[string]any{"entries": []any{}})
+	return map[string][]byte{"GEMINI.md": s.Rules, "hooks.json": hooks, "mcp_config.json": mcp, "skills.json": skills}
+}
+
+func agyPreToolUse(command string) map[string]any {
+	const kind = "command"
+	return map[string]any{"PreToolUse": []any{map[string]any{"matcher": "*", hooksKey: []any{map[string]any{"type": kind, kind: command, "timeout": 30}}}}}
+}
+
+func agyLoginSource(configDir string) string {
+	for _, candidate := range []string{
+		filepath.Join(configDir, ".gemini", "antigravity-cli", agyLoginToken),
+		filepath.Join(configDir, "antigravity-cli", agyLoginToken),
+		filepath.Join(configDir, agyLoginToken),
+	} {
+		if _, err := os.Lstat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join(configDir, agyLoginToken)
+}
+
+// linkAgyLogin links the person's own host OAuth token into the managed agy
+// home. A refreshed token rewritten in place is left as it is.
+func (s *Server) linkAgyLogin() error {
+	h, ok := s.Config.Harnesses[HarnessAgy]
+	if !ok {
+		return nil
+	}
+	if err := ownedDirectory(s.agyHomeDir()); err != nil {
+		return err
+	}
+	if err := ownedDirectory(filepath.Join(s.agyHomeDir(), ".gemini")); err != nil {
+		return err
+	}
+	if err := ownedDirectory(s.agyAppDir()); err != nil {
+		return err
+	}
+	link := filepath.Join(s.agyAppDir(), agyLoginToken)
+	if _, err := os.Stat(link); err == nil {
+		return nil
+	}
+	src := agyLoginSource(h.ConfigDir)
+	if target, err := os.Readlink(link); err == nil {
+		if target == src {
+			return nil
+		}
+		if err := os.Remove(link); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Symlink(src, link)
+}
+
 const hooksKey = "hooks"
 
 // preToolUse is the hook table both harnesses read: one command for every tool.
@@ -248,6 +342,28 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 	}
+	if p.AgyDigest != "" {
+		if err := ownedDirectory(s.agyHomeDir()); err != nil {
+			return "", err
+		}
+		if err := ownedDirectory(filepath.Join(s.agyHomeDir(), ".gemini")); err != nil {
+			return "", err
+		}
+		if err := ownedDirectory(s.agyConfigDir()); err != nil {
+			return "", err
+		}
+		if err := ownedDirectory(s.agyAppDir()); err != nil {
+			return "", err
+		}
+		for name, b := range s.agyFiles() {
+			if err := atomicFile(filepath.Join(s.agyConfigDir(), name), b); err != nil {
+				return "", err
+			}
+		}
+		if err := s.linkAgyLogin(); err != nil {
+			return "", err
+		}
+	}
 	// The manifest comes last: a host is prepared only once every file is.
 	if err := atomicFile(filepath.Join(s.Root, "policy.json"), mustJSON(p)); err != nil {
 		return "", err
@@ -277,6 +393,14 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 			b, err := readRegular(filepath.Join(s.codexHomeDir(), name), MaxWire)
 			if err != nil || Digest(b) != Digest(want) {
 				return p, errors.New("installed codex rules, configuration or hooks do not match the policy")
+			}
+		}
+	}
+	if p.AgyDigest != "" {
+		for name, want := range s.agyFiles() {
+			b, err := readRegular(filepath.Join(s.agyConfigDir(), name), MaxWire)
+			if err != nil || Digest(b) != Digest(want) {
+				return p, errors.New("installed agy rules, configuration or hooks do not match the policy")
 			}
 		}
 	}
@@ -311,8 +435,11 @@ func (s *Server) workerExecutable() error {
 // Probe runs no model call and returns no authentication values. Its output is
 // only metadata. No provider credential from the SSH login shell is inherited.
 func (s *Server) probe(ctx context.Context, name string, h HarnessConfig) error {
-	if name == HarnessCodex {
+	switch name {
+	case HarnessCodex:
 		return s.probeCodex(ctx, h)
+	case HarnessAgy:
+		return s.probeAgy(ctx, h)
 	}
 	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))
@@ -359,4 +486,77 @@ func (s *Server) probeCodex(ctx context.Context, h HarnessConfig) error {
 		return errors.New("execution host needs an independently provisioned Codex ChatGPT login: run `CODEX_HOME=<configDir> codex login --device-auth` on the host")
 	}
 	return nil
+}
+
+// agyEnvironment runs agy against the managed agy home only while keeping the
+// host account's Go build and module caches for worker build commands.
+func (s *Server) agyEnvironment() []string {
+	return s.agyEnvironmentWithHome(s.agyHomeDir())
+}
+
+func (s *Server) agyEnvironmentWithHome(home string) []string {
+	var out []string
+	userHome := os.Getenv("HOME")
+	for _, kv := range cleanEnvironment("", s.Executable) {
+		if strings.HasPrefix(kv, "HOME=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, "HOME="+home)
+	if userHome != "" {
+		if v := os.Getenv("GOPATH"); v != "" {
+			out = append(out, "GOPATH="+v)
+		} else {
+			out = append(out, "GOPATH="+filepath.Join(userHome, "go"))
+		}
+		if v := os.Getenv("GOCACHE"); v != "" {
+			out = append(out, "GOCACHE="+v)
+		} else {
+			out = append(out, "GOCACHE="+filepath.Join(userHome, ".cache", "go-build"))
+		}
+	}
+	return out
+}
+
+// probeAgy checks the pinned version and an active agy OAuth login in the
+// managed home without making a model generation call.
+func (s *Server) probeAgy(ctx context.Context, h HarnessConfig) error {
+	if err := s.linkAgyLogin(); err != nil {
+		return errors.New("agy login link in the managed home is unavailable")
+	}
+	version, err := s.command(ctx, "", s.agyEnvironment(), h.Executable, "--version")
+	parts := strings.Fields(string(version))
+	gotVer := ""
+	switch len(parts) {
+	case 1:
+		gotVer = parts[0]
+	case 2:
+		if parts[0] == HarnessAgy {
+			gotVer = parts[1]
+		}
+	case 3:
+		if parts[0] == HarnessAgy && parts[1] == "version" {
+			gotVer = parts[2]
+		}
+	}
+	if err != nil || gotVer != h.Version {
+		return errors.New("unsupported or mismatched agy version")
+	}
+	modelsOut, err := s.combined(ctx, "", s.agyEnvironment(), h.Executable, "models")
+	if err != nil || !agyHasModels(string(modelsOut)) {
+		return errors.New("execution host needs an independently provisioned agy login: run `HOME=<configDir> agy` on the host")
+	}
+	return nil
+}
+
+func agyHasModels(raw string) bool {
+	for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 0 || strings.EqualFold(fields[0], "fetching") || strings.EqualFold(fields[0], "not") {
+			continue
+		}
+		return true
+	}
+	return false
 }

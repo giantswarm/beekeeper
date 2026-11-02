@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -96,7 +97,7 @@ func DecideUnsandboxedAgy(input []byte) []byte {
 
 // DecideSandboxAgy is DecideSandbox in agy's PreToolUse format.
 func (h Hook) DecideSandboxAgy(input []byte) []byte {
-	ev, _, errReason := parseAgyEvent(input)
+	ev, _, errReason := h.parseAgy(input)
 	if errReason != "" {
 		return DenyAgy(errReason)
 	}
@@ -112,7 +113,7 @@ func (h Hook) DecideSandboxAgy(input []byte) []byte {
 // DecideAgy reads an agy PreToolUse JSON event from input, runs the Hook's
 // checks on it, and returns the response in agy's PreToolUse JSON format.
 func (h Hook) DecideAgy(input []byte) []byte {
-	ev, origCmd, errReason := parseAgyEvent(input)
+	ev, origCmd, errReason := h.parseAgy(input)
 	if errReason != "" {
 		return DenyAgy(errReason)
 	}
@@ -171,6 +172,10 @@ var agyNonFileTools = map[string]bool{
 }
 
 func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
+	return (Hook{}).parseAgy(input)
+}
+
+func (h Hook) parseAgy(input []byte) (ev event, origCmd, errReason string) {
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	var p agyPayload
@@ -178,9 +183,15 @@ func parseAgyEvent(input []byte) (ev event, origCmd, errReason string) {
 		return event{}, "", "Refused: malformed PreToolUse payload."
 	}
 	args := p.ToolCall.Args
+	base := h.Project
+	if len(p.WorkspacePaths) > 0 && p.WorkspacePaths[0] != "" {
+		base = p.WorkspacePaths[0]
+	}
 	cwd := firstString(args, "Cwd", "DirectoryPath", "SearchPath", "SearchDirectory")
-	if cwd == "" && len(p.WorkspacePaths) > 0 {
-		cwd = p.WorkspacePaths[0]
+	if cwd == "" {
+		cwd = base
+	} else if !filepath.IsAbs(cwd) && filepath.IsAbs(base) {
+		cwd = filepath.Join(base, cwd)
 	}
 	if cwd == "" {
 		cwd, _ = os.Getwd()

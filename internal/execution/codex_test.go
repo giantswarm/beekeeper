@@ -82,7 +82,7 @@ func TestHostConfigHarnesses(t *testing.T) {
 		"codex only":            {map[string]HarnessConfig{HarnessCodex: codex}, true},
 		"claude and codex":      {map[string]HarnessConfig{HarnessClaude: f.s.Config.Harnesses[HarnessClaude], HarnessCodex: codex}, true},
 		"none":                  {map[string]HarnessConfig{}, false},
-		"agy has no adapter":    {map[string]HarnessConfig{"agy": codex}, false},
+		"omp has no adapter":    {map[string]HarnessConfig{"omp": codex}, false},
 		"codex without login":   {map[string]HarnessConfig{HarnessCodex: {Executable: codex.Executable, Version: codex.Version}}, false},
 		"codex below its range": {map[string]HarnessConfig{HarnessCodex: {Executable: codex.Executable, Version: "0.100.0", ConfigDir: codex.ConfigDir}}, false},
 		"codex relative binary": {map[string]HarnessConfig{HarnessCodex: {Executable: "codex", Version: codex.Version, ConfigDir: codex.ConfigDir}}, false},

@@ -103,8 +103,11 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		go func() { defer close(leaseDone); s.maintainLease(leaseCtx, ref, leaseStarted, lease) }()
 		defer func() { stopLease(); <-leaseDone }()
 	}
-	if j.Request.Harness == HarnessCodex {
+	switch j.Request.Harness {
+	case HarnessCodex:
 		return s.runCodex(ctx, ref, j)
+	case HarnessAgy:
+		return s.runAgy(ctx, ref, j)
 	}
 	h := s.Config.Harnesses[j.Request.Harness]
 	env := append(s.toolPath(cleanEnvironment(h.ConfigDir, s.Executable)), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
