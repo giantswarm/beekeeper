@@ -1,0 +1,208 @@
+package cmd
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"path/filepath"
+	"time"
+
+	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+var budgetCredentials = github.BudgetCredentials
+
+const unlabelledIdentity = "unlabelled"
+
+func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
+	// Every producer (watch, loop and CLI) shares this lock. Hold it from
+	// the initial cache read through publication so a delayed high response
+	// cannot overwrite a concurrent low reading or return it to admission.
+	lock := flock.New(filepath.Join(a.store.Dir(), "budget-probe.lock"))
+	held, err := lock.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
+		return github.Budget{}, err
+	}
+	if !held {
+		return github.Budget{}, errors.New("budget probe lock unavailable")
+	}
+	defer func() { _ = lock.Unlock() }()
+	st, err := a.store.Read()
+	if err != nil {
+		return github.Budget{}, err
+	}
+	now := time.Now().UTC()
+	profiles := map[string]github.Budget{}
+	saved := map[string]state.Budget{}
+	var failures []error
+	var warnings []string
+	credentials := budgetCredentials(ctx)
+	seen := map[string]bool{}
+	for _, credential := range credentials {
+		seen[credential.Identity] = true
+	}
+	if st.Budget != nil {
+		for id, old := range st.Budget.Identities {
+			if id == unlabelledIdentity {
+				if old.GraphQL != nil && now.Before(old.GraphQL.Reset) {
+					profiles[id], saved[id] = historicalBudget(old.GraphQL), old
+				}
+				continue
+			}
+			if !seen[id] {
+				credentials = append(credentials, github.BudgetCredential{Identity: id, Err: errors.New("previously configured credential is unavailable")})
+			}
+		}
+	}
+	for _, credential := range credentials {
+		var previous state.Budget
+		if st.Budget != nil {
+			previous = st.Budget.Identities[credential.Identity]
+		}
+		if credential.Skip {
+			if credential.Warning != "" {
+				warnings = append(warnings, credential.Warning)
+			}
+			// Losing provider metadata must not erase a known low unexpired window.
+			// Failed metadata readings have no usable counter and are discarded.
+			cached := github.Budget{Identity: credential.Identity, Login: previous.Login,
+				Remaining: previous.Limit, Limit: previous.Limit, Reset: previous.Reset}
+			restFresh := now.Before(previous.Reset)
+			if restFresh {
+				cached.Remaining = previous.Remaining
+			}
+			if g := previous.GraphQL; g != nil && g.Err == "" && now.Before(g.Reset) {
+				cached.GraphQL = graphqlOf(g)
+			}
+			if restFresh || cached.GraphQL != nil {
+				profiles[credential.Identity], saved[credential.Identity] = cached, previous
+			}
+			continue
+		}
+		b, cached, err := a.probeIdentity(ctx, credential, previous, now)
+		profiles[credential.Identity], saved[credential.Identity] = b, cached
+		if err != nil {
+			failures = append(failures, fmt.Errorf("GitHub identity %s: %w", credential.Identity, err))
+		}
+	}
+	if len(profiles) == 0 {
+		return github.Budget{}, errors.New("no GitHub budget identities configured")
+	}
+	b := github.LowestBudget(profiles, now)
+	if st.Budget != nil && len(st.Budget.Identities) == 0 {
+		if old := st.Budget.GraphQL; old != nil && old.Err == "" && now.Before(old.Reset) && old.Remaining < b.GraphQL.Remaining {
+			legacy := *old
+			legacy.Identity = unlabelledIdentity
+			profiles[unlabelledIdentity] = historicalBudget(&legacy)
+			saved[unlabelledIdentity] = state.Budget{Identity: unlabelledIdentity, Remaining: legacy.Limit, Limit: legacy.Limit, Reset: legacy.Reset, At: legacy.At, GraphQL: &legacy}
+			b = github.LowestBudget(profiles, now)
+		}
+	}
+	minimum := saved[b.Identity]
+	if b.GraphQL != nil {
+		minimum.GraphQL = storedGraphQL(b.GraphQL, saved[b.GraphQL.Identity].GraphQL.At)
+	}
+	minimum.Identities = saved
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.BudgetETag, st.Budget = minimum.ETag, &minimum
+		return nil, nil
+	}); err != nil {
+		failures = append(failures, err)
+	}
+	b.Warnings = warnings
+	return b, errors.Join(failures...)
+}
+
+func historicalBudget(g *state.GraphQL) github.Budget {
+	return github.Budget{Identity: g.Identity, Login: g.Login, Remaining: g.Limit, Limit: g.Limit, Reset: g.Reset, GraphQL: graphqlOf(g)}
+}
+
+func (a *app) probeIdentity(ctx context.Context, credential github.BudgetCredential, previous state.Budget, now time.Time) (github.Budget, state.Budget, error) {
+	id := credential.Identity
+	unknown := func(err error) (github.Budget, state.Budget, error) {
+		g := &github.GraphQL{Identity: id, Err: err.Error()}
+		return github.Budget{Identity: id, GraphQL: g}, state.Budget{Identity: id, At: now, Windows: previous.Windows, GraphQL: storedGraphQL(g, now)}, err
+	}
+	if credential.Err != nil {
+		return unknown(credential.Err)
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	repo := a.cfg.GitHub.ProbeRepo
+	if id == github.IdentityApp {
+		repo = github.BudgetAppRepo
+	}
+	b, etag, err := github.Probe(ctx, client, credential.Value, repo, previous.ETag)
+	if err != nil {
+		return unknown(err)
+	}
+	b.Identity = id
+	g := previous.GraphQL
+	if g == nil || g.Identity != id || g.Err != "" || now.Sub(g.At) > a.cfg.Merge.BudgetFresh.Duration || !g.Reset.IsZero() && !now.Before(g.Reset) {
+		reading := github.ProbeGraphQL(ctx, client, credential.Value, now)
+		reading.Identity = id
+		g = storedGraphQL(&reading, now)
+	}
+	g, windows := observedGraphQL(previous, g, now)
+	b.GraphQL, b.Login = graphqlOf(g), g.Login
+	b.Windows = map[string]github.GraphQL{}
+	for key, window := range windows {
+		b.Windows[key] = *graphqlOf(&window)
+	}
+	cached := state.Budget{Identity: id, Login: b.Login, ETag: etag, At: now,
+		Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, GraphQL: g, Windows: windows}
+	if g.Err != "" {
+		return b, cached, errors.New(g.Err)
+	}
+	return b, cached, nil
+}
+
+// A source can report a different window before the previous one resets
+// (a credential rotation or an inconsistent upstream reading). A high
+// reading must not erase the low unexpired observation. Within a window,
+// remaining points are monotonic downwards for admission purposes.
+func observedGraphQL(previous state.Budget, current *state.GraphQL, now time.Time) (*state.GraphQL, map[string]state.GraphQL) {
+	windows := map[string]state.GraphQL{}
+	remember := func(g *state.GraphQL) {
+		if g == nil || g.Err != "" || !now.Before(g.Reset) {
+			return
+		}
+		key := g.Login + "@" + g.Reset.UTC().Format(time.RFC3339Nano)
+		observed := *g
+		observed.BlockedBy = nil
+		if old, ok := windows[key]; ok && old.Remaining < g.Remaining {
+			observed.Remaining, observed.At = old.Remaining, old.At
+		}
+		windows[key] = observed
+	}
+	for _, window := range previous.Windows {
+		remember(&window)
+	}
+	if len(previous.Windows) == 0 {
+		remember(previous.GraphQL)
+	}
+	remember(current)
+	selected := *current
+	if current.Err != "" {
+		return &selected, windows
+	}
+	blocked := current.Blocks(now)
+	for _, window := range windows {
+		blocked = blocked || window.Blocks(now)
+		if window.Remaining < selected.Remaining || window.Remaining == selected.Remaining && window.Reset.Before(selected.Reset) {
+			selected = window
+		}
+	}
+	if blocked && !selected.Blocks(now) {
+		selected.BlockedBy = []string{current.Identity}
+	}
+	return &selected, windows
+}
+
+func storedGraphQL(g *github.GraphQL, at time.Time) *state.GraphQL {
+	return &state.GraphQL{Identity: g.Identity, Login: g.Login, BlockedBy: g.BlockedBy, Remaining: g.Remaining,
+		Limit: g.Limit, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary, Err: g.Err, At: at}
+}

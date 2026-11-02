@@ -127,6 +127,7 @@ const priorityMetaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fie
 {"id":"FP","name":"Priority","dataType":"NUMBER"}]}}}}}`
 
 func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
 	f.queries = append(f.queries, q)
 	vars := map[string]string{}

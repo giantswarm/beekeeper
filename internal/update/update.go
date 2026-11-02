@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -40,6 +43,7 @@ var ErrOutdated = errors.New("a newer beekeeper release is available")
 // running version.
 var (
 	newSource      = newGitHubSource
+	newTagSource   = newGitHubTagSource
 	newValidator   = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
@@ -152,4 +156,88 @@ func prerelease(current string) bool {
 	}
 	v, err := semver.NewVersion(current)
 	return err == nil && v.Prerelease() != ""
+}
+
+// InstallVersion installs exactly the release version (a tag, "v0.3.0")
+// over the running executable once its bundle verifies, as Run installs the
+// latest: an execution host follows its coordinator's release, never a newer
+// one. The replaced binary stays next to the executable (Previous) until
+// Rollback puts it back or the next install replaces it. The running
+// version is left as it is.
+func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, error) {
+	res := Result{Current: currentVersion(), Latest: version}
+	want, err := semver.StrictNewVersion(strings.TrimPrefix(version, "v"))
+	if err != nil || !strings.HasPrefix(version, "v") {
+		return res, fmt.Errorf("%q is no release version (v<major>.<minor>.<patch>)", version)
+	}
+	if _, err := semver.NewVersion(res.Current); err != nil {
+		return res, fmt.Errorf("cannot update a development build (version %s) to a release: install %s by hand", res.Current, version)
+	}
+	if version == res.Current {
+		return res, nil
+	}
+	source, err := newTagSource(version)
+	if err != nil {
+		return res, fmt.Errorf("creating release source: %w", err)
+	}
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: source, Validator: newValidator(), Prerelease: want.Prerelease() != ""})
+	if err != nil {
+		return res, err
+	}
+	lookup, cancel := context.WithTimeout(ctx, lookupTimeout)
+	rel, found, err := up.DetectVersion(lookup, selfupdate.ParseSlug(Repository), version)
+	cancel()
+	switch {
+	case errors.Is(err, selfupdate.ErrValidationAssetNotFound):
+		return res, fmt.Errorf("release %s of %s has no signature bundle for this platform's binary; refusing to install it: %w", version, Repository, err)
+	case err != nil:
+		return res, fmt.Errorf("looking up release %s of %s: %w", version, Repository, err)
+	case !found || "v"+rel.Version() != version:
+		return res, fmt.Errorf("GitHub answered no release %s of %s that carries a binary for %s/%s", version, Repository, runtime.GOOS, runtime.GOARCH)
+	}
+	res.Published, res.URL, res.Newer = rel.PublishedAt, rel.URL, newer(version, res.Current)
+	if res.Path, err = executable(); err != nil {
+		return res, fmt.Errorf("locating the running executable: %w", err)
+	}
+	target, err := filepath.EvalSymlinks(res.Path)
+	if err != nil {
+		return res, err
+	}
+	if err := keepPrevious(target); err != nil {
+		return res, fmt.Errorf("keeping %s for a rollback: %w", target, err)
+	}
+	if err := selfupdatecosign.Install(ctx, up, rel, res.Path); err != nil {
+		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
+	}
+	res.Updated = true
+	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s from %s to %s.\n", res.Path, res.Current, version)
+	return res, nil
+}
+
+// Previous is where InstallVersion keeps the binary it replaced at the
+// resolved executable path target: hidden beside it, so the directory's
+// bare beekeeper stays the one installed.
+func Previous(target string) string {
+	return filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+".previous")
+}
+
+// keepPrevious links the binary at target to Previous(target), replacing an
+// older one: the install renames over target, and the link keeps the
+// replaced file, mode included, without a copy.
+func keepPrevious(target string) error {
+	prev := Previous(target)
+	if err := os.Remove(prev); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Link(target, prev)
+}
+
+// Rollback puts the binary InstallVersion replaced back over the executable
+// at path in one rename.
+func Rollback(path string) error {
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	return os.Rename(Previous(target), target)
 }
