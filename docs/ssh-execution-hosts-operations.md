@@ -573,7 +573,10 @@ up the exact owned branch before creating a PR. A create attempt is never retrie
 blindly. PR editing and commenting continue to use coordinating workflows;
 this command grants no general GitHub API authority.
 
-To bring the latest default branch into the workspace before publishing again:
+To bring the latest default branch into the workspace before publishing again
+(before the desk review approves the PR; after approval only the merge moves the
+head: the supervisor's reviewed merge updates a behind branch itself, and a
+sync is left for a conflict the supervisor reports):
 
 ```sh
 beekeeper agents publish --sync-base

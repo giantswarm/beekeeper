@@ -101,7 +101,7 @@ func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execu
 	if pull.State != superloop.Open || pull.Head != use.Head || !pull.Green {
 		return refused("merge head moved or current CI is not green")
 	}
-	return a.authenticateExecutionReview(st, use, pull)
+	return a.authenticateExecutionReview(ctx, st, use, pull)
 }
 
 func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, repository string, pr int, head string, issuer state.Party) (execution.MergeAuthorization, error) {
