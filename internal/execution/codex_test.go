@@ -342,8 +342,8 @@ func TestCodexRunnerRefusesForeignThread(t *testing.T) {
 		t.Fatal("a foreign thread was accepted or replaced the recorded one")
 	}
 	cancel()
-	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("runner cancellation: %v", err)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled runner: %v", err)
 	}
 }
 
