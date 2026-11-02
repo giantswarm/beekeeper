@@ -2443,11 +2443,16 @@ cache, which dev images loaded into kind labs pile up, are kept under `doctor.do
 reads `docker system df` and, over a cap, removes the unused images created or last tagged longest
 ago (dangling ones first; the tag time is `docker image inspect`'s `LastTagTime`, as an image
 rebuilt from cache or retagged keeps its old Created) down to three quarters of it, and prunes the build cache with `docker builder prune
---max-used-space` likewise. An image a container uses (a kind node's included) or a kind lab's
-node holds (`crictl images` in each node, by ID, tag or digest) is never removed; a node that is
-not running leaves every image in place. Nor is one created or tagged within the last 24 hours, or
-since the oldest held lab lease was claimed (72 hours back at most): a session's dev image waits
-for its lab. Nothing is pruned while an image import or build runs
+--max-used-space` likewise. The images a running kind lab's node holds (`crictl images` in each
+node, by ID, tag or digest) go last: the node keeps its own copy, though a lab created again
+loads it anew. Once the removed images' sizes say the target is reached, `docker system df` is
+read again and the prune goes on while it says more (layers shared between images free nothing
+until the last of them goes); an image Docker refuses to remove is tried once more after the
+others. An image a container uses (a kind node's included) is never removed, nor one created or
+tagged within the last 24 hours, or since the oldest held lab lease was claimed (72 hours back at
+most): a session's dev image waits for its lab. A prune that leaves the images over their cap
+names the largest images that kept them there, with why (a container uses it, in flight, or
+Docker's refusal), and is a `DOCKER` line. Nothing is pruned while an image import or build runs
 (`kind load` or `create`, `docker build`, `load`, `save` or `import`, buildx, `ctr … import`),
 and none while a lab lease was claimed within the hour, its holder possibly mid-load; the prune
 tries again five minutes later and stops between images when an import begins. One process
@@ -3424,7 +3429,7 @@ The organisation and desk keys, and their defaults:
 | `disk.caches` | `go-build`, `sccache`, `beekeeper-tmp` | Cache policies of the disk step: a path or glob, a mode (`entries`, `files`, `command` with the tool's `command`, `off`), `olderThan`, `maxGiB`, `regenerable`; an entry named like a built-in changes it. See [cache policies](docs/development.md#cache-policies). |
 | `disk.checkouts`, `disk.buildDirs`, `disk.buildOutputs`, `disk.trashDirs` | known harness checkouts; standard build dirs; no external output; state trash dirs | Additional checkout places, regenerable directory names, external output with its owning worktree, and replacement trash places; see [automatic disk reclamation](docs/development.md#automatic-disk-reclamation). |
 | `doctor.goCacheMaxGiB`, `doctor.goCacheEvery` | `20`; `1h` | The cap of the shared Go build cache and how often a watch reads its size; over the cap it is trimmed, least recently used first, to three quarters of it while no go build runs, and past the cap by a quarter while builds run ([Agents started without a click](#agents-started-without-a-click)); negative: off |
-| `doctor.dockerImagesMaxGiB`, `doctor.dockerBuildCacheMaxGiB`, `doctor.dockerEvery` | `40`; `20`; `1h` | The caps of Docker's images and build cache and how often a watch reads their sizes; over a cap the unused images created or tagged longest ago, or the least recently used build cache, go down to three quarters of it, never an image a container or a kind lab's node uses or one created or tagged within 24 hours or since a held lab lease's claim, nor while an image import runs or a lab lease is under an hour old ([Agents started without a click](#agents-started-without-a-click)); negative: off |
+| `doctor.dockerImagesMaxGiB`, `doctor.dockerBuildCacheMaxGiB`, `doctor.dockerEvery` | `40`; `20`; `1h` | The caps of Docker's images and build cache and how often a watch reads their sizes; over a cap the unused images created or tagged longest ago (a kind lab's node's copies last), or the least recently used build cache, go down to three quarters of it, never an image a container uses or one created or tagged within 24 hours or since a held lab lease's claim, nor while an image import runs or a lab lease is under an hour old ([Agents started without a click](#agents-started-without-a-click)); negative: off |
 | `doctor.worktreeRoots`, `doctor.worktreesEvery` | `[~/.local/state/klaus-lab/worktrees]`; `6h` | Where a watch looks for workers' git worktrees and how often: one whose pull request merged or closed six hours ago is removed, or loses only its build output while it holds uncommitted or unpushed work, as does any other untouched six hours; a live session's and a locked one stay ([Agents started without a click](#agents-started-without-a-click)); negative: off |
 | `doctor.freeEvery` | `1h` | How often a watch frees dead sessions' scratch and orphaned go-build dirs in the tmpfs `/tmp` (`free --apply --only session-dirs,go-build`); negative: off |
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |

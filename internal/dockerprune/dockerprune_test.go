@@ -29,6 +29,9 @@ const (
 	docker   = "docker"
 	image    = "image"
 	oldID    = "sha256:old"
+	// inlabID is the fixture's image a kind node holds, danglingID its
+	// image without a tag.
+	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
 )
 
 func TestNormalize(t *testing.T) {
@@ -141,26 +144,39 @@ func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 	if old := images[1]; old.ID != oldID || len(old.Refs) != 2 || old.Unique != 2e9 || !old.Tagged.Equal(tagged) {
 		t.Errorf("old = %+v; want both tags, 2 GB, tagged %v", old, tagged)
 	}
-	used, err := KindImages(context.Background(), f.run)
+	held, err := KindImages(context.Background(), f.run)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ids := func(keep time.Time) []string {
 		var out []string
-		for _, c := range Candidates(images, used, keep) {
+		for _, c := range Candidates(images, held, keep) {
 			out = append(out, c.ID)
 		}
 		return out
 	}
-	// The node image runs a container, nginx:1 is in the lab by its tag;
-	// old, created first but retagged since new was built, goes after it.
-	if got, want := ids(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)), []string{"sha256:dangling", "sha256:new", "sha256:old"}; !slices.Equal(got, want) {
+	// The node image runs a container; nginx:1, created before all
+	// others, is in the lab by its tag and goes last; old, created first
+	// but retagged since new was built, goes after new.
+	if got, want := ids(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)), []string{danglingID, "sha256:new", oldID, inlabID}; !slices.Equal(got, want) {
 		t.Errorf("candidates = %v; want %v", got, want)
 	}
 	// Kept since the 13th: new, created on the 15th, and old, tagged on the
 	// 16th, stay whatever their Created.
-	if got, want := ids(time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)), []string{"sha256:dangling"}; !slices.Equal(got, want) {
+	keep := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	if got, want := ids(keep), []string{danglingID, inlabID}; !slices.Equal(got, want) {
 		t.Errorf("candidates kept since the 13th = %v; want %v", got, want)
+	}
+	var why []string
+	for _, b := range Kept(images, keep) {
+		why = append(why, b.Image.ID+": "+b.Why)
+	}
+	if want := []string{
+		"sha256:new: " + inFlight(images[0].Active()),
+		"sha256:old: " + inFlight(images[1].Active()),
+		"sha256:node: a container uses it",
+	}; !slices.Equal(why, want) {
+		t.Errorf("kept = %q; want %q", why, want)
 	}
 }
 
@@ -177,10 +193,12 @@ func TestListImagesFailsWithoutTagTimes(t *testing.T) {
 	}
 }
 
-func TestKindImagesRefusesAStoppedNode(t *testing.T) {
-	f := &fake{nodes: "lab-control-plane\texited\n"}
-	if _, err := KindImages(context.Background(), f.run); err == nil || !strings.Contains(err.Error(), "exited") {
-		t.Errorf("err = %v; want the stopped node named", err)
+func TestKindImagesSkipsAStoppedNode(t *testing.T) {
+	f := &fake{nodes: "lab-control-plane\texited\nlab-worker\trunning\n",
+		crictl: map[string]string{"lab-worker": `{"images":[{"id":"sha256:inlab","repoTags":[],"repoDigests":[]}]}`}}
+	held, err := KindImages(context.Background(), f.run)
+	if err != nil || !held.Has(Image{ID: inlabID}) || len(held) != 1 {
+		t.Errorf("held = %v, %v; want the running node's image alone", held, err)
 	}
 }
 
@@ -191,26 +209,58 @@ func TestTrimImagesStopsAtTheTargetAndWhenBusy(t *testing.T) {
 		{ID: "c", Refs: []string{"x:2"}, Unique: 2e9},
 	}
 	f := &fake{}
-	freed, removed, err := TrimImages(context.Background(), f.run, cands, 10e9, 6e9, func() bool { return false })
-	if err != nil || !slices.Equal(removed, []string{"a", "x:1 y:1"}) || freed != 4e9 {
-		t.Fatalf("trim = %d, %v, %v; want 2 removed, 4 GB", freed, removed, err)
+	tr, err := TrimImages(context.Background(), f.run, cands, 10e9, 6e9, nil, func() bool { return false })
+	if err != nil || !slices.Equal(tr.Removed, []string{"a", "x:1 y:1"}) || tr.Freed != 4e9 {
+		t.Fatalf("trim = %+v, %v; want 2 removed, 4 GB", tr, err)
 	}
 	if want := [][]string{{"a"}, {"x:1", "y:1"}}; !slices.EqualFunc(f.removed, want, slices.Equal) {
 		t.Errorf("removed %v; want %v", f.removed, want)
 	}
 	f = &fake{}
 	calls := 0
-	_, removed, err = TrimImages(context.Background(), f.run, cands, 10e9, 0, func() bool { calls++; return calls > 1 })
-	if !errors.Is(err, ErrBusy) || len(removed) != 1 {
-		t.Errorf("busy trim = %v, %v; want 1 removed, then ErrBusy", removed, err)
+	tr, err = TrimImages(context.Background(), f.run, cands, 10e9, 0, nil, func() bool { calls++; return calls > 1 })
+	if !errors.Is(err, ErrBusy) || len(tr.Removed) != 1 {
+		t.Errorf("busy trim = %v, %v; want 1 removed, then ErrBusy", tr.Removed, err)
 	}
 }
 
-func TestTrimImagesSkipsARefusedImage(t *testing.T) {
-	f := &fake{refuse: "a"}
-	cands := []Image{{ID: "a", Unique: 1}, {ID: "b", Unique: 1}}
-	if _, removed, err := TrimImages(context.Background(), f.run, cands, 2, 0, func() bool { return false }); err != nil || !slices.Equal(removed, []string{"b"}) {
-		t.Errorf("trim = %v, %v; want b removed, a skipped", removed, err)
+// Removing a and b frees 4 GB by their unique sizes but 3 GB on disk:
+// the rest they share with c. The trim reads the size again and goes on
+// until Docker says the target is reached.
+func TestTrimImagesGoesOnWhileDockerSaysMore(t *testing.T) {
+	cands := []Image{{ID: "a", Unique: 2e9}, {ID: "b", Unique: 2e9}, {ID: "c", Unique: 2e9}, {ID: "d", Unique: 2e9}}
+	f := &fake{}
+	sizes := []int64{7e9, 6e9}
+	reads := 0
+	size := func() (int64, error) { reads++; return sizes[reads-1], nil }
+	tr, err := TrimImages(context.Background(), f.run, cands, 10e9, 6e9, size, func() bool { return false })
+	if err != nil || !slices.Equal(tr.Removed, []string{"a", "b", "c"}) || reads != 2 {
+		t.Errorf("trim = %+v, %v after %d reads; want a, b and c removed after 2", tr, err, reads)
+	}
+}
+
+// A refused image is tried again after the others: a parent goes once its
+// child did. One refused twice is the trim's to report.
+func TestTrimImagesRetriesARefusedImage(t *testing.T) {
+	const stuck, parent, child = "stuck", "parent", "child"
+	f := &fake{refuse: stuck}
+	parentRefused := true
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		switch {
+		case slices.Contains(args, parent) && parentRefused:
+			return nil, errors.New("conflict: image has dependent child images")
+		case slices.Contains(args, child):
+			parentRefused = false
+		}
+		return f.run(ctx, args...)
+	}
+	cands := []Image{{ID: stuck, Unique: 1}, {ID: parent, Unique: 1}, {ID: child, Unique: 1}}
+	tr, err := TrimImages(context.Background(), run, cands, 3, 0, nil, func() bool { return false })
+	if err != nil || !slices.Equal(tr.Removed, []string{child, parent}) {
+		t.Fatalf("trim = %+v, %v; want child, then parent removed", tr, err)
+	}
+	if len(tr.Refused) != 1 || tr.Refused[0].Image.ID != stuck || !strings.Contains(tr.Refused[0].Why, "being used by a container") {
+		t.Errorf("refused = %+v; want stuck with Docker's reason", tr.Refused)
 	}
 }
 
