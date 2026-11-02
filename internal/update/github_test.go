@@ -18,6 +18,8 @@ const (
 	githubOlderRC    = "v0.171.0-rc.99"
 	githubNewerRC    = "v0.171.0-rc.100"
 	matchingRefsPath = "/git/matching-refs/"
+	// behindCompare is a compare whose head is an ancestor of its base.
+	behindCompare = `{"status":"behind"}`
 )
 
 type releaseTransport func(*http.Request) (*http.Response, error)
@@ -327,7 +329,7 @@ func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
 			return 200, commitOrderRefs, nil
 		}
 		if strings.Contains(r.URL.Path, comparePathPart+newestFinalSHA+"...7777777") {
-			return 200, `{"status":"behind"}`, nil
+			return 200, behindCompare, nil
 		}
 		if strings.Contains(r.URL.Path, comparePathPart) {
 			return 200, aheadCompare, nil
@@ -362,7 +364,7 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 			return 200, refs, nil
 		}
 		if strings.Contains(r.URL.Path, "/compare/"+runningSHA+"...deadbeef") {
-			return 200, `{"status":"behind"}`, nil
+			return 200, behindCompare, nil
 		}
 		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 		return 200, releaseJSON(tag, true, true), nil
@@ -457,7 +459,7 @@ func TestGitHubReleaseBehindALaterBasesCandidates(t *testing.T) {
 					base, head, _ := strings.Cut(compare, "...")
 					switch b, h := position[base], position[head]; {
 					case h < b:
-						return 200, `{"status":"behind"}`, nil
+						return 200, behindCompare, nil
 					case h > b:
 						return 200, `{"status":"ahead"}`, nil
 					}
