@@ -1428,6 +1428,11 @@ type Event struct {
 	Subject string `json:"subject,omitempty"`
 }
 
+// NoteLookup is the optional complete history of a store that retains closed notes.
+type NoteLookup interface {
+	LookupNote(int) (*Note, *Event, error)
+}
+
 // NoteHistory is the optional history of a store that retains central note
 // closures beyond the late-answer window. File-backed stores need not implement it.
 type NoteHistory interface {
@@ -1840,21 +1845,27 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
+	reader := bufio.NewReader(f)
+	for {
+		// A record can contain a complete note and answer of any length.
+		line, readErr := reader.ReadBytes('\n')
 		var e Event
 		// A write lost to an unclean shutdown leaves NUL bytes, and the next
 		// append lands right behind them on the same line.
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
+			if n > 0 && len(out) > n {
+				out = out[len(out)-n:]
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return out, nil
+		}
+		if readErr != nil {
+			return out, readErr
 		}
 	}
-	if n > 0 && len(out) > n {
-		out = out[len(out)-n:]
-	}
-	return out, sc.Err()
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under
