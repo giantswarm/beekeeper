@@ -907,3 +907,57 @@ func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T
 		t.Errorf("serving work:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// board next --skip passes over the items it names, so a scan walks every
+// free candidate by repeating the call each pick names, and a second call
+// after a skip offers a different candidate.
+func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	running := state.Party{Session: "s1", Name: workerOne}
+	st := &state.State{Records: []state.Record{{Session: running, Issue: "o/r#2", At: listed.Add(-time.Hour)}}}
+	sc := pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed}
+	fresh := func() []board.Candidate {
+		cands := boardCandidates(5)
+		cands[3].Skip = oldBacklog
+		return cands
+	}
+	var picks []string
+	var skip []string
+	for range 10 {
+		cands := fresh()
+		skipAsked(cands, skip)
+		res := nextFree(st, cands, sc)
+		if res.Pick == nil {
+			break
+		}
+		picks = append(picks, res.Pick.Ref)
+		skip = nextSkip(skip, res.Pick)
+	}
+	if want := []string{"o/r#1", "o/r#3", "o/r#5"}; !slices.Equal(picks, want) {
+		t.Errorf("walked %v, want %v", picks, want)
+	}
+	cands := fresh()
+	refs, err := skipRefs([]string{"https://github.com/O/R/issues/1", " o/r#3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipAsked(cands, refs)
+	res := nextFree(st, cands, sc)
+	if res.Pick == nil || res.Pick.Ref != "o/r#5" || res.SkippedBy[kindAsked] != 2 || res.Skipped[0].Skip != skipAskedReason {
+		t.Errorf("pick %v, skipped by %v, skipped %+v", res.Pick, res.SkippedBy, res.Skipped)
+	}
+	if res.Skipped[1].Skip != `served by "Worker one"` {
+		t.Errorf("a served item keeps its reason: %q", res.Skipped[1].Skip)
+	}
+	res.NextSkip = nextSkip(refs, res.Pick)
+	var out strings.Builder
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "  next candidate: board next --skip O/R#1,o/r#3,o/r#5\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out.String())
+	}
+	if _, err := skipRefs([]string{"o/r"}); err == nil {
+		t.Error("--skip o/r names no issue, accepted")
+	}
+}

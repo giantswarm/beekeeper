@@ -56,6 +56,7 @@ runs every board.tidyEvery.`,
 func (a *app) boardNextCmd() *cobra.Command {
 	var claim, replace bool
 	var waits string
+	var skip []string
 	var view nextView
 	c := &cobra.Command{
 		Use:   "next",
@@ -181,7 +182,17 @@ each followed by how many it left out ("… 12 more skipped above the pick",
 pick are whole. --fields ref,title,url (implies --json) keeps only the
 named fields of each item in pick, skipped and after_pick, a name it does
 not know refused with the names it knows. Without either the output is
-the whole walk.`,
+the whole walk.
+
+--skip <owner/repo#n|URL> (repeated or comma-separated) passes over the
+items it names, each skipped as "skipped by --skip" (kind asked) unless
+something else holds it already, so the next free item behind them is the
+pick; a name no candidate carries changes nothing. Without --claim the
+pick is followed by the call that offers the candidate after it, "next
+candidate: board next --skip <the skips and the pick>" (--json
+next_skip): a scan walks every free candidate by repeating that call
+alone, until exit 3 says none is left. An item skipped this way still
+counts as free for an unstaffed epic.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if view.limit < 0 {
@@ -190,9 +201,12 @@ the whole walk.`,
 			if err := checkFields(view.fields); err != nil {
 				return usageErr("%v", err)
 			}
+			var err error
+			if skip, err = skipRefs(skip); err != nil {
+				return usageErr("%v", err)
+			}
 			var me state.Party
 			if claim {
-				var err error
 				if me, err = a.caller(); err != nil {
 					return err
 				}
@@ -225,6 +239,7 @@ the whole walk.`,
 				return err
 			}
 			skipHeldLeases(cands, holders, me)
+			skipAsked(cands, skip)
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -254,6 +269,7 @@ the whole walk.`,
 					_, epic := ranks.Of(ref, snap.Parent)
 					return epic
 				})
+				res.NextSkip = nextSkip(skip, res.Pick)
 			}
 			if err != nil {
 				return err
@@ -265,6 +281,7 @@ the whole walk.`,
 	c.Flags().BoolVar(&claim, "claim", false, "record the item as the calling session's (sessions serve), atomically")
 	c.Flags().BoolVar(&replace, "replace", false, "with --claim: replace the session's record even while the item it serves is open")
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on, for the record")
+	c.Flags().StringSliceVar(&skip, "skip", nil, "pass over these items (owner/repo#n or URL, repeated or comma-separated): the next free one behind them is the pick")
 	c.Flags().IntVar(&view.limit, "limit", 0, "list at most this many items of each list, saying how many it left out (0: all)")
 	c.Flags().StringSliceVar(&view.fields, "fields", nil, "with --json (implied): keep only these fields of each item, comma-separated: "+strings.Join(candidateFields(), ","))
 	return c
@@ -431,6 +448,43 @@ func skipHeldLeases(cands []board.Candidate, holders []lease.Holder, me state.Pa
 	}
 }
 
+// skipAskedReason is the skip reason of an item board next --skip names.
+const skipAskedReason = "skipped by --skip"
+
+// skipRefs is each of refs as owner/repo#n, a ref that names no issue
+// refused.
+func skipRefs(refs []string) ([]string, error) {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		owner, repo, n, err := board.Ref(strings.TrimSpace(r))
+		if err != nil {
+			return nil, fmt.Errorf("--skip: %w", err)
+		}
+		out = append(out, fmt.Sprintf("%s/%s#%d", owner, repo, n))
+	}
+	return out, nil
+}
+
+// skipAsked marks every free candidate skipped that skip names (board next
+// --skip), so a scan walks the candidates by repeated calls; one skipped
+// for another reason keeps it.
+func skipAsked(cands []board.Candidate, skip []string) {
+	for i := range cands {
+		if cands[i].Skip == "" && slices.ContainsFunc(skip, func(r string) bool { return strings.EqualFold(r, cands[i].Ref) }) {
+			cands[i].Skip = skipAskedReason
+		}
+	}
+}
+
+// nextSkip is the --skip of the board next that offers the candidate
+// after pick: skip and pick, none without a pick.
+func nextSkip(skip []string, pick *board.Candidate) []string {
+	if pick == nil {
+		return nil
+	}
+	return append(slices.Clone(skip), pick.Ref)
+}
+
 // pickScope is what a pick reads beside the state: who asks, which sessions
 // run and when they were listed, which issues the pull requests close
 // (closes, from Client.Closes) and the board's owner, which a repo#n a
@@ -516,6 +570,9 @@ type nextResult struct {
 	// Unstaffed are the epics of the priority list with free work under
 	// them that no session serves (unstaffedEpics); none after a claim.
 	Unstaffed []unstaffedEpic `json:"unstaffed,omitempty"`
+	// NextSkip is the --skip of the call that offers the candidate after
+	// the pick: the skips asked for and the pick; none after a claim.
+	NextSkip []string `json:"next_skip,omitempty"`
 	// owners is who serves each item a session serves (nextFree's owners),
 	// by its lower-cased ref.
 	owners map[string]string
@@ -571,7 +628,7 @@ func unstaffedEpics(list board.Priorities, res nextResult, epicOf func(ref strin
 		}
 		u := unstaffedEpic{Rank: e.Rank, Ref: e.Ref, URL: e.URL, Title: e.Title}
 		for _, c := range all {
-			if c.Skip == "" && strings.EqualFold(c.PriorityOf, e.Ref) {
+			if (c.Skip == "" || c.Skip == skipAskedReason) && strings.EqualFold(c.PriorityOf, e.Ref) {
 				if u.Free == 0 {
 					u.Next = c.Ref
 				}
@@ -606,6 +663,7 @@ const (
 	kindPlanning = "planning"
 	kindUnknown  = "unknown"
 	kindOrder    = "order"
+	kindAsked    = "asked"
 )
 
 // skipKind names the kind of a skip reason: who holds the item, or what
@@ -624,6 +682,8 @@ func skipKind(reason string) string {
 		return kindLease
 	case strings.HasPrefix(reason, claimedPrefix):
 		return kindClaimed
+	case reason == skipAskedReason:
+		return kindAsked
 	case strings.Contains(reason, "in planning ("):
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
@@ -992,6 +1052,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 			}
 			if res.Claimed {
 				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now, its Status unchanged (board move %s %q once you take it on; sessions unserve %s releases it)\n", p.Ref, p.Ref, "in progress", p.Ref)
+			}
+			if len(res.NextSkip) > 0 {
+				_, _ = fmt.Fprintf(a.out, "  next candidate: board next --skip %s\n", strings.Join(res.NextSkip, ","))
 			}
 		}
 		if n := len(res.AfterPick); n > 0 {
