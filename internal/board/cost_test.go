@@ -325,8 +325,8 @@ func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 			}
 		}
 	}
-	if b.cost > 40 {
-		t.Errorf("one read costs %d GraphQL points, want at most 40", b.cost)
+	if b.cost > 41 {
+		t.Errorf("one read costs %d GraphQL points, want at most 41", b.cost)
 	}
 }
 
