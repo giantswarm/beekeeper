@@ -14,7 +14,7 @@ import (
 func (a *app) configCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "config",
-		Short: "Edit the configuration in one validated write",
+		Short: "Check or edit the configuration",
 		Args:  cobra.NoArgs,
 		// The configuration it edits may not load: it is what config set
 		// repairs.
@@ -22,6 +22,33 @@ func (a *app) configCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.AddCommand(&cobra.Command{
+		Use:   "check",
+		Short: "Validate configuration keys, values and local input files",
+		Long: `check reads the same configuration file as other commands (--config,
+$BEEKEEPER_CONFIG, or $XDG_CONFIG_HOME/beekeeper/config.yaml). It reports
+unknown keys, invalid values and missing explicitly configured local input
+files by key path. It does not read referenced files, resolve secrets, run
+commands or open state. Output paths and unconfigured defaults need not exist.
+
+Exit codes: 0 valid, 1 invalid or unreadable, 2 usage.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			path, err := config.Path(a.cfgPath)
+			if err != nil {
+				return err
+			}
+			findings, err := config.Check(path)
+			if err != nil {
+				return err
+			}
+			if len(findings) != 0 {
+				return errors.New(strings.Join(findings, "\n"))
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "valid configuration: %s\n", path)
+			return err
+		},
+	})
 	c.AddCommand(&cobra.Command{
 		Use:   "set <key> <value> [<key> <value>]…",
 		Short: "Set keys of the configuration file together, validated before the write",
