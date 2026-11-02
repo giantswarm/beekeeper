@@ -204,7 +204,7 @@ func (s *Server) settings() []byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard"
 	b, _ := json.Marshal(map[string]any{
 		hooksKey:      preToolUse(cmd),
-		"permissions": map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent", "mcp__*"}},
+		"permissions": map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent"}},
 	})
 	return b
 }

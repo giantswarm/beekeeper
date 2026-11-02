@@ -13,6 +13,8 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+const coordinatorMCPPrefix = "mcp__coordinator__"
+
 const (
 	executionConfigFlag  = "--config"
 	executionRunCommand  = "run"
@@ -67,6 +69,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 	}
 	if !executionWithin(workspace, ev.CWD) {
 		return ExecutionDeny("tool working directory is outside its owned workspace")
+	}
+	if h.ExecutionMCP && strings.HasPrefix(ev.ToolName, coordinatorMCPPrefix) {
+		return h.Decide(raw)
 	}
 	switch ev.ToolName {
 	case bashTool:
@@ -125,7 +130,7 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 			out = ExecutionDenyCodex("execution guard failed; tool call denied")
 		}
 	}()
-	if reason := ValidateCodexInput(raw); reason != "" {
+	if reason := validateCodexInput(raw, h.ExecutionMCP); reason != "" {
 		return ExecutionDenyCodex(reason)
 	}
 	var ev event
@@ -148,6 +153,7 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 		return executionWithin(workspace, p)
 	}
 	switch {
+	case h.ExecutionMCP && strings.HasPrefix(ev.ToolName, coordinatorMCPPrefix):
 	case isCodexShellTool(ev.ToolName):
 		command, _, _ := extractCodexShellCommand(ev.ToolInput)
 		if strings.TrimSpace(command) == "" {
