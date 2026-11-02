@@ -418,20 +418,16 @@ func TestReportsSourceInitializationFailure(t *testing.T) {
 	}
 }
 
-// installBundle is the bundle InstallVersion's release carries, and
-// windowsOS the platform that keeps no previous binary.
-const (
-	installBundle = "the release's bundle"
-	windowsOS     = "windows"
-)
+// installBundle is the bundle InstallVersion's release carries.
+const installBundle = "the release's bundle"
 
-func TestInstallVersionInstallsThatReleaseAndKeepsThePrevious(t *testing.T) {
+func TestInstallVersionInstallsThatReleaseWithoutBackup(t *testing.T) {
 	src := &fakeSource{
 		releases: []selfupdate.SourceRelease{release("v0.4.0"), release(latestV)},
 		assets:   map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)},
 	}
 	setup(t, running, src)
-	exe, content := installed(t)
+	exe, _ := installed(t)
 	v := &acceptingValidator{}
 	newValidator = func() selfupdate.Validator { return v }
 
@@ -449,19 +445,8 @@ func TestInstallVersionInstallsThatReleaseAndKeepsThePrevious(t *testing.T) {
 	if string(v.bundle) != installBundle {
 		t.Errorf("validated against bundle %q", v.bundle)
 	}
-	if runtime.GOOS == windowsOS {
-		return
-	}
-	if got, err := os.ReadFile(filepath.Clean(Previous(exe))); err != nil || !bytes.Equal(got, content) {
-		t.Fatalf("previous binary %q, %v; want the replaced one", got, err)
-	}
-	link, _ := executable()
-	if err := Rollback(link); err != nil {
-		t.Fatal(err)
-	}
-	assertUnchanged(t, exe, content)
-	if _, err := os.Stat(Previous(exe)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("previous binary left after the rollback: %v", err)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".previous")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("backup left after update: %v", err)
 	}
 }
 
@@ -501,5 +486,131 @@ func TestInstallVersionRefusesNoReleaseVersion(t *testing.T) {
 		if _, err := InstallVersion(context.Background(), io.Discard, v); err == nil {
 			t.Errorf("InstallVersion(%q) accepted", v)
 		}
+	}
+}
+
+func TestInstallVersionDoesNotTouchBackupPath(t *testing.T) {
+	src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+	setup(t, running, src)
+	exe, _ := installed(t)
+	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+	// A nonempty directory makes backup removal fail on every platform,
+	// even when the test runs with elevated permissions.
+	backup := filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".previous")
+	if err := os.Mkdir(backup, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(backup, "untouched")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := InstallVersion(context.Background(), io.Discard, latestV)
+	if err != nil || !res.Updated {
+		t.Fatalf("InstallVersion() = %+v, %v", res, err)
+	}
+	if got, err := os.ReadFile(exe); err != nil || string(got) != newBinary {
+		t.Fatalf("installed %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(marker); err != nil || string(got) != "keep" {
+		t.Fatalf("backup path touched: %q, %v", got, err)
+	}
+}
+
+func TestInstallVersionUsesPrivilegeOnlyForVerifiedReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		verifyErr, sudoErr error
+	}{
+		{name: "success"},
+		{name: "invalid signature", verifyErr: errors.New("invalid signature")},
+		{name: "sudo unavailable", sudoErr: errors.New("sudo denied")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+			setup(t, running, src)
+			exe, content := installed(t)
+			newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+			originalInstall, originalPrivileged := installVerified, privilegedInstall
+			t.Cleanup(func() { installVerified, privilegedInstall = originalInstall, originalPrivileged })
+			installs, privileged := 0, 0
+			installVerified = func(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
+				installs++
+				if installs == 1 {
+					return &os.PathError{Op: "mkdir", Path: filepath.Dir(exe), Err: os.ErrPermission}
+				}
+				if tc.verifyErr != nil {
+					return tc.verifyErr
+				}
+				return originalInstall(ctx, up, rel, path)
+			}
+			privilegedInstall = func(_ context.Context, source, target, mode string) error {
+				privileged++
+				if target != exe || mode != "750" {
+					t.Fatalf("destination %q mode %q", target, mode)
+				}
+				got, err := os.ReadFile(source)
+				if err != nil || string(got) != newBinary {
+					t.Fatalf("staged %q, %v", got, err)
+				}
+				if tc.sudoErr != nil {
+					return tc.sudoErr
+				}
+				return os.Rename(source, target)
+			}
+			res, err := InstallVersion(context.Background(), io.Discard, latestV)
+			if tc.verifyErr != nil {
+				if !errors.Is(err, tc.verifyErr) || privileged != 0 {
+					t.Fatalf("verification error %v, privileged calls %d", err, privileged)
+				}
+			} else if tc.sudoErr != nil {
+				if !errors.Is(err, tc.sudoErr) || privileged != 1 {
+					t.Fatalf("sudo error %v, calls %d", err, privileged)
+				}
+			} else if err != nil || !res.Updated || privileged != 1 {
+				t.Fatalf("result %+v, %v, privileged calls %d", res, err, privileged)
+			}
+			if tc.verifyErr != nil || tc.sudoErr != nil {
+				assertUnchanged(t, exe, content)
+			}
+		})
+	}
+}
+
+func TestPrivilegedInstallReplacesAtomicallyWithoutBackup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sudo installation is Unix only")
+	}
+	dir := t.TempDir()
+	// Exercise the actual installer script without privileges. The fake sudo
+	// accepts only noninteractive invocation and executes its exact argv.
+	sudo := filepath.Join(dir, "sudo")
+	if err := os.WriteFile(sudo, []byte("#!/bin/sh\n[ \"$1\" = -n ] && [ \"$2\" = -- ] || exit 1\nshift 2\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	target := filepath.Join(dir, "installed binary")
+	source := filepath.Join(dir, "verified binary")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte(newBinary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := privilegedInstall(context.Background(), source, target, "750"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != newBinary {
+		t.Fatalf("installed %q, %v", got, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0o750 {
+		t.Fatalf("mode %v, %v", info, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("installation left temporary files: %v", entries)
 	}
 }
