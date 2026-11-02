@@ -89,8 +89,69 @@ func TestNoteAnswerOffRosterDelivery(t *testing.T) {
 					if !tc.reader && (got.Delivery.Detail == "" || !strings.Contains(got.Delivery.Detail, "no longer runs")) {
 						t.Fatalf("failure reason: %+v", got.Delivery)
 					}
-				} else if !strings.Contains(out.String(), "notification: "+wantStatus) {
-					t.Fatalf("status missing: %s", out.String())
+				} else {
+					wantLine := "notification: " + wantStatus + "\n"
+					if !tc.reader {
+						wantLine = "notification: " + wantStatus + " "
+					}
+					if !strings.Contains(out.String(), wantLine) {
+						t.Fatalf("status %q missing from:\n%s", wantLine, out.String())
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAnswerServingOffRosterDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reader  bool
+		display string
+	}{
+		{name: "case 0: named serving session", reader: true, display: "interactive session"},
+		{name: "case 1: id only serving session", reader: true},
+		{name: "case 2: ended serving session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, out := noteApp(t)
+			a.cfg.StateDir = t.TempDir()
+			inbox := codex.InboxPath(a.cfg.StateDir, offID)
+			if err := codex.MakeInbox(inbox); err != nil {
+				t.Fatal(err)
+			}
+			if tc.reader {
+				r, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // synthetic test inbox
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = r.Close() })
+			}
+			srv := state.Party{Session: offID, HostSession: codex.HostPrefix + offID, Name: tc.display}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Records = []state.Record{{Issue: decisionRef, Session: srv}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			c := a.answerCmd()
+			c.SetOut(out)
+			c.SetErr(out)
+			c.SetArgs([]string{decisionRef, noteDeliveryWords})
+			if err := c.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.reader {
+				msgs, err := codex.Drain(inbox)
+				if err != nil || len(msgs) != 1 || !strings.Contains(msgs[0], "ANSWER on "+decisionRef) || !strings.Contains(msgs[0], noteDeliveryWords) {
+					t.Fatalf("serving inbox: %q, %v", msgs, err)
+				}
+				if !strings.Contains(out.String(), "told ") {
+					t.Fatalf("serving output missing told: %s", out.String())
+				}
+			} else {
+				if !strings.Contains(out.String(), "telling ") || !strings.Contains(out.String(), "failed") || strings.Contains(out.String(), "no session serves") {
+					t.Fatalf("serving failure not surfaced: %s", out.String())
 				}
 			}
 		})

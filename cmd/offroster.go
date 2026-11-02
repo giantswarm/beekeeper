@@ -55,8 +55,13 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 		}
 	}
 	for _, p := range st.Parks {
-		if p.By.Session == q || p.By.HostSession == q {
+		if strings.EqualFold(p.By.Name, q) || p.By.Session == q || p.By.HostSession == q {
 			return p.By, true
+		}
+	}
+	for _, r := range st.Records {
+		if r.Ended.IsZero() && (strings.EqualFold(r.Session.Name, q) || r.Session.Session == q || r.Session.HostSession == q) {
+			return r.Session, true
 		}
 	}
 	if strings.HasPrefix(q, claudeHarness{}.HostPrefix()) {

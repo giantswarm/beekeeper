@@ -3,7 +3,10 @@ package cmd
 import (
 	"encoding/json"
 
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/state/kube"
 )
 
 const (
@@ -26,7 +29,13 @@ func (a *app) recordNoteDelivery(by state.Party, d noteDelivery) error {
 	if err != nil {
 		return err
 	}
-	return a.store.Record(event(by, noteDeliveryEvent, "%s", data))
+	ev := event(by, noteDeliveryEvent, "%s", data)
+	if s, ok := a.store.(interface {
+		Audit(ctrlclient.Object, string, state.Event) error
+	}); ok {
+		return s.Audit(kube.NoteObject(d.Team, d.Note), d.Team, ev)
+	}
+	return a.store.Record(ev)
 }
 
 func (a *app) localNote(id int) (*shownNote, error) {

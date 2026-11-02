@@ -95,7 +95,11 @@ history cannot be recovered.`,
 				return err
 			}
 			if local.Delivery != nil {
-				if _, err := fmt.Fprintf(a.out, "notification: %s %s\n", local.Delivery.Status, local.Delivery.Detail); err != nil {
+				line := local.Delivery.Status
+				if local.Delivery.Detail != "" {
+					line += " " + local.Delivery.Detail
+				}
+				if _, err := fmt.Fprintf(a.out, "notification: %s\n", line); err != nil {
 					return err
 				}
 			}
