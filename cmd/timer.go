@@ -48,6 +48,16 @@ line says it. A timer with a condition, --wake or --run closes when it
 fires. --repeat daily, weekdays or weekly re-arms a --wake or --run timer
 at the same local time instead; it stays open until timer done.
 
+Times carry their zone (08:30 CET). A timer firing more than a tick past
+its time says how late it is and what held it: a beekeeper stop, or no tick
+at all (the watch and the supervisor loop down, or the state locked). Its
+--run command gets BEEKEEPER_TIMER_ID, BEEKEEPER_TIMER_DUE and
+BEEKEEPER_TIMER_LATE: an agents start it runs makes the session's first
+line, and its log entry (agents.start), the timer, its due time and the
+start in one zone and, when late, what held it (the timer's late firing,
+the capacity gate's wait); a start the gate refuses is logged with the
+timer.
+
 The conditions of --when, each one read of its reference per check, shared
 by every timer on it; a GitHub one waits while the budget is under the
 floor:
@@ -311,14 +321,14 @@ func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 
 // timerWhen says when a timer fires and what it does then.
 func timerWhen(now time.Time, t state.Timer) string {
-	s := "at " + clock(now, t.Due)
+	s := "at " + clockZone(now, t.Due)
 	if t.Conditional() {
-		s = "from " + clock(now, t.Due) + " when " + timerCond(t)
+		s = "from " + clockZone(now, t.Due) + " when " + timerCond(t)
 		if t.Every != 0 {
 			s += ", every " + t.Every.String()
 		}
 		if !t.Until.IsZero() {
-			s += ", until " + clock(now, t.Until)
+			s += ", until " + clockZone(now, t.Until)
 			if t.Expire {
 				s += " (then expires)"
 			}
