@@ -271,7 +271,7 @@ func TestLoopRequiresFreshGraphQLRecovery(t *testing.T) {
 		{"at floor", &state.GraphQL{Remaining: 2500, At: now, Reset: now.Add(time.Hour)}, true},
 		{kindStale, &state.GraphQL{Remaining: 4900, At: now.Add(-2 * time.Minute), Reset: now.Add(time.Hour)}, true},
 		{"reset passed", &state.GraphQL{Remaining: 4900, At: now, Reset: now.Add(-time.Second)}, true},
-		{"recovered", &state.GraphQL{Remaining: 4900, At: now, Reset: now.Add(time.Hour)}, false},
+		{"fresh quota recovery", &state.GraphQL{Remaining: 4900, At: now, Reset: now.Add(time.Hour)}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &state.Budget{Remaining: 4900, At: now, Reset: now.Add(time.Hour), GraphQL: tc.g}
