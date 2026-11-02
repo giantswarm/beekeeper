@@ -423,10 +423,12 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time, cfg
 	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
-			if executionReserved(st, ag) {
-				c.Busy = append(c.Busy, ag.Name)
-			} else {
+			if !executionReserved(st, ag) {
 				c.Idle = append(c.Idle, ag.Name)
+			} else if k := keptBy(st, ag, now); k != "" {
+				c.Parked = append(c.Parked, fmt.Sprintf("%s (%s)", ag.Name, k))
+			} else {
+				c.Busy = append(c.Busy, ag.Name)
 			}
 			continue
 		}
@@ -477,7 +479,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
-			if !executionReserved(st, ag) {
+			if !executionReserved(st, ag) || keptBy(st, ag, now) != "" {
 				continue
 			}
 			r, _ := executionRecord(st, *ag.Execution)
