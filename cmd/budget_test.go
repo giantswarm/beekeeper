@@ -258,6 +258,31 @@ func TestBudgetShowsTheSearchLimits(t *testing.T) {
 	}
 }
 
+func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
+	a, out := budgetApp(t)
+	reset := a.now.Add(40 * time.Minute)
+	searchGitHub(t, 7, reset)
+	if err := a.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{
+		Reset:     reset,
+		Remaining: 4920,
+		Spent:     42,
+		Steps:     map[string]int{"board": 39, "pull": 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := a.budgetCmd()
+	c.SetArgs(nil)
+	c.SetOut(out)
+	c.SetErr(out)
+	if err := c.Execute(); err != nil {
+		t.Fatalf("budget = %v", err)
+	}
+	want := "loop GraphQL spend: 42 of 1500 (board 39, pull 3), resets " + clock(a.now, reset)
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("budget printed %q, want %q", out.String(), want)
+	}
+}
+
 const (
 	gateFlag       = "--gate"
 	codeSearchFlag = "--bucket code_search"

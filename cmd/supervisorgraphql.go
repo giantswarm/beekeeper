@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -26,6 +27,7 @@ const loopGraphQLReserve = 500
 
 type loopGraphQLSpend struct {
 	Reset     time.Time                     `json:"reset"`
+	HeldAt    time.Time                     `json:"heldAt,omitzero"`
 	Remaining int                           `json:"remaining"`
 	Spent     int                           `json:"spent"`
 	Steps     map[string]int                `json:"steps"`
@@ -40,11 +42,12 @@ type loopGraphQLAccount struct {
 func graphQLAccounts(b github.Budget) map[string]loopGraphQLAccount {
 	out := map[string]loopGraphQLAccount{}
 	add := func(id string, g *github.GraphQL) {
-		if g != nil {
-			if g.Login != "" {
-				id += "/" + g.Login
-			}
-			out[id] = loopGraphQLAccount{Reset: g.Reset, Remaining: g.Remaining}
+		if g == nil {
+			return
+		}
+		key := cmp.Or(g.Login, id, "default")
+		if old, ok := out[key]; !ok || g.Remaining < old.Remaining {
+			out[key] = loopGraphQLAccount{Reset: g.Reset, Remaining: g.Remaining}
 		}
 	}
 	if len(b.Identities) == 0 {
@@ -53,13 +56,7 @@ func graphQLAccounts(b github.Budget) map[string]loopGraphQLAccount {
 		}
 	} else {
 		for id, profile := range b.Identities {
-			if len(profile.Windows) == 0 {
-				add(id, profile.GraphQL)
-			} else {
-				for key, window := range profile.Windows {
-					add(id+"@"+key, &window)
-				}
-			}
+			add(id, profile.GraphQL)
 		}
 	}
 	return out
@@ -77,6 +74,34 @@ func (s loopGraphQLSpend) floorHeld(now time.Time, floor int) bool {
 	return false
 }
 
+func sameGraphQLWindow(a, b time.Time) bool {
+	if a.IsZero() || b.IsZero() {
+		return a.Equal(b)
+	}
+	diff := a.Sub(b)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= 2*time.Minute
+}
+
+func (s loopGraphQLSpend) boardHeld(st *state.Budget, step string, floor int, now time.Time) bool {
+	if step != loopBoard || !now.Before(s.Reset) || s.Spent+loopGraphQLReserve <= loopGraphQLLimit-loopGraphQLProbeReserve {
+		return false
+	}
+	if st != nil && st.GraphQL != nil {
+		g := st.GraphQL
+		if !s.HeldAt.IsZero() && g.At.After(s.HeldAt) && st.Remaining > floor && g.Remaining >= floor+loopGraphQLReserve {
+			return false
+		}
+		if s.HeldAt.IsZero() && st.Remaining > floor && g.Remaining >= floor+loopGraphQLReserve &&
+			(g.Limit > 0 && g.Limit-g.Remaining < s.Spent || g.Remaining > s.Remaining || (!g.Reset.IsZero() && !sameGraphQLWindow(s.Reset, g.Reset))) {
+			return false
+		}
+	}
+	return true
+}
+
 var readLoopGraphQLBudget = func(a *app, ctx context.Context) (github.Budget, error) {
 	copyApp, cfg := *a, *a.cfg
 	cfg.Merge.BudgetFresh.Duration = -time.Second
@@ -85,9 +110,9 @@ var readLoopGraphQLBudget = func(a *app, ctx context.Context) (github.Budget, er
 }
 
 // loopGitHub admits one observation against the shared floor and a durable
-// hourly allowance. Traffic between observations counts conservatively as
-// shared spend: it can hold the loop early but cannot grant extra allowance.
-// Reserving before the call makes an interrupted child fail closed too.
+// allowance for the active GraphQL window. A healthy live REST and GraphQL
+// budget reading above the floor releases a held allowance rather than
+// renewing a blind hourly hold.
 func (a *app) loopGitHub(ctx context.Context, step string, run func() error) error {
 	if a.cfg.GitHub.Floor <= 0 {
 		return run()
@@ -112,9 +137,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if _, err := a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
 		return err
 	}
-	// Once this window is held, another budget probe cannot release it.
-	// Repeated held attempts must cost zero GraphQL until its reset.
-	if a.now.Before(spend.Reset) && spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.floorHeld(a.now, a.cfg.GitHub.Floor) {
+	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.now) {
 		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, errLoopLater)
 	}
 	b, err := readLoopGraphQLBudget(a, ctx)
@@ -122,28 +145,32 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		return fmt.Errorf("loop GitHub budget unavailable: %w", errLoopLater)
 	}
 	g := b.GraphQL
-	// This allowance has its own hour. Selecting another identity or a
-	// GitHub window resetting must never replenish the loop's allowance.
-	if !a.now.Before(spend.Reset) || spend.Steps == nil {
-		spend = loopGraphQLSpend{Reset: a.now.Add(time.Hour), Remaining: g.Remaining, Steps: map[string]int{}}
+	reset := g.Reset
+	if reset.IsZero() || !a.now.Before(reset) {
+		reset = a.now.Add(time.Hour)
+	}
+	liveHealthy := b.Remaining > a.cfg.GitHub.Floor && g.Remaining >= a.cfg.GitHub.Floor+loopGraphQLReserve
+	wasHeld := spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.floorHeld(a.now, a.cfg.GitHub.Floor)
+	releaseHold := liveHealthy && wasHeld && (step != loopBoard ||
+		spend.floorHeld(a.now, a.cfg.GitHub.Floor) ||
+		(!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) ||
+		g.Remaining > spend.Remaining ||
+		(g.Limit > 0 && g.Limit-g.Remaining < spend.Spent) ||
+		(!spend.HeldAt.IsZero() && st.Budget.GraphQL.At.After(spend.HeldAt)))
+	if !a.now.Before(spend.Reset) || spend.Steps == nil || (!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) || releaseHold {
+		spend = loopGraphQLSpend{Reset: reset, Remaining: g.Remaining, Steps: map[string]int{}}
 	}
 	accounts := graphQLAccounts(b)
-	shared := 0
-	for id, current := range accounts {
-		if previous, ok := spend.Accounts[id]; ok && previous.Reset.Equal(current.Reset) {
-			shared += max(0, previous.Remaining-current.Remaining)
-		}
-	}
-	spend.Spent += shared
-	spend.Steps["shared"] += shared
 	spend.Remaining = g.Remaining
 	spend.Accounts = accounts
-	if b.Remaining <= a.cfg.GitHub.Floor || g.Remaining < a.cfg.GitHub.Floor+loopGraphQLReserve || spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve {
+	if !liveHealthy || (step == loopBoard && spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve) {
+		spend.HeldAt = a.now
 		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 			return err
 		}
 		return fmt.Errorf("loop GitHub held: %d points spent, %d remaining (floor %d): %w", spend.Spent, g.Remaining, a.cfg.GitHub.Floor, errLoopLater)
 	}
+	spend.HeldAt = time.Time{}
 	spend.Spent += loopGraphQLReserve
 	spend.Steps[step] += loopGraphQLReserve
 	if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
@@ -154,28 +181,41 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if err != nil || after.GraphQL == nil || after.GraphQL.Err != "" {
 		return fmt.Errorf("loop GitHub spend unknown; reservation retained: %w", errLoopLater)
 	}
-	// Match counters by identity and window, never by the aggregate minimum.
 	afterAccounts := graphQLAccounts(after)
-	known := len(afterAccounts) == len(accounts)
 	cost := 0
+	windowChanged := false
 	for id, previous := range accounts {
 		current, ok := afterAccounts[id]
-		if !ok || !current.Reset.Equal(previous.Reset) {
-			known = false
+		if !ok || !sameGraphQLWindow(current.Reset, previous.Reset) || current.Remaining > previous.Remaining {
+			windowChanged = true
 			continue
 		}
 		cost += max(0, previous.Remaining-current.Remaining)
 	}
-	if known {
+	if windowChanged {
+		afterReset := after.GraphQL.Reset
+		if afterReset.IsZero() || !a.now.Before(afterReset) {
+			afterReset = a.now.Add(time.Hour)
+		}
+		used := 0
+		if after.GraphQL.Limit > 0 {
+			used = max(0, after.GraphQL.Limit-after.GraphQL.Remaining)
+		}
+		spend = loopGraphQLSpend{
+			Reset:     afterReset,
+			Remaining: after.GraphQL.Remaining,
+			Spent:     used,
+			Steps:     map[string]int{step: used},
+			Accounts:  afterAccounts,
+		}
+	} else {
 		spend.Spent += cost - loopGraphQLReserve
 		spend.Steps[step] += cost - loopGraphQLReserve
 		spend.Remaining = after.GraphQL.Remaining
 		spend.Accounts = afterAccounts
-		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
-			return err
-		}
-	} else {
-		return fmt.Errorf("loop GitHub identity or window changed; reservation retained: %w", errLoopLater)
+	}
+	if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
+		return err
 	}
 	return runErr
 }

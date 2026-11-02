@@ -1910,16 +1910,18 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
 	var over, kept []overtake
-	readRefs := func() error {
-		over, kept = w.overtakenNow(ctx, st)
-		return nil
-	}
-	if w.loopOwned {
-		if err := w.loopGitHub(ctx, "watch", readRefs); err != nil {
-			over, kept = nil, nil
+	if len(overtakeRefs(st)) > 0 {
+		readRefs := func() error {
+			over, kept = w.overtakenNow(ctx, st)
+			return nil
 		}
-	} else {
-		_ = readRefs()
+		if w.loopOwned {
+			if err := w.loopGitHub(ctx, "watch", readRefs); err != nil {
+				over, kept = nil, nil
+			}
+		} else {
+			_ = readRefs()
+		}
 	}
 	parks := w.settledParks(ctx, st)
 	if !w.chores {

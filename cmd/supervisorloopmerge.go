@@ -34,7 +34,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if st.Stop != nil {
 		return "", refused("the desk is stopped")
 	}
-	if lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st) {
+	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st) {
 		return "", errLoopLater
 	}
 	p, err := readLoopPull(ctx, act.Ref)

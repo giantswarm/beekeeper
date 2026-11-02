@@ -601,7 +601,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		return out
 	}
 	var states map[github.PR]github.RefState
-	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
+	if len(refs) > 0 && !boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
 		var s map[github.PR]github.RefState
@@ -629,12 +629,14 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			err = read()
 		}
 		if err != nil {
-			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
+			if !errors.Is(err, errLoopLater) {
+				w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
+			}
 		} else {
 			w.clear("park-refs")
+			states = s
+			w.cacheParkRefs(parked, s)
 		}
-		states = s
-		w.cacheParkRefs(parked, s)
 	}
 	var closes map[int]string
 	if len(closed) > 0 {
