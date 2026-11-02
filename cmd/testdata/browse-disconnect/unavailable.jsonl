@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "reconnect-list", "name": "mcp__claude-in-chrome__list_connected_browsers", "input": {}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "reconnect-list", "is_error": false, "content": "[]"}]}}

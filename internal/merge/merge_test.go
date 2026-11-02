@@ -800,6 +800,7 @@ func TestParseReleaseWait(t *testing.T) {
 		{"tag pipeline failed", `{"verdict":"ci_failed","reason":"push failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "push failed", true},
 		{"a status failed", `{"verdict":"status_failed","reason":"ci/x failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "ci/x failed", true},
 		{"timed out", `{"verdict":"timeout","reason":"30m","tag":"v1.4.0"}`, Outcome{Merged: true, Unconfirmed: true}, "30m", true},
+		{"no release", `{"verdict":"no_release","reason":"no version bump"}`, Outcome{Merged: true, NoRelease: true}, "no version bump", true},
 		{"no document", ``, Outcome{}, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -825,6 +826,27 @@ func TestBlockingForAdmitsTheHoldsSession(t *testing.T) {
 			if h, ok := BlockingFor(st, now, s, "giantswarm/model-manager", pr, lane); !ok || h.ExceptSession != "BK 0.156 promoter" {
 				t.Errorf("#%d: session %q is not held", pr, s)
 			}
+		}
+	}
+}
+
+// A merge GitHub judged settles from its merge time when it is recorded
+// after it; any other outcome, or a merge time after the record (clock
+// skew), settles from the record time.
+func TestSettlesFrom(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		out  Outcome
+		want time.Time
+	}{
+		{"merged before the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(-time.Hour)}), now.Add(-time.Hour)},
+		{"merged after the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(time.Second)}), now},
+		{"not merged", Judged(github.Pull{State: github.Closed, MergedAt: now.Add(-time.Hour)}), now},
+		{"devctl's document", Outcome{Merged: true, Release: "v1.0.0"}, now},
+	} {
+		if got := c.out.SettlesFrom(now); !got.Equal(c.want) {
+			t.Errorf("%s: settles from %s, want %s", c.name, got, c.want)
 		}
 	}
 }

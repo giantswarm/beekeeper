@@ -1,0 +1,3 @@
+browser connection lost
+- Read the heading
+- Report it

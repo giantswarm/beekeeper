@@ -351,6 +351,13 @@ work, which takes no choice on a self-hosted provider.`,
 			if err != nil {
 				return err
 			}
+			// The timer whose command runs this start, from its
+			// environment or, on the broker's side, the flags a brokered
+			// start forwards it in.
+			tm, byTimer, err := timerOfStart(cmd)
+			if err != nil {
+				return err
+			}
 			// another desk's claim of the brief's issue refuses the start,
 			// --force aside, before anything is judged or recorded
 			if err := a.claimGate(cmd.Context(), name, briefIssue(brief), force, dryRun); err != nil {
@@ -425,8 +432,14 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
+			// A timer's start says what the gate did to it in the log.
+			gateFrom := time.Now()
 			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, kind)
+			gateWait := time.Since(gateFrom)
 			if err != nil {
+				if byTimer {
+					a.recordTimerRefusal(name, tm, err)
+				}
 				return err
 			}
 			if harness == harnessAuto {
@@ -482,6 +495,13 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 			}
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
+			if byTimer {
+				line, err := a.recordTimerStart(name, tm, gateWait)
+				if err != nil {
+					return err
+				}
+				sp.brief = line + "\n\n" + sp.brief
+			}
 			h, _ := harnessByName(harness)
 			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			return h.Start(cmd.Context(), a, sp)
@@ -505,6 +525,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
+	addTimerFlags(c)
 	return c
 }
 
