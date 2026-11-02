@@ -153,6 +153,18 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	return parseLoopPull(ref, out)
 }
 
+// readChangedPast reads the files p's head changes past the change of
+// reviewed (github.ChangedPast).
+var readChangedPast = func(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
+	r, ok := parseRef(p.Ref)
+	if !ok || p.Base == "" {
+		return nil, fmt.Errorf("%s names no pull request with a base", p.Ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return github.ChangedPast(ctx, github.RunGH, r.Repo, p.Base, reviewed, p.Head)
+}
+
 // readBaseMerge reads whether the approval of approved covers p's head: it
 // only merges its base into approved, resolving the merge's conflicts or
 // not, or rebases approved onto it (github.ApprovalCovers).
@@ -423,7 +435,8 @@ its key first in the detail):
             branches go back for repair; other gate refusals stay barriers.
             The gate never updates a pinned branch. An approval covers a head
             that only brings the base into the approved one: the approved
-            head is its ancestor, every commit it adds is a merge, and its
+            head is its ancestor, every commit it adds that the base lacks
+            is a merge, and its
             change against its merge base with the base branch is the
             approved head's, file by file, hunk by hunk, line by line
             (compare API), or differs only where the merges resolve a
@@ -449,10 +462,18 @@ its key first in the detail):
             once for each such park; its new green head gets the next
             round, or the merge go once none is left. Review and rework
             stay in the loop: no merge question goes to guide.person
+  go        (past the reviews) a green head the worker parked on after
+            superloop.MaxReviews reviews, the last approving, whose change
+            differs from the approved head's (compare API, the base's own
+            changes left out) only in test files (_test.go, testdata/) and
+            files a review's findings name: the desk's rule is one review,
+            then the fixes and the merge, so the merge go, with no note
   escalate  a head that would need a review past superloop.MaxReviews (an
-            approved second review, then a change it does not cover): a
-            decision for guide.person (note add, options Merge and
-            Rework), once per head; no third reviewer starts
+            approved second review, then a change past its findings and
+            tests, or a comparison GitHub cuts short): a decision for
+            guide.person (note add, options Merge and Rework) naming the
+            files past the findings, once per head; no third reviewer
+            starts
   answer    the person answered an escalation (beekeeper answer --note):
             an answer that releases it (the
             Merge option, or words to merge that refuse nothing) is the
@@ -526,8 +547,12 @@ its key first in the detail):
             supervisor.classifier command, given the event as JSON on
             stdin, answers {"class":"needs-person|blocked|failed|question",
             "confidence":0.9}; the event goes to the guide (note add for
-            guide.person) with its class, or unclassified below
-            supervisor.classifierConfidence (0.8) or without a classifier
+            guide.person) with its class. A park the classifier cannot
+            place (below supervisor.classifierConfidence, 0.8, or without
+            a classifier) files no note: the worker is woken (agents wake)
+            to park again on a wait the loop watches (a pull request, a
+            timer that wakes it, a note for a person) or to report done.
+            An unclassified report goes to the guide unclassified
   file      a problem found (agents.problem) that cites no issue URL:
             the full report is logged in supervisor.file and delivered once
             by guide watch as GUIDE PROBLEM, to file in its owning repository.
@@ -630,6 +655,9 @@ type supervisorLoop struct {
 	// baseMerges are the answers of readBaseMerge, by pull request,
 	// approved head and head: two commits' relation does not change.
 	baseMerges map[string]bool
+	// changedPast are the answers of readChangedPast, by pull request,
+	// reviewed head and head.
+	changedPast map[string][]string
 	// opens are the answers of refStates, by issue or pull request,
 	// each kept for loopOpenEvery.
 	opens map[string]loopOpen
@@ -782,7 +810,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -855,8 +883,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
 		DevctlOwners: a.cfg.Merge.DevctlOwners, Admin: a.cfg.Merge.Admin,
-		BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
-		Open:       func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
+		BaseMerged:  func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
+		ChangedPast: func(p superloop.Pull, reviewed string) ([]string, error) { return l.changed(ctx, p, reviewed) },
+		Open:        func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
@@ -1097,6 +1126,24 @@ func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, appro
 	return ok
 }
 
+// changed lists the files p's head changes past the change of reviewed,
+// read once per pair of heads; a read that fails is read again next pass.
+func (l *supervisorLoop) changed(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
+	key := p.Ref + " " + reviewed + " " + p.Head
+	if files, read := l.changedPast[key]; read {
+		return files, nil
+	}
+	files, err := readChangedPast(ctx, p, reviewed)
+	if err != nil {
+		return nil, err
+	}
+	if l.changedPast == nil {
+		l.changedPast = map[string][]string{}
+	}
+	l.changedPast[key] = files
+	return files, nil
+}
+
 // ownership readies the desk's policy for a pass's reads: the logins the
 // desk opens its pull requests as and, once supervisor.ownership.team is
 // set, the team files, read again every teamsEvery. False, said once, while
@@ -1263,7 +1310,15 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
-	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
+	case superloop.KindClassify:
+		// An unclassified park's wake claims the agent's name; a note for
+		// the guide claims its question.
+		if c.target == act.Agent {
+			done = logged("agents.wake", opens)
+		} else {
+			done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
+		}
+	case superloop.KindEscalate, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	case superloop.KindIntake:
 		for _, e := range evs {
@@ -2352,6 +2407,16 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 			why = fmt.Sprintf("its classifier says %s (confidence %.2f), which only a person or the guide resolves", c.Class, c.Confidence)
 		}
 	}
+	// A park the loop cannot place is the worker's to classify: it is told
+	// how to park on a wait the loop watches, and nothing goes to the
+	// person, who could weigh no option of it.
+	if label == "unclassified" && e.Verb == parkEvent {
+		act.Message = unclassifiedParkMessage(e)
+		if err := l.wake(ctx, act); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("woke %s to park on a wait the loop watches (%s): no note for the person", e.Agent, why), nil
+	}
 	ref := agentRef(st, e.Agent)
 	if ref == "" {
 		return "", fmt.Errorf("%s's %s names no issue or pull request to file the guide's note on", e.Agent, e.Verb)
@@ -2362,6 +2427,16 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 		return "", err
 	}
 	return fmt.Sprintf("%s to the guide (%s) on %s", e.Verb, label, ref), nil
+}
+
+// unclassifiedParkMessage tells the worker whose park e the loop cannot
+// place how to park so that it can.
+func unclassifiedParkMessage(e superloop.Event) string {
+	return fmt.Sprintf("Your park at %s (%q) names no wait the supervisor loop watches, so nothing would ever resume you. "+
+		"If your task is finished, report it: agents idle --done --report and --problem. Otherwise park again on what you wait for: "+
+		"a pull request (agents park --on <owner/repo#n>), a time or an external state (timer add --wake <you>, then agents park), "+
+		"or a person's decision (note add --for <person> with its status quo, why, options and default, then agents park --on '#<note>').",
+		e.At.UTC().Format(time.RFC3339), truncate(oneLine(e.Detail), 300))
 }
 
 // fileReportSeparator identifies reports stored in the event itself. Older
