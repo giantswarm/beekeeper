@@ -23,7 +23,9 @@ import (
 // not yet reacted) and 0827-during (cluster-api-events' mark and start time,
 // the control plane rolling) are rebuilt from them, the events and the
 // conditions' transition times, the rolling control plane from another
-// installation's control plane read mid-upgrade.
+// installation's control plane read mid-upgrade. Every cluster carries the
+// weeks-old giantswarm.io/last-known-cluster-upgrade-timestamp
+// cluster-api-events writes (its Available condition's transition time).
 var phases = []string{"0820-before", "0821-changed", "0827-during", "0843-after"}
 
 func objects(t *testing.T, phase string) []Object {
@@ -352,5 +354,110 @@ func TestLiftBackfillsTarget(t *testing.T) {
 	Reconcile(st, prod, []Upgrade{{Cluster: "wc", To: stuckTo}}, at, watch)
 	if st.Holds[0].UpgradeTo != stuckTo {
 		t.Errorf("holds %+v", st.Holds)
+	}
+}
+
+// marked is cluster-api-events' upgrading mark set.
+const marked = "true"
+
+// withMC returns the phase's objects with mc's annotations changed by set.
+func withMC(t *testing.T, phase string, set map[string]string) []Object {
+	t.Helper()
+	objs := objects(t, phase)
+	for i := range objs {
+		if objs[i].Kind == kindCluster && objs[i].Metadata.Name == "mc" {
+			for k, v := range set {
+				objs[i].Metadata.Annotations[k] = v
+			}
+		}
+	}
+	return objs
+}
+
+// stamp is a time d before at, as an annotation holds it.
+func stamp(d time.Duration) string { return at.Add(-d).Format(time.RFC3339) }
+
+// TestStaleMark: an upgrade cluster-api-events still marks although its
+// cluster reports the recorded release and has rolled out runs on for
+// RolloutGrace from its start stamp, then is over, and its hold, set with an
+// unread from release, lifts on that reading.
+func TestStaleMark(t *testing.T) {
+	mark := map[string]string{upgradingMark: marked, upgradeStartTime: stamp(10 * time.Minute)}
+	if ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return false }); len(ups) != 1 || ups[0].Rolling {
+		t.Errorf("a marked upgrade within its grace: %+v", ups)
+	}
+	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "mc"), Reason: "upgrade prod/mc ? → " + to, At: at.Add(-50 * time.Hour), UpgradeTo: to}}}
+	mark[upgradeStartTime] = stamp(50 * time.Hour)
+	ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return true })
+	if len(ups) != 0 {
+		t.Errorf("a stale mark upgrades: %+v", ups)
+	}
+	if begun, ended := Reconcile(st, prod, ups, at, watch); len(begun) != 0 || len(ended) != 1 {
+		t.Errorf("begun %+v ended %+v", begun, ended)
+	}
+	if _, ok := Held(st, prod, at); ok {
+		t.Errorf("prod still held: %+v", st.Holds)
+	}
+}
+
+// TestStalledMark: a marked rollout StallAfter after its start stamp is
+// over; one younger runs on.
+func TestStalledMark(t *testing.T) {
+	held := func(string) bool { return true }
+	if ups := Detect(withMC(t, "0827-during", map[string]string{upgradeStartTime: stamp(2 * time.Hour)}), at, held); len(ups) != 1 || ups[0].Rolling {
+		t.Errorf("a marked rollout of 2h ended: %+v", ups)
+	}
+	if ups := Detect(withMC(t, "0827-during", map[string]string{upgradeStartTime: stamp(StallAfter + time.Minute)}), at, held); len(ups) != 0 {
+		t.Errorf("a stalled marked rollout runs on: %+v", ups)
+	}
+}
+
+// TestRollingAfterMarkCleared: once cluster-api-events clears its mark and
+// start stamp (its weeks-old last-known timestamp staying), a held rollout
+// runs on and keeps its hold until StallAfter from the hold's begin.
+func TestRollingAfterMarkCleared(t *testing.T) {
+	objs := withMC(t, "0827-during", map[string]string{upgradingMark: "false"})
+	for i := range objs {
+		delete(objs[i].Metadata.Annotations, upgradeStartTime)
+	}
+	ups := Detect(objs, at, func(c string) bool { return c == "mc" })
+	if len(ups) != 1 || !ups[0].Rolling {
+		t.Fatalf("a held rollout ended with the mark: %+v", ups)
+	}
+	h := state.Hold{Target: HoldTarget(prod, "mc"), Reason: "upgrade prod/mc 35.0.1 → " + to, At: at.Add(-2 * time.Hour), UpgradeTo: to}
+	st := &state.State{Holds: []state.Hold{h}}
+	if begun, ended := Reconcile(st, prod, ups, at, watch); len(begun)+len(ended) != 0 {
+		t.Errorf("a young rollout: begun %+v ended %+v", begun, ended)
+	}
+	if _, ok := Held(st, prod, at); !ok {
+		t.Error("a young rollout lost its hold")
+	}
+	h.At = at.Add(-StallAfter)
+	st = &state.State{Holds: []state.Hold{h}}
+	if begun, ended := Reconcile(st, prod, ups, at, watch); len(begun) != 0 || len(ended) != 1 {
+		t.Errorf("a stalled rollout: begun %+v ended %+v", begun, ended)
+	}
+	if ups := Detect(objs, at, func(string) bool { return false }); len(ups) != 0 {
+		t.Errorf("a stalled rollout without its hold upgrades: %+v", ups)
+	}
+}
+
+// TestStaleMarkKeepsDueSchedule: a due scheduled upgrade holds its cluster
+// though the previous one's mark is stale.
+func TestStaleMarkKeepsDueSchedule(t *testing.T) {
+	objs := withMC(t, "0843-after", map[string]string{
+		upgradingMark: marked, upgradeStartTime: stamp(50 * time.Hour),
+		scheduleRelease: "35.2.0", scheduleTime: stamp(time.Minute),
+	})
+	ups := Detect(objs, at, func(string) bool { return false })
+	if len(ups) != 1 || ups[0].Cluster != "mc" || ups[0].Rolling {
+		t.Errorf("a due schedule: %+v", ups)
+	}
+}
+
+func TestStale(t *testing.T) {
+	h := state.Hold{Target: HoldTarget(prod, "mc"), At: at.Add(-StallAfter)}
+	if !Stale(h, at) || Stale(state.Hold{Target: h.Target, At: at.Add(-time.Hour)}, at) || Stale(state.Hold{Target: "lane:x", At: h.At}, at) {
+		t.Error("stale")
 	}
 }
