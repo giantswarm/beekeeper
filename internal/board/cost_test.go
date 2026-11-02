@@ -200,7 +200,7 @@ func (b *largeBoard) items() []string {
 	var out []string
 	n := 1
 	for i := range b.progress {
-		prio := "null"
+		prio := jsonNull
 		if i < b.ranked {
 			prio = fmt.Sprintf(`{"number":%d}`, i+1)
 		}
@@ -298,7 +298,7 @@ func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 // formula: the walk of board next reads it once. Each epic's sub-issues are
 // read by a page of its own size: a page of 50 for every epic cost this
 // board of 426 candidates 92 points, 53 of them for sub-issue slots no epic
-// filled; it costs 39.
+// filled; including the current-blocker read, it costs 41.
 func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 	b := &largeBoard{t: t, progress: 40, planning: 10, tail: 255, subs: 6, open: 4, ranked: 20}
 	c := &Client{GH: b.run, Board: b.order(), Plans: []string{plansRepo}}
@@ -325,8 +325,8 @@ func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 			}
 		}
 	}
-	if b.cost > 40 {
-		t.Errorf("one read costs %d GraphQL points, want at most 40", b.cost)
+	if b.cost > 41 {
+		t.Errorf("one read costs %d GraphQL points, want at most 41", b.cost)
 	}
 }
 

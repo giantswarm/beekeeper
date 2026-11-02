@@ -271,6 +271,45 @@ func TestKubeRefusesProductionPluginWrites(t *testing.T) {
 	wantPassed(t, kubeHook(gazelleKC), "kubectl-ate --context kind-agentlab delete actor x")
 }
 
+func TestKubeGSTemplateRepeated(t *testing.T) {
+	for _, prefix := range []string{"kubectl-gs", "kubectl gs", "/home/u/bin/kubectl-gs"} {
+		for _, flags := range []string{
+			"",
+			"--cache-dir /cache ",
+			"--certificate-authority /ca.crt --client-certificate /client.crt --client-key /client.key ",
+			"--as-uid viewer --tls-server-name api.example.com ",
+			"--cache-dir=/cache --tls-server-name=api.example.com ",
+		} {
+			cmd := prefix + " --context teleport.giantswarm.io-gazelle " + flags + "template cluster --provider capa --name x"
+			for _, kc := range []string{machineKC, gazelleKC, labKC} {
+				h := kubeHook(kc)
+				for range 3 {
+					wantPassed(t, h, cmd)
+					// The same global flags must not exempt a real write,
+					// including a read-looking word consumed as a flag value.
+					wantRefused(t, h, prefix+" --context teleport.giantswarm.io-gazelle "+flags+"update app --name x --version 1", prodMsg)
+				}
+			}
+		}
+	}
+	for _, cmd := range []string{
+		"kubectl --cache-dir /cache --context teleport.giantswarm.io-gazelle gs template cluster --provider capa --name x",
+		"kubectl-gs template cluster --context teleport.giantswarm.io-gazelle --provider capa --name x",
+		"bash -c 'kubectl-gs --cache-dir /cache --context teleport.giantswarm.io-gazelle template cluster --provider capa --name x'",
+	} {
+		wantPassed(t, kubeHook(machineKC), cmd)
+	}
+	for _, cmd := range []string{
+		"kubectl-gs --context teleport.giantswarm.io-gazelle --cache-dir template update app --name x --version 1",
+		"kubectl --cache-dir template --context teleport.giantswarm.io-gazelle gs update app --name x --version 1",
+		"kubectl --context teleport.giantswarm.io-gazelle --as-uid get delete pod x",
+		"kubectl gs --context teleport.giantswarm.io-gazelle --as-uid template delete cluster x",
+		"kubectl-gs template cluster --context teleport.giantswarm.io-gazelle --name x | kubectl --context teleport.giantswarm.io-gazelle apply -f -",
+	} {
+		wantRefused(t, kubeHook(machineKC), cmd, prodMsg)
+	}
+}
+
 func TestKubeRefusesMissingContext(t *testing.T) {
 	h := kubeHook(machineKC)
 	for _, cmd := range []string{
