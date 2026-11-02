@@ -175,6 +175,8 @@ func TestTrimGoCachePastTheMarginTrimsWhileAGoBuildRuns(t *testing.T) {
 // holds the cache: a compile reads its entries.
 func TestTrimGoCacheWaitsForABeekeeperRun(t *testing.T) {
 	a, cache := goCacheApp(t)
+	defer func(w time.Duration) { goCacheHoldWait = w }(goCacheHoldWait)
+	goCacheHoldWait = 10 * time.Millisecond
 	release, err := gocache.Use(context.Background(), cache)
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +193,40 @@ func TestTrimGoCacheWaitsForABeekeeperRun(t *testing.T) {
 	release()
 	if r := a.trimGoCache(false, noBuilds); r.used || r.removed != 3 {
 		t.Errorf("after the run: %+v; want the trim", r)
+	}
+}
+
+// Overlapping beekeeper runs that always hold the cache: past the margin the
+// trim waits for them, new runs behind it, and trims once they ended.
+func TestTrimGoCachePastTheMarginWaitsForTheRuns(t *testing.T) {
+	a, cache := goCacheApp(t)
+	run, err := gocache.Use(context.Background(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan goCacheRun)
+	go func() { done <- a.trimGoCache(false, noBuilds) }()
+	time.Sleep(200 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := gocache.Use(ctx, cache); err == nil {
+		t.Error("a new run started while the trim waited; want it behind the trim")
+	}
+	addEntry(t, cache, "04/written-during-the-wait-a", 1<<30, time.Now())
+	run()
+	r := <-done
+	if r.used || r.removed != 4 || exists(filepath.Join(cache, "00/new-a")) || !exists(filepath.Join(cache, "04/written-during-the-wait-a")) {
+		t.Fatalf("trim = %+v; want the 4 oldest of 5 entries removed once the run ended", r)
+	}
+	u, err := gocache.Scan(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.before != 5<<30 || r.after != u.Bytes || u.Bytes != 1<<30 {
+		t.Errorf("before %d, after %d, on disk %d; want the rescan's 5 GiB and the 1 GiB left", r.before, r.after, u.Bytes)
+	}
+	if !strings.Contains(r.String(), "past the cap by a quarter, after waiting") {
+		t.Errorf("line %q; want the wait for the runs", r)
 	}
 }
 
