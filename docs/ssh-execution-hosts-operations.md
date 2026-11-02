@@ -162,9 +162,14 @@ Hosts run the coordinator's release. `agents hosts update <host>` connects
 over the host's SSH route and runs `agents hosts self-update --version
 <coordinator release>` there. With no execution running, the host holds its
 admission, installs exactly that release once its Sigstore bundle verifies (as
-`self-update` does; the replaced binary is kept beside it as
-`.beekeeper.previous`), and has the installed release prepare its own policy.
-A release that does not prepare is rolled back and the old one prepares again;
+`self-update` does), and has the installed release prepare its own policy.
+The download is staged in a writable temporary directory beside the executable
+and atomically renamed over it; no backup or hard link is created. The update
+account needs write permission on that directory, rather than ownership of the
+old binary. If a system installation directory is not writable, beekeeper verifies
+the download in its own temporary directory, then uses `sudo -n` only to stage
+and atomically rename it in the destination directory. Sudo never prompts;
+if it is unavailable or denied, the failure is reported and the host stays held. A release that does not prepare leaves the host held for a retry;
 one that does moves the host's watches and sandbox broker onto it, as
 `self-update` does.
 The coordinator then runs `hosts check` with the digest the host answered and
