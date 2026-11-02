@@ -518,3 +518,21 @@ at most 20 seconds; it returns an explicit uncertainty on disconnect. Stops and
 holds serialize with that attempt. `agents hosts check` refuses hosts that do
 not advertise publication support; upgrade and prepare an older host before
 starting workers there. Existing raw merge and API guards remain in force.
+
+### Source freshness at start
+
+The coordinator fetches the requested `--ref` from GitHub before host preparation,
+records its exact commit and a bundle digest in the start request, and transfers
+the objects over the authenticated SSH route in bounded chunks. The host checks
+the digest and commit before checking out the workspace. Its configured source
+checkout stays unchanged and needs no GitHub credential. Recovery reuses the
+saved commit and bundle even if the branch has advanced meanwhile. Both ends
+must support source transfer; an older host refuses preparation rather than
+starting from its stale ref. Bundles have a 64 MiB limit; oversized sources fail
+before activation and preserve the reservation for inspection.
+
+A pending reservation from before source transfer may already have a prepared
+host journal whose reply was lost. Recovery inspects that journal before
+pinning source and reuses its original request and commit. Only an explicit
+missing-journal response permits a new source pin; an unreadable journal or
+uncertain connection preserves the reservation for another recovery attempt.

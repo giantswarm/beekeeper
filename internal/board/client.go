@@ -76,7 +76,7 @@ const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt number sta
 
 // itemFields is what a move takes of an item: its id, its board and the
 // board fields with the Team.
-const itemFields = `id project{id} ` + boardFields + `
+const itemFields = `id project{id number owner{...on ProjectV2Owner{login}}} ` + boardFields + `
 team:fieldValueByName(name:"` + TeamField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
 type issueJSON struct {
@@ -887,6 +887,84 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	return mv, nil
 }
 
+// workedStatus reports whether status on another board means the issue is
+// already being worked there, rather than sitting in an intake or finished
+// column.
+func workedStatus(status string) bool {
+	w := words(status)
+	if w == "" {
+		return false
+	}
+	switch w {
+	case "inbox", "backlog", "todo", "to do", "triage", "new", "icebox", "done", "closed", "completed", "archived":
+		return false
+	}
+	return true
+}
+
+// Intake puts the issue ref onto the configured board in the intake status in
+// stands for ( typically Backlog), with board.team as its Team when it has
+// none, unless the issue already sits on another board where it is being
+// worked (Moved.Board and Moved.Kept set) or already has a Status on the
+// configured board (left as it is, Moved.Kept set when it differs from in).
+func (c *Client) Intake(ctx context.Context, ref, in string) (*Moved, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return nil, err
+	}
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
+	m, err := c.meta(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
+	id, found, items, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	if err != nil {
+		return nil, err
+	}
+	sf := m.Fields[StatusField]
+	to, err := Resolve(StatusField, sf.names(), in)
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
+	team, err := c.team(m)
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
+	if found == nil {
+		for _, other := range items {
+			if other.Project.ID != m.ID && other.Status != nil && workedStatus(other.Status.Name) {
+				mv.From = other.Status.Name
+				mv.To = other.Status.Name
+				mv.Board = other.boardName()
+				mv.Kept = true
+				return mv, nil
+			}
+		}
+	}
+	item, err := c.ensure(ctx, m, mv, id, found)
+	if err != nil {
+		return nil, err
+	}
+	if item.Team == nil && team != nil {
+		if err := c.set(ctx, m.ID, item.ID, team.field, team.id); err != nil {
+			return nil, err
+		}
+		mv.Team = team.name
+	}
+	if item.Status != nil && item.Status.Name != "" {
+		mv.From = item.Status.Name
+		mv.To = item.Status.Name
+		mv.Kept = !strings.EqualFold(item.Status.Name, to)
+		return mv, nil
+	}
+	mv.To = to
+	if err := c.set(ctx, m.ID, item.ID, sf.ID, sf.option(to)); err != nil {
+		return nil, err
+	}
+	return mv, nil
+}
+
 // item is the issue's item on the board, read from the issue's
 // projectItems, else answered by addProjectV2ItemById: the issue's
 // existing item, or a new one, which marks mv added. An issue GitHub does
@@ -928,8 +1006,41 @@ func (c *Client) ensure(ctx context.Context, m *meta, mv *Moved, id string, foun
 	}
 	it := *a.Added.Item
 	// An item that existed carries its fields; a new one none.
-	mv.Added = it.Status == nil && it.Team == nil
+	mv.Added = it.Status == nil && it.Team == nil && it.Kind == nil
 	return it, nil
+}
+
+// onBoard returns ref's existing item on m, or nil when ref is not on m.
+// For an issue outside the board's owner, whose projectItems omit m, it
+// probes addProjectV2ItemById and deletes a freshly added blank item.
+func (c *Client) onBoard(ctx context.Context, m *meta, ref string) (*projectItem, error) {
+	oo, or, on, err := Ref(ref)
+	if err != nil {
+		return nil, err
+	}
+	oref := fmt.Sprintf("%s/%s#%d", oo, or, on)
+	octx := github.ActingOn(ctx, oo+"/"+or)
+	oid, found, _, err := c.lookup(octx, m, oref, oo, or, on)
+	if err != nil || found != nil || strings.EqualFold(oo, c.Board.Owner) {
+		return found, err
+	}
+	var omv Moved
+	omv.Ref = oref
+	it, err := c.ensure(octx, m, &omv, oid, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !omv.Added {
+		return &it, nil
+	}
+	_ = c.deleteItem(octx, m.ID, it.ID)
+	return nil, nil
+}
+
+func (c *Client) deleteItem(ctx context.Context, project, item string) error {
+	var done json.RawMessage
+	return c.graphql(ctx, &done, `mutation($p:ID!,$i:ID!){deleteProjectV2Item(input:{projectId:$p,itemId:$i}){deletedItemId}}`,
+		vars{"p": project, "i": item})
 }
 
 // lookup reads the issue's node id and its item on the board from the
@@ -1029,7 +1140,7 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 		if strings.EqualFold(oref, rk.Ref) {
 			return nil, &Refusal{rk.Ref + " cannot be placed against itself"}
 		}
-		_, found, _, err := c.lookup(github.ActingOn(ctx, oo+"/"+or), m, oref, oo, or, on)
+		found, err := c.onBoard(ctx, m, oref)
 		if err != nil {
 			return nil, err
 		}
@@ -1148,14 +1259,36 @@ func (c *Client) set(ctx context.Context, project, item, f, o string) error {
 
 // projectItem is an issue's item on a board.
 type projectItem struct {
-	ID      string              `json:"id"`
-	Project struct{ ID string } `json:"project"`
-	Status  *struct {
+	ID      string `json:"id"`
+	Project struct {
+		ID     string `json:"id"`
+		Number int    `json:"number"`
+		Owner  *struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	} `json:"project"`
+	Home *struct {
+		Number int `json:"number"`
+		Owner  *struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	} `json:"home"`
+	Status *struct {
 		Name      string
 		UpdatedAt time.Time `json:"updatedAt"`
 	} `json:"status"`
 	Kind *struct{ Name string } `json:"kind"`
 	Team *struct{ Name string } `json:"team"`
+}
+
+func (p projectItem) boardName() string {
+	if p.Project.Owner != nil && p.Project.Owner.Login != "" && p.Project.Number != 0 {
+		return fmt.Sprintf("%s/%d", p.Project.Owner.Login, p.Project.Number)
+	}
+	if p.Home != nil && p.Home.Owner != nil && p.Home.Owner.Login != "" && p.Home.Number != 0 {
+		return fmt.Sprintf("%s/%d", p.Home.Owner.Login, p.Home.Number)
+	}
+	return p.Project.ID
 }
 
 // onto marks it a board item with the board fields of p.

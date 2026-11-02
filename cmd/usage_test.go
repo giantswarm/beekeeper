@@ -1196,6 +1196,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
       sevenDay:
         - {upTo: 95, floor: 1, ceiling: 1}
     omp:
+      kind: self-hosted
       floor: 1
       ceiling: 1
   choices:
@@ -2128,6 +2129,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
   ceiling: 4
   providers:
     shared-agy:
+      command: [read-agy]
       floor: 1
       ceiling: 1
   choices:
@@ -2166,6 +2168,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	// Requesting --harness auto --model claude-opus-4-6-thinking must still attribute BusyGemini to
 	// shared-agy before filtering candidate choices to claude-opus-4-6-thinking, and refuse the start.
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}, as: usageCaller}
+	stubSubscriptionUsage(a)
 	cmd := a.agentStartCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true

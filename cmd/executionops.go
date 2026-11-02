@@ -97,6 +97,7 @@ func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason strin
 			return nil, refused("execution registration disappeared")
 		}
 		r.Observation.Handle = r.Handle
+		r.Observation.InTurn = false
 		r.Observation.StopRequested = true
 		r.Observation.StopAcknowledged = true
 		r.Observation.ProcessState = execution.Exited

@@ -2363,12 +2363,22 @@ type Merge struct {
 	// repository of any other owner, and every repository while it is
 	// empty, takes the plain squash merge as the gh login instead.
 	DevctlOwners []string `yaml:"devctlOwners"`
+	// Admin are the repositories (owner/repo) the desk merges with --admin
+	// past their branch ruleset after the approved desk review; only their
+	// merge go names --admin.
+	Admin []string `yaml:"admin"`
 }
 
 // DevctlServes says whether devctl pr merge serves repo's owner.
 func (m Merge) DevctlServes(repo string) bool {
 	owner, _, _ := strings.Cut(repo, "/")
 	return slices.ContainsFunc(m.DevctlOwners, func(o string) bool { return strings.EqualFold(o, owner) })
+}
+
+// AdminMerge says whether the desk merges repo (owner/repo) with --admin
+// after the approved desk review.
+func (m Merge) AdminMerge(repo string) bool {
+	return slices.ContainsFunc(m.Admin, func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
 // Notify configures what `watch --notify` sends to the desktop.
@@ -3443,7 +3453,7 @@ func (c *Config) defaults() error {
 		if name == AgyHarness && len(p.Command) == 0 && !p.SelfHosted() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
-		if name == CodexHarness && len(p.Command) == 0 && p.hasFields() {
+		if name == CodexHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultCodexUsageCommand)
 		}
 		baseFloor := c.Capacity.Floor
@@ -3798,6 +3808,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := ownerRepos("plans.repositories", c.Plans.Repositories); err != nil {
+		return err
+	}
+	if err := ownerRepos("merge.admin", c.Merge.Admin); err != nil {
 		return err
 	}
 	if err := c.Sink.validate(); err != nil {

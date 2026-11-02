@@ -808,6 +808,7 @@ type ExecutionRecord struct {
 	Provider        string                             `json:"provider"`
 	Bucket          string                             `json:"bucket,omitempty"`
 	ReservedAt      time.Time                          `json:"reservedAt"`
+	LastActive      time.Time                          `json:"lastActive,omitzero"`
 	Observation     execution.Observation              `json:"observation"`
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
