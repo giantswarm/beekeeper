@@ -2,6 +2,7 @@ package board
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -251,12 +252,15 @@ func TestTheGoOfAnEpicPastItIsReadFromItsGoComment(t *testing.T) {
 }
 
 // goGH answers a move of the Up Next epic o/r#50: the board, the epic's
-// item, the plans search and the epic's repository.
+// item, the plans search and the epic's repository. merged is the merged
+// plan only the search of merged pull requests finds.
 type goGH struct {
 	t                  *testing.T
 	planPrivate, found bool
 	repoPrivate        bool
+	merged             string
 	mutations, repos   []string
+	queries            []string
 }
 
 func (f *goGH) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -276,7 +280,11 @@ func (f *goGH) run(ctx context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
+	case strings.Contains(q, "search(query:") && strings.Contains(q, "is:merged"):
+		f.queries = append(f.queries, q)
+		return []byte(`{"data":{"search":{"nodes":[` + f.merged + `]}}}`), nil
 	case strings.Contains(q, "search("):
+		f.queries = append(f.queries, q)
 		if !f.found {
 			return []byte(`{"data":{"p0":{"nodes":[]}}}`), nil
 		}
@@ -324,16 +332,58 @@ func TestMovingAnEpicToInProgressIsTheGo(t *testing.T) {
 	if _, err := c.Move(context.Background(), epicRef, "in progress"); !errors.As(err, &r) || !strings.Contains(r.Reason, "has no private thread") || len(f.mutations) != 0 {
 		t.Errorf("Move with no private thread = %v; mutations %v", err, f.mutations)
 	}
-	// Without a plan the go moves and records nothing.
+	// Without an open or a merged plan the go moves and records nothing,
+	// after both searches.
 	f = &goGH{t: t}
 	c.GH = f.run
-	if mv, err := c.Move(context.Background(), epicRef, "in progress"); err != nil || mv.Go == nil || mv.Go.Plan != nil || len(f.mutations) != 1 {
-		t.Errorf("Move without a plan = %+v, %v; mutations %v", mv, err, f.mutations)
+	if mv, err := c.Move(context.Background(), epicRef, "in progress"); err != nil || mv.Go == nil || mv.Go.Plan != nil || len(f.mutations) != 1 || len(f.queries) != 2 {
+		t.Errorf("Move without a plan = %+v, %v; mutations %v, queries %q", mv, err, f.mutations, f.queries)
 	}
 	// Any other move of the epic is no go.
 	f = &goGH{t: t, found: true}
 	c.GH = f.run
 	if mv, err := c.Move(context.Background(), epicRef, "backlog"); err != nil || mv.Go != nil {
 		t.Errorf("Move to Backlog = %+v, %v", mv, err)
+	}
+}
+
+func TestMovingAnEpicWhosePlanIsMergedRecordsTheGoAtItsMergeCommit(t *testing.T) {
+	b := config.Board{Owner: "o", Project: 7, Team: "X"}
+	// Only the search of merged pull requests finds the plan, which names
+	// the epic as owner/repo#n; another lists it as a slice.
+	merged := func(n int, body string) string {
+		return strings.Replace(planNode(n, "MERGED", false, true, body), `"body"`, fmt.Sprintf(`"mergeCommit":{"oid":"m%d"},"body"`, n), 1)
+	}
+	f := &goGH{t: t, planPrivate: true, merged: merged(2, "Epic: https://github.com/o/r/issues/1\n\n1. o/r#50: a slice") + "," + merged(1, "**Epic:** o/r#50")}
+	c := &Client{GH: f.run, Board: b, Plans: []string{plansRepo}}
+	mv, err := c.Move(context.Background(), epicRef, "in progress")
+	if err != nil || mv.Go == nil || mv.Go.Plan == nil || mv.Go.Plan.URL != "https://github.com/o/plans/pull/1" || mv.Go.Plan.Head != "m1" || mv.Go.Plan.State != planMerged || mv.Go.Thread != "o/plans#1" {
+		t.Fatalf("Move = %+v (go %+v), %v", mv, mv.Go, err)
+	}
+	if len(f.queries) != 2 || !strings.Contains(f.queries[1], `search(query:"repo:o/plans is:pr is:merged 50 sort:updated-desc",type:ISSUE,first:30)`) || !strings.Contains(f.queries[1], "mergeCommit{oid}") {
+		t.Errorf("queries %q", f.queries)
+	}
+	if _, err := c.RecordGo(context.Background(), mv.Go, mv.Go.Text("guide", mv.To)); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.mutations[len(f.mutations)-1]; !strings.HasPrefix(got, "comment on PR1: **Go:** o/r#50 moved to In Progress ⛏️ by guide. Its open sub-issues are offered as work from now on, implemented at this plan at its head m1 (merged).") {
+		t.Errorf("comment %q", got)
+	}
+	// The plan the first search finds merged is at its merge commit too, and
+	// a go recorded at it, or at the merged branch's head, has not moved.
+	prs := []planPR{}
+	if err := json.Unmarshal([]byte("["+merged(1, "Epic: https://github.com/o/r/issues/50")+"]"), &prs); err != nil {
+		t.Fatal(err)
+	}
+	p := pick(epicRef, prs)
+	for _, head := range []string{"m1", "h1"} {
+		g := &Go{Epic: epicRef, Plan: &Plan{URL: p.URL, Head: head}, Thread: epicRef}
+		var th thread
+		if err := json.Unmarshal(fmt.Appendf(nil, `{"nodes":[{"body":%q,"url":"https://github.com/c/1","createdAt":"2026-10-01T01:00:00Z"}]}`, g.Text("guide", inProgress)), &th); err != nil {
+			t.Fatal(err)
+		}
+		if got := readGo(epicRef, p, prs, th); got.Head != "m1" || got.Implemented != head || got.Since != "" || got.Moved != 0 {
+			t.Errorf("go at %s = %+v", head, got)
+		}
 	}
 }
