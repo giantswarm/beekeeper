@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"path"
 	"regexp"
 	"runtime"
@@ -334,38 +333,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 // last reading is older than merge.budgetFresh or its reset has passed (the
 // window it counted is over).
 func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
-	token, err := github.Token(ctx)
-	if err != nil {
-		return github.Budget{}, err
-	}
-	st, err := a.store.Read()
-	if err != nil {
-		return github.Budget{}, err
-	}
-	client := &http.Client{Timeout: 20 * time.Second}
-	b, etag, err := github.Probe(ctx, client, token, a.cfg.GitHub.ProbeRepo, st.BudgetETag)
-	if err != nil {
-		return b, err
-	}
-	now := time.Now().UTC()
-	var g *state.GraphQL
-	if last := st.Budget; last != nil && last.GraphQL != nil && now.Sub(last.GraphQL.At) <= a.cfg.Merge.BudgetFresh.Duration &&
-		(last.GraphQL.Reset.IsZero() || now.Before(last.GraphQL.Reset)) {
-		g = last.GraphQL
-	} else if r := github.ProbeGraphQL(ctx, client, token, now); r.Err == "" {
-		g = &state.GraphQL{Remaining: r.Remaining, Limit: r.Limit, Reset: r.Reset, Refused: r.Refused, Secondary: r.Secondary, At: now}
-	} else {
-		b.GraphQL = &r
-	}
-	if g != nil {
-		b.GraphQL = graphqlOf(g)
-	}
-	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.BudgetETag = etag
-		st.Budget = &state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, At: now, GraphQL: g}
-		return nil, nil
-	})
-	return b, nil
+	return a.probeIdentities(ctx)
 }
 
 // findWaits lists the long-running commands sessions block on; a watch's
@@ -661,6 +629,9 @@ func budgetLine(a *app, b github.Budget) string {
 	}
 	line := fmt.Sprintf("%d of %d left, resets %s (in %s); floor %d: %s",
 		b.Remaining, b.Limit, clock(a.now, b.Reset), dur(b.Reset.Sub(a.now)), a.cfg.GitHub.Floor, status)
+	if b.Identity != "" {
+		line += fmt.Sprintf(" [REST identity %s/%s]", b.Identity, b.Login)
+	}
 	if g := b.GraphQL; g != nil {
 		line += "; " + graphqlText(a, g)
 	}
@@ -673,15 +644,29 @@ func graphqlOf(g *state.GraphQL) *github.GraphQL {
 	if g == nil {
 		return nil
 	}
-	return &github.GraphQL{Limit: g.Limit, Remaining: g.Remaining, Used: g.Limit - g.Remaining, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary}
+	return &github.GraphQL{Identity: g.Identity, Login: g.Login, BlockedBy: g.BlockedBy, Limit: g.Limit, Remaining: g.Remaining, Used: g.Limit - g.Remaining, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary, Err: g.Err}
 }
 
 // graphqlText says the GraphQL limit: its figures, or its refusal with the
 // kind of limit and when it ends.
 func graphqlText(a *app, g *github.GraphQL) string {
+	text := graphqlReadingText(a, g)
+	if g.Identity != "" {
+		text += " [identity " + g.Identity
+		if g.Login != "" {
+			text += "/" + g.Login
+		}
+		text += "]"
+	}
+	return text
+}
+
+func graphqlReadingText(a *app, g *github.GraphQL) string {
 	switch {
 	case g.Err != "":
 		return "GraphQL unknown (" + truncate(g.Err, 60) + ")"
+	case len(g.BlockedBy) > 0 && g.Refused == "":
+		return fmt.Sprintf("GraphQL %d of %d; blocked by identities %s", g.Remaining, g.Limit, strings.Join(g.BlockedBy, ", "))
 	case g.Refused == "":
 		return fmt.Sprintf("GraphQL %d of %d", g.Remaining, g.Limit)
 	}
