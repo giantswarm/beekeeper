@@ -18,7 +18,7 @@ One task; stricter desk rules win.
 - **Alerts.** Post-roll/proof: `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts snapshot`, never Alertmanager/Mimir.
 - **Rounds.** Focused checks, push fixes together once per round. Read saved failures; rerun failing tests only (`-run`); pipes: `set -o pipefail`. Reviews: focused reproductions, full checks are CI's.
 - **Git.** No force push (`--force-with-lease` too). Before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. Own worktree; commit, no `git stash`.
-- **Files.** Scratch: `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
+- **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
 - **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`; an agentlab proof only waits: never under `beekeeper run`.
 - **Stop**: kill by PID, gated runs by `beekeeper gate stop`. Never hard-delete: move aside.
 - **Near `agents.relayAt`**, handover (`agents note`), stop.

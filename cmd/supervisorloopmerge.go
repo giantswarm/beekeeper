@@ -175,6 +175,13 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 	return "merged; task closed without waking worker", err
 }
 
+// The reasons a reviewed merge stops for desk policy, before and after a
+// branch update alike.
+const (
+	reasonDeskStopped = "the desk is stopped"
+	reasonMergeHeld   = "merge held by desk policy"
+)
+
 // reviewedMerge is the gate's mutation child. A branch behind its base it
 // updates once, as the gate's --update-branch would, and merges the updated
 // head only once its checks are green and the approval covers it
@@ -275,11 +282,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	if st.Stop != nil {
-		doc.Reason = "the desk is stopped"
+		doc.Reason = reasonDeskStopped
 		return doc
 	}
 	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
-		doc.Reason = "merge held by desk policy"
+		doc.Reason = reasonMergeHeld
 		return doc
 	}
 	merging := head
@@ -296,11 +303,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			return doc
 		}
 		if st.Stop != nil {
-			doc.Reason = "the desk is stopped"
+			doc.Reason = reasonDeskStopped
 			return doc
 		}
 		if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
-			doc.Reason = "merge held by desk policy"
+			doc.Reason = reasonMergeHeld
 			return doc
 		}
 		p, merging = up, up.Head

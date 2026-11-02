@@ -12,6 +12,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+// The checks of the rig's reviewed head.
+const behindBuild, behindUnit = "build", "unit"
+
 // behindRig is a loop rig whose pull request, approved at loopHead, is
 // behind its base: GitHub's update-branch moves it to loopFixed with its
 // checks pending, and every pause of the wait for them runs onPause.
@@ -26,9 +29,9 @@ func newBehindRig(t *testing.T) *behindRig {
 	t.Helper()
 	b := &behindRig{loopRig: newLoopRig(t)}
 	r := b.loopRig
-	r.pull.Base = "main"
+	r.pull.Base = mainBranch
 	r.pull.MergeState = "BEHIND"
-	r.pull.Checks = []string{"ci", "lint"}
+	r.pull.Checks = []string{behindBuild, behindUnit}
 	r.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
 		return approved == loopHead && p.Head == loopFixed, nil
 	}
@@ -41,7 +44,7 @@ func newBehindRig(t *testing.T) *behindRig {
 		}
 		return merge(argv)
 	}
-	b.onPause = func(int) { r.pull.Green, r.pull.Checks = true, []string{"ci", "lint"} }
+	b.onPause = func(int) { r.pull.Green, r.pull.Checks = true, []string{behindBuild, behindUnit} }
 	pause, wait := reviewedPause, reviewedUpdateWait
 	t.Cleanup(func() { reviewedPause, reviewedUpdateWait = pause, wait })
 	reviewedUpdateWait = time.Hour
@@ -81,9 +84,9 @@ func TestReviewedMergeUpdatesABehindBranchAndMergesTheCoveredHead(t *testing.T) 
 	b.claim(t)
 	// The first read after the update shows only part of the checks.
 	b.onPause = func(n int) {
-		b.pull.Green, b.pull.Checks = true, []string{"ci"}
+		b.pull.Green, b.pull.Checks = true, []string{behindBuild}
 		if n > 1 {
-			b.pull.Checks = []string{"ci", "lint"}
+			b.pull.Checks = []string{behindBuild, behindUnit}
 		}
 	}
 	doc := b.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
@@ -113,22 +116,22 @@ func TestReviewedMergeOfAnUpdatedBranchStopsShort(t *testing.T) {
 		want string
 		set  func(*behindRig)
 	}{
-		"red": {github.SquashRed, "red: ci", func(b *behindRig) {
-			b.onPause = func(int) { b.pull.Red = []superloop.Check{{Name: "ci"}} }
+		reviewedRedCase: {github.SquashRed, "red: " + behindBuild, func(b *behindRig) {
+			b.onPause = func(int) { b.pull.Red = []superloop.Check{{Name: behindBuild}} }
 		}},
 		"uncovered": {github.SquashNotApplicable, "changes more than the base", func(b *behindRig) {
 			b.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
 		}},
-		"timeout": {github.SquashTimeout, "did not all pass", func(b *behindRig) {
+		"checks too slow": {github.SquashTimeout, "did not all pass", func(b *behindRig) {
 			reviewedUpdateWait = 0
 			b.onPause = func(int) {}
 		}},
 		"update refused": {github.SquashNotApplicable, "merge conflict", func(b *behindRig) {
 			b.command = func([]string) (string, int) { return "merge conflict", 1 }
 		}},
-		"stopped meanwhile": {github.SquashNotApplicable, "stopped", func(b *behindRig) {
+		"stopped meanwhile": {github.SquashNotApplicable, reasonDeskStopped, func(b *behindRig) {
 			b.onPause = func(int) {
-				b.pull.Green, b.pull.Checks = true, []string{"ci", "lint"}
+				b.pull.Green, b.pull.Checks = true, []string{behindBuild, behindUnit}
 				if err := b.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
 					t.Fatal(err)
 				}
