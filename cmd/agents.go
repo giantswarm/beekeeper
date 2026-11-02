@@ -352,12 +352,22 @@ started is never archived nor stopped.`,
 				return err
 			}
 			var gone state.Party
+			var worktreeDir, reviewHead string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				i, err := findAgent(st, args[0])
 				if err != nil {
 					return nil, err
 				}
 				gone = st.Agents[i].Party
+				if st.Agents[i].Park != nil {
+					worktreeDir = st.Agents[i].Park.Worktree
+					reviewHead = st.Agents[i].Park.ReviewHead
+				}
+				if worktreeDir == "" {
+					if k := st.StartIndex(gone); k >= 0 {
+						worktreeDir = st.Starts[k].Dir
+					}
+				}
 				if st.Agents[i].Execution != nil {
 					if executionReserved(st, st.Agents[i]) {
 						return nil, refused("SSH execution must have confirmed termination before removal")
@@ -379,6 +389,7 @@ started is never archived nor stopped.`,
 					return err
 				}
 			}
+			defer a.cleanRemovedWorktree(cmd.Context(), worktreeDir, reviewHead)
 			if _, err := fmt.Fprintf(a.out, "removed %s\n", gone.Name); err != nil || keepDesktop {
 				return err
 			}
