@@ -219,7 +219,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	pf := root.PersistentFlags()
 	pf.StringVar(&a.cfgPath, configFlag, "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
-	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session")
+	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session; agents park, idle and desktop act as the registered agent of this name")
 	pf.BoolVar(&a.json, "json", false, "print JSON")
 	pf.StringVar(&a.executionRequestID, "request-id", "", "idempotency key for a managed remote note, park or report retry")
 

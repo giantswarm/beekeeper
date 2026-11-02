@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -181,6 +182,53 @@ func TestMergedPullRequestMakesTheParkResumable(t *testing.T) {
 	}
 	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err == nil || !strings.Contains(err.Error(), "is not parked") {
 		t.Errorf("second resume: %v", err)
+	}
+}
+
+// --as <name> acts as the registered agent of that name for agents park and
+// agents idle, though a session registered it: a session of another harness
+// or a wrapper script parks and reports as its agent without a harness's
+// session variables. A managed SSH execution's entry is not reached by name.
+func TestAsNamesTheRegisteredAgent(t *testing.T) {
+	const session = "5f0c2a7e-0000-4000-8000-000000000001"
+	w := parkingWatch(t, nil)
+	agent := state.Party{Session: session, HostSession: "local_" + session, Name: agentOne}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Party = agent
+		st.Records = []state.Record{{Session: agent}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "3", "Timo's answer on the rollout"); err != nil {
+		t.Fatalf("park --as %s: %v", agentOne, err)
+	}
+	st, _ := w.store.Read()
+	if ag := st.Agents[0]; ag.Park == nil || ag.Park.On != "#3" || len(st.Parks) != 0 {
+		t.Fatalf("agent %+v park %+v, parks off the roster %+v", ag, ag.Park, st.Parks)
+	}
+	if st.Records[0].Waits != "Timo's answer on the rollout" {
+		t.Errorf("the agent's session record waits %q", st.Records[0].Waits)
+	}
+	c := w.agentsCmd()
+	c.SetOut(w.out)
+	c.SetErr(w.out)
+	c.SetArgs([]string{"idle", "--done", "--report", "https://github.com/giantswarm/beekeeper/issues/86 done", "--problem", "none"})
+	if err := c.Execute(); err != nil {
+		t.Fatalf("idle --done --as %s: %v", agentOne, err)
+	}
+	if ag := agentOf(t, w); !ag.Done || ag.Task != "" || ag.Session != session {
+		t.Errorf("agent after idle --done %+v", ag)
+	}
+
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: agent, Task: parkTask, AssignedAt: relayNow, Execution: &execution.Ref{}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "3", "an answer"); err == nil || !strings.Contains(err.Error(), "no session id") {
+		t.Errorf("park --as an SSH execution's entry: %v", err)
 	}
 }
 
