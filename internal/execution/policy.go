@@ -504,15 +504,19 @@ func (s *Server) agyEnvironment() []string {
 
 func (s *Server) agyEnvironmentWithHome(home string) []string {
 	var out []string
-	userHome := os.Getenv("HOME")
+	userHome := os.Getenv(EnvHome)
+	if userHome == "" {
+		userHome = os.Getenv("HOME")
+	}
 	for _, kv := range cleanEnvironment("", s.Executable) {
-		if strings.HasPrefix(kv, "HOME=") {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, EnvHome+"=") {
 			continue
 		}
 		out = append(out, kv)
 	}
 	out = append(out, "HOME="+home)
 	if userHome != "" {
+		out = append(out, EnvHome+"="+userHome)
 		if v := os.Getenv("GOPATH"); v != "" {
 			out = append(out, "GOPATH="+v)
 		} else {

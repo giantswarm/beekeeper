@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -156,5 +157,54 @@ func TestExecutionGuardDecisionMatchesAgyHookFormat(t *testing.T) {
 	claudeJournal.Request.Harness = claudeComm
 	if out := executionGuardDecision(guard.Hook{}, harnessAgy, claudeJournal, nil)(agyRaw); !deniedAgy(out) {
 		t.Fatal("agy-format hook ran in a claude execution")
+	}
+
+	// Verify loadConfig + InstalledPolicy + executionHook succeed when child
+	// processes inherit HOME=<s.Root>/agy-home and BEEKEEPER_EXECUTION_HOME.
+	realHome, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", realHome)
+	t.Setenv("XDG_STATE_HOME", "")
+	rulesPath := filepath.Join(realHome, "host-rules.md")
+	if err := os.WriteFile(rulesPath, []byte("fixture host rules"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := execution.SigningKey(filepath.Join(realHome, "coordinator"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(realHome, "config.yaml")
+	cfgYAML := "identity:\n  person: fixture\nagents:\n  execution:\n    identity: " + sshTestSelector + "\n    rulesFile: " + rulesPath + "\n    workspaceRoot: " + filepath.Join(realHome, "workspaces") + "\n    repositories:\n      " + sshTestRepository + ": " + filepath.Join(realHome, "source") + "\n    harnesses:\n      agy:\n        executable: /usr/local/bin/agy\n        version: 1.4.7\n        configDir: " + filepath.Join(realHome, "agy-login") + "\n    coordinators:\n      " + sshTestCoordinator + ":\n        publicKey: " + execution.PublicKey(key) + "\n        callback:\n          ssh: guard-coordinator.example\n          executable: " + sshTestExecutable + "\n          config: " + sshTestConfig + "\n    maxBusy: 1\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prepApp := &app{cfgPath: cfgPath, hook: true}
+	if err := prepApp.load(); err != nil {
+		t.Fatal(err)
+	}
+	prepSrv, err := prepApp.hostRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepSrv.Prepare(prepSrv.Policy()); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(prepApp.cfg.StateDir, "execution", "agy-home"))
+	t.Setenv(execution.EnvHome, realHome)
+	guardApp := &app{cfgPath: cfgPath, hook: true}
+	if err := guardApp.load(); err != nil {
+		t.Fatalf("guard load under agy HOME override: %v", err)
+	}
+	guardSrv, err := guardApp.hostRuntime()
+	if err != nil {
+		t.Fatalf("guard hostRuntime under agy HOME override: %v", err)
+	}
+	if _, err := guardSrv.InstalledPolicy(); err != nil {
+		t.Fatalf("guard InstalledPolicy under agy HOME override: %v", err)
+	}
+	if out := executionGuardDecision(guardApp.executionHook(), harnessAgy, agyJournal, guardApp.executionProtected(guardSrv))(agyRaw); deniedAgy(out) {
+		t.Fatalf("agy guard under agy HOME override denied valid command: %s", out)
 	}
 }

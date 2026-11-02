@@ -35,6 +35,7 @@ const (
 	Protocol         = 1
 	EnvID            = "BEEKEEPER_EXECUTION_ID"
 	EnvCoordinator   = "BEEKEEPER_EXECUTION_COORDINATOR"
+	EnvHome          = "BEEKEEPER_EXECUTION_HOME"
 	MaxWire          = 1 << 20
 	MaxLog           = 256 << 10
 	Prepared         = "prepared"

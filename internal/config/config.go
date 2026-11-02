@@ -3131,8 +3131,15 @@ func (c *Config) Incomplete() []string {
 	return out
 }
 
+func userHomeDir() (string, error) {
+	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+		return filepath.Clean(h), nil
+	}
+	return os.UserHomeDir()
+}
+
 func (c *Config) defaults() error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return err
 	}

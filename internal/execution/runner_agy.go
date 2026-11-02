@@ -39,15 +39,27 @@ func agyArgs(model, thread string) []string {
 
 func agyStreamMessage(text string) string {
 	b, _ := json.Marshal(struct {
-		Type    string `json:"type"`
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{Type: "m" + "essage", Role: userMessageType, Content: text})
+		Event   string `json:"event"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}{
+		Event: userMessageType,
+		Message: struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}{Role: userMessageType, Content: text},
+	})
 	return string(b) + "\n"
 }
 
+func (s *Server) agyMCPHomeDir(ref Ref) string {
+	return filepath.Join(s.Root, string(ref.Execution)+"-agy-home")
+}
+
 func (s *Server) prepareAgyMCPHome(ref Ref, j Journal) (string, error) {
-	home := filepath.Join(s.Root, string(ref.Execution)+"-agy-home")
+	home := s.agyMCPHomeDir(ref)
 	cfgDir := filepath.Join(home, ".gemini", "config")
 	if err := ownedDirectory(home); err != nil {
 		return "", err

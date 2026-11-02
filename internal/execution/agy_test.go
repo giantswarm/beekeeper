@@ -24,6 +24,8 @@ if [ "$1" = models ]; then
   echo "gemini-3.1-pro-high"; exit 0
 fi
 test -n "${HOME}"
+test -n "${BEEKEEPER_EXECUTION_HOME}"
+test "${HOME}" != "${BEEKEEPER_EXECUTION_HOME}"
 test -z "${GEMINI_API_KEY+x}"
 test -z "${GOOGLE_API_KEY+x}"
 test -z "${CODEX_HOME+x}"
@@ -31,6 +33,10 @@ test -z "${CLAUDE_CONFIG_DIR+x}"
 test -n "${BEEKEEPER_EXECUTION_ID}"
 test -n "${BEEKEEPER_CONFIG}"
 IFS= read -r input
+case "$input" in
+  '{"event":"user","message":{"role":"user","content":'*) ;;
+  *) echo '{"event":"result","result":{"status":"ERROR","error":"stream input message is missing the \"event\" field"}}'; exit 1 ;;
+esac
 printf '%s|%s|%s\n' "$HOME" "$*" "$input" >> "$calls"
 if [ -e "$(dirname "$0")/no-thread" ]; then echo '{"event":"error"}'; exit 1; fi
 thread="019a0000-0000-7000-8000-000000000001"
@@ -370,5 +376,14 @@ func TestAgyRunnerCoordinatorMCP(t *testing.T) {
 	sharedMCP, err := os.ReadFile(filepath.Join(f.s.agyConfigDir(), "mcp_config.json")) //nolint:gosec // test-owned managed home
 	if err != nil || strings.TrimSpace(string(sharedMCP)) != `{"mcpServers":{}}` {
 		t.Fatalf("shared agy policy home was mutated: %s %v", sharedMCP, err)
+	}
+	f.launcher.mu.Lock()
+	f.launcher.states[UnitName(f.r.Ref)] = unitInactive
+	f.launcher.mu.Unlock()
+	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: "stop-mcp", Reason: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(filepath.Dir(filepath.Dir(mcpFile)))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("per-execution MCP home was not cleaned on stop: %v", err)
 	}
 }
