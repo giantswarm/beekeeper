@@ -938,7 +938,7 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 		t.Errorf("walked %v, want %v", picks, want)
 	}
 	cands := fresh()
-	refs, err := skipRefs([]string{"https://github.com/O/R/issues/1", " o/r#3"})
+	refs, err := skipRefs([]string{"https://github.com/O/R/issues/1", " " + all[2].Ref})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +958,7 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 	if want := "  next candidate: board next --skip O/R#1,o/r#3,o/r#5\n"; !strings.Contains(out.String(), want) {
 		t.Errorf("output lacks %q:\n%s", want, out.String())
 	}
-	if _, err := skipRefs([]string{"o/r"}); err == nil {
+	if _, err := skipRefs([]string{scratchRepo}); err == nil {
 		t.Error("--skip o/r names no issue, accepted")
 	}
 }
