@@ -347,9 +347,9 @@ type Park struct {
 	// Worktree is the local git worktree root the caller parked from.
 	Worktree string    `json:"worktree,omitempty"`
 	By       Party     `json:"by"`
-	At        time.Time `json:"at"`
-	On        string    `json:"on,omitempty"`
-	Waits     string    `json:"waits"`
+	At       time.Time `json:"at"`
+	On       string    `json:"on,omitempty"`
+	Waits    string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`

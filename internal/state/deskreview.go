@@ -92,4 +92,3 @@ func (st *State) UpsertReviewPark(rp ReviewPark) {
 	}
 	st.ReviewParks = append(st.ReviewParks, rp)
 }
-

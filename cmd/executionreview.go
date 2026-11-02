@@ -124,13 +124,11 @@ func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUs
 			return s.Execution != nil && s.Execution.Request.Repository == use.Repository && sameReviewSession(round.Worker, s.Party)
 		})
 	}
-	headOK := round != nil && (round.Head == use.Head || use.ID == "" && round.Result != nil)
-	if round == nil || !headOK || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
+	if round == nil || round.Head != use.Head || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
 		return refused("no assigned independent review round for this execution and head")
 	}
 	result := round.Result
-	verdictOK := result != nil && (result.Verdict == superloop.Approved || use.ID == "" && round.Head != use.Head && result.Verdict == superloop.ChangesRequested)
-	if result == nil || !sameReviewSession(result.By, round.Reviewer) || !verdictOK {
+	if result == nil || !sameReviewSession(result.By, round.Reviewer) || result.Verdict != superloop.Approved {
 		return refused("assigned independent reviewer has not approved this head")
 	}
 	currentIndex := slices.IndexFunc(pull.Reviews, func(review superloop.Review) bool { return review.ID == result.ID })
@@ -138,7 +136,7 @@ func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUs
 		return refused("authenticated independent review no longer exists")
 	}
 	current := pull.Reviews[currentIndex]
-	if current.Author != result.Author || current.Head != round.Head || current.Commit != round.Head || current.Verdict != result.Verdict || execution.Digest([]byte(current.Body)) != result.BodyDigest {
+	if current.Author != result.Author || current.Head != use.Head || current.Commit != use.Head || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
 		return refused("authenticated independent review changed; new supervisor approval required")
 	}
 	// The loop's own merge presents no grant: it is the merge authority, so

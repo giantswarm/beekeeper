@@ -377,7 +377,7 @@ func TestExecutionReviewCompletionVerdictAndRetryAreAuthenticated(t *testing.T) 
 	}
 }
 
-func TestExecutionMergeCoordinatorSucceedsAfterStoppedWorkerAndReviewFix(t *testing.T) {
+func TestExecutionMergeCoordinatorNeedsTheFixHeadsApprovalAfterTheWorkerEnded(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	rejected := superloop.Review{ID: "r1-changes", Verdict: superloop.ChangesRequested}
 	completeMergeReview(t, a, use, &rejected)
@@ -413,11 +413,23 @@ func TestExecutionMergeCoordinatorSucceedsAfterStoppedWorkerAndReviewFix(t *test
 	if err := a.executionMergeLive(context.Background(), st, workerUse); err == nil {
 		t.Fatal("worker grant admitted without an approved round on the fix head")
 	}
-	// The coordinator loop (use.ID == "") merges the fix head after an authenticated ChangesRequested round.
+	// The coordinator loop (use.ID == "") never merges the fix head on the earlier ChangesRequested round.
 	coordUse := use
 	coordUse.ID = ""
 	coordUse.Head = fixedHead
+	if err := a.executionMergeLive(context.Background(), st, coordUse); err == nil {
+		t.Fatal("coordinator merge admitted the unreviewed fix head on an earlier ChangesRequested round")
+	}
+	// The fix head's own round, assigned to the ended worker's execution and
+	// approved, lets the coordinator merge with no worker left on the roster.
+	assignMergeReview(t, a, coordUse, 2)
+	approved := superloop.Review{ID: "r2-approved", Verdict: superloop.Approved}
+	completeMergeReview(t, a, coordUse, &approved)
+	pull.Reviews = []superloop.Review{rejected, approved}
+	if st, err = a.store.Read(); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.executionMergeLive(context.Background(), st, coordUse); err != nil {
-		t.Fatalf("coordinator merge after ChangesRequested fix round and stopped worker failed: %v", err)
+		t.Fatalf("coordinator merge of the approved fix head after the worker ended failed: %v", err)
 	}
 }

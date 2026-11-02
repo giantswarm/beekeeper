@@ -275,7 +275,7 @@ func (r *loopRig) park(t *testing.T, on string, at time.Time) {
 			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopWorker}, Task: "fix " + loopURL})
 			i = len(st.Agents) - 1
 		}
-		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: "desk review", ReviewHead: loopHead}
+		st.Agents[i].Park = &state.Park{On: on, At: at, Waits: deskReviewWait, ReviewHead: loopHead}
 		return nil, nil
 	})
 	if err != nil {
