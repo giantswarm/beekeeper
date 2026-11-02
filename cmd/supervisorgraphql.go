@@ -16,6 +16,7 @@ import (
 
 const loopGraphQLFile = "loop-graphql.json"
 const loopGraphQLLimit = 1500
+const loopPullStep = "pull"
 
 // The loop-owned watch samples the budget at most every 30 seconds. Keep
 // 300 points outside the work allowance for two identities' probes and boundaries.

@@ -132,7 +132,7 @@ func TestLoopAllowanceHoldReleasesWhenLiveBudgetAboveFloor(t *testing.T) {
 		}
 		return github.LowestBudget(profiles, r.a.now), nil
 	}
-	for _, step := range []string{"pull", "park-refs", loopBoard} {
+	for _, step := range []string{loopPullStep, "park-refs", loopBoard} {
 		ran := false
 		if err := r.a.loopGitHub(context.Background(), step, func() error {
 			ran = true
@@ -266,12 +266,12 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 		t.Fatalf("allowance hold was not released to live reset %s: %+v", liveReset, spend)
 	}
 	r.answer = func(args []string) (string, int) {
-		if len(args) >= 2 && args[0] == loopBoard && args[1] == "move" {
+		if slices.Contains(args, loopBoard) {
 			return "Error: loop GitHub allowance held until 2026-11-02T22:30:00Z: later", 1
 		}
 		return "", 0
 	}
-	if _, err := l.run(context.Background(), loopBoard, "move", "o/r#9", "backlog", "--intake"); !errors.Is(err, errLoopLater) {
+	if _, err := l.run(context.Background(), loopBoard, "o/r#9", "backlog", "--intake"); !errors.Is(err, errLoopLater) {
 		t.Fatalf("held child board command did not map to errLoopLater: %v", err)
 	}
 }
