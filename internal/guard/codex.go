@@ -1090,6 +1090,14 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 		}
 		isMeta = isMeta && !findReads(args)
 	}
+	// A command-line helper can concatenate or join its path arguments.
+	if !isMeta && !isBeekeeperTextSubcommand(name, args) && len(args) > 1 {
+		for _, joined := range []string{strings.Join(args, ""), strings.Join(args, "/")} {
+			if isGuardedCodexHomePath(joined, dir) || containsGuardedCodexHomeRef(joined) {
+				return codexHomeRefusalMsg, ""
+			}
+		}
+	}
 	// A function defined on the command line has an unchecked body: what it
 	// is handed may be written, so a guarded Codex home path is refused.
 	if helper && !isSymbolic && lnArgs == nil {

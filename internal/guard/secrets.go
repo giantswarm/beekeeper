@@ -271,12 +271,10 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 	// dirs: where a relative path may point, the working directory and
 	// every directory the command line changes to.
 	dirs := []string{g.cwd}
-	for _, m := range cdArg.FindAllStringSubmatch(sc.plain, -1) {
-		d := wordPath(strings.Trim(m[1], `'"`), g.cwd)
-		if d == "" {
-			d = within(g.cwd, m[1])
+	for _, st := range walkSegments(sc, g.cwd, false) {
+		if st.dir != "" && !slices.Contains(dirs, st.dir) {
+			dirs = append(dirs, st.dir)
 		}
-		dirs = append(dirs, d)
 	}
 	vars := scanVars(sc, segs)
 	metadata, funcs := metadataFunctions(cmd), functionBodies(cmd)
