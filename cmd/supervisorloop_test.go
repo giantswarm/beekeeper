@@ -503,6 +503,14 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	if start := r.called(agentsName, agentStartName); start == nil {
 		t.Fatalf("no review of a head with its own change: %v\n%s", r.calls, r.out)
 	}
+	// A repository in merge.admin gets --admin --match-head-commit in its go.
+	r.a.cfg.Merge.Admin = []string{"O/R"}
+	r.verdict("R2", own, superloop.Approved, "")
+	r.pass(t)
+	wake = r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], "`gh pr merge 7 --repo o/r --squash --admin --match-head-commit "+own+"`") {
+		t.Fatalf("no admin merge go: %v\n%s", r.calls, r.out)
+	}
 }
 
 // A head that only merges main into the head a review asked changes on is

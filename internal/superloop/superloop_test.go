@@ -204,8 +204,25 @@ func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
 	}
 	in.DevctlOwners = []string{"giantswarm"}
 	a = only(t, Plan(in), KindGo)
-	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") {
+	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") || strings.Contains(a.Message, "--admin") {
 		t.Errorf("a gh repository's go = %q", a.Message)
+	}
+	in.Admin = []string{"O/R"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --admin --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") {
+		t.Errorf("an admin repository's go = %q", a.Message)
+	}
+	// A repository in merge.admin takes gh pr merge --admin even when its
+	// owner is in merge.devctlOwners; another repository never gets --admin.
+	in.DevctlOwners = []string{"O"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`gh pr merge 7 --repo o/r --squash --admin --match-head-commit "+head1+"`") || strings.Contains(a.Message, "devctl") {
+		t.Errorf("an admin repository under devctlOwners go = %q", a.Message)
+	}
+	in.Admin = []string{"o/other"}
+	a = only(t, Plan(in), KindGo)
+	if !strings.Contains(a.Message, "`devctl pr merge o/r 7 --update-branch`") || strings.Contains(a.Message, "--admin") {
+		t.Errorf("a non-admin repository under devctlOwners go = %q", a.Message)
 	}
 }
 

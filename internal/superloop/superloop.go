@@ -258,6 +258,10 @@ type Input struct {
 	// the gate's devctl pr merge --update-branch, on any other gh pr merge
 	// --match-head-commit.
 	DevctlOwners []string
+	// Admin is merge.admin: the repositories (owner/repo) whose go names
+	// gh pr merge --admin --match-head-commit to merge past their branch
+	// ruleset after the approved review.
+	Admin []string
 	// BaseMerged reports whether p's head only brings its base into
 	// approved, an earlier head the loop's go covers: it merges the base,
 	// resolving the merge's conflicts or not, or rebases onto it
@@ -320,9 +324,16 @@ func (in Input) baseMerged(p Pull, approved string) bool {
 	return in.BaseMerged != nil && approved != "" && !sameHead(approved, p.Head) && in.BaseMerged(p, approved)
 }
 
-// gated reports whether the gate's devctl pr merge serves repo.
+// gated reports whether the gate's devctl pr merge serves repo. A
+// repository in Admin merges with gh pr merge --admin instead.
 func (in Input) gated(repo string) bool {
-	return slices.ContainsFunc(in.DevctlOwners, func(o string) bool { return strings.EqualFold(o, ownerOf(repo)) })
+	return !in.admin(repo) && slices.ContainsFunc(in.DevctlOwners, func(o string) bool { return strings.EqualFold(o, ownerOf(repo)) })
+}
+
+// admin reports whether repo merges with gh pr merge --admin after the
+// approved review.
+func (in Input) admin(repo string) bool {
+	return slices.ContainsFunc(in.Admin, func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
 // ownerOf is owner/repo's owner.
@@ -1272,7 +1283,8 @@ func EventAgent(verb, detail, by string) string {
 // goAction is the merge go for base's head, naming the merge command of
 // its repository's path: the gate's devctl pr merge --update-branch where
 // devctl serves it, whose base update the go covers, else gh pr merge
-// --match-head-commit.
+// --match-head-commit (--admin included where merge.admin lists the
+// repository).
 func goAction(in Input, base Action, why string) Action {
 	a := base
 	a.Key, a.Kind = goKey(base.Ref, base.Head), KindGo
@@ -1282,7 +1294,11 @@ func goAction(in Input, base Action, why string) Action {
 			base.URL, base.Head, why, repo, n, short(base.Head))
 		return a
 	}
-	a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now with `gh pr merge %s --repo %s --squash --match-head-commit %s`, then report.", base.URL, base.Head, why, n, repo, base.Head)
+	admin := ""
+	if in.admin(repo) {
+		admin = " --admin"
+	}
+	a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now with `gh pr merge %s --repo %s --squash%s --match-head-commit %s`, then report.", base.URL, base.Head, why, n, repo, admin, base.Head)
 	return a
 }
 

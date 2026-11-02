@@ -384,7 +384,8 @@ its key first in the detail):
             command of the repository's path: the gate's devctl pr merge
             <repo> <n> --update-branch on a repository of
             merge.devctlOwners, whose base update the go covers, else gh
-            pr merge --match-head-commit <head>. An approval covers a head
+            pr merge --match-head-commit <head> (--admin --match-head-commit
+            <head> where merge.admin lists the repository). An approval covers a head
             that only brings the base into the approved one: the approved
             head is its ancestor, every commit it adds is a merge, and its
             change against its merge base with the base branch is the
@@ -813,8 +814,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now, PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
-		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
-		Open: func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
+		DevctlOwners: a.cfg.Merge.DevctlOwners, Admin: a.cfg.Merge.Admin,
+		BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
+		Open:       func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
