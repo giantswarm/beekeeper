@@ -380,9 +380,36 @@ func testFile(path string) bool {
 	return strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, "testdata/") || strings.Contains(path, "/testdata/")
 }
 
-// named reports whether text names path, by its path or its base name.
+// named reports whether text names path, by its path or its base name,
+// each as a whole token (token): loop.go is not named by a finding on
+// cmd/supervisorloop.go. A base name stands for the file in any directory.
 func named(text, path string) bool {
-	return strings.Contains(text, path) || strings.Contains(text, path[strings.LastIndex(path, "/")+1:])
+	return token(text, path) || token(text, path[strings.LastIndex(path, "/")+1:])
+}
+
+// token reports whether s occurs in text as a whole token: no path or
+// identifier character right before it, and none right after it but a
+// sentence's closing dot.
+func token(text, s string) bool {
+	for i := 0; s != ""; {
+		j := strings.Index(text[i:], s)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(s)
+		before := start == 0 || !pathChar(text[start-1])
+		after := end == len(text) || !pathChar(text[end]) || text[end] == '.' && (end+1 == len(text) || !pathChar(text[end+1]))
+		if before && after {
+			return true
+		}
+		i = start + 1
+	}
+	return false
+}
+
+// pathChar reports whether c can be part of a file path or an identifier.
+func pathChar(c byte) bool {
+	return c == '/' || c == '.' || c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // gated reports whether the gate's devctl pr merge serves repo. A

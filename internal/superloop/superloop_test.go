@@ -1271,10 +1271,28 @@ func TestFixesOnlyNamesFilesByPathOrBaseName(t *testing.T) {
 		{"cmd/park_test.go", true},
 		{"testdata/a.json", true},
 		{"cmd/board.go", false},
+		// A base name inside another file's name is no finding's file.
+		{"internal/loop/loop.go", false},
+		{"internal/config/config.go", false},
+		{"cmd/supervisorloop.go", true},
+		{"cmd/x/park.go", false},
 	} {
 		in := Input{ChangedPast: func(Pull, string) ([]string, error) { return []string{c.file}, nil }}
-		if got, why := in.fixesOnly(Pull{Head: head2}, head1, []string{"- agentpark.go:12 drops the wait"}); got != c.want {
+		findings := []string{"- agentpark.go:12 drops the wait", "- cmd/supervisorloop.go:2345: the wake is lost", "see supervisorconfig.go and agentpark.golden."}
+		if got, why := in.fixesOnly(Pull{Head: head2}, head1, findings); got != c.want {
 			t.Errorf("%s: fixesOnly = %v (%s), want %v", c.file, got, why, c.want)
 		}
+	}
+}
+
+// A finding on cmd/supervisorloop.go names neither internal/loop/loop.go
+// nor internal/config/config.go.
+func TestFixesOnlyRefusesSuffixCollisions(t *testing.T) {
+	in := Input{ChangedPast: func(Pull, string) ([]string, error) {
+		return []string{"cmd/supervisorloop.go", "internal/loop/loop.go", "internal/config/config.go"}, nil
+	}}
+	ok, why := in.fixesOnly(Pull{Head: head2}, head1, []string{"- cmd/supervisorloop.go:2345: the wake is lost"})
+	if ok || !strings.Contains(why, "internal/loop/loop.go, internal/config/config.go") {
+		t.Errorf("fixesOnly = %v, %q", ok, why)
 	}
 }

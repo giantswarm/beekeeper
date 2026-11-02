@@ -1236,7 +1236,15 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
-	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
+	case superloop.KindClassify:
+		// An unclassified park's wake claims the agent's name; a note for
+		// the guide claims its question.
+		if c.target == act.Agent {
+			done = logged("agents.wake", opens)
+		} else {
+			done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
+		}
+	case superloop.KindEscalate, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	case superloop.KindIntake:
 		for _, e := range evs {

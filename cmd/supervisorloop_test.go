@@ -1454,6 +1454,68 @@ func TestLoopDoesNotRepeatAnActionWhoseRecordWasLost(t *testing.T) {
 	}
 }
 
+// unclassifiedPark parks the rig's worker on nothing and logs the park the
+// loop cannot place.
+func (r *loopRig) unclassifiedPark(t *testing.T) {
+	t.Helper()
+	r.park(t, "", time.Now().Add(-time.Minute))
+	r.pull.State = superloop.Merged
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, parkEvent, "%s: parked: live proof, waiting", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An unclassified park's wake whose record was lost is settled by its own
+// agents.wake line: the worker is not woken twice.
+func TestLoopDoesNotRepeatAnUnclassifiedParksWake(t *testing.T) {
+	r := newLoopRig(t)
+	r.unclassifiedPark(t)
+	r.failRecord = func(e state.Event) bool { return e.Verb == "supervisor.classify" }
+	if err := r.passErr(); err == nil {
+		t.Fatal("the lost record was not an error")
+	}
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("no wake: %v", r.calls)
+	}
+	r.failRecord = func(state.Event) bool { return false }
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName); c != nil {
+		t.Errorf("the wake was sent again after the restart: %v", c)
+	}
+	if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
+		t.Errorf("the wake logged as %+v", evs)
+	}
+}
+
+// A claimed wake that never ran is taken after the restart, whatever note
+// the loop filed about the worker meanwhile.
+func TestLoopWakesForAnUnclassifiedParkWhoseClaimedWakeNeverRan(t *testing.T) {
+	r := newLoopRig(t)
+	answer := r.answer
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentWakeName {
+			return "wake failed", 1
+		}
+		return answer(args)
+	}
+	r.unclassifiedPark(t)
+	_ = r.passErr()
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("no wake tried: %v", r.calls)
+	}
+	if err := r.a.store.Record(event(loopParty, "note.add", "#5 for %s: %s escalated on %s", loopPerson, loopWorker, loopURL)); err != nil {
+		t.Fatal(err)
+	}
+	r.answer = answer
+	r.pass(t)
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("the claimed wake was read as taken: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || strings.Contains(evs[0].Detail, "before an interruption") {
+		t.Errorf("the wake logged as %+v", evs)
+	}
+}
+
 // A claim whose command left no line is taken after the restart.
 func TestLoopTakesAClaimedActionItNeverRan(t *testing.T) {
 	r := newLoopRig(t)
