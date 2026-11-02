@@ -33,10 +33,14 @@ func (h Hook) runnerRefusal(cmd string, bg bool) string {
 const ownedWhat = "a devctl pr merge, release promote, pr wait, release wait or rollout wait"
 
 // runnerMerges returns the offsets of the blocking devctl commands in cmd
-// that a runner runs from its arguments or a backquote substitution runs,
-// with no gate before them, and how the first runs. A mention in a text
-// command's argument (gh, git commit, echo, grep) or in a here-document is no
-// run; a shell's -c string is hiddenMerges'.
+// that the gate rewrite left ungated, and how the first runs. It fails
+// closed: an unquoted one the rewrite did not gate is at no command position
+// it knows, so whatever command it is an argument of (a runner, a wrapper,
+// a multi-call binary) may run it. A quoted one runs when a runner runs its
+// quoted argument (parallel 'devctl …', ssh host 'devctl …'). A mention in a
+// text command's argument (gh, git commit, echo, grep), in a here-document or
+// in a variable's value is no run; a shell's -c string and its arguments are
+// hiddenMerges', an assignment heldMerges'.
 func runnerMerges(cmd string) (how string, at []int) {
 	sc := scanShell(cmd)
 	segs := sc.segments()
@@ -44,18 +48,30 @@ func runnerMerges(cmd string) (how string, at []int) {
 		if gated.MatchString(cmd[:m[0]]) || inHeredoc(sc, m[0]) {
 			continue
 		}
-		if sc.masked[m[0]] == cmd[m[0]] && inBackquotes(cmd[:m[0]]) {
+		bare := sc.masked[m[0]] == cmd[m[0]]
+		if bare && inBackquotes(cmd[:m[0]]) {
 			if how == "" {
 				how = "a backquote substitution runs " + ownedWhat
 			}
 			at = append(at, m[0])
 			continue
 		}
+		if _, ok := assignedValue(sc, segs, m[0]); ok {
+			continue
+		}
 		for i, sg := range segs {
 			if m[0] < sg.start || m[0] >= sg.end {
 				continue
 			}
-			if r := runnerBefore(sc.masked[sg.start:m[0]]); r != "" && !textStage(sc, segs, i) {
+			before := cmd[sg.start:m[0]]
+			if textStage(sc, segs, i) || shellCArg.MatchString(before) {
+				break
+			}
+			r := runnerBefore(sc.masked[sg.start:m[0]])
+			if r == "" && bare {
+				r = "`" + firstWord(before) + "`"
+			}
+			if r != "" {
 				if how == "" {
 					how = r + " runs " + ownedWhat + " from its arguments"
 				}
@@ -65,6 +81,14 @@ func runnerMerges(cmd string) (how string, at []int) {
 		}
 	}
 	return how, at
+}
+
+// firstWord is the first word of a simple command's text, as written.
+func firstWord(s string) string {
+	if f := strings.Fields(s); len(f) > 0 {
+		return f[0]
+	}
+	return s
 }
 
 // inBackquotes reports whether before, the text up to a command, ends in an

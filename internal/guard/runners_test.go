@@ -37,6 +37,11 @@ func TestHookRefusesRunnerMerges(t *testing.T) {
 		{`sudo -E devctl pr merge o/r 7`, "sudo", `sudo -E ` + g + `devctl pr merge o/r 7`, false},
 		{`watch -n 60 devctl pr wait o/r 7`, "watch", `watch -n 60 ` + g + `devctl pr wait o/r 7`, false},
 		{`cd x && nice -n 5 xargs devctl rollout wait inst o/r --pr < prs`, xargsRunner, `cd x && nice -n 5 xargs ` + g + `devctl rollout wait inst o/r --pr < prs`, false},
+		// Unquoted, it fails closed whatever runs it: an unlisted wrapper, a quoted runner name, a multi-call binary.
+		{`busybox xargs devctl pr merge o/r < prs`, xargsRunner, `busybox xargs ` + g + `devctl pr merge o/r < prs`, false},
+		{`"xargs" -n1 devctl pr merge o/r < prs`, "`\"xargs\"`", `"xargs" -n1 ` + g + `devctl pr merge o/r < prs`, false},
+		{`time -v devctl pr merge o/r 7`, "`time`", `time -v ` + g + `devctl pr merge o/r 7`, false},
+		{`xargs echo devctl pr merge o/r < prs`, "`xargs`", `xargs echo ` + g + `devctl pr merge o/r < prs`, false},
 		// A backquote substitution is a command the gate rewrite does not reach either.
 		{"x=`devctl pr wait o/r 7`", backquoteRunner, "x=`" + g + "devctl pr wait o/r 7`", false},
 		{"echo \"done: ` devctl pr merge o/r 7`\"", backquoteRunner, "echo \"done: ` " + g + "devctl pr merge o/r 7`\"", false},
