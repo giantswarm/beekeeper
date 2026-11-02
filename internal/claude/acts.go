@@ -275,13 +275,14 @@ func (a *Acts) cli(id string, w []string, dir string) {
 	if len(args) > 1 {
 		sub, verb = args[0], args[1]
 	}
+	const ghIssue = "issue"
 	switch {
-	case tool == "gh" && (sub == "pr" || sub == "issue") && verb == "create":
+	case tool == "gh" && (sub == "pr" || sub == ghIssue) && verb == "create":
 		a.creates[id] = true
-		if sub == "issue" {
+		if sub == ghIssue {
 			a.createIssues[id] = true
 		}
-	case tool == "gh" && (sub == "pr" || sub == "issue") && verb != "list" && verb != "status":
+	case tool == "gh" && (sub == "pr" || sub == ghIssue) && verb != "list" && verb != "status":
 		nums = nums[:min(1, len(nums))]
 	case tool == devctlComm && sub == "pr", pr != "":
 	default:

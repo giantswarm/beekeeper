@@ -21,6 +21,7 @@ const (
 	crossEpic    = "org/engine#10"
 	crossChild   = "org/engine#11"
 	crossBacklog = "org/engine#2"
+	stepBacklog  = "Backlog"
 )
 
 // One project holds native issues from both owners. Its status and position
@@ -41,11 +42,11 @@ func crossOwnerSnapshot(t *testing.T, now time.Time) *board.Snapshot {
 		Order: []config.BoardStep{
 			{Name: stepInProgress, Status: []string{stepInProgress}, SubIssues: true},
 			{Name: stepUpNext, Status: []string{stepUpNext}},
-			{Name: "Backlog", Status: []string{"Backlog"}},
+			{Name: stepBacklog, Status: []string{stepBacklog}},
 		},
 		Gate: board.Gate{Kind: []string{kindEpic}, Planning: []string{stepUpNext}, Go: stepInProgress},
 		// Deliberately put Backlog before Up Next before In Progress.
-		Items:      []board.Item{item(crossBacklog, "Backlog"), item(crossHome, stepUpNext), item(crossForeign, stepUpNext), ep},
+		Items:      []board.Item{item(crossBacklog, stepBacklog), item(crossHome, stepUpNext), item(crossForeign, stepUpNext), ep},
 		Priorities: board.Priorities{{Ref: crossEpic, Rank: 2}, {Ref: crossHome, Rank: 1}},
 	}
 }
@@ -146,13 +147,14 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	// Place crossHome (priority 1) at the top of the board and crossBacklog
 	// (unranked) at the bottom, where an unranked backlog item sits.
 	snap.Items = []board.Item{snap.Items[1], snap.Items[2], snap.Items[3], snap.Items[0]}
+	const worker = "worker-1"
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{
-			Party: state.Party{Name: "worker-1", Session: "s-worker-1"},
+			Party: state.Party{Name: worker, Session: "s-worker-1"},
 			Task:  crossHome,
 		}}
 		st.Records = []state.Record{
-			{Session: state.Party{Name: "worker-1", Session: "s-worker-1"}, Issue: crossHome, At: r.a.now},
+			{Session: state.Party{Name: worker, Session: "s-worker-1"}, Issue: crossHome, At: r.a.now},
 			{Session: state.Party{Name: "worker-epic", Session: "s-epic"}, Issue: crossChild, At: r.a.now},
 		}
 		return nil, nil
@@ -165,8 +167,8 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	const filedURL = "https://github.com/org/engine/issues/88"
 	now := r.a.now.UTC()
 	if err := r.a.store.Record(
-		event(state.Party{Name: "worker-1"}, superloop.VerbDone, "worker-1 done: finished %s", crossHome),
-		event(state.Party{Name: "worker-1"}, superloop.VerbProblem, "worker-1: filed %s to unblock %s", filedURL, crossHome),
+		event(state.Party{Name: worker}, superloop.VerbDone, "%s done: finished %s", worker, crossHome),
+		event(state.Party{Name: worker}, superloop.VerbProblem, "%s: filed %s to unblock %s", worker, filedURL, crossHome),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +192,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 			// GitHub adds a new item at the very bottom of the board in Backlog
 			// (after crossBacklog).
 			snap.Items = append(snap.Items, board.Item{
-				Ref: filedRef, URL: filedURL, OnBoard: true, Status: "Backlog", Created: now, Updated: now,
+				Ref: filedRef, URL: filedURL, OnBoard: true, Status: stepBacklog, Created: now, Updated: now,
 			})
 			return "added org/engine#88 to the board personal/1, Team X: → Backlog\n", 0
 		case len(args) == 5 && args[0] == loopBoard && args[1] == "rank" && args[2] == filedRef && args[3] == "--after":
@@ -208,7 +210,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 				}
 			}
 			return "ranked org/engine#88 on the board personal/1: after " + anchor + "\n", 0
-		case args[0] == loopBoard && args[1] == "next":
+		case args[0] == loopBoard && slices.Contains(args, "next"):
 			st, err := r.a.store.Read()
 			if err != nil {
 				t.Fatal(err)
@@ -218,7 +220,9 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 			// crossBacklog at the bottom), board next offers org/engine#88 first!
 			sc := pickScope{
 				listed: r.a.now,
-				alive:  func(p state.Party) bool { return p.Session == "s-epic" || p.Session == "s-home" || p.Session == "s-foreign" },
+				alive: func(p state.Party) bool {
+					return p.Session == "s-epic" || p.Session == "s-home" || p.Session == "s-foreign"
+				},
 			}
 			st.Records = append(st.Records,
 				state.Record{Session: state.Party{Name: "worker-home", Session: "s-home"}, Issue: crossHome, At: r.a.now},
