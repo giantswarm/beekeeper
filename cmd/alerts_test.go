@@ -200,24 +200,28 @@ func TestSnapshotLinesWithoutContext(t *testing.T) {
 // Namespace groups must stay distinct, and JSON must retain labels that the
 // text's grouping columns do not name.
 func TestAlertSnapshotLabels(t *testing.T) {
-	const ignored = "Heartbeat"
-	labels := map[string]string{labelAlertname: "ManagementClusterJobFailed", "namespace": "snapshot-a", labelSeverity: "notify", labelTeam: "snapshot-team", "route": "jobs", "job_name": "failed-job"}
+	const (
+		ignored    = "Heartbeat"
+		namespaceA = "snapshot-a"
+		namespaceB = "snapshot-b"
+	)
+	labels := map[string]string{labelAlertname: "ManagementClusterJobFailed", "namespace": namespaceA, labelSeverity: "notify", labelTeam: "snapshot-team", "route": "jobs", "job_name": "failed-job"}
 	other := map[string]string{}
 	for k, v := range labels {
 		other[k] = v
 	}
-	other["namespace"] = "snapshot-b"
+	other["namespace"] = namespaceB
 	hidden := alerts.Raw{Fingerprint: "hidden", Labels: map[string]string{labelAlertname: ignored}}
 	silenced := alerts.Raw{Fingerprint: "silenced", Labels: labels}
 	silenced.Status.SilencedBy = []string{"silence"}
 	targets := []alerts.Target{{Name: lab}, {Name: "unreachable"}, {Name: "no-context"}}
 	answers := []alerts.Answer{
-		{OK: true, Alerts: []alerts.Raw{{Fingerprint: "snapshot-a", Labels: labels}, {Fingerprint: "snapshot-b", Labels: other}, hidden, silenced}},
+		{OK: true, Alerts: []alerts.Raw{{Fingerprint: namespaceA, Labels: labels}, {Fingerprint: namespaceB, Labels: other}, hidden, silenced}},
 		{Why: "read failed"}, {NoContext: true, Why: "context missing"},
 	}
 	result := makeAlertSnapshot(alerts.Rules{Ignore: []string{ignored}}, targets, answers, time.Now())
 	text := strings.Join(result.Lines, "\n")
-	for _, ns := range []string{"snapshot-a", "snapshot-b"} {
+	for _, ns := range []string{namespaceA, namespaceB} {
 		if !strings.Contains(text, "namespace="+ns) {
 			t.Errorf("missing namespace %s: %s", ns, text)
 		}
