@@ -1058,10 +1058,12 @@ ignored ("up next", "progress"); anything else is refused with the board's
 values, before anything is written, as is an issue that does not exist.
 
 Moving an epic to In Progress (board.epics' go) is the go: when a plan
-pull request names it, the go is recorded as an agent-written comment on
-the epic's private thread naming the plan and its head commit, the plan
-implemented at that head: the epic itself in a private repository, else
-the plan pull request in a private one. An epic of a public repository
+pull request names it, the open one, else a merged one, the go is recorded
+as an agent-written comment on the epic's private thread naming the plan
+and its head commit, a merged plan's merge commit, the plan implemented at
+that head. The private thread is the epic itself in a private repository,
+else the plan pull request in a private one. With neither an open nor a
+merged plan naming the epic, the move records no go and says so. An epic of a public repository
 whose plan is public too has no private thread: the move is refused before
 anything is written. Exit 3 when refused.`,
 		Args: cobra.ExactArgs(2),
@@ -1118,7 +1120,7 @@ anything is written. Exit 3 when refused.`,
 			}
 			if g := mv.Go; err == nil && g != nil {
 				if g.Plan == nil {
-					_, err = fmt.Fprintf(a.out, "the go of %s: no plan pull request names it, no plan head recorded\n", mv.Ref)
+					_, err = fmt.Fprintf(a.out, "the go of %s: neither an open nor a merged plan pull request names it, no go recorded\n", mv.Ref)
 				} else {
 					_, err = fmt.Fprintf(a.out, "the go of %s: plan %s (%s) at %s, recorded on %s: %s\n", mv.Ref, g.Plan.URL, g.Plan.State, g.Plan.Head, g.Thread, g.Comment)
 				}
