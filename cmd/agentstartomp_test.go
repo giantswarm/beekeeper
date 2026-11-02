@@ -182,17 +182,17 @@ func TestOmpStartNeedsVault(t *testing.T) {
 	a := vaultApp(t, 20*time.Millisecond)
 	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
 	a.cfg.Capacity = config.Capacity{
-		Floor:   1,
 		Ceiling: 2,
 		Providers: map[string]config.Provider{
-			claudeComm:  {Floor: 1, Ceiling: 1},
-			omp.Harness: {Floor: 1, Ceiling: 1},
+			claudeComm:  {Ceiling: 1},
+			omp.Harness: {Kind: config.KindSelfHosted, Ceiling: 1},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: testModelOpus47},
 			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
 		},
 	}
+	stubSubscriptionUsage(a)
 	for _, tc := range []struct {
 		args []string
 		want bool
@@ -313,15 +313,13 @@ omp:
     spark:
       apiKey: ` + sparkRef + `
 capacity:
-  floor: 1
   ceiling: 2
   providers:
     spark:
-      floor: 1
       ceiling: 1
       command: ["sh", "-c", "touch ` + marker + ` && echo '{\"fiveHour\":{\"usedPercent\":10,\"resetsAt\":\"2099-01-01T00:00:00Z\"}}'"]
       fiveHour:
-        - {upTo: 90, floor: 1, ceiling: 1}
+        - {upTo: 90, ceiling: 1}
   choices:
     - {harness: omp, model: ` + sparkModel + `, provider: spark}
 `
@@ -353,11 +351,10 @@ capacity:
 	}
 	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
 	a.cfg.Capacity = config.Capacity{
-		Floor:   1,
 		Ceiling: 2,
 		Providers: map[string]config.Provider{
-			claudeComm:  {Floor: 1, Ceiling: 1},
-			omp.Harness: {Floor: 1, Ceiling: 1},
+			claudeComm:  {Ceiling: 1},
+			omp.Harness: {Ceiling: 1},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: testModelOpus47},
@@ -386,19 +383,17 @@ func TestAutoStartNeedsVaultZeroNowPace(t *testing.T) {
 	}
 	a.cfg.Omp = config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{sparkProvider: {APIKey: sparkRef}}}
 	a.cfg.Capacity = config.Capacity{
-		Floor:   1,
 		Ceiling: 2,
 		Providers: map[string]config.Provider{
 			claudeComm: {
-				Floor:   1,
 				Ceiling: 1,
 				Usage: config.Usage{
 					Command:  []string{"read-claude"},
-					FiveHour: []config.UsageBand{{UpTo: 90, Floor: 1, Ceiling: 1}},
-					SevenDay: []config.UsageBand{{UpTo: 90, Floor: 1, Ceiling: 1}},
+					FiveHour: []config.UsageBand{{UpTo: 90, Ceiling: 1}},
+					SevenDay: []config.UsageBand{{UpTo: 90, Ceiling: 1}},
 				},
 			},
-			omp.Harness: {Floor: 1, Ceiling: 1},
+			omp.Harness: {Ceiling: 1},
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: testModelOpus47},
@@ -485,7 +480,7 @@ func TestOmpQualifiedModelMatchesItsBareChoice(t *testing.T) {
 	const id, recorded, rackB = "flash-id", "vllm/flash-id", "rack-b"
 	k := config.Capacity{
 		Providers: map[string]config.Provider{
-			claudeComm: {Floor: 1, Ceiling: 1},
+			claudeComm: {Ceiling: 1},
 			"rack-a":   {Kind: config.KindSelfHosted, Ceiling: 2},
 			rackB:      {Kind: config.KindSelfHosted, Ceiling: 2},
 		},

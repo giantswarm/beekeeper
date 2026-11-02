@@ -31,7 +31,17 @@ var boardGH github.GH = github.RunGH
 
 // boardClient is the client of the configured board and plans repositories.
 func (a *app) boardClient() *board.Client {
-	return &board.Client{GH: boardGH, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+	gh := boardGH
+	if a.as == loopParty.Name {
+		gh = func(ctx context.Context, args ...string) (out []byte, err error) {
+			err = a.loopGitHub(ctx, "board", func() error {
+				out, err = boardGH(ctx, args...)
+				return err
+			})
+			return out, err
+		}
+	}
+	return &board.Client{GH: gh, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
 }
 
 func (a *app) boardCmd() *cobra.Command {
@@ -76,8 +86,14 @@ with its plan ("epic in planning (Up Next), plan <url> (draft): its
 sub-issues wait for the go") or without one (its planning session's), and
 never offered through its sub-issues; an issue whose nearest epic among its
 parents on the board is in planning is skipped as "sub-issue of epic
-<owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
-the go: from then its open sub-issues are offered, in their order. The
+<owner/repo#n>, in planning (Up Next)". An epic not yet scheduled for
+planning (in a status ahead of Up Next, Inbox or Backlog, or without a
+Status) has no plan and no go: it is skipped as "epic Backlog, not
+scheduled for planning: …", never offered through its sub-issues, and an
+issue whose nearest epic is one is skipped as "sub-issue of epic
+<owner/repo#n>, not scheduled for planning (Backlog)". Moving the epic to In
+Progress is the go: from then its open sub-issues are offered, in their
+order. The
 order is the steps' alone: their Status (board.order lists In Progress, then
 Up Next, then Backlog), and within a step the board's own order of its
 items. The person's priority list (beekeeper priority, the board's Priority
@@ -125,7 +141,7 @@ free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
 agent's task, a running session's work), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
-(the epic gate holds it), unknown (GitHub answered its board fields or an
+(the epic gate holds it: in planning or not scheduled for it), unknown (GitHub answered its board fields or an
 epic's sub-issues with an error), scope (outside the work scope) and order (a rule of board.order turns it
 away: an old Backlog item, one in Inbox, one without recorded blockers), and
 each epic in planning or past its go with its plan's URL, state and head,
@@ -624,7 +640,7 @@ func skipKind(reason string) string {
 		return kindLease
 	case strings.HasPrefix(reason, claimedPrefix):
 		return kindClaimed
-	case strings.Contains(reason, "in planning ("):
+	case strings.Contains(reason, "in planning ("), strings.Contains(reason, board.NotScheduled):
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
 		return kindUnknown
@@ -907,6 +923,15 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 			out[strings.ToLower(r.Issue)] = fmt.Sprintf("%s (busy, no CLI)", name(r.Session))
 		}
 	}
+	for _, rp := range st.ReviewParks {
+		who := fmt.Sprintf("%s (reviewing %s)", name(rp.Party), rp.On)
+		if rp.Serves != "" && out[strings.ToLower(rp.Serves)] == "" {
+			out[strings.ToLower(rp.Serves)] = who
+		}
+		if rp.On != "" && out[strings.ToLower(rp.On)] == "" {
+			out[strings.ToLower(rp.On)] = who
+		}
+	}
 	named := func(text, who string) {
 		for _, ref := range namedRefs(text, sc.owner) {
 			if _, ok := out[ref]; !ok {
@@ -1037,7 +1062,8 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 }
 
 func (a *app) boardMoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var intake bool
+	c := &cobra.Command{
 		Use:   "move <owner/repo#n|URL> <status>",
 		Short: "Set a board item's Status by its canonical name, adding the issue to the board when it is missing",
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
@@ -1045,6 +1071,9 @@ board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
 Status. Issues from any accessible repository are added to the configured
 board, regardless of the repository's owner, subject to GitHub permissions.
+With --intake, the issue is put in the given status only when it has no
+Status on the configured board yet and does not sit on another board where
+it is already being worked.
 Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
@@ -1067,7 +1096,11 @@ anything is written. Exit 3 when refused.`,
 			}
 			me, _ := a.caller()
 			cl := a.boardClient()
-			mv, err := cl.Move(cmd.Context(), args[0], args[1])
+			move := cl.Move
+			if intake {
+				move = cl.Intake
+			}
+			mv, err := move(cmd.Context(), args[0], args[1])
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
 			}
@@ -1089,6 +1122,7 @@ anything is written. Exit 3 when refused.`,
 				team = " on the board " + mv.Board
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
 			case mv.Added:
 				_ = a.store.Log(event(me, "board.move", "%s: added to the board%s, → %s", mv.Ref, team, mv.To))
 			case mv.From != mv.To:
@@ -1098,6 +1132,8 @@ anything is written. Exit 3 when refused.`,
 				return a.printJSON(mv)
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
+				_, err = fmt.Fprintf(a.out, "left %s in %s%s\n", mv.Ref, mv.From, team)
 			case mv.Added:
 				_, err = fmt.Fprintf(a.out, "added %s to the board %s/%d%s: → %s\n", mv.Ref, a.cfg.Board.Owner, a.cfg.Board.Project, team, mv.To)
 			case mv.From == mv.To:
@@ -1115,6 +1151,8 @@ anything is written. Exit 3 when refused.`,
 			return err
 		},
 	}
+	c.Flags().BoolVar(&intake, "intake", false, "put the issue in this intake status only when it has no Status yet and is not being worked on another board")
+	return c
 }
 
 func (a *app) boardRankCmd() *cobra.Command {

@@ -141,8 +141,8 @@ func TestTranscriptHarnessFormats(t *testing.T) {
 		{secretLinkCodex, map[string]any{hookEventKey: PreToolUseEvent, sessionKey: transcriptWorker, toolNameKey: "exec_command", toolInputKey: map[string]any{"cmd": "jq 'keys' " + p}}},
 		{secretLinkCodex, map[string]any{hookEventKey: PreToolUseEvent, sessionKey: transcriptWorker, toolNameKey: "write_stdin", toolInputKey: map[string]any{"chars": "cat " + p + "\n"}}},
 		{secretLinkCodex, map[string]any{hookEventKey: PreToolUseEvent, sessionKey: transcriptWorker, toolNameKey: "view_image", toolInputKey: map[string]any{pathKey: p}}},
-		{"agy", map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": "cat " + p}}}},
-		{"agy", map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "view_file", "args": map[string]any{transcriptAbsolutePath: p}}}},
+		{agyHarnessName, map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": "cat " + p}}}},
+		{agyHarnessName, map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "view_file", "args": map[string]any{transcriptAbsolutePath: p}}}},
 	}
 	for _, tc := range cases {
 		raw, err := json.Marshal(tc.payload)
@@ -287,5 +287,74 @@ func TestTranscriptManagedScope(t *testing.T) {
 	h.Transcripts.Managed = func(string) (bool, error) { return false, errors.New("unreadable starts") }
 	if d := transcriptDecision(t, h, transcriptOwner, readTool, p); d == nil || d.PermissionDecision != decisionDeny {
 		t.Fatal("unreadable starts passed")
+	}
+}
+
+func TestTranscriptWorktreePythonEdit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	cwd := filepath.Join(home, "projects", "worktree")
+	for _, command := range []string{
+		`python3 -c 'from pathlib import Path; p = Path("docs/guide.md"); p.write_text(p.read_text().replace("old", "new"))'`,
+		`python3 -c 'from pathlib import Path; p = Path("config.yaml"); p.write_text(p.read_text().replace(".claude", ".codex"))'`,
+		"python3 <<'PY'\nfrom pathlib import Path\np = Path('docs/guide.md')\np.write_text(p.read_text().replace('old', 'new'))\nPY",
+	} {
+		if d := decide(t, h, cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("worktree edit refused: %s: %+v", command, d)
+		}
+	}
+}
+
+func TestTranscriptConstructedPathReason(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	for _, command := range []string{
+		`python3 -c 'from pathlib import Path; print((Path.home()/".codex"/"sessions").rglob("*"))'`,
+		`python3 -c 'import os; print(open(os.path.join(os.environ["HOME"], ".claude", "history.jsonl")).read())'`,
+		`python3 -c 'from pathlib import Path; component = ".codex"; print((Path.home()/component/"history.jsonl").read_text())'`,
+	} {
+		d := decide(t, h, home, command, nil)
+		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot resolve") || strings.Contains(d.Reason, transcriptReasonName) {
+			t.Errorf("constructed path diagnostic: %s: %+v", command, d)
+		}
+	}
+	// A literal relative harness root must still be checked against the cwd.
+	if d := decide(t, h, home, `python3 -c 'from pathlib import Path; print(list(Path(".claude").rglob("*")))'`, nil); d == nil || d.PermissionDecision != decisionDeny {
+		t.Errorf("relative protected root passed: %+v", d)
+	}
+}
+
+func TestTranscriptReviewParenthesizedComponent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	for _, expression := range []string{
+		`Path.home() / (".codex") / "history.jsonl"`,
+		`Path.home() / (((".codex"))) / "history.jsonl"`,
+		`Path.home() / component / "history.jsonl"`,
+		`Path.home().joinpath(((".codex")), "history.jsonl")`,
+		`Path(f"{Path.home()}/{'.codex'}/history.jsonl")`,
+	} {
+		prefix := ""
+		if strings.Contains(expression, "component") {
+			prefix = `component = ".codex"; `
+		}
+		code := `from pathlib import Path; ` + prefix + `print((` + expression + `).read_text())`
+		command := "python3 -c '" + strings.ReplaceAll(code, "'", "'\\''") + "'"
+		if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("constructed protected path passed: %s: %+v", command, d)
+		}
+	}
+}
+
+func TestTranscriptReviewReplacementVariable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	command := `python3 -c 'from pathlib import Path; old = ".claude"; p = Path("config.yaml"); p.write_text(p.read_text().replace(old, "new"))'`
+	if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d != nil && d.PermissionDecision == decisionDeny {
+		t.Errorf("replacement variable refused: %+v", d)
 	}
 }

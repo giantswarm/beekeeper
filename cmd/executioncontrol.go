@@ -36,6 +36,7 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
+	PostMerge *string `json:"postMerge,omitempty"`
 	// Head is the HEAD of the execution's workspace when it parked. The
 	// coordinator checks it against the pull request itself (a host's own
 	// branch and GitHub view are no proof); ReviewHead is an older host's.
@@ -96,6 +97,18 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		return json.NewEncoder(output).Encode(reply)
 	}
 	reply.Ref, reply.RequestID = req.Ref, req.RequestID
+	if req.Operation == execution.MCPList || req.Operation == execution.MCPCall {
+		value, callErr := a.executionMCP(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		r, i := executionRecord(st, req.Ref)
 		if r == nil || req.Protocol != execution.Protocol || req.RequestID == "" || req.Ref.Validate() != nil || string(req.Ref.Host) != host || !execution.VerifyCallback(req, r.Request.ControlKey) {
@@ -164,7 +177,7 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
 			if publishErr != nil {
 				reply.Error = publishErr.Error()
-				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s", publication.Head))
+				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s: %s", publication.Head, publishErr))
 			} else {
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
@@ -349,8 +362,34 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
+			pm := ""
+			if v.PostMerge != nil {
+				pm = *v.PostMerge
+			}
+			if pm == "" && ag.Park != nil && ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
+				pm = *ag.Park.PostMerge
+			}
+			if pm == "" {
+				if rp, ok := st.ReviewParkFor(v.On); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
+					pm = *rp.PostMerge
+				}
+			}
+			v.PostMerge = &pm
+			if ag.Execution != nil {
+				if r, _ := executionRecord(st, *ag.Execution); r != nil {
+					r.Completed = true
+				}
+			}
+		} else {
+			v.PostMerge = nil
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead}
+		if v.On != "" {
+			if rp, ok := st.ReviewParkFor(v.On); ok {
+				inheritReviewParkOnAgent(st, ag, rp, a.now.UTC())
+			}
+			st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
+		}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)
@@ -448,7 +487,7 @@ func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head
 			}
 		}
 	}
-	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionBranch(r.Handle.Ref) || !strings.EqualFold(p.Head.Repo.FullName, r.Request.Repository) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
+	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, r.Request.Repository) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
 		return ""
 	}
 	return p.Head.SHA

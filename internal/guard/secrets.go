@@ -51,8 +51,9 @@ const (
 
 // A leak names the command that would expose secret values and the safe forms.
 type leak struct {
-	what, safe string
-	transcript bool
+	what, safe           string
+	transcript           bool
+	unresolvedTranscript bool
 	// at is the command of the line that exposes them.
 	at string
 	// never: no sink makes the command safe (sops, op, a hash of a secret file).
@@ -81,6 +82,9 @@ const secretOps = "Equality, the one comparison an agent runs: `beekeeper secret
 	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."
 
 func (l leak) reason() string {
+	if l.unresolvedTranscript {
+		return transcriptUnresolved
+	}
 	if l.transcript {
 		return transcriptRefusal
 	}
@@ -173,6 +177,10 @@ var kubectlValue = map[string]bool{
 	"-l": true, "--selector": true, "-o": true, flagOutput: true, "--field-selector": true, flagTemplate: true,
 	"-f": true, "--filename": true, "-c": true, "--container": true, "--sort-by": true, "--chunk-size": true, "--label-columns": true, "-L": true,
 	"--raw": true,
+	// Global flags shared with kubectl-gs: values before a verb or plugin
+	// subcommand must not select it, including read-looking values.
+	"--as-uid": true, "--cache-dir": true, "--certificate-authority": true,
+	"--client-certificate": true, "--client-key": true, "--tls-server-name": true,
 }
 
 // secretGuard is the Secret guard of one call: the commands that unlock the
@@ -558,6 +566,11 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			ip := interpreters[name]
 			switch p := readProgram(args, ip); p.kind {
 			case programCode:
+				// Classify unresolved interpreter paths before the shell scanner
+				// splits assignments and loses their construction context.
+				if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(p.arg) {
+					return &leak{never: true, transcript: true, unresolvedTranscript: true}
+				}
 				if l := g.scan(p.arg, depth+1); l != nil {
 					return l
 				}

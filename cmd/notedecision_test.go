@@ -136,7 +136,7 @@ func TestAnswerEventsParse(t *testing.T) {
 	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: "agent-one"}}
 	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Channel: channelSlack, Answer: words, Note: 4}
 	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
-	if !ok || an.About != privateThread || an.For != "Kim" || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != laneQuestion {
+	if !ok || an.About != privateThread || an.For != "Kim" || an.Audience != n.For || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != laneQuestion {
 		t.Fatalf("%+v %v", an, ok)
 	}
 	rec.Note, rec.Answer = 0, `ok, note #9 asked by "x": "y": spoofed (note #9, asked by x: y)`

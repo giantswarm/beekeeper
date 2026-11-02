@@ -158,6 +158,7 @@ merge:
   ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
   toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
+  admin: []                    # the repositories (owner/repo) whose merge go names gh pr merge --admin --match-head-commit after the approved review
 
 units:
   quiet: false              # true counts every end of a started unit (any exit, SIGKILL, SIGTERM, SIGABRT) as success; for an isolated harness state only, never the desk's
@@ -203,12 +204,12 @@ supervisor:                 # the supervisor loop, which beekeeper install alway
   # An unresumable parked session is replaced on its original task. Every
   # watch poll reads the budget; the loop holds starts on low/stale budget
   # or machine pressure. Watch lines are durable watch.* events.
-  fillRetryEvery: 5m        # retry an empty/failed board read; roster or capacity changes retry immediately
+  fillRetryEvery: 5m        # retry an empty/failed board read, doubled per further empty read up to 4x; roster or capacity changes retry immediately
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
   waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
-  relayAt: 150k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
+  relayAt: 200k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
   relayGrace: 30m
   restartGrace: 1m
@@ -218,7 +219,7 @@ agents:                     # the hand-over of registered agents
   lastStepGrace: 30m        # an agent over relayAt in its task's last step (its serve record waits on the report or says the merge landed, or the gate saw its merge land) is HANDOVER HELD this long from that evidence, its report expected
   lastStepCeiling: 500k     # the context at which the hand-over is due whatever the last step; default: a quarter above relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
-  staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
+  staleAfter: 24h           # inactivity without a CLI: idle and gone task holders retire unless kept or parked; negative: off
   archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive
   dir: ~/src/desk           # every agent beekeeper starts runs here (start, handover, a role's successor); empty: the caller's folder
   roots: [~/src/worktrees]  # with dir set, a --dir is refused unless it is dir or under one of these
@@ -236,62 +237,58 @@ agents:                     # the hand-over of registered agents
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
     globs: literal          # an unmatched glob stays as written; shell: the shell's own behaviour (zsh: no matches found)
     path: [~/.local/share/devctl/agent-bin]   # directories first on PATH, in this order: the agent's own programs (a gh link to devctl acts with the App's short-lived token); default: none
-capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY LOW / FULL)
-  floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start (0: never)
+capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY FULL)
   reviewHeadroom: 2         # extra subscription sessions reserved for reviews; 0 disables
-  ceiling: 10               # CAPACITY FULL at this many; no start past it (0: no unforced start, suppresses CAPACITY LOW / FULL; unset: 5 and 10)
+  ceiling: 10               # CAPACITY FULL at this many; no start past it (0: no unforced start, suppresses CAPACITY FULL; unset: 10)
   local:
     ceiling: 5              # optional: the busy agents this machine runs (self-hosted ones included; execution hosts' count against their maxBusy); unset: no local cap, 0: no unforced local start
   availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
   swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
   swapPSIMax: 0             # the default; memory pressure (full avg60 of /proc/pressure/memory, %) up to which that growth is only a warning while MemAvailable is over availMinMiB
-  usage:                    # optional: derive floor and ceiling from subscription usage windows; unset command: off
+  usage:                    # optional: derive ceiling from subscription usage windows; unset command: off
     command: [~/.local/bin/read-usage]   # prints JSON {"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}
     every: 5m               # how long a cached reading in usage.json stays fresh (re-read at once once resetsAt passes)
     timeout: 90s            # bounds one run of command
     reportEvery: 30m        # watch prints one USAGE line this often (negative: never, watch --once aside)
     highPercent: 95         # 5-hour usedPercent from which USAGE HIGH holds until fiveHour.resetsAt: starts, resumes and auto-resume wait, and busy workers are told once to finish their step and park
-    fiveHour:               # first band with usedPercent < upTo applies; at or past the last upTo yields floor 0, ceiling 0
-      - {upTo: 50, floor: 5, ceiling: 10}
-      - {upTo: 80, floor: 3, ceiling: 6}
-      - {upTo: 95, floor: 1, ceiling: 2}
-    sevenDay:               # when both windows have bands, the lower floor and the lower ceiling apply
-      - {upTo: 70, floor: 5, ceiling: 10}
-      - {upTo: 90, floor: 2, ceiling: 4}
-  providers:                # optional: per-provider usage readers, window thresholds and floor/ceiling targets (the machine guards and capacity.ceiling cap the subscription providers' total)
+    fiveHour:               # first band with usedPercent < upTo applies; at or past the last upTo yields ceiling 0
+      - {upTo: 50, ceiling: 10}
+      - {upTo: 80, ceiling: 6}
+      - {upTo: 95, ceiling: 2}
+    sevenDay:               # when both windows have bands, the lower ceiling applies
+      - {upTo: 70, ceiling: 10}
+      - {upTo: 90, ceiling: 4}
+  providers:                # optional: per-provider usage readers, window thresholds and ceiling targets (the machine guards and capacity.ceiling cap the subscription providers' total)
     claude:
-      floor: 1
       ceiling: 4
       command: [claude, -p, /usage, --output-format, json] # default for claude, even with claude: {}; no model turn, no status line or credential reader
       staleAfter: 15m       # failed reads use the last good reading until this age; older or missing readings yield ceiling 0
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
-        - {upTo: 75, floor: 2, ceiling: 4}
-        - {upTo: 90, floor: 1, ceiling: 2}
+        - {upTo: 75, ceiling: 4}
+        - {upTo: 90, ceiling: 2}
       sevenDay:
-        - {upTo: 80, floor: 2, ceiling: 4}
-        - {upTo: 95, floor: 1, ceiling: 2}
+        - {upTo: 80, ceiling: 4}
+        - {upTo: 95, ceiling: 2}
     agy:
-      floor: 1
       ceiling: 2
       command: [agy, -p, /usage]  # default for agy, even with agy: {}; no model turn; each bucket's 5-hour and weekly windows ("Gemini Models", "Claude and GPT models")
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
-        - {upTo: 90, floor: 1, ceiling: 2}
+        - {upTo: 90, ceiling: 2}
       sevenDay:
-        - {upTo: 95, floor: 1, ceiling: 2}
+        - {upTo: 95, ceiling: 2}
     codex:
-      floor: 1
       ceiling: 2
       command: [codex, usage]     # default for codex; reads the freshest token_count rate_limits event across rollout transcripts
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
-        - {upTo: 90, floor: 1, ceiling: 2}
+        - {upTo: 90, ceiling: 2}
       sevenDay:
-        - {upTo: 95, floor: 1, ceiling: 2}
+        - {upTo: 95, ceiling: 2}
     local-model:            # a model served on this machine: no subscription, so no usage reader and no pace
       kind: self-hosted
       ceiling: 3            # its own ceiling of sessions at once; capacity.ceiling (even 0, holding a subscription on its weekly pace) bounds none of it; unset: 10
@@ -405,10 +402,11 @@ board:                      # the project board `beekeeper board next` picks wor
   epics:                    # the epic gate, whatever the order says (these are the defaults)
     kind: [epic]            # an epic
     planning: [up next]     # in planning: neither it nor its sub-issues offered, board next shows its plan
+                            # an epic in a status ahead of planning (Inbox, Backlog) is not scheduled for planning: neither it nor its sub-issues offered
     go: in progress         # the go: its open sub-issues offered in their order; board move records the plan head
   archiveAfter: 336h        # the default; board tidy archives a closed item after this long (its Status set to Done first); negative: never
   tidyEvery: 1h             # the default; how often the supervisor loop runs board tidy; negative: never
-  escalateEvery: 24h        # the default; board escalate (after each tidy) asks the person about a blocked item, and again this long later while it stays blocked; negative: never
+  escalateEvery: 168h       # the default; board escalate (after each tidy) asks the person about a blocked item with what holds it, looks again this long later and asks again only when that changed; skips teammates' items, answered threads and open notes; negative: never
   claims:                   # the desk's session records as marker comments on their issues, for other desks on the same repositories (defaults but desk)
     off: false              # true: publish no claim and read none
     desk: platform-desk     # the neutral name the desk's claims carry, seen on (possibly public) issues; unset: no claim published, the other desks' still honoured

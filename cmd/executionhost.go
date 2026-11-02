@@ -167,6 +167,7 @@ func (a *app) executionHook() guard.Hook {
 // execution: it is denied in the format asked for, never translated. A codex
 // hook binds its calls to the thread the runner recorded.
 func executionGuardDecision(h guard.Hook, format string, j execution.Journal, protected []string) func([]byte) []byte {
+	h.ExecutionMCP = j.Request.MCP
 	if format == execution.HarnessOmp {
 		return func(raw []byte) []byte {
 			if j.Request.Harness != execution.HarnessOmp {
@@ -302,7 +303,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents publish", "agents merge", "run", "run tail", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents publish", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -404,7 +405,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
+	return []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -458,14 +459,35 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(caps)
 	}})
+	c.AddCommand(a.executionHostUpdateCmds()...)
 	c.AddCommand(&cobra.Command{Use: "sync <host>", Short: "Reconcile recorded executions, pending controls and acknowledged stops", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return a.syncExecutionHost(cmd.Context(), args[0]) }})
 	return c
 }
 
-func (a *app) executionHost(selector string) (execution.Host, error) {
+// catalogHost is the agents.hosts entry selector names, as configured.
+func (a *app) catalogHost(selector string) (execution.Host, error) {
 	h, ok := a.cfg.Agents.Hosts[selector]
 	if !ok || selector == executionLocal {
 		return h, usageErr("unknown SSH execution host %q", selector)
+	}
+	return h, h.ValidateCatalog()
+}
+
+// executionHost is the agents.hosts entry selector names, pinned to the
+// policy digest beekeeper recorded for it (agents hosts update). The state
+// is peeked, never waited on: callers run inside a state update too.
+func (a *app) executionHost(selector string) (execution.Host, error) {
+	h, err := a.catalogHost(selector)
+	if err != nil {
+		return h, err
+	}
+	st, err := a.store.Peek()
+	if err != nil {
+		return h, err
+	}
+	h = pinnedHost(st, selector, h)
+	if h.PolicyDigest == "" {
+		return h, refused("execution host %s has no pinned policy: beekeeper agents hosts update %s pins it", selector, selector)
 	}
 	return h, h.Validate()
 }

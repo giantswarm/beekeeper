@@ -31,13 +31,25 @@ type comparison struct {
 	MergeBase struct {
 		SHA string `json:"sha"`
 	} `json:"merge_base_commit"`
-	Commits []struct {
-		SHA     string `json:"sha"`
-		Parents []struct {
-			SHA string `json:"sha"`
-		} `json:"parents"`
-	} `json:"commits"`
-	Files []compareFile `json:"files"`
+	Commits []comparisonCommit `json:"commits"`
+	Files   []compareFile      `json:"files"`
+}
+
+// comparisonCommit is one commit a comparison lists, with its parents.
+type comparisonCommit struct {
+	SHA     string `json:"sha"`
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
+}
+
+// complete says why c, a comparison of the base with to, may list fewer
+// commits than to has past the base, "" when it lists them all.
+func complete(c comparison, to string) string {
+	if c.AheadBy > len(c.Commits) || len(c.Commits) >= compareCommits {
+		return fmt.Sprintf("%s has %d commits past the base, more than the comparison lists", short(to), c.AheadBy)
+	}
+	return ""
 }
 
 // compareFile is one file a comparison changes.
@@ -67,8 +79,9 @@ func compare(ctx context.Context, gh GH, repo, from, to string) (comparison, err
 // why or why not. It does when head
 //
 //   - only merges base into approved: approved is an ancestor of head (no
-//     rebase, no force push), every commit head adds to approved is a
-//     merge, and the change head makes against its merge base with base is
+//     rebase, no force push), every commit head adds to approved that the
+//     base lacks is a merge (the base's own commits a merge brings in are
+//     the base's), and the change head makes against its merge base with base is
 //     the one approved makes against its own: the same files, each with
 //     the same hunks adding and removing the same lines (context and
 //     positions may move with the base). A file without a patch (binary,
@@ -95,18 +108,8 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 		return false, "", err
 	}
 	rebased := added.Status == compareDiverged
-	switch {
-	case added.Status != compareAhead && !rebased:
+	if added.Status != compareAhead && !rebased {
 		return false, fmt.Sprintf("%s is %s of the approved head %s, not ahead", short(head), added.Status, short(approved)), nil
-	case !rebased && (added.AheadBy > len(added.Commits) || len(added.Commits) >= compareCommits):
-		return false, fmt.Sprintf("%s adds %d commits to %s, more than the comparison lists", short(head), added.AheadBy, short(approved)), nil
-	}
-	if !rebased {
-		for _, c := range added.Commits {
-			if len(c.Parents) < 2 {
-				return false, fmt.Sprintf("%s adds commit %s, which is no merge", short(head), short(c.SHA)), nil
-			}
-		}
 	}
 	was, err := compare(ctx, gh, repo, base, approved)
 	if err != nil {
@@ -115,6 +118,31 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 	now, err := compare(ctx, gh, repo, base, head)
 	if err != nil {
 		return false, "", err
+	}
+	// own are the commits head adds to the pull request: the commits of
+	// head the base lacks that approved lacks too. The base's own commits a
+	// merge brings in are no change of the pull request's.
+	var own []comparisonCommit
+	if !rebased {
+		if why := complete(was, approved); why != "" {
+			return false, why, nil
+		}
+		if why := complete(now, head); why != "" {
+			return false, why, nil
+		}
+		approvedHas := map[string]bool{}
+		for _, c := range was.Commits {
+			approvedHas[c.SHA] = true
+		}
+		for _, c := range now.Commits {
+			if approvedHas[c.SHA] {
+				continue
+			}
+			if len(c.Parents) < 2 {
+				return false, fmt.Sprintf("%s adds commit %s, which is no merge", short(head), short(c.SHA)), nil
+			}
+			own = append(own, c)
+		}
 	}
 	unpatched, differ, why := sameChange(was.Files, now.Files)
 	if why != "" {
@@ -158,7 +186,7 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 	if rebased {
 		return true, fmt.Sprintf("%s rebases the approved head %s onto %s, resolving its conflicts in %s", short(head), short(approved), base, strings.Join(differ, ", ")), nil
 	}
-	for _, c := range added.Commits {
+	for _, c := range own {
 		if ok, err := mergesBase(ctx, gh, repo, base, c.Parents); err != nil {
 			return false, "", err
 		} else if !ok {
@@ -303,4 +331,46 @@ func hunkCounts(header string) string {
 		return "1"
 	}
 	return "@@ -" + count(f[1]) + " +" + count(f[2])
+}
+
+// ChangedPast lists the files whose change head makes against base differs
+// from the one reviewed made: added or removed from the pull request's
+// change, changed in status or name, or adding or removing other lines (a
+// file without a patch: another blob). It is the change a review of
+// reviewed did not see, the base's own changes left out; a comparison at
+// the compare API's caps proves nothing and is an error.
+func ChangedPast(ctx context.Context, gh GH, repo, base, reviewed, head string) ([]string, error) {
+	was, err := compare(ctx, gh, repo, base, reviewed)
+	if err != nil {
+		return nil, err
+	}
+	now, err := compare(ctx, gh, repo, base, head)
+	if err != nil {
+		return nil, err
+	}
+	if n := max(len(was.Files), len(now.Files)); n >= compareFiles {
+		return nil, fmt.Errorf("the change of %s or %s against %s lists %d files, at the comparison's cap", short(reviewed), short(head), base, n)
+	}
+	byName := map[string]compareFile{}
+	for _, f := range was.Files {
+		byName[f.Name] = f
+	}
+	var out []string
+	for _, f := range now.Files {
+		w, ok := byName[f.Name]
+		delete(byName, f.Name)
+		switch {
+		case !ok, w.Status != f.Status, w.Previous != f.Previous:
+		case w.Patch == "" && f.Patch == "" && w.SHA == f.SHA:
+			continue
+		case w.Patch != "" && f.Patch != "" && slices.Equal(changedLines(w.Patch), changedLines(f.Patch)):
+			continue
+		}
+		out = append(out, f.Name)
+	}
+	for name := range byName {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out, nil
 }

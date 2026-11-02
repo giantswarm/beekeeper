@@ -58,7 +58,8 @@ Formatters that write stay local automatically. Benchmark/lab classes, sandboxed
 runs and managed executions with a coordinator stop unit also remain local.
 
 Setup, admission, capacity, upload and bounded placement failures emit one line
-and use the unchanged local slot. After a command might have started, it never
+and use the unchanged local slot, recorded as `run.fallback` with the reason.
+After a command might have started, it never
 falls back: output resumes from the last delivered byte, with four bounded
 connection attempts, and the command's exact exit code is relayed. An
 unrecoverable connection returns 125. Interrupts stop the remote process group
@@ -67,6 +68,22 @@ reclaims abandoned uploads and stops orphaned process groups. Remote stdout and
 stderr form one ordered stream on the caller's stdout. A failed remote command
 keeps the tail of that stream in the caller's run record as the local slot
 keeps its scope's (`beekeeper run tail`, `remote-<id>.log`).
+
+## The record of a run
+
+Every run writes `run.start` and `run.end` to the event log, local and remote
+alike, so `beekeeper log --verb run.` shows every build whatever slot it ran
+in, and `beekeeper run stats [--since WHEN]` counts per repository the local
+vs remote runs, their minutes, the failure rate and the builder pods' warm
+cache (the numbers the shared cache, issue #1782, is measured against). A
+remote run's records name the builder pod, its namespace and whether its pod
+was warm (its build caches hold earlier runs) or cold; both name the
+repository and HEAD built, the command, the duration and the exit code. The
+end of a failed remote run names the masked tail the caller kept from its
+streamed output (`beekeeper run tail`, `remote-<id>.log`), so the failure
+reads from the record and nobody reruns the suite to see it (issue #796).
+The host's event log and the tails directory outlive the pod: the records
+stand after the builder Job and its 60 s TTL are gone.
 
 ## Builder image contract
 

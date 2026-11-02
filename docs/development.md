@@ -35,6 +35,12 @@ files together, so a change that adds or removes a string in `cmd/snapshot.go` c
 in an untouched `cmd/*_test.go`: that finding is the change's, and CI reports it too. A lint of a
 worktree of `origin/main` tells main's findings from a change's.
 
+Run `gitleaks detect --redact --log-opts=--all` from the repository root to scan the full
+history, or `gitleaks detect --redact --no-git` to scan the working tree. Both load
+`.gitleaks.toml`, which extends all default detection rules. Its signing-test exception
+requires the exact fake GPG key ID and `cmd/sandboxsign_test.go` together, and applies
+only to `generic-api-key`; other values and files remain scanned.
+
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
@@ -56,6 +62,17 @@ without either status or spec provenance remain visible with their namespace's t
 creation time, without an invented filer identity. Listing does not repair status during
 another object's update. Apply the generated Note CRD before running the new server so
 Kubernetes preserves these optional spec fields.
+
+`note show <id>` reads one note in full, with its status, audience and retained answer;
+`--json` returns the note fields plus `status`, `answer` and `closure`. Open central
+notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
+while `#<n>` selects the local record. The central instance's own CLI can also
+read retained closed Note resources. File-backed stores can recover answered
+notes while their full `answer.recorded` event remains, without a record-size cap.
+New answer events retain the original audience separately from the answerer;
+older events without that audience show it as unknown rather than naming the
+answerer as the addressee. Other removed or expired
+records are reported as unavailable, never reconstructed from a truncated log.
 
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
 successful filing followed by an empty listing can mean it was answered between those
@@ -307,6 +324,7 @@ timer from the running watches.
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, kept from tick to tick by the watch, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, the PreToolUse hook's rewrite and refusals (a third lab, the person's folders, default-branch and force pushes, …) in both Claude Code (`--format claude`) and `agy` (`--format agy`) formats, and the PermissionRequest hook's decision. |
+| `internal/runrecord` | The shape of a run's event-log records (`run.start` / `run.end` / `run.fallback`), written by `internal/guard` for a local run and `internal/remotebuild` for a builder pod's, and read by `run stats`: where the run ran, what it built, its duration, exit and failure tail. A leaf so both writers share it. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |
 | `cmd` | The command line. The supervisor and the guide are one `role` type (`cmd/relay.go`): start, relay, relief, restart grace and relay due are written once and parameterised by the role's name, record and configuration; only the supervisor's start moves the grants. The guide's queue (`guideQueue`) holds the notes for `guide.person` (`noteFor`: a note's `For`, or an older note's `[for <person>]` text prefix, compared without case) and the waiting sessions, running ones from their desktop record and stopped ones from `claude.StoppedWaiting` (a record not parsed unless it holds `"blocked"`), without the guide's own session, an archived one or a test (`Session.Aside`, `Record.Aside`); its feed drops a note it said before that is still open but no longer in the queue without a line. |
@@ -377,7 +395,8 @@ extended. A pressure run's `DISK PRUNE` line names the caches still holding
 the most, and when the disk is still under the free-disk floor after it, the
 largest directories (100 MiB or more) of the user cache directory no policy
 covers, with their last write. The supervisor's "Disk remains low after
-pruning" note carries the same.
+pruning" finding carries the same; it goes to the guide to file, never to
+the person as a decision.
 
 ### The disk step
 
@@ -466,7 +485,14 @@ processes again. An exited zombie holds no references and is skipped; a
 zombie thread-group leader is read through its live threads
 (`/proc/<pid>/task/<tid>`). Expected kernel permission denials on
 non-dumpable helpers or helpers with different credentials or capabilities
-do not stop pruning; their readable references still protect data. Ownership
+do not stop pruning; their readable references still protect data. A
+process of the person's uid the kernel refuses (EACCES) in another pid
+namespace (`NSpid` lists more than one id) or user namespace (its `uid_map`
+differs) is a container's, a kind pod's pause container with the pod's
+`fsGroup` for one: its paths name the container's filesystem, so it is
+skipped and the `DISK PRUNE` line counts it (`skipped N unreadable processes
+of other namespaces`); refused in the person's own namespaces it stays
+unknown. Ownership
 of ptrace-gated child entries detects changes in dumpability even when the
 process directory still has its original owner.
 
@@ -493,3 +519,75 @@ open note leaves the existing note open and logs `note.folded`.
 The original trigger of an already missing note cannot be recovered once its
 old logs and Events have expired. Retaining the close record makes subsequent
 closures attributable without relying on that retention window.
+
+
+The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed-head <sha>`.
+The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
+uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
+names to `squash` (the default), `rebase`, or `merge`; `merge.admin` controls `--admin`.
+The pinned path never updates the branch: a behind or conflicting branch goes back to its
+worker for repair and another green published head. A restart reads GitHub before repeating
+a mutation whose completion record was lost. Successful merge actions are `supervisor.merge`,
+not worker merge grants. An already queued or running gate is observed without submitting
+another merge. Gate queue and policy refusals never become branch repair requests from
+words in their messages; only the pinned mutation child's structured result can request repair.
+
+On auto-release branches, the pinned child follows its merge with `devctl release wait --pr`
+and saves the release verdict in its durable result. Lane settlement retains the confirmed
+release and roll target, a no-release merge frees its lane, and a candidate or no-release
+merge lifts the devctl tool-release hold. An unreadable release result remains explicitly
+unconfirmed. The wait never repeats the merge.
+
+A review park declares remaining work with `--post-merge "<release, rollout or proof>"`.
+Omitting it on a new park declares that the task ends at merge: the loop records the final
+report and closes the task without waking its worker. Older parks retain their existing
+release-containment behavior. The standby leaves new review parks to the loop, avoiding a
+second wake when a review or merge arrives. Only rostered review parks carry this declaration;
+plain waits and off-roster sessions keep the normal watcher lifecycle. A closed pull request,
+or a merged pull request whose served issue remains open or unreadable, wakes its worker to
+continue or verify the task rather than leaving it parked.
+
+The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
+The receipt binds its active local note, session, thread, displayed head, selected option and
+verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
+command-line flag alone cannot select the channel. The guide keeps the note's option labels
+and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
+relay still does not verify. The central instance retains its authenticated identity checks.
+
+The guide defaults to a 200k relay point. When a feed line arrives after an hour
+of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`
+before the expired cache is warmed again. Unknown activity times and active
+subagents do not count as idle. The supervisor loop is a service with no model
+context; retired supervisor-session relay settings remain ignored.
+
+The guide successor prompt references its skill or configured instruction file
+and the desk's standing file once. Queue rows are shortened; `guide queue --full`
+reads them in full, and `handover --full` retains live details and recent history.
+`TestGuidePromptBudget` exercises a typical desk with 40 verbose decisions and
+a large standing file, using a conservative 25,000-byte prompt budget (no more
+than 25,000 byte-level tokens). The role skill and project instructions loaded
+by the harness remain outside the generated prompt's budget.
+
+The doctor stops reparented process trees left in linked worktrees by known local
+workers that have left the roster. It sends SIGTERM, then SIGKILL after
+two seconds, checking the process start time, user and worktree before each
+signal. Each targeted PID and masked command is recorded as `agents.archive`.
+`doctor --dry-run` reports candidates without signalling; `ps` marks the same
+candidates `[orphan: <worktree>]` (JSON: `orphan`, `worktree`), beside their age.
+A roster entry, including a done worker awaiting removal, or a live CLI protects
+its worktree. Main checkouts, arbitrary directories, unknown starts and remote
+executions are excluded. Inherited worker IDs also identify servers whose tool
+shell changed into a different worktree after the session started. Cleanup is
+retried by later doctor runs if a live CLI still protects a finished worktree.
+
+`TestStopWorktreeOrphansLive` starts an adopted, TERM-ignoring server in a scratch
+worktree and proves dry-run preservation, escalation and archive logging.
+`TestWorktreeOrphans` covers shared worktrees, rostered/done sessions, live CLIs,
+remote starts, older processes and changed working directories.
+
+Removed manually registered workers retain their identity and registration time
+in `endedWorkers`, so their inherited session ID also identifies leftovers.
+This cleanup history grants no permissions to the start or permission hooks.
+Ownership and roster protection both use Claude session IDs or normalized
+Codex, omp and agy host-session IDs; a hosted harness takes precedence over
+a launching Claude session inherited in the same environment.

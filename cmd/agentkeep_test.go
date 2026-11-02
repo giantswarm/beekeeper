@@ -36,7 +36,7 @@ func TestPlanChoresLeavesKeptEntries(t *testing.T) {
 	}
 	plan := func() []string {
 		var got []string
-		for _, c := range planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, keepNow) {
+		for _, c := range planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, keepNow, nil) {
 			got = append(got, c.String())
 		}
 		return got
@@ -70,7 +70,7 @@ func TestRemoveAgentsHonoursAKeepSetSincePlan(t *testing.T) {
 	stale, done := staleAgent("Judge"), staleAgent("Done")
 	done.Done = true
 	st := &state.State{Agents: []state.Agent{stale, done}}
-	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, keepNow)
+	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, keepNow, nil)
 	stale.Keep, done.Keep = &state.Keep{}, &state.Keep{}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{stale, done}

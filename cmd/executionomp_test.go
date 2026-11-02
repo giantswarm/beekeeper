@@ -36,7 +36,7 @@ func TestExecutionOmpCoordinatorAdmission(t *testing.T) {
 	if st.Starts[0].Execution.Provider != executionOmpFixture {
 		t.Fatalf("provider = %q", st.Starts[0].Execution.Provider)
 	}
-	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, a.cfg)
 	if len(counts[executionOmpFixture].Busy) != 1 {
 		t.Fatal("remote worker escaped coordinator ceiling")
 	}

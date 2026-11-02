@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +31,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 // memcapCPU is memcap.slice's CPU budget from the configuration, the part
@@ -125,6 +128,15 @@ the agent sandbox, which keeps the user systemd out of reach, the host's
 broker (beekeeper sandbox broker) caps the slot and moves the command into
 its scope, the command still in the sandbox; with no broker answering, run
 refuses (exit 1) rather than run a build uncapped.
+
+Every run records itself in the event log as run.start / run.end, local and
+remote alike: where it ran (its scope, or the builder pod), what it built
+(repository and HEAD), the command, its duration and exit, and, of a failed
+run, the file its output tail was kept in (beekeeper run tail). beekeeper
+log --verb run. shows the records; beekeeper run stats [--since WHEN]
+counts them per repository: local vs remote, minutes, failures and the
+builder pods' cache. A remote attempt that fell back records run.fallback
+with its reason.
 
 For the length of the command a run holds the Go build cache's use lock
 shared, so no trim of the cache (doctor.goCacheMaxGiB) removes an entry a
@@ -224,12 +236,15 @@ machine's files stay untouched.`,
 				}
 				o.Class = guard.DefaultClass(args)
 			}
+			repo, commit := a.worktreeIdentity(cmd.Context())
+			o.Repo, o.Head = repo, commit
 			// Per-run local resource/wait overrides retain their existing semantics.
 			// Remote pods use the desk-configured resources and placement bound.
 			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
 				head := guard.CommandHead(args)
 				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr,
-					Tail: o.Tail, KeepFailure: func(runID string, exit int) { o.KeepFailureTail("remote-"+runID, head, exit) }}
+					Record: a.runRecorder(), Name: head, Repo: repo, Head: commit,
+					Tail: o.Tail, KeepFailure: func(runID string, exit int) string { return o.KeepFailureTail("remote-"+runID, head, exit) }}
 				if handled, rc := runner.Try(cmd.Context(), args); handled {
 					if rc != 0 {
 						return &exitError{code: rc}
@@ -250,6 +265,9 @@ machine's files stay untouched.`,
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&classFlag, "class", "", "the run's class: build takes a build slot, benchmark and lab take none (default build, lab for agentlab)")
 	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT, else 8m, 60m in a background call)")
+	// `run stats` is a reader, not a run: a command literally named stats
+	// still runs with `run -- stats …`.
+	c.AddCommand(a.runStatsCmd())
 	c.AddCommand(a.runTailCmd())
 	return c
 }
@@ -278,6 +296,23 @@ func (a *app) parseableKnownHosts() {
 
 // noSession names a process no Claude Code session started.
 const noSession = "no session"
+
+// worktreeIdentity is what a run builds: the owner/repo of the current
+// worktree's origin and its HEAD commit, "" where neither is known (outside
+// a git worktree, an origin that is no GitHub repository). Each git call has
+// its own short bound: a hung repository costs the run no more than that.
+func (a *app) worktreeIdentity(ctx context.Context) (repo, head string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	git := func(args ...string) string {
+		out, err := exec.CommandContext(ctx, "git", args...).Output() //nolint:gosec // fixed executable and typed arguments
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	return worktrees.RepoOf(git("remote", "get-url", "origin")), git("rev-parse", "HEAD")
+}
 
 // runRecorder appends a run's events to the event log as the calling
 // session, or nil when the log cannot be opened: a build runs regardless.
@@ -330,9 +365,11 @@ the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
 machine kubeconfig. A configuration that does not load refuses every Bash
 call, naming the error.
-Every gh pr merge and gh api PUT of a pull request merge requires the
-supervisor loop's durable go for this worker and exact head, current green CI
-and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
+A merge of a merge.devctlOwners repository is the gate's devctl pr merge
+alone: gh pr merge, gh api, GraphQL and curl merges there are refused,
+naming the gated command. Elsewhere every gh pr merge and gh api PUT of a
+pull request merge requires the supervisor loop's durable go for this worker
+and exact head, current green CI and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
 so GitHub enforces the checked head atomically. GraphQL merges and deferred
 auto-merges are refused; expose script merges as their own tool command.
 Successful preflight checks leave a merge.authorized event (not proof that
@@ -550,13 +587,14 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				Apps:    a.allowedApps, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
-				h.MergeGo = a.hookMergeGo
+				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
 				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
 				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
+				h.LiveDirs = a.hookLiveDirs
 				if !inSandbox() {
 					h.FreshLabs = a.freshLabKubeconfigs
 				}
