@@ -996,12 +996,8 @@ func (a Agents) ProfileFor(name string) (Profile, bool) {
 	return Profile{}, false
 }
 
-// DefaultFloor and DefaultCeiling are capacity.floor and capacity.ceiling
-// when unset; an explicit 0 stays 0.
-const (
-	DefaultFloor   = 5
-	DefaultCeiling = 10
-)
+// DefaultCeiling is capacity.ceiling when unset; an explicit 0 stays 0.
+const DefaultCeiling = 10
 
 // Defaults of capacity.usage and capacity.providers.<name> when a usage
 // command is set.
@@ -1078,15 +1074,13 @@ const (
 	DefaultAgyClaudeBucket = "Claude and GPT models"
 )
 
-// Capacity is the supervisor's target of busy agents and the memory guards
+// Capacity is the supervisor's ceiling of busy agents and the memory guards
 // that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
+// Any legacy floor key in YAML is ignored.
 type Capacity struct {
-	// Floor is the fewest busy agents the supervisor keeps (5); Ceiling
-	// the most it starts (10). Zero is honoured: ceiling 0 refuses every
-	// unforced start.
-	Floor      int `yaml:"floor"`
+	// Ceiling is the most busy agents the supervisor starts (10). Zero is
+	// honoured: ceiling 0 refuses every unforced start.
 	Ceiling    int `yaml:"ceiling"`
-	floorSet   bool
 	ceilingSet bool
 	// ReviewHeadroom reserves extra subscription sessions for reviews. Zero disables it.
 	ReviewHeadroom    int `yaml:"reviewHeadroom"`
@@ -1103,12 +1097,12 @@ type Capacity struct {
 	// /proc/pressure/memory, in percent) up to which disk swap's growth is
 	// a warning rather than a refusal (0: any pressure refuses).
 	SwapPSIMax float64 `yaml:"swapPSIMax"`
-	// Usage derives Floor and Ceiling from the subscription's 5-hour and
-	// 7-day usage windows read by a configured command; unset, Floor and
-	// Ceiling stand as configured.
+	// Usage derives Ceiling from the subscription's 5-hour and 7-day usage
+	// windows read by a configured command; unset, Ceiling stands as
+	// configured.
 	Usage Usage `yaml:"usage"`
 	// Providers configures per-provider (e.g. claude, agy, codex) usage
-	// readers, window thresholds and floor/ceiling targets. Busy agents count
+	// readers, window thresholds and ceiling targets. Busy agents count
 	// against the provider they run on, while the machine guards and
 	// Capacity.Ceiling cap the total.
 	Providers     map[string]Provider `yaml:"providers"`
@@ -1152,17 +1146,15 @@ func (l LocalCapacity) Limit() (int, bool) {
 }
 
 // Provider configures one provider (such as claude, agy or codex): its own
-// floor and ceiling of busy agents and its usage reader and thresholds. A
-// provider of Kind self-hosted (a model served on the desk's own machines)
-// sets no usage reader: its ceiling alone bounds its busy sessions, and
-// capacity.ceiling bounds only the subscription providers' total.
+// ceiling of busy agents and its usage reader and thresholds. A provider of
+// Kind self-hosted (a model served on the desk's own machines) sets no usage
+// reader: its ceiling alone bounds its busy sessions, and capacity.ceiling
+// bounds only the subscription providers' total.
 type Provider struct {
 	// Kind is KindSubscription (the default: a usage reader and a pace) or
 	// KindSelfHosted (no usage reader; a ceiling of sessions at once).
 	Kind             string `yaml:"kind"`
-	Floor            int    `yaml:"floor"`
 	Ceiling          int    `yaml:"ceiling"`
-	floorSet         bool
 	ceilingSet       bool
 	ServeModeCommand []string `yaml:"serveModeCommand"`
 	// ServeModeCeilings maps a serving mode read by ServeModeCommand to the
@@ -1273,13 +1265,11 @@ type ServeModeReading struct {
 }
 
 // WithServeMode returns the provider with r applied: the ceiling the mode it
-// names, falling back to Ceiling while the mode names none or the read failed,
-// and its floor clamped under that ceiling.
+// names, falling back to Ceiling while the mode names none or the read failed.
 func (p Provider) WithServeMode(r ServeModeReading) Provider {
 	if r.Mode != "" && r.Err == "" {
 		if c, ok := p.ServeModeCeiling(r.Mode); ok {
 			p.Ceiling = c
-			p.Floor = min(p.Floor, c)
 		}
 	}
 	return p
@@ -1411,7 +1401,7 @@ type Usage struct {
 	HighPercent    float64 `yaml:"highPercent"`
 	highPercentSet bool
 	// FiveHourMax and SevenDayMax are hard usedPercent stops for a window:
-	// at or past the threshold the window yields (floor 0, ceiling 0).
+	// at or past the threshold the window yields ceiling 0.
 	FiveHourMax    float64 `yaml:"fiveHourMax"`
 	fiveHourMaxSet bool
 	SevenDayMax    float64 `yaml:"sevenDayMax"`
@@ -1421,14 +1411,14 @@ type Usage struct {
 	// (default 0); a positive margin counts as 0.
 	PaceMargin    float64 `yaml:"paceMargin"`
 	paceMarginSet bool
-	// FiveHour and SevenDay map a window's usedPercent to a (floor, ceiling)
-	// pair: the first band with usedPercent < upTo applies, and at or past
-	// the last band's upTo the window yields (0, 0). When both windows have
-	// bands, the lower floor and the lower ceiling apply.
+	// FiveHour and SevenDay map a window's usedPercent to a ceiling: the
+	// first band with usedPercent < upTo applies, and at or past the last
+	// band's upTo the window yields 0. When both windows have bands, the
+	// lower ceiling applies.
 	FiveHour []UsageBand `yaml:"fiveHour"`
 	SevenDay []UsageBand `yaml:"sevenDay"`
-	// PaceCaps lower Floor and Ceiling when the 7-day window's usedPercent
-	// exceeds the even weekly pace by at least OverBy percentage points.
+	// PaceCaps lower Ceiling when the 7-day window's usedPercent exceeds the
+	// even weekly pace by at least OverBy percentage points.
 	PaceCaps []PaceCap `yaml:"paceCaps"`
 	// Buckets maps a model name or prefix to a bucket name in multi-bucket
 	// usage output (such as `agy -p /usage`).
@@ -1436,22 +1426,18 @@ type Usage struct {
 }
 
 // UsageBand is one usage band of a subscription window: while the window's
-// usedPercent is below UpTo, its target is Floor and Ceiling.
+// usedPercent is below UpTo, its target is Ceiling.
 type UsageBand struct {
 	UpTo       float64 `yaml:"upTo"`
-	Floor      int     `yaml:"floor"`
 	Ceiling    int     `yaml:"ceiling"`
-	floorSet   bool
 	ceilingSet bool
 }
 
-// PaceCap caps Floor and Ceiling when the 7-day window's usedPercent exceeds
-// the even weekly pace by at least OverBy percentage points.
+// PaceCap caps Ceiling when the 7-day window's usedPercent exceeds the even
+// weekly pace by at least OverBy percentage points.
 type PaceCap struct {
 	OverBy     float64 `yaml:"overBy"`
-	Floor      int     `yaml:"floor"`
 	Ceiling    int     `yaml:"ceiling"`
-	floorSet   bool
 	ceilingSet bool
 }
 
@@ -1551,46 +1537,43 @@ func (u *Usage) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// UnmarshalYAML records whether floor and ceiling were explicitly set on the band.
+// UnmarshalYAML records whether ceiling was explicitly set on the band.
 func (b *UsageBand) UnmarshalYAML(n *yaml.Node) error {
 	type plain UsageBand
 	if err := n.Decode((*plain)(b)); err != nil {
 		return err
 	}
 	var set struct {
-		Floor   *int `yaml:"floor"`
 		Ceiling *int `yaml:"ceiling"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
-	b.floorSet, b.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	b.ceilingSet = set.Ceiling != nil
 	return nil
 }
 
-// UnmarshalYAML records whether floor and ceiling were explicitly set on the pace cap.
+// UnmarshalYAML records whether ceiling was explicitly set on the pace cap.
 func (p *PaceCap) UnmarshalYAML(n *yaml.Node) error {
 	type plain PaceCap
 	if err := n.Decode((*plain)(p)); err != nil {
 		return err
 	}
 	var set struct {
-		Floor   *int `yaml:"floor"`
 		Ceiling *int `yaml:"ceiling"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
-	p.floorSet, p.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	p.ceilingSet = set.Ceiling != nil
 	return nil
 }
 
-// UnmarshalYAML decodes kind, floor, ceiling and either inline or nested usage
+// UnmarshalYAML decodes kind, ceiling and either inline or nested usage
 // fields on a provider.
 func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	var fc struct {
 		Kind             *string              `yaml:"kind"`
-		Floor            *int                 `yaml:"floor"`
 		Ceiling          *int                 `yaml:"ceiling"`
 		Usage            *Usage               `yaml:"usage"`
 		ServeModeStale   *Duration            `yaml:"serveModeStaleAfter"`
@@ -1630,16 +1613,13 @@ func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	if fc.ServeModeSwitchT != nil {
 		p.ServeModeSwitchTimeout = *fc.ServeModeSwitchT
 	}
-	if fc.Floor != nil {
-		p.Floor, p.floorSet = *fc.Floor, true
-	}
 	if fc.Ceiling != nil {
 		p.Ceiling, p.ceilingSet = *fc.Ceiling, true
 	}
 	return nil
 }
 
-func (u *Usage) defaults(home string, baseFloor int) {
+func (u *Usage) defaults(home string) {
 	if !u.Enabled() {
 		return
 	}
@@ -1652,18 +1632,6 @@ func (u *Usage) defaults(home string, baseFloor int) {
 	setDur(&u.ReportEvery, DefaultUsageReportEvery)
 	if !u.highPercentSet {
 		u.HighPercent = DefaultUsageHighPercent
-	}
-	for _, bs := range [][]UsageBand{u.FiveHour, u.SevenDay} {
-		for i := range bs {
-			if !bs[i].floorSet {
-				bs[i].Floor = max(0, min(baseFloor, bs[i].Ceiling))
-			}
-		}
-	}
-	for i := range u.PaceCaps {
-		if !u.PaceCaps[i].floorSet {
-			u.PaceCaps[i].Floor = max(0, min(baseFloor, u.PaceCaps[i].Ceiling))
-		}
 	}
 }
 
@@ -1718,8 +1686,8 @@ func (u Usage) validateNamed(prefix string) error {
 				return fmt.Errorf("%s[%d]: upTo %g is not above %g: list bands in ascending order", w.name, i, b.UpTo, prev)
 			case !b.ceilingSet:
 				return fmt.Errorf("%s[%d]: ceiling is required", w.name, i)
-			case b.Floor < 0 || b.Ceiling < b.Floor:
-				return fmt.Errorf("%s[%d]: floor %d and ceiling %d; the ceiling is at least the floor", w.name, i, b.Floor, b.Ceiling)
+			case b.Ceiling < 0:
+				return fmt.Errorf("%s[%d]: ceiling %d is negative", w.name, i, b.Ceiling)
 			}
 			prev = b.UpTo
 		}
@@ -1734,106 +1702,98 @@ func (u Usage) validateNamed(prefix string) error {
 			return fmt.Errorf("%s[%d]: overBy %g is not above %g: list paceCaps in ascending order", name, i, pc.OverBy, prevOver)
 		case !pc.ceilingSet:
 			return fmt.Errorf("%s[%d]: ceiling is required", name, i)
-		case pc.Floor < 0 || pc.Ceiling < pc.Floor:
-			return fmt.Errorf("%s[%d]: floor %d and ceiling %d; the ceiling is at least the floor", name, i, pc.Floor, pc.Ceiling)
+		case pc.Ceiling < 0:
+			return fmt.Errorf("%s[%d]: ceiling %d is negative", name, i, pc.Ceiling)
 		}
 		prevOver = pc.OverBy
 	}
 	return nil
 }
 
-// Derive returns Capacity with Floor and Ceiling derived from the subscription
-// usage windows' effective usedPercent values (nil when a window was not
-// reported) and reports whether USAGE HIGH holds on the 5-hour window.
+// Derive returns Capacity with Ceiling derived from the subscription usage
+// windows' effective usedPercent values (nil when a window was not reported)
+// and reports whether USAGE HIGH holds on the 5-hour window.
 func (k Capacity) Derive(fiveHour, sevenDay *float64) (derived Capacity, high bool) {
 	return k.DeriveWithPace(fiveHour, sevenDay, nil)
 }
 
-// DeriveWithPace returns Capacity with Floor and Ceiling derived from the
-// 5-hour and 7-day windows and the 7-day even pace.
+// DeriveWithPace returns Capacity with Ceiling derived from the 5-hour and
+// 7-day windows and the 7-day even pace.
 func (k Capacity) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Capacity, high bool) {
 	derived = k
 	if !k.Usage.Enabled() {
 		return derived, false
 	}
 	p := Provider{
-		Floor:      k.Floor,
 		Ceiling:    k.Ceiling,
-		floorSet:   k.floorSet,
 		ceilingSet: k.ceilingSet,
 		Usage:      k.Usage,
 	}
 	dp, high := p.DeriveWithPace(fiveHour, sevenDay, pace)
-	derived.Floor, derived.Ceiling = dp.Floor, dp.Ceiling
+	derived.Ceiling = dp.Ceiling
 	return derived, high
 }
 
-// Derive returns Provider with Floor and Ceiling derived from the subscription
-// usage windows' effective usedPercent values and reports whether USAGE HIGH
-// holds on the 5-hour window.
+// Derive returns Provider with Ceiling derived from the subscription usage
+// windows' effective usedPercent values and reports whether USAGE HIGH holds on
+// the 5-hour window.
 func (p Provider) Derive(fiveHour, sevenDay *float64) (derived Provider, high bool) {
 	return p.DeriveWithPace(fiveHour, sevenDay, nil)
 }
 
-// DeriveWithPace returns Provider with Floor and Ceiling derived from the
-// 5-hour and 7-day windows and the 7-day even pace.
+// DeriveWithPace returns Provider with Ceiling derived from the 5-hour and
+// 7-day windows and the 7-day even pace.
 func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Provider, high bool) {
 	derived = p
 	if !p.Enabled() {
 		return derived, false
 	}
-	floor, ceiling, banded := p.Floor, p.Ceiling, false
+	ceiling, banded := p.Ceiling, false
 	apply := func(pct *float64, bands []UsageBand) {
 		if pct == nil || len(bands) == 0 {
 			return
 		}
-		bf, bc := matchBand(*pct, bands)
+		bc := matchBand(*pct, bands)
 		if !banded {
-			floor, ceiling, banded = bf, bc, true
+			ceiling, banded = bc, true
 			return
 		}
-		floor, ceiling = min(floor, bf), min(ceiling, bc)
+		ceiling = min(ceiling, bc)
 	}
 	apply(fiveHour, p.FiveHour)
 	apply(sevenDay, p.SevenDay)
-	if banded {
-		if p.ceilingSet {
-			ceiling = min(ceiling, p.Ceiling)
-		}
-		if p.floorSet {
-			floor = min(floor, p.Floor)
-		}
+	if banded && p.ceilingSet {
+		ceiling = min(ceiling, p.Ceiling)
 	}
 	if sevenDay != nil && pace != nil && len(p.PaceCaps) > 0 {
 		over := *sevenDay - *pace
 		for _, pc := range p.PaceCaps {
 			if over >= pc.OverBy-1e-9 {
-				floor, ceiling = min(floor, pc.Floor), min(ceiling, pc.Ceiling)
+				ceiling = min(ceiling, pc.Ceiling)
 			}
 		}
 	}
 	if (p.fiveHourMaxSet || p.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.FiveHourMax {
-		floor, ceiling = 0, 0
+		ceiling = 0
 	}
 	if (p.sevenDayMaxSet || p.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.SevenDayMax {
-		floor, ceiling = 0, 0
+		ceiling = 0
 	}
-	floor = min(floor, ceiling)
 	if fiveHour != nil && *fiveHour >= p.EffectiveHighPercent() {
-		derived.Floor, derived.Ceiling = 0, 0
+		derived.Ceiling = 0
 		return derived, true
 	}
-	derived.Floor, derived.Ceiling = floor, ceiling
+	derived.Ceiling = ceiling
 	return derived, false
 }
 
-func matchBand(used float64, bands []UsageBand) (floor, ceiling int) {
+func matchBand(used float64, bands []UsageBand) (ceiling int) {
 	for _, b := range bands {
 		if used < b.UpTo {
-			return b.Floor, b.Ceiling
+			return b.Ceiling
 		}
 	}
-	return 0, 0
+	return 0
 }
 
 // ProviderNames returns the configured providers in their YAML declaration
@@ -1863,7 +1823,7 @@ func (k Capacity) ProviderNames() []string {
 	return out
 }
 
-// UnmarshalYAML records whether floor, ceiling and reviewHeadroom were set, and
+// UnmarshalYAML records whether ceiling and reviewHeadroom were set, and
 // preserves the YAML key order of providers.
 func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 	type plain Capacity
@@ -1871,14 +1831,13 @@ func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	var set struct {
-		Floor          *int `yaml:"floor"`
 		Ceiling        *int `yaml:"ceiling"`
 		ReviewHeadroom *int `yaml:"reviewHeadroom"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
-	k.floorSet, k.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	k.ceilingSet = set.Ceiling != nil
 	k.reviewHeadroomSet = set.ReviewHeadroom != nil
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		if n.Content[i].Value == "providers" && n.Content[i+1].Kind == yaml.MappingNode {
@@ -2191,8 +2150,8 @@ type Supervisor struct {
 	PostMergeWindow Duration `yaml:"postMergeWindow"`
 	NoteDue         Duration `yaml:"noteDue"`
 	// FillRetryEvery bounds repeated empty or failed board reads while
-	// capacity's floor and ceiling stay unchanged and no agent is done or
-	// removed (5m).
+	// capacity's ceiling stays unchanged and no agent is done or removed
+	// (5m).
 	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
@@ -3417,10 +3376,7 @@ func (c *Config) defaults() error {
 	if !c.Capacity.ceilingSet && c.Capacity.Ceiling == 0 {
 		c.Capacity.Ceiling = DefaultCeiling
 	}
-	if !c.Capacity.floorSet && c.Capacity.Floor == 0 {
-		c.Capacity.Floor = max(0, min(DefaultFloor, c.Capacity.Ceiling))
-	}
-	c.Capacity.Usage.defaults(home, c.Capacity.Floor)
+	c.Capacity.Usage.defaults(home)
 	for _, name := range slices.Sorted(maps.Keys(c.Capacity.Providers)) {
 		p := c.Capacity.Providers[name]
 		if p.SelfHosted() {
@@ -3428,24 +3384,15 @@ func (c *Config) defaults() error {
 			// capacity.ceiling, which a desk lowers to hold one on its week,
 			// does not set its target. Without a ceiling of its own it runs
 			// DefaultSelfHostedCeiling sessions at once, bounded by the
-			// machine guards. Its floor is 0: nothing here needs a minimum
-			// number of busy sessions; only its ceiling bounds it.
+			// machine guards.
 			if !p.ceilingSet {
 				p.Ceiling = DefaultSelfHostedCeiling
-			}
-			if !p.floorSet {
-				p.Floor = 0
 			}
 			for i := range p.ServeModeCommand {
 				p.ServeModeCommand[i] = homePath(home, p.ServeModeCommand[i])
 			}
-		} else {
-			if !p.ceilingSet && p.Ceiling == 0 {
-				p.Ceiling = c.Capacity.Ceiling
-			}
-			if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
-				p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
-			}
+		} else if !p.ceilingSet && p.Ceiling == 0 {
+			p.Ceiling = c.Capacity.Ceiling
 		}
 		if name == ClaudeHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultClaudeUsageCommand)
@@ -3456,11 +3403,7 @@ func (c *Config) defaults() error {
 		if name == CodexHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultCodexUsageCommand)
 		}
-		baseFloor := c.Capacity.Floor
-		if p.floorSet {
-			baseFloor = p.Floor
-		}
-		p.defaults(home, baseFloor)
+		p.defaults(home)
 		c.Capacity.Providers[name] = p
 	}
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
@@ -3889,8 +3832,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("resources: %q is not a valid resource name", r)
 		}
 	}
-	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
-		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
+	if k := c.Capacity; k.Ceiling < 0 {
+		return fmt.Errorf("capacity.ceiling: %d is negative", k.Ceiling)
 	}
 	if c.Capacity.ReviewHeadroom < 0 {
 		return fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom)
@@ -3912,8 +3855,8 @@ func (c *Config) validate() error {
 		if k := strings.TrimSpace(p.Kind); k != "" && k != KindSubscription && k != KindSelfHosted {
 			return fmt.Errorf("capacity.providers.%s.kind: %q is not %s or %s", name, p.Kind, KindSubscription, KindSelfHosted)
 		}
-		if p.Floor < 0 || p.Ceiling < p.Floor {
-			return fmt.Errorf("capacity.providers.%s: floor %d and ceiling %d; the ceiling is at least the floor", name, p.Floor, p.Ceiling)
+		if p.Ceiling < 0 {
+			return fmt.Errorf("capacity.providers.%s.ceiling: %d is negative", name, p.Ceiling)
 		}
 		if p.SelfHosted() {
 			// claude, agy and codex are the subscription harnesses' names: a
