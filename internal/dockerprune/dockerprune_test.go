@@ -29,6 +29,9 @@ const (
 	docker   = "docker"
 	image    = "image"
 	oldID    = "sha256:old"
+	// inlabID is the fixture's image a kind node holds, danglingID its
+	// image without a tag.
+	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
 )
 
 func TestNormalize(t *testing.T) {
@@ -155,13 +158,13 @@ func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 	// The node image runs a container; nginx:1, created before all
 	// others, is in the lab by its tag and goes last; old, created first
 	// but retagged since new was built, goes after new.
-	if got, want := ids(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)), []string{"sha256:dangling", "sha256:new", "sha256:old", "sha256:inlab"}; !slices.Equal(got, want) {
+	if got, want := ids(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)), []string{danglingID, "sha256:new", oldID, inlabID}; !slices.Equal(got, want) {
 		t.Errorf("candidates = %v; want %v", got, want)
 	}
 	// Kept since the 13th: new, created on the 15th, and old, tagged on the
 	// 16th, stay whatever their Created.
 	keep := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
-	if got, want := ids(keep), []string{"sha256:dangling", "sha256:inlab"}; !slices.Equal(got, want) {
+	if got, want := ids(keep), []string{danglingID, inlabID}; !slices.Equal(got, want) {
 		t.Errorf("candidates kept since the 13th = %v; want %v", got, want)
 	}
 	var why []string
@@ -194,7 +197,7 @@ func TestKindImagesSkipsAStoppedNode(t *testing.T) {
 	f := &fake{nodes: "lab-control-plane\texited\nlab-worker\trunning\n",
 		crictl: map[string]string{"lab-worker": `{"images":[{"id":"sha256:inlab","repoTags":[],"repoDigests":[]}]}`}}
 	held, err := KindImages(context.Background(), f.run)
-	if err != nil || !held.Has(Image{ID: "sha256:inlab"}) || len(held) != 1 {
+	if err != nil || !held.Has(Image{ID: inlabID}) || len(held) != 1 {
 		t.Errorf("held = %v, %v; want the running node's image alone", held, err)
 	}
 }
