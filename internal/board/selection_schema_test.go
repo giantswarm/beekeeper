@@ -199,7 +199,7 @@ func parseGQL(q string) (gqlDoc, error) {
 			continue
 		}
 		switch kw := p.name(); kw {
-		case "query", "mutation":
+		case gqlQuery, gqlMutation:
 			p.name()
 			if p.space(); p.i < len(p.s) && p.s[p.i] == '(' {
 				p.args()
