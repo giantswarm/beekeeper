@@ -41,6 +41,19 @@ type executionPublicationResult struct {
 func executionBranch(ref execution.Ref) string {
 	return fmt.Sprintf("beekeeper-execution/%s/%d", ref.Execution, ref.Generation)
 }
+
+func executionOwnedBranch(r *state.ExecutionRecord) string {
+	if r != nil {
+		if r.Published != nil && r.Published.Branch != "" {
+			return r.Published.Branch
+		}
+		if g := strings.TrimSpace(r.Request.GitRef); g != "" && g != "HEAD" && g != "main" && g != "master" && !publicationCommit(g) {
+			return g
+		}
+		return executionBranch(r.Handle.Ref)
+	}
+	return ""
+}
 func publicationCommit(s string) bool {
 	b, err := hex.DecodeString(s)
 	return err == nil && len(b) == 20
@@ -148,7 +161,7 @@ func (a *app) publishExecution(ctx context.Context, st *state.State, ref executi
 		return result, err
 	}
 	bundlePath := filepath.Join(dir, "commits.bundle")
-	result.Branch = executionBranch(ref)
+	result.Branch = executionOwnedBranch(r)
 	if p.SyncBase {
 		if _, err = publishGit(ctx, repo, "cat-file", "-e", p.Head+"^{commit}"); err != nil {
 			return result, refused("base synchronization head is not in the default branch history")

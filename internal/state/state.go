@@ -343,8 +343,10 @@ type Park struct {
 	ReviewHead string `json:"reviewHead,omitempty"`
 	// PostMerge is work remaining after merge; nil preserves older parks.
 	// An explicit empty string lets the loop close the task without a wake.
-	PostMerge *string   `json:"postMerge,omitempty"`
-	By        Party     `json:"by"`
+	PostMerge *string `json:"postMerge,omitempty"`
+	// Worktree is the local git worktree root the caller parked from.
+	Worktree string    `json:"worktree,omitempty"`
+	By       Party     `json:"by"`
 	At        time.Time `json:"at"`
 	On        string    `json:"on,omitempty"`
 	Waits     string    `json:"waits"`
@@ -1082,6 +1084,7 @@ type State struct {
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
 	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
+	ReviewParks   []ReviewPark   `json:"reviewParks,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.

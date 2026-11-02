@@ -350,10 +350,22 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
+			if v.PostMerge == nil {
+				empty := ""
+				v.PostMerge = &empty
+			}
+			if ag.Execution != nil {
+				if r, _ := executionRecord(st, *ag.Execution); r != nil {
+					r.Completed = true
+				}
+			}
 		} else {
 			v.PostMerge = nil
 		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
+		if v.On != "" {
+			st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
+		}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)
@@ -451,7 +463,7 @@ func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head
 			}
 		}
 	}
-	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionBranch(r.Handle.Ref) || !strings.EqualFold(p.Head.Repo.FullName, r.Request.Repository) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
+	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, r.Request.Repository) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
 		return ""
 	}
 	return p.Head.SHA

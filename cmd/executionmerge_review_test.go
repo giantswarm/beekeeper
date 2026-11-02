@@ -376,3 +376,48 @@ func TestExecutionReviewCompletionVerdictAndRetryAreAuthenticated(t *testing.T) 
 		t.Fatal("conflicting verdict persisted")
 	}
 }
+
+func TestExecutionMergeCoordinatorSucceedsAfterStoppedWorkerAndReviewFix(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	rejected := superloop.Review{ID: "r1-changes", Verdict: superloop.ChangesRequested}
+	completeMergeReview(t, a, use, &rejected)
+	pull.Reviews = []superloop.Review{rejected}
+
+	fixedHead := strings.Repeat("b", 40)
+	pull.Head = fixedHead
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		r := st.Starts[0].Execution
+		r.Completed = true
+		r.Observation.StopAcknowledged = true
+		r.Observation.ProcessState = execution.Exited
+		st.UpsertReviewPark(state.ReviewPark{
+			On:         fmt.Sprintf("%s#%d", use.Repository, use.PR),
+			At:         time.Now(),
+			ReviewHead: fixedHead,
+			Agent:      st.Agents[0].Name,
+			Party:      st.Agents[0].Party,
+			Execution:  &use.Ref,
+		})
+		st.Agents = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A worker grant on the unreviewed fix head is still refused.
+	workerUse := use
+	workerUse.Head = fixedHead
+	if err := a.executionMergeLive(context.Background(), st, workerUse); err == nil {
+		t.Fatal("worker grant admitted without an approved round on the fix head")
+	}
+	// The coordinator loop (use.ID == "") merges the fix head after an authenticated ChangesRequested round.
+	coordUse := use
+	coordUse.ID = ""
+	coordUse.Head = fixedHead
+	if err := a.executionMergeLive(context.Background(), st, coordUse); err != nil {
+		t.Fatalf("coordinator merge after ChangesRequested fix round and stopped worker failed: %v", err)
+	}
+}

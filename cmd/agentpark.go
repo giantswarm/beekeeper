@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -211,8 +212,13 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
 		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
-		if i >= 0 && reviewHead != "" && len(postMerge) > 0 {
-			park.PostMerge = &postMerge[0]
+		if i >= 0 && reviewHead != "" {
+			pm := ""
+			if len(postMerge) > 0 {
+				pm = postMerge[0]
+			}
+			park.PostMerge = &pm
+			park.Worktree = parkWorktree(".")
 		}
 		name, counted, resume := me.Name, "off the roster, woken by its session id", fmt.Sprintf("beekeeper agents resume %s", wakeID(me))
 		// One park per session: a new one replaces the last, also one it
@@ -221,6 +227,9 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		if i >= 0 {
 			st.Agents[i].Park = park
 			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
+			if on != "" {
+				st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, on) })
+			}
 		} else {
 			// A session off the roster parks too: the watch wakes it by
 			// its session id once the wait settles, as it does an agent.
@@ -766,6 +775,16 @@ var parkReviewHead = func(on string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return publishedParkHead(ctx, on, ".", runGit, github.RunGH)
+}
+
+var parkWorktree = func(dir string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := runGit(ctx, dir, "rev-parse", "--path-format=absolute", "--show-toplevel")
+	if err != nil {
+		return ""
+	}
+	return filepath.Clean(strings.TrimSpace(string(out)))
 }
 
 func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, gh github.GH) string {

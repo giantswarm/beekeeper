@@ -2696,6 +2696,9 @@ func TestLoopReviewsARemoteWorkersPublishedPark(t *testing.T) {
 	park := func(head string) {
 		t.Helper()
 		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(party) }) {
+				st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Execution: &ref})
+			}
 			_, evs, err := r.a.applyExecutionControl(context.Background(), st, party, execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, executionPark{On: loopPR, Waits: deskReviewWait, Head: head})})
 			return evs, err
 		}); err != nil {
