@@ -151,7 +151,7 @@ func TestRemoteRunThroughShellTransport(t *testing.T) {
 	r := Runner{Config: validConfig(), StateDir: t.TempDir(), Stdout: &output, Stderr: &diagnostics,
 		Name: "go test ./...", Repo: "giantswarm/beekeeper", Head: "16a89d963f2a9c1b",
 		Record: func(verb, detail string) { events = append(events, verb+" "+detail) },
-		Tail: &ring, KeepFailure: func(runID string, exit int) string {
+		Tail:   &ring, KeepFailure: func(runID string, exit int) string {
 			return "state/run-tails/remote-" + runID + ".log"
 		}}
 	r.Command = func(ctx context.Context, in io.Reader, out io.Writer, args ...string) error {
