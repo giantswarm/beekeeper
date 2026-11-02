@@ -17,7 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `board next` counts blockers from the current `blockedBy` list for board items, sub-issues and search results, so a freshly blocked item is skipped immediately and is offered again once its blockers close. Its query no longer reads the delayed dependency summary (https://github.com/giantswarm/beekeeper/issues/958).
 - Queued merges behind a live gate sleep with bounded backoff and only read their local queue position, avoiding repeated state rewrites, lane recovery and GitHub reads while waiting, and renew their queue place once before a detached handoff (https://github.com/giantswarm/beekeeper/issues/2049).
 - Full-history and working-tree gitleaks scans allow the fake GPG key ID in the signing argument parser test, scoped to its exact value, file and detection rule.
 
