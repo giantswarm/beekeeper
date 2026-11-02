@@ -178,6 +178,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	t.Cleanup(func() { readReviewedBehind = wasBehind })
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
+	oldBudget := readLoopGraphQLBudget
+	t.Cleanup(func() { readLoopGraphQLBudget = oldBudget })
+	readLoopGraphQLBudget = func(a *app, _ context.Context) (github.Budget, error) {
+		st, err := a.store.Read()
+		if err != nil || st.Budget == nil {
+			return github.Budget{}, err
+		}
+		return github.Budget{Remaining: st.Budget.Remaining, Limit: st.Budget.Limit, Reset: st.Budget.Reset, GraphQL: graphqlOf(st.Budget.GraphQL)}, nil
+	}
 	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
 	}

@@ -61,6 +61,16 @@ as a failure. No board read runs while the GitHub budget is under
 `github.floor` (REST until its reset, or the last GraphQL reading until its
 reset, an hour after the reading when GitHub named none, or a GraphQL refusal): the done events wait unsettled and the refill
 skips its read, without a failure or a pause.
+The loop also holds ownership and PR observations under the GraphQL floor
+or while the reading is unknown or stale. Board queries and tracked PR reads
+check a fresh budget against a durable allowance of 1,500 points per GitHub
+window, reserving 500 points before each request. Concurrent timer commands
+share its lock. An interrupted request keeps its reservation. Traffic between
+observations counts conservatively toward the allowance as `shared`; a busy
+desk can therefore pause the loop early. `budget --json` exposes the window,
+spent points and `board`, `pull`, `pass` and `shared` totals under `loop`.
+Unchanged PR observations last five minutes; a new park, a report from that
+PR's reviewer or an answer on its thread invalidates them immediately.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 

@@ -639,6 +639,9 @@ type supervisorLoop struct {
 	opens map[string]loopOpen
 	// merged are the merged pull requests read, by reference.
 	merged map[string]superloop.Pull
+	// pulls reuses unchanged PR observations between passes. A new park,
+	// answer or reviewer report invalidates them before planning.
+	pulls map[string]loopPullObservation
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -838,6 +841,20 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A budget hold applies to observations too: reading every parked PR
+	// while starts are held still drains the shared GraphQL window.
+	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
+		return nil
+	}
+	delete(l.said, "graphql budget")
+	if !l.dryRun {
+		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
+			return nil
+		}
+		delete(l.said, "graphql allowance")
+	}
 	if !l.dryRun {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
@@ -953,9 +970,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Pulls[ref] = p
 			continue
 		}
-		p, err := readLoopPull(ctx, ref)
+		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
 		if err != nil {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
+			if errors.Is(err, errLoopLater) {
+				return nil
+			}
 			continue
 		}
 		if r, ok := parseRef(ref); ok {
@@ -1380,7 +1400,7 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 	a := l.a
 	b := a.cfg.Board
 	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.now.Sub(l.tidyAt) < b.TidyEvery.Duration ||
-		lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
 		return
 	}
 	l.tidyAt = a.now

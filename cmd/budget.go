@@ -91,15 +91,18 @@ unread core budget:
 				firstLine = fmt.Sprintf("merges first: %s, queued for the reset, go before the waits until they start, at %s at the latest (merge.resetFirst)",
 					merge.Keys(first), clock(a.now, merge.ResetFirstUntil(first, window)))
 			}
+			var loopSpend loopGraphQLSpend
+			_, _ = a.store.ReadFile(loopGraphQLFile, &loopSpend)
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
-					Floor   int            `json:"floor"`
-					Held    bool           `json:"held"`
-					Urgent  []state.Urgent `json:"urgent,omitempty"`
-					Gated   []gatedParty   `json:"gated,omitempty"`
-					Pollers []poller       `json:"pollers"`
-				}{b, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
+					Loop    *loopGraphQLSpend `json:"loop,omitempty"`
+					Floor   int               `json:"floor"`
+					Held    bool              `json:"held"`
+					Urgent  []state.Urgent    `json:"urgent,omitempty"`
+					Gated   []gatedParty      `json:"gated,omitempty"`
+					Pollers []poller          `json:"pollers"`
+				}{b, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
 				for _, l := range searchLines(a, b.Search) {

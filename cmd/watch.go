@@ -1573,7 +1573,7 @@ func (w *watcher) exposures() {
 func (w *watcher) budget(ctx context.Context, now time.Time) {
 	b, err := w.probeBudget(ctx)
 	if ctx.Err() == nil {
-		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
+		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
 		w.publishBudget(held)
 	}
 	switch {

@@ -772,8 +772,8 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 	for _, name := range []string{"graphql under floor", "graphql refused", "rest under floor"} {
 		t.Run(name, func(t *testing.T) {
 			r, l, reads := nothingFreeRig(t, 2)
-			r.a.cfg.GitHub.Floor = 2500
 			r.loopPass(t, l)
+			r.a.cfg.GitHub.Floor = 2500
 			setBudget := func(low bool) {
 				t.Helper()
 				err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -810,7 +810,7 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 			if got := len(r.logged(t, "supervisor.next")); got != 0 {
 				t.Fatalf("next starts settled without a board read: %d", got)
 			}
-			if !strings.Contains(r.out.String(), "SUPERVISOR NEXT HELD") {
+			if !strings.Contains(r.out.String(), "SUPERVISOR GITHUB HELD") {
 				t.Errorf("the hold is not said:\n%s", r.out)
 			}
 			setBudget(false)
@@ -842,10 +842,20 @@ func TestLoopReadsNoBoardUntilTheGraphQLReset(t *testing.T) {
 	if *reads != 0 {
 		t.Fatalf("read the board %d times before the GraphQL reset", *reads)
 	}
-	if !strings.Contains(r.out.String(), "SUPERVISOR NEXT HELD") {
+	if !strings.Contains(r.out.String(), "SUPERVISOR GITHUB HELD") {
 		t.Errorf("the hold is not said:\n%s", r.out)
 	}
 	r.loopPass(t, l)
+	r.loopPass(t, l)
+	if *reads != 0 {
+		t.Fatal("read board on an expired low reading without evidence of recovery")
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget.GraphQL = &state.GraphQL{Remaining: 4900, Limit: 5000, At: r.a.now, Reset: r.a.now.Add(time.Hour)}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	r.loopPass(t, l)
 	if *reads != 1 {
 		t.Fatalf("past the GraphQL reset: %d board reads, want 1", *reads)
