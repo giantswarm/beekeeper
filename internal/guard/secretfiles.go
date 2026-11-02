@@ -220,6 +220,28 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 	} else if checked {
 		isMeta = true // a link to a guarded file, no read of it
 	}
+	// A directory copy (including cp -rs) exposes every guarded descendant.
+	// Refuse it at the source, before an alias can escape the path guard.
+	if name == "cp" {
+		sources, _, _, _ := lnOperands(args)
+		for _, d := range dirs {
+			for _, source := range sources {
+				if file := g.files.holds(wordPath(source, d)); file != "" {
+					return &leak{what: "a copy of " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
+				}
+			}
+		}
+	}
+	// Opaque helpers may assemble a path from separate arguments.
+	if !isMeta && len(args) > 1 {
+		for _, joined := range []string{strings.Join(args, ""), strings.Join(args, "/")} {
+			for _, d := range dirs {
+				if file := g.files.match(wordPath(joined, d)); file != "" {
+					return &leak{what: "a split path to " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
+				}
+			}
+		}
+	}
 	if name == findCmd {
 		if file := g.files.findSource(args, dirs, g.feeds); file != "" {
 			return &leak{what: "a find that runs a reader on " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
