@@ -886,8 +886,9 @@ type Agents struct {
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
-	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
-	// the roster before the doctor takes it off (24h).
+	// StaleAfter bounds inactivity without a running CLI (24h). An idle or
+	// unkept task holder is retired after this age; gone task holders free
+	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
 	// ArchiveAgreement says where the person agreed that the desktop
 	// sessions of finished workers beekeeper started are archived without
@@ -3634,7 +3635,7 @@ func (c *Config) validate() error {
 		if selector == "local" || !execution.ValidIdentity(selector) || identities[host.Identity] {
 			return errors.New("agents.hosts requires unique identities and selectors; local is reserved")
 		}
-		if err := host.Validate(); err != nil {
+		if err := host.ValidateCatalog(); err != nil {
 			return fmt.Errorf("agents.hosts.%s: %w", selector, err)
 		}
 		identities[host.Identity] = true
