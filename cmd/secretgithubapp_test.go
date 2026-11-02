@@ -270,7 +270,7 @@ func TestSecretGitHubAppDryRun(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{file, githubAppOp, "team-agents", recipient, "stringData.private-key", "stringData.client-secret", "stringData.webhook-secret"} {
+			for _, want := range []string{file, githubAppOp, a.cfg.Apps.Secrets[fixtureOrg].Namespace, recipient, "stringData.private-key", "stringData.client-secret", "stringData.webhook-secret"} {
 				if !strings.Contains(out, want) {
 					t.Errorf("output lacks %q: %s", want, out)
 				}
