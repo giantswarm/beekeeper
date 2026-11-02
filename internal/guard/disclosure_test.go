@@ -5,7 +5,10 @@ import (
 	"testing"
 )
 
-const expandsPermissions = "Expands the Organization permissions section"
+const (
+	expandsPermissions    = "Expands the Organization permissions section"
+	typedDisclosureAction = "type"
+)
 
 func TestPermissionDisclosureHook(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -27,7 +30,7 @@ func TestPermissionDisclosureHook(t *testing.T) {
 		"a button is not a section":       {permissionsPage, leftClick, "Expands the Save changes button", nil, Deny},
 		"a dropdown is not a section":     {permissionsPage, leftClick, "Expands the Members dropdown", nil, Deny},
 		"right click is not a disclosure": {permissionsPage, "right_click", expandsPermissions, nil, Deny},
-		"typed text is not a disclosure":  {permissionsPage, "type", expandsPermissions, nil, Deny},
+		"typed text is not a disclosure":  {permissionsPage, typedDisclosureAction, expandsPermissions, nil, Deny},
 		"keypress is not a disclosure":    {permissionsPage, actionKeyPress, expandsPermissions, nil, Deny},
 		"consent button remains guarded":  {otherAppPage, leftClick, expandsPermissions, nil, Deny},
 		"another host":                    {lanConsentPage, leftClick, expandsPermissions, nil, Deny},
@@ -56,7 +59,7 @@ func TestPermissionDisclosureBatchStillChecksSubmit(t *testing.T) {
 		t.Fatalf("batch decision = %+v, want denial of unrecorded Save", d)
 	}
 	// Setting a form value is not a disclosure, whatever its summary says.
-	ev = toolEvent(browserTools+chromeForm, map[string]any{tabKey: json.Number(tab7), valueKey: "write", summaryKey: expandsPermissions})
+	ev = toolEvent(browserTools+chromeForm, map[string]any{tabKey: json.Number(tab7), valueKey: "read-and-write", summaryKey: expandsPermissions})
 	ev["transcript_path"] = transcriptWith(t, Page{URL: permissionsPage, Title: permissionsTitle}, false)
 	d = decideEvent(t, Hook{Apps: func() []App { return nil }}, ev)
 	if d == nil || d.PermissionDecision != Deny {
@@ -67,7 +70,7 @@ func TestPermissionDisclosureBatchStillChecksSubmit(t *testing.T) {
 func TestPermissionDisclosureRequiresDrawnPage(t *testing.T) {
 	for _, verdict := range []string{NotDrawn, ""} {
 		t.Run(verdict, func(t *testing.T) {
-			calls := []drawsCall{{chromeNavigation, map[string]any{urlKey: permissionsPage, tabKey: 7}, "Navigated", permissionsPage}}
+			calls := []drawsCall{{chromeNavigation, map[string]any{urlKey: permissionsPage, tabKey: 7}, "Opened permissions page", permissionsPage}}
 			if verdict != "" {
 				calls = append(calls, drawResult(verdict, permissionsPage))
 			}
