@@ -564,6 +564,9 @@ type Timer struct {
 	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
 	// until marked done.
 	Repeat string `json:"repeat,omitempty"`
+	// Held is what kept a due timer from firing at its time (a beekeeper
+	// stop), said when it fires late; a re-armed timer starts without it.
+	Held string `json:"held,omitempty"`
 
 	rest rest
 }
@@ -1005,6 +1008,9 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
+	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// They grant no start permissions; Starts remains the authorization ledger.
+	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a
 	// session no roster entry names), one per session, its By: the watch
 	// settles and resumes them as it does a roster agent's.
@@ -1413,6 +1419,11 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteLookup is the optional complete history of a store that retains closed notes.
+type NoteLookup interface {
+	LookupNote(int) (*Note, *Event, error)
 }
 
 // NoteHistory is the optional history of a store that retains central note
@@ -1827,21 +1838,27 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
+	reader := bufio.NewReader(f)
+	for {
+		// A record can contain a complete note and answer of any length.
+		line, readErr := reader.ReadBytes('\n')
 		var e Event
 		// A write lost to an unclean shutdown leaves NUL bytes, and the next
 		// append lands right behind them on the same line.
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
+			if n > 0 && len(out) > n {
+				out = out[len(out)-n:]
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return out, nil
+		}
+		if readErr != nil {
+			return out, readErr
 		}
 	}
-	if n > 0 && len(out) > n {
-		out = out[len(out)-n:]
-	}
-	return out, sc.Err()
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under

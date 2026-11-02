@@ -1364,14 +1364,28 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 }
 
 // loopFailure persists identical failures across passes and restarts. Two
-// consecutive failures defer the action for five minutes, keeping it pending.
+// consecutive failures defer the action for five minutes, keeping it pending;
+// each further identical failure doubles the deferral up to an hour, so a
+// refusal that does not change is not retried every five minutes all day.
 type loopFailure struct {
 	Message string    `json:"message"`
 	Count   int       `json:"count"`
 	RetryAt time.Time `json:"retryAt"`
 }
 
-const loopFailureBackoff = 5 * time.Minute
+const (
+	loopFailureBackoff    = 5 * time.Minute
+	loopFailureBackoffCap = time.Hour
+)
+
+// loopFailureDelay is the deferral after count identical failures.
+func loopFailureDelay(count int) time.Duration {
+	d := loopFailureBackoff
+	for i := 2; i < count && d < loopFailureBackoffCap; i++ {
+		d *= 2
+	}
+	return min(d, loopFailureBackoffCap)
+}
 
 func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
 	f := loopFailure{Message: cause.Error(), Count: 1}
@@ -1381,7 +1395,7 @@ func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, caus
 		f.Count = previous.Count + 1
 	}
 	if f.Count >= 2 {
-		f.RetryAt = l.a.now.Add(loopFailureBackoff)
+		f.RetryAt = l.a.now.Add(loopFailureDelay(f.Count))
 	}
 	b, err := json.Marshal(f)
 	if err != nil {
@@ -2654,7 +2668,7 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	}
 	found := checkTimers(ctx, acting, a.now, lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
-	_, _, _, changed := settleTimersMatching(st, found, a.now, timerActs)
+	_, _, _, changed := settleTimersMatching(st, found, a.now, a.cfg.Supervisor.LoopInterval.Duration, timerActs)
 	if !changed {
 		return nil
 	}
@@ -2662,7 +2676,7 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	var fires []timerFire
 	if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 		var evs []state.Event
-		lines, evs, fires, _ = settleTimersMatching(current, found, a.now, timerActs)
+		lines, evs, fires, _ = settleTimersMatching(current, found, a.now, a.cfg.Supervisor.LoopInterval.Duration, timerActs)
 		return evs, nil
 	}); err != nil {
 		return err
