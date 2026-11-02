@@ -460,7 +460,7 @@ func TestEndReviewWorkersPersistsReviewParkBeforeRosterRemoval(t *testing.T) {
 }
 
 func TestReviewFixEndedWorkerNeedsRepair(t *testing.T) {
-	for _, reason := range []string{"conflict", "failed CI"} {
+	for _, reason := range []string{"conflicting base", "failed CI"} {
 		t.Run(reason, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.pull.Branch = "repair-branch"
@@ -478,7 +478,7 @@ func TestReviewFixEndedWorkerNeedsRepair(t *testing.T) {
 				t.Fatal("worker did not end")
 			}
 			r.pull.Green = false
-			if reason == "conflict" {
+			if reason == "conflicting base" {
 				r.pull.MergeState = "DIRTY"
 			} else {
 				r.pull.Red = []superloop.Check{{Name: "unit checks"}}

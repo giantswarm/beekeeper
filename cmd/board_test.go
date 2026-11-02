@@ -911,9 +911,9 @@ func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T
 }
 
 func TestBoardEndedReviewWorkerDoesNotServe(t *testing.T) {
-	st := &state.State{ReviewParks: []state.ReviewPark{{Agent: "ended worker", Party: state.Party{Name: "ended worker"}, On: "o/r#9", Serves: "o/r#1"}}}
+	st := &state.State{ReviewParks: []state.ReviewPark{{Agent: workerOne, Party: state.Party{Name: workerOne}, On: loopPR, Serves: refOne}}}
 	res := nextFree(st, boardCandidates(1), pickScope{alive: func(state.Party) bool { return false }})
-	if res.Pick == nil || res.Pick.Ref != "o/r#1" {
+	if res.Pick == nil || res.Pick.Ref != refOne {
 		t.Fatalf("ended review worker claimed issue: %+v", res)
 	}
 }
