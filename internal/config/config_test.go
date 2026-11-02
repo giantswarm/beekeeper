@@ -19,7 +19,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.StateDir != "/state/beekeeper" || c.LeaseDir != "/state/beekeeper/leases" || c.GitHub.Floor != 2500 ||
-		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Agents.RelayAt != 400_000 || c.Guide.RelayAt != 150_000 {
+		c.Watch.Interval.Duration != 30*time.Second || c.Watch.BatchInterval.Duration != 5*time.Minute || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Agents.RelayAt != 400_000 || c.Guide.RelayAt != 150_000 {
 		t.Errorf("defaults = %+v", c)
 	}
 	if len(c.Notify.Kinds) != 5 || c.Notify.Policy().Quiet != nil {
@@ -1246,5 +1246,18 @@ func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
 	}
 	if _, ok := c.Capacity.Providers[CodexHarness]; ok {
 		t.Fatal("created an unconfigured Codex provider")
+	}
+}
+
+func TestWatchBatchInterval(t *testing.T) {
+	for _, value := range []string{"1m", "-1s"} {
+		c, err := parse("test.yaml", []byte("watch: {batchInterval: "+value+"}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := time.ParseDuration(value)
+		if c.Watch.BatchInterval.Duration != want {
+			t.Errorf("batch interval = %s, want %s", c.Watch.BatchInterval, want)
+		}
 	}
 }
