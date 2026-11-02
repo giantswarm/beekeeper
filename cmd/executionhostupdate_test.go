@@ -466,3 +466,22 @@ func TestSupervisorLoopUpdatesHostsAndHandsOnEachHoldOnce(t *testing.T) {
 		t.Errorf("the held host was not tried again: %v", r.calls)
 	}
 }
+
+func TestReleaseVersionIsATagNotABuild(t *testing.T) {
+	for v, want := range map[string]bool{
+		"v0.174.0":       true,
+		"v0.174.0-rc.22": true,
+		"v1.0.0":         true,
+		"dev":            false,
+		"0.174.0":        false,
+		"v0.174":         false,
+		"v0.173.3-r41451705t20261102031105hdf6b6d4": false,
+		"v0.3.1-0.20260924210000-edd882d0a1b2":      false,
+		"v0.174.0+dirty":                            false,
+		"v0.174.0-rc.1; true":                       false,
+	} {
+		if got := releaseVersion(v); got != want {
+			t.Errorf("releaseVersion(%q) = %v, want %v", v, got, want)
+		}
+	}
+}

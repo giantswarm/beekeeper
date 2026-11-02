@@ -7,13 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"
-	"golang.org/x/mod/module"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -56,12 +54,16 @@ const hostUpdateCmdName = "update"
 // hostVersionFlag names the release a host's self-update installs.
 const hostVersionFlag = "version"
 
-// releaseVersion says whether v is a release tag a host can install
-// ("v0.3.0", "v0.3.0-rc.2"), not a development or pseudo-version build.
+// releaseVersion says whether v is a release tag a host can install, a
+// release ("v0.3.0") or a release candidate ("v0.3.0-rc.2"): not a
+// development, pseudo-version or make build
+// ("v0.3.0-r123t20261102031105habc1234").
 func releaseVersion(v string) bool {
-	_, err := semver.StrictNewVersion(strings.TrimPrefix(v, "v"))
-	return err == nil && strings.HasPrefix(v, "v") && !strings.Contains(v, "+") && !module.IsPseudoVersion(v)
+	return releaseTag.MatchString(v)
 }
+
+// releaseTag is the shape of the release tags.
+var releaseTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$`)
 
 func (a *app) executionHostUpdateCmds() []*cobra.Command {
 	updateCmd := &cobra.Command{Use: hostUpdateCmdName + " <host>", Short: "Update an execution host to this coordinator's release, prepare its policy and pin its digest in beekeeper's state", Long: `Update the execution host to this coordinator's release and record the
