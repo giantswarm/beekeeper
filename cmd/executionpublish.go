@@ -290,8 +290,8 @@ func (a *app) executionPublishCmd() *cobra.Command {
 			return err
 		}
 		policy, err := s.InstalledPolicy()
-		if err != nil || policy.Digest() != j.Request.PolicyDigest || j.StopRequest != nil || j.Completed || !execution.SupportedHarness(j.Request.Harness) {
-			return refused("publication policy changed or execution is unavailable")
+		if err != nil || policy.Digest() != j.BoundPolicy() || j.StopRequest != nil || j.Completed || !execution.SupportedHarness(j.Request.Harness) {
+			return refused("publication policy changed or execution is unavailable; after an approved host-policy update the coordinator rebinds this execution with agents recover")
 		}
 		ctx := cmd.Context()
 		workspace := j.Handle.Workspace

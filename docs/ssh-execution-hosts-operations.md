@@ -134,6 +134,25 @@ Changing the host binary, rules, settings, or protected host configuration inval
 the policy. Prepare and pin a matching bundle again before starting new work.
 Do not weaken a required guard to make a check pass.
 
+A running execution stays bound to the policy it started under. After such a
+change its unit keeps running, but its `agents publish`, `agents merge` and
+capped runs refuse until the coordinator rebinds it. Once the new bundle is
+prepared on the host and its digest pinned in the coordinator catalog, rebind
+each running execution from the coordinator:
+
+```sh
+beekeeper agents recover worker
+```
+
+Recovery inspects the same execution and never starts a replacement. It rebinds
+only to the host's prepared policy, only when that is the catalog's pinned
+digest, and only from the policy the execution is bound to; it records an
+`execution.policy-rebound` event with both digests. The worker keeps its
+workspace, commits, owned branch and pull request, and retries its publication.
+While the host policy is unprepared, stale, or not yet pinned, `recover` exits 3
+and says that the unit is reachable but its publication is unavailable. A stopped,
+completed or failed execution is never rebound.
+
 The pinned digest covers every host setting that changes what a worker may start
 under or how much it may consume: the security sections, the execution host
 configuration (`execution.maxBusy` included), and the start guards — the memory

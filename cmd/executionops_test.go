@@ -23,6 +23,7 @@ type testExecutionTransport struct {
 	stop    func(context.Context, execution.Ref, execution.StopRequest) (execution.Ack, error)
 	inspect func(context.Context, execution.Ref) (execution.Observation, error)
 	sync    func(context.Context, execution.Ref) (execution.ControlResult, error)
+	rebind  func(context.Context, execution.Ref, execution.PolicyRebind) (execution.Observation, error)
 }
 
 func (f *testExecutionTransport) ResolveMessage(ctx context.Context, r execution.Ref, q execution.MessageResolution) (execution.Ack, error) {
@@ -297,6 +298,12 @@ func (f *testExecutionTransport) Stop(ctx context.Context, r execution.Ref, q ex
 func (f *testExecutionTransport) Inspect(ctx context.Context, r execution.Ref) (execution.Observation, error) {
 	return f.inspect(ctx, r)
 }
+func (f *testExecutionTransport) RebindPolicy(ctx context.Context, r execution.Ref, q execution.PolicyRebind) (execution.Observation, error) {
+	if f.rebind == nil {
+		return execution.Observation{}, errors.New("fixture transport has no policy rebind")
+	}
+	return f.rebind(ctx, r, q)
+}
 func (f *testExecutionTransport) SyncControl(ctx context.Context, r execution.Ref) (execution.ControlResult, error) {
 	if f.sync != nil {
 		return f.sync(ctx, r)
@@ -450,5 +457,75 @@ func TestExecutionLostLogsAndInspectExposeReachabilityWithoutChangingTask(t *tes
 	st, err := a.store.Read()
 	if err != nil || st.Agents[0].Task != r.Task || st.Starts[0].Execution.Terminal() {
 		t.Fatal("read failure changed task or process ownership")
+	}
+}
+
+// After a host upgrade re-prepares its policy under a running execution,
+// recover tells a reachable unit from one whose publication stays unavailable,
+// and rebinds it only to the policy the host catalog approved, once, with an
+// audit event and no replacement start.
+func TestExecutionRecoverRebindsApprovedHostPolicy(t *testing.T) {
+	a, r := executionTestApp(t)
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := st.Starts[0].Execution.Handle
+	original, prepared := r.PolicyDigest, execution.Digest([]byte("upgraded fixture policy"))
+	bound, installed := original, ""
+	var rebinds []execution.PolicyRebind
+	fake := &testExecutionTransport{}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		return execution.Observation{Handle: handle, ProcessState: execution.Running, Reachability: execution.Reachable, Ready: true, PolicyDigest: bound, HostPolicyDigest: installed}, nil
+	}
+	fake.start = func(context.Context, execution.StartRequest) (execution.Handle, error) {
+		t.Fatal("recovery started a unit")
+		return execution.Handle{}, nil
+	}
+	fake.rebind = func(ctx context.Context, ref execution.Ref, q execution.PolicyRebind) (execution.Observation, error) {
+		rebinds = append(rebinds, q)
+		bound = q.To
+		return fake.inspect(ctx, ref)
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	ctx := context.Background()
+
+	for _, step := range []struct{ installed, want string }{
+		{"", "unprepared or stale"},
+		{prepared, "not the catalog's approved"},
+	} {
+		installed = step.installed
+		err := a.activateExecution(ctx, r.Ref)
+		var refusal *exitError
+		if !errors.As(err, &refusal) || refusal.code != ExitRefused || !strings.Contains(err.Error(), "is reachable") || !strings.Contains(err.Error(), "publication, merge and capped runs are unavailable") || !strings.Contains(err.Error(), step.want) {
+			t.Fatalf("recover did not report the unavailable publication (%s): %v", step.want, err)
+		}
+	}
+	if len(rebinds) != 0 {
+		t.Fatal("recover rebound an unapproved policy")
+	}
+
+	host := a.cfg.Agents.Hosts[sshTestSelector]
+	host.PolicyDigest = prepared
+	a.cfg.Agents.Hosts[sshTestSelector] = host
+	if err := a.activateExecution(ctx, r.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if len(rebinds) != 1 || rebinds[0] != (execution.PolicyRebind{From: original, To: prepared}) {
+		t.Fatalf("recover sent the wrong rebind: %+v", rebinds)
+	}
+	if err := a.activateExecution(ctx, r.Ref); err != nil || len(rebinds) != 1 {
+		t.Fatal("a recovery of a rebound execution rebound it again", err)
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := st.Starts[0].Execution.Observation; o.PolicyDigest != prepared || !o.PolicyAvailable() || len(st.Starts) != 1 || len(st.Agents) != 1 {
+		t.Fatalf("recorded execution does not show the rebound policy: %+v", o)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "execution.policy-rebound" })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, original+" -> "+prepared) {
+		t.Fatal("rebind left no audit event", evs, err)
 	}
 }

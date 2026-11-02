@@ -358,9 +358,10 @@ func TestExecutionPublicationCheckRejectsOlderHost(t *testing.T) {
 	}
 }
 
-func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
-	rig := newPublicationRig(t)
-	rig.commit(t, "change.txt", "host command\n")
+// ownedPublicationHost installs a prepared host whose journal owns the rig's
+// execution, for host-side publication commands run as that execution.
+func ownedPublicationHost(t *testing.T, rig *publicationRig) (s *execution.Server, j execution.Journal, root, bodyPath string) {
+	t.Helper()
 	root, rootErr := filepath.EvalSymlinks(t.TempDir())
 	if rootErr != nil {
 		t.Fatal(rootErr)
@@ -370,13 +371,13 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := execution.Endpoint{SSH: "publication-coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}
-	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
+	s = &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
 	digest, err := s.Prepare(s.Policy())
 	if err != nil {
 		t.Fatal(err)
 	}
 	rig.request.PolicyDigest = digest
-	j := execution.Journal{Request: rig.request, Digest: rig.request.Digest(), Handle: execution.Handle{Ref: rig.request.Ref, Unit: execution.UnitName(rig.request.Ref), ConversationID: rig.request.ConversationID, Workspace: rig.workspace, Commit: rig.base}}
+	j = execution.Journal{Request: rig.request, Digest: rig.request.Digest(), Handle: execution.Handle{Ref: rig.request.Ref, Unit: execution.UnitName(rig.request.Ref), ConversationID: rig.request.ConversationID, Workspace: rig.workspace, Commit: rig.base}}
 	raw, err := json.Marshal(j)
 	if err != nil {
 		t.Fatal(err)
@@ -396,10 +397,17 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	bodyPath := filepath.Join(scratch, "pr.md")
+	bodyPath = filepath.Join(scratch, "pr.md")
 	if err := os.WriteFile(bodyPath, []byte("Resolve the fixture defect."), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return s, j, root, bodyPath
+}
+
+func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
+	rig := newPublicationRig(t)
+	rig.commit(t, "change.txt", "host command\n")
+	s, _, root, bodyPath := ownedPublicationHost(t, rig)
 	command := rig.a.executionPublishCmd()
 	var output bytes.Buffer
 	command.SetOut(&output)
@@ -476,6 +484,47 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	command.SetArgs(nil)
 	if err := command.Execute(); err == nil {
 		t.Fatal("unowned process published")
+	}
+}
+
+// A host upgrade re-prepares its policy under a running execution that already
+// published. Its follow-up keeps failing closed until the execution is rebound
+// to the prepared policy, then publishes to the same owned PR.
+func TestExecutionPublicationFollowUpAfterHostPolicyRebind(t *testing.T) {
+	rig := newPublicationRig(t)
+	rig.commit(t, "change.txt", "before the host upgrade\n")
+	s, j, _, bodyPath := ownedPublicationHost(t, rig)
+	publish := func(args ...string) (executionPublicationResult, error) {
+		command := rig.a.executionPublishCmd()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetArgs(args)
+		var result executionPublicationResult
+		if err := command.Execute(); err != nil {
+			return result, err
+		}
+		return result, json.Unmarshal(output.Bytes(), &result)
+	}
+	first, err := publish("--title", "fix: fixture before the host upgrade", "--body-file", bodyPath)
+	if err != nil || first.URL == "" {
+		t.Fatal("first publication failed", err)
+	}
+	original := j.Request.PolicyDigest
+	s.Version = "publication-test-upgraded"
+	prepared, err := s.Prepare(s.Policy())
+	if err != nil || prepared == original {
+		t.Fatal("fixture upgrade did not change the prepared policy", err)
+	}
+	head := rig.commit(t, "follow-up.txt", "after the host upgrade\n")
+	if _, err := publish(); err == nil || !strings.Contains(err.Error(), "agents recover") {
+		t.Fatal("follow-up published under a changed policy, or its refusal names no recovery", err)
+	}
+	if _, err := s.RebindPolicy(context.Background(), j.Handle.Ref, execution.PolicyRebind{From: original, To: prepared}); err != nil {
+		t.Fatal(err)
+	}
+	followUp, err := publish()
+	if err != nil || followUp.URL != first.URL || followUp.Head != head || followUp.Branch != first.Branch || rig.creates != 1 {
+		t.Fatalf("rebound follow-up did not publish to the owned PR: %+v, %v", followUp, err)
 	}
 }
 

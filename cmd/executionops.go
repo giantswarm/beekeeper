@@ -144,7 +144,13 @@ func (a *app) executionStopCmd() *cobra.Command {
 	return c
 }
 func (a *app) executionRecoverCmd() *cobra.Command {
-	return &cobra.Command{Use: "recover <agent-or-execution>", Short: "Recover the same registration and execution after an interrupted start", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	return &cobra.Command{Use: "recover <agent-or-execution>", Short: "Recover the same registration and execution after an interrupted start or an approved host-policy update", Long: `Recover inspects the recorded execution and never starts a replacement for it.
+After an interrupted start it activates the same registration. After a host
+upgrade re-prepared its policy under a running execution, that execution's
+publication, merge and capped runs refuse until recover rebinds it: only to the
+host's prepared policy, and only once its digest is the one pinned in the host
+catalog. Until then recover exits 3, naming the reachable unit and why its
+publication is unavailable.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		ref, err := a.executionByName(args[0])
 		if err != nil {
 			return err
@@ -415,4 +421,47 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 		return st
 	}
 	return updated
+}
+
+// rebindExecutionPolicy moves a confirmed execution onto its host's prepared
+// policy after an approved host-policy update: only the digest pinned in the
+// coordinator's host catalog is accepted, and the host requires both that it is
+// prepared and that the execution is bound to the policy it replaces. Every
+// other difference keeps failing closed and says so: the unit runs on, its
+// publication, merge and capped runs refuse.
+func (a *app) rebindExecutionPolicy(ctx context.Context, host execution.Host, client execution.Transport, name string, ref execution.Ref, o execution.Observation) (execution.Observation, error) {
+	if o.PolicyAvailable() {
+		return o, nil
+	}
+	unavailable := fmt.Sprintf("execution %s of %s on %s is reachable (unit %s, process %s), but its publication, merge and capped runs are unavailable under its policy %s: ", ref.Execution, name, ref.Host, o.Handle.Unit, o.ProcessState, o.PolicyDigest)
+	switch {
+	case o.HostPolicyDigest == "":
+		return o, refused("%sthe host policy is unprepared or stale; prepare the matching bundle on the host, pin its digest in the host catalog, then recover again", unavailable)
+	case o.HostPolicyDigest != host.PolicyDigest:
+		return o, refused("%sthe host's prepared policy %s is not the catalog's approved %s; pin the prepared digest once approved, then recover again", unavailable, o.HostPolicyDigest, host.PolicyDigest)
+	}
+	rebinder, ok := client.(execution.PolicyRebinder)
+	if !ok {
+		return o, refused("%sthe execution transport cannot rebind a policy", unavailable)
+	}
+	from := o.PolicyDigest
+	rebound, err := rebinder.RebindPolicy(ctx, ref, execution.PolicyRebind{From: from, To: host.PolicyDigest})
+	if err != nil {
+		a.executionFailure(ref, err)
+		return o, fmt.Errorf("%spolicy rebind failed: %w", unavailable, err)
+	}
+	if err := a.saveExecutionObservation(ref, rebound); err != nil {
+		return o, err
+	}
+	if !rebound.PolicyAvailable() {
+		return rebound, refused("%sthe host did not confirm the rebind", unavailable)
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		_, i := executionRecord(st, ref)
+		if i < 0 {
+			return nil, refused("execution is not registered")
+		}
+		return []state.Event{event(st.Starts[i].By, "execution.policy-rebound", "%s: %s -> %s, approved host policy of %s", st.Starts[i].Name, from, rebound.PolicyDigest, ref.Host)}, nil
+	})
+	return rebound, err
 }
