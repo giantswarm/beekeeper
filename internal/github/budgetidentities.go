@@ -23,6 +23,9 @@ type BudgetCredential struct {
 	Identity string
 	Value    string `json:"-"`
 	Err      error  `json:"-"`
+	// Skip omits an absent App or one whose metadata cannot be read.
+	Skip    bool   `json:"-"`
+	Warning string `json:"-"`
 }
 
 // BudgetCredentials explicitly selects the stored gh login and, when
@@ -41,17 +44,20 @@ func BudgetCredentials(ctx context.Context) []BudgetCredential {
 	}
 	status := exec.CommandContext(ctx, devctl, budgetAuthCommand, "status") //nolint:gosec // fixed credential-provider command
 	status.Env = env
-	raw, err := status.Output()
+	// The overall exit status covers other providers too (for example CircleCI).
+	// Its stdout can still contain usable GitHub metadata.
+	raw, _ := status.Output()
 	var metadata struct {
 		GitHub struct {
-			Present bool `json:"present"`
+			Present *bool `json:"present"`
 		} `json:"github"`
 	}
-	if err != nil || json.Unmarshal(raw, &metadata) != nil {
-		return append(result, BudgetCredential{Identity: IdentityApp, Err: fmt.Errorf("devctl App credential metadata unavailable")})
+	if json.Unmarshal(raw, &metadata) != nil || metadata.GitHub.Present == nil {
+		return append(result, BudgetCredential{Identity: IdentityApp, Skip: true,
+			Warning: "devctl App credential metadata unavailable; probing stored gh identity only"})
 	}
-	if !metadata.GitHub.Present {
-		return result
+	if !*metadata.GitHub.Present {
+		return append(result, BudgetCredential{Identity: IdentityApp, Skip: true})
 	}
 	// devctl applies its owner routing even under auth exec. Pin the App's
 	// owner explicitly so a personal checkout cannot select the gh login.

@@ -39,6 +39,7 @@ func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
 	profiles := map[string]github.Budget{}
 	saved := map[string]state.Budget{}
 	var failures []error
+	var warnings []string
 	credentials := budgetCredentials(ctx)
 	seen := map[string]bool{}
 	for _, credential := range credentials {
@@ -61,6 +62,26 @@ func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
 		var previous state.Budget
 		if st.Budget != nil {
 			previous = st.Budget.Identities[credential.Identity]
+		}
+		if credential.Skip {
+			if credential.Warning != "" {
+				warnings = append(warnings, credential.Warning)
+			}
+			// Losing provider metadata must not erase a known low unexpired window.
+			// Failed metadata readings have no usable counter and are discarded.
+			cached := github.Budget{Identity: credential.Identity, Login: previous.Login,
+				Remaining: previous.Limit, Limit: previous.Limit, Reset: previous.Reset}
+			restFresh := now.Before(previous.Reset)
+			if restFresh {
+				cached.Remaining = previous.Remaining
+			}
+			if g := previous.GraphQL; g != nil && g.Err == "" && now.Before(g.Reset) {
+				cached.GraphQL = graphqlOf(g)
+			}
+			if restFresh || cached.GraphQL != nil {
+				profiles[credential.Identity], saved[credential.Identity] = cached, previous
+			}
+			continue
 		}
 		b, cached, err := a.probeIdentity(ctx, credential, previous, now)
 		profiles[credential.Identity], saved[credential.Identity] = b, cached
@@ -92,6 +113,7 @@ func (a *app) probeIdentities(ctx context.Context) (github.Budget, error) {
 	}); err != nil {
 		failures = append(failures, err)
 	}
+	b.Warnings = warnings
 	return b, errors.Join(failures...)
 }
 

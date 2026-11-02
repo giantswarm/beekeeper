@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -209,5 +212,89 @@ func TestBudgetSerializesConcurrentDelayedResponses(t *testing.T) {
 				t.Fatalf("returned/persisted minima diverged: %+v, %+v, %v, %v", b.GraphQL, st.Budget, err, readErr)
 			}
 		})
+	}
+}
+
+// The provider's global verdict includes unrelated services. Only its GitHub
+// metadata decides whether the App can participate in the budget.
+func TestBudgetGateUsesGitHubMetadataDespiteProviderExit(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata   string
+		wantApp, warning bool
+	}{
+		{"unrelated auth required", `{"github":{"present":true},"circleci":{"present":false}}`, true, false},
+		{"github absent", `{"github":{"present":false}}`, false, false},
+		{"metadata unreadable", `not-json`, false, true},
+		{"github block absent", `{}`, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refuse := false
+			refusingGitHub(t, &refuse)
+			a, out := budgetApp(t)
+			budgetCredentials = github.BudgetCredentials
+			bin := t.TempDir()
+			script := "#!/bin/sh\nif [ \"$1 $2\" = 'auth status' ]; then\nprintf '%s\\n' '" + tc.metadata + "'\nexit 8\nfi\nprintf 'tok\\n'\n"
+			if err := os.WriteFile(filepath.Join(bin, "devctl"), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			// A prior failed App probe must not keep the corrected fallback blocked.
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Budget = &state.Budget{Identities: map[string]state.Budget{github.IdentityApp: {Identity: github.IdentityApp, GraphQL: &state.GraphQL{Err: "old metadata error"}}}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			c := a.budgetCmd()
+			c.SetArgs([]string{gateFlag})
+			c.SetOut(out)
+			c.SetErr(out)
+			if err := c.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, app := st.Budget.Identities[github.IdentityApp]
+			if app != tc.wantApp {
+				t.Fatalf("App present = %v, want %v", app, tc.wantApp)
+			}
+			if strings.Contains(out.String(), "WARNING:") != tc.warning {
+				t.Fatalf("warning missing or unexpected: %s", out.String())
+			}
+		})
+	}
+}
+
+func TestBudgetMetadataFallbackRetainsKnownLowWindow(t *testing.T) {
+	refuse := false
+	refusingGitHub(t, &refuse)
+	a, out := budgetApp(t)
+	budgetCredentials = func(context.Context) []github.BudgetCredential {
+		return []github.BudgetCredential{{Identity: github.IdentityGH, Value: "tok"},
+			{Identity: github.IdentityApp, Skip: true, Warning: "App metadata unavailable"}}
+	}
+	reset := time.Now().Add(time.Hour)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget = &state.Budget{Identities: map[string]state.Budget{github.IdentityApp: {
+			Identity: github.IdentityApp, Remaining: 4000, Limit: 5000, Reset: reset,
+			GraphQL: &state.GraphQL{Identity: github.IdentityApp, Remaining: 100, Limit: 5000, Reset: reset, At: time.Now()},
+		}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := a.budgetCmd()
+	c.SetArgs([]string{gateFlag})
+	c.SetOut(out)
+	c.SetErr(out)
+	err := c.Execute()
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 3 {
+		t.Fatalf("known low App budget did not hold gate: %v", err)
+	}
+	if !strings.Contains(out.String(), "WARNING:") {
+		t.Fatal("missing fallback warning")
 	}
 }
