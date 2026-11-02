@@ -373,15 +373,15 @@ func TestParseRateLimitsToleratesInformationalFieldShapes(t *testing.T) {
 	}{
 		{
 			name:        "balance as a numeric string",
-			extra:       `"credits":{"has_credits":true,"unlimited":false,"balance":"25.5"},"plan_type":"plus"`,
-			wantPlan:    "plus",
+			extra:       `"credits":{"has_credits":true,"unlimited":false,"balance":"25.5"},"plan_type":"business"`,
+			wantPlan:    "business",
 			wantCredits: true,
 			wantBalance: ptrFloat(25.5),
 		},
 		{
 			name:        "balance as an empty string",
-			extra:       `"credits":{"has_credits":false,"unlimited":false,"balance":""},"plan_type":"plus"`,
-			wantPlan:    "plus",
+			extra:       `"credits":{"has_credits":false,"unlimited":false,"balance":""},"plan_type":"team"`,
+			wantPlan:    "team",
 			wantCredits: true,
 		},
 		{
