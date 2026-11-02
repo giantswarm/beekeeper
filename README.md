@@ -1475,8 +1475,12 @@ id. A board without the field has an empty list; `gh project field-create <proje
 
 - `beekeeper priority` prints the open epics of `board.team` that hold a rank: rank, epic URL, title,
   Status and hold (`--json` the list). An epic is the team's by its Team field or by its team label
-  (`board.teamLabel`, default `team/<first word of board.team>`), so a label sync that moves the
-  Team keeps the epic on the list. A held epic, one with an open recorded blocker (`board block
+  (`board.teamLabel`, default `team/<first word of board.team>`) only when its Team
+  is unset. An explicit Team is authoritative: an epic moved to
+  another team leaves this desk's list, even with a stale team label. Each team
+  maintains its own ranks in the shared Priority field; writes renumber only its
+  own epics and refuse setting a rank for an epic belonging to another team.
+  A held epic, one with an open recorded blocker (`board block
   --by`), keeps its rank and shows `held: blocked by <owner/repo#n>; 1 of 1 blockers open`;
   `board next` skips it and every issue under it.
 - Every read of the list (`priority`, `board next`) is compared with the last one (the state
@@ -1497,6 +1501,13 @@ call without `--as`, from the supervisor, the guide or a worker, or with any oth
 (exit 3) with the reason and the rule "only the person changes priorities", before GitHub is asked
 anything. Every change is a `priority.set` event in `beekeeper log`, naming the person and the
 session that relayed the word.
+
+`beekeeper board rank` changes positions only, never the epic Priority numbers.
+Any session may change positions, including automatic placement of blockers and
+follow-ups. Outside a session, `--as <name>` identifies the caller; anonymous
+calls are refused (exit 3). Every move logs `board.rank` naming the caller. This is a deliberate
+split: the person's epic priority list is protected by `--as`; sessions may
+arrange work within `board.order`'s steps. Positions determine the next pick.
 
 `beekeeper board next` orders nothing by the list: `board.order`'s steps (by Status) and the
 board's positions within each step decide the pick. A candidate shows the rank of its epic, its
