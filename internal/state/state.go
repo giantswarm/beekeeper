@@ -827,7 +827,17 @@ type ExecutionRecord struct {
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
 	Published *ExecutionPublication `json:"published,omitempty"`
-	rest      rest
+	// StartUnsent says no start request of this reservation has left the
+	// coordinator yet, so the host holds no journal of it. A reservation
+	// recorded before this field existed reads false: maybe sent.
+	StartUnsent bool `json:"startUnsent,omitempty"`
+	// StartSentAt is when the coordinator last sent its start request.
+	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// ReleasedAt is when a reservation the host never acknowledged was
+	// given up, ReleaseReason why: it holds no host or desk slot since.
+	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
+	ReleaseReason string    `json:"releaseReason,omitempty"`
+	rest          rest
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
@@ -849,11 +859,18 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if r.Released() {
+		return true
+	}
 	if r.StopRequest != nil && !r.Observation.StopAcknowledged {
 		return false
 	}
 	return r.Observation.StopAcknowledged || r.Observation.ProcessState == execution.Exited || r.Observation.ProcessState == execution.Failed
 }
+
+// Released says the reservation was given up before its host acknowledged
+// a start: no process of it can exist.
+func (r *ExecutionRecord) Released() bool { return !r.ReleasedAt.IsZero() }
 
 // Archive is the desktop session of an agent that left the roster while
 // its archive could not be done (its CLI ran a turn, no steward recorded
