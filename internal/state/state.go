@@ -564,6 +564,9 @@ type Timer struct {
 	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
 	// until marked done.
 	Repeat string `json:"repeat,omitempty"`
+	// Held is what kept a due timer from firing at its time (a beekeeper
+	// stop), said when it fires late; a re-armed timer starts without it.
+	Held string `json:"held,omitempty"`
 
 	rest rest
 }
