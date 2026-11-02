@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Isolate priority reads and renumbering by the configured Team even when stale team labels remain, reject ranking another team's epic, and document the enforced split between person-only epic priorities and session-editable board positions (logged with the caller), refusing anonymous position edits.
+- Full-history and working-tree gitleaks scans allow the fake GPG key ID in the signing argument parser test, scoped to its exact value, file and detection rule.
 
 - The supervisor loop stops filing notes for the person that the desk's rules settle. An approval now covers a head that merges the base even when the merge brings the base's own commits along: only the pull request's own new commits must be merges, so a plain `main` merge after the go no longer reads as "changes more than the base". Past the two reviews, a green head whose change beyond the approved head stays in test files (`_test.go`, `testdata/`) and files the reviews' findings name gets the merge go with no note; only a change past them (named in the note) or a comparison GitHub cuts short still asks the person. A park on nothing the classifier cannot place (or with no classifier) files no note: the worker is woken once for that park to park on a wait the loop watches (a pull request, a timer, a note for a person) or to report done ([https://github.com/giantswarm/beekeeper/issues/1979](https://github.com/giantswarm/beekeeper/issues/1979)).
 
