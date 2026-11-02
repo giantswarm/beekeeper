@@ -62,7 +62,7 @@ func relayGH(_ context.Context, args ...string) ([]byte, error) {
 		return fmt.Appendf(nil, `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[
 {"id":"FS","name":"Status","options":[%s]},{"id":"FK","name":"Kind","options":[%s]},{"id":"FP","name":"Priority","dataType":"NUMBER"}]}}}}}`,
 			opts(holdStatuses...), opts(kindEpic, "Feature")), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, "items(first:"):
 		var nodes []string
 		for _, is := range relayBoard {
 			if strings.Contains(vs["q"], "status:") && !strings.Contains(vs["q"], fmt.Sprintf("%q", is.status)) ||

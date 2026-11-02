@@ -293,6 +293,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
+	rep.chores = append(rep.chores, a.doctorLabs(ctx, sessions, r)...)
 	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
 	rep.sameTitles = sameTitles(sessions)
 	rep.ungated = ungatedLines(sessions, t)
@@ -683,6 +684,9 @@ line:
   transient unit beekeeper-reopen-<id> that gives it its row and warms its
   CLI (agent.reopen in the log); the watch says NO DESKTOP ROW once per
   such worker meanwhile;
+- releases leases whose local session ended, logging each release once;
+- stops configured kind labs after 15 minutes without a lease, preserving
+  their containers and data; the next successful claim starts them again;
 - probes each fault of doctor.faults (a probe exits 0 while the fault is
   absent) and runs the remedy of a failing one that may run unattended,
   or the faults named with --fault; a fault still failing is one note for
