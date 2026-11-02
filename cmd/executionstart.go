@@ -114,7 +114,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
-	prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. To merge upstream changes without a GitHub credential on this host, use `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
+	prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. Before the desk review approves the PR, merge upstream changes without a GitHub credential on this host with `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again; after approval only the merge moves the head (it updates a behind branch itself), so sync the base then only to resolve a conflict the supervisor reports. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
 	r := execution.StartRequest{MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
@@ -191,7 +191,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// weighs those choices alone, so a choice it cannot run never shows as
 	// its room.
 	exclude = append(slices.Clone(exclude), hostUnsupportedHarnesses...)
-	for _, name := range []string{claudeComm, codex.Harness} {
+	for _, name := range []string{claudeComm, codex.Harness, harnessAgy} {
 		if !host.Supports(name) {
 			exclude = append(exclude, name)
 		}
@@ -228,17 +228,17 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 }
 
 // hostUnsupportedHarnesses are the harnesses an execution host has no
-// adapter for. Of the others, Claude Code and Codex, a host runs those its
-// catalogue entry lists (executionCapacity) and its check offers
+// adapter for. Of the others, Claude Code, Codex and Agy, a host runs those
+// its catalogue entry lists (executionCapacity) and its check offers
 // (hostUnoffered). hostRunsHarness is the other side, a harness some host
 // runs ("" is Claude Code).
-var hostUnsupportedHarnesses = []string{harnessAgy, omp.Harness}
+var hostUnsupportedHarnesses = []string{omp.Harness}
 
 // hostUnoffered are the remote harnesses a host's check did not offer: a
 // harness whose version, login or guard failed there is no choice on it.
 func hostUnoffered(caps execution.Capabilities) []string {
 	var out []string
-	for _, name := range []string{claudeComm, codex.Harness} {
+	for _, name := range []string{claudeComm, codex.Harness, harnessAgy} {
 		if caps.Harnesses[name] == "" {
 			out = append(out, name)
 		}
@@ -247,7 +247,7 @@ func hostUnoffered(caps execution.Capabilities) []string {
 }
 
 // hostRunsHarness says whether one of hosts can run harness: Claude Code on
-// any host, as before, and Codex on a host whose entry lists it.
+// any host, as before, and Codex or Agy on a host whose entry lists it.
 func hostRunsHarness(harness string, hosts []execution.Host) bool {
 	h := strings.TrimSpace(harness)
 	if h == "" || h == claudeComm {

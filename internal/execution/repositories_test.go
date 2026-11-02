@@ -5,7 +5,7 @@ import "testing"
 const fixtureRepositoryOwner = "example"
 
 func TestRepositoryAdmissionPolicy(t *testing.T) {
-	h := Host{Repositories: map[string]string{"explicit/repo": "/srv/source"}, RepositoryOrgs: []string{fixtureRepositoryOwner}}
+	h := Host{Repositories: map[string]string{"explicit/repo": "/srv/explicit"}, RepositoryOrgs: []string{fixtureRepositoryOwner}}
 	for repo, want := range map[string]bool{"explicit/repo": true, "example/third": true, "EXAMPLE/other": true, "foreign/repo": false, "example/../../escape": false, fixtureRepositoryOwner: false} {
 		if got := h.AdmitsRepository(repo); got != want {
 			t.Errorf("admit %q = %v", repo, got)

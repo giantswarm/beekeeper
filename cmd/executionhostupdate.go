@@ -21,12 +21,11 @@ import (
 )
 
 // Seams the tests replace: the coordinator's release, the host's install of
-// a release, its rollback, the installed release's prepare and the restarts
+// a release, the installed release's prepare and the restarts
 // onto it.
 var (
 	coordinatorVersion = project.Version
 	installVersion     = update.InstallVersion
-	rollbackInstall    = update.Rollback
 	// runHostPrepare runs the release an update installed at path and
 	// returns its standard output: its answer, never its diagnostics.
 	runHostPrepare = func(ctx context.Context, path string, args ...string) ([]byte, error) {
@@ -72,8 +71,8 @@ agents.hosts no longer needs one.
 
 Over the host's SSH route, the host's beekeeper (agents hosts self-update)
 installs exactly this coordinator's release once its Sigstore bundle
-verifies, the replaced binary kept beside it, and the installed release
-prepares its policy. A release that does not prepare is rolled back. The
+verifies, replacing the binary atomically without a backup. The installed
+release prepares its policy. A release that does not prepare holds the host. The
 host answers its release and policy digest; once its check (agents hosts
 check) passes with that digest, the digest is the host's pin.
 
@@ -96,9 +95,9 @@ A development build pins no release.`, Args: cobra.ExactArgs(1), RunE: func(cmd 
 	selfUpdate := &cobra.Command{Use: "self-update --version <release>", Short: "On an execution host: install the coordinator's release, verified, and prepare its policy", Long: `Run on the execution host by the coordinator's agents hosts update, over the
 host's SSH route: with no execution running, install exactly the release
 --version names once its Sigstore bundle verifies (self-update's check),
-keeping the replaced binary beside it, and have the installed release
-prepare its own policy. A release that does not prepare is rolled back and
-this one prepares again. The answer is one JSON line: the release, the
+replacing the binary atomically without a backup, and have the installed
+release prepare its own policy. A release that does not prepare holds the
+host until a retry succeeds. The answer is one JSON line: the release, the
 policy digest, the executions still running (busy, nothing changed) or the
 error.`, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(a.hostSelfUpdate(cmd.Context(), protocol, version))
@@ -175,16 +174,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 		restartOnInstalled(ctx, a, res.Path, written)
 		return next
 	}
-	if !res.Updated {
-		return fail(fmt.Errorf("%s did not prepare its policy: %s", version, reason))
-	}
-	if err := rollbackInstall(res.Path); err != nil {
-		return fail(fmt.Errorf("%s did not prepare its policy (%s) and the rollback to %s failed: %w", version, reason, s.Version, err))
-	}
-	if _, err := s.Prepare(s.Policy()); err != nil {
-		return fail(fmt.Errorf("%s did not prepare its policy (%s); rolled back to %s, which did not prepare either: %w", version, reason, s.Version, err))
-	}
-	return fail(fmt.Errorf("%s did not prepare its policy (%s); rolled back to %s", version, reason, s.Version))
+	return fail(fmt.Errorf("%s did not prepare its policy: %s; host remains held until an update succeeds", version, reason))
 }
 
 // errHostDrains is an update that waits for the executions on a host.

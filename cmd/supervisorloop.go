@@ -339,6 +339,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		if c.superseded(j.Rollup) {
 			continue
 		}
+		p.Checks = append(p.Checks, cmp.Or(c.Name, c.Context))
 		if !c.green() {
 			p.Green = false
 		}
