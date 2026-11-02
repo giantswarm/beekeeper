@@ -313,6 +313,9 @@ type choiceCandidate struct {
 	Model      string   `json:"model"`
 	Provider   string   `json:"provider"`
 	Bucket     string   `json:"bucket,omitempty"`
+	Class      int      `json:"class,omitempty"`
+	Cost       float64  `json:"cost,omitempty"`
+	Family     string   `json:"family,omitempty"`
 	OK         bool     `json:"ok"`
 	Reason     string   `json:"reason,omitempty"`
 	BehindPace *float64 `json:"behindPace,omitempty"`
@@ -324,6 +327,8 @@ type choiceView struct {
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Bucket   string `json:"bucket,omitempty"`
+	TaskKind string `json:"taskKind,omitempty"`
+	Decision string `json:"decision,omitempty"`
 	Review   bool   `json:"review,omitempty"`
 	// ReviewOfSelfHosted says the start reviews a self-hosted model's work:
 	// no choice on a self-hosted provider is eligible.
@@ -1455,9 +1460,20 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		ReviewOfSelfHosted: kind == forReviewOfSelfHosted,
 		Exclude:            normEx,
 	}
+	if k.TaskKind != "" || len(k.TaskPolicies) > 0 {
+		cv.TaskKind = k.TaskKind
+		if cv.TaskKind == "" {
+			cv.TaskKind = workerRole
+			if kind != forWorker {
+				cv.TaskKind = taskKindReview
+			}
+		}
+		cv.Decision = "task " + cv.TaskKind + ": eligible provider furthest behind weekly pace, lower configured cost breaks equal pace"
+	}
 	var reasons []string
 	bestSubscription := false
 	bestBehind := math.Inf(-1)
+	bestCost := math.Inf(1)
 
 	for _, ch := range k.Choices {
 		provName := ch.EffectiveProvider()
@@ -1468,12 +1484,16 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			bucketName = ch.EffectiveBucket(pCfg)
 		}
 		cand := choiceCandidate{
+			Class: ch.Class, Cost: ch.Cost, Family: ch.Family,
 			Harness:  ch.Harness,
 			Model:    ch.Model,
 			Provider: provName,
 			Bucket:   bucketName,
 		}
-		reason := evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, now)
+		reason := modelPolicyReason(k, ch, pv, bucketName, kind)
+		if reason == "" {
+			reason = evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, now)
+		}
 		if reason == "" {
 			cand.OK = true
 			subscription := !pCfg.SelfHosted()
@@ -1488,8 +1508,8 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 					cand.BehindPace = &behind
 				}
 			}
-			if cv.Harness == "" || subscription && (!bestSubscription || behind > bestBehind) {
-				bestSubscription, bestBehind = subscription, behind
+			if cv.Harness == "" || subscription && (!bestSubscription || behind > bestBehind || behind == bestBehind && ch.Cost > 0 && ch.Cost < bestCost) {
+				bestSubscription, bestBehind, bestCost = subscription, behind, ch.Cost
 				cv.Harness = ch.Harness
 				cv.Model = ch.Model
 				cv.Provider = provName
@@ -1695,10 +1715,13 @@ func (v *capacityView) verdict() string {
 func (a *app) liveCapacity() config.Capacity {
 	if p := cmp.Or(a.cfgPath, a.loadedCfg); p != "" {
 		if c, err := config.Load(p); err == nil {
+			c.Capacity.TaskKind, c.Capacity.AuthorModel = a.selectionKind, a.selectionAuthor
 			return c.Capacity
 		}
 	}
-	return a.cfg.Capacity
+	k := a.cfg.Capacity
+	k.TaskKind, k.AuthorModel = a.selectionKind, a.selectionAuthor
+	return k
 }
 
 // readHeadroom reads the machine's headroom now against k; swap is the
@@ -1852,6 +1875,13 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			a.selectionKind = strings.TrimSpace(a.selectionKind)
+			if a.selectionKind == taskKindReview {
+				review = true
+			}
+			if a.selectionAuthor != "" && !review && !ofSelfHosted {
+				return usageErr(authorNeedsReview)
+			}
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -1907,6 +1937,9 @@ nothing; it makes no GitHub call.`,
 			}
 			if v.Choice != nil {
 				p("choice: %s", v.Choice.line())
+				if v.Choice.Decision != "" {
+					p("decision: %s", v.Choice.Decision)
+				}
 			}
 			if len(v.Parked) > 0 {
 				p("parked: %s", strings.Join(v.Parked, ", "))
@@ -1924,6 +1957,8 @@ nothing; it makes no GitHub call.`,
 	}
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
+	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
+	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, using reserved review headroom")
 	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the verdict for the review of a self-hosted model's work: no self-hosted provider")
 	c.Flags().StringSliceVar(&exclude, excludeFlag, nil, "exclude a choice by model, harness/model, provider or harness (repeatable or comma-separated)")
@@ -1936,7 +1971,7 @@ nothing; it makes no GitHub call.`,
 // of a self-hosted model's work, excludeFlag excludes choices.
 const (
 	buildsFlag             = "builds"
-	reviewFlag             = "review"
+	reviewFlag             = taskKindReview
 	reviewOfSelfHostedFlag = "review-of-self-hosted"
 	excludeFlag            = "exclude"
 )
@@ -2000,6 +2035,13 @@ behind pace, each provider's windows and
 verdict, and the headroom. Exit 0 either way; reads only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			a.selectionKind = strings.TrimSpace(a.selectionKind)
+			if a.selectionKind == taskKindReview {
+				review = true
+			}
+			if a.selectionAuthor != "" && !review && !ofSelfHosted {
+				return usageErr(authorNeedsReview)
+			}
 			kind := startKind(review, ofSelfHosted)
 			v, err := a.startCapacityForAuto(cmd.Context(), false, nil, kind, "")
 			if err != nil {
@@ -2013,6 +2055,8 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 			return err
 		},
 	}
+	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
+	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().BoolVar(&review, reviewFlag, false, "decide a review start using reserved review headroom")
 	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "decide the reviewer of a self-hosted model's work: no self-hosted provider")
 	return c
@@ -2055,6 +2099,11 @@ func (a *app) startGateWithOptions(ctx context.Context, name, harness, model str
 		return "", nil, err
 	}
 	latest := v
+	for _, b := range v.Blocks {
+		if strings.HasPrefix(b, modelPolicyPrefix) {
+			return "", v, refused("%s", b)
+		}
+	}
 	over, err := queueStart(v, builds, force, wait,
 		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
 		func() (*capacityView, error) {
@@ -2062,6 +2111,11 @@ func (a *app) startGateWithOptions(ctx context.Context, name, harness, model str
 			if err == nil {
 				next = next.forTarget(a.liveCapacity(), harness, effModel)
 				latest = next
+				for _, b := range next.Blocks {
+					if strings.HasPrefix(b, modelPolicyPrefix) {
+						return nil, refused("%s", b)
+					}
+				}
 			}
 			return next, err
 		})
@@ -2094,6 +2148,29 @@ func (v *capacityView) forPoolTarget(k config.Capacity, harness, model string) *
 	if v == nil || v.Stopped != "" || v.reviewLimitReached || harness == harnessAuto || len(v.Providers) == 0 {
 		return v
 	}
+	task := cmp.Or(k.TaskKind, workerRole)
+	if k.TaskKind == "" && v.Review {
+		task = taskKindReview
+	}
+	policy := k.TaskPolicies[task]
+	if policy.MinClass > 0 || policy.MaxCost > 0 || policy.DifferentFamily || k.AuthorModel != "" || v.Review && k.TaskPolicies[taskKindReview].DifferentFamily {
+		known := slices.ContainsFunc(k.Choices, func(ch config.Choice) bool {
+			return ch.Harness == harness && (strings.EqualFold(ch.Model, model) || ompChoiceModel(ch, model))
+		})
+		if !known {
+			v.Room, v.Blocks = 0, []string{"model policy: target has no configured capability, cost or family metadata"}
+			return v
+		}
+	}
+	if v.Choice != nil {
+		for _, cand := range v.Choice.Candidates {
+			if cand.Harness == harness && strings.EqualFold(cand.Model, model) && strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
+				v.Room, v.Blocks = 0, []string{cand.Reason}
+				return v
+			}
+		}
+	}
+
 	prov, bucket := resolveAgentProviderBucket(k, harness, model)
 	pv := v.Providers[prov]
 	if pv == nil {
@@ -2262,6 +2339,14 @@ func choicesHaveModel(choices []config.Choice, model string) bool {
 
 func filterChoiceModel(k config.Capacity, model string) config.Capacity {
 	m := strings.TrimSpace(model)
+	if k.AuthorFamily == "" {
+		for _, ch := range k.Choices {
+			if strings.EqualFold(ch.Model, k.AuthorModel) {
+				k.AuthorFamily = ch.Family
+				break
+			}
+		}
+	}
 	if m == "" || len(k.Choices) == 0 {
 		return k
 	}

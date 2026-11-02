@@ -198,6 +198,8 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 }
 
 type startVaultFlags struct {
+	taskKind     string
+	authorModel  string
 	harness      string
 	model        string
 	excludes     []string
@@ -216,6 +218,16 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 			break
 		}
 		switch {
+		case strings.HasPrefix(arg, "--kind="):
+			f.taskKind = strings.TrimPrefix(arg, "--kind=")
+		case arg == taskKindArg && i+1 < len(args):
+			i++
+			f.taskKind = args[i]
+		case strings.HasPrefix(arg, "--"+authorModelFlag+"="):
+			f.authorModel = strings.TrimPrefix(arg, "--"+authorModelFlag+"=")
+		case arg == "--"+authorModelFlag && i+1 < len(args):
+			i++
+			f.authorModel = args[i]
 		case strings.HasPrefix(arg, "--harness="):
 			f.harness = strings.TrimPrefix(arg, "--harness=")
 		case arg == "--harness" && i+1 < len(args):
@@ -283,6 +295,10 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 		}
 	}
 	k := target.liveCapacity()
+	k.TaskKind, k.AuthorModel = f.taskKind, f.authorModel
+	if f.taskKind == taskKindReview {
+		f.review = true
+	}
 	if len(k.Choices) == 0 {
 		return false
 	}

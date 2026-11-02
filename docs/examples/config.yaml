@@ -206,6 +206,7 @@ supervisor:                 # the supervisor loop, which beekeeper install alway
   # or machine pressure. Watch lines are durable watch.* events.
   fillRetryEvery: 5m        # retry an empty/failed board read; roster or capacity changes retry immediately
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
+  model: ""                 # guide successors: overrides the previous holder's model
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
   waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
@@ -232,6 +233,11 @@ agents:                     # the hand-over of registered agents
       deny: []              # further permission rules refused (permissions.deny); a bare tool or mcp__<server> name takes it off the tool list
   mode: desktop             # desktop: started sessions are imported into Claude Desktop and woken through it; background: each is a claude --bg session with Remote Control, none of the caller's CLAUDE* variables, on the roster at once, woken by its messaging or claude --bg --resume
   model: ""                 # the model of a session beekeeper starts when the start names none; empty: Claude Code's default
+  requireModel: false       # true refuses a start with no resolved model (exit 3)
+  models: []                # first matching name regexp and optional kind wins; --model overrides
+  # models:
+  #   - {match: '^scan', kind: audit, model: claude-opus-5-5}
+  #   - {match: '^scan', model: claude-sonnet-5-5}
   autoResume: false         # the watch resumes a parked agent (agents park --on) with what settled its note or pull request; false: it says AGENT RESUMABLE, agents resume does it by hand
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
@@ -302,6 +308,13 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
       #   tiny: {nodes: [node-a], sessions: 1}           # the mode that runs while node-b stands claimed
       # serveModeSwitchCommand: [~/.local/bin/switch-serving-mode]  # switches into the mode named as its last argument; beekeeper relays, holds no control of its own
       # serveModeSwitchTimeout: 1m  # how long a switch may take before beekeeper ends it and leaves the mode as its reader reports it
+  taskPolicies: {}          # optional kind -> {minClass: N, maxCost: N}; class and cost are desk-maintained
+  # taskPolicies:
+  #   audit: {minClass: 3}
+  #   planning: {minClass: 2, maxCost: 5}
+  #   review: {differentFamily: true}  # the loop supplies the author's model; manual reviews need --author-model
+  # choices may add kinds: [worker, review], class: 3, cost: 5,
+  # family: claude and reviewReserve: 20 (percent of the weekly window).
   choices:                  # ordered (harness, model) candidates for agents start (no --harness, or --harness auto), beekeeper capacity pick and the supervisor loop; every start alike, none ahead of its provider's even 7-day pace
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}

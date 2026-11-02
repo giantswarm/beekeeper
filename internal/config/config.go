@@ -929,6 +929,30 @@ type Agents struct {
 	// Model is the model of a session beekeeper starts when the start names
 	// none (--model, a successor's holder's); empty: Claude Code's default.
 	Model string `yaml:"model"`
+	// Models is ordered: the first name regexp (and optional task kind) wins.
+	Models []AgentModelRule `yaml:"models"`
+	// RequireModel refuses omission rather than using a harness default.
+	RequireModel bool `yaml:"requireModel"`
+}
+
+// AgentModelRule selects a model for a named task before provider selection.
+type AgentModelRule struct {
+	Match string `yaml:"match"`
+	Kind  string `yaml:"kind"`
+	Model string `yaml:"model"`
+}
+
+// ModelFor returns the first matching model, then the desk-wide fallback.
+func (a Agents) ModelFor(name, kind string) string {
+	for _, r := range a.Models {
+		if r.Kind != "" && r.Kind != kind {
+			continue
+		}
+		if re, err := regexp.Compile(r.Match); err == nil && re.MatchString(name) {
+			return strings.TrimSpace(r.Model)
+		}
+	}
+	return strings.TrimSpace(a.Model)
 }
 
 type ExecutionHost = execution.Host
@@ -1075,10 +1099,21 @@ const (
 	DefaultAgyClaudeBucket = "Claude and GPT models"
 )
 
-// Capacity is the supervisor's ceiling of busy agents and the memory guards
-// that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
+// TaskPolicy constrains model choices for a kind of task. Classes and costs
+// are desk-maintained relative values; no provider price is assumed.
+type TaskPolicy struct {
+	MinClass        int     `yaml:"minClass"`
+	MaxCost         float64 `yaml:"maxCost"`
+	DifferentFamily bool    `yaml:"differentFamily"`
+}
+
+// Capacity is the supervisor's ceiling and model selection policy.
 // Any legacy floor key in YAML is ignored.
 type Capacity struct {
+	TaskPolicies map[string]TaskPolicy `yaml:"taskPolicies"`
+	TaskKind     string                `yaml:"-"`
+	AuthorModel  string                `yaml:"-"`
+	AuthorFamily string                `yaml:"-"`
 	// Ceiling is the most busy agents the supervisor starts (10). Zero is
 	// honoured: ceiling 0 refuses every unforced start.
 	Ceiling    int `yaml:"ceiling"`
@@ -1279,6 +1314,13 @@ func (p Provider) WithServeMode(r ServeModeReading) Provider {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
+	// Kinds limits this choice to task kinds; empty permits all kinds.
+	Kinds  []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
+	Class  int      `yaml:"class,omitempty" json:"class,omitempty"`
+	Cost   float64  `yaml:"cost,omitempty" json:"cost,omitempty"`
+	Family string   `yaml:"family,omitempty" json:"family,omitempty"`
+	// ReviewReserve keeps this percent of the weekly window for reviews.
+	ReviewReserve float64 `yaml:"reviewReserve,omitempty" json:"reviewReserve,omitempty"`
 	// Harness is the agent harness to start ("claude", "agy", "codex", "omp").
 	Harness string `yaml:"harness" json:"harness"`
 	// Model is the model selector passed to the harness.
@@ -2221,6 +2263,8 @@ func (o Ownership) validate() error {
 // successor's session prompt (the instructions it follows, a skill or a
 // file, not both) and the relay.
 type Role struct {
+	// Model overrides the previous holder's model for every successor.
+	Model string `yaml:"model"`
 	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
@@ -3598,6 +3642,19 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	for i, r := range c.Agents.Models {
+		if _, err := regexp.Compile(r.Match); err != nil {
+			return fmt.Errorf("agents.models[%d].match: %w", i, err)
+		}
+		if strings.TrimSpace(r.Match) == "" || strings.TrimSpace(r.Model) == "" {
+			return fmt.Errorf("agents.models[%d]: match and model are required", i)
+		}
+	}
+	for kind, p := range c.Capacity.TaskPolicies {
+		if strings.TrimSpace(kind) == "" || p.MinClass < 0 || p.MaxCost < 0 {
+			return fmt.Errorf("capacity.taskPolicies.%s: nonempty kind and nonnegative class and cost required", kind)
+		}
+	}
 	if err := c.Run.Remote.Validate(); err != nil {
 		return err
 	}
@@ -3950,6 +4007,9 @@ func (c *Config) validate() error {
 		}
 	}
 	for i, ch := range c.Capacity.Choices {
+		if ch.Class < 0 || ch.Cost < 0 || ch.ReviewReserve < 0 || ch.ReviewReserve > 100 {
+			return fmt.Errorf("capacity.choices[%d]: class and cost must be nonnegative, reviewReserve in [0, 100]", i)
+		}
 		switch {
 		case strings.TrimSpace(ch.Harness) == "":
 			return fmt.Errorf("capacity.choices[%d]: harness is required", i)

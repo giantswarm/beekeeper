@@ -1745,6 +1745,22 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err != nil {
 		return "", err
 	}
+	var authorFlags []string
+	if l.a.cfg.Capacity.TaskPolicies[taskKindReview].DifferentFamily {
+		st, err := l.a.store.Read()
+		if err != nil {
+			return "", err
+		}
+		for _, ag := range st.Agents {
+			if ag.Name == act.Agent && ag.Model != "" {
+				authorFlags = []string{"--" + authorModelFlag, ag.Model}
+				break
+			}
+		}
+		if len(authorFlags) == 0 {
+			return "", refused("model policy: review requires the author's recorded model")
+		}
+	}
 	place, err := l.startPlacement(ctx, r.Repo, true, act.SelfHosted)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
@@ -1755,6 +1771,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	name := superloop.ReviewerName(act.Ref, act.Round)
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
+	args = append(args, authorFlags...)
 	if len(l.a.cfg.Capacity.Choices) > 0 {
 		// The reviewer takes capacity's pick, decided as a worker's start
 		// is; a self-hosted model's work gets one on no self-hosted provider.

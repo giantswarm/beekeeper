@@ -425,6 +425,22 @@ claimed is not listed. A CLI that a session started, from its tool shell or thro
 session restarting; a `claude -p` its tool shell runs without an id of its own is one of that
 session's commands.
 
+## Task models
+
+`agents.models` selects a model by the start's name regexp and optional task
+kind; `--model` overrides it. `agents.requireModel: true` refuses an unresolved
+model with exit 3. `guide.model` overrides the previous holder for relay and
+standby successors. The supervisor loop uses the same model policy for its
+workers and reviewers.
+
+`capacity.choices` can describe model class, relative cost, allowed task kinds,
+family and weekly review reserve. `capacity.taskPolicies` constrains task kinds;
+`--kind` selects the policy for both capacity and starts. Review starts can use
+`--author-model` to require another model family. Capacity JSON explains the
+choice and rejections; successful starts record the model and reason.
+See [the task model policy](docs/development.md#task-model-policy) and
+[example configuration](docs/examples/config.yaml).
+
 ## The model server
 
 The host's model servers (ollama, and Lemonade Server where `lemonade.url` is set) keep a

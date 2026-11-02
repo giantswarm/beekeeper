@@ -295,7 +295,37 @@ work, which takes no choice on a self-hosted provider.`,
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
+			a.selectionKind = strings.TrimSpace(a.selectionKind)
+			if a.selectionKind == taskKindReview {
+				review = true
+			}
+			if a.selectionAuthor != "" && !review && !ofSelfHosted {
+				return usageErr(authorNeedsReview)
+			}
+			if a.selectionKind == "" {
+				if review || ofSelfHosted {
+					a.selectionKind = taskKindReview
+				} else {
+					a.selectionKind = workerRole
+				}
+			}
+			if strings.TrimSpace(model) == "" {
+				rules := a.cfg.Agents
+				rules.Model = "" // a harness-specific fallback is resolved after choosing the harness
+				model = rules.ModelFor(name, a.selectionKind)
+			}
 			harness = a.defaultStartHarness(harness, model)
+			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
+				if err := a.requireStartModel(name, ""); err != nil {
+					return err
+				}
+			}
+			if harness != harnessAuto {
+				model = a.effectiveStartModel(harness, model)
+				if err := a.requireStartModel(name, model); err != nil {
+					return err
+				}
+			}
 			kind := startKind(review, ofSelfHosted)
 			if host != "" && host != "local" {
 				base, ok := harnessByName(harness)
@@ -411,6 +441,11 @@ work, which takes no choice on a self-hosted provider.`,
 					if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
 						return err
 					}
+					if ch.Decision != "" {
+						if _, err := fmt.Fprintln(a.out, "decision: "+ch.Decision); err != nil {
+							return err
+						}
+					}
 					harness = ch.Harness
 					model = ch.Model
 				}
@@ -457,6 +492,11 @@ work, which takes no choice on a self-hosted provider.`,
 			} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
 				return err
 			}
+			if v != nil && v.Choice != nil && v.Choice.Decision != "" {
+				if _, err := fmt.Fprintln(a.out, "decision: "+v.Choice.Decision); err != nil {
+					return err
+				}
+			}
 			if choiceLine != "" {
 				if _, err := fmt.Fprintf(a.out, "choice: %s\n", choiceLine); err != nil {
 					return err
@@ -484,9 +524,18 @@ work, which takes no choice on a self-hosted provider.`,
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
 			h, _ := harnessByName(harness)
 			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
-			return h.Start(cmd.Context(), a, sp)
+			if err := h.Start(cmd.Context(), a, sp); err != nil {
+				return err
+			}
+			by, err := a.caller()
+			if err != nil {
+				return err
+			}
+			return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
 		},
 	}
+	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
+	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
@@ -619,7 +668,7 @@ func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
 		for _, cand := range v.Choice.Candidates {
 			// --force overrides capacity, never an exclusion or the one
 			// restriction on the review of a self-hosted model's work.
-			if cand.Reason != "excluded" && cand.Reason != selfHostedReviewer {
+			if cand.Reason != "excluded" && cand.Reason != selfHostedReviewer && !strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
 				return &choiceView{
 					Harness:  cand.Harness,
 					Model:    cand.Model,
@@ -729,7 +778,10 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	sp.model = cmp.Or(sp.model, a.cfg.Agents.Model)
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, sp.role))
+	if err := a.requireStartModel(sp.name, sp.model); err != nil {
+		return startedAgent{}, err
+	}
 	// A profiled session's task runs as a headless turn under its profile:
 	// the desktop spawns its own CLI for a desktop turn, with the person's
 	// whole tool surface, and no seed turn is needed before it.
@@ -790,7 +842,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		if sp.desktop {
 			st.Agents[len(st.Agents)-1].DesktopTurn = s.At
 		}
-		evs := []state.Event{event(by, verbStart, "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: session %s in %s, model %s, bypassPermissions, busy with %q", sp.name, id, dir, cmp.Or(sp.model, harnessDefaultModel), reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -2016,7 +2068,10 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 	if err != nil {
 		return err
 	}
-	sp.model = cmp.Or(sp.model, a.cfg.Agents.Model)
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, sp.role))
+	if err := a.requireStartModel(sp.name, sp.model); err != nil {
+		return err
+	}
 	profile := profileName(a.cfg, sp.role)
 	if mode == config.ModeBackground {
 		var flags []string

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -151,7 +152,10 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		}
 		ref := r.Ref
 		current.Agents[len(current.Agents)-1].Execution = &ref
-		events := []state.Event{event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider)}
+		events := []state.Event{
+			event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider),
+			event(by, verbStart, "%s: kind %s, host %s, harness %s, model %s; %s", name, a.selectionKind, host.Identity, r.Harness, r.Model, cmp.Or(startDecision(verdict), "explicit selection or configured default")),
+		}
 		if over != "" {
 			events = append(events, event(by, verbStart, "%s: started over %s (--force)", name, over))
 		}

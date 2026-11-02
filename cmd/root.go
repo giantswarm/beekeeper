@@ -99,6 +99,8 @@ func Main() int {
 }
 
 type app struct {
+	selectionKind      string
+	selectionAuthor    string
 	executionTransport func(execution.Host) execution.Transport
 	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
 	executionRuntime   func() (*execution.Server, error)
