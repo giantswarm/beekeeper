@@ -21,11 +21,14 @@ const (
 )
 
 // Gate is the epic gate (config.EpicGate) in the board's canonical values;
-// the zero Gate is off.
+// the zero Gate is off. Ahead are the board's statuses ahead of its first
+// planning status (Inbox, Backlog): an epic there, or without a Status, is
+// not yet scheduled for planning.
 type Gate struct {
 	Kind     []string
 	Planning []string
 	Go       string
+	Ahead    []string
 }
 
 // Epic reports whether the board item it is an epic.
@@ -33,6 +36,12 @@ func (g Gate) Epic(it Item) bool { return it.OnBoard && slices.Contains(g.Kind, 
 
 // InPlanning reports whether it is an epic in planning.
 func (g Gate) InPlanning(it Item) bool { return g.Epic(it) && slices.Contains(g.Planning, it.Status) }
+
+// Unscheduled reports whether it is an epic not yet scheduled for planning:
+// without a Status or in one ahead of planning, it has no plan and no go.
+func (g Gate) Unscheduled(it Item) bool {
+	return g.Epic(it) && (it.Status == "" || slices.Contains(g.Ahead, it.Status))
+}
 
 // watched reports whether it is an epic in planning or past its go, whose
 // plan board next shows.
@@ -91,14 +100,25 @@ func ResolveGate(e config.EpicGate, statuses, kinds []string) (Gate, error) {
 	if len(gos) > 0 {
 		g.Go = gos[0]
 	}
+	if i := slices.IndexFunc(statuses, func(s string) bool { return slices.Contains(g.Planning, s) }); i > 0 {
+		g.Ahead = slices.Clone(statuses[:i])
+	}
 	return g, nil
 }
 
-// planning says why the gate holds the item it: an epic in planning, or an
-// issue under one, whose nearest epic among its parents on the board is in
-// planning; "" when the gate holds it not.
+// NotScheduled is in the skip reason of an epic not yet scheduled for
+// planning and of every issue under it.
+const NotScheduled = "not scheduled for planning"
+
+// planning says why the gate holds the item it: an epic in planning or not
+// yet scheduled for planning, or an issue under one, whose nearest epic among
+// its parents on the board is in planning or unscheduled; "" when the gate
+// holds it not.
 func (snap *Snapshot) planning(it Item, byRef map[string]Item) string {
 	g := snap.Gate
+	if g.Unscheduled(it) {
+		return fmt.Sprintf("epic %s, %s: no plan and no go, board move %s %q schedules its planning", cmp.Or(it.Status, "without a Status"), NotScheduled, it.Ref, g.Planning[0])
+	}
 	if g.InPlanning(it) {
 		if p := snap.Plans[strings.ToLower(it.Ref)]; p != nil {
 			return fmt.Sprintf("epic in planning (%s), plan %s (%s): its sub-issues wait for the go, board move %s %q", it.Status, p.URL, p.State, it.Ref, g.Go)
@@ -115,6 +135,9 @@ func (snap *Snapshot) planning(it Item, byRef map[string]Item) string {
 		if g.Epic(p) {
 			if g.InPlanning(p) {
 				return fmt.Sprintf("sub-issue of epic %s, in planning (%s)", p.Ref, p.Status)
+			}
+			if g.Unscheduled(p) {
+				return fmt.Sprintf("sub-issue of epic %s, %s (%s)", p.Ref, NotScheduled, cmp.Or(p.Status, "without a Status"))
 			}
 			return ""
 		}
