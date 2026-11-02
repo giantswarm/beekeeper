@@ -92,11 +92,8 @@ func (s loopGraphQLSpend) boardHeld(st *state.Budget, step string, floor int, no
 	}
 	if st != nil && st.GraphQL != nil {
 		g := st.GraphQL
-		if !s.HeldAt.IsZero() && g.At.After(s.HeldAt) && st.Remaining > floor && g.Remaining >= floor+loopGraphQLReserve {
-			return false
-		}
-		if s.HeldAt.IsZero() && st.Remaining > floor && g.Remaining >= floor+loopGraphQLReserve &&
-			(g.Limit > 0 && g.Limit-g.Remaining < s.Spent || g.Remaining > s.Remaining || (!g.Reset.IsZero() && !sameGraphQLWindow(s.Reset, g.Reset))) {
+		if st.Remaining > floor && g.Remaining >= floor+loopGraphQLReserve &&
+			(s.floorHeld(now, floor) || g.Limit > 0 && g.Limit-g.Remaining < s.Spent || g.Remaining > s.Remaining || (!g.Reset.IsZero() && !sameGraphQLWindow(s.Reset, g.Reset))) {
 			return false
 		}
 	}
@@ -152,12 +149,10 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	liveHealthy := b.Remaining > a.cfg.GitHub.Floor && g.Remaining >= a.cfg.GitHub.Floor+loopGraphQLReserve
 	wasHeld := spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.floorHeld(a.now, a.cfg.GitHub.Floor)
-	releaseHold := liveHealthy && wasHeld && (step != loopBoard ||
-		spend.floorHeld(a.now, a.cfg.GitHub.Floor) ||
+	releaseHold := liveHealthy && wasHeld && (spend.floorHeld(a.now, a.cfg.GitHub.Floor) ||
 		(!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) ||
 		g.Remaining > spend.Remaining ||
-		(g.Limit > 0 && g.Limit-g.Remaining < spend.Spent) ||
-		(!spend.HeldAt.IsZero() && st.Budget.GraphQL.At.After(spend.HeldAt)))
+		(g.Limit > 0 && g.Limit-g.Remaining < spend.Spent))
 	if !a.now.Before(spend.Reset) || spend.Steps == nil || (!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) || releaseHold {
 		spend = loopGraphQLSpend{Reset: reset, Remaining: g.Remaining, Steps: map[string]int{}}
 	}

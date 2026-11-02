@@ -23,34 +23,55 @@ func TestLoopGraphQLAllowancePersistsAndProtectsFloor(t *testing.T) {
 		remaining-- // the fresh probe itself costs a point
 		return github.Budget{Remaining: 4900, GraphQL: &github.GraphQL{Remaining: remaining, Limit: 5000, Reset: reset}}, nil
 	}
-	runs := 0
+	runs, pullRuns := 0, 0
 	start := r.a.now
 	for attempt := range 200 {
 		r.a.now = start.Add(time.Duration(attempt) * 18 * time.Second)
 		if attempt%5 == 0 {
 			remaining -= 3
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Budget = &state.Budget{
+					Remaining: 4900, Limit: 5000, Reset: reset, At: r.a.now,
+					GraphQL: &state.GraphQL{Remaining: remaining, Limit: 5000, Reset: reset, At: r.a.now},
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
 		} // 120 watch probes across the hour
 		// Every attempt uses a new app, as parent/child commands and a
 		// restarted loop do. The allowance is shared through the store.
 		a := *r.a
-		err := a.loopGitHub(context.Background(), "board", func() error { runs++; remaining -= 39; return nil })
+		err := a.loopGitHub(context.Background(), loopBoard, func() error { runs++; remaining -= 39; return nil })
 		if err != nil && !errors.Is(err, errLoopLater) {
 			t.Fatal(err)
 		}
+		if attempt%5 == 0 {
+			if err := a.loopGitHub(context.Background(), loopPullStep, func() error { pullRuns++; return nil }); err != nil {
+				t.Fatalf("interleaved pull step held at attempt %d: %v", attempt, err)
+			}
+		}
 	}
-	if runs == 0 || 5000-remaining > loopGraphQLLimit || remaining < 2500 {
-		t.Fatalf("runs=%d spent=%d remaining=%d", runs, 5000-remaining, remaining)
+	if runs == 0 || pullRuns != 40 || 5000-remaining > loopGraphQLLimit || remaining < 2500 {
+		t.Fatalf("runs=%d pullRuns=%d spent=%d remaining=%d", runs, pullRuns, 5000-remaining, remaining)
+	}
+	var spend loopGraphQLSpend
+	if _, err := r.a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
+		t.Fatal(err)
+	}
+	if spend.Steps[loopBoard] <= loopGraphQLLimit-loopGraphQLProbeReserve-loopGraphQLReserve {
+		t.Fatalf("board spend was wiped mid-window: %+v", spend)
 	}
 	before := runs
 	remaining = 2550
-	if err := r.a.loopGitHub(context.Background(), "pull", func() error { runs++; return nil }); !errors.Is(err, errLoopLater) || runs != before {
+	if err := r.a.loopGitHub(context.Background(), loopPullStep, func() error { runs++; return nil }); !errors.Is(err, errLoopLater) || runs != before {
 		t.Fatalf("admitted work without room above floor: %v", err)
 	}
 	// Only a new GitHub window releases the durable allowance.
 	remaining = 5000
 	reset = reset.Add(time.Hour)
 	r.a.now = r.a.now.Add(time.Hour)
-	if err := r.a.loopGitHub(context.Background(), "pull", func() error { runs++; return nil }); err != nil || runs != before+1 {
+	if err := r.a.loopGitHub(context.Background(), loopPullStep, func() error { runs++; return nil }); err != nil || runs != before+1 {
 		t.Fatalf("new window did not release allowance: %v", err)
 	}
 }

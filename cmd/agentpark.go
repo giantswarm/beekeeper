@@ -634,6 +634,8 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			}
 		} else {
 			w.clear("park-refs")
+		}
+		if len(s) > 0 {
 			states = s
 			w.cacheParkRefs(parked, s)
 		}

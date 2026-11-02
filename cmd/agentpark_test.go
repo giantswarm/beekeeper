@@ -593,3 +593,36 @@ func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
 		})
 	}
 }
+
+func TestSettledParksKeepsPartialBatchResultsOnError(t *testing.T) {
+	w := parkingWatch(t, nil)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: w.now, On: refOne}
+		st.Parks = []state.Park{{By: offSession, At: w.now, On: refTwo}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := refStates
+	t.Cleanup(func() { refStates = prev })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		return map[github.PR]github.RefState{
+			refs[0]: {Kind: github.RefPullRequest, State: github.Merged},
+		}, errParkLookup
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := w.settledParks(t.Context(), st)
+	if len(settled) != 1 || settled[0].on != refOne {
+		t.Fatalf("partial batch result did not settle %s: %+v", refOne, settled)
+	}
+	st, err = w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Park == nil || st.Agents[0].Park.RefKind != github.RefPullRequest {
+		t.Fatalf("partial batch result did not cache RefKind: %+v", st.Agents[0].Park)
+	}
+}
