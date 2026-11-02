@@ -1005,6 +1005,9 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
+	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// They grant no start permissions; Starts remains the authorization ledger.
+	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a
 	// session no roster entry names), one per session, its By: the watch
 	// settles and resumes them as it does a roster agent's.

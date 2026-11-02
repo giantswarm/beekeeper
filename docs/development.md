@@ -529,3 +529,24 @@ verbatim text. `answer` verifies that receipt before recording channel `guide_di
 command-line flag alone cannot select the channel. The guide keeps the note's option labels
 and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
 relay still does not verify. The central instance retains its authenticated identity checks.
+
+The doctor stops reparented process trees left in linked worktrees by known local
+workers that have left the roster. It sends SIGTERM, then SIGKILL after
+two seconds, checking the process start time, user and worktree before each
+signal. Each targeted PID and masked command is recorded as `agents.archive`.
+`doctor --dry-run` reports candidates without signalling; `ps` marks the same
+candidates `[orphan: <worktree>]` (JSON: `orphan`, `worktree`), beside their age.
+A roster entry, including a done worker awaiting removal, or a live CLI protects
+its worktree. Main checkouts, arbitrary directories, unknown starts and remote
+executions are excluded. Inherited worker IDs also identify servers whose tool
+shell changed into a different worktree after the session started. Cleanup is
+retried by later doctor runs if a live CLI still protects a finished worktree.
+
+`TestStopWorktreeOrphansLive` starts an adopted, TERM-ignoring server in a scratch
+worktree and proves dry-run preservation, escalation and archive logging.
+`TestWorktreeOrphans` covers shared worktrees, rostered/done sessions, live CLIs,
+remote starts, older processes and changed working directories.
+
+Removed manually registered workers retain their identity and registration time
+in `endedWorkers`, so their inherited session ID also identifies leftovers.
+This cleanup history grants no permissions to the start or permission hooks.
