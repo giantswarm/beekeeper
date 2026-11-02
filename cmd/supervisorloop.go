@@ -913,9 +913,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	l.postMerge = superloop.ReleaseWorkers(in)
 	if len(l.postMerge) > 0 {
-		sessions, _, sessionErr := a.sessions()
+		sessions, _, sessionErr := loopSessions(a)
 		for i, ag := range st.Agents {
-			if sessionErr != nil && !platform.Missing(sessionErr) {
+			if ag.Execution != nil {
+				in.Workers[i].LastActive = executionLastActive(st, ag, a.now)
+			} else if sessionErr != nil && !platform.Missing(sessionErr) {
 				in.Workers[i].LastActive = a.now // never retire on a failed observation
 			} else if s, ok := claude.Live(sessions, ag.Party); ok {
 				in.Workers[i].LastActive = s.LastActive
@@ -1438,8 +1440,81 @@ func redChecks(key string) string {
 
 // loopInTurn reports whether p's session runs a turn.
 var loopInTurn = func(a *app, p state.Party) bool {
+	if a.executionInTurn(p) {
+		return true
+	}
 	_, ok := a.runningTurn(p)
 	return ok
+}
+
+// executionLastActive is the latest activity recorded for ag's managed SSH
+// execution, or now when its host is unreachable so a failed observation
+// never retires a post-merge worker.
+func executionLastActive(st *state.State, ag state.Agent, now time.Time) time.Time {
+	if ag.Execution == nil {
+		return time.Time{}
+	}
+	r, _ := executionRecord(st, *ag.Execution)
+	if r == nil {
+		return time.Time{}
+	}
+	if r.Observation.Reachability == execution.Unreachable {
+		return now
+	}
+	last := r.LastActive
+	if r.Observation.LastActive.After(last) {
+		last = r.Observation.LastActive
+	}
+	if r.Published != nil && r.Published.At.After(last) {
+		last = r.Published.At
+	}
+	if !r.Terminal() && r.StopRequest == nil && r.Observation.InTurn && r.Observation.ObservedAt.After(last) {
+		last = r.Observation.ObservedAt
+	}
+	return last
+}
+
+func (a *app) executionInTurn(p state.Party) bool {
+	st, err := a.store.Read()
+	if err != nil {
+		return false
+	}
+	return executionInTurn(st, p, a.now)
+}
+
+// executionInTurn reports whether p's managed SSH execution is in a turn:
+// the host observation reports an active turn, a wake message is in flight,
+// or the coordinator recorded turn activity within stewardQuiet while the
+// worker is neither parked nor finished.
+func executionInTurn(st *state.State, p state.Party, now time.Time) bool {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Execution != nil && ag.Is(p) })
+	if i < 0 {
+		return false
+	}
+	ag := st.Agents[i]
+	r, _ := executionRecord(st, *ag.Execution)
+	if r == nil || r.Terminal() || r.StopRequest != nil {
+		return false
+	}
+	if r.Observation.InTurn {
+		return true
+	}
+	for _, m := range r.Messages {
+		if m.Stage == execution.Uncertain || (!r.Completed && !ag.Done && (m.Stage == executionPending || m.Stage == execution.Stored)) {
+			return true
+		}
+	}
+	if ag.Park != nil || r.Completed || ag.Done || now.IsZero() {
+		return false
+	}
+	last := r.LastActive
+	if r.Observation.LastActive.After(last) {
+		last = r.Observation.LastActive
+	}
+	if r.Published != nil && r.Published.At.After(last) {
+		last = r.Published.At
+	}
+	return !last.IsZero() && now.Sub(last) < stewardQuiet
 }
 
 // loopSessions reads the running Claude sessions and process table for a pass.
