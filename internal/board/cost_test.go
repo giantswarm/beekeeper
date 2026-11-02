@@ -303,7 +303,7 @@ func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 // formula: the walk of board next reads it once. Each epic's sub-issues are
 // read by a page of its own size: a page of 50 for every epic cost this
 // board of 426 candidates 92 points, 53 of them for sub-issue slots no epic
-// filled. Right-sized issue pages keep the full read below 40 points.
+// filled. With current-blocker reads and 80-item issue pages, it costs 37.
 func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 	b := &largeBoard{t: t, progress: 40, planning: 10, tail: 255, subs: 6, open: 4, ranked: 20}
 	c := &Client{GH: b.run, Board: b.order(), Plans: []string{plansRepo}}
