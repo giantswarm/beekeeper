@@ -17,7 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The Kubernetes hook parses kubectl-gs global value flags before selecting its subcommand: `template cluster` stays allowed against production, and a read-looking flag value cannot exempt a production write.
 - Queued merges behind a live gate sleep with bounded backoff and only read their local queue position, avoiding repeated state rewrites, lane recovery and GitHub reads while waiting, and renew their queue place once before a detached handoff (https://github.com/giantswarm/beekeeper/issues/2049).
 - Full-history and working-tree gitleaks scans allow the fake GPG key ID in the signing argument parser test, scoped to its exact value, file and detection rule.
 
@@ -70,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `beekeeper run` without `--class` runs a command that cannot build at once, uncapped and outside the build slot queue: a single `true`, `false`, `echo` or `printf`, or a command that only prints its help or version (`go version`, `make help`, `kubectl --help`). It waited for a build slot like a build ([#919](https://github.com/giantswarm/beekeeper/issues/919)).
 
 - PR parks request desk review only when made from the PR's published worktree, with matching branch and HEAD. Other parks remain plain waits and resume on merge or close. After upgrading, reissue existing PR review parks from their published worktrees: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` ([https://github.com/giantswarm/beekeeper/issues/1824](https://github.com/giantswarm/beekeeper/issues/1824)).
+- The Kubernetes hook parses kubectl-gs global value flags before selecting its subcommand: `template cluster` stays allowed against production, and a read-looking flag value cannot exempt a production write.
+
 
 ### Changed
 
