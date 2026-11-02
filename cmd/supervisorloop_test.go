@@ -3021,3 +3021,34 @@ func TestLoopFailureDelayGrowsToAnHour(t *testing.T) {
 		}
 	}
 }
+
+// A look for a newer release that fails is said, once until a look
+// succeeds again, never taken for "this is the latest".
+func TestLoopSaysAFailedReleaseLookup(t *testing.T) {
+	r := newLoopRig(t)
+	failing := true
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && failing {
+			return "beekeeper: looking up the latest release: no signed binary found\n", ExitError
+		}
+		return "", 0
+	}
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	for range 2 {
+		if v := l.newerRelease(context.Background()); v != "" {
+			t.Fatalf("a failed look found %q", v)
+		}
+	}
+	const failed = "SUPERVISOR RELEASE LOOKUP FAILED: self-update --check exits 1: beekeeper: looking up the latest release: no signed binary found\n"
+	if r.out.String() != failed {
+		t.Fatalf("said %q, want %q once", r.out, failed)
+	}
+	// A look that succeeds clears it: the next failure is said again.
+	failing = false
+	l.newerRelease(context.Background())
+	failing = true
+	l.newerRelease(context.Background())
+	if r.out.String() != failed+failed {
+		t.Fatalf("said %q, want the failure again after a success", r.out)
+	}
+}
