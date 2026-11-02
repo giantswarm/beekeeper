@@ -17,7 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `beekeeper doctor` no longer reports a process as a stale binary when the install it is checked against arrived before the process started, or when the path names another file only in the doctor's own mount namespace: the path is resolved through the process's own root, and a gate started after the install, a re-executed gate call or a call started from a second copy on the PATH is not listed. A process an install did replace is still listed, its `stale binary` line naming the install's path and time ([https://github.com/giantswarm/beekeeper/issues/905](https://github.com/giantswarm/beekeeper/issues/905)).
 - Queued merges behind a live gate sleep with bounded backoff and only read their local queue position, avoiding repeated state rewrites, lane recovery and GitHub reads while waiting, and renew their queue place once before a detached handoff (https://github.com/giantswarm/beekeeper/issues/2049).
 - Full-history and working-tree gitleaks scans allow the fake GPG key ID in the signing argument parser test, scoped to its exact value, file and detection rule.
 
@@ -71,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `beekeeper run` without `--class` runs a command that cannot build at once, uncapped and outside the build slot queue: a single `true`, `false`, `echo` or `printf`, or a command that only prints its help or version (`go version`, `make help`, `kubectl --help`). It waited for a build slot like a build ([#919](https://github.com/giantswarm/beekeeper/issues/919)).
 
 - PR parks request desk review only when made from the PR's published worktree, with matching branch and HEAD. Other parks remain plain waits and resume on merge or close. After upgrading, reissue existing PR review parks from their published worktrees: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` ([https://github.com/giantswarm/beekeeper/issues/1824](https://github.com/giantswarm/beekeeper/issues/1824)).
+- `beekeeper doctor` no longer reports a process as a stale binary when the install it is checked against arrived before the process started, or when the path names another file only in the doctor's own mount namespace: the path is resolved through the process's own root, and a gate started after the install, a re-executed gate call or a call started from a second copy on the PATH is not listed. A process an install did replace is still listed, its `stale binary` line naming the install's path and time ([https://github.com/giantswarm/beekeeper/issues/905](https://github.com/giantswarm/beekeeper/issues/905)).
 
 ### Changed
 
