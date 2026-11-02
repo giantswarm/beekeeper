@@ -1037,7 +1037,8 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 }
 
 func (a *app) boardMoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var intake bool
+	c := &cobra.Command{
 		Use:   "move <owner/repo#n|URL> <status>",
 		Short: "Set a board item's Status by its canonical name, adding the issue to the board when it is missing",
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
@@ -1045,6 +1046,9 @@ board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
 Status. Issues from any accessible repository are added to the configured
 board, regardless of the repository's owner, subject to GitHub permissions.
+With --intake, the issue is put in the given status only when it has no
+Status on the configured board yet and does not sit on another board where
+it is already being worked.
 Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
@@ -1067,7 +1071,11 @@ anything is written. Exit 3 when refused.`,
 			}
 			me, _ := a.caller()
 			cl := a.boardClient()
-			mv, err := cl.Move(cmd.Context(), args[0], args[1])
+			move := cl.Move
+			if intake {
+				move = cl.Intake
+			}
+			mv, err := move(cmd.Context(), args[0], args[1])
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
 			}
@@ -1089,6 +1097,7 @@ anything is written. Exit 3 when refused.`,
 				team = " on the board " + mv.Board
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
 			case mv.Added:
 				_ = a.store.Log(event(me, "board.move", "%s: added to the board%s, → %s", mv.Ref, team, mv.To))
 			case mv.From != mv.To:
@@ -1098,6 +1107,8 @@ anything is written. Exit 3 when refused.`,
 				return a.printJSON(mv)
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
+				_, err = fmt.Fprintf(a.out, "left %s in %s%s\n", mv.Ref, mv.From, team)
 			case mv.Added:
 				_, err = fmt.Fprintf(a.out, "added %s to the board %s/%d%s: → %s\n", mv.Ref, a.cfg.Board.Owner, a.cfg.Board.Project, team, mv.To)
 			case mv.From == mv.To:
@@ -1115,6 +1126,8 @@ anything is written. Exit 3 when refused.`,
 			return err
 		},
 	}
+	c.Flags().BoolVar(&intake, "intake", false, "put the issue in this intake status only when it has no Status yet and is not being worked on another board")
+	return c
 }
 
 func (a *app) boardRankCmd() *cobra.Command {

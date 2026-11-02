@@ -145,7 +145,7 @@ the build slots and their caps (`memcap.slots`, `memcap.max`, `memcap.cpuQuota`,
 them on the host is a digest mismatch in `agents hosts check` until a matching
 bundle is prepared and pinned again. What stays host-local on purpose is the
 machine's own watch and desk pacing, which never bounds a pinned remote worker:
-the supervisor's target and pace (`capacity.floor`, `capacity.ceiling` and the
+the supervisor's target and pace (`capacity.ceiling` and the
 rest of `capacity` beyond the guards above), watch's alert thresholds and
 cadence (its `interval`, `repeat`, `availMinMiB`, `swapMaxMiB`, `oomdHeadroomMinMiB`,
 `scopeAnonMaxMiB`, `gttMaxMiB`, `psiMax`, `cpuPSIMax`, `forkRateMax`, `stackMax`,
@@ -241,7 +241,9 @@ read-and-review path. A review waits when coordinator review capacity is full.
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against
 their host's `maxBusy`, never against it; local self-hosted sessions count.
-Every local start, the loop's and one by hand, is refused at it. A retired remote worker is
+Every local start, the loop's and one by hand, is refused at it; a review may
+use `capacity.reviewHeadroom` above it, since reviews run only on the
+coordinator. A retired remote worker is
 stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable
@@ -518,3 +520,21 @@ at most 20 seconds; it returns an explicit uncertainty on disconnect. Stops and
 holds serialize with that attempt. `agents hosts check` refuses hosts that do
 not advertise publication support; upgrade and prepare an older host before
 starting workers there. Existing raw merge and API guards remain in force.
+
+### Source freshness at start
+
+The coordinator fetches the requested `--ref` from GitHub before host preparation,
+records its exact commit and a bundle digest in the start request, and transfers
+the objects over the authenticated SSH route in bounded chunks. The host checks
+the digest and commit before checking out the workspace. Its configured source
+checkout stays unchanged and needs no GitHub credential. Recovery reuses the
+saved commit and bundle even if the branch has advanced meanwhile. Both ends
+must support source transfer; an older host refuses preparation rather than
+starting from its stale ref. Bundles have a 64 MiB limit; oversized sources fail
+before activation and preserve the reservation for inspection.
+
+A pending reservation from before source transfer may already have a prepared
+host journal whose reply was lost. Recovery inspects that journal before
+pinning source and reuses its original request and commit. Only an explicit
+missing-journal response permits a new source pin; an unreadable journal or
+uncertain connection preserves the reservation for another recovery attempt.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +38,8 @@ type RankedEpic struct {
 	// Held is its hold (Item.HeldText): its open blockers, "" for none. A
 	// held epic keeps its rank; board next skips it and every issue under it.
 	Held string `json:"held,omitempty"`
+	// BlockedBy are its open recorded blockers (Item.OpenBlockedBy).
+	BlockedBy []string `json:"blockedBy,omitempty"`
 	// item is its item's id on the board.
 	item string
 }
@@ -93,7 +96,8 @@ func (snap *Snapshot) Parent(ref string) string {
 }
 
 // Annotate records on each candidate the rank it has (Ranks.Of, from its
-// own parent and upward through parent), for what board next says of it.
+// own parent and upward through parent, or from a ranked item on the board
+// that it blocks), for what board next says of it.
 // It never reorders or skips a candidate: the configured order alone, by
 // Status and then the board's own order, decides what is picked.
 func Annotate(cands []Candidate, r Ranks, parent func(string) string) {
@@ -106,6 +110,21 @@ func Annotate(cands []Candidate, r Ranks, parent func(string) string) {
 			return parent(ref)
 		}
 		c.Priority, c.PriorityOf = r.Of(c.Ref, up)
+	}
+	for i := range cands {
+		c := &cands[i]
+		if c.Priority > 0 {
+			continue
+		}
+		for _, blocked := range cands {
+			if blocked.Priority == 0 || (c.Priority > 0 && blocked.Priority >= c.Priority) {
+				continue
+			}
+			if slices.ContainsFunc(blocked.OpenBlockedBy, func(b string) bool { return strings.EqualFold(b, c.Ref) }) {
+				c.Priority = blocked.Priority
+				c.PriorityOf = cmp.Or(blocked.PriorityOf, blocked.Ref)
+			}
+		}
 	}
 }
 
@@ -259,7 +278,7 @@ content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
 			seen[n.ID] = true
 			it := n.Content.item()
 			n.projectItem.onto(&it)
-			e := RankedEpic{Ref: it.Ref, URL: it.URL, Title: it.Title, Status: it.Status, Held: it.HeldText(), item: n.ID}
+			e := RankedEpic{Ref: it.Ref, URL: it.URL, Title: it.Title, Status: it.Status, Held: it.HeldText(), BlockedBy: it.OpenBlockedBy, item: n.ID}
 			n.onto(&e)
 			*out = append(*out, e)
 		}
@@ -521,7 +540,185 @@ func (c *Client) RankedNow(ctx context.Context, ref string) (*RankedEpic, error)
 	it := is.item()
 	node := is.ProjectItems.Nodes[i]
 	node.projectItem.onto(&it)
-	e := &RankedEpic{Ref: it.Ref, URL: it.URL, Title: it.Title, Status: it.Status, Held: it.HeldText(), item: node.ID}
+	e := &RankedEpic{Ref: it.Ref, URL: it.URL, Title: it.Title, Status: it.Status, Held: it.HeldText(), BlockedBy: it.OpenBlockedBy, item: node.ID}
 	node.onto(e)
 	return e, nil
+}
+
+// issueRefInText matches an issue or pull request URL or owner/repo#n in text.
+var issueRefInText = regexp.MustCompile(`(?i)github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b`)
+
+func refsInText(text string) []string {
+	var out []string
+	for _, m := range issueRefInText.FindAllStringSubmatch(text, -1) {
+		repo, num := m[1], m[2]
+		if repo == "" {
+			repo, num = m[3], m[4]
+		}
+		ref := repo + "#" + num
+		if !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, ref) }) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func (c *Client) lookupOrigin(ctx context.Context, m *meta, ref string, probeCrossOwner bool) (onBoard bool, parent, body string, blockedBy []string, err error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return false, "", "", nil, err
+	}
+	norm := fmt.Sprintf("%s/%s#%d", owner, repo, n)
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
+	var r struct {
+		Repository struct {
+			Issue *struct {
+				ID     string `json:"id"`
+				Body   string `json:"body"`
+				Parent *struct {
+					Number     int `json:"number"`
+					Repository struct {
+						NameWithOwner string `json:"nameWithOwner"`
+					} `json:"repository"`
+				} `json:"parent"`
+				BlockedBy struct {
+					Nodes []blockerNode `json:"nodes"`
+				} `json:"blockedBy"`
+				ProjectItems struct {
+					Nodes []projectItem `json:"nodes"`
+				} `json:"projectItems"`
+			} `json:"issue"`
+		} `json:"repository"`
+	}
+	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id body parent{number repository{nameWithOwner}} `+blockerFields+` projectItems(first:50){nodes{
+`+itemFields+`}}}}}`,
+		vars{"o": owner, "r": repo, "n": n})
+	p, ok := partialOf(err)
+	if !ok {
+		return false, "", "", nil, err
+	}
+	is := r.Repository.Issue
+	if is == nil {
+		return false, "", "", nil, &Refusal{norm + " is no issue" + p.reason()}
+	}
+	if is.Parent != nil && is.Parent.Number != 0 && is.Parent.Repository.NameWithOwner != "" {
+		parent = fmt.Sprintf("%s#%d", is.Parent.Repository.NameWithOwner, is.Parent.Number)
+	}
+	for _, b := range is.BlockedBy.Nodes {
+		if b.State == stateOpen && b.Number != 0 && b.Repository.NameWithOwner != "" {
+			blockedBy = append(blockedBy, fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number))
+		}
+	}
+	onBoard = slices.ContainsFunc(is.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID })
+	if !onBoard && probeCrossOwner && !strings.EqualFold(owner, c.Board.Owner) && is.ID != "" {
+		var omv Moved
+		omv.Ref = norm
+		if it, cerr := c.ensure(ctx, m, &omv, is.ID, nil); cerr == nil {
+			if !omv.Added {
+				onBoard = true
+			} else {
+				_ = c.deleteItem(ctx, m.ID, it.ID)
+			}
+		}
+	}
+	return onBoard, parent, is.Body, blockedBy, nil
+}
+
+// RankAnchor returns the issue on the board that ref should be ranked right
+// after (Rank with Place{After: anchor}), from the priority list and ref's
+// origin (its parent, a ranked item it blocks, or from, the item or pull
+// request it was filed from, or an issue ref's body cites): the high-ranked
+// epic or item it blocks or follows from when on the board (or its ranked
+// epic), else the last ranked epic of the priority list; "" when none is on
+// the board.
+func (c *Client) RankAnchor(ctx context.Context, ref, from string) (string, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return "", err
+	}
+	normRef := fmt.Sprintf("%s/%s#%d", owner, repo, n)
+	m, err := c.meta(github.ActingOn(ctx, owner+"/"+repo))
+	if err != nil {
+		return "", err
+	}
+	list, err := c.priorities(ctx, m)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range list {
+		if !strings.EqualFold(e.Ref, normRef) && slices.ContainsFunc(e.BlockedBy, func(b string) bool { return strings.EqualFold(b, normRef) }) {
+			return e.Ref, nil
+		}
+	}
+	_, parent, body, _, _ := c.lookupOrigin(ctx, m, normRef, false)
+	var origins []string
+	addOrigin := func(r string) {
+		oo, or, on, err := Ref(r)
+		if err != nil {
+			return
+		}
+		cand := fmt.Sprintf("%s/%s#%d", oo, or, on)
+		if !strings.EqualFold(cand, normRef) && !slices.ContainsFunc(origins, func(s string) bool { return strings.EqualFold(s, cand) }) {
+			origins = append(origins, cand)
+		}
+	}
+	addOrigin(parent)
+	normFrom := ""
+	if rs := refsInText(from); len(rs) > 0 {
+		from = rs[0]
+	}
+	if oo, or, on, err := Ref(from); err == nil {
+		normFrom = fmt.Sprintf("%s/%s#%d", oo, or, on)
+		addOrigin(normFrom)
+	}
+	for _, r := range refsInText(body) {
+		addOrigin(r)
+	}
+	ranks := list.Ranks()
+	var fallbackBoard string
+	for i := 0; i < len(origins); i++ {
+		orig := origins[i]
+		if _, epic := ranks.Of(orig, func(string) string { return "" }); epic != "" {
+			return orig, nil
+		}
+		onBoard, origParent, _, origBlockedBy, err := c.lookupOrigin(ctx, m, orig, true)
+		if err != nil {
+			if normFrom != "" && strings.EqualFold(orig, normFrom) {
+				if closes, cerr := c.Closes(ctx, []string{normFrom}); cerr == nil {
+					for _, cl := range closes[strings.ToLower(normFrom)] {
+						addOrigin(cl)
+					}
+				}
+			}
+			continue
+		}
+		if _, epic := ranks.Of(orig, func(r string) string {
+			if strings.EqualFold(r, orig) {
+				return origParent
+			}
+			return ""
+		}); epic != "" {
+			if onBoard {
+				return orig, nil
+			}
+			if !strings.EqualFold(epic, normRef) {
+				return epic, nil
+			}
+		}
+		if onBoard && slices.ContainsFunc(origBlockedBy, func(b string) bool { return strings.EqualFold(b, normRef) }) {
+			return orig, nil
+		}
+		if onBoard && fallbackBoard == "" {
+			fallbackBoard = orig
+		}
+	}
+	if fallbackBoard != "" {
+		return fallbackBoard, nil
+	}
+	for i := len(list) - 1; i >= 0; i-- {
+		if !strings.EqualFold(list[i].Ref, normRef) {
+			return list[i].Ref, nil
+		}
+	}
+	return "", nil
 }

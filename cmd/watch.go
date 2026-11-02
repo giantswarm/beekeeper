@@ -76,12 +76,9 @@ closed, is one MERGE HUNG line: the watch ends its devctl and records the
 merge at the next poll. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
-that wakes it). Fewer busy agents than capacity.floor, with the headroom
-for a start, is one CAPACITY LOW line, and a positive capacity.ceiling
-reached one CAPACITY FULL line, each with the headroom (beekeeper capacity)
-and one ENDED line when the count recovers; capacity.ceiling of 0 suppresses
-both CAPACITY LOW and CAPACITY FULL (capacity.floor of 0 suppresses CAPACITY
-LOW). When capacity.usage.command or capacity.providers is configured, the watch refreshes each
+that wakes it). A positive capacity.ceiling reached is one CAPACITY FULL
+line with the headroom (beekeeper capacity) and one ENDED line when the
+count recovers; capacity.ceiling of 0 suppresses CAPACITY FULL. When capacity.usage.command or capacity.providers is configured, the watch refreshes each
 subscription's 5-hour and 7-day usage windows every usage.every
 (default 5m, and once resetsAt passes), prints one USAGE line (with each
 provider's windows and verdict and the capacity.choices selection when
@@ -128,7 +125,10 @@ reading again. A
 cluster whose release changes begins an upgrade: its release label differs
 from the one cluster-api-events recorded, cluster-api-events marks it
 upgrading, or its scheduled upgrade is due. It ends once none of that holds
-and its control plane and node pools have rolled. While it runs, the
+and its control plane and node pools have rolled; a marked one once the
+cluster reports the release cluster-api-events recorded and has rolled out
+for an hour from its start stamp, or that start is a day ago; a rollout
+after the mark cleared a day after its hold began. While it runs, the
 installation is held (hold upgrade:<installation>/<cluster>): the gate
 refuses the merges of its lanes and lease claims of its name are refused.
 "UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and

@@ -44,12 +44,12 @@ its systemd service on Linux (on macOS launchd restarts a failed loop
 itself); no session ever stands in for it.
 
 With `supervisor.workerBrief` configured, each pass fills the desk to
-`capacity.floor` from the next free ranked board items, including after a
+`capacity.ceiling` from the next free ranked board items, including after a
 restart or roster loss without a done report. Each start rechecks capacity
-and stops when its gates refuse, the floor is reached, or the board offers
+and stops when its gates refuse, the ceiling is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
 An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
-default) before retrying, unless `capacity.floor` or `capacity.ceiling`
+default) before retrying, unless `capacity.ceiling`
 changes or an agent is done or leaves the roster first; a park, a resume,
 a wait or a new task, and the busy count and room they move, do not end it. An empty or failed read answers
 the rest of its pass, the done-triggered starts included. `board next`
@@ -323,9 +323,9 @@ whose shared rules sit above the repositories puts them in `~/.codex/AGENTS.md` 
 
 | Command | For |
 |---|---|
-| `beekeeper capacity [--builds] [--review] [--review-of-self-hosted] [--exclude <choice>]` | The busy, parked, waiting and idle agents against `capacity.floor` and `capacity.ceiling`, the headroom that bounds a new start (MemAvailable, disk swap's growth over the watch's readings weighed with memory pressure and MemAvailable, the 1-minute load against the watch's limit, the kind labs against their cap, and for a start that builds the free build slots) and one verdict: `room for N starts` or what blocks one, each guard that refuses named; a swap growth without pressure is a warning in parentheses after it. When `capacity.providers` and `capacity.choices` are configured, prints each provider's busy agents, usage windows (with the 7-day pace share) and verdict, and the eligible subscription choice furthest behind its even 7-day pace (even pace minus used percent, from the model's bucket for multi-bucket providers), with `capacity.choices` order breaking ties and self-hosted choices as fallbacks. Each eligible provider has room, its 5-hour window below threshold and its 7-day use within its worker weekly cap (`sevenDayMax`) and not ahead of the even pace of its window (a negative `paceMargin` tightens it; a positive one, a choice's `skipPace` and `capacity.reviewSkipPace` are read and ignored); a stale or failed usage read counts as no room (`ceiling 0`, `room 0`) for that provider. `--exclude` skips matching choices (by model, `harness/model`, provider or harness). Every start is decided alike: `--review` marks a review start, which skips no gate, and `--review-of-self-hosted` the review of a pull request a self-hosted model's worker wrote, which takes no choice on a self-hosted provider. `--builds` judges a start whose task builds, tests or lints, which waits for a free build slot (`agents start --builds` waits its turn in the slot queue); without it the verdict is for a start that does not build, and a busy slot is a note after the verdict, never a `no start`. Read-only, no GitHub call.  A provider of `kind: self-hosted` (a model served on the desk's own machines) reads no subscription usage and has no pace: its own ceiling of busy sessions bounds it, optionally the one its serving mode names (`serveModeCommand`, `serveModeCeilings`), and `capacity.ceiling` bounds none of it, so a desk that lowers it to 0 to keep a subscription on its weekly pace still starts on its own model. |
+| `beekeeper capacity [--builds] [--review] [--review-of-self-hosted] [--exclude <choice>]` | The busy, parked, waiting and idle agents against `capacity.ceiling`, the headroom that bounds a new start (MemAvailable, disk swap's growth over the watch's readings weighed with memory pressure and MemAvailable, the 1-minute load against the watch's limit, the kind labs against their cap, and for a start that builds the free build slots) and one verdict: `room for N starts` or what blocks one, each guard that refuses named; a swap growth without pressure is a warning in parentheses after it. When `capacity.providers` and `capacity.choices` are configured, prints each provider's busy agents, usage windows (with the 7-day pace share) and verdict, and the eligible subscription choice furthest behind its even 7-day pace (even pace minus used percent, from the model's bucket for multi-bucket providers), with `capacity.choices` order breaking ties and self-hosted choices as fallbacks. Each eligible provider has room, its 5-hour window below threshold and its 7-day use within its worker weekly cap (`sevenDayMax`) and not ahead of the even pace of its window (a negative `paceMargin` tightens it; a positive one, a choice's `skipPace` and `capacity.reviewSkipPace` are read and ignored); a stale or failed usage read counts as no room (`ceiling 0`, `room 0`) for that provider. `--exclude` skips matching choices (by model, `harness/model`, provider or harness). Every start is decided alike: `--review` marks a review start, which skips no gate, and `--review-of-self-hosted` the review of a pull request a self-hosted model's worker wrote, which takes no choice on a self-hosted provider. `--builds` judges a start whose task builds, tests or lints, which waits for a free build slot (`agents start --builds` waits its turn in the slot queue); without it the verdict is for a start that does not build, and a busy slot is a note after the verdict, never a `no start`. Read-only, no GitHub call.  A provider of `kind: self-hosted` (a model served on the desk's own machines) reads no subscription usage and has no pace: its own ceiling of busy sessions bounds it, optionally the one its serving mode names (`serveModeCommand`, `serveModeCeilings`), and `capacity.ceiling` bounds none of it, so a desk that lowers it to 0 to keep a subscription on its weekly pace still starts on its own model. |
 | `beekeeper capacity pick [--review-of-self-hosted]` | One line: the `<harness> <model>` the next start takes, or `none`. It is the decision `agents start` without `--harness`, the supervisor loop's reviewers and its next starts take: the eligible subscription furthest behind its even 7-day pace, with `capacity.choices` order breaking ties and self-hosted choices as fallbacks. Each eligible provider has a free slot under its running-session ceiling, whose 5-hour and 7-day windows are under their stop percent (`fiveHourMax`, `sevenDayMax`) and whose 7-day use is not ahead of the even pace of its window, with the machine's headroom a hard gate and `capacity.ceiling` bounding the subscriptions together. A review may use `capacity.reviewHeadroom` extra subscription sessions above the worker ceiling (default 2); machine guards and provider window stops still apply; `--review-of-self-hosted` decides the reviewer of a pull request a self-hosted model's worker wrote, which takes no self-hosted provider. `--json` gives the pick with every choice's reason, each eligible subscription choice's `behindPace` in percentage points, each provider's windows and verdict, and the headroom. Read-only. |
-| `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force, the notes and timers that are due and the busy agents against the target (`busy 4/5-10`). `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
+| `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force, the notes and timers that are due and the busy agents against the ceiling (`busy 4/10`). `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
 | `beekeeper sessions` | Every running session, Claude Code's, omp's, agy's and codex's (marked `omp`, `agy` or `codex` `busy` or `idle`, see [omp agents](#omp-agents), [agy agents](#agy-agents) and [codex agents](#codex-agents)): the issues and pull requests its latest turns acted on (its `sessions serve` record, its `gh` and `devctl` commands and GitHub tool calls, what it created; a ref it only quoted or read is a mention, kept in `--json` as `mentioned`), when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, how full its context is, its last hour (turns, tool calls and their errors, GitHub calls, cost), role and leases, after `archived` or `test` for a session the guide's feed leaves out. Overlaps name what more than one session acts on. The session records follow: the running sessions', then the parked ones (a worker that runs no CLI while it stays on the roster parked or kept still serves its item; its line names the worker and its park reason, `--json` has them in `parked`), then the ended ones. `--all` adds the paused ones and the omp, agy and codex sessions of the last 24 hours no process runs: a message to them does not arrive. `--json` has every figure per session and their totals (see [Session metrics](#session-metrics)). |
 | `beekeeper tail <session>` | A session's last turns without tool calls: what it said and what it was told. The session is named as `sessions serve` names one: its desktop title, its roster name, a session id or a PID. |
 | `beekeeper snapshot` | One tick: load, RAM, swap, memory pressure, the desktop scope, tmpfs and disk, build slots and their CPU budget and use (`memcap.slice`'s `cpu.max` and `cpu.stat` over a 500 ms sample), kind clusters, the sessions' last hour and the three that spent the most in it, the commands sessions sit on, every kernel OOM kill since your last snapshot with whose limit it hit (a memcap scope no `run.start` names says `cap unknown`, never the default cap; a test run's scope is a test kill), leases, holds, the GitHub budget, the installations' alerts and their running upgrades (`upgrades: prod/mc 35.0.1 → 35.1.1 for 9m (control plane 3/4, node pools 15/15) · test none`). A caller inside a Claude session that has taken one before gets only what changed since, or one `no change` line; `--full` prints the whole screen and then what changed. |
@@ -1927,6 +1927,12 @@ workers have rolled), or its scheduled upgrade is due (`alpha.giantswarm.io/upda
 differs from the label and `…-target-time` has passed). It ends once none of that holds and its
 control plane and node pools have rolled (every KubeadmControlPlane at its `spec.version`, every
 control plane and node pool with all replicas up to date, no `RollingOut` condition True). A
+marked upgrade is over, though the mark stays, once the cluster reports the release
+cluster-api-events recorded and has rolled out for an hour since cluster-api-events stamped its
+start (`giantswarm.io/upgrade-start-time`), or that start is a day ago: a mark cluster-api-events
+never clears (a managed AKS control plane) or a stalled rollout holds the installation no longer.
+A rollout that runs on after the mark cleared keeps its hold at most a day from the hold's begin.
+Either way the hold lifts on that reading, whether the release it upgraded from was read or not. A
 workload cluster on an older release than its management cluster is not upgrading. The release it
 upgrades from is the one the label changed from, else the one cluster-api-events' `Upgrading…`
 event names.
@@ -1947,7 +1953,8 @@ refuses an `upgrade:` target; `hold lift upgrade:<installation>/<cluster>` lifts
 (a workload cluster's roll stuck on a drain need not stop the installation's merges): the hold
 stays lifted, recorded with who lifted it, until that upgrade ends, and only a different upgrade
 of the cluster (another target release) holds the installation again. `hold list` and `status`
-show the lifted hold and who lifted it.
+show the lifted hold and who lifted it; `hold list` marks an upgrade hold that has stood for a day
+`active, stale`, longer than the watch lets an upgrade it reads run: worth a look.
 
 
 The one claim an upgrade admits is the work that unblocks it: a node drain stalled on a
@@ -2057,12 +2064,13 @@ and a crash both start a fresh session.
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
   resume at …`).
 - **Review headroom:** `capacity.reviewHeadroom` (default 2, zero disables it) reserves
-  extra subscription sessions above a positive worker ceiling for `--review` starts.
+  extra subscription sessions above a positive worker ceiling for `--review` starts, and as
+  many above a positive `capacity.local.ceiling`.
   Reviews run before new workers within a supervisor pass. Memory, swap, load, lab
   and build guards, usage window stops and weekly pace still apply. `capacity` and
   its JSON show the reserve, occupancy above the worker ceiling and busy sessions.
   Filing findings starts no filer session.
-- **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10
+- **Capacity:** the supervisor keeps up to `capacity.ceiling` agents busy (10
   when unset; a ceiling of 0 refuses every unforced start with `no start: ceiling 0`, and does so
   for the subscription providers alone: a `capacity.providers` entry of `kind: self-hosted`, a
   model served on the desk's own machines, keeps starting on its own ceiling of sessions at once).
@@ -2079,8 +2087,10 @@ and a crash both start a fresh session.
   which bounds the subscriptions across the desk and its execution hosts: every busy agent whose
   session runs locally counts, a self-hosted provider's included; an agent on an execution host
   counts against that host's `maxBusy` and never against it. Every local start, the loop's and
-  one by hand, worker, reviewer and resume alike, is refused at it (`no start: N busy locally at
-  capacity.local.ceiling N`); `capacity` prints it as its `local:` line (`--json` `local`). Unset,
+  one by hand, worker and resume alike, is refused at it (`no start: N busy locally at
+  capacity.local.ceiling N`); a review, which runs only on the coordinator, may use
+  `capacity.reviewHeadroom` above it as above the worker ceiling (`… plus review headroom N`), the
+  machine's guards still applying. `capacity` prints it as its `local:` line (`--json` `local`). Unset,
   there is no local cap; 0 refuses every unforced local start. `beekeeper capacity` (and
   `--json`) prints the count, the headroom that bounds a new start (MemAvailable against
   `capacity.availMinMiB`, disk swap's growth over the watch's readings of `watch.swapWindow` against
@@ -2110,14 +2120,13 @@ and a crash both start a fresh session.
   refuses no start that only reads. `watch` weighs a start that does not build. `agents start`
   refuses a start whose verdict has no room (exit 3, the guards named, no session created) unless
   `--force`, which starts it and records the verdict overridden (`agents.start` in the log).
-  `watch` says `CAPACITY LOW <busy> of <floor>` once while busy stays under the
-  floor with room for a start, and `CAPACITY FULL <busy> of <ceiling>` at a positive ceiling, each with
-  the headroom line and one `ENDED` line when the count recovers; a ceiling of 0 suppresses both
-  `CAPACITY LOW` and `CAPACITY FULL` (a floor of 0 suppresses `CAPACITY LOW`). The `handover` carries
-  the count, `status` shows `busy <n>/<floor>-<ceiling>`.
+  `watch` says `CAPACITY FULL <busy> of <ceiling>` at a positive ceiling, with
+  the headroom line and one `ENDED` line when the count recovers; a ceiling of 0 suppresses
+  `CAPACITY FULL`. The `handover` carries
+  the count, `status` shows `busy <n>/<ceiling>`.
   When `capacity.usage.command` is configured, beekeeper runs that command (bounded by
   `capacity.usage.timeout`, default `15s`) to read the subscription's 5-hour and 7-day usage
-  windows as JSON on stdout (`{"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}`, either window optional unless its bands or `highPercent` are configured), caches the reading in `usage.json` for `capacity.usage.every` (default `5m`, re-reading at once once a window's `resetsAt` passes), and derives `floor` and `ceiling` from the ascending `{upTo, floor, ceiling}` bands in `capacity.usage.fiveHour` and `capacity.usage.sevenDay` (taking the lower `floor` and `ceiling` when both windows have bands, and `0/0` at or past a window's last `upTo`). `beekeeper capacity` appends `; usage 5h …, 7d …` to its `capacity:` line and includes `usage` in `--json`; `beekeeper snapshot` prints `usage: …` (`--json` `usage`); `beekeeper watch` prints `USAGE: …` every `capacity.usage.reportEvery` (default `30m`, negative turns periodic lines off, `watch --once` prints once). Once `fiveHour.usedPercent` reaches `capacity.usage.highPercent` (default `95`), `watch` emits `USAGE HIGH` once (`ENDED USAGE HIGH` once reset), tells each running busy worker once per window episode to finish its current step and park, and gates `capacity`, unforced `agents start`, unforced `agents resume` (`--force` overrides) and `watch`'s `autoResume` until `fiveHour.resetsAt`.
+  windows as JSON on stdout (`{"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}`, either window optional unless its bands or `highPercent` are configured), caches the reading in `usage.json` for `capacity.usage.every` (default `5m`, re-reading at once once a window's `resetsAt` passes), and derives `ceiling` from the ascending `{upTo, ceiling}` bands in `capacity.usage.fiveHour` and `capacity.usage.sevenDay` (taking the lower `ceiling` when both windows have bands, and `0` at or past a window's last `upTo`). `beekeeper capacity` appends `; usage 5h …, 7d …` to its `capacity:` line and includes `usage` in `--json`; `beekeeper snapshot` prints `usage: …` (`--json` `usage`); `beekeeper watch` prints `USAGE: …` every `capacity.usage.reportEvery` (default `30m`, negative turns periodic lines off, `watch --once` prints once). Once `fiveHour.usedPercent` reaches `capacity.usage.highPercent` (default `95`), `watch` emits `USAGE HIGH` once (`ENDED USAGE HIGH` once reset), tells each running busy worker once per window episode to finish its current step and park, and gates `capacity`, unforced `agents start`, unforced `agents resume` (`--force` overrides) and `watch`'s `autoResume` until `fiveHour.resetsAt`.
   `capacity.providers.claude: {}` defaults to `[claude, -p, /usage, --output-format, json]`.
   This local command uses no model tokens and needs no credential reader or status line. It runs
   under beekeeper's state directory at the provider's `every` (default `5m`), with its `timeout`.
@@ -2159,7 +2168,7 @@ tab-separated fields, always present, in this order.
 | 3 | the number of leases held |
 | 4 | the number of holds in force |
 | 5 | the number of notes and timers whose time has come |
-| 6 | the busy agents against `capacity.floor`, `<n>/<floor>` |
+| 6 | the busy agents against `capacity.ceiling`, `<n>/<ceiling>` |
 
 ### Agents started without a click
 
@@ -2885,7 +2894,7 @@ a `FAILED` line and makes `stop` exit 1, without the all-clear; the stop stands.
 set lifted (a hold that stood before stays, one it replaced is put back unless its time passed),
 starts and wakes allowed. A unit that does not start again keeps beekeeper stopped, with that
 unit still to start, and makes `resume` exit 1. It starts no session: it names the sessions
-the stop ended, which wait for a wake. The stop never changes `capacity.floor` or
+the stop ended, which wait for a wake. The stop never changes
 `capacity.ceiling`, so the capacity after the resume is what it was.
 
 ### A repository's instructions on the first write
@@ -3398,6 +3407,7 @@ The organisation and desk keys, and their defaults:
 | `github.allowedOrgs` | `[giantswarm]` | The organizations and accounts an agent writes to; the hook refuses every GitHub write to any other repository, `[]` turns it off ([Writes outside the allowed organizations](#writes-outside-the-allowed-organizations)) |
 | `github.upstreamReview` | unset: "the team's upstream review list" | Where a change meant for upstream is queued (`owner/repo#n`), named in the refusal |
 | `merge.devctlOwners` | none: every merge is the plain squash merge | The owners whose repositories `devctl pr merge` serves |
+| `merge.admin` | none | The repositories (`owner/repo`) the desk merges with `--admin` past their branch ruleset after the approved desk review; only their merge go names `--admin --match-head-commit <head>` |
 | `guide.skill`, `guide.person` | unset | The guide's skill and the person it walks through their notes |
 | `claude.desktopApp` | `claude-desktop` | The desktop app's executable, which opens `claude://` links and starts the app |
 | `shell` | `$SHELL`, else `sh` | The shell the hook runs a rewritten build, test or lint command in |
