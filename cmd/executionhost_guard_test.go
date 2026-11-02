@@ -117,7 +117,6 @@ func TestExecutionHostPolicyDigestStaysHostLocalForWatchCadence(t *testing.T) {
 		name  string
 		tweak func(*config.Config)
 	}{
-		{"capacity.floor", func(c *config.Config) { c.Capacity.Floor = 5 }},
 		{"capacity.ceiling", func(c *config.Config) { c.Capacity.Ceiling = 10 }},
 		{"watch.interval", func(c *config.Config) { c.Watch.Interval = config.Duration{Duration: time.Minute} }},
 		{"watch.availMinMiB", func(c *config.Config) { c.Watch.AvailMinMiB = 8192 }},

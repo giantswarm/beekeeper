@@ -108,8 +108,8 @@ func TestCountAgentsWaiting(t *testing.T) {
 	if want := []string{"Poll (waits: sleep 30)", "CI (waits: gh run watch 7)"}; !slices.Equal(c.Waiting, want) {
 		t.Errorf("waiting %v, want %v", c.Waiting, want)
 	}
-	k := config.Capacity{Floor: 1, Ceiling: 3}
-	if got := c.line(k); got != "2 busy of floor 1, ceiling 3: Fresh, Build; 0 parked, 2 waiting, 0 idle" {
+	k := config.Capacity{Ceiling: 3}
+	if got := c.line(k); got != "2 busy of ceiling 3: Fresh, Build; 0 parked, 2 waiting, 0 idle" {
 		t.Errorf("line %q", got)
 	}
 	// Four agents at a ceiling of three, two of them waiting: room for one.
@@ -137,8 +137,7 @@ const (
 // build slot is free.
 const slotNote = " (no free build slot: a start that builds (--builds) waits for it)"
 
-// tight is a roomy headroom whose memory leaves no room for a start: the
-// watch tests' machine, which says no CAPACITY line under the floor.
+// tight is a roomy headroom whose memory leaves no room for a start.
 func tight() *headroom {
 	h := roomy()
 	h.AvailableMiB = 5 << 10
@@ -149,7 +148,7 @@ func tight() *headroom {
 // that blocks. The build slot guards only a start that builds: without the
 // mark a busy slot is a note after the verdict, with it a block.
 func TestCapacityVerdict(t *testing.T) {
-	k := config.Capacity{Floor: 5, Ceiling: 10}
+	k := config.Capacity{Ceiling: 10}
 	busy := func(n int) agentCount {
 		c := agentCount{}
 		for i := range n {
@@ -219,7 +218,7 @@ func TestCapacityVerdict(t *testing.T) {
 // (exit 3, the guards named) and lets --force through with the verdict it
 // overrides: a busy build slot refuses only a start that builds.
 func TestGateStart(t *testing.T) {
-	k := config.Capacity{Floor: 5, Ceiling: 10}
+	k := config.Capacity{Ceiling: 10}
 	three := countAgents(supervised(3), nil, keepNow)
 	slotBusy := roomy()
 	slotBusy.SlotsFree = 0
@@ -253,19 +252,6 @@ func TestGateStart(t *testing.T) {
 	}
 }
 
-// The watch's CAPACITY LOW weighs a start that does not build: a busy build
-// slot leaves the room and is a note in the line.
-func TestWatchCapacitySlotBusy(t *testing.T) {
-	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	room := roomy()
-	room.SlotsFree = 0
-	w.readHeadroom = func(context.Context, *swapReading) *headroom { return room }
-	w.capacity(context.Background(), supervised(3), nil)
-	if !strings.Contains(out.String(), "CAPACITY LOW 3 of 5: "+roomSeven+slotNote+"; headroom:") {
-		t.Fatalf("under the floor with the slot busy:\n%s", out)
-	}
-}
-
 // supervised is a roster of n busy workers.
 func supervised(n int) *state.State {
 	st := &state.State{}
@@ -275,9 +261,9 @@ func supervised(n int) *state.State {
 	return st
 }
 
-// The watch says CAPACITY LOW once while busy stays under the floor with
-// room for a start, ENDED when the count recovers, and again when it drops;
-// CAPACITY FULL at the ceiling. Without room it says nothing.
+// The watch says CAPACITY FULL at the ceiling and ENDED when busy drops below
+// it; below the ceiling it stays silent (no CAPACITY LOW) and clears any stale
+// capacity-low condition.
 func TestWatchCapacity(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	room := roomy()
@@ -286,27 +272,17 @@ func TestWatchCapacity(t *testing.T) {
 	count := func(s string) int { return strings.Count(out.String(), s) }
 
 	w.capacity(context.Background(), supervised(3), nil)
-	w.capacity(context.Background(), supervised(3), nil)
-	if count("CAPACITY LOW 3 of 5: room for 7 starts; headroom: MemAvailable 45.0 GiB") != 1 {
-		t.Fatalf("under the floor twice:\n%s", out)
-	}
-	w.capacity(context.Background(), supervised(5), nil)
-	if count("ENDED CAPACITY LOW 3 of 5") != 1 || reads != 2 {
-		t.Fatalf("recovered (reads %d):\n%s", reads, out)
-	}
-	w.capacity(context.Background(), supervised(4), nil)
-	if count("CAPACITY LOW 4 of 5") != 1 {
-		t.Fatalf("dropped again:\n%s", out)
+	if out.Len() != 0 || reads != 0 {
+		t.Fatalf("below ceiling (reads %d):\n%s", reads, out)
 	}
 	w.capacity(context.Background(), supervised(10), nil)
-	if count("CAPACITY FULL 10 of 10: headroom:") != 1 {
-		t.Fatalf("at the ceiling:\n%s", out)
+	w.capacity(context.Background(), supervised(10), nil)
+	if count("CAPACITY FULL 10 of 10: headroom:") != 1 || reads != 2 {
+		t.Fatalf("at the ceiling twice (reads %d):\n%s", reads, out)
 	}
-	out.Reset()
-	room.AvailableMiB = 5 << 10
-	w.capacity(context.Background(), supervised(2), nil)
-	if strings.Contains(out.String(), "CAPACITY LOW") {
-		t.Fatalf("under the floor without room:\n%s", out)
+	w.capacity(context.Background(), supervised(9), nil)
+	if count("ENDED CAPACITY FULL 10 of 10") != 1 || reads != 2 {
+		t.Fatalf("below ceiling again (reads %d):\n%s", reads, out)
 	}
 }
 
@@ -328,10 +304,10 @@ func TestWatchSwapReading(t *testing.T) {
 func TestPromptCapacity(t *testing.T) {
 	st, sessions := capacityRoster()
 	var buf bytes.Buffer
-	a := &app{out: &buf, now: keepNow, cfg: &config.Config{Capacity: config.Capacity{Floor: 5, Ceiling: 10}}}
+	a := &app{out: &buf, now: keepNow, cfg: &config.Config{Capacity: config.Capacity{Ceiling: 10}}}
 	a.promptCapacity(func(f string, args ...any) { buf.WriteString(fmt.Sprintf(f, args...) + "\n") }, st, sessions)
 	if p := buf.String(); !strings.Contains(p, "### Capacity") ||
-		!strings.Contains(p, "2 busy of floor 5, ceiling 10: "+busyOne+", "+busyTwo+"; 3 parked, 0 waiting, 2 idle; `beekeeper capacity` says whether a start fits.") {
+		!strings.Contains(p, "2 busy of ceiling 10: "+busyOne+", "+busyTwo+"; 3 parked, 0 waiting, 2 idle; `beekeeper capacity` says whether a start fits.") {
 		t.Errorf("prompt:\n%s", p)
 	}
 }
@@ -341,7 +317,7 @@ func TestPromptCapacity(t *testing.T) {
 // refuses it without the wait, and a turn that does not come refuses it
 // with the waiters still ahead.
 func TestQueueStart(t *testing.T) {
-	k := config.Capacity{Floor: 5, Ceiling: 10}
+	k := config.Capacity{Ceiling: 10}
 	three := countAgents(supervised(3), nil, keepNow)
 	slotBusy := roomy()
 	slotBusy.SlotsFree = 0
@@ -405,11 +381,10 @@ func TestDryRunSlotNamesTheWait(t *testing.T) {
 	}
 }
 
-// A configured ceiling of 0 (and floor of 0) says "no start: ceiling 0",
-// refuses agents start without --force, and keeps the watch silent; unset
-// keeps the 5/10 defaults.
+// A configured ceiling of 0 says "no start: ceiling 0", refuses agents start
+// without --force, and keeps the watch silent; unset keeps the default 10.
 func TestCapacityCeilingZeroAndUnset(t *testing.T) {
-	zero := config.Capacity{Floor: 0, Ceiling: 0}
+	zero := config.Capacity{Ceiling: 0}
 	for _, n := range []int{0, 2} {
 		v := newCapacity(countAgents(supervised(n), nil, keepNow), zero, roomy(), false)
 		if got := v.verdict(); got != noStartCeilingZero || v.Room != 0 {
@@ -428,9 +403,9 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 		t.Errorf("gateStart with --force: over %q, %v", over, err)
 	}
 
-	// End-to-end: config set capacity.floor 0 capacity.ceiling 0 -> capacity
-	// says "no start: ceiling 0" and agents start refuses without --force;
-	// an unset config keeps floor 5, ceiling 10.
+	// End-to-end: config set capacity.ceiling 0 -> capacity says
+	// "no start: ceiling 0" and agents start refuses without --force;
+	// an unset config keeps ceiling 10.
 	orig := plat
 	plat = platform.Stub()
 	plat.Machine = roomyMachine{Machine: plat.Machine}
@@ -458,36 +433,35 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	}
 
 	const (
-		floorKey        = "capacity.floor"
 		ceilingKey      = "capacity.ceiling"
 		verbAgentsStart = "agents.start"
-		lowTwoOfFive    = "CAPACITY LOW 2 of 5"
+		fullTenOfTen    = "CAPACITY FULL 10 of 10"
 		dirFlag         = "--dir"
 		forceFlag       = "--force"
 	)
-	setCap := func(path, floor, ceiling string, extra ...config.Setting) {
+	setCap := func(path, ceiling string, extra ...config.Setting) {
 		t.Helper()
-		settings := append([]config.Setting{{Key: floorKey, Value: floor}, {Key: ceilingKey, Value: ceiling}}, extra...)
+		settings := append([]config.Setting{{Key: ceilingKey, Value: ceiling}}, extra...)
 		if _, err := config.Set(path, settings); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	aUnset, outUnset := openApp(false)
-	if err := aUnset.capacityCmd().Execute(); err != nil || !strings.Contains(outUnset.String(), "0 busy of floor 5, ceiling 10") || !strings.Contains(outUnset.String(), "room for 10 starts\n") {
+	if err := aUnset.capacityCmd().Execute(); err != nil || !strings.Contains(outUnset.String(), "0 busy of ceiling 10") || !strings.Contains(outUnset.String(), "room for 10 starts\n") {
 		t.Fatalf("unset capacity = %q, %v", outUnset.String(), err)
 	}
 	cfgCmd := aUnset.configCmd()
-	cfgCmd.SetArgs([]string{"set", floorKey, "0", ceilingKey, "0"})
+	cfgCmd.SetArgs([]string{"set", ceilingKey, "0"})
 	if err := cfgCmd.Execute(); err != nil {
 		t.Fatalf("config set 0 = %v", err)
 	}
 	aZero, outZero := openApp(false)
-	if err := aZero.capacityCmd().Execute(); err != nil || !strings.Contains(outZero.String(), "0 busy of floor 0, ceiling 0") || !strings.Contains(outZero.String(), "\n"+noStartCeilingZero+"\n") {
+	if err := aZero.capacityCmd().Execute(); err != nil || !strings.Contains(outZero.String(), "0 busy of ceiling 0") || !strings.Contains(outZero.String(), "\n"+noStartCeilingZero+"\n") {
 		t.Fatalf("ceiling 0 capacity = %q, %v", outZero.String(), err)
 	}
 	aJSON, outJSON := openApp(true)
-	if err := aJSON.capacityCmd().Execute(); err != nil || !strings.Contains(outJSON.String(), `"floor": 0`) || !strings.Contains(outJSON.String(), `"ceiling": 0`) || !strings.Contains(outJSON.String(), `"verdict": "`+noStartCeilingZero+`"`) {
+	if err := aJSON.capacityCmd().Execute(); err != nil || strings.Contains(outJSON.String(), `"floor"`) || !strings.Contains(outJSON.String(), `"ceiling": 0`) || !strings.Contains(outJSON.String(), `"verdict": "`+noStartCeilingZero+`"`) {
 		t.Fatalf("ceiling 0 capacity --json = %q, %v", outJSON.String(), err)
 	}
 	brief := filepath.Join(dir, "brief.md")
@@ -528,7 +502,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	// A queued agents start --builds reloads Capacity from cfgPath when its
 	// slot turn arrives, catching a ceiling: 0 written while it waited; it
 	// also passes the reloaded Capacity to readHeadroom.
-	setCap(cfgPath, "5", "10")
+	setCap(cfgPath, "10")
 	aQueued, _ := openApp(false)
 	// Clear the forced worker so 0 agents are busy when the build start enters.
 	if err := aQueued.store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = nil; return nil, nil }); err != nil {
@@ -542,7 +516,6 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	_, err = queueStart(vInitial, true, false, "8m",
 		func() (bool, int, error) {
 			_, serr := config.Set(cfgPath, []config.Setting{
-				{Key: floorKey, Value: "0"},
 				{Key: ceilingKey, Value: "0"},
 				{Key: "capacity.availMinMiB", Value: "61440"},
 			})
@@ -555,22 +528,22 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 
 	// Watch: reloads Capacity from watchCfg on each poll without mutating
 	// w.cfg; ceiling 0 clears open capacity conditions and suppresses new ones,
-	// a watcher started at ceiling 0 resumes emitting once a positive ceiling
-	// is restored, and floor 0 with a positive ceiling stays silent at 0 busy.
+	// and a watcher started at ceiling 0 resumes emitting once a positive ceiling
+	// is restored.
 	watchDir := t.TempDir()
 	watchCfg := filepath.Join(watchDir, "config.yaml")
 	w, _, out := notifyingWatch(t, watchDir, false)
 	w.cfgPath = watchCfg
 	reads := 0
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { reads++; return roomy() }
-	w.capacity(context.Background(), supervised(2), nil)
-	if !strings.Contains(out.String(), lowTwoOfFive) || reads != 1 {
+	w.capacity(context.Background(), supervised(10), nil)
+	if !strings.Contains(out.String(), fullTenOfTen) || reads != 1 {
 		t.Fatalf("before ceiling 0 (reads %d):\n%s", reads, out)
 	}
 	out.Reset()
-	setCap(watchCfg, "0", "0")
+	setCap(watchCfg, "0")
 	w.capacity(context.Background(), supervised(0), nil)
-	if !strings.Contains(out.String(), "ENDED "+lowTwoOfFive) || strings.Contains(out.String(), "CAPACITY FULL") || reads != 1 {
+	if !strings.Contains(out.String(), "ENDED "+fullTenOfTen) || reads != 1 {
 		t.Fatalf("at ceiling 0 with 0 busy (reads %d):\n%s", reads, out)
 	}
 	if w.cfg.Capacity.Ceiling != config.DefaultCeiling {
@@ -588,28 +561,21 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	wFromZero.cfgPath = watchCfg
 	fromZeroReads := 0
 	wFromZero.readHeadroom = func(context.Context, *swapReading) *headroom { fromZeroReads++; return roomy() }
-	wFromZero.capacity(context.Background(), supervised(2), nil)
+	wFromZero.capacity(context.Background(), supervised(10), nil)
 	if outFromZero.Len() != 0 || fromZeroReads != 0 {
 		t.Fatalf("started at ceiling 0 (reads %d):\n%s", fromZeroReads, outFromZero)
 	}
-	setCap(watchCfg, "5", "10")
-	wFromZero.capacity(context.Background(), supervised(2), nil)
-	if !strings.Contains(outFromZero.String(), lowTwoOfFive) || fromZeroReads != 1 {
+	setCap(watchCfg, "10")
+	wFromZero.capacity(context.Background(), supervised(10), nil)
+	if !strings.Contains(outFromZero.String(), fullTenOfTen) || fromZeroReads != 1 {
 		t.Fatalf("after restoring positive ceiling (reads %d):\n%s", fromZeroReads, outFromZero)
-	}
-
-	out.Reset()
-	setCap(watchCfg, "0", "10")
-	w.capacity(context.Background(), supervised(0), nil)
-	if out.Len() != 0 || reads != 1 {
-		t.Fatalf("at floor 0, ceiling 10 with 0 busy (reads %d):\n%s", reads, out)
 	}
 
 	// A broken configuration file falls back to w.cfg.Capacity.
 	if err := os.WriteFile(watchCfg, []byte("capacity: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := wFromZero.liveCapacity(); got.Floor != zero.Floor || got.Ceiling != zero.Ceiling {
+	if got := wFromZero.liveCapacity(); got.Ceiling != zero.Ceiling {
 		t.Errorf("liveCapacity on broken file = %+v, want fallback %+v", got, zero)
 	}
 }
@@ -617,7 +583,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 func TestSubscriptionWithoutReaderRefusesStart(t *testing.T) {
 	for _, name := range []string{config.CodexHarness, config.ClaudeHarness, config.AgyHarness, "custom"} {
 		t.Run(name, func(t *testing.T) {
-			p := config.Provider{Floor: 0, Ceiling: 2}
+			p := config.Provider{Ceiling: 2}
 			v := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{}, time.Now())
 			if v.Room != 0 || v.Ceiling != 0 || !strings.Contains(v.Error, "usage not read") || len(v.Blocks) == 0 {
 				t.Fatalf("unknown subscription usage allowed: %+v", v)

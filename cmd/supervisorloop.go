@@ -453,7 +453,7 @@ its key first in the detail):
             under agents.archiveAgreement and stopping finished or relieved
             background sessions). A session its person started is never
             retired
-  next      after a done, and every pass below capacity.floor while capacity
+  next      after a done, and every pass below capacity.ceiling while capacity
             has room: the next item of board
             next starts (agents start, --harness auto with
             capacity.choices) with supervisor.workerBrief; none

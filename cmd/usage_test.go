@@ -128,20 +128,20 @@ cat "` + outFile + `"
 		}
 	}
 
-	// 1. Valid reading writes usage.json and derives floor 2, ceiling 4.
+	// 1. Valid reading writes usage.json and derives ceiling 4.
 	writePayload(fmt.Sprintf(`{"fiveHour":{"usedPercent":62.5,"resetsAt":%q},"sevenDay":{"usedPercent":40,"resetsAt":%q}}`,
 		reset5h.Format(time.RFC3339), reset7d.Format(time.RFC3339)))
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}}
 	k, u := a.resolveUsage(context.Background(), a.liveCapacity())
-	if u == nil || u.Error != "" || k.Floor != 2 || k.Ceiling != 4 || u.High || countCalls() != 1 {
-		t.Fatalf("first resolve = (%d,%d), u=%+v, calls=%d", k.Floor, k.Ceiling, u, countCalls())
+	if u == nil || u.Error != "" || k.Ceiling != 4 || u.High || countCalls() != 1 {
+		t.Fatalf("first resolve = %d, u=%+v, calls=%d", k.Ceiling, u, countCalls())
 	}
 
 	// 2. Within every (1m < 5m) and before reset5h (2m), usage.json is reused without running reader.
 	a.now = t0.Add(time.Minute)
 	k, u = a.resolveUsage(context.Background(), a.liveCapacity())
-	if u == nil || u.Error != "" || k.Floor != 2 || k.Ceiling != 4 || countCalls() != 1 {
-		t.Fatalf("cached resolve = (%d,%d), u=%+v, calls=%d", k.Floor, k.Ceiling, u, countCalls())
+	if u == nil || u.Error != "" || k.Ceiling != 4 || countCalls() != 1 {
+		t.Fatalf("cached resolve = %d, u=%+v, calls=%d", k.Ceiling, u, countCalls())
 	}
 
 	// 3. Crossing reset5h (2m10s < 5m) invalidates usage.json and re-runs reader immediately.
@@ -150,8 +150,8 @@ cat "` + outFile + `"
 		nextReset5h.Format(time.RFC3339), reset7d.Format(time.RFC3339)))
 	a.now = t0.Add(2*time.Minute + 10*time.Second)
 	k, u = a.resolveUsage(context.Background(), a.liveCapacity())
-	if u == nil || u.Error != "" || k.Floor != 1 || k.Ceiling != 3 || countCalls() != 2 {
-		t.Fatalf("after 5h reset = (%d,%d), u=%+v, calls=%d; want (1,3) and 2 calls", k.Floor, k.Ceiling, u, countCalls())
+	if u == nil || u.Error != "" || k.Ceiling != 3 || countCalls() != 2 {
+		t.Fatalf("after 5h reset = %d, u=%+v, calls=%d; want 3 and 2 calls", k.Ceiling, u, countCalls())
 	}
 
 	// 4. Advancing past every (5m) re-runs reader; non-zero exit + stderr surfaces in u.Error and blocks capacity.
@@ -186,8 +186,8 @@ cat "` + outFile + `"
 	//    kept when the reader cannot run inside the sandbox.
 	writePayload(fmt.Sprintf(`{"fiveHour":{"usedPercent":30,"resetsAt":%q},"sevenDay":{"usedPercent":40,"resetsAt":%q}}`,
 		nextReset5h.Format(time.RFC3339), reset7d.Format(time.RFC3339)))
-	if k, u = a.resolveUsage(context.Background(), a.liveCapacity()); u.Error != "" || k.Floor != 5 || k.Ceiling != 10 {
-		t.Fatalf("seed host reading = (%d,%d), u=%+v", k.Floor, k.Ceiling, u)
+	if k, u = a.resolveUsage(context.Background(), a.liveCapacity()); u.Error != "" || k.Ceiling != 10 {
+		t.Fatalf("seed host reading = %d, u=%+v", k.Ceiling, u)
 	}
 	if err := os.WriteFile(codeFile, []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -195,8 +195,8 @@ cat "` + outFile + `"
 	t.Setenv(sandbox.Env, "1")
 	t.Setenv(sandbox.Brokered, "")
 	a.now = a.now.Add(6 * time.Minute) // > every (5m), <= 2 × every (10m)
-	if k, u = a.resolveUsage(context.Background(), a.liveCapacity()); u == nil || u.Error != "" || k.Floor != 5 || k.Ceiling != 10 {
-		t.Fatalf("sandbox grace fallback = (%d,%d), u=%+v", k.Floor, k.Ceiling, u)
+	if k, u = a.resolveUsage(context.Background(), a.liveCapacity()); u == nil || u.Error != "" || k.Ceiling != 10 {
+		t.Fatalf("sandbox grace fallback = %d, u=%+v", k.Ceiling, u)
 	}
 }
 
@@ -262,12 +262,12 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 		}, &out
 	}
 
-	// 5h 60% -> (2, 3); 7d 75% -> (1, 2) => derived (1, 2); 1 busy => room for 1 start.
+	// 5h 60% -> ceiling 3; 7d 75% -> ceiling 2 => derived ceiling 2; 1 busy => room for 1 start.
 	aText, outText := openApp(t0, false)
 	if err := aText.capacityCmd().Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got := outText.String(); !strings.Contains(got, "capacity: 1 busy of floor 1, ceiling 2: W 1;") ||
+	if got := outText.String(); !strings.Contains(got, "capacity: 1 busy of ceiling 2: W 1;") ||
 		!strings.Contains(got, "; usage 5h 60% (resets ") ||
 		!strings.Contains(got, ", 7d 75% (resets ") ||
 		!strings.Contains(got, "\nroom for 1 start\n") {
@@ -279,7 +279,6 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	var parsed struct {
-		Floor   int        `json:"floor"`
 		Ceiling int        `json:"ceiling"`
 		Room    int        `json:"room"`
 		Verdict string     `json:"verdict"`
@@ -288,7 +287,7 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 	if err := json.Unmarshal(outJSON.Bytes(), &parsed); err != nil {
 		t.Fatalf("unmarshal capacity --json: %v\n%s", err, outJSON.String())
 	}
-	if parsed.Floor != 1 || parsed.Ceiling != 2 || parsed.Room != 1 || parsed.Usage == nil ||
+	if parsed.Ceiling != 2 || parsed.Room != 1 || parsed.Usage == nil ||
 		parsed.Usage.FiveHour == nil || parsed.Usage.FiveHour.UsedPercent != 60 ||
 		parsed.Usage.SevenDay == nil || parsed.Usage.SevenDay.UsedPercent != 75 || parsed.Usage.High {
 		t.Fatalf("capacity --json = %+v (usage %+v)", parsed, parsed.Usage)
@@ -296,20 +295,20 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 
 	// status and promptCapacity pick up the cached usage.json without running a subprocess.
 	stView, err := aText.status()
-	if err != nil || stView.Floor != 1 || stView.Ceiling != 2 {
-		t.Fatalf("status = %+v, %v; want floor 1, ceiling 2", stView, err)
+	if err != nil || stView.Ceiling != 2 {
+		t.Fatalf("status = %+v, %v; want ceiling 2", stView, err)
 	}
 	stNow, _ := store.Read()
 	var promptBuf bytes.Buffer
 	aText.promptCapacity(func(f string, args ...any) { _, _ = fmt.Fprintf(&promptBuf, f+"\n", args...) }, stNow, nil)
-	if !strings.Contains(promptBuf.String(), "1 busy of floor 1, ceiling 2") || !strings.Contains(promptBuf.String(), "; usage 5h 60%") {
+	if !strings.Contains(promptBuf.String(), "1 busy of ceiling 2") || !strings.Contains(promptBuf.String(), "; usage 5h 60%") {
 		t.Fatalf("promptCapacity:\n%s", promptBuf.String())
 	}
 
 	// Queued agents start --builds re-checks usage when its build slot turn arrives.
 	tHigh := t0.Add(10 * time.Minute)
 	aQueue, _ := openApp(t0, false)
-	vBusySlot := newCapacity(agentCount{}, config.Capacity{Floor: 1, Ceiling: 2}, &headroom{AvailableMiB: 45 << 10, AvailMinMiB: 20 << 10, Slots: 1, SlotsFree: 0, MaxLabs: 2}, true)
+	vBusySlot := newCapacity(agentCount{}, config.Capacity{Ceiling: 2}, &headroom{AvailableMiB: 45 << 10, AvailMinMiB: 20 << 10, Slots: 1, SlotsFree: 0, MaxLabs: 2}, true)
 	_, qErr := queueStart(vBusySlot, true, false, "8m",
 		func() (bool, int, error) {
 			cur.FiveHour = &usageWindow{UsedPercent: 96, ResetsAt: reset5h}
@@ -454,7 +453,7 @@ capacity:
 	wOnce := aOnce.newWatcher(false, false)
 	wOnce.now = t0
 	wOnce.pending(context.Background(), sessionsAt(t0, false))
-	if err := wOnce.onceErr(); err != nil || !strings.Contains(onceOut.String(), "USAGE: 5h 40%") || !strings.Contains(onceOut.String(), "target floor 4, ceiling 8") {
+	if err := wOnce.onceErr(); err != nil || !strings.Contains(onceOut.String(), "USAGE: 5h 40%") || !strings.Contains(onceOut.String(), "target ceiling 8") {
 		t.Fatalf("watch --once ok: err=%v, out=\n%s", err, onceOut.String())
 	}
 
@@ -474,7 +473,7 @@ capacity:
 	w1, out1 := newWatch(t0)
 	w1.pending(context.Background(), sessionsAt(t0, false))
 	w1.saveMark()
-	if !strings.Contains(out1.String(), "USAGE: 5h 40%") || !strings.Contains(out1.String(), "CAPACITY LOW 2 of 4") {
+	if !strings.Contains(out1.String(), "USAGE: 5h 40%") || strings.Contains(out1.String(), "CAPACITY LOW") {
 		t.Fatalf("poll 1 output:\n%s", out1.String())
 	}
 
@@ -488,7 +487,7 @@ capacity:
 
 	// 3. At 31m, 5h crosses highPercent (96% >= 95%) AND note #1 closes:
 	//    - USAGE (with "(USAGE HIGH)") prints after 30m;
-	//    - USAGE HIGH prints once; CAPACITY LOW clears ("ENDED CAPACITY LOW");
+	//    - USAGE HIGH prints once;
 	//    - live busyOne is told once to finish its step and park (busyTwo with no CLI is NOT woken);
 	//    - ParkedAuto becomes AGENT RESUMABLE, and autoResume holds off while USAGE HIGH stands.
 	t31 := t0.Add(31 * time.Minute)
@@ -507,7 +506,6 @@ capacity:
 	got31 := out2.String()
 	if !strings.Contains(got31, "USAGE: 5h 96%") ||
 		!strings.Contains(got31, "USAGE HIGH: 5h 96% at or past 95%") ||
-		!strings.Contains(got31, "ENDED CAPACITY LOW") ||
 		!strings.Contains(got31, `AGENT RESUMABLE "ParkedAuto"`) ||
 		strings.Contains(got31, "AGENT RESUME FAILED") {
 		t.Fatalf("at USAGE HIGH (31m):\n%s", got31)
@@ -647,7 +645,7 @@ func TestSnapshotUsageAndDiff(t *testing.T) {
 	var printBuf bytes.Buffer
 	a.out = &printBuf
 	a.printSnapshot(s1)
-	if !strings.Contains(printBuf.String(), "usage: 5h 30%") || !strings.Contains(printBuf.String(), "target floor 5, ceiling 10") {
+	if !strings.Contains(printBuf.String(), "usage: 5h 30%") || !strings.Contains(printBuf.String(), "target ceiling 10") {
 		t.Fatalf("printSnapshot:\n%s", printBuf.String())
 	}
 
@@ -670,9 +668,9 @@ func TestSnapshotUsageAndDiff(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d := diffSnapshots(s2, s3); !slices.ContainsFunc(d, func(s string) bool {
-		return strings.Contains(s, "usage: 5h 60%") && strings.Contains(s, "target floor 2, ceiling 4")
+		return strings.Contains(s, "usage: 5h 60%") && strings.Contains(s, "target ceiling 4")
 	}) {
-		t.Errorf("band-change diff = %q, want usage target floor 2, ceiling 4", d)
+		t.Errorf("band-change diff = %q, want usage target ceiling 4", d)
 	}
 }
 
@@ -1751,14 +1749,14 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 	t0 := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	a := &app{cfgPath: cfgPath, cfg: cfg, store: store, now: t0, out: &bytes.Buffer{}}
 
-	// 1. No cached files for either enabled provider: floor 0, ceiling 0 (never raw 3, 6), u.Error set.
+	// 1. No cached files for either enabled provider: ceiling 0 (never raw 6), u.Error set.
 	derived0, u0 := a.cachedUsageCapacity(cfg.Capacity)
-	if derived0.Floor != 0 || derived0.Ceiling != 0 || u0 == nil || u0.Error == "" {
-		t.Fatalf("missing cache: derived=(%d,%d), u=%+v; want (0,0) and error", derived0.Floor, derived0.Ceiling, u0)
+	if derived0.Ceiling != 0 || u0 == nil || u0.Error == "" {
+		t.Fatalf("missing cache: derived=%d, u=%+v; want 0 and error", derived0.Ceiling, u0)
 	}
 
-	// 2. Write fresh reading for agy (floor 1, ceiling 2) and stale reading for claude:
-	//    claude contributes (0,0), agy contributes (1,2), and u.Error names claude.
+	// 2. Write fresh reading for agy (ceiling 2) and stale reading for claude:
+	//    claude contributes 0, agy contributes 2, and u.Error names claude.
 	staleReading := usageReading{
 		At:       t0.Add(-20 * time.Minute),
 		FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
@@ -1774,12 +1772,12 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	derived1, u1 := a.cachedUsageCapacity(cfg.Capacity)
-	if derived1.Floor != 1 || derived1.Ceiling != 2 || u1 == nil || !strings.Contains(u1.Error, "claude: usage reading is stale") {
-		t.Fatalf("stale claude + fresh agy: derived=(%d,%d), u=%+v; want (1,2) and claude stale error", derived1.Floor, derived1.Ceiling, u1)
+	if derived1.Ceiling != 2 || u1 == nil || !strings.Contains(u1.Error, "claude: usage reading is stale") {
+		t.Fatalf("stale claude + fresh agy: derived=%d, u=%+v; want 2 and claude stale error", derived1.Ceiling, u1)
 	}
 
 	// 3. Make claude fresh as well, then set w.providerUsageErr["claude"] on watcher:
-	//    w.currentUsage returns error and w.capacity suppresses CAPACITY LOW.
+	//    w.currentUsage returns error.
 	freshClaude := usageReading{
 		At:       t0.Add(-1 * time.Minute),
 		FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: t0.Add(2 * time.Hour)},
@@ -1795,8 +1793,8 @@ func TestCachedProvidersCapacityAndWatcherCurrentUsage(t *testing.T) {
 	w.providerUsageErr = map[string]string{claudeComm: "endpoint timeout"}
 
 	kw, uw := w.currentUsage(cfg.Capacity, t0)
-	if kw.Floor != 3 || kw.Ceiling != 6 || uw != nil {
-		t.Fatalf("watcher.currentUsage with providerUsageErr: kw=(%d,%d), uw=%+v", kw.Floor, kw.Ceiling, uw)
+	if kw.Ceiling != 6 || uw != nil {
+		t.Fatalf("watcher.currentUsage with providerUsageErr: kw=%d, uw=%+v", kw.Ceiling, uw)
 	}
 	w.watchProvidersUsage(context.Background(), cfg.Capacity, &state.State{}, nil)
 	if !strings.Contains(watchOut.String(), "last good read 1m") || !strings.Contains(watchOut.String(), "endpoint timeout") {
@@ -2266,7 +2264,7 @@ capacity:
 	if err := capCmd.Execute(); err != nil {
 		t.Fatalf("capacity with no codex rollouts: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 0 busy of floor 0, ceiling 0; usage unknown (no codex rollout files found); no start: subscription usage unknown (no codex rollout files found)") {
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 0; usage unknown (no codex rollout files found); no start: subscription usage unknown (no codex rollout files found)") {
 		t.Fatalf("expected codex fail-closed when no rollouts exist, got:\n%s", capOut.String())
 	}
 
@@ -2285,7 +2283,7 @@ capacity:
 	if err := aCap.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity with valid codex rollout + metadata-only newer rollout: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 0 busy of floor 1, ceiling 2; usage 5h 18%") ||
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 2; usage 5h 18%") ||
 		!strings.Contains(capOut.String(), "room for 2 starts") ||
 		!strings.Contains(capOut.String(), "choice: codex / gpt-5.4 (provider codex)") {
 		t.Fatalf("capacity output with dual-window codex rollout:\n%s", capOut.String())
@@ -2303,7 +2301,7 @@ capacity:
 	if err := aCap.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on Pro single-window codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 0 busy of floor 1, ceiling 2; usage 7d 85%") ||
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 2; usage 7d 85%") ||
 		!strings.Contains(capOut.String(), "choice: none (claude/claude-opus-4-7: usage high: 5h 96% at or past 95%") ||
 		!strings.Contains(capOut.String(), "codex/gpt-5.4: 7d 85% at or past worker cap 80%") {
 		t.Fatalf("capacity normal mode at 85%% 7d:\n%s", capOut.String())
@@ -2405,7 +2403,7 @@ capacity:
 	if err := aStopped.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on stopped codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (codex spend control reached); no start: subscription usage unknown (codex spend control reached)") {
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 0: AutoCodexWorker; usage unknown (codex spend control reached); no start: subscription usage unknown (codex spend control reached)") {
 		t.Fatalf("expected codex spend_control_reached to fail closed, got:\n%s", capOut.String())
 	}
 
@@ -2415,7 +2413,7 @@ capacity:
 	if err := aStale.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on stale codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (usage reading is stale") {
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 0: AutoCodexWorker; usage unknown (usage reading is stale") {
 		t.Fatalf("expected stale codex reading to fail closed, got:\n%s", capOut.String())
 	}
 
@@ -2430,7 +2428,7 @@ capacity:
 	if err := aFuture.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on future codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 1 busy of floor 0, ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 0: AutoCodexWorker; usage unknown (usage reading timestamp 2026-10-28T15:10:00Z is in the future)") {
 		t.Fatalf("expected future codex reading to fail closed, got:\n%s", capOut.String())
 	}
 }
@@ -2537,7 +2535,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	if !strings.Contains(got, "provider local-model: 0 busy of ceiling 2; room for 2 starts") {
 		t.Fatalf("self-hosted provider line:\n%s", got)
 	}
-	if !strings.Contains(got, "provider claude: 0 busy of floor 1, ceiling 2; usage 5h 0%, 7d 0%; no start: ceiling 0") {
+	if !strings.Contains(got, "provider claude: 0 busy of ceiling 2; usage 5h 0%, 7d 0%; no start: ceiling 0") {
 		t.Fatalf("subscription provider line:\n%s", got)
 	}
 	// The subscription's choice has no room, so the self-hosted one is what a
@@ -3174,7 +3172,7 @@ omp:
 	if strings.Contains(got, "no start: ceiling 0") {
 		t.Fatalf("provider-pool verdict hides the provider's own block:\n%s", got)
 	}
-	if !strings.Contains(got, "provider claude: 0 busy of floor 0, ceiling 0; usage unknown (endpoint timeout)") {
+	if !strings.Contains(got, "provider claude: 0 busy of ceiling 0; usage unknown (endpoint timeout)") {
 		t.Fatalf("claude line on the failed read:\n%s", got)
 	}
 	if !strings.Contains(got, "provider local-model: 0 busy of ceiling 2; room for 2 starts") {
@@ -3625,7 +3623,7 @@ func TestIdleFiveHourProviderCapacity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		provider := config.Provider{Floor: 1, Ceiling: 2, Usage: config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}}
+		provider := config.Provider{Ceiling: 2, Usage: config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Ceiling: 0}}}}
 		view := buildSingleProviderView("claude", provider, providerAgents{}, providerReadingResult{reading: r, ok: true}, keepNow)
 		want := 2
 		if weekly > 80 {
@@ -3645,7 +3643,7 @@ func TestUsageLastGoodFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := keepNow
-			u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Floor: 0, Ceiling: 0}}}
+			u := config.Usage{Command: []string{usageTestReader}, PaceCaps: []config.PaceCap{{OverBy: 0, Ceiling: 0}}}
 			original := usageReading{At: now.Add(-6 * time.Minute), SevenDay: &usageWindow{UsedPercent: 80, ResetsAt: now.Add(6 * 24 * time.Hour)}}
 			if err := store.WriteFile(usageProviderFile("claude"), original); err != nil {
 				t.Fatal(err)
@@ -3657,7 +3655,7 @@ func TestUsageLastGoodFallback(t *testing.T) {
 			if err != nil || r.Fallback != cause || !r.At.Equal(original.At) {
 				t.Fatalf("fallback: %+v %v", r, err)
 			}
-			p := config.Provider{Usage: u, Floor: 1, Ceiling: 3}
+			p := config.Provider{Usage: u, Ceiling: 3}
 			pv := buildSingleProviderView("claude", p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
 			if pv.Ceiling != 0 {
 				t.Fatalf("fallback bypassed pace: %+v", pv)
@@ -3724,8 +3722,8 @@ func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 	if _, err := a.resolveReading(context.Background(), file, u); err == nil {
 		t.Fatal("accepted 20-minute source as fallback")
 	}
-	p := config.Provider{Floor: 1, Ceiling: 3, Usage: u}
-	k := config.Capacity{Floor: 1, Ceiling: 3, Providers: map[string]config.Provider{claudeComm: p}}
+	p := config.Provider{Ceiling: 3, Usage: u}
+	k := config.Capacity{Ceiling: 3, Providers: map[string]config.Provider{claudeComm: p}}
 	derived, view := a.cachedProvidersCapacityAt(k, a.now, map[string]string{claudeComm: readFailure})
 	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
 		t.Fatalf("cached provider: %+v %+v", derived, view)

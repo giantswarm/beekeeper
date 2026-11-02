@@ -16,7 +16,7 @@ import (
 
 // localCap is a capacity whose capacity.local.ceiling is n.
 func localCap(ceiling, n int) config.Capacity {
-	return config.Capacity{Floor: 0, Ceiling: ceiling, Local: config.LocalCapacity{Ceiling: &n}}
+	return config.Capacity{Ceiling: ceiling, Local: config.LocalCapacity{Ceiling: &n}}
 }
 
 // remoteTasked is a busy agent whose session runs on an execution host.

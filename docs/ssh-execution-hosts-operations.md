@@ -145,7 +145,7 @@ the build slots and their caps (`memcap.slots`, `memcap.max`, `memcap.cpuQuota`,
 them on the host is a digest mismatch in `agents hosts check` until a matching
 bundle is prepared and pinned again. What stays host-local on purpose is the
 machine's own watch and desk pacing, which never bounds a pinned remote worker:
-the supervisor's target and pace (`capacity.floor`, `capacity.ceiling` and the
+the supervisor's target and pace (`capacity.ceiling` and the
 rest of `capacity` beyond the guards above), watch's alert thresholds and
 cadence (its `interval`, `repeat`, `availMinMiB`, `swapMaxMiB`, `oomdHeadroomMinMiB`,
 `scopeAnonMaxMiB`, `gttMaxMiB`, `psiMax`, `cpuPSIMax`, `forkRateMax`, `stackMax`,

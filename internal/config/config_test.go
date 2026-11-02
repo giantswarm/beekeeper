@@ -31,8 +31,8 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
-	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Floor != DefaultFloor || k.Ceiling != DefaultCeiling || k.ReviewHeadroom != 2 || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
-		t.Errorf("swap guard and capacity defaults = %s %d/%d %d %g %d", w.SwapWindow, k.Floor, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Ceiling != DefaultCeiling || k.ReviewHeadroom != 2 || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+		t.Errorf("swap guard and capacity defaults = %s %d %d %g %d", w.SwapWindow, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
 		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
@@ -204,25 +204,24 @@ func TestLoadRejects(t *testing.T) {
 		"omp key as value":            "omp: {providers: {spark: {apiKey: sk-planted}}}",
 		"omp key half ref":            "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
 		"omp key no ref":              "omp: {providers: {spark: {}}}",
-		"swap window under 5m":        "watch: {swapWindow: 2m}",
-		"negative swapPSIMax":         "capacity: {swapPSIMax: -1}",
-		"negative capacity floor":     "capacity: {floor: -1, ceiling: 0}",
-		"negative capacity ceiling":   "capacity: {ceiling: -1}",
-		"ceiling under floor":         "capacity: {floor: 5, ceiling: 0}",
-		"usage without command":       "capacity: {usage: {highPercent: 90}}",
-		"usage bands without command": "capacity: {usage: {fiveHour: [{upTo: 80, ceiling: 4}]}}",
-		"usage empty executable":      "capacity: {usage: {command: [\"  \"]}}",
-		"usage negative every":        "capacity: {usage: {command: [reader], every: -1m}}",
-		"usage negative timeout":      "capacity: {usage: {command: [reader], timeout: -1s}}",
-		"usage zero highPercent":      "capacity: {usage: {command: [reader], highPercent: 0}}",
-		"usage over-100 highPercent":  "capacity: {usage: {command: [reader], highPercent: 101}}",
-		"usage NaN highPercent":       "capacity: {usage: {command: [reader], highPercent: .nan}}",
-		"usage band zero upTo":        "capacity: {usage: {command: [reader], fiveHour: [{upTo: 0, ceiling: 4}]}}",
-		"usage band over-100 upTo":    "capacity: {usage: {command: [reader], fiveHour: [{upTo: 105, ceiling: 4}]}}",
-		"usage band unsorted":         "capacity: {usage: {command: [reader], fiveHour: [{upTo: 80, ceiling: 4}, {upTo: 80, ceiling: 2}]}}",
-		"usage band missing ceiling":  "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, floor: 2}]}}",
-		"usage band negative floor":   "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, floor: -1, ceiling: 2}]}}",
-		"usage band ceiling < floor":  "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, floor: 5, ceiling: 2}]}}",
+		"swap window under 5m":         "watch: {swapWindow: 2m}",
+		"negative swapPSIMax":          "capacity: {swapPSIMax: -1}",
+		"negative capacity ceiling":    "capacity: {ceiling: -1}",
+		"negative provider ceiling":    "capacity: {providers: {claude: {ceiling: -1}}}",
+		"usage without command":        "capacity: {usage: {highPercent: 90}}",
+		"usage bands without command":  "capacity: {usage: {fiveHour: [{upTo: 80, ceiling: 4}]}}",
+		"usage empty executable":       "capacity: {usage: {command: [\"  \"]}}",
+		"usage negative every":         "capacity: {usage: {command: [reader], every: -1m}}",
+		"usage negative timeout":       "capacity: {usage: {command: [reader], timeout: -1s}}",
+		"usage zero highPercent":       "capacity: {usage: {command: [reader], highPercent: 0}}",
+		"usage over-100 highPercent":   "capacity: {usage: {command: [reader], highPercent: 101}}",
+		"usage NaN highPercent":        "capacity: {usage: {command: [reader], highPercent: .nan}}",
+		"usage band zero upTo":         "capacity: {usage: {command: [reader], fiveHour: [{upTo: 0, ceiling: 4}]}}",
+		"usage band over-100 upTo":     "capacity: {usage: {command: [reader], fiveHour: [{upTo: 105, ceiling: 4}]}}",
+		"usage band unsorted":          "capacity: {usage: {command: [reader], fiveHour: [{upTo: 80, ceiling: 4}, {upTo: 80, ceiling: 2}]}}",
+		"usage band missing ceiling":   "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80}]}}",
+		"usage band negative ceiling":  "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, ceiling: -1}]}}",
+		"paceCap negative ceiling":     "capacity: {usage: {command: [reader], paceCaps: [{overBy: 5, ceiling: -1}]}}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -756,41 +755,41 @@ func TestAppsTemplateOf(t *testing.T) {
 	}
 }
 
-// A configured capacity.floor or capacity.ceiling of 0 is kept; unset takes
-// DefaultFloor (clamped to a lower configured ceiling) and DefaultCeiling.
+// A configured capacity.ceiling of 0 is kept; unset takes DefaultCeiling, and
+// retired floor keys are ignored.
 func TestCapacityZeroAndUnset(t *testing.T) {
 	for _, tc := range []struct {
-		name               string
-		raw                string
-		wantFloor, wantMax int
+		name    string
+		raw     string
+		wantMax int
 	}{
-		{"omitted", "", DefaultFloor, DefaultCeiling},
-		{"empty map", "capacity: {}\n", DefaultFloor, DefaultCeiling},
-		{"null keys", "capacity: {floor: null, ceiling: null}\n", DefaultFloor, DefaultCeiling},
-		{"both zero", "capacity: {floor: 0, ceiling: 0}\n", 0, 0},
-		{"ceiling zero alone", "capacity: {ceiling: 0}\n", 0, 0},
-		{"ceiling under default floor", "capacity: {ceiling: 3}\n", 3, 3},
-		{"floor zero alone", "capacity: {floor: 0}\n", 0, DefaultCeiling},
-		{"floor zero, ceiling set", "capacity: {floor: 0, ceiling: 4}\n", 0, 4},
+		{"omitted", "", DefaultCeiling},
+		{"empty map", "capacity: {}\n", DefaultCeiling},
+		{"null keys", "capacity: {floor: null, ceiling: null}\n", DefaultCeiling},
+		{"both zero", "capacity: {floor: 0, ceiling: 0}\n", 0},
+		{"ceiling zero alone", "capacity: {ceiling: 0}\n", 0},
+		{"ceiling three", "capacity: {ceiling: 3}\n", 3},
+		{"retired floor ignored when ceiling unset", "capacity: {floor: 5}\n", DefaultCeiling},
+		{"retired floor above ceiling ignored", "capacity: {floor: 5, ceiling: 3}\n", 3},
 	} {
 		c, err := Load(writeTemp(t, tc.raw))
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if c.Capacity.Floor != tc.wantFloor || c.Capacity.Ceiling != tc.wantMax {
-			t.Errorf("%s: got floor %d, ceiling %d; want %d, %d", tc.name, c.Capacity.Floor, c.Capacity.Ceiling, tc.wantFloor, tc.wantMax)
+		if c.Capacity.Ceiling != tc.wantMax {
+			t.Errorf("%s: got ceiling %d; want %d", tc.name, c.Capacity.Ceiling, tc.wantMax)
 		}
 	}
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	c, err := Set(p, []Setting{{"capacity.floor", "0"}, {"capacity.ceiling", "0"}})
+	c, err := Set(p, []Setting{{"capacity.ceiling", "0"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Capacity.Floor != 0 || c.Capacity.Ceiling != 0 {
-		t.Errorf("Set returned floor %d, ceiling %d; want 0, 0", c.Capacity.Floor, c.Capacity.Ceiling)
+	if c.Capacity.Ceiling != 0 {
+		t.Errorf("Set returned ceiling %d; want 0", c.Capacity.Ceiling)
 	}
-	if loaded, err := Load(p); err != nil || loaded.Capacity.Floor != 0 || loaded.Capacity.Ceiling != 0 {
-		t.Errorf("Load after Set = %+v, %v; want floor 0, ceiling 0", loaded, err)
+	if loaded, err := Load(p); err != nil || loaded.Capacity.Ceiling != 0 {
+		t.Errorf("Load after Set = %+v, %v; want ceiling 0", loaded, err)
 	}
 }
 
@@ -824,31 +823,27 @@ func TestCapacityUsageAndDerive(t *testing.T) {
 		t.Errorf("defaults = every %s timeout %s reportEvery %s highPercent %g (set %v)",
 			u.Every, u.Timeout, u.ReportEvery, u.HighPercent, u.HighPercentSet())
 	}
-	// Band without floor clamps default floor (5) to its ceiling (4); explicit floor: 0 stays 0.
-	if u.FiveHour[1].Floor != 4 || u.FiveHour[2].Floor != 0 {
-		t.Errorf("band floors = %+v", u.FiveHour)
-	}
 
 	num := func(v float64) *float64 { return &v }
 	for _, tc := range []struct {
-		name               string
-		five, seven        *float64
-		wantFloor, wantMax int
-		wantHigh           bool
+		name        string
+		five, seven *float64
+		wantMax     int
+		wantHigh    bool
 	}{
-		{"first 5h band, 7d unreported", num(20), nil, 6, 12, false},
-		{"first 5h + first 7d takes min", num(20), num(40), 5, 10, false},
-		{"boundary 50 enters second 5h band", num(50), num(40), 4, 4, false},
-		{"second 7d band caps first 5h band", num(20), num(75), 2, 3, false},
-		{"third 5h band keeps floor 0", num(85), num(40), 0, 2, false},
-		{"past last 7d band yields 0/0 without high", num(20), num(90), 0, 0, false},
-		{"at highPercent triggers USAGE HIGH", num(95), num(40), 0, 0, true},
-		{"above 100 triggers USAGE HIGH", num(102.5), num(40), 0, 0, true},
+		{"first 5h band, 7d unreported", num(20), nil, 12, false},
+		{"first 5h + first 7d takes min", num(20), num(40), 10, false},
+		{"boundary 50 enters second 5h band", num(50), num(40), 4, false},
+		{"second 7d band caps first 5h band", num(20), num(75), 3, false},
+		{"third 5h band yields ceiling 2", num(85), num(40), 2, false},
+		{"past last 7d band yields 0 without high", num(20), num(90), 0, false},
+		{"at highPercent triggers USAGE HIGH", num(95), num(40), 0, true},
+		{"above 100 triggers USAGE HIGH", num(102.5), num(40), 0, true},
 	} {
 		got, high := c.Capacity.Derive(tc.five, tc.seven)
-		if got.Floor != tc.wantFloor || got.Ceiling != tc.wantMax || high != tc.wantHigh {
-			t.Errorf("%s: got (%d, %d, high=%v), want (%d, %d, high=%v)",
-				tc.name, got.Floor, got.Ceiling, high, tc.wantFloor, tc.wantMax, tc.wantHigh)
+		if got.Ceiling != tc.wantMax || high != tc.wantHigh {
+			t.Errorf("%s: got (%d, high=%v), want (%d, high=%v)",
+				tc.name, got.Ceiling, high, tc.wantMax, tc.wantHigh)
 		}
 	}
 
@@ -857,8 +852,8 @@ func TestCapacityUsageAndDerive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, high := paused.Capacity.Derive(num(10), nil); got.Floor != 0 || got.Ceiling != 0 || high {
-		t.Errorf("explicit ceiling 0 with band: got (%d, %d, high=%v), want (0, 0, false)", got.Floor, got.Ceiling, high)
+	if got, high := paused.Capacity.Derive(num(10), nil); got.Ceiling != 0 || high {
+		t.Errorf("explicit ceiling 0 with band: got (%d, high=%v), want (0, false)", got.Ceiling, high)
 	}
 
 	// Negative reportEvery turns periodic USAGE watch lines off without failing validation.
@@ -869,11 +864,11 @@ func TestCapacityUsageAndDerive(t *testing.T) {
 	if quiet.Capacity.Usage.ReportEvery.Duration >= 0 || !quiet.Capacity.Usage.HighPercentSet() || quiet.Capacity.Usage.HighPercent != 98 {
 		t.Errorf("quiet usage = %+v", quiet.Capacity.Usage)
 	}
-	if got, high := quiet.Capacity.Derive(num(96), nil); got.Floor != DefaultFloor || got.Ceiling != DefaultCeiling || high {
-		t.Errorf("no bands below custom highPercent 98: got (%d, %d, high=%v)", got.Floor, got.Ceiling, high)
+	if got, high := quiet.Capacity.Derive(num(96), nil); got.Ceiling != DefaultCeiling || high {
+		t.Errorf("no bands below custom highPercent 98: got (%d, high=%v)", got.Ceiling, high)
 	}
-	if got, high := quiet.Capacity.Derive(num(98), nil); got.Floor != 0 || got.Ceiling != 0 || !high {
-		t.Errorf("at custom highPercent 98: got (%d, %d, high=%v)", got.Floor, got.Ceiling, high)
+	if got, high := quiet.Capacity.Derive(num(98), nil); got.Ceiling != 0 || !high {
+		t.Errorf("at custom highPercent 98: got (%d, high=%v)", got.Ceiling, high)
 	}
 }
 
@@ -883,11 +878,9 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := `capacity:
-  floor: 5
   ceiling: 10
   providers:
     claude:
-      floor: 5
       ceiling: 10
       command: ["~/bin/claude-usage"]
       staleAfter: 15m
@@ -895,15 +888,15 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
       sevenDayMax: 99
       paceMargin: 2
       fiveHour:
-        - {upTo: 70, floor: 5, ceiling: 10}
-        - {upTo: 85, floor: 2, ceiling: 4}
-        - {upTo: 95, floor: 0, ceiling: 1}
+        - {upTo: 70, ceiling: 10}
+        - {upTo: 85, ceiling: 4}
+        - {upTo: 95, ceiling: 1}
       sevenDay:
-        - {upTo: 85, floor: 5, ceiling: 10}
-        - {upTo: 95, floor: 1, ceiling: 3}
+        - {upTo: 85, ceiling: 10}
+        - {upTo: 95, ceiling: 3}
       paceCaps:
-        - {overBy: 5, floor: 1, ceiling: 3}
-        - {overBy: 10, floor: 0, ceiling: 1}
+        - {overBy: 5, ceiling: 3}
+        - {overBy: 10, ceiling: 1}
     agy:
       ceiling: 2
       fiveHourMax: 90
@@ -929,7 +922,7 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 		t.Errorf("claude provider = %+v", cl)
 	}
 	agy := c.Capacity.Providers[provAgy]
-	if agy.Floor != 0 || agy.Ceiling != 2 || !slices.Equal(agy.Command, DefaultAgyUsageCommand) {
+	if agy.Ceiling != 2 || !slices.Equal(agy.Command, DefaultAgyUsageCommand) {
 		t.Errorf("agy provider = %+v", agy)
 	}
 	if got := c.Capacity.Choices[0]; got.EffectiveProvider() != provClaude || got.EffectivePaceMargin(cl) != 2 {
@@ -946,24 +939,24 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 	}
 
 	num := func(v float64) *float64 { return &v }
-	// PaceCaps lower claude's floor/ceiling when 7d is ahead of pace by >= 5% or >= 10%.
-	if dp, high := cl.DeriveWithPace(num(20), num(56), num(50)); dp.Floor != 1 || dp.Ceiling != 3 || high {
-		t.Errorf("paceCap +6%%: got (%d, %d, high=%v), want (1, 3, false)", dp.Floor, dp.Ceiling, high)
+	// PaceCaps lower claude's ceiling when 7d is ahead of pace by >= 5% or >= 10%.
+	if dp, high := cl.DeriveWithPace(num(20), num(56), num(50)); dp.Ceiling != 3 || high {
+		t.Errorf("paceCap +6%%: got (%d, high=%v), want (3, false)", dp.Ceiling, high)
 	}
-	if dp, high := cl.DeriveWithPace(num(20), num(61), num(50)); dp.Floor != 0 || dp.Ceiling != 1 || high {
-		t.Errorf("paceCap +11%%: got (%d, %d, high=%v), want (0, 1, false)", dp.Floor, dp.Ceiling, high)
+	if dp, high := cl.DeriveWithPace(num(20), num(61), num(50)); dp.Ceiling != 1 || high {
+		t.Errorf("paceCap +11%%: got (%d, high=%v), want (1, false)", dp.Ceiling, high)
 	}
-	// fiveHourMax (90) yields (0, 0) without high (< 95); at 95 high is true.
-	if dp, high := cl.DeriveWithPace(num(91), num(40), num(50)); dp.Floor != 0 || dp.Ceiling != 0 || high {
-		t.Errorf("at fiveHourMax 91%%: got (%d, %d, high=%v), want (0, 0, false)", dp.Floor, dp.Ceiling, high)
+	// fiveHourMax (90) yields 0 without high (< 95); at 95 high is true.
+	if dp, high := cl.DeriveWithPace(num(91), num(40), num(50)); dp.Ceiling != 0 || high {
+		t.Errorf("at fiveHourMax 91%%: got (%d, high=%v), want (0, false)", dp.Ceiling, high)
 	}
-	if dp, high := cl.DeriveWithPace(num(95), num(40), num(50)); dp.Floor != 0 || dp.Ceiling != 0 || !high {
-		t.Errorf("at highPercent 95%%: got (%d, %d, high=%v), want (0, 0, true)", dp.Floor, dp.Ceiling, high)
+	if dp, high := cl.DeriveWithPace(num(95), num(40), num(50)); dp.Ceiling != 0 || !high {
+		t.Errorf("at highPercent 95%%: got (%d, high=%v), want (0, true)", dp.Ceiling, high)
 	}
 
 	// A self-hosted provider fails closed: no subscription fields, no
 	// half-configured serving mode, no subscription choice on it, and its
-	// ceiling follows a ~/ serveModeCommand and a floor of its own.
+	// ceiling follows a ~/ serveModeCommand.
 	t.Run("self-hosted rejections", func(t *testing.T) {
 		for name, raw := range map[string]string{
 			"with a usage command":    "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      command: [r]\n",
@@ -999,29 +992,24 @@ func TestCapacityProvidersAndChoices(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := c.Capacity.Providers["local-model"]
-		if p.Floor != 0 {
-			t.Errorf("self-hosted floor = %d, want 0", p.Floor)
-		}
 		if p.Ceiling != 10 {
 			t.Errorf("self-hosted ceiling = %d, want the configured 10", p.Ceiling)
 		}
 		if p.ServeModeCommand[0] != filepath.Join(home, "bin", "read-serve-mode") {
 			t.Errorf("serveModeCommand = %v, want the home-expanded path", p.ServeModeCommand)
 		}
-		// A mode whose ceiling is under the provider's configured floor
-		// clamps the floor to it, so floor never exceeds ceiling.
-		clRaw := "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      floor: 2\n      ceiling: 5\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 5, tiny: 1}\n"
+		clRaw := "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      ceiling: 5\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 5, tiny: 1}\n"
 		cc, err := Load(writeTemp(t, clRaw))
 		if err != nil {
 			t.Fatal(err)
 		}
 		cp := cc.Capacity.Providers["local-model"]
-		if got := cp.WithServeMode(ServeModeReading{Mode: "tiny"}); got.Ceiling != 1 || got.Floor != 1 {
-			t.Errorf("WithServeMode(tiny) = (%d, %d), want (1, 1)", got.Ceiling, got.Floor)
+		if got := cp.WithServeMode(ServeModeReading{Mode: "tiny"}); got.Ceiling != 1 {
+			t.Errorf("WithServeMode(tiny) = %d, want 1", got.Ceiling)
 		}
-		// An unknown mode keeps the configured pair.
-		if got := cp.WithServeMode(ServeModeReading{Mode: "other"}); got.Ceiling != 5 || got.Floor != 2 {
-			t.Errorf("WithServeMode(unknown) = (%d, %d), want (5, 2)", got.Ceiling, got.Floor)
+		// An unknown mode keeps the configured ceiling.
+		if got := cp.WithServeMode(ServeModeReading{Mode: "other"}); got.Ceiling != 5 {
+			t.Errorf("WithServeMode(unknown) = %d, want 5", got.Ceiling)
 		}
 	})
 
@@ -1101,7 +1089,6 @@ func TestClaudeUsageDefault(t *testing.T) {
 // command before validation, just like an empty provider entry.
 func TestClaudeUsageDefaultWithThresholds(t *testing.T) {
 	const raw = `capacity:
-  floor: 5
   ceiling: 14
   providers:
     claude:
@@ -1131,7 +1118,7 @@ func TestClaudeUsageDefaultWithThresholds(t *testing.T) {
 	if !slices.Equal(codex.Command, DefaultCodexUsageCommand) || codex.Ceiling != 6 || codex.FiveHourMax != 92 || codex.SevenDayMax != 97 {
 		t.Fatalf("Codex defaults or thresholds: %+v", codex)
 	}
-	if c.Capacity.Floor != 5 || c.Capacity.Ceiling != 14 || len(c.Capacity.Choices) != 2 ||
+	if c.Capacity.Ceiling != 14 || len(c.Capacity.Choices) != 2 ||
 		c.Capacity.Choices[0].Harness != ClaudeHarness || c.Capacity.Choices[0].Model != "claude-opus-5-5" ||
 		c.Capacity.Choices[1].Harness != CodexHarness || c.Capacity.Choices[1].Model != "gpt-6.1-sol" {
 		t.Fatalf("capacity choices or total bounds changed: %+v", c.Capacity)
@@ -1235,7 +1222,7 @@ func TestCapacityLocalCeiling(t *testing.T) {
 }
 
 func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
-	for _, raw := range []string{"capacity: {providers: {codex: {floor: 0, ceiling: 2}}}", "capacity: {providers: {codex: {}}}"} {
+	for _, raw := range []string{"capacity: {providers: {codex: {ceiling: 2}}}", "capacity: {providers: {codex: {}}}"} {
 		c, err := Load(writeTemp(t, raw))
 		if err != nil {
 			t.Fatal(err)
@@ -1245,12 +1232,12 @@ func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
 			t.Fatalf("Codex default reader missing: %+v", p)
 		}
 	}
-	c, err := Load(writeTemp(t, "capacity: {providers: {codex: {floor: 0, ceiling: 2, command: [custom-reader]}}}"))
+	c, err := Load(writeTemp(t, "capacity: {providers: {codex: {ceiling: 2, command: [custom-reader]}}}"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := c.Capacity.Providers[CodexHarness]
-	if !slices.Equal(p.Command, []string{"custom-reader"}) || p.Floor != 0 || p.Ceiling != 2 {
+	if !slices.Equal(p.Command, []string{"custom-reader"}) || p.Ceiling != 2 {
 		t.Fatalf("explicit Codex settings changed: %+v", p)
 	}
 	c, err = Load(writeTemp(t, "{}"))

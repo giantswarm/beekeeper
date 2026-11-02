@@ -93,7 +93,6 @@ type usageView struct {
 	At          time.Time    `json:"at,omitzero"`
 	FiveHour    *usageWindow `json:"fiveHour,omitempty"`
 	SevenDay    *usageWindow `json:"sevenDay,omitempty"`
-	Floor       int          `json:"floor"`
 	Ceiling     int          `json:"ceiling"`
 	High        bool         `json:"high,omitempty"`
 	HighPercent float64      `json:"highPercent,omitempty"`
@@ -593,7 +592,6 @@ func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.C
 		Fallback:    r.Fallback,
 		FiveHour:    fh,
 		SevenDay:    sd,
-		Floor:       derived.Floor,
 		Ceiling:     derived.Ceiling,
 		High:        high,
 		HighPercent: k.Usage.EffectiveHighPercent(),
@@ -602,9 +600,8 @@ func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.C
 
 func errorUsageView(k config.Capacity, err error) (config.Capacity, *usageView) {
 	derived := k
-	derived.Floor, derived.Ceiling = 0, 0
+	derived.Ceiling = 0
 	return derived, &usageView{
-		Floor:       0,
 		Ceiling:     0,
 		HighPercent: k.Usage.EffectiveHighPercent(),
 		Error:       err.Error(),
@@ -775,8 +772,6 @@ func (a *app) cachedUsageCapacity(k config.Capacity) (config.Capacity, *usageVie
 
 func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, providerErrs map[string]string) (config.Capacity, *usageView) {
 	derived := k
-	sumFloor, sumCeiling := 0, 0
-	subFloor, subCeiling := 0, 0
 	// subDerivedCeiling is the subscription providers' own ceiling as the
 	// cached readings derive it; selfHostedCeiling the self-hosted providers'
 	// own, which capacity.ceiling never caps.
@@ -796,17 +791,11 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 					p = p.WithServeMode(r)
 				}
 			}
-			sumFloor += p.Floor
-			sumCeiling += p.Ceiling
 			selfHostedCeiling += p.Ceiling
 			continue
 		}
 		if !p.Enabled() {
-			sumFloor += p.Floor
-			sumCeiling += p.Ceiling
 			anySubscription = true
-			subFloor += p.Floor
-			subCeiling += p.Ceiling
 			subDerivedCeiling += p.Ceiling
 			continue
 		}
@@ -829,26 +818,20 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			continue
 		}
 		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
-		sumFloor += pv.Floor
-		sumCeiling += pv.Ceiling
 		anySubscription = true
-		subFloor += pv.Floor
-		subCeiling += pv.Ceiling
 		subDerivedCeiling += pv.Ceiling
 	}
 	derived.Ceiling = selfHostedCeiling + subDerivedCeiling
 	if anySubscription {
 		// capacity.ceiling caps the subscription providers, not the
 		// self-hosted ones: a desk that lowers it to 0 suppresses CAPACITY
-		// LOW and CAPACITY FULL (k.Ceiling stays 0 for the watch) and holds
-		// the subscription side to 0, while the self-hosted ceiling stands
-		// beside it.
+		// FULL (k.Ceiling stays 0 for the watch) and holds the subscription
+		// side to 0, while the self-hosted ceiling stands beside it.
 		derived.Ceiling = min(k.Ceiling, subDerivedCeiling) + selfHostedCeiling
 	}
-	derived.Floor = min(k.Floor, min(sumFloor, derived.Ceiling))
 	var u *usageView
 	if len(errs) > 0 {
-		u = &usageView{Floor: derived.Floor, Ceiling: derived.Ceiling, Error: strings.Join(errs, "; ")}
+		u = &usageView{Ceiling: derived.Ceiling, Error: strings.Join(errs, "; ")}
 	}
 	return derived, u
 }
@@ -1059,7 +1042,7 @@ func (u *usageView) capacitySuffix(now time.Time) string {
 }
 
 func (u *usageView) watchLine(now time.Time) string {
-	s := fmt.Sprintf("%s; target floor %d, ceiling %d", u.windowsLine(now), u.Floor, u.Ceiling)
+	s := fmt.Sprintf("%s; target ceiling %d", u.windowsLine(now), u.Ceiling)
 	if u.High {
 		s += " (USAGE HIGH)"
 	}
@@ -1464,7 +1447,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	if shouldEmit && len(parts) > 0 {
 		w.emitNow("usage", "USAGE: %s", strings.Join(parts, "; "))
 	}
-	return &usageView{Floor: v.Floor, Ceiling: v.Ceiling, High: allHigh}
+	return &usageView{Ceiling: v.Ceiling, High: allHigh}
 }
 
 func (w *watcher) clearUsageHighEpisode(file string) {

@@ -20,7 +20,7 @@ import (
 const (
 	fillCapacityCommand = "capacity"
 	fillEmptyBoardJSON  = `{"pick":null}`
-	fillNoRoomJSON      = `{"floor":3,"room":0}`
+	fillNoRoomJSON      = `{"ceiling":3,"room":0}`
 	fillAgentDone       = "an agent is done"
 )
 
@@ -39,7 +39,7 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {
 		case fillCapacityCommand:
-			out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: 5 - busy, agentCount: agentCount{Busy: make([]string, busy)}})
+			out, err := json.Marshal(capacityView{Ceiling: 3, Room: 3 - busy, agentCount: agentCount{Busy: make([]string, busy)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestLoopFillOnStartupAndAfterRosterLoss(t *testing.T) {
 	}
 	r.pass(t)
 	if r.called(agentsName, agentStartName) != nil {
-		t.Fatal("started above floor")
+		t.Fatal("started above ceiling")
 	}
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
@@ -96,8 +96,60 @@ func TestLoopFillOnStartupAndAfterRosterLoss(t *testing.T) {
 	}
 }
 
+func TestLoopFillFillsEveryFreeSlotToCeiling(t *testing.T) {
+	r, busy := fillRig(t)
+	original := r.answer
+	r.answer = func(args []string) (string, int) {
+		if args[0] == fillCapacityCommand {
+			out, err := json.Marshal(capacityView{Ceiling: 5, Room: 5 - *busy, agentCount: agentCount{Busy: make([]string, *busy)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(out), 0
+		}
+		return original(args)
+	}
+	r.pass(t)
+	if *busy != 5 || len(r.logged(t, "supervisor.next")) != 5 {
+		t.Fatalf("did not fill all 5 slots up to ceiling: busy %d, %s", *busy, r.out)
+	}
+}
+
+func TestLoopFillSkipsBoardWhenAllProvidersHeldByPaceEvenWithHosts(t *testing.T) {
+	r, busy := hostFillRig(t)
+	original := r.answer
+	boardReads := 0
+	r.answer = func(args []string) (string, int) {
+		switch args[0] {
+		case fillCapacityCommand:
+			if slices.Contains(args, loopHostFlag) {
+				return loopRoomJSON, 0
+			}
+			out, err := json.Marshal(capacityView{
+				Ceiling: 5,
+				Room:    0,
+				Choice:  &choiceView{Reason: "claude/claude-opus-4-7: 7d 60% ahead of pace 50% (+10%)"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(out), 0
+		case loopBoard:
+			boardReads++
+		}
+		return original(args)
+	}
+	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if *busy != 0 || boardReads != 0 {
+		t.Fatalf("expected 0 starts and 0 board reads when all choices held by pace: busy=%d, boardReads=%d, out=%s", *busy, boardReads, r.out)
+	}
+}
+
 func TestLoopFillStopsAtGatesAndEmptyBoard(t *testing.T) {
-	for _, name := range []string{"capacity refused", "no room", "at floor", "empty board", "bad capacity", "bad board", "start refused", "no brief", "dry run"} {
+	for _, name := range []string{"capacity refused", "no room", "at ceiling", "empty board", "bad capacity", "bad board", "start refused", "no brief", "dry run"} {
 		t.Run(name, func(t *testing.T) {
 			r, busy := fillRig(t)
 			original := r.answer
@@ -108,8 +160,8 @@ func TestLoopFillStopsAtGatesAndEmptyBoard(t *testing.T) {
 						return "pace or host pressure", ExitRefused
 					case "no room":
 						return fillNoRoomJSON, 0
-					case "at floor":
-						return `{"floor":0,"room":5}`, 0
+					case "at ceiling":
+						return `{"ceiling":0,"room":5}`, 0
 					case "bad capacity":
 						return "broken JSON", 0
 					}
@@ -183,7 +235,7 @@ func TestLoopFillBoundsStaleCapacity(t *testing.T) {
 	original := r.answer
 	r.answer = func(args []string) (string, int) {
 		if args[0] == fillCapacityCommand {
-			return `{"floor":3,"room":2}`, 0
+			return `{"ceiling":3,"room":2}`, 0
 		}
 		return original(args)
 	}
@@ -260,7 +312,6 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 		change string
 		reads  int
 	}{
-		{"the floor changes", 2},
 		{"the ceiling changes", 2},
 		{"an agent is removed", 2},
 		{fillAgentDone, 2},
@@ -268,14 +319,14 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 		// it; neither can make an empty board offer an item.
 		{"busy count changes", 1},
 		{"available room changes", 1},
-		{"capacity cycles through the floor", 1},
+		{"capacity cycles through the ceiling", 1},
 	} {
 		change := tc.change
 		t.Run(change, func(t *testing.T) {
 			r, busy := fillRig(t)
 			original := r.answer
 			reads := 0
-			changedRoom, floor, ceiling := false, 3, 5
+			changedRoom, ceiling := false, 5
 			r.answer = func(args []string) (string, int) {
 				if args[0] == loopBoard {
 					reads++
@@ -286,7 +337,7 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 					if changedRoom {
 						room = 1
 					}
-					return fmt.Sprintf(`{"floor":%d,"ceiling":%d,"room":%d,"busy":%s}`, floor, ceiling, room, busyJSON(*busy)), 0
+					return fmt.Sprintf(`{"ceiling":%d,"room":%d,"busy":%s}`, ceiling, room, busyJSON(*busy)), 0
 				}
 				return original(args)
 			}
@@ -299,8 +350,6 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 				t.Fatal(err)
 			}
 			switch change {
-			case "the floor changes":
-				floor = 4
 			case "the ceiling changes":
 				ceiling = 6
 			case "busy count changes":
@@ -319,8 +368,8 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-			case "capacity cycles through the floor":
-				*busy = 3
+			case "capacity cycles through the ceiling":
+				*busy = 5
 				if err := l.pass(t.Context()); err != nil {
 					t.Fatal(err)
 				}
@@ -377,7 +426,7 @@ func TestLoopFillPauseHoldsThroughRosterChurn(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := countAgents(st, nil, r.a.now)
-		out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: 5 - len(c.Busy), agentCount: c})
+		out, err := json.Marshal(capacityView{Ceiling: 5, Room: 5 - len(c.Busy), agentCount: c})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -508,7 +557,7 @@ func TestLoopFillDryRunPreviewsWithoutStartingOrWriting(t *testing.T) {
 			if empty {
 				count = 0
 			}
-			if !strings.Contains(r.out.String(), fmt.Sprintf("SUPERVISOR WOULD NEXT fill %d to capacity.floor", count)) {
+			if !strings.Contains(r.out.String(), fmt.Sprintf("SUPERVISOR WOULD NEXT fill %d to capacity.ceiling", count)) {
 				t.Fatalf("no refill preview: %s", r.out)
 			}
 			if *busy != 0 || len(after) != len(before) || capacityReads != 1 || boardReads != 1 || r.called(agentsName) != nil {
@@ -542,7 +591,7 @@ func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
 			if slices.Contains(args, loopHostFlag) {
 				return loopRoomJSON, 0
 			}
-			out, err := json.Marshal(capacityView{Floor: 3, Ceiling: 5, Room: localRoom, agentCount: agentCount{Busy: make([]string, *busy)}})
+			out, err := json.Marshal(capacityView{Ceiling: 3, Room: localRoom, agentCount: agentCount{Busy: make([]string, *busy)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -557,19 +606,19 @@ func hostFillRigRoom(t *testing.T, localRoom int) (*loopRig, *int) {
 }
 
 // TestLoopFillPlacesOnAHostWhenTheCoordinatorIsFull is the issue's case for
-// the capacity fill: the coordinator's machine is at its floor of room, a
-// host has room, and the shortfall is filled there rather than not at all.
+// the capacity fill: the coordinator's machine has no room, a host has room,
+// and the free slots up to the ceiling are filled there rather than not at all.
 func TestLoopFillPlacesOnAHostWhenTheCoordinatorIsFull(t *testing.T) {
 	r, busy := hostFillRig(t)
 	if err := r.a.dryRunSupervisorLoop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r.out.String(), "SUPERVISOR WOULD NEXT fill 3 to capacity.floor") {
+	if !strings.Contains(r.out.String(), "SUPERVISOR WOULD NEXT fill 3 to capacity.ceiling") {
 		t.Fatalf("no refill preview onto the host: %s", r.out)
 	}
 	r.pass(t)
 	if *busy != 3 || len(r.logged(t, "supervisor.next")) != 3 {
-		t.Fatalf("the fill did not reach the floor on the host: busy %d\n%s", *busy, r.out)
+		t.Fatalf("the fill did not reach the ceiling on the host: busy %d\n%s", *busy, r.out)
 	}
 	for _, c := range r.calls {
 		if c[0] == agentsName && c[1] == agentStartName {
