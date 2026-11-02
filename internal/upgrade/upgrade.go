@@ -18,12 +18,14 @@
 // older release than another is not upgrading: only a
 // change of its own release begins an upgrade.
 //
-// An upgrade is over, whatever cluster-api-events' mark says, once its
+// A marked upgrade is over, though cluster-api-events' mark stays, once its
 // cluster reports the release cluster-api-events recorded and has rolled out
-// for RolloutGrace since the upgrade began, or has rolled without finishing
-// for StallAfter: a mark that outlives its upgrade (one cluster-api-events
-// never clears, on a managed control plane for one) or a stalled rollout
-// holds no installation for good.
+// for RolloutGrace since cluster-api-events stamped its start
+// (giantswarm.io/upgrade-start-time), or that start is StallAfter ago: a
+// mark that outlives its upgrade (one cluster-api-events never clears, on a
+// managed control plane for one) or a stalled rollout holds no installation
+// for good. An unmarked rollout runs on while its hold does, at most
+// StallAfter from the hold's begin (Reconcile).
 package upgrade
 
 import (
@@ -53,7 +55,6 @@ const (
 	kindControlPlane  = "KubeadmControlPlane"
 	kindMachinePool   = "MachinePool"
 	kindMachineDeploy = "MachineDeployment"
-	lastKnownTime     = "giantswarm.io/last-known-cluster-upgrade-timestamp"
 )
 
 const (
@@ -220,29 +221,23 @@ func due(a map[string]string, label string, now time.Time) (string, time.Time, b
 	return target, t, err == nil && target != "" && target != label && !now.Before(t)
 }
 
-// over reports whether the cluster's upgrade is over although
-// cluster-api-events may still mark it: the cluster reports the release
+// over reports whether a marked upgrade is over although
+// cluster-api-events still marks it: the cluster reports the release
 // cluster-api-events recorded, no scheduled upgrade is due, and it has
-// rolled out (settled) for RolloutGrace since the upgrade began, or it began
-// StallAfter ago. The upgrade began at the later of cluster-api-events'
-// record of the release and its start time; a cluster with neither is not
-// judged.
+// rolled out (settled) for RolloutGrace since cluster-api-events stamped the
+// upgrade's start, or that start is StallAfter ago. A cluster without the
+// mark or the start stamp is not judged here.
 func over(o Object, now time.Time, settled bool) bool {
 	a := o.Metadata.Annotations
 	label := o.Metadata.Labels[releaseLabel]
-	if label == "" || label != a[lastKnownRelease] {
+	if a[upgradingMark] != "true" || label == "" || label != a[lastKnownRelease] {
 		return false
 	}
 	if _, _, ok := due(a, label, now); ok {
 		return false
 	}
-	var began time.Time
-	for _, k := range []string{lastKnownTime, upgradeStartTime} {
-		if t, err := time.Parse(time.RFC3339, a[k]); err == nil && t.After(began) {
-			began = t
-		}
-	}
-	if began.IsZero() {
+	began, err := time.Parse(time.RFC3339, a[upgradeStartTime])
+	if err != nil {
 		return false
 	}
 	age := now.Sub(began)
@@ -302,8 +297,8 @@ func EndLine(h state.Hold) string {
 // Is reports whether a hold is an upgrade's automatic hold.
 func Is(h state.Hold) bool { return strings.HasPrefix(h.Target, HoldPrefix) }
 
-// Stale reports whether an upgrade hold has stood for StallAfter: no upgrade
-// the watch reads runs that long, so its installation has gone unread.
+// Stale reports whether an upgrade hold has stood for StallAfter, longer
+// than the watch lets an upgrade it reads run: worth a look.
 func Stale(h state.Hold, now time.Time) bool { return Is(h) && now.Sub(h.At) >= StallAfter }
 
 // Held returns an active upgrade hold of the installation.
@@ -333,7 +328,8 @@ func HeldClusters(st *state.State, now time.Time) func(installation, cluster str
 
 // Reconcile makes the installation's upgrade holds those of its running
 // upgrades: a hold for each that has none (begun), none for any that no
-// longer runs (ended). A lifted hold stays lifted while its upgrade runs; a
+// longer runs (ended), nor for a rollout that runs on StallAfter after its
+// hold began (ended). A lifted hold stays lifted while its upgrade runs; a
 // different upgrade of the cluster (another target release) replaces it with
 // an active hold. Only a readable installation is reconciled.
 func Reconcile(st *state.State, installation string, running []Upgrade, now time.Time, by state.Party) (begun, ended []state.Hold) {
@@ -348,6 +344,8 @@ func Reconcile(st *state.State, installation string, running []Upgrade, now time
 		}
 		u, runs := want[h.Target]
 		switch {
+		case runs && u.Rolling && now.Sub(h.At) >= StallAfter:
+			// a rollout stalled since its hold began: no upgrade
 		case runs && h.Active(now):
 			have[h.Target] = true
 			return false

@@ -1926,13 +1926,13 @@ differs from the release cluster-api-events last recorded
 workers have rolled), or its scheduled upgrade is due (`alpha.giantswarm.io/update-schedule-target-release`
 differs from the label and `…-target-time` has passed). It ends once none of that holds and its
 control plane and node pools have rolled (every KubeadmControlPlane at its `spec.version`, every
-control plane and node pool with all replicas up to date, no `RollingOut` condition True). It is
-over, whatever cluster-api-events' mark says, once the cluster reports the release
-cluster-api-events recorded and has rolled out for an hour since the upgrade began (the later of
-`giantswarm.io/last-known-cluster-upgrade-timestamp` and `giantswarm.io/upgrade-start-time`), or
-has rolled without finishing for a day: a mark cluster-api-events never clears (a managed AKS
-control plane) or a stalled node-pool rollout holds the installation no longer, and its hold
-lifts on that reading, whether the release it upgraded from was read or not. A
+control plane and node pool with all replicas up to date, no `RollingOut` condition True). A
+marked upgrade is over, though the mark stays, once the cluster reports the release
+cluster-api-events recorded and has rolled out for an hour since cluster-api-events stamped its
+start (`giantswarm.io/upgrade-start-time`), or that start is a day ago: a mark cluster-api-events
+never clears (a managed AKS control plane) or a stalled rollout holds the installation no longer.
+A rollout that runs on after the mark cleared keeps its hold at most a day from the hold's begin.
+Either way the hold lifts on that reading, whether the release it upgraded from was read or not. A
 workload cluster on an older release than its management cluster is not upgrading. The release it
 upgrades from is the one the label changed from, else the one cluster-api-events' `Upgrading…`
 event names.
@@ -1954,7 +1954,7 @@ refuses an `upgrade:` target; `hold lift upgrade:<installation>/<cluster>` lifts
 stays lifted, recorded with who lifted it, until that upgrade ends, and only a different upgrade
 of the cluster (another target release) holds the installation again. `hold list` and `status`
 show the lifted hold and who lifted it; `hold list` marks an upgrade hold that has stood for a day
-`active, stale`: its installation has gone unread since.
+`active, stale`, longer than the watch lets an upgrade it reads run: worth a look.
 
 
 The one claim an upgrade admits is the work that unblocks it: a node drain stalled on a
