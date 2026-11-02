@@ -28,6 +28,7 @@ type fakeDeps struct {
 }
 
 func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSchema(f.t, args)
 	q := args[3]
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}

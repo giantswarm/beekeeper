@@ -75,8 +75,9 @@ kind:fieldValueByName(name:"` + KindField + `"){...on ProjectV2ItemFieldSingleSe
 const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt number state repository{nameWithOwner}}}}`
 
 // itemFields is what a move takes of an item: its id, its board and the
-// board fields with the Team.
-const itemFields = `id project{id number owner{...on ProjectV2Owner{login}}} ` + boardFields + `
+// board fields with the Team. ProjectV2Owner declares no login: the
+// board's owner names it as the User or Organization it is.
+const itemFields = `id project{id number owner{...on User{login} ...on Organization{login}}} ` + boardFields + `
 team:fieldValueByName(name:"` + TeamField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
 type issueJSON struct {

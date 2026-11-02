@@ -30,6 +30,7 @@ type tidyGH struct {
 }
 
 func (f *tidyGH) run(_ context.Context, args ...string) ([]byte, error) {
+	checkSchema(f.t, args)
 	q := args[3]
 	vars := map[string]string{}
 	for i := 4; i+1 < len(args); i += 2 {
