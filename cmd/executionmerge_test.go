@@ -122,6 +122,34 @@ func TestExecutionMergeLiveDeniesStopHoldMovedHeadAndMissingLease(t *testing.T) 
 	}
 }
 
+// The loop merges an execution worker's approved head itself and presents no
+// grant; that is no "invalid merge authorization identity".
+func TestExecutionMergeLiveAdmitsTheLoopsOwnMergeWithoutAGrant(t *testing.T) {
+	a, r := executionTestApp(t)
+	r.LeaseRequired = true
+	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg}
+	head := strings.Repeat("a", 40)
+	use := execution.MergeUse{Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
+	old := readLoopPull
+	t.Cleanup(func() { readLoopPull = old })
+	pull := superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{Head: head, Verdict: superloop.Approved}}}
+	completeMergeReview(t, a, use, &pull.Reviews[0])
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Starts[0].Execution.Request = r
+	st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Minute)}
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return pull, nil }
+	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
+		t.Fatalf("loop merge of an approved head refused: %v", err)
+	}
+	pull.Reviews = nil
+	if a.executionMergeLive(context.Background(), st, use) == nil {
+		t.Fatal("loop merge admitted without the approved review")
+	}
+}
+
 func TestExecutionMergeGrantRequiresSupervisorAndReviewRound(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg}
