@@ -743,10 +743,13 @@ a glob, and a destination that is an option or comes from a substitution, keep t
 The same holds for a link to a directory that holds a credential file (the home directory and `/`
 included), and for a relative link source, resolved from the link's own directory as well as the
 working directory. `ln` or a helper defined on the command line that links such a directory is
-refused like a read of the file itself. A `find` whose `-exec`,
+refused like a read of the file itself. Directory copies, including `cp -rs`, are refused when
+their source holds a guarded file. Relative paths also account for `pushd` and `popd`.
+A `find` whose `-exec`,
 `-execdir`, `-ok` or `-okdir` runs anything but a metadata command (or `shred`, `unlink`, `rmdir`,
 `echo`, `printf`) on a start path holding a credential file its `-name`/`-iname` tests accept is a
-read of it. A command that prints a credential file's path (`readlink`, `realpath`, `find`, `ls`,
+read of it; moving a found file with `mv` counts too, since the destination could expose it.
+A command that prints a credential file's path (`readlink`, `realpath`, `find`, `ls`,
 `stat` with its path in the format, …) is a read too when its output is piped into a stage that may
 open it or substituted into a command other than `echo`, `printf`, `test`, `[`, `[[`, `basename`,
 `dirname` or `mkdir` (`readlink -f link | xargs cat`, `cat "$(readlink -f link)"`); `| wc -l`,
@@ -754,6 +757,8 @@ open it or substituted into a command other than `echo`, `printf`, `test`, `[`, 
 `stat -c %s` stay metadata, and the operands of a `[[ … ]]` after its `&&` or `||` are the test's. Codex refuses these in the same way, and in
 addition refuses a helper defined on the command line that is handed a path in its protected home,
 since its body (parameter operators, `$*`, `printf -v`, `mkdir`) may write it.
+Helper arguments assembled by concatenation or by joining path components are checked together:
+splitting a guarded file path, or a protected Codex home path under Codex, does not authorize access.
 
 Static checks such as `bash -n scripts/install.sh`, `sh -n scripts/install.sh` and
 `shellcheck scripts/install.sh` inspect script text without executing its credential operations.
