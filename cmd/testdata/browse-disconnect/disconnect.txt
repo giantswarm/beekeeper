@@ -1,0 +1,4 @@
+Opened the page before the connection dropped.
+browser connection lost
+- Read the heading
+- Report it
