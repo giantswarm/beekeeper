@@ -73,7 +73,15 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 
 // wakeID is the id a wake of p resolves p by: its CLI session id, else its
 // desktop or harness id.
-func wakeID(p state.Party) string { return cmp.Or(p.Session, p.HostSession) }
+func wakeID(p state.Party) string {
+	// A harness's conversation id can also be a UUID. Off the roster that
+	// UUID would be mistaken for a Claude session; its host id names the
+	// channel that actually owns the conversation.
+	if _, _, ok := harnessForHost(p.HostSession); ok {
+		return p.HostSession
+	}
+	return cmp.Or(p.Session, p.HostSession)
+}
 
 // onRoster says whether p is a roster agent.
 func onRoster(st *state.State, p state.Party) bool {

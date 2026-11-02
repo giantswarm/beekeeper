@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -190,22 +189,40 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 // otherwise. A central instance has no sessions to tell: it queues line in
 // the mailbox of the filer's person, addressed to the filing agent, whose
 // machine's watch delivers it.
-func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) string {
+func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) (report string) {
+	delivery := noteDelivery{Note: n.ID, Team: n.By.Team, Status: "delivered"}
+	defer func() {
+		// Hold-release messages use this route too; their delivery must not
+		// replace the outcome of the answer notification itself.
+		if !strings.HasPrefix(line, "NOTE ANSWERED #") && !strings.HasPrefix(line, "NOTE DEFAULTED #") {
+			return
+		}
+		if err := a.recordNoteDelivery(by, delivery); err != nil {
+			report += fmt.Sprintf(" note #%d: retaining notification status failed: %v", n.ID, err)
+		}
+	}()
+	fail := func(err error) string {
+		delivery.Status, delivery.Detail = "failed", err.Error()
+		return fmt.Sprintf("note #%d: notification failed (%v): %s", n.ID, err, line)
+	}
+
 	if a.central {
 		if a.mailFiler == nil || n.By.Host == "" {
-			return ""
+			return fail(fmt.Errorf("no mailbox route for the filing session"))
 		}
 		if err := a.mailFiler(ctx, n, line); err != nil {
-			return fmt.Sprintf("note #%d: telling %q on %s failed (%v): %s", n.ID, n.By.Name, n.By.Host, err, line)
+			return fail(err)
 		}
+		delivery.Status = "queued"
 		return ""
 	}
-	if n.By.Name == "" {
-		return ""
+	if n.By.Name == "" && wakeID(n.By) == "" {
+		return fail(fmt.Errorf("the note retains no filing session identity"))
 	}
 	// The supervisor loop is no session: it reads the answer from the log
 	// at its next pass.
 	if n.By.Name == loopParty.Name && n.By.Session == "" {
+		delivery.Status = "waiting"
 		return fmt.Sprintf("note #%d: the supervisor loop acts on the answer at its next pass", n.ID)
 	}
 	quiet := *a
@@ -213,13 +230,12 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	a = &quiet
 	st, err := a.store.Read()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "note #%d: telling %q failed (%v): %s\n", n.ID, n.By.Name, err, line)
-		return ""
+		return fail(err)
 	}
 	rl, ok := filedRole(st, n.By)
 	if !ok {
 		if err := a.quietWake(ctx, by, cmp.Or(wakeID(n.By), n.By.Name), line); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "note #%d: telling %q failed (%v): %s\n", n.ID, n.By.Name, err, line)
+			return fail(err)
 		}
 		return ""
 	}
@@ -235,9 +251,9 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 		why = fmt.Sprintf("the %s, %q, cannot be told (%v)", rl.name, h.Name, err)
 	}
 	if err := a.keepRoleLine(rl, line); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "note #%d: keeping the line for the %s failed (%v): %s\n", n.ID, rl.name, err, line)
-		return ""
+		return fail(fmt.Errorf("keeping the line for the %s: %w", rl.name, err))
 	}
+	delivery.Status, delivery.Detail = "waiting", why
 	return fmt.Sprintf("note #%d: %s: the answer waits for its next start (beekeeper %s start)", n.ID, why, rl.name)
 }
 
