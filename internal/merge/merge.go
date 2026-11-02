@@ -681,6 +681,31 @@ func ServerError(doc []byte) bool {
 	return json.Unmarshal(doc, &d) == nil && d.ExitCode == 7 && serverError.MatchString(d.Reason)
 }
 
+// NoRunsHint is what to do about a head whose workflows never ran
+// (NoRuns): GitHub started none for its commit, which the base-merge commit
+// of --update-branch can be, and no wait makes them start.
+const NoRunsHint = "the head has no GitHub Actions run: GitHub started no workflow for its commit (the base-merge commit of --update-branch can get none), and no wait starts them; push an empty commit to the branch (git commit --allow-empty) or close and reopen the pull request, wait for its checks, then run the same merge again"
+
+// NoRuns says whether devctl's document ended its wait on checks that never
+// reported (exit 4: required_missing or no_checks) while the head carries no
+// GitHub Actions run, a check run of a workflow: the head's workflows never
+// started, which a retrigger fixes and another wait does not (NoRunsHint).
+func NoRuns(doc []byte) bool {
+	type check struct {
+		Source   string `json:"source"`
+		Workflow string `json:"workflow"`
+	}
+	var d struct {
+		ExitCode int     `json:"exitCode"`
+		Verdict  string  `json:"verdict"`
+		Checks   []check `json:"checks"`
+	}
+	if json.Unmarshal(doc, &d) != nil || d.ExitCode != 4 || (d.Verdict != "required_missing" && d.Verdict != "no_checks") {
+		return false
+	}
+	return !slices.ContainsFunc(d.Checks, func(c check) bool { return c.Source == "check_run" && c.Workflow != "" })
+}
+
 // Present says whether a waiting merge holds its place against the arrived
 // merges behind it: a merge run outside the gate, one whose devctl pr merge
 // is in the gate, or was within ttl (a rerun after exit 76, the retry of a

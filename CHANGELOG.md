@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A gated merge whose head got no workflow runs, as the base-merge commit of `--update-branch` can, no longer ends on a bare devctl exit 4 (`required_missing` or `no_checks`): with no GitHub Actions run among the head's checks, its reason says that another wait will not start them and that an empty commit or a close and reopen of the pull request retriggers them before the same merge runs again (https://github.com/giantswarm/beekeeper/issues/1562).
+
 - The supervisor loop ignores cancelled checks superseded by a newer check on the same head when waking workers and requiring green CI; pending replacements still block the go (https://github.com/giantswarm/beekeeper/issues/1958).
 
 - The supervisor loop no longer leaves a pull request without a go when its worker pushes while a review round runs. With no verdict on the round's head, a verdict submitted during the round on the pull request's current head is the round's: an approval is the go (naming the head the round opened on), changes requested are forwarded and count as the round's cycle. A verdict on any other head (one from before the round, a teammate's late review of an older head) is no verdict of the round, which runs on with its reviewer; once that reviewer reports done without a verdict on the newest head, the newest head gets its round. A park since the round opened asks for the newest head; a green head past its approval whose only park predates the round gets a `supervisor.leave` line saying so, once per head, never silence ([https://github.com/giantswarm/beekeeper/issues/1868](https://github.com/giantswarm/beekeeper/issues/1868)).

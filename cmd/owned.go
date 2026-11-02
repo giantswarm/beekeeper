@@ -437,7 +437,9 @@ func signalName(s syscall.Signal) string {
 // handCut is a merge's base branch that no Auto-release run tags, whose
 // release nobody awaits. A merge declined on classic branch
 // protection is its cause and fix alone (merge.ClassicProtection), which the
-// truncation of devctl's long reason would cut.
+// truncation of devctl's long reason would cut; a head whose workflows never
+// ran (merge.NoRuns) gets what to do after it (merge.NoRunsHint), which the
+// truncation never cuts either.
 func runReason(doc []byte, last, handCut string) string {
 	if why := merge.ClassicProtection(doc); why != "" {
 		return why
@@ -473,6 +475,8 @@ func runReason(doc []byte, last, handCut string) string {
 		why = strings.Trim("merged, release "+rel+"; "+why, "; ")
 	}
 	switch {
+	case why != "" && merge.NoRuns(doc):
+		return truncate(why, 300) + "; " + merge.NoRunsHint
 	case why != "":
 		return truncate(why, 300)
 	case last != "":
