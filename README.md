@@ -18,7 +18,11 @@ The first [SSH execution-host slice](docs/ssh-execution-hosts-operations.md)
 starts managed headless Claude sessions in isolated host-local clones, with
 coordinator registration, shared capacity, acknowledged controls and owned
 stops. Remote wakes and resumes use durable ordered message receipts; inspect
-them with `agents messages` and reconcile with `agents hosts sync`. With
+them with `agents messages` and reconcile with `agents hosts sync`. Hosts
+follow the coordinator's release: `agents hosts update` installs it there,
+verified, and pins the prepared policy digest in beekeeper's state, which the
+supervisor loop does after each coordinator update; a host that cannot be
+updated is held. With
 `supervisor.hosts`, `supervisor loop` places its worker starts
 on these hosts when the coordinator is out of room (or always with
 `supervisor.hostsFirst`, for what a host can run: a repository no host maps
@@ -49,16 +53,44 @@ restart or roster loss without a done report. Each start rechecks capacity
 and stops when its gates refuse, the ceiling is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
 An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
-default) before retrying, unless `capacity.ceiling`
+default) before retrying, doubled for each further empty or failed read in a
+row up to four times the interval (5m, 10m, 20m, 20m, …) until a start or
+one of the changes below, unless `capacity.ceiling`
 changes or an agent is done or leaves the roster first; a park, a resume,
 a wait or a new task, and the busy count and room they move, do not end it. An empty or failed read answers
 the rest of its pass, the done-triggered starts included. `board next`
 exiting 3 with no pick (nothing free) is that empty read: a done event's
 next start settles on it ("the board offers nothing") and is never retried
 as a failure. No board read runs while the GitHub budget is under
-`github.floor` (REST until its reset, or the last GraphQL reading within the
-hour, or a GraphQL refusal): the done events wait unsettled and the refill
+`github.floor` (REST until its reset, or the last GraphQL reading until its
+reset, an hour after the reading when GitHub named none, or a GraphQL refusal): the done events wait unsettled and the refill
 skips its read, without a failure or a pause.
+The loop also holds ownership and PR observations under the GraphQL floor
+or while the reading is unknown or stale. Board queries and tracked PR reads
+check a fresh budget against a durable allowance of 1,500 points per hour,
+keeping 300 points for two identities' budget probes and reserving 500 points before
+each work request. Budget probes run at most every 30 seconds. Concurrent timer commands
+share its lock. An interrupted request keeps its reservation. Traffic between
+observations counts conservatively toward the allowance as `shared`; a busy
+desk can therefore pause the loop early. `budget --json` exposes the window,
+spent points and `board`, `pull`, `watch`, `timers`, `pass` and `shared` totals
+under `loop`. The embedded watch's note and parked-PR reads and GitHub timer
+conditions share the allowance; local timer jobs remain independent.
+`budget` names the stored `gh` login and the configured devctl `app` login,
+with each account's login, counters and reset under JSON `identities`.
+Both routes are explicit, independent of the checkout, and cached separately.
+Each identity retains all unexpired observed GraphQL `windows`: a newer high
+window cannot erase an older drained one, and counters cannot increase before
+their window resets. An older unlabelled low reading is retained as `unlabelled`
+until its reset rather than silently reassigned to a credential.
+The top-level REST and GraphQL readings each select their lowest balance;
+`budget --gate`, merge admission and the loop use those minima. An unknown
+or missing previously configured identity holds the gate. Refusals on a
+higher-balance identity also hold it without hiding the lowest counter.
+Loop spend tracks each identity's counter separately; selecting another
+minimum or a GitHub window resetting never replenishes its own hourly allowance.
+Unchanged PR observations last five minutes; a new park, a report from that
+PR's reviewer or an answer on its thread invalidates them immediately.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
@@ -2077,8 +2109,10 @@ and a crash both start a fresh session.
   worker a reboot stopped, a desktop session closed) does not come back by itself. `watch` says
   `AGENTS STOPPED` once per agent, and the `handover` Agents section marks it, each with
   how to resume it: `claude --bg --resume <session> "…"` for a background worker, its
-  `claude://code/continue` link for a desktop session. Nothing is resumed automatically: a burst
-  of resumed workers after a login is the supervisor's call against the machine's memory. The
+  `claude://code/continue` link for a desktop session, or `beekeeper agents wake <name> <message>`
+  for codex, omp and agy workers. Those workers count as running while their harness runner
+  lives, including between turns and before their first transcript. Nothing is resumed automatically:
+  a burst of resumed workers after a login is the supervisor's call against the machine's memory. The
   line tells a worker parked on a person (its serve record's `--waits` names the person, a note,
   the supervisor or the guide: `parked on a person: …`) apart from one whose headless turn ended
   on a background wait again after the reopen resumed it once (`ended on a wait again after its
@@ -2383,7 +2417,17 @@ open timer that wakes the agent by name (`timer add --wake`) keeps it the same w
 is done. `agents` shows what keeps an entry in its KEPT column, `doctor --dry-run` names each kept
 entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board next` counts its
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
-returns the entry to `agents.staleAfter`. The doctor also reopens a worker whose session the desktop
+returns the entry to `agents.staleAfter`.
+
+A task holder with no running CLI or turn and no transcript or roster activity
+for `agents.staleAfter` is **gone**. Kept and parked agents, agents with a wake
+timer, and remote executions are protected. `capacity` releases its busy and
+provider slots; `agents` and the watch show its last activity. The doctor retires
+it through the usual archive path, ends its serve record so the board can offer
+its item again, and logs its unfinished task and latest hand-over note as an
+`agents.gone` event without asking for a decision. Before retirement, a wake, resume or
+new activity restores its slot. Setting `agents.staleAfter` negative disables
+stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
 
 A park on a pull request requests the supervisor loop's independent review only

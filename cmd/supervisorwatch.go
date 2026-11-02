@@ -25,7 +25,7 @@ func (a *app) startLoopWatch(ctx context.Context) func() {
 	ctx, cancel := context.WithCancel(ctx)
 	observing := *a
 	cfg := *a.cfg
-	cfg.Watch.BudgetEvery = cfg.Watch.Interval
+	cfg.Watch.BudgetEvery.Duration = max(30*time.Second, cfg.Watch.Interval.Duration)
 	observing.cfg = &cfg
 	w := observing.newWatcher(false, true)
 	w.loopOwned = true

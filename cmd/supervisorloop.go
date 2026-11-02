@@ -540,6 +540,15 @@ its key first in the detail):
             supervisor.postInstall once, then self-update --check must
             find it the latest. A loop whose binary was replaced
             re-executes the installed one at its next pass
+  hosts     every pass, each execution host (agents.hosts) whose pin is
+            not this coordinator's release: agents hosts update installs
+            the release there, verified, and pins the policy digest it
+            prepared in beekeeper's state. A host with executions drains
+            first (no new start); a host whose update fails is held (no
+            start there), handed on once as a finding like file's, and
+            tried again hourly; the other hosts keep running. A
+            development build updates none, and nothing while beekeeper
+            stop stands
   classify  a report or park the rules cannot place: agents.report without
             agents.done; a park on nothing of an agent still parked
             on nothing, with no timer that wakes it (timer add --wake), no
@@ -640,6 +649,10 @@ type supervisorLoop struct {
 	// fillPause defers an unproductive board read until capacity changes,
 	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
+	// fillEmpty counts the refill's unproductive board reads since its last
+	// start or a change that ended its pause; each one doubles the next
+	// pause, up to fillBackoff times.
+	fillEmpty int
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
@@ -663,6 +676,9 @@ type supervisorLoop struct {
 	opens map[string]loopOpen
 	// merged are the merged pull requests read, by reference.
 	merged map[string]superloop.Pull
+	// pulls reuses unchanged PR observations between passes. A new park,
+	// answer or reviewer report invalidates them before planning.
+	pulls map[string]loopPullObservation
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -862,11 +878,30 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Wall-clock timer jobs keep running while GitHub observations are
+	// held. Board commands they invoke still share the query admission gate.
 	if !l.dryRun {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
+	}
+	// A budget hold applies to observations too: reading every parked PR
+	// while starts are held still drains the shared GraphQL window.
+	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
+		return nil
+	}
+	delete(l.said, "graphql budget")
+	if !l.dryRun {
+		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
+			return nil
+		}
+		delete(l.said, "graphql allowance")
+	}
+	if !l.dryRun {
 		l.tidy(ctx, st)
+		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
@@ -979,9 +1014,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Pulls[ref] = p
 			continue
 		}
-		p, err := readLoopPull(ctx, ref)
+		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
 		if err != nil {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
+			if errors.Is(err, errLoopLater) {
+				return nil
+			}
 			continue
 		}
 		if r, ok := parseRef(ref); ok {
@@ -1457,7 +1495,7 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 	a := l.a
 	b := a.cfg.Board
 	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.now.Sub(l.tidyAt) < b.TidyEvery.Duration ||
-		lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
 		return
 	}
 	l.tidyAt = a.now
@@ -1758,7 +1796,7 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 		_, turn := turnRunning(sessions, t, p, a.now)
 		return turn || loopInTurn(a, p) || inFlight(p)
 	}
-	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now), func(c chore) bool {
+	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
 	_, _, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
@@ -2189,8 +2227,8 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 
 // boardBudgetLow reports whether a board walk, which costs a large share of
 // the GraphQL budget, must wait: the REST budget is under floor until its
-// reset, GraphQL refuses, or the last GraphQL reading, taken within its
-// hourly window, is under floor.
+// reset, GraphQL refuses, or the last GraphQL reading is under floor until
+// its window resets (its reset, else an hour after the reading).
 func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 	if lowBudget(b, floor, now) {
 		return true
@@ -2199,7 +2237,16 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 		return false
 	}
 	g := b.GraphQL
-	return g.Blocks(now) || (g.Remaining < floor && now.Sub(g.At) < time.Hour)
+	if g.Blocks(now) {
+		return true
+	}
+	if g.Remaining >= floor {
+		return false
+	}
+	if !g.Reset.IsZero() {
+		return now.Before(g.Reset)
+	}
+	return now.Sub(g.At) < time.Hour
 }
 
 // readNextItem reads board next --json. With nothing free board next exits
@@ -2678,7 +2725,9 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 			acting = append(acting, t)
 		}
 	}
-	found := checkTimers(ctx, acting, a.now, lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st))
+	githubHeld := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
+		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now)
+	found := a.loopTimerChecks(ctx, acting, a.now, githubHeld || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
 	_, _, _, changed := settleTimersMatching(st, found, a.now, a.cfg.Supervisor.LoopInterval.Duration, timerActs)
 	if !changed {

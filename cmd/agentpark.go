@@ -107,7 +107,9 @@ a new publication asks for that head's review. Every other park (including one w
 publication cannot be verified) records a plain wait: no reviewer, merge
 go or findings forwarded. The command says which it recorded. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
-park. A session off the roster parks too (any session that never
+park. --as <name> parks the registered agent of that name, whatever
+session registered it: a session of another harness or a wrapper script
+parks its agent that way, without a harness's session variables. A session off the roster parks too (any session that never
 registered): its park is kept apart from the roster,
 settles the same way and resumes it by its session id; one whose session
 is gone by then gets no wake and one line, and the issues it served go
@@ -194,7 +196,7 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 	reviewHead := parkReviewHead(on)
 	var line string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
+		i := a.callerAgent(st, me)
 		if i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done) {
 			return nil, refused("%q has no task: park keeps a task, an idle agent has nothing to wait for", st.Agents[i].Name)
 		}
@@ -218,7 +220,11 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		// One park per session: a new one replaces the last, also one it
 		// took off the roster before it registered.
 		st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
+		// self is the session that parks: under --as the agent's own,
+		// whose session record and start the park concerns.
+		self := me
 		if i >= 0 {
+			self = st.Agents[i].Party
 			st.Agents[i].Park = park
 			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
 		} else {
@@ -227,7 +233,7 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			st.Parks = append(st.Parks, *park)
 		}
 		for j := range st.Records {
-			if st.Records[j].Session.Is(me) {
+			if st.Records[j].Session.Is(self) {
 				st.Records[j].Waits = waits
 			}
 		}
@@ -254,7 +260,7 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			}
 		}
 		line = fmt.Sprintf("%s: %s; %s, and %s. End your turn now.", name, parkedText(park, a.now), counted, back)
-		if k := st.StartIndex(me); k >= 0 && st.Starts[k].Background {
+		if k := st.StartIndex(self); k >= 0 && st.Starts[k].Background {
 			line += " The watch stops your background session once the turn ends, and the wake resumes it from its transcript."
 		}
 		return []state.Event{event(me, parkEvent, "%s: %s", name, parkedText(park, a.now))}, nil
@@ -325,12 +331,13 @@ func (a *app) agentResumeCmd() *cobra.Command {
 	var force bool
 	c := &cobra.Command{
 		Use:   agentResumeName + " [--force] <agent>",
-		Short: "Resume a parked agent with what settled its wait, or by hand",
+		Short: "Resume a parked or gone agent",
 		Long: `resume ends an agent's park (agents park) and wakes it, as agents wake
 does: by name to a running CLI, else headless. Its turn carries what
 settled the wait, a person's answer word for word, or that the caller
-resumed it by hand. An agent that is not parked is refused: agents wake
-messages it. While USAGE HIGH holds on the 5-hour window
+resumed it by hand. Before retirement, a gone agent can also be resumed:
+its task becomes busy again. A recent agent that is not parked is refused:
+agents wake messages it. While USAGE HIGH holds on the 5-hour window
 (capacity.usage.highPercent), resume refuses until fiveHour.resetsAt
 unless --force is given.`,
 		Example: `  beekeeper agents resume "BK 86"`,
@@ -356,6 +363,7 @@ func (a *app) resumeParked(ctx context.Context, by state.Party, q string) error 
 
 func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, force bool) error {
 	var target *state.Agent
+	var gone bool
 	st, err := a.store.Read()
 	if err == nil {
 		i, ferr := findAgent(st, q)
@@ -365,15 +373,31 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 			}
 			return ferr
 		}
-		if st.Agents[i].Park == nil {
-			return refused("%q is not parked: agents wake messages it", st.Agents[i].Name)
-		}
 		cp := st.Agents[i]
+		if cp.Park == nil {
+			_, gone = goneAgent(a.cfg, st, nil, cp, a.cfg.Agents.StaleAfter.Duration, a.now)
+			if gone {
+				sessions, _, err := a.sessions()
+				if err != nil {
+					return err
+				}
+				_, gone = goneAgent(a.cfg, st, sessions, cp, a.cfg.Agents.StaleAfter.Duration, a.now)
+			}
+			if !gone {
+				return refused("%q is not parked: agents wake messages it", cp.Name)
+			}
+		}
 		target = &cp
 	}
 	block := a.usageHighBlockForAgent(ctx, st, nil, target)
 	if block != "" && !force {
 		return refused("no resume: %s (--force resumes anyway)", block)
+	}
+	if gone {
+		if err := wakeOwner(a, ctx, by, target.Name, resumeMessage, ""); err != nil {
+			return err
+		}
+		return a.store.Record(event(by, resumedEvent, "%s: resumed from gone state", target.Name))
 	}
 	if target != nil && target.Execution != nil {
 		return a.enqueueExecutionWake(ctx, by, *target, parkMessage(target.Park, by.Name), target.Park)
@@ -543,19 +567,30 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
-		attempts := map[github.PR]github.RefState{}
-		for _, ag := range parked {
-			if ag.Park != nil && ag.Park.RefKind != github.RefPullRequest {
-				r, ok := parseRef(ag.Park.On)
-				if ok && slices.Contains(refs, r) {
-					attempts[r] = github.RefState{Kind: ag.Park.RefKind}
+		var s map[github.PR]github.RefState
+		read := func() error {
+			attempts := map[github.PR]github.RefState{}
+			for _, ag := range parked {
+				if ag.Park != nil && ag.Park.RefKind != github.RefPullRequest {
+					r, ok := parseRef(ag.Park.On)
+					if ok && slices.Contains(refs, r) {
+						attempts[r] = github.RefState{Kind: ag.Park.RefKind}
+					}
 				}
 			}
+			if len(attempts) > 0 {
+				w.cacheParkRefs(parked, attempts)
+			}
+			var err error
+			s, err = refStates(ctx, refs)
+			return err
 		}
-		if len(attempts) > 0 {
-			w.cacheParkRefs(parked, attempts)
+		var err error
+		if w.loopOwned {
+			err = w.loopGitHub(ctx, "park-refs", read)
+		} else {
+			err = read()
 		}
-		s, err := refStates(ctx, refs)
 		if err != nil {
 			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
 		} else {

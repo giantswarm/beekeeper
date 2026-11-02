@@ -129,6 +129,7 @@ type (
 	plainRoleLine     RoleLine
 	plainPair         Pair
 	plainStop         Stop
+	plainHostPin      HostPin
 )
 
 func (v *State) UnmarshalJSON(b []byte) error {
@@ -264,3 +265,5 @@ func (v *Pair) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plai
 func (v Pair) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainPair(v), v.rest) }
 func (v *Stop) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainStop)(v), &v.rest) }
 func (v Stop) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainStop(v), v.rest) }
+func (v *HostPin) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainHostPin)(v), &v.rest) }
+func (v HostPin) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainHostPin(v), v.rest) }
