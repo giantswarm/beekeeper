@@ -119,6 +119,8 @@ type app struct {
 
 	// kindClusters lists the running kind clusters; nil asks docker.
 	kindClusters func() ([]string, error)
+	// labDocker replaces Docker calls in lifecycle tests.
+	labDocker func(context.Context, ...string) ([]byte, error)
 	// labDirs maps the labs agentlab knows to their directories; nil asks
 	// agentlab list.
 	labDirs func() (map[string]string, error)

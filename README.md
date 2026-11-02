@@ -1984,6 +1984,12 @@ the lease, and list a running kind cluster no lab lease maps as unmapped; a clai
 lease names the cluster it covers, and `free` marks a running cluster whose lease is free as
 idle, with its last holder from the event log. Without `labs` nothing asks docker.
 
+The doctor releases leases of ended local sessions, logging each release once.
+It stops configured kind labs after 15 minutes without a lease, keeping their
+containers and data. The next successful claim restarts stopped nodes before
+returning the kubeconfig; a failed restart fails the command and keeps the lease
+for a retry. Person-held leases, remote holders and unmapped clusters stay alone.
+
 ## Desktop notifications
 
 `beekeeper watch --notify` sends the events that need a person to the desktop's notification
