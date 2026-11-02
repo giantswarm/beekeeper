@@ -16,7 +16,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-const reviewFixIssue = "https://github.com/o/r/issues/5"
+const (
+	reviewFixIssue     = "https://github.com/o/r/issues/5"
+	reviewFixServedRef = "o/r#15"
+	reviewFixServedURL = "https://github.com/o/r/issues/15"
+)
 
 func TestReviewFixTerminalParksWakeRemainingTasks(t *testing.T) {
 	for _, scenario := range []string{"merged with open issue", "merged with unread issue", "closed pull request"} {
@@ -317,16 +321,16 @@ func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(
 	wasDefaultBranch := ghDefaultBranch
 	t.Cleanup(func() { ghDefaultBranch = wasDefaultBranch })
 	ghDefaultBranch = func(_ context.Context, _ string) (string, error) {
-		return "main", nil
+		return mainBranch, nil
 	}
 	r.pull.Branch = "fix-2079-deleted-after-merge"
-	r.pull.Base = "main"
+	r.pull.Base = mainBranch
 	r.park(t, loopPR, time.Now())
 	r.started(t, loopWorker, "worker-session-1")
 	postMergeWork := "prove v0.175.0 rollout on live cluster"
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents[0].Park.PostMerge = &postMergeWork
-		st.Records = append(st.Records, state.Record{Session: st.Agents[0].Party, Issue: "o/r#5"})
+		st.Records = append(st.Records, state.Record{Session: st.Agents[0].Party, Issue: reviewFixServedRef})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -338,7 +342,7 @@ func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.ReviewParks) != 1 || st.ReviewParks[0].Serves != "o/r#5" || st.ReviewParks[0].PostMerge == nil || *st.ReviewParks[0].PostMerge != postMergeWork {
+	if len(st.ReviewParks) != 1 || st.ReviewParks[0].Serves != reviewFixServedRef || st.ReviewParks[0].PostMerge == nil || *st.ReviewParks[0].PostMerge != postMergeWork {
 		t.Fatalf("ReviewPark lost Serves or PostMerge: %+v", st.ReviewParks)
 	}
 
@@ -363,7 +367,7 @@ func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(
 		t.Fatal(err)
 	}
 	fixerBrief := string(fixerBriefBytes)
-	if !strings.Contains(fixerBrief, reviewFixIssue) || !strings.Contains(fixerBrief, postMergeWork) {
+	if !strings.Contains(fixerBrief, reviewFixServedURL) || !strings.Contains(fixerBrief, postMergeWork) {
 		t.Fatalf("fixer brief missing original task URL or post-merge work:\n%s", fixerBrief)
 	}
 
@@ -389,7 +393,7 @@ func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.ReviewParks) != 1 || st.ReviewParks[0].Serves != "o/r#5" || st.ReviewParks[0].PostMerge == nil || *st.ReviewParks[0].PostMerge != postMergeWork {
+	if len(st.ReviewParks) != 1 || st.ReviewParks[0].Serves != reviewFixServedRef || st.ReviewParks[0].PostMerge == nil || *st.ReviewParks[0].PostMerge != postMergeWork {
 		t.Fatalf("plain fixer park lost original Serves or PostMerge: %+v", st.ReviewParks)
 	}
 
@@ -403,7 +407,7 @@ func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(
 	if contStart == nil {
 		t.Fatalf("expected post-merge continuation start, got calls=%v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(contStart, "fix-2079-deleted-after-merge") || !slices.Contains(contStart, "main") {
+	if slices.Contains(contStart, "fix-2079-deleted-after-merge") || !slices.Contains(contStart, mainBranch) {
 		t.Fatalf("post-merge continuation used deleted PR branch instead of surviving ref: %v", contStart)
 	}
 	contBriefBytes, err := os.ReadFile(contStart[3])
@@ -411,7 +415,7 @@ func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(
 		t.Fatal(err)
 	}
 	contBrief := string(contBriefBytes)
-	if !strings.Contains(contBrief, reviewFixIssue) || !strings.Contains(contBrief, postMergeWork) || strings.Contains(contBrief, "request the next review round") {
+	if !strings.Contains(contBrief, reviewFixServedURL) || !strings.Contains(contBrief, postMergeWork) || strings.Contains(contBrief, "request the next review round") {
 		t.Fatalf("continuation brief did not use continuation instructions:\n%s", contBrief)
 	}
 }
