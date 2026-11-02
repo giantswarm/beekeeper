@@ -372,6 +372,9 @@ const metaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"n
 
 func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	q := args[3]
+	if strings.Contains(q, "ProjectV2Owner{login}") {
+		f.t.Fatalf("ProjectV2Owner has no login field in GitHub GraphQL; use User and Organization inline fragments: %s", q)
+	}
 	f.queries = append(f.queries, q)
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
@@ -553,15 +556,13 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 // board's owner o.
 const labIssue7 = "teemow/lab#7"
 
-// homeItem is an item of the issue on project number of owner, whose
-// Status field FU has the options u1 Backlog and u2 In Progress.
+// homeItem is an item of the issue on project number of owner.
 func homeItem(id, project, owner string, number int, status string) string {
 	st := "null"
 	if status != "" {
 		st = fmt.Sprintf(`{"name":%q}`, status)
 	}
-	return fmt.Sprintf(`{"id":%q,"project":{"id":%q},"status":%s,"home":{"number":%d,"owner":{"login":%q},
-"status":{"id":"FU","options":[{"id":"u1","name":"Backlog"},{"id":"u2","name":"In Progress"}]}}}`, id, project, st, number, owner)
+	return fmt.Sprintf(`{"id":%q,"project":{"id":%q,"number":%d,"owner":{"login":%q}},"status":%s}`, id, project, number, owner, st)
 }
 
 func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
