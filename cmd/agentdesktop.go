@@ -41,7 +41,7 @@ the agent.`,
 				return err
 			}
 			find := func(st *state.State) (int, error) {
-				i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) })
+				i := a.callerAgent(st, me)
 				if len(args) > 0 {
 					return findAgent(st, args[0])
 				} else if i < 0 {

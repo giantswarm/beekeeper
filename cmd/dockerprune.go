@@ -61,6 +61,16 @@ type dockerRun struct {
 	// blockers are the images that kept the images over their cap after
 	// a trim: in use, in flight or refused by Docker.
 	blockers []dockerprune.Blocker
+	// cacheKept counts the build cache records over the cap that no
+	// removal may take (a build or container uses them, or Docker says
+	// nothing about them), holding cacheKeptBytes: why the cache stays
+	// over its cap.
+	cacheKept      int
+	cacheKeptBytes int64
+	// attempted says the caps were over and the real trims ran (not a dry
+	// run, nothing held them back): the line says what was left, not what
+	// would be pruned.
+	attempted bool
 	// held says what held the prune back; locked says another process
 	// prunes now.
 	held   string
@@ -77,6 +87,18 @@ func (r dockerRun) blocked() bool    { return len(r.blockers) > 0 }
 
 // dockerBlockersShown bounds the blockers a line names, the largest first.
 const dockerBlockersShown = 5
+
+// keepReasons names what a build cache trim left above its cap: the build
+// cache records no removal may take (a build or container uses them, or
+// Docker says nothing about them), with the space they hold. Empty when a
+// step found nothing to keep or brought its size under the cap.
+func (r dockerRun) keepReasons() []string {
+	var out []string
+	if r.cacheMax > 0 && r.after.BuildCache > r.cacheMax && r.cacheKept > 0 {
+		out = append(out, fmt.Sprintf("%s build cache records in use or unreadable (%s) stay", plural(r.cacheKept, "record"), gibStr(r.cacheKeptBytes)))
+	}
+	return out
+}
 
 // String says the run in one line.
 func (r dockerRun) String() string {
@@ -98,6 +120,7 @@ func (r dockerRun) String() string {
 	if r.blocked() {
 		did = append(did, "images stay over their cap: "+blockerList(r.blockers))
 	}
+	keeps := strings.Join(r.keepReasons(), "; ")
 	switch {
 	case r.err != nil && len(did) > 0:
 		return fmt.Sprintf("%s; %s, then: %v", head, strings.Join(did, "; "), r.err)
@@ -107,9 +130,11 @@ func (r dockerRun) String() string {
 		return fmt.Sprintf("%s; %s; the rest waits: %s", head, strings.Join(did, "; "), r.held)
 	case r.held != "":
 		return fmt.Sprintf("%s; its prune waits: %s", head, r.held)
+	case len(did) > 0 && keeps != "":
+		return head + "; " + strings.Join(did, "; ") + "; " + keeps
 	case len(did) > 0:
 		return head + "; " + strings.Join(did, "; ")
-	case r.over():
+	case r.over() && !r.attempted:
 		var would []string
 		if r.imagesOver() {
 			would = append(would, "images to "+gibStr(r.imagesMax*3/4))
@@ -117,7 +142,15 @@ func (r dockerRun) String() string {
 		if r.cacheOver() {
 			would = append(would, "build cache to "+gibStr(r.cacheMax*3/4))
 		}
-		return head + "; would prune " + strings.Join(would, " and ")
+		line := head + "; would prune " + strings.Join(would, " and ")
+		if keeps != "" {
+			line += " (" + keeps + ")"
+		}
+		return line
+	case r.over() && keeps != "":
+		return head + "; nothing reclaimable: " + keeps
+	case r.over():
+		return head + "; nothing reclaimable"
 	}
 	return head
 }
@@ -247,11 +280,14 @@ func (a *app) pruneDocker(dryRun bool, holds func() string) dockerRun {
 	if r.held = holds(); r.held != "" {
 		return r
 	}
+	r.attempted = true
 	var errs []error
 	if r.cacheOver() {
-		if err := dockerprune.PruneBuildCache(ctx, d, r.cacheMax*3/4); err != nil {
+		t, err := dockerprune.PruneBuildCache(ctx, d, r.cacheMax*3/4)
+		r.cacheKept, r.cacheKeptBytes = t.Kept, t.KeptBytes
+		if err != nil {
 			errs = append(errs, err)
-		} else {
+		} else if t.Removed > 0 {
 			r.pruned = true
 		}
 	}
@@ -269,7 +305,10 @@ func (a *app) pruneDocker(dryRun bool, holds func() string) dockerRun {
 		r.blockers = nil
 	}
 	r.err = errors.Join(errs...)
-	if r.acted() {
+	// The run's line goes to the log when it reclaimed something and, when
+	// the trims ran over a cap and freed nothing, as the record of why
+	// (the keep reasons name what no removal may take).
+	if r.acted() || r.attempted {
 		_ = a.store.Log(event(watchParty, dockerVerb, "%s", r.logLine()))
 	}
 	return r
