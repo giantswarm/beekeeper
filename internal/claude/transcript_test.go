@@ -131,3 +131,58 @@ func TestReadAnswer(t *testing.T) {
 		t.Errorf("call %+v", c)
 	}
 }
+
+// TurnDone says whether the transcript's last message of its own answers the
+// last message and stopped: the proof that no turn runs. A wake's message
+// (a user line the model has not answered), a tool call round, a line the
+// CLI still writes, a subagent's line, an unknown or missing file are none
+// of them proof.
+func TestTurnDone(t *testing.T) {
+	const (
+		userMsg = `{"type":"user","timestamp":"2026-10-05T10:00:00Z","message":{"content":"go on"}}`
+		// the wake's message: a message entry, not a tool result
+		userBlock = `{"type":"user","timestamp":"2026-10-05T10:00:00Z","message":{"content":[{"type":"text","text":"go on"}]}}`
+		toolCall  = `{"type":"assistant","timestamp":"2026-10-05T10:00:01Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}`
+		toolRet   = `{"type":"user","timestamp":"2026-10-05T10:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ok"}]}]}}`
+		answered  = `{"type":"assistant","timestamp":"2026-10-05T10:00:03Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`
+		thinking  = `{"type":"assistant","timestamp":"2026-10-05T10:00:01Z","message":{"stop_reason":"tool_use","content":[{"type":"thinking","thinking":"hmm"}]}}`
+		sidechain = `{"type":"assistant","isSidechain":true,"timestamp":"2026-10-05T10:00:03Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"sub"}]}}`
+		noReason  = `{"type":"assistant","timestamp":"2026-10-05T10:00:03Z","message":{"content":[{"type":"text","text":"writing"}]}}`
+	)
+	for _, c := range []struct {
+		name  string
+		lines []string // "" is a line only partly written (no newline after it)
+		want  bool
+	}{
+		{"empty", nil, false},
+		{"no message", []string{`{"type":"summary","summary":"x"}`}, false},
+		{"wake's message, model has not answered", []string{answered, userMsg}, false},
+		{"wake's message as a content block", []string{answered, userBlock}, false},
+		{"thinking mid-turn, the next round is coming", []string{answered, userMsg, thinking}, false},
+		{"tool call round", []string{answered, userMsg, toolCall}, false},
+		{"tool result, model has not answered", []string{answered, userMsg, toolCall, toolRet}, false},
+		{"turn answered and stopped", []string{answered, userMsg, toolCall, toolRet, answered}, true},
+		{"answer ends the turn, tool round before it", []string{answered, userMsg, toolCall, toolRet, toolCall, toolRet, answered}, true},
+		{"the answer's line still written", []string{answered, userMsg, toolCall, toolRet, `{"type":"assistant","timestamp":"2026-10-05T10:00:03Z","message":{"stop_reason":"end`}, false},
+		{"subagent's answer is not the session's", []string{answered, userMsg, sidechain}, false},
+		{"a no-stop-reason line holds the stop off", []string{userMsg, noReason}, false},
+		{"meta line is no turn", []string{answered, `{"type":"user","isMeta":true,"message":{"content":"<system-reminder>x</system-reminder>"}}`, answered}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := strings.Join(c.lines, "\n")
+			if len(c.lines) > 0 && !strings.HasPrefix(c.name, "the answer's line") {
+				body += "\n"
+			}
+			path := filepath.Join(t.TempDir(), "s.jsonl")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := TurnDone(path); got != c.want {
+				t.Errorf("TurnDone = %v, want %v for %q", got, c.want, body)
+			}
+		})
+	}
+	if TurnDone(filepath.Join(t.TempDir(), "missing.jsonl")) || TurnDone("") {
+		t.Error("a missing transcript or no path proves a turn ended")
+	}
+}
