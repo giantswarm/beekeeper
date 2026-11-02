@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const workspaceOriginalContents = "original\n"
+
 func TestRemoteWorkersOwnLinkedWorktreesAndBranches(t *testing.T) {
 	f := testFixture(t)
 	ctx := context.Background()
@@ -49,7 +51,7 @@ func TestRemoteWorkersOwnLinkedWorktreesAndBranches(t *testing.T) {
 			t.Fatal("worker shares provisioned Git metadata")
 		}
 		initial, err := os.ReadFile(filepath.Join(h.Workspace, "tracked.txt"))
-		if err != nil || string(initial) != "original\n" {
+		if err != nil || string(initial) != workspaceOriginalContents {
 			t.Fatal("worker inherited another workspace change")
 		}
 		if err := os.WriteFile(filepath.Join(h.Workspace, "tracked.txt"), []byte("worker change"), 0600); err != nil {
@@ -70,7 +72,7 @@ func TestRemoteWorkersOwnLinkedWorktreesAndBranches(t *testing.T) {
 		t.Fatal("provisioned checkout changed branch")
 	}
 	data, err := os.ReadFile(filepath.Join(f.source, "tracked.txt"))
-	if err != nil || string(data) != "original\n" {
+	if err != nil || string(data) != workspaceOriginalContents {
 		t.Fatal("provisioned files changed")
 	}
 }

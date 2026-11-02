@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const guardTestAgyHarness = "agy"
+
 const gatedCommand = "devctl pr merge giantswarm/project 7 --update-branch"
 
 // gatedHook is a desk whose giantswarm merges are the gate's and whose
@@ -46,7 +48,7 @@ func TestGatedRepositoryMergeIsTheGates(t *testing.T) {
 				}
 				return d.Reason
 			}(),
-			"agy": func() string {
+			guardTestAgyHarness: func() string {
 				d := decideAgyCmd(t, h, "/", command)
 				if d.Decision != decisionDeny {
 					return ""
