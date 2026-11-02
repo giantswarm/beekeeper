@@ -94,6 +94,32 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
+The doctor releases a local lease when its session is no longer running,
+preserving any lab configuration drift for the next claimant. Person-held
+leases and remote holders are left alone. Each release is logged once as
+`lease.release-gone`. Configured kind labs with no lease are stopped after
+15 minutes (`lab.stop`); containers and their data stay intact. The idle
+observation is persisted across watch restarts and reset by a claim.
+Unmapped clusters are never stopped. A failed Docker read or stop is reported
+and retried on the next doctor tick; `doctor --dry-run` changes nothing.
+
+A handover successor's recorded start protects inherited leases throughout
+the five-minute first-reply startup window, including when the doctor's
+process snapshot predates the handover or launch. The original claim time
+stays intact; after the startup window an absent successor's lease is
+eligible for normal cleanup.
+
+A successful lab claim starts existing stopped kind nodes (`lab.start`)
+before returning the kubeconfig. It does not create a missing cluster. A
+failed restart fails the command while retaining ownership for a claim retry.
+Sandboxed claims run the restart through the host broker, which rechecks
+ownership. Docker stop and start operations share the state lock with claims.
+For a live lifecycle proof, use isolated state and disposable Docker containers
+with a unique `io.x-k8s.kind.cluster` label: seed an idle timestamp 15 minutes
+ago, run the doctor, then claim the lease and check that the same containers
+restart with a marker file intact. Never point scratch state at another
+worker's lab.
+
 ```bash
 cat >| /tmp/bk.yaml <<EOF
 stateDir: /tmp/bk-state
