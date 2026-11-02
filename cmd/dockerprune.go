@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,15 +22,16 @@ import (
 // A lab machine that loads dev images into kind clusters piles up Docker
 // images and build cache nothing removes. Over doctor.dockerImagesMaxGiB the
 // watch removes the unused images created or tagged longest ago down to
-// three quarters of the cap; over doctor.dockerBuildCacheMaxGiB it prunes the
-// build cache likewise. An image a container uses or a kind lab's node
-// holds is never removed, nor one created or tagged within dockerTagSettle
-// or since a held lab lease was claimed (a session's dev image not yet
-// loaded), and nothing is pruned while an image import or build runs or a
-// lab lease is fresh (its holder may be mid-load). Each prune is logged
-// (docker.prune) with the images it removed. One process prunes at a time
-// (docker.lock), and the watches share when Docker was read last
-// (docker.json).
+// three quarters of the cap, the ones a kind lab's node holds a copy of
+// last; over doctor.dockerBuildCacheMaxGiB it prunes the build cache
+// likewise. An image a container uses is never removed, nor one created or
+// tagged within dockerTagSettle or since a held lab lease was claimed (a
+// session's dev image not yet loaded), and nothing is pruned while an image
+// import or build runs or a lab lease is fresh (its holder may be mid-load).
+// A prune that leaves the images over their cap names the images that kept
+// them there. Each prune is logged (docker.prune) with the images it
+// removed. One process prunes at a time (docker.lock), and the watches
+// share when Docker was read last (docker.json).
 
 const (
 	dockerFile = "docker.json"
@@ -57,6 +59,9 @@ type dockerRun struct {
 	removed []string
 	freed   int64
 	pruned  bool
+	// blockers are the images that kept the images over their cap after
+	// a trim: in use, in flight or refused by Docker.
+	blockers []dockerprune.Blocker
 	// held says what held the prune back; locked says another process
 	// prunes now.
 	held   string
@@ -69,6 +74,10 @@ func (r dockerRun) imagesOver() bool { return r.imagesMax > 0 && r.before.Images
 func (r dockerRun) cacheOver() bool  { return r.cacheMax > 0 && r.before.BuildCache > r.cacheMax }
 func (r dockerRun) over() bool       { return r.imagesOver() || r.cacheOver() }
 func (r dockerRun) acted() bool      { return len(r.removed) > 0 || r.pruned }
+func (r dockerRun) blocked() bool    { return len(r.blockers) > 0 }
+
+// dockerBlockersShown bounds the blockers a line names, the largest first.
+const dockerBlockersShown = 5
 
 // String says the run in one line.
 func (r dockerRun) String() string {
@@ -86,6 +95,9 @@ func (r dockerRun) String() string {
 	}
 	if r.pruned {
 		did = append(did, "build cache pruned to "+gibStr(r.after.BuildCache))
+	}
+	if r.blocked() {
+		did = append(did, "images stay over their cap: "+blockerList(r.blockers))
 	}
 	switch {
 	case r.err != nil && len(did) > 0:
@@ -118,6 +130,25 @@ func (r dockerRun) logLine() string {
 		return r.String()
 	}
 	return r.String() + "; removed: " + strings.Join(r.removed, ", ")
+}
+
+// blockerList names the largest blockers with what each holds and why,
+// and how many more hold how much.
+func blockerList(bs []dockerprune.Blocker) string {
+	bs = slices.Clone(bs)
+	slices.SortStableFunc(bs, func(a, b dockerprune.Blocker) int { return cmp.Compare(b.Image.Unique, a.Image.Unique) })
+	var parts []string
+	for _, b := range bs[:min(len(bs), dockerBlockersShown)] {
+		parts = append(parts, fmt.Sprintf("%s (%s, %s)", b.Image.Name(), gibStr(b.Image.Unique), b.Why))
+	}
+	if rest := bs[min(len(bs), dockerBlockersShown):]; len(rest) > 0 {
+		var n int64
+		for _, b := range rest {
+			n += b.Image.Unique
+		}
+		parts = append(parts, fmt.Sprintf("and %d more (%s)", len(rest), gibStr(n)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func capStr(b int64) string {
@@ -237,6 +268,9 @@ func (a *app) pruneDocker(dryRun bool, holds func() string) dockerRun {
 			errs = append(errs, err)
 		}
 	}
+	if r.after.Images <= r.imagesMax {
+		r.blockers = nil
+	}
 	r.err = errors.Join(errs...)
 	if r.acted() {
 		_ = a.store.Log(event(watchParty, dockerVerb, "%s", r.logLine()))
@@ -244,25 +278,35 @@ func (a *app) pruneDocker(dryRun bool, holds func() string) dockerRun {
 	return r
 }
 
-// trimDockerImages removes the unused images, the kind labs' and the
-// recently produced left alone (dockerKeep), until the images are under
-// three quarters of their cap or something holds the prune back.
+// trimDockerImages removes the unused images, the recently produced left
+// alone (dockerKeep) and the kind labs' last, until Docker says the images
+// are under three quarters of their cap or something holds the prune back.
+// The images it could not remove are the run's blockers.
 func (a *app) trimDockerImages(ctx context.Context, d dockerprune.Docker, r *dockerRun, holds func() string) error {
 	images, err := dockerprune.ListImages(ctx, d)
 	if err != nil {
 		return err
 	}
-	used, err := dockerprune.KindImages(ctx, d)
+	held, err := dockerprune.KindImages(ctx, d)
 	if err != nil {
 		return fmt.Errorf("no image removed: %w", err)
 	}
 	busy := func() bool { r.held = holds(); return r.held != "" }
-	keep := dockerKeep(a.heldLabs(), time.Now())
-	r.freed, r.removed, err = dockerprune.TrimImages(ctx, d, dockerprune.Candidates(images, used, keep), r.before.Images, r.imagesMax*3/4, busy)
-	if errors.Is(err, dockerprune.ErrBusy) {
-		return nil
+	size := func() (int64, error) {
+		u, err := dockerprune.ReadUsage(ctx, d)
+		return u.Images, err
 	}
-	return err
+	keep := dockerKeep(a.heldLabs(), time.Now())
+	t, err := dockerprune.TrimImages(ctx, d, dockerprune.Candidates(images, held, keep), r.before.Images, r.imagesMax*3/4, size, busy)
+	r.freed, r.removed = t.Freed, t.Removed
+	switch {
+	case errors.Is(err, dockerprune.ErrBusy):
+		return nil
+	case err != nil:
+		return err
+	}
+	r.blockers = append(dockerprune.Kept(images, keep), t.Refused...)
+	return nil
 }
 
 // dockerKeep is the time since which a created or tagged image stays:
@@ -291,7 +335,8 @@ type dockerMark = goCacheMark
 // over its cap, in the background so the sample goes on. A prune an import
 // or a fresh lab lease holds back is tried again every goCacheRetry; once
 // it has waited doctor.dockerEvery the watch says DOCKER until it ran. A
-// failed read or prune is DOCKER too.
+// failed read or prune, or one that leaves the images over their cap, is
+// DOCKER too.
 func (w *watcher) docker(now time.Time) {
 	if !w.dockerOn || dockerCLI == nil || (w.cfg.Doctor.DockerImagesMax() == 0 && w.cfg.Doctor.DockerBuildCacheMax() == 0) ||
 		!w.dockerPruning.CompareAndSwap(false, true) {
@@ -329,6 +374,6 @@ func (w *watcher) docker(now time.Time) {
 		m.Checked = now
 		_ = w.store.WriteFile(dockerFile, m)
 		waited := !m.Waiting.IsZero() && now.Sub(m.Waiting) >= every
-		w.check("docker", r.err != nil || waited, "DOCKER: %s", r)
+		w.check("docker", r.err != nil || r.blocked() || waited, "DOCKER: %s", r)
 	}()
 }

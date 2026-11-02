@@ -13,19 +13,21 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/dockerprune"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // fakeDocker is a docker CLI with 7 GiB of images over a 4 GiB cap and
 // 6 GiB of build cache over a 4 GiB cap: three unused images and one a
-// kind lab's node holds, each of 2 GiB. A removal or prune shrinks what
-// df says. An image was last tagged at its tagged time, never without one.
+// kind lab's node holds, each of 2 GiB. A removal shrinks what df says by
+// shrink (2 GiB, less when the image shares layers), a prune likewise. An
+// image was last tagged at its tagged time, never without one.
 type fakeDocker struct {
-	images, cache int64
-	tagged        map[string]time.Time
-	removed       [][]string
-	pruned        []string
+	images, cache, shrink int64
+	tagged                map[string]time.Time
+	removed               [][]string
+	pruned                []string
 }
 
 func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
@@ -54,7 +56,7 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"images":[{"id":"sha256:inside","repoTags":["gsoci.azurecr.io/giantswarm/y:dev"]}]}`), nil
 	case args[0] == dockerImage && args[1] == "rm":
 		f.removed = append(f.removed, args[2:])
-		f.images -= 2 << 30
+		f.images -= f.shrink
 		return nil, nil
 	case args[0] == "builder" && args[1] == "prune":
 		f.pruned = args[2:]
@@ -74,7 +76,7 @@ func bytesStr(n int64) string { return strconv.FormatInt(n, 10) + "B" }
 
 func dockerApp(t *testing.T) (*app, *fakeDocker) {
 	t.Helper()
-	f := &fakeDocker{images: 7 << 30, cache: 6 << 30, tagged: map[string]time.Time{}}
+	f := &fakeDocker{images: 7 << 30, cache: 6 << 30, shrink: 2 << 30, tagged: map[string]time.Time{}}
 	dockerCLI = f.run
 	t.Cleanup(func() { dockerCLI = nil })
 	dir := t.TempDir()
@@ -143,21 +145,73 @@ func TestDockerKeep(t *testing.T) {
 	}
 }
 
-func TestPruneDockerNeverRemovesAnImageAKindLabHolds(t *testing.T) {
+func TestPruneDockerRemovesAKindLabsCopyLast(t *testing.T) {
 	a, f := dockerApp(t)
-	a.cfg.Doctor.DockerImagesMaxGiB = 1
+	f.images = 10 << 30
+	a.cfg.Doctor.DockerImagesMaxGiB = 3
 	a.cfg.Doctor.DockerBuildCacheMaxGiB = -1
 	r := a.pruneDocker(false, noHolds)
-	if r.err != nil || len(r.removed) != 3 {
-		t.Fatalf("prune = %+v; want every unused image removed", r)
+	// The lab's image, created first, goes after every other unused one;
+	// the node image a container runs stays.
+	if want := [][]string{{"x:dev-1"}, {"x:dev-2"}, {"x:dev-3"}, {"gsoci.azurecr.io/giantswarm/y:dev"}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
+		t.Errorf("removed %v, %v; want %v", f.removed, r.err, want)
 	}
-	for _, refs := range f.removed {
-		if slices.Contains(refs, "gsoci.azurecr.io/giantswarm/y:dev") || slices.Contains(refs, "kindest/node:v1") {
-			t.Errorf("removed %v, which a kind lab uses", refs)
-		}
+	if r.after.Images > 3<<30 || r.blocked() {
+		t.Errorf("prune = %+v; want the images under their cap", r)
 	}
 	if f.pruned != nil {
 		t.Error("the build cache was pruned with its cap off")
+	}
+}
+
+// The unused images share layers: each removal frees 1 GiB on disk though
+// its unique size says 2. One run still ends under the cap.
+func TestPruneDockerReachesTheCapThroughSharedLayers(t *testing.T) {
+	a, f := dockerApp(t)
+	f.shrink = 1 << 30
+	a.cfg.Doctor.DockerBuildCacheMaxGiB = -1
+	r := a.pruneDocker(false, noHolds)
+	if r.err != nil || r.after.Images > 4<<30 || len(f.removed) != 4 || r.blocked() {
+		t.Errorf("prune = %+v, removed %v; want the images at 3 GiB after four removals", r, f.removed)
+	}
+}
+
+// Over a 1 GiB cap with two images in flight: the old and the lab's images
+// go, the in-flight ones and the node's stay, and the line names them.
+func TestPruneDockerNamesWhatKeepsTheImagesOverTheCap(t *testing.T) {
+	a, f := dockerApp(t)
+	a.cfg.Doctor.DockerImagesMaxGiB = 1
+	a.cfg.Doctor.DockerBuildCacheMaxGiB = -1
+	f.tagged["sha256:new"] = time.Now().Add(-time.Hour)
+	f.tagged["sha256:mid"] = time.Now().Add(-2 * time.Hour)
+	r := a.pruneDocker(false, noHolds)
+	if want := [][]string{{"x:dev-1"}, {"gsoci.azurecr.io/giantswarm/y:dev"}}; r.err != nil || !slices.EqualFunc(f.removed, want, slices.Equal) {
+		t.Fatalf("removed %v, %v; want %v", f.removed, r.err, want)
+	}
+	line := r.String()
+	for _, want := range []string{
+		"2 unused images removed (about 4.0 GiB), images now 3.0 GiB; images stay over their cap: ",
+		"x:dev-3 (2.0 GiB, created or tagged ", "x:dev-2 (2.0 GiB, created or tagged ", ", in flight)",
+		"kindest/node:v1 (2.0 GiB, a container uses it)",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("line %q; want %q in it", line, want)
+		}
+	}
+	if !r.blocked() || !r.notable() {
+		t.Errorf("prune = %+v; want it blocked and notable", r)
+	}
+}
+
+func TestBlockerListNamesTheLargest(t *testing.T) {
+	var bs []dockerprune.Blocker
+	for i := range 7 {
+		bs = append(bs, dockerprune.Blocker{Image: dockerprune.Image{ID: "sha256:" + strconv.Itoa(i), Unique: int64(i+1) << 30}, Why: "a container uses it"})
+	}
+	want := "sha256:6 (7.0 GiB, a container uses it), sha256:5 (6.0 GiB, a container uses it), sha256:4 (5.0 GiB, a container uses it), " +
+		"sha256:3 (4.0 GiB, a container uses it), sha256:2 (3.0 GiB, a container uses it), and 2 more (3.0 GiB)"
+	if got := blockerList(bs); got != want {
+		t.Errorf("blockers =\n %q\nwant\n %q", got, want)
 	}
 }
 

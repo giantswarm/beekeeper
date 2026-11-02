@@ -1,8 +1,9 @@
 // Package dockerprune keeps the Docker images and build cache of a lab
 // machine under a size: the unused images created or tagged longest ago go
-// first, the build cache is pruned by Docker's own least-recently-used order.
-// An image a container uses, one a kind lab's node holds, or one created or
-// tagged since a keep time is never removed.
+// first, the ones a kind lab's node holds a copy of last, and the build cache
+// is pruned by Docker's own least-recently-used order. An image a container
+// uses, or one created or tagged since a keep time, is never removed; a trim
+// that stays over its size says which images kept it there.
 package dockerprune
 
 import (
@@ -174,13 +175,14 @@ func none(s string) string {
 	return s
 }
 
-// InUse are the images that must stay: by ID, normalized reference and
-// digest.
+// InUse are the images kind labs' nodes hold: by ID, normalized reference
+// and digest.
 type InUse map[string]bool
 
-// Has says img is in use: a container runs it, or a kind node holds it.
+// Has says a kind node holds img. The node's containerd has its own copy,
+// so the host's may go, though a lab created again would load it anew.
 func (u InUse) Has(img Image) bool {
-	if img.Containers > 0 || u[img.ID] || (img.Digest != "" && u[img.Digest]) {
+	if u[img.ID] || (img.Digest != "" && u[img.Digest]) {
 		return true
 	}
 	return slices.ContainsFunc(img.Refs, func(r string) bool { return u[Normalize(r)] })
@@ -200,10 +202,10 @@ func Normalize(ref string) string {
 	return ref
 }
 
-// KindImages are the images every kind node holds, and the node images
-// themselves through the containers using them. A node that is not running
-// cannot say what it holds: then nothing is known to be unused, and the
-// call fails.
+// KindImages are the images every running kind node holds. A node that is
+// not running cannot say what it holds and is skipped: what it holds only
+// ranks a trim's candidates, and its own copy stays whatever the host
+// removes.
 func KindImages(ctx context.Context, d Docker) (InUse, error) {
 	raw, err := d(ctx, "ps", "-a", "--filter", "label="+KindLabel, "--format", "{{.Names}}\t{{.State}}")
 	if err != nil {
@@ -217,7 +219,7 @@ func KindImages(ctx context.Context, d Docker) (InUse, error) {
 			continue
 		}
 		if state != "running" {
-			return nil, fmt.Errorf("kind node %s is %s: what it holds is unknown", name, state)
+			continue
 		}
 		out, err := d(ctx, "exec", name, "crictl", "images", "-o", "json")
 		if err != nil {
@@ -248,55 +250,129 @@ func KindImages(ctx context.Context, d Docker) (InUse, error) {
 	return used, nil
 }
 
-// Candidates are the images a trim may remove, in the order it removes
-// them: dangling ones first, then the ones created or tagged longest ago.
-// An image created or tagged after keep is no candidate: a session may have
+// kept says why an image is no candidate, "" for a candidate: a container
+// uses it, or it was created or tagged after keep, so a session may have
 // produced it for a lab it has not loaded yet.
-func Candidates(images []Image, used InUse, keep time.Time) []Image {
-	out := slices.DeleteFunc(slices.Clone(images), func(i Image) bool { return used.Has(i) || i.Active().After(keep) })
+func kept(i Image, keep time.Time) string {
+	switch {
+	case i.Containers > 0:
+		return "a container uses it"
+	case i.Active().After(keep):
+		return "created or tagged " + i.Active().Format("2006-01-02 15:04 MST") + ", in flight"
+	}
+	return ""
+}
+
+// Candidates are the images a trim may remove, in the order it removes
+// them: dangling ones first, then the ones created or tagged longest ago,
+// and the ones a kind node holds (held) after all others, by the same
+// order. An image a container uses or one created or tagged after keep is
+// no candidate (Kept).
+func Candidates(images []Image, held InUse, keep time.Time) []Image {
+	out := slices.DeleteFunc(slices.Clone(images), func(i Image) bool { return kept(i, keep) != "" })
+	rank := func(i Image) int {
+		r := 0
+		if held.Has(i) {
+			r += 2
+		}
+		if len(i.Refs) > 0 {
+			r++
+		}
+		return r
+	}
 	slices.SortStableFunc(out, func(a, b Image) int {
-		if da, db := len(a.Refs) == 0, len(b.Refs) == 0; da != db {
-			if da {
-				return -1
-			}
-			return 1
+		if ra, rb := rank(a), rank(b); ra != rb {
+			return ra - rb
 		}
 		return a.Active().Compare(b.Active())
 	})
 	return out
 }
 
+// Blocker is an image a trim left in place, and why.
+type Blocker struct {
+	Image Image
+	Why   string
+}
+
+// Kept are the images no trim removes, with why: the ones a container
+// uses and the ones created or tagged after keep.
+func Kept(images []Image, keep time.Time) []Blocker {
+	var out []Blocker
+	for _, i := range images {
+		if why := kept(i, keep); why != "" {
+			out = append(out, Blocker{Image: i, Why: why})
+		}
+	}
+	return out
+}
+
+// Trimmed is what a trim did: what it freed by the images' unique sizes,
+// the names of the images it removed, and the candidates Docker refused to
+// remove.
+type Trimmed struct {
+	Freed   int64
+	Removed []string
+	Refused []Blocker
+}
+
 // TrimImages removes candidates in order until the images' size, from
-// total, is at most target, asking busy before each removal. An image
-// Docker refuses to remove (a container started on it since) is skipped.
-// It returns what it freed by the images' unique sizes and the names of
-// the images it removed.
-func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, busy func() bool) (freed int64, removed []string, err error) {
-	var refused []error
-	for _, img := range candidates {
-		if total-freed <= target {
-			break
+// total, is at most target, asking busy before each removal. Once the
+// unique sizes it freed say the target is reached, it reads the size again
+// (size, nil for none) and goes on while Docker still says more: layers
+// the removed images shared with others free nothing until the last of
+// them goes. An image Docker refuses to remove (a container started on it
+// since, a child image built on it) is skipped and, while the images stay
+// over target, tried once more after the others.
+func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, size func() (int64, error), busy func() bool) (Trimmed, error) {
+	var t Trimmed
+	left := total
+	over := func() (bool, error) {
+		if left > target || size == nil {
+			return left > target, nil
 		}
-		if busy() {
-			return freed, removed, ErrBusy
+		n, err := size()
+		if err != nil {
+			return false, err
 		}
-		args := []string{"image", "rm"}
-		if len(img.Refs) == 0 {
-			args = append(args, img.ID)
-		} else {
-			args = append(args, img.Refs...)
-		}
-		if _, err := d(ctx, args...); err != nil {
-			refused = append(refused, fmt.Errorf("%s: %w", img.ID, err))
-			continue
-		}
-		freed += img.Unique
-		removed = append(removed, img.Name())
+		left = n
+		return left > target, nil
 	}
-	if len(refused) > 0 && len(removed) == 0 {
-		return freed, removed, errors.Join(refused...)
+	pass := func(images []Image) ([]Blocker, error) {
+		var refused []Blocker
+		for _, img := range images {
+			if more, err := over(); err != nil || !more {
+				return refused, err
+			}
+			if busy() {
+				return refused, ErrBusy
+			}
+			args := []string{"image", "rm"}
+			if len(img.Refs) == 0 {
+				args = append(args, img.ID)
+			} else {
+				args = append(args, img.Refs...)
+			}
+			if _, err := d(ctx, args...); err != nil {
+				refused = append(refused, Blocker{Image: img, Why: "Docker refused its removal: " + err.Error()})
+				continue
+			}
+			t.Freed += img.Unique
+			left -= img.Unique
+			t.Removed = append(t.Removed, img.Name())
+		}
+		return refused, nil
 	}
-	return freed, removed, nil
+	refused, err := pass(candidates)
+	if err == nil && len(refused) > 0 {
+		retry := make([]Image, len(refused))
+		for i, b := range refused {
+			retry[i] = b.Image
+		}
+		refused, err = pass(retry)
+	}
+	t.Refused = refused
+	return t, err
 }
 
 // PruneBuildCache prunes the build cache down to keep bytes; the cache a
