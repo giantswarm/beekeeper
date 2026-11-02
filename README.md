@@ -53,16 +53,44 @@ restart or roster loss without a done report. Each start rechecks capacity
 and stops when its gates refuse, the ceiling is reached, or the board offers
 nothing. The existing done-triggered next-item transition remains active.
 An empty or failed board read waits `supervisor.fillRetryEvery` (5m by
-default) before retrying, unless `capacity.ceiling`
+default) before retrying, doubled for each further empty or failed read in a
+row up to four times the interval (5m, 10m, 20m, 20m, …) until a start or
+one of the changes below, unless `capacity.ceiling`
 changes or an agent is done or leaves the roster first; a park, a resume,
 a wait or a new task, and the busy count and room they move, do not end it. An empty or failed read answers
 the rest of its pass, the done-triggered starts included. `board next`
 exiting 3 with no pick (nothing free) is that empty read: a done event's
 next start settles on it ("the board offers nothing") and is never retried
 as a failure. No board read runs while the GitHub budget is under
-`github.floor` (REST until its reset, or the last GraphQL reading within the
-hour, or a GraphQL refusal): the done events wait unsettled and the refill
+`github.floor` (REST until its reset, or the last GraphQL reading until its
+reset, an hour after the reading when GitHub named none, or a GraphQL refusal): the done events wait unsettled and the refill
 skips its read, without a failure or a pause.
+The loop also holds ownership and PR observations under the GraphQL floor
+or while the reading is unknown or stale. Board queries and tracked PR reads
+check a fresh budget against a durable allowance of 1,500 points per hour,
+keeping 300 points for two identities' budget probes and reserving 500 points before
+each work request. Budget probes run at most every 30 seconds. Concurrent timer commands
+share its lock. An interrupted request keeps its reservation. Traffic between
+observations counts conservatively toward the allowance as `shared`; a busy
+desk can therefore pause the loop early. `budget --json` exposes the window,
+spent points and `board`, `pull`, `watch`, `timers`, `pass` and `shared` totals
+under `loop`. The embedded watch's note and parked-PR reads and GitHub timer
+conditions share the allowance; local timer jobs remain independent.
+`budget` names the stored `gh` login and the configured devctl `app` login,
+with each account's login, counters and reset under JSON `identities`.
+Both routes are explicit, independent of the checkout, and cached separately.
+Each identity retains all unexpired observed GraphQL `windows`: a newer high
+window cannot erase an older drained one, and counters cannot increase before
+their window resets. An older unlabelled low reading is retained as `unlabelled`
+until its reset rather than silently reassigned to a credential.
+The top-level REST and GraphQL readings each select their lowest balance;
+`budget --gate`, merge admission and the loop use those minima. An unknown
+or missing previously configured identity holds the gate. Refusals on a
+higher-balance identity also hold it without hiding the lowest counter.
+Loop spend tracks each identity's counter separately; selecting another
+minimum or a GitHub window resetting never replenishes its own hourly allowance.
+Unchanged PR observations last five minutes; a new park, a report from that
+PR's reviewer or an answer on its thread invalidates them immediately.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
@@ -523,7 +551,10 @@ kube guard is off and `beekeeper snapshot` says so):
   `kubectl gs update app …` are refused; a plugin subcommand that reads (`get`, `list`, `describe`,
   `logs`, `top`, `status`, `version`, `template`, …) and the read-only plugins (`tree`,
   `access-matrix`, `resource-capacity`, `who-can`, `neat`, `krew`, `oidc-login`, `ns`) pass. Every other
-  plugin subcommand counts as a write.
+  plugin subcommand counts as a write. `kubectl-gs template cluster` passes against any
+  context, including with value-taking global flags before `template` (`--cache-dir`,
+  `--certificate-authority`, `--client-certificate`, `--client-key`, `--as-uid`,
+  `--tls-server-name`). Those values never select a read or write subcommand.
 
 Each guard sees through prefix commands, pipelines and lists, `$( )`, shell `-c` strings and
 here-documents fed to a shell, and kubectl or a kubectl plugin run through a shell function or a variable. Quoted text

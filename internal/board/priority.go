@@ -266,7 +266,7 @@ func (c *Client) rankedPages(ctx context.Context, q string, seen map[string]bool
 		}
 		err := c.graphql(ctx, &r, `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
 items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+priorityFields+`
-content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
+content{...I}}}}}}}`+issueFields, vs)
 		if err != nil {
 			return fmt.Errorf("the priority list: %w", err)
 		}
@@ -524,7 +524,7 @@ func (c *Client) RankedNow(ctx context.Context, ref string) (*RankedEpic, error)
 			} `json:"issue"`
 		} `json:"repository"`
 	}
-	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){...I `+blockerFields+` projectItems(first:50){nodes{project{id} `+priorityFields+`}}}}}`+issueFields,
+	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){...I projectItems(first:50){nodes{project{id} `+priorityFields+`}}}}}`+issueFields,
 		vars{"o": owner, "r": repo, "n": n})
 	if err != nil {
 		return nil, fmt.Errorf("the board item of %s: %w", ref, err)
