@@ -177,6 +177,14 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 		return r
 	}
 	defer release()
+	if r.heldFor > 0 {
+		// The runs it waited for wrote on: trim and count what is there now.
+		u, err = gocache.Scan(r.dir)
+		r.before, r.after, r.err = u.Bytes, u.Bytes, err
+		if err != nil || !r.over() {
+			return r
+		}
+	}
 	r.waits = builds()
 	r.forced = len(r.waits) > 0 && r.before > goCacheForce(r.max)
 	if len(r.waits) == 0 || r.forced {

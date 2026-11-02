@@ -212,10 +212,18 @@ func TestTrimGoCachePastTheMarginWaitsForTheRuns(t *testing.T) {
 	if _, err := gocache.Use(ctx, cache); err == nil {
 		t.Error("a new run started while the trim waited; want it behind the trim")
 	}
+	addEntry(t, cache, "04/written-during-the-wait-a", 1<<30, time.Now())
 	run()
 	r := <-done
-	if r.used || r.removed != 3 || exists(filepath.Join(cache, "03/oldest-d")) {
-		t.Fatalf("trim = %+v; want 3 entries removed once the run ended", r)
+	if r.used || r.removed != 4 || exists(filepath.Join(cache, "00/new-a")) || !exists(filepath.Join(cache, "04/written-during-the-wait-a")) {
+		t.Fatalf("trim = %+v; want the 4 oldest of 5 entries removed once the run ended", r)
+	}
+	u, err := gocache.Scan(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.before != 5<<30 || r.after != u.Bytes || u.Bytes != 1<<30 {
+		t.Errorf("before %d, after %d, on disk %d; want the rescan's 5 GiB and the 1 GiB left", r.before, r.after, u.Bytes)
 	}
 	if !strings.Contains(r.String(), "past the cap by a quarter, after waiting") {
 		t.Errorf("line %q; want the wait for the runs", r)
