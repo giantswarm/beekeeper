@@ -149,28 +149,9 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 		if strings.TrimSpace(command) == "" {
 			return ExecutionDenyCodex("invalid execution command")
 		}
-		cwd := ev.CWD
-		if dir, ok := ev.ToolInput[codexWorkdirKey].(string); ok && dir != "" {
-			if !target(dir) {
-				return ExecutionDenyCodex("tool working directory is outside its owned workspace")
-			}
-			if !filepath.IsAbs(dir) {
-				dir = filepath.Join(ev.CWD, dir)
-			}
-			cwd = filepath.Clean(dir)
-		}
-		// The full guard below reads the same effective directory.
-		if cwd != ev.CWD {
-			var top map[string]any
-			if json.Unmarshal(raw, &top) != nil {
-				return ExecutionDenyCodex("invalid managed execution tool event")
-			}
-			top["cwd"] = cwd
-			b, err := json.Marshal(top)
-			if err != nil {
-				return ExecutionDenyCodex("invalid managed execution tool event")
-			}
-			raw = b
+		cwd := codexShellWorkdir(ev.CWD, ev.ToolInput)
+		if !target(cwd) {
+			return ExecutionDenyCodex("tool working directory is outside its owned workspace")
 		}
 		if err := executionShell(command, workspace, cwd, protected, 0); err != nil {
 			return ExecutionDenyCodex(err.Error())
@@ -199,6 +180,9 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 	case ev.ToolName == codexUpdatePlanTool || ev.ToolName == codexWebTool:
 	default:
 		return ExecutionDenyCodex("tool is not supported by the managed remote adapter; use component commands for notes and reports")
+	}
+	if h.Project == "" {
+		h.Project = workspace
 	}
 	h.Transcripts.Managed = func(string) (bool, error) { return true, nil }
 	return h.DecideCodex(raw)
