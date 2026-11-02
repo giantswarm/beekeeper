@@ -368,3 +368,109 @@ func TestSSHResolveBlockedReceiptUnblocksQueueWithoutReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestSSHInspectReportsTurnAndLastActive(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("remote execution hosts require Linux")
+	}
+	f := testFixture(t)
+	f.r.Messaging = true
+	gate := filepath.Join(t.TempDir(), "release-wake")
+	child := filepath.Join(t.TempDir(), "fake-harness")
+	script := "#!/bin/sh\nset -eu\nIFS= read -r first\nprintf '%s\\n' \"$first\" | sed 's/}$/,\"isReplay\":true}/'\nprintf '{\"type\":\"result\"}\\n'\nIFS= read -r second\nprintf '%s\\n' \"$second\" | sed 's/}$/,\"isReplay\":true}/'\nwhile [ ! -e " + quote(gate) + " ]; do sleep 0.01; done\nprintf '{\"type\":\"result\"}\\n'\n"
+	if err := os.WriteFile(child, []byte(script), 0o700); err != nil { //nolint:gosec // executable fake harness in its owned temporary directory
+		t.Fatal(err)
+	}
+	h := f.s.Config.Harnesses[HarnessClaude]
+	h.Executable = child
+	f.s.Config.Harnesses[HarnessClaude] = h
+	original := f.s.Command
+	f.s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+		if bin == child {
+			bin = fixtureClaudeExecutable
+		}
+		return original(ctx, dir, env, bin, args...)
+	}
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	f.r.RegistrationReceipt = Sign(f.r, f.key, f.s.now())
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.s.Run(ctx, f.r.Ref) }()
+
+	// Wait for the first turn's result event to leave the runner idle between turns.
+	for {
+		o, err := f.s.Inspect(ctx, f.r.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.Ready && !o.InTurn && !o.LastActive.IsZero() {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("runner exited before wake: %v", err)
+		case <-ctx.Done():
+			t.Fatal("first turn did not settle to idle after result")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	wake := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "post-merge follow-up"}
+	if _, err := f.s.Message(ctx, f.r.Ref, wake); err != nil {
+		t.Fatal(err)
+	}
+	// While the wake turn is running (before its result event), Inspect reports InTurn.
+	for {
+		o, err := f.s.Inspect(ctx, f.r.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.InTurn && o.MessageSequence == 1 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("runner exited during wake turn: %v", err)
+		case <-ctx.Done():
+			t.Fatal("wake turn was not observed in-turn")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if err := os.WriteFile(gate, []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := ControlRequest{Operation: ControlReport, Data: json.RawMessage(`{"finished":true}`)}
+	if err := f.s.finishControl(ctx, f.r.Ref, want, ControlResult{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("runner did not exit after wake turn result and completed report")
+	}
+	f.launcher.mu.Lock()
+	f.launcher.states[UnitName(f.r.Ref)] = unitInactive
+	f.launcher.mu.Unlock()
+	o, err := f.s.Inspect(ctx, f.r.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.InTurn || o.ProcessState != Exited || o.LastActive.IsZero() {
+		t.Fatalf("completed runner observation = %+v", o)
+	}
+}
