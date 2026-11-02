@@ -1,303 +1,276 @@
 package board
 
 import (
-	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// gqlType is a type of GitHub's GraphQL schema as the board's queries meet
-// it: its fields with the type each answers ("" for one the check does not
-// follow). A complete type lists every field GitHub declares on it, so a
-// selection of any other is the error GitHub answers; the interfaces and
-// unions are complete, the object types are listed only for the way down
-// to them.
-type gqlType struct {
-	complete bool
-	fields   map[string]string
+// abstractType is an interface or union of GitHub's GraphQL schema: the
+// fields a selection on it may take directly, and the object types it
+// stands for. A union has no fields but __typename.
+type abstractType struct {
+	fields   []string
+	possible []string
 }
 
-// githubSchemaText is the part of GitHub's public GraphQL schema the
-// board's queries pass through, one type a line: its kind, its name and
-// its fields, each with the type it answers where the check follows it.
-// The interfaces and unions are complete, a query selects any other field
-// of theirs only through an inline fragment of a concrete type; the object
-// types name only the fields that lead to them.
-const githubSchemaText = `
-type Query repositoryOwner:RepositoryOwner repository:Repository search:SearchResultItemConnection node:Node
-type Mutation addProjectV2ItemById:AddProjectV2ItemByIdPayload updateProjectV2ItemPosition:UpdateProjectV2ItemPositionPayload
-type AddProjectV2ItemByIdPayload item:ProjectV2Item
-type UpdateProjectV2ItemPositionPayload items:ProjectV2ItemConnection
-type SearchResultItemConnection nodes:SearchResultItem
-type Repository issue:Issue issueOrPullRequest:IssueOrPullRequest
-type Issue projectItems:ProjectV2ItemConnection
-type ProjectV2ItemConnection nodes:ProjectV2Item
-type ProjectV2Item project:ProjectV2 content:ProjectV2ItemContent fieldValueByName:ProjectV2ItemFieldValue
-type ProjectV2 owner:ProjectV2Owner items:ProjectV2ItemConnection fields:ProjectV2FieldConfigurationConnection field:ProjectV2FieldConfiguration
-type ProjectV2FieldConfigurationConnection nodes:ProjectV2FieldConfiguration
-type ProjectV2ItemFieldNumberValue creator:Actor
-type ProjectV2ItemFieldSingleSelectValue creator:Actor
-interface ProjectV2Owner id projectV2:ProjectV2 projectsV2
-interface RepositoryOwner avatarUrl id login repositories repository:Repository resourcePath url
-interface Actor avatarUrl login resourcePath url
-interface Node id
-union ProjectV2ItemFieldValue
-union ProjectV2ItemContent
-union ProjectV2FieldConfiguration
-union IssueOrPullRequest
-union SearchResultItem
+// githubSchema is the part of GitHub's public GraphQL schema the board's
+// queries reach, one declaration a line:
+//
+//	interface Name: field ... = ObjectType ...
+//	union Name = ObjectType ...
+//	Type.field FieldType
+//
+// The interfaces and unions are the types a selection is checked on: a
+// field outside an interface's (a union has none but __typename) is one
+// GitHub rejects the whole query for, as it did the owner's login selected
+// on ProjectV2Owner (https://github.com/giantswarm/beekeeper/issues/1997).
+// The field types lead from a query's root to them; a field missing here
+// leaves its selection unchecked up to its next inline fragment.
+const githubSchema = `
+interface Actor: avatarUrl login resourcePath url = Bot EnterpriseUserAccount Mannequin Organization User
+interface ProjectV2Owner: id projectV2 projectsV2 = Issue Organization PullRequest User
+interface RepositoryOwner: avatarUrl id login repositories repository resourcePath url = Organization User
+union IssueOrPullRequest = Issue PullRequest
+union ProjectV2ItemContent = DraftIssue Issue PullRequest
+union ProjectV2FieldConfiguration = ProjectV2Field ProjectV2IterationField ProjectV2SingleSelectField
+union ProjectV2ItemFieldValue = ProjectV2ItemFieldDateValue ProjectV2ItemFieldIterationValue ProjectV2ItemFieldLabelValue ProjectV2ItemFieldMilestoneValue ProjectV2ItemFieldNumberValue ProjectV2ItemFieldPullRequestValue ProjectV2ItemFieldRepositoryValue ProjectV2ItemFieldReviewerValue ProjectV2ItemFieldSingleSelectValue ProjectV2ItemFieldTextValue ProjectV2ItemFieldUserValue
+union SearchResultItem = App Discussion Issue MarketplaceListing Organization PullRequest Repository User
+Query.repositoryOwner RepositoryOwner
+Query.repository Repository
+Query.search SearchResultItemConnection
+Mutation.addProjectV2ItemById AddProjectV2ItemByIdPayload
+Mutation.archiveProjectV2Item ArchiveProjectV2ItemPayload
+Mutation.updateProjectV2ItemFieldValue UpdateProjectV2ItemFieldValuePayload
+Mutation.clearProjectV2ItemFieldValue ClearProjectV2ItemFieldValuePayload
+AddProjectV2ItemByIdPayload.item ProjectV2Item
+ArchiveProjectV2ItemPayload.item ProjectV2Item
+UpdateProjectV2ItemFieldValuePayload.projectV2Item ProjectV2Item
+ClearProjectV2ItemFieldValuePayload.projectV2Item ProjectV2Item
+Repository.issue Issue
+Repository.pullRequest PullRequest
+Repository.issueOrPullRequest IssueOrPullRequest
+Issue.parent Issue
+Issue.blockedBy IssueConnection
+Issue.projectItems ProjectV2ItemConnection
+PullRequest.closingIssuesReferences IssueConnection
+PullRequest.projectItems ProjectV2ItemConnection
+IssueConnection.nodes Issue
+ProjectV2ItemConnection.nodes ProjectV2Item
+ProjectV2FieldConfigurationConnection.nodes ProjectV2FieldConfiguration
+SearchResultItemConnection.nodes SearchResultItem
+ProjectV2Owner.projectV2 ProjectV2
+ProjectV2.owner ProjectV2Owner
+ProjectV2.items ProjectV2ItemConnection
+ProjectV2.fields ProjectV2FieldConfigurationConnection
+ProjectV2.field ProjectV2FieldConfiguration
+ProjectV2Item.project ProjectV2
+ProjectV2Item.content ProjectV2ItemContent
+ProjectV2Item.fieldValueByName ProjectV2ItemFieldValue
+ProjectV2ItemFieldNumberValue.creator Actor
+ProjectV2ItemFieldSingleSelectValue.creator Actor
 `
 
-// githubSchema is githubSchemaText by type name.
-var githubSchema = func() map[string]gqlType {
-	m := map[string]gqlType{}
-	for line := range strings.Lines(githubSchemaText) {
-		f := strings.Fields(line)
-		if len(f) < 2 {
-			continue
+// abstractTypes and fieldTypes are githubSchema's interfaces and unions by
+// name and its field types by "Type.field".
+var abstractTypes, fieldTypes = parseSchema(githubSchema)
+
+func parseSchema(s string) (map[string]abstractType, map[string]string) {
+	abstract, fields := map[string]abstractType{}, map[string]string{}
+	for line := range strings.Lines(s) {
+		decl, possible, ok := strings.Cut(line, "=")
+		w := strings.Fields(decl)
+		switch {
+		case len(w) == 0:
+		case ok && len(w) >= 2 && w[0] == "interface":
+			abstract[strings.TrimSuffix(w[1], ":")] = abstractType{fields: w[2:], possible: strings.Fields(possible)}
+		case ok && len(w) == 2 && w[0] == "union":
+			abstract[w[1]] = abstractType{possible: strings.Fields(possible)}
+		case !ok && len(w) == 2:
+			fields[w[0]] = w[1]
+		default:
+			panic("githubSchema: " + line)
 		}
-		t := gqlType{complete: f[0] != "type", fields: map[string]string{}}
-		for _, x := range f[2:] {
-			name, typ, _ := strings.Cut(x, ":")
-			t.fields[name] = typ
-		}
-		m[f[1]] = t
 	}
-	return m
-}()
-
-// gqlSel is one selection of a selection set: a field with its own
-// selections, an inline fragment on a type ("" for none) or a fragment
-// spread.
-type gqlSel struct {
-	name, on, spread string
-	inline           bool
-	set              []gqlSel
+	return abstract, fields
 }
 
-// gqlDoc is a parsed query: its operations by their root type and its
-// fragments by name.
-type gqlDoc struct {
-	ops   []gqlSel
-	frags map[string]gqlSel
-}
-
-type gqlParser struct {
-	s   string
-	i   int
-	err error
-}
-
-func (p *gqlParser) fail(format string, a ...any) {
-	if p.err == nil {
-		p.err = fmt.Errorf("at %d: %s", p.i, fmt.Sprintf(format, a...))
-	}
-	p.i = len(p.s)
-}
-
-func (p *gqlParser) space() {
-	for p.i < len(p.s) && strings.IndexByte(" \t\r\n,", p.s[p.i]) >= 0 {
-		p.i++
-	}
-}
-
-func isNameByte(b byte) bool {
-	return b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || '0' <= b && b <= '9'
-}
-
-func (p *gqlParser) name() string {
-	p.space()
-	j := p.i
-	for p.i < len(p.s) && isNameByte(p.s[p.i]) {
-		p.i++
-	}
-	return p.s[j:p.i]
-}
-
-func (p *gqlParser) eat(tok string) bool {
-	p.space()
-	if strings.HasPrefix(p.s[p.i:], tok) {
-		p.i += len(tok)
-		return true
-	}
-	return false
-}
-
-// args skips a parenthesised argument or variable list, its strings with
-// their escapes.
-func (p *gqlParser) args() {
-	depth := 0
-	for ; p.i < len(p.s); p.i++ {
-		switch p.s[p.i] {
-		case '"':
-			for p.i++; p.i < len(p.s) && p.s[p.i] != '"'; p.i++ {
-				if p.s[p.i] == '\\' {
-					p.i++
+// gqlTokens splits a GraphQL document into names, punctuators and string
+// literals, dropping whitespace, commas and comments.
+func gqlTokens(q string) []string {
+	var out []string
+	for i := 0; i < len(q); {
+		switch c := q[i]; {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',':
+			i++
+		case c == '#':
+			for i < len(q) && q[i] != '\n' {
+				i++
+			}
+		case c == '"':
+			j := i + 1
+			for j < len(q) && q[j] != '"' {
+				if q[j] == '\\' {
+					j++
 				}
+				j++
 			}
-		case '(':
-			depth++
-		case ')':
-			if depth--; depth == 0 {
-				p.i++
-				return
+			out = append(out, q[i:min(j+1, len(q))])
+			i = j + 1
+		case strings.HasPrefix(q[i:], "..."):
+			out = append(out, "...")
+			i += 3
+		case c == '_' || c == '$' || c == '-' || c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z':
+			j := i + 1
+			for j < len(q) && (q[j] == '_' || q[j] >= '0' && q[j] <= '9' || q[j] >= 'A' && q[j] <= 'Z' || q[j] >= 'a' && q[j] <= 'z') {
+				j++
 			}
+			out = append(out, q[i:j])
+			i = j
+		default:
+			out = append(out, string(c))
+			i++
 		}
-	}
-	p.fail("unterminated arguments")
-}
-
-func (p *gqlParser) set() []gqlSel {
-	if !p.eat("{") {
-		p.fail("want a selection set")
-		return nil
-	}
-	out := []gqlSel{}
-	for !p.eat("}") {
-		if p.i >= len(p.s) {
-			p.fail("unterminated selection set")
-			return out
-		}
-		if p.eat("...") {
-			switch n := p.name(); n {
-			case "on":
-				on := p.name()
-				out = append(out, gqlSel{inline: true, on: on, set: p.set()})
-			case "":
-				out = append(out, gqlSel{inline: true, set: p.set()})
-			default:
-				out = append(out, gqlSel{spread: n})
-			}
-			continue
-		}
-		s := gqlSel{name: p.name()}
-		if s.name == "" {
-			p.fail("unexpected %q", p.s[p.i:min(p.i+10, len(p.s))])
-			return out
-		}
-		if p.eat(":") {
-			s.name = p.name()
-		}
-		if p.space(); p.i < len(p.s) && p.s[p.i] == '(' {
-			p.args()
-		}
-		if p.space(); p.i < len(p.s) && p.s[p.i] == '{' {
-			s.set = p.set()
-		}
-		out = append(out, s)
 	}
 	return out
 }
 
-func parseGQL(q string) (gqlDoc, error) {
-	p := &gqlParser{s: q}
-	d := gqlDoc{frags: map[string]gqlSel{}}
-	for p.space(); p.i < len(p.s); p.space() {
-		if p.s[p.i] == '{' {
-			d.ops = append(d.ops, gqlSel{on: "Query", set: p.set()})
-			continue
+// checkSchema reports the first selection of q GitHub's schema rejects on
+// one of abstractTypes: a field the interface or union does not declare, or
+// an inline fragment on a type it cannot be. Selections on object types are
+// taken as they are; GitHub's answer to those is in the fakes' data.
+func checkSchema(q string) error {
+	q = strings.TrimPrefix(q, "query=")
+	toks := gqlTokens(q)
+	var stack []string // the type of each open selection set, "" unknown
+	next := ""         // the type the next "{" opens
+	for i := 0; i < len(toks); i++ {
+		tok := toks[i]
+		cur := ""
+		if len(stack) > 0 {
+			cur = stack[len(stack)-1]
 		}
-		switch kw := p.name(); kw {
-		case "query", "mutation":
-			p.name()
-			if p.space(); p.i < len(p.s) && p.s[p.i] == '(' {
-				p.args()
+		switch {
+		case tok == "(":
+			for depth := 0; i < len(toks); i++ {
+				if toks[i] == "(" {
+					depth++
+				} else if toks[i] == ")" {
+					if depth--; depth == 0 {
+						break
+					}
+				}
 			}
-			d.ops = append(d.ops, gqlSel{on: strings.ToUpper(kw[:1]) + kw[1:], set: p.set()})
-		case "fragment":
-			n := p.name()
-			if p.name() != "on" {
-				p.fail("fragment %s without a type condition", n)
-				continue
+		case tok == "{":
+			stack = append(stack, next)
+			next = ""
+		case tok == "}":
+			if len(stack) == 0 {
+				return fmt.Errorf("unbalanced } in %s", q)
 			}
-			on := p.name()
-			d.frags[n] = gqlSel{on: on, set: p.set()}
+			stack = stack[:len(stack)-1]
+		case len(stack) == 0 && (tok == "query" || tok == "mutation"):
+			next = map[string]string{"query": "Query", "mutation": "Mutation"}[tok]
+			if i+1 < len(toks) && toks[i+1] != "(" && toks[i+1] != "{" {
+				i++
+			}
+		case len(stack) == 0 && tok == "fragment":
+			if i+3 >= len(toks) || toks[i+2] != "on" {
+				return fmt.Errorf("fragment without a type condition in %s", q)
+			}
+			next = toks[i+3]
+			i += 3
+		case tok == "...":
+			if i+2 < len(toks) && toks[i+1] == "on" {
+				t := toks[i+2]
+				if err := fragmentOn(cur, t); err != nil {
+					return fmt.Errorf("%w in %s", err, q)
+				}
+				next = t
+				i += 2
+			} else {
+				i++ // a named fragment's spread
+			}
+		case len(stack) == 0:
+			return fmt.Errorf("%q outside a selection set in %s", tok, q)
 		default:
-			p.fail("unexpected definition %q", kw)
-		}
-	}
-	return d, p.err
-}
-
-// checkGQL is the errors GitHub answers to query for selecting a field its
-// type does not declare, as far as githubSchema knows the types.
-func checkGQL(q string) []string {
-	d, err := parseGQL(q)
-	if err != nil {
-		return []string{"unparsable query: " + err.Error()}
-	}
-	var errs []string
-	var walk func(typ string, set []gqlSel)
-	walk = func(typ string, set []gqlSel) {
-		t := githubSchema[typ]
-		for _, s := range set {
-			switch {
-			case s.spread != "":
-				if _, ok := d.frags[s.spread]; !ok {
-					errs = append(errs, fmt.Sprintf("Fragment %s was used, but not defined", s.spread))
-				}
-			case s.inline:
-				walk(cmp.Or(s.on, typ), s.set)
-			case s.name == "__typename":
-			default:
-				child, ok := t.fields[s.name]
-				if !ok && t.complete {
-					errs = append(errs, fmt.Sprintf("Field '%s' doesn't exist on type '%s'", s.name, typ))
-				}
-				if s.set != nil {
-					walk(child, s.set)
-				}
+			field := tok
+			if i+2 < len(toks) && toks[i+1] == ":" {
+				field = toks[i+2]
+				i += 2
+			}
+			if a, ok := abstractTypes[cur]; ok && field != "__typename" && !slices.Contains(a.fields, field) {
+				return fmt.Errorf("field %q doesn't exist on type %q in %s", field, cur, q)
+			}
+			next = ""
+			if cur != "" {
+				next = fieldTypes[cur+"."+field]
 			}
 		}
 	}
-	for _, op := range d.ops {
-		walk(op.on, op.set)
+	if len(stack) != 0 {
+		return fmt.Errorf("unclosed selection set in %s", q)
 	}
-	for _, f := range d.frags {
-		walk(f.on, f.set)
-	}
-	return errs
+	return nil
 }
 
-// checkSchema fails t for a GraphQL request whose query GitHub rejects for
-// a field its type does not declare: every fake of the board's requests
-// runs it, so such a query fails here and not against GitHub.
-func checkSchema(t *testing.T, args []string) {
+// fragmentOn reports an inline fragment on t GitHub rejects inside a
+// selection on cur: types that share no object type.
+func fragmentOn(cur, t string) error {
+	if cur == "" || cur == t {
+		return nil
+	}
+	possible := func(name string) []string {
+		if a, ok := abstractTypes[name]; ok {
+			return a.possible
+		}
+		return []string{name}
+	}
+	for _, p := range possible(t) {
+		if slices.Contains(possible(cur), p) {
+			return nil
+		}
+	}
+	return fmt.Errorf("fragment on %q can never apply to %q", t, cur)
+}
+
+// checkedQuery fails t on a query GitHub's schema rejects, as GitHub fails
+// the whole request.
+func checkedQuery(t *testing.T, q string) {
 	t.Helper()
-	if len(args) < 4 || args[0] != "api" || args[1] != "graphql" || !strings.HasPrefix(args[3], "query=") {
-		return
-	}
-	q := strings.TrimPrefix(args[3], "query=")
-	for _, e := range checkGQL(q) {
-		t.Errorf("GitHub rejects the query: %s\n%s", e, q)
+	if err := checkSchema(q); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestCheckGQLRejectsWhatGitHubRejects(t *testing.T) {
-	for _, tc := range []struct {
-		q    string
-		want []string
-	}{
-		// The item read of a move as it was: ProjectV2Owner declares no login.
-		{`query{repository(owner:"o",name:"r"){issue(number:5){id projectItems(first:50){nodes{id project{id number owner{...on ProjectV2Owner{login}}}}}}}}`,
-			[]string{"Field 'login' doesn't exist on type 'ProjectV2Owner'"}},
-		{`query{repository(owner:"o",name:"r"){issue(number:5){projectItems(first:50){nodes{project{owner{login}}}}}}}`,
-			[]string{"Field 'login' doesn't exist on type 'ProjectV2Owner'"}},
-		{`query($o:String!){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:1){owner{id}}} title}}`,
-			[]string{"Field 'title' doesn't exist on type 'RepositoryOwner'"}},
-		{`query{repository(owner:"o",name:"r"){issue(number:5){projectItems(first:1){nodes{s:fieldValueByName(name:"S"){name}}}}}}`,
-			[]string{"Field 'name' doesn't exist on type 'ProjectV2ItemFieldValue'"}},
-		{`query{repository(owner:"o",name:"r"){issue(number:5){...I}}}`, []string{"Fragment I was used, but not defined"}},
-		{`query{repository(owner:"o",name:"r"){issue(number:5){...I}}}` + issueFields, nil},
-		{`mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{` + itemFields + `}}}`, nil},
-		{`query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{
-` + itemFields + `}}}}}`, nil},
-		{`query{s1:search(query:"repo:o/r \"a\" is:open",type:ISSUE,first:50){nodes{...on Issue{number} __typename}}}`, nil},
+func TestCheckSchemaRejectsWhatGitHubRejects(t *testing.T) {
+	for name, q := range map[string]string{
+		// The query of https://github.com/giantswarm/beekeeper/pull/1990.
+		"login on ProjectV2Owner": `query{repository(owner:"o",name:"r"){issue(number:1){projectItems(first:50){nodes{id project{id number owner{...on ProjectV2Owner{login}}}}}}}}`,
+		"login on owner directly": `query{repository(owner:"o",name:"r"){issue(number:1){projectItems(first:50){nodes{project{owner{login}}}}}}}`,
+		"field on a union":        `query{repository(owner:"o",name:"r"){issueOrPullRequest(number:1){state}}}`,
+		"field on a union value":  `mutation{addProjectV2ItemById(input:{projectId:"p",contentId:"c"}){item{status:fieldValueByName(name:"Status"){name}}}}`,
+		"fragment never applying": `query{repository(owner:"o",name:"r"){issueOrPullRequest(number:1){...on User{login}}}}`,
+		"projectV2 on owner":      `query{repositoryOwner(login:"o"){projectV2(number:1){id}}}`,
 	} {
-		got := checkGQL(tc.q)
-		if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
-			t.Errorf("checkGQL(%s) = %q, want %q", tc.q, got, tc.want)
+		if checkSchema(q) == nil {
+			t.Errorf("%s: %s passes", name, q)
+		}
+	}
+}
+
+func TestCheckSchemaPassesTheBoardsQueries(t *testing.T) {
+	for name, q := range map[string]string{
+		"an item":      `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{` + itemFields + `}}}}}`,
+		"an added one": `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{` + itemFields + `}}}`,
+		"the board": `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
+items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{` + priorityFields + `
+content{...I ` + blockerFields + `}}}}}}}` + issueFields,
+		"a state": `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...on Issue{state} ...on PullRequest{state}}}}`,
+	} {
+		if err := checkSchema(q); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

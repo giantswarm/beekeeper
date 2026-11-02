@@ -260,8 +260,9 @@ type goGH struct {
 }
 
 func (f *goGH) run(ctx context.Context, args ...string) ([]byte, error) {
-	checkSchema(f.t, args)
+	checkSelectionSchema(f.t, args)
 	q := args[3]
+	checkedQuery(f.t, q)
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
 	for i := 4; i+1 < len(args); i += 2 {
