@@ -224,6 +224,15 @@ The turn shares the person's Chrome: hold the browser lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
 a page that waits on a person (a sign-in form, a dialog) is the usual cause.
 
+A muster sign-in is "muster auth login --no-browser" (the hook refuses it
+without the flag in every session: muster would open the person's default
+browser, outside the Claude in Chrome tab group this turn works in), run in
+the background: it prints the sign-in URL and waits for the callback. This
+command then opens the URL under the browser lease, for example:
+
+  beekeeper browse "Open <the printed URL>, sign in with its SSO button,
+  report the final page."
+
 A consent page (an OAuth grant: GitHub's green Authorize button, an identity
 provider's Allow) is a permission grant to the turn's classifier, which
 refuses the click, or the whole task at its first call. A consent for an App

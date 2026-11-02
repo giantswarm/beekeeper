@@ -7,26 +7,46 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 )
 
+// musterLoginCmd is the muster sign-in without arguments.
+const musterLoginCmd = "muster auth login"
+
 func TestBrowserRefusal(t *testing.T) {
 	held := func(session string) func() []lease.Holder {
 		return func() []lease.Holder {
 			return []lease.Holder{{Env: "spidertron", Session: "s1"}, {Env: browserLease, Session: session}}
 		}
 	}
+	heldOnDesktop := func() []lease.Holder { return []lease.Holder{{Env: browserLease, HostSession: "local_s1"}} }
 	for name, tc := range map[string]struct {
 		cmd, session string
 		leases       func() []lease.Holder
 		refused      bool
 	}{
-		"muster login without the lease":  {"timeout 120 muster auth login --context spidertron --silent", "s1", held("other"), true},
-		"muster login under the lease":    {"muster auth login --context spidertron", "s1", held("s1"), false},
-		"no browser lease held at all":    {"muster auth login", "s1", func() []lease.Holder { return nil }, true},
-		"gh web login":                    {"gh auth login --hostname github.com --web", "s1", held("other"), true},
-		"gh token login opens nothing":    {"gh auth login --with-token < f", "s1", held("other"), false},
-		"xdg-open after a list":           {"cd x && xdg-open https://example.com", "s1", held("other"), true},
-		"muster status passes":            {"muster auth status --context spidertron", "s1", held("other"), false},
-		"a mention is no command":         {"grep -n 'muster auth login' README.md", "s1", held("other"), false},
-		"lease held under the desktop id": {"muster auth login", "s1", func() []lease.Holder { return []lease.Holder{{Env: browserLease, HostSession: "local_s1"}} }, false},
+		"muster login without the lease":       {"timeout 120 muster auth login --context spidertron --silent", "s1", held("other"), true},
+		"muster login under the lease":         {"muster auth login --context spidertron", "s1", held("s1"), true},
+		"muster login, no lease at all":        {musterLoginCmd, "s1", func() []lease.Holder { return nil }, true},
+		"muster login without a lease reader":  {musterLoginCmd, "s1", nil, true},
+		"no-browser under the lease":           {"muster auth login --context spidertron --no-browser", "s1", held("s1"), false},
+		"no-browser without the lease":         {"timeout 600 muster auth login --no-browser --context spidertron", "s1", held("other"), false},
+		"no-browser, no lease at all":          {"muster auth login --no-browser", "s1", func() []lease.Holder { return nil }, false},
+		"no-browser=true":                      {"muster auth login --no-browser=true", "s1", held("other"), false},
+		"no-browser=false opens":               {"muster auth login --no-browser=false", "s1", held("s1"), true},
+		"the variable in front":                {"MUSTER_NO_BROWSER=1 muster auth login --context lab", "s1", held("other"), false},
+		"the variable through env":             {"env MUSTER_NO_BROWSER=true muster auth login", "s1", held("other"), false},
+		"the variable off":                     {"MUSTER_NO_BROWSER=0 muster auth login", "s1", held("s1"), true},
+		"the variable exported before":         {"export MUSTER_NO_BROWSER=1; muster auth login", "s1", held("other"), false},
+		"the variable exported off":            {"export MUSTER_NO_BROWSER=1; export MUSTER_NO_BROWSER=off\nmuster auth login", "s1", held("s1"), true},
+		"the flag on another command":          {"muster auth login --no-browser; muster auth login --context lab", "s1", held("s1"), true},
+		"the flag after the command ends":      {"muster auth login && echo --no-browser", "s1", held("s1"), true},
+		"muster login's help":                  {"muster auth login --help", "s1", held("other"), false},
+		"gh web login":                         {"gh auth login --hostname github.com --web", "s1", held("other"), true},
+		"gh web login under the lease":         {"gh auth login --web", "s1", held("s1"), false},
+		"gh token login opens nothing":         {"gh auth login --with-token < f", "s1", held("other"), false},
+		"xdg-open after a list":                {"cd x && xdg-open https://example.com", "s1", held("other"), true},
+		"muster status passes":                 {"muster auth status --context spidertron", "s1", held("other"), false},
+		"a mention is no command":              {"grep -n 'muster auth login' README.md", "s1", held("other"), false},
+		"xdg-open, lease under the desktop id": {"xdg-open https://example.com", "s1", heldOnDesktop, false},
+		"muster login, lease under desktop id": {musterLoginCmd, "s1", heldOnDesktop, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := Hook{Leases: tc.leases}.browserRefusal(tc.cmd, tc.session)
@@ -35,6 +55,13 @@ func TestBrowserRefusal(t *testing.T) {
 			}
 			if tc.refused && !strings.Contains(r, "beekeeper lease claim browser") {
 				t.Errorf("the refusal does not say how to get the lease: %q", r)
+			}
+			if tc.refused && strings.Contains(tc.cmd, "muster") {
+				for _, want := range []string{"`muster auth login --no-browser`", "`beekeeper browse "} {
+					if !strings.Contains(r, want) {
+						t.Errorf("the refusal does not name %s: %q", want, r)
+					}
+				}
 			}
 		})
 	}

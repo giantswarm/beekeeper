@@ -20,7 +20,11 @@ const start = `(?:^[ \t]*|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
 
 // pos is a command position: a start with optional wrappers (timeout 600,
 // time, nice, env, VAR=val, command).
-const pos = start + `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
+const pos = start + posWrappers
+
+// posWrappers are the prefix commands and assignments pos allows in front of a
+// command.
+const posWrappers = `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
 
 // mergePos is a command position for the merge gate: a start with any of the
 // prefix commands that run their arguments as a command, with their options.
