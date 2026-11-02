@@ -26,7 +26,7 @@ func roleSlash(cfg config.Role) string {
 }
 
 // roleInstructions opens rl's successor prompt: the configured skill's bare
-// slash command or the file.
+// slash command or a reference to its instruction file.
 func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
 	cfg := rl.cfg(a.cfg)
 	from := ""
@@ -35,11 +35,10 @@ func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
 	}
 	switch {
 	case cfg.Instructions != "":
-		raw, err := os.ReadFile(cfg.Instructions)
-		if err != nil {
+		if _, err := os.ReadFile(cfg.Instructions); err != nil {
 			return "", fmt.Errorf("%s.instructions: %w", rl.name, err)
 		}
-		return strings.TrimSpace(string(raw)), nil
+		return fmt.Sprintf("You take over %s%s. Read and follow the instructions in %q.", rl.duty, from, cfg.Instructions), nil
 	case cfg.Skill != "":
 		return fmt.Sprintf("%syou take over %s%s.", roleSlash(cfg), rl.duty, from), nil
 	}
