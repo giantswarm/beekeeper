@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
+
+// mergeStateClean is GitHub's merge state of an up-to-date, mergeable branch.
+const mergeStateClean = "CLEAN"
 
 // The checks of the rig's reviewed head.
 const behindBuild, behindUnit = "build", "unit"
@@ -30,7 +34,7 @@ func newBehindRig(t *testing.T) *behindRig {
 	b := &behindRig{loopRig: newLoopRig(t)}
 	r := b.loopRig
 	r.pull.Base = mainBranch
-	r.pull.MergeState = "BEHIND"
+	r.pull.MergeState = mergeStateBehind
 	r.pull.Checks = []string{behindBuild, behindUnit}
 	r.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
 		return approved == loopHead && p.Head == loopFixed, nil
@@ -39,7 +43,7 @@ func newBehindRig(t *testing.T) *behindRig {
 	r.command = func(argv []string) (string, int) {
 		if slices.Contains(argv, "repos/"+loopMergeRepo+"/pulls/7/update-branch") {
 			b.updates = append(b.updates, argv[len(argv)-1])
-			r.pull.Head, r.pull.MergeState, r.pull.Green, r.pull.Checks = loopFixed, "CLEAN", false, nil
+			r.pull.Head, r.pull.MergeState, r.pull.Green, r.pull.Checks = loopFixed, mergeStateClean, false, nil
 			return "", 0
 		}
 		return merge(argv)
@@ -169,7 +173,7 @@ func TestLoopMergesAnApprovedBehindHeadAfterUpdatingIt(t *testing.T) {
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.pull.MergeState = "BEHIND"
+	r.pull.MergeState = mergeStateBehind
 	r.pass(t)
 	if r.pull.State != superloop.Merged || r.lastMerged != loopFixed {
 		t.Fatalf("not merged at the updated head: %+v; commands %v; calls %v", r.pull, r.cmds, r.calls)
@@ -183,5 +187,62 @@ func TestLoopMergesAnApprovedBehindHeadAfterUpdatingIt(t *testing.T) {
 	r.pass(t)
 	if n := len(b.merges()); n != 1 {
 		t.Fatalf("%d merges, want 1", n)
+	}
+}
+
+// A base that moves on while the updated head's checks run leaves that head
+// behind: the merge updates again, pinned to it, and never merges a head
+// that lacks the current base, admin or not.
+func TestReviewedMergeUpdatesAgainWhenTheBaseMovesDuringTheWait(t *testing.T) {
+	const moved = "3333333333333333333333333333333333333333"
+	for _, late := range []bool{false, true} {
+		t.Run(fmt.Sprint("past the wait ", late), func(t *testing.T) {
+			b := newBehindRig(t)
+			b.a.cfg.Merge.Admin = []string{loopMergeRepo}
+			if late {
+				reviewedUpdateWait = time.Millisecond
+			}
+			b.claim(t)
+			b.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
+				return approved == loopHead && (p.Head == loopFixed || p.Head == moved), nil
+			}
+			merge := b.command
+			b.command = func(argv []string) (string, int) {
+				if !slices.Contains(argv, "repos/"+loopMergeRepo+"/pulls/7/update-branch") {
+					return merge(argv)
+				}
+				b.updates = append(b.updates, argv[len(argv)-1])
+				next := loopFixed
+				if b.pull.Head == loopFixed {
+					next = moved
+				}
+				b.pull.Head, b.pull.MergeState, b.pull.Green, b.pull.Checks = next, mergeStateClean, false, nil
+				return "", 0
+			}
+			// The checks of the first update pass while the base moves on.
+			b.onPause = func(int) {
+				b.pull.Green, b.pull.Checks = true, []string{behindBuild, behindUnit}
+				if b.pull.Head == loopFixed {
+					b.pull.MergeState = mergeStateBehind
+					if late {
+						time.Sleep(2 * reviewedUpdateWait)
+					}
+				}
+			}
+			doc := b.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
+			m := b.merges()
+			if late {
+				if doc.ExitCode != github.SquashTimeout || len(m) != 0 || len(b.updates) != 1 {
+					t.Fatalf("a stale head past the wait: %+v, commands %v", doc, b.cmds)
+				}
+				return
+			}
+			if doc.ExitCode != 0 || !slices.Equal(b.updates, []string{"expected_head_sha=" + loopHead, "expected_head_sha=" + loopFixed}) {
+				t.Fatalf("second update: %+v, updates %v, commands %v", doc, b.updates, b.cmds)
+			}
+			if len(m) != 1 || !slices.Contains(m[0], moved) || slices.Contains(m[0], loopFixed) || !slices.Contains(m[0], "--admin") {
+				t.Fatalf("merged a stale head: %v", m)
+			}
+		})
 	}
 }

@@ -217,7 +217,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "branch is draft or conflicts with its base"
 		return doc
 	}
-	behind := p.MergeState == "BEHIND"
+	behind := p.MergeState == mergeStateBehind
 	if !behind {
 		n, err := readReviewedBehind(ctx, p)
 		if err != nil {
@@ -271,7 +271,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 				doc.Reason = "execution stopped"
 				return doc
 			}
-			if err := a.authenticateExecutionReview(st, use, p); err != nil {
+			if err := a.authenticateExecutionReview(ctx, st, use, p); err != nil {
 				doc.Reason = err.Error()
 				return doc
 			}
