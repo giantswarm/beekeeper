@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `board move <epic> "In Progress"` records the go when the epic's plan pull request is already merged: with no open plan found, it searches the plans repositories' merged pull requests for the epic's number, takes the latest whose Epic line names it (its URL or `owner/repo#n`), and records the go at its merge commit. A merged plan's head is its merge commit wherever an epic's plan is shown; a go recorded earlier at the merged branch's head counts as unmoved. With neither an open nor a merged plan, the move says so and records no go (https://github.com/giantswarm/beekeeper/issues/1540).
 - Secret-file checks track `pushd`/`popd`, refuse directory copies and `find` moves that expose guarded files, and recognize helper paths split across arguments. Codex also checks split protected-home paths (https://github.com/giantswarm/beekeeper/issues/1902).
 
 - Priority-list reads omit candidate-only label and assignee connections, keeping the large-board regression at 37 GraphQL points without changing ranks or blocker holds.
