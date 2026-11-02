@@ -45,7 +45,7 @@ func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := "Merge https://github.com/o/private/pull/7 at abc1234? Status quo: reviewed. Why: review limit."
-			raw, _ := json.Marshal(map[string]any{"hook_event_name": guard.PostToolUseEvent, dialogSessionKey: dialogSession, "tool_name": guard.AskTool,
+			raw, _ := json.Marshal(map[string]any{"hook_event_name": guard.PostToolUseEvent, dialogSessionKey: dialogSession, transcriptToolName: guard.AskTool,
 				transcriptInputKey: map[string]any{"questions": []any{map[string]any{"question": q, "options": []any{map[string]any{"label": dialogMergeChoice}, map[string]any{"label": "Rework"}}}}},
 				"tool_response":    map[string]any{"answers": map[string]string{q: dialogMergeChoice}}})
 			a.redactResult(raw)
