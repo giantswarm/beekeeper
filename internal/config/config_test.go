@@ -435,7 +435,7 @@ func TestLoadReporter(t *testing.T) {
 		t.Errorf("plans: %+v, %v", c.Plans, err)
 	}
 	for _, raw := range []string{"reporter: {every: 1h}\n", "reporter: {every: 10s, brief: b.md}\n",
-		"reporter: {every: 1h, brief: b.md, tz: Mars/Olympus}\n", "reporter: {every: 1h, brief: b.md, reviews: [plans]}\n", "plans: {repositories: [plans]}\n"} {
+		"reporter: {every: 1h, brief: b.md, tz: Mars/Olympus}\n", "reporter: {every: 1h, brief: b.md, reviews: [plans]}\n", "plans: {repositories: [plans]}\n", "merge: {admin: [owner]}\n"} {
 		if _, err := Load(write(raw)); err == nil {
 			t.Errorf("%q loads", raw)
 		}
@@ -443,7 +443,8 @@ func TestLoadReporter(t *testing.T) {
 }
 
 // devctl serves the owners of merge.devctlOwners, none by default; any
-// other owner's repository takes the plain squash merge.
+// other owner's repository takes the plain squash merge. merge.admin lists
+// the repositories merged with --admin after the approved desk review.
 func TestDevctlServes(t *testing.T) {
 	var c Config
 	if err := c.defaults(); err != nil {
@@ -452,10 +453,19 @@ func TestDevctlServes(t *testing.T) {
 	if c.Merge.DevctlServes("example/x") {
 		t.Error("devctl serves an owner by default")
 	}
+	if c.Merge.AdminMerge("example/x") {
+		t.Error("admin merge by default")
+	}
 	c.Merge.DevctlOwners = []string{"example"}
 	for repo, want := range map[string]bool{"example/beekeeper": true, "Example/x": true, "someone/notebook": false} {
 		if got := c.Merge.DevctlServes(repo); got != want {
 			t.Errorf("%s: %v, want %v", repo, got, want)
+		}
+	}
+	c.Merge.Admin = []string{"example/repo"}
+	for repo, want := range map[string]bool{"Example/Repo": true, "example/other": false, "someone/repo": false} {
+		if got := c.Merge.AdminMerge(repo); got != want {
+			t.Errorf("admin %s: %v, want %v", repo, got, want)
 		}
 	}
 }
@@ -1221,5 +1231,33 @@ func TestCapacityLocalCeiling(t *testing.T) {
 				t.Fatalf("local ceiling %d (set %v), want %d (set %v)", n, ok, tc.want, tc.set)
 			}
 		})
+	}
+}
+
+func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
+	for _, raw := range []string{"capacity: {providers: {codex: {floor: 0, ceiling: 2}}}", "capacity: {providers: {codex: {}}}"} {
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers[CodexHarness]
+		if !p.Enabled() || !slices.Equal(p.Command, DefaultCodexUsageCommand) || p.EffectiveEvery() != DefaultUsageEvery {
+			t.Fatalf("Codex default reader missing: %+v", p)
+		}
+	}
+	c, err := Load(writeTemp(t, "capacity: {providers: {codex: {floor: 0, ceiling: 2, command: [custom-reader]}}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Capacity.Providers[CodexHarness]
+	if !slices.Equal(p.Command, []string{"custom-reader"}) || p.Floor != 0 || p.Ceiling != 2 {
+		t.Fatalf("explicit Codex settings changed: %+v", p)
+	}
+	c, err = Load(writeTemp(t, "{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Capacity.Providers[CodexHarness]; ok {
+		t.Fatal("created an unconfigured Codex provider")
 	}
 }

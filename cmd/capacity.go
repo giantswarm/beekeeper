@@ -922,129 +922,126 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		pv.Verdict = providerVerdict(0, pv.Blocks)
 		return pv
 	}
-	if pCfg.Enabled() {
-		pv.HighPercent = pCfg.EffectiveHighPercent()
-		if !res.ok || res.err != nil {
-			errMsg := "usage not read"
-			if res.err != nil {
-				errMsg = res.err.Error()
-			}
-			pv.Floor, pv.Ceiling, pv.Room = 0, 0, 0
-			pv.Error = errMsg
-			pv.Stale = strings.Contains(errMsg, "stale")
-			pv.Blocks = []string{"subscription usage unknown (" + errMsg + ")"}
-			pv.Verdict = providerVerdict(0, pv.Blocks)
-			return pv
+	// Every subscription needs a reading, even when no reader was configured.
+	pv.HighPercent = pCfg.EffectiveHighPercent()
+	if !res.ok || res.err != nil {
+		errMsg := "usage not read"
+		if res.err != nil {
+			errMsg = res.err.Error()
 		}
-		r := res.reading
-		pv.At = r.At
-		pv.Fallback = r.Fallback
-		if r.NoPlanWindows {
-			pv.NoPlanWindows = true
-			pv.Blocks = []string{claudeNoPlanWindows}
-			pv.Verdict = providerVerdict(0, pv.Blocks)
-			return pv
-		}
-		if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
-			pv.Buckets = make(map[string]*bucketView, len(r.Buckets))
-			pv.bucketOrder = bucketNames(r)
-			maxBucketCeiling := 0
-			anyBucketOpen := false
-			allHigh := true
-			var firstHighFH *usageWindow
-			var bucketBlocks []string
-			for _, bName := range pv.bucketOrder {
-				b := r.Buckets[bName]
-				fh := effectiveWindow(b.FiveHour, now)
-				sd := effectiveSevenDayWindow(b.SevenDay, now)
-				dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
-				dp.Ceiling = reviewCeiling(dp.Ceiling, extra)
-				if high && firstHighFH == nil {
-					firstHighFH = fh
-				}
-				bBusy := pa.BucketBusy[bName]
-				if bBusy == nil {
-					bBusy = []string{}
-				}
-				var bBlocks []string
-				switch {
-				case high:
-					bBlocks = append(bBlocks, highBlockText(fh, pv.HighPercent, now))
-				case pCfg.FiveHourMax > 0 && fh != nil && fh.UsedPercent >= pCfg.FiveHourMax:
-					bBlocks = append(bBlocks, fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(pCfg.FiveHourMax)))
-				case pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax:
-					bBlocks = append(bBlocks, fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax)))
-				case dp.Ceiling == 0:
-					bBlocks = append(bBlocks, ceilingZero)
-				case len(bBusy) >= dp.Ceiling:
-					bBlocks = append(bBlocks, fmt.Sprintf("%d busy at the ceiling of %d", len(bBusy), dp.Ceiling))
-				}
-				bRoom := 0
-				if len(bBlocks) == 0 {
-					bRoom = max(0, dp.Ceiling-len(bBusy))
-					anyBucketOpen = true
-				} else {
-					bucketBlocks = append(bucketBlocks, bName+": "+bBlocks[0])
-				}
-				if !high {
-					allHigh = false
-				}
-				maxBucketCeiling = max(maxBucketCeiling, dp.Ceiling)
-				pv.Buckets[bName] = &bucketView{
-					Name:     bName,
-					Busy:     bBusy,
-					Floor:    dp.Floor,
-					Ceiling:  dp.Ceiling,
-					Room:     bRoom,
-					FiveHour: fh,
-					SevenDay: sd,
-					Pace:     sdPace(sd),
-					High:     high,
-					Blocks:   bBlocks,
-				}
-			}
-			if maxBucketCeiling == 0 {
-				pv.Floor, pv.Ceiling, pv.Room = 0, 0, 0
-				pv.High = allHigh
-				if allHigh {
-					pv.FiveHour = firstHighFH
-				}
-				pv.Blocks = bucketBlocks
-				pv.Verdict = providerVerdict(0, pv.Blocks)
-				return pv
-			}
-			pv.Ceiling = min(reviewCeiling(pCfg.Ceiling, extra), maxBucketCeiling)
-			pv.Floor = min(pCfg.Floor, pv.Ceiling)
-			switch {
-			case pv.Ceiling == 0:
-				pv.Blocks = []string{ceilingZero}
-			case len(pv.Busy) >= pv.Ceiling:
-				pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
-			case !anyBucketOpen:
-				pv.Blocks = bucketBlocks
-			default:
-				pv.Room = pv.Ceiling - len(pv.Busy)
-				for _, bv := range pv.Buckets {
-					bv.Room = min(bv.Room, pv.Room)
-				}
-			}
-			pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
-			return pv
-		}
-		pv.FiveHour = effectiveWindow(r.FiveHour, now)
-		pv.SevenDay = effectiveSevenDayWindow(r.SevenDay, now)
-		pv.Pace = sdPace(pv.SevenDay)
-		dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pv.Pace)
-		pv.Floor, pv.Ceiling, pv.High = dp.Floor, reviewCeiling(dp.Ceiling, extra), high
-	} else {
-		pv.Floor, pv.Ceiling = pCfg.Floor, reviewCeiling(pCfg.Ceiling, extra)
+		pv.Floor, pv.Ceiling, pv.Room = 0, 0, 0
+		pv.Error = errMsg
+		pv.Stale = strings.Contains(errMsg, "stale")
+		pv.Blocks = []string{"subscription usage unknown (" + errMsg + ")"}
+		pv.Verdict = providerVerdict(0, pv.Blocks)
+		return pv
 	}
+	r := res.reading
+	pv.At = r.At
+	pv.Fallback = r.Fallback
+	if r.NoPlanWindows {
+		pv.NoPlanWindows = true
+		pv.Blocks = []string{claudeNoPlanWindows}
+		pv.Verdict = providerVerdict(0, pv.Blocks)
+		return pv
+	}
+	if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
+		pv.Buckets = make(map[string]*bucketView, len(r.Buckets))
+		pv.bucketOrder = bucketNames(r)
+		maxBucketCeiling := 0
+		anyBucketOpen := false
+		allHigh := true
+		var firstHighFH *usageWindow
+		var bucketBlocks []string
+		for _, bName := range pv.bucketOrder {
+			b := r.Buckets[bName]
+			fh := effectiveWindow(b.FiveHour, now)
+			sd := effectiveSevenDayWindow(b.SevenDay, now)
+			dp, high := pCfg.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
+			dp.Ceiling = reviewCeiling(dp.Ceiling, extra)
+			if high && firstHighFH == nil {
+				firstHighFH = fh
+			}
+			bBusy := pa.BucketBusy[bName]
+			if bBusy == nil {
+				bBusy = []string{}
+			}
+			var bBlocks []string
+			switch {
+			case high:
+				bBlocks = append(bBlocks, highBlockText(fh, pv.HighPercent, now))
+			case pCfg.FiveHourMax > 0 && fh != nil && fh.UsedPercent >= pCfg.FiveHourMax:
+				bBlocks = append(bBlocks, fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(pCfg.FiveHourMax)))
+			case pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax:
+				bBlocks = append(bBlocks, fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax)))
+			case dp.Ceiling == 0:
+				bBlocks = append(bBlocks, ceilingZero)
+			case len(bBusy) >= dp.Ceiling:
+				bBlocks = append(bBlocks, fmt.Sprintf("%d busy at the ceiling of %d", len(bBusy), dp.Ceiling))
+			}
+			bRoom := 0
+			if len(bBlocks) == 0 {
+				bRoom = max(0, dp.Ceiling-len(bBusy))
+				anyBucketOpen = true
+			} else {
+				bucketBlocks = append(bucketBlocks, bName+": "+bBlocks[0])
+			}
+			if !high {
+				allHigh = false
+			}
+			maxBucketCeiling = max(maxBucketCeiling, dp.Ceiling)
+			pv.Buckets[bName] = &bucketView{
+				Name:     bName,
+				Busy:     bBusy,
+				Floor:    dp.Floor,
+				Ceiling:  dp.Ceiling,
+				Room:     bRoom,
+				FiveHour: fh,
+				SevenDay: sd,
+				Pace:     sdPace(sd),
+				High:     high,
+				Blocks:   bBlocks,
+			}
+		}
+		if maxBucketCeiling == 0 {
+			pv.Floor, pv.Ceiling, pv.Room = 0, 0, 0
+			pv.High = allHigh
+			if allHigh {
+				pv.FiveHour = firstHighFH
+			}
+			pv.Blocks = bucketBlocks
+			pv.Verdict = providerVerdict(0, pv.Blocks)
+			return pv
+		}
+		pv.Ceiling = min(reviewCeiling(pCfg.Ceiling, extra), maxBucketCeiling)
+		pv.Floor = min(pCfg.Floor, pv.Ceiling)
+		switch {
+		case pv.Ceiling == 0:
+			pv.Blocks = []string{ceilingZero}
+		case len(pv.Busy) >= pv.Ceiling:
+			pv.Blocks = []string{fmt.Sprintf("%d busy at the ceiling of %d", len(pv.Busy), pv.Ceiling)}
+		case !anyBucketOpen:
+			pv.Blocks = bucketBlocks
+		default:
+			pv.Room = pv.Ceiling - len(pv.Busy)
+			for _, bv := range pv.Buckets {
+				bv.Room = min(bv.Room, pv.Room)
+			}
+		}
+		pv.Verdict = providerVerdict(pv.Room, pv.Blocks)
+		return pv
+	}
+	pv.FiveHour = effectiveWindow(r.FiveHour, now)
+	pv.SevenDay = effectiveSevenDayWindow(r.SevenDay, now)
+	pv.Pace = sdPace(pv.SevenDay)
+	dp, high := pCfg.DeriveWithPace(pctPtr(pv.FiveHour), pctPtr(pv.SevenDay), pv.Pace)
+	pv.Floor, pv.Ceiling, pv.High = dp.Floor, reviewCeiling(dp.Ceiling, extra), high
 	switch {
 	case pv.High:
 		pv.Blocks = []string{highBlockText(pv.FiveHour, pv.HighPercent, now)}
-	case pCfg.Enabled() && pCfg.FiveHourMax > 0 && pv.FiveHour != nil && pv.FiveHour.UsedPercent >= pCfg.FiveHourMax:
+	case pCfg.FiveHourMax > 0 && pv.FiveHour != nil && pv.FiveHour.UsedPercent >= pCfg.FiveHourMax:
 		pv.Blocks = []string{fmt.Sprintf("5h %s at or past %s", pct(pv.FiveHour.UsedPercent), pct(pCfg.FiveHourMax))}
-	case pCfg.Enabled() && pCfg.SevenDayMax > 0 && pv.SevenDay != nil && pv.SevenDay.UsedPercent >= pCfg.SevenDayMax:
+	case pCfg.SevenDayMax > 0 && pv.SevenDay != nil && pv.SevenDay.UsedPercent >= pCfg.SevenDayMax:
 		pv.Blocks = []string{fmt.Sprintf("7d %s at or past %s", pct(pv.SevenDay.UsedPercent), pct(pCfg.SevenDayMax))}
 	case pv.Ceiling == 0:
 		pv.Blocks = []string{ceilingZero}

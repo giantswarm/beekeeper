@@ -97,7 +97,7 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 	var out []chore
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
-			if why := stoppedExecutionWhy(st, ag); why != "" {
+			if why := stoppedExecutionWhy(st, ag); why != "" && !busy(ag.Party) {
 				out = append(out, chore{kind: choreRemove, agent: ag, why: why})
 			}
 			continue
@@ -310,7 +310,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return false // its only activity, the sleeping waits, is stopped
 		}
 		_, turn := turnRunning(sessions, t, p, a.now)
-		return turn || inFlight(p)
+		return turn || executionInTurn(st, p, a.now) || inFlight(p)
 	}
 	chores := planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now)
 	fix := func(f config.Fault) bool { return !r.dryRun && (f.Unattended || slices.Contains(r.attended, f.Name)) }

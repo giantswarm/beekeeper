@@ -209,6 +209,28 @@ const transcriptRefusal = "Refused: this call may read another session's private
 // Include literal paths embedded in interpreter code, not just shell words.
 var transcriptHomeComponent = regexp.MustCompile(`['"]\.(?:codex|claude|gemini|omp|agy)['"]`)
 
+// Inspect operations outside string data. A harness component may be stored in
+// a replacement variable, but grouping or a variable must not hide a path
+// operation. We cannot prove the base of such constructions, so fail closed.
+var transcriptCodeString = regexp.MustCompile(`[fF]?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
+var transcriptPathOperation = regexp.MustCompile(`[/+]|\b(?:join|Join|joinpath|home|expanduser|homedir|environ|getenv)\b`)
+
+func unresolvedTranscriptPath(code string) bool {
+	if !transcriptHomeComponent.MatchString(code) {
+		return false
+	}
+	operations := transcriptCodeString.ReplaceAllStringFunc(code, func(literal string) string {
+		// Formatted strings contain executable expressions, not just data.
+		if literal[0] == 'f' || literal[0] == 'F' {
+			return literal
+		}
+		return ""
+	})
+	return transcriptPathOperation.MatchString(operations)
+}
+
+const transcriptUnresolved = "Refused: the guard cannot resolve a constructed harness path in this script. Use explicit file paths so transcript access can be checked, or ask the supervisor for an explicit fixture grant."
+
 var transcriptLiteralPath = regexp.MustCompile(`(?:~|\$\{?[A-Z_]+\}?|/)[^\s'"` + "`" + `(){};,<>|]+`)
 
 func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]string) *leak {
@@ -258,14 +280,17 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 		}
 		// A program that constructs a harness home from a quoted component
 		// has no statically provable transcript target: fail closed.
-		if ip, ok := interpreters[name]; ok && ip.code != nil && transcriptHomeComponent.MatchString(word) {
-			return &leak{never: true, transcript: true}
+		if ip, ok := interpreters[name]; ok && ip.code != nil && unresolvedTranscriptPath(word) {
+			return &leak{never: true, transcript: true, unresolvedTranscript: true}
 		}
 		word = strings.TrimPrefix(strings.TrimPrefix(word, "0<"), "<>")
 		if _, value, ok := strings.Cut(word, "="); ok {
 			word = value
 		}
 		candidates := []string{word}
+		for _, component := range transcriptHomeComponent.FindAllString(word, -1) {
+			candidates = append(candidates, strings.Trim(component, `"'`))
+		}
 		for _, literal := range transcriptLiteralPath.FindAllString(word, -1) {
 			// A slash in a jq operator or a shell parameter is not an absolute path.
 			if strings.Trim(literal, "/") != "" && !strings.Contains(word, "${") {

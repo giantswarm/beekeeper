@@ -415,8 +415,11 @@ func (a *app) printHolds(holds []state.Hold) {
 	_, _ = fmt.Fprintln(w, "TARGET\tSTATE\tUNTIL\tBY\tSINCE\tREASON")
 	for _, h := range holds {
 		status, end := holdActive, holdEnd(a, h)
-		if h.LiftedBy != nil {
+		switch {
+		case h.LiftedBy != nil:
 			status = liftedText(a, h)
+		case upgrade.Stale(h, a.now):
+			status = holdActive + ", stale"
 		}
 		if end == "" {
 			end = "until lifted"

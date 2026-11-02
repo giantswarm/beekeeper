@@ -36,6 +36,7 @@ func sshStartTestApp(t *testing.T) (*app, string) {
 	plat.Machine = roomyMachine{Machine: plat.Machine}
 	a.cfg.Identity.Host = sshTestCoordinator
 	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{claudeComm: {Ceiling: 1}}, Choices: []config.Choice{{Harness: claudeComm, Model: bgModel}}}
+	stubSubscriptionUsage(a)
 	a.cfg.Agents.Hosts = map[string]config.ExecutionHost{}
 	for _, selector := range []string{sshTestSelector, sshTestOtherSelector} {
 		a.cfg.Agents.Hosts[selector] = execution.Host{Endpoint: execution.Endpoint{SSH: selector + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: execution.HostID(selector), WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{sshTestRepository: "/srv/source"}, Harnesses: []string{claudeComm}, PolicyDigest: execution.Digest([]byte("fixture policy")), MaxBusy: 2}
@@ -345,7 +346,7 @@ func TestExecutionCapacityWeighsOnlyTheHostsHarnesses(t *testing.T) {
 	}
 	k = a.cfg.Capacity
 	k.Choices = append([]config.Choice{{Harness: codex.Harness, Model: "gpt-fixture"}}, k.Choices...)
-	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, nil, nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != claudeComm {
+	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, a.executionReadings(context.Background(), k), nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != claudeComm {
 		t.Fatalf("the host's Claude choice: room %d, choice %+v, blocks %v", v.Room, v.Choice, v.Blocks)
 	}
 }

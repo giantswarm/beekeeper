@@ -384,7 +384,8 @@ its key first in the detail):
             command of the repository's path: the gate's devctl pr merge
             <repo> <n> --update-branch on a repository of
             merge.devctlOwners, whose base update the go covers, else gh
-            pr merge --match-head-commit <head>. An approval covers a head
+            pr merge --match-head-commit <head> (--admin --match-head-commit
+            <head> where merge.admin lists the repository). An approval covers a head
             that only brings the base into the approved one: the approved
             head is its ancestor, every commit it adds is a merge, and its
             change against its merge base with the base branch is the
@@ -493,6 +494,13 @@ its key first in the detail):
             A done report's problems arrive together before the done settles.
             No decision note or thread reference is needed. A problem naming
             its issue is already filed; the agent keeps its task
+  intake    an issue the desk filed (a problem report's issue URL, a
+            follow-up named in a report, an issue a session created with gh
+            issue create): put on the configured board in Backlog (board
+            move --intake), unless it already sits on another board where it
+            is being worked, and ranked from the priority list (board rank
+            --after) right after the high-ranked epic or item it blocks or
+            follows from
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -559,9 +567,11 @@ type supervisorLoop struct {
 	stopWatch  func()
 	// tidyAt is when the loop last ran board tidy.
 	tidyAt time.Time
-	// stages are the release stages finished, by key.
-	stages    map[string]bool
-	postMerge []superloop.Action
+	// stages are the release or intake stages finished, by key; stageDetail
+	// is the recorded detail of each stage.
+	stages      map[string]bool
+	stageDetail map[string]string
+	postMerge   []superloop.Action
 	// fillPause defers an unproductive board read until capacity changes,
 	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
@@ -804,8 +814,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now, PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
-		DevctlOwners: a.cfg.Merge.DevctlOwners, BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
-		Open: func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration}
+		DevctlOwners: a.cfg.Merge.DevctlOwners, Admin: a.cfg.Merge.Admin,
+		BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
+		Open:       func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
+		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
+	if in.Board {
+		in.Filed = l.filedIssues(st)
+	}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
@@ -830,7 +845,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	claims, stages := map[string]loopClaim{}, map[string]bool{}
+	claims, stages, stageDetail := map[string]loopClaim{}, map[string]bool{}, map[string]string{}
 	failures := map[string]loopFailure{}
 	for _, e := range taken {
 		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
@@ -846,6 +861,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			delete(claims, key)
 		case e.Verb == loopStageVerb:
 			stages[key] = true
+			stageDetail[key] = rest
 		case e.Verb == loopFailureVerb:
 			var f loopFailure
 			if json.Unmarshal([]byte(rest), &f) == nil {
@@ -856,7 +872,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}
-	l.stages = stages
+	l.stages, l.stageDetail = stages, stageDetail
 	since := l.since
 	evs, err := a.store.Follow("supervisor-loop", func(e state.Event) bool {
 		return slices.Contains(loopEventVerbs, e.Verb) && !e.At.Before(since)
@@ -911,9 +927,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	l.postMerge = superloop.ReleaseWorkers(in)
 	if len(l.postMerge) > 0 {
-		sessions, _, sessionErr := a.sessions()
+		sessions, _, sessionErr := loopSessions(a)
 		for i, ag := range st.Agents {
-			if sessionErr != nil && !platform.Missing(sessionErr) {
+			if ag.Execution != nil {
+				in.Workers[i].LastActive = executionLastActive(st, ag, a.now)
+			} else if sessionErr != nil && !platform.Missing(sessionErr) {
 				in.Workers[i].LastActive = a.now // never retire on a failed observation
 			} else if s, ok := claude.Live(sessions, ag.Party); ok {
 				in.Workers[i].LastActive = s.LastActive
@@ -1069,6 +1087,8 @@ func would(act superloop.Action) string {
 		return "install " + act.Version
 	case superloop.KindClassify:
 		return fmt.Sprintf("send its %s to the guide", act.Event.Verb)
+	case superloop.KindIntake:
+		return fmt.Sprintf("put %s on the board in Backlog and rank it", act.URL)
 	case superloop.KindGo, superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
@@ -1133,6 +1153,17 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 			logged("agents.remove", func(d string) bool { return d == c.target })
 	case superloop.KindEscalate, superloop.KindClassify, superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
+	case superloop.KindIntake:
+		for _, e := range evs {
+			if e.Verb == "board.move" && opens(e.Detail) {
+				moveStage := act.Key + " move"
+				l.stages[moveStage] = true
+				if l.stageDetail != nil && l.stageDetail[moveStage] == "" {
+					l.stageDetail[moveStage] = e.Detail
+				}
+			}
+		}
+		done = logged("board.rank", opens)
 	}
 	if !done {
 		return "", false, nil
@@ -1424,6 +1455,8 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.classify(ctx, st, act)
 	case superloop.KindFile:
 		return l.toFile(ctx, st, act)
+	case superloop.KindIntake:
+		return l.intakeIssue(ctx, st, act)
 	}
 	return "", fmt.Errorf("no transition for %s", act.Kind)
 }
@@ -1436,8 +1469,81 @@ func redChecks(key string) string {
 
 // loopInTurn reports whether p's session runs a turn.
 var loopInTurn = func(a *app, p state.Party) bool {
+	if a.executionInTurn(p) {
+		return true
+	}
 	_, ok := a.runningTurn(p)
 	return ok
+}
+
+// executionLastActive is the latest activity recorded for ag's managed SSH
+// execution, or now when its host is unreachable so a failed observation
+// never retires a post-merge worker.
+func executionLastActive(st *state.State, ag state.Agent, now time.Time) time.Time {
+	if ag.Execution == nil {
+		return time.Time{}
+	}
+	r, _ := executionRecord(st, *ag.Execution)
+	if r == nil {
+		return time.Time{}
+	}
+	if r.Observation.Reachability == execution.Unreachable {
+		return now
+	}
+	last := r.LastActive
+	if r.Observation.LastActive.After(last) {
+		last = r.Observation.LastActive
+	}
+	if r.Published != nil && r.Published.At.After(last) {
+		last = r.Published.At
+	}
+	if !r.Terminal() && r.StopRequest == nil && r.Observation.InTurn && r.Observation.ObservedAt.After(last) {
+		last = r.Observation.ObservedAt
+	}
+	return last
+}
+
+func (a *app) executionInTurn(p state.Party) bool {
+	st, err := a.store.Read()
+	if err != nil {
+		return false
+	}
+	return executionInTurn(st, p, a.now)
+}
+
+// executionInTurn reports whether p's managed SSH execution is in a turn:
+// the host observation reports an active turn, a wake message is in flight,
+// or the coordinator recorded turn activity within stewardQuiet while the
+// worker is neither parked nor finished.
+func executionInTurn(st *state.State, p state.Party, now time.Time) bool {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Execution != nil && ag.Is(p) })
+	if i < 0 {
+		return false
+	}
+	ag := st.Agents[i]
+	r, _ := executionRecord(st, *ag.Execution)
+	if r == nil || r.Terminal() || r.StopRequest != nil {
+		return false
+	}
+	if r.Observation.InTurn {
+		return true
+	}
+	for _, m := range r.Messages {
+		if m.Stage == execution.Uncertain || (!r.Completed && !ag.Done && (m.Stage == executionPending || m.Stage == execution.Stored)) {
+			return true
+		}
+	}
+	if ag.Park != nil || r.Completed || ag.Done || now.IsZero() {
+		return false
+	}
+	last := r.LastActive
+	if r.Observation.LastActive.After(last) {
+		last = r.Observation.LastActive
+	}
+	if r.Published != nil && r.Published.At.After(last) {
+		last = r.Published.At
+	}
+	return !last.IsZero() && now.Sub(last) < stewardQuiet
 }
 
 // loopSessions reads the running Claude sessions and process table for a pass.
@@ -2169,9 +2275,126 @@ const fileReportSeparator = "; file in the owning repositories:\n"
 
 // toFile leaves the full finding in the settled transition's event. The
 // guide's feed reads that event once; no decision or thread is needed.
-func (l *supervisorLoop) toFile(_ context.Context, _ *state.State, act superloop.Action) (string, error) {
+func (l *supervisorLoop) toFile(_ context.Context, st *state.State, act superloop.Action) (string, error) {
 	e := *act.Event
-	return fmt.Sprintf("%s reported at %s%s%s", e.Agent, e.At.UTC().Format(time.RFC3339), fileReportSeparator, act.Message), nil
+	from := ""
+	if ref := agentRef(st, e.Agent); ref != "" && !strings.Contains(act.Message, ref) {
+		from = " (from " + ref + ")"
+	}
+	return fmt.Sprintf("%s reported at %s%s%s%s", e.Agent, e.At.UTC().Format(time.RFC3339), from, fileReportSeparator, act.Message), nil
+}
+
+// readIntakeAnchor resolves the board item that ref should be ranked right
+// after (Client.RankAnchor).
+var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (string, error) {
+	return a.boardClient().RankAnchor(ctx, ref, from)
+}
+
+// filedIssues reads the issues created by sessions active since the loop
+// started (Work.Created), with the item or pull request each session was
+// working on when it filed the issue.
+func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
+	sessions, _, err := loopSessions(l.a)
+	if err != nil || len(sessions) == 0 {
+		return nil
+	}
+	var out []superloop.FiledIssue
+	for _, s := range sessions {
+		if !s.LastActive.IsZero() && s.LastActive.Before(l.since) {
+			continue
+		}
+		w, _ := harnessForSession(s).ReadTranscript(l.a, s, l.a.now)
+		if len(w.Created) == 0 {
+			continue
+		}
+		p := s.Party()
+		agent := p.Name
+		from := ""
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			agent = st.Agents[i].Name
+			from = agentRef(st, agent)
+		} else if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(p) {
+			agent = "guide"
+		}
+		if from == "" {
+			for _, list := range [][]string{w.Refs, w.Mentioned} {
+				for _, r := range list {
+					if !slices.ContainsFunc(w.Created, func(c string) bool { return strings.EqualFold(c, r) }) {
+						from = r
+						break
+					}
+				}
+				if from != "" {
+					break
+				}
+			}
+		}
+		for _, c := range w.Created {
+			r, ok := parseRef(c)
+			if !ok {
+				continue
+			}
+			ref := refName(r)
+			url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
+			out = append(out, superloop.FiledIssue{Ref: ref, URL: url, Agent: agent, From: from})
+		}
+	}
+	return out
+}
+
+// intakeIssue puts act.Ref onto the configured board in Backlog, unless it
+// already sits on another board where it is being worked, and ranks it from
+// the priority list right after the high-ranked epic or item it blocks or
+// follows from.
+func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if lowBudget(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+		return "", errLoopLater
+	}
+	moveStage := act.Key + " move"
+	moveLine := l.stageDetail[moveStage]
+	if !l.stages[moveStage] {
+		if err := l.claim(act, act.Ref); err != nil {
+			return "", err
+		}
+		out, err := l.run(ctx, loopBoard, "move", act.Ref, "backlog", "--intake")
+		if err != nil {
+			return "", err
+		}
+		l.boardNone = nil
+		l.fillPause = fillPause{}
+		moveLine = oneLine(out)
+		if strings.HasPrefix(moveLine, "left ") {
+			return moveLine, nil
+		}
+		if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] %s", moveStage, moveLine)); err != nil {
+			return "", err
+		}
+		l.stages[moveStage] = true
+		if l.stageDetail != nil {
+			l.stageDetail[moveStage] = moveLine
+		}
+	}
+	from := cmp.Or(act.Message, agentRef(st, act.Agent))
+	anchor, err := readIntakeAnchor(ctx, l.a, act.Ref, from)
+	if err != nil {
+		return "", err
+	}
+	if anchor == "" && from != "" && !superloop.IsPull(from) {
+		if r, ok := parseRef(from); ok && !strings.EqualFold(refName(r), act.Ref) {
+			anchor = refName(r)
+		}
+	}
+	if anchor != "" && !strings.EqualFold(anchor, act.Ref) {
+		rankOut, err := l.run(ctx, loopBoard, "rank", act.Ref, "--after", anchor)
+		if err != nil {
+			return "", err
+		}
+		if moveLine == "" {
+			return oneLine(rankOut), nil
+		}
+		return fmt.Sprintf("%s; %s", moveLine, oneLine(rankOut)), nil
+	}
+	return moveLine, nil
 }
 
 // agentRef is the issue or pull request the agent works: what it is
