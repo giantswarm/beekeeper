@@ -50,7 +50,7 @@ func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Cont
 	cfg := "stateDir: " + dir + "\n" +
 		"claude: {projectsDir: " + filepath.Join(dir, "projects") + ", sessionsDir: " + filepath.Join(dir, "sessions") + "}\n" +
 		"lanes: [{name: " + loopLane + ", installation: gazelle, repositories: [" + loopRepo + "]}]\n" +
-		"watch: {interval: " + interval + ", budgetEvery: 24h" + extra + "}\n"
+		"watch: {batchInterval: -1s, interval: " + interval + ", budgetEvery: 24h" + extra + "}\n"
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
