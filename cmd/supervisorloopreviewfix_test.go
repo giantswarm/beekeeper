@@ -306,3 +306,151 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 		t.Fatalf("approved second round did not merge: %v\n%s", r.calls, r.out)
 	}
 }
+
+func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.ReviewRounds = 2
+	r.sshLoopHost(t, true)
+	host := r.a.cfg.Agents.Hosts[sshTestSelector]
+	host.Repositories[loopMergeRepo] = "/srv/repo"
+	r.a.cfg.Agents.Hosts[sshTestSelector] = host
+	wasDefaultBranch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = wasDefaultBranch })
+	ghDefaultBranch = func(_ context.Context, _ string) (string, error) {
+		return "main", nil
+	}
+	r.pull.Branch = "fix-2079-deleted-after-merge"
+	r.pull.Base = "main"
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-session-1")
+	postMergeWork := "prove v0.175.0 rollout on live cluster"
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.PostMerge = &postMergeWork
+		st.Records = append(st.Records, state.Record{Session: st.Agents[0].Party, Issue: "o/r#5"})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass 1: worker ends into ReviewParks and R1 starts.
+	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.ReviewParks) != 1 || st.ReviewParks[0].Serves != "o/r#5" || st.ReviewParks[0].PostMerge == nil || *st.ReviewParks[0].PostMerge != postMergeWork {
+		t.Fatalf("ReviewPark lost Serves or PostMerge: %+v", st.ReviewParks)
+	}
+
+	// Pass 2: R1 requests changes; fixer starts on the PR branch with original task and post-merge metadata.
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "fix handler.go:42")
+	r.answer = func(args []string) (string, int) {
+		if len(args) >= 1 && args[0] == loopCapacity {
+			if slices.Contains(args, "--host") {
+				return `{"room":1}`, 0
+			}
+			return `{"room":0}`, 0
+		}
+		return "", 0
+	}
+	r.pass(t)
+	fixerStart := r.called(agentsName, agentStartName, loopWorker)
+	if fixerStart == nil || !slices.Contains(fixerStart, "fix-2079-deleted-after-merge") {
+		t.Fatalf("expected remote fixer start on PR branch, got %v", fixerStart)
+	}
+	fixerBriefBytes, err := os.ReadFile(fixerStart[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixerBrief := string(fixerBriefBytes)
+	if !strings.Contains(fixerBrief, reviewFixIssue) || !strings.Contains(fixerBrief, postMergeWork) {
+		t.Fatalf("fixer brief missing original task URL or post-merge work:\n%s", fixerBrief)
+	}
+
+	// Pass 3: the fixer registers and parks with a PLAIN park (no --post-merge flag), as its brief or a worker might.
+	r.pull.Head = loopFixed
+	wasReviewHead := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = wasReviewHead })
+	parkReviewHead = func(string) string { return loopFixed }
+	fixerParty := state.Party{Name: loopWorker, Session: "worker-session-2"}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: fixerParty, Task: "fix " + loopURL})
+		st.Starts = append(st.Starts, state.Start{Party: fixerParty, By: loopParty, At: time.Now().Add(time.Minute), Dir: t.TempDir()})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.a.park(fixerParty, loopPR, deskReviewWait); err != nil {
+		t.Fatal(err)
+	}
+	r.a.now = time.Now().Add(2 * time.Minute)
+	r.pass(t)
+	st, err = r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.ReviewParks) != 1 || st.ReviewParks[0].Serves != "o/r#5" || st.ReviewParks[0].PostMerge == nil || *st.ReviewParks[0].PostMerge != postMergeWork {
+		t.Fatalf("plain fixer park lost original Serves or PostMerge: %+v", st.ReviewParks)
+	}
+
+	// Pass 4: R2 approves and merges; pass 5 sees the merged PR and starts post-merge continuation on "main", not the deleted PR branch.
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
+	r.pull.State = superloop.Merged
+	r.pull.MergeCommit = "9999999999999999999999999999999999999999"
+	r.pass(t)
+	contStart := r.called(agentsName, agentStartName, loopWorker)
+	if contStart == nil {
+		t.Fatalf("expected post-merge continuation start, got calls=%v\n%s", r.calls, r.out)
+	}
+	if slices.Contains(contStart, "fix-2079-deleted-after-merge") || !slices.Contains(contStart, "main") {
+		t.Fatalf("post-merge continuation used deleted PR branch instead of surviving ref: %v", contStart)
+	}
+	contBriefBytes, err := os.ReadFile(contStart[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	contBrief := string(contBriefBytes)
+	if !strings.Contains(contBrief, reviewFixIssue) || !strings.Contains(contBrief, postMergeWork) || strings.Contains(contBrief, "request the next review round") {
+		t.Fatalf("continuation brief did not use continuation instructions:\n%s", contBrief)
+	}
+}
+
+func TestEndReviewWorkersPersistsReviewParkBeforeRosterRemoval(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-session-1")
+	postMergeWork := "verify deployment"
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.PostMerge = &postMergeWork
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate `agents remove` durably removing the roster entry on disk and then failing/interrupting before endReviewWorkers finishes.
+	failedOnce := false
+	r.answer = func(args []string) (string, int) {
+		if len(args) >= 2 && args[0] == agentsName && args[1] == loopRemove && !failedOnce {
+			failedOnce = true
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = nil
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return "interrupted after roster removal", 1
+		}
+		return "", 0
+	}
+	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Agents) != 0 || len(st.ReviewParks) != 1 || st.ReviewParks[0].ReviewHead != loopHead {
+		t.Fatalf("review handoff was lost across roster removal interruption: Agents=%+v ReviewParks=%+v", st.Agents, st.ReviewParks)
+	}
+	if r.called(agentsName, agentStartName, loopReviewer) == nil {
+		t.Fatalf("reviewer did not start from persisted ReviewPark after interruption: %v\n%s", r.calls, r.out)
+	}
+}

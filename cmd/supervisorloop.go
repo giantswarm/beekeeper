@@ -1816,6 +1816,21 @@ func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
 	return ag.Park.PostMerge != nil || st.Starts[k].Dir != ""
 }
 
+func reviewParkServes(st *state.State, ag state.Agent, on string) string {
+	if s := loopServes(st, ag); s != "" && !strings.EqualFold(s, on) {
+		return s
+	}
+	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) {
+		if r, ok := parseRef(ref); ok {
+			return refName(r)
+		}
+	}
+	if rp, ok := st.ReviewParkFor(on); ok && rp.Serves != "" {
+		return rp.Serves
+	}
+	return ""
+}
+
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
 	for _, ag := range st.Agents {
 		if ag.Park == nil || ag.Park.ReviewHead == "" {
@@ -1828,11 +1843,19 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 		if l.dryRun || !shouldEndReviewWorker(st, ag) {
 			continue
 		}
+		if loopInTurn(l.a, ag.Party) {
+			l.sayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
+			continue
+		}
 		var selector, model string
+		worktreeDir := ag.Park.Worktree
 		if k := st.StartIndex(ag.Party); k >= 0 {
 			model = st.Starts[k].Model
 			if st.Starts[k].Execution != nil {
 				selector = st.Starts[k].Execution.Selector
+			}
+			if worktreeDir == "" {
+				worktreeDir = st.Starts[k].Dir
 			}
 		}
 		rp := state.ReviewPark{
@@ -1844,13 +1867,15 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 			Execution:  ag.Execution,
 			Selector:   selector,
 			Model:      cmp.Or(ag.Model, model),
-			Serves:     loopServes(st, ag),
+			Serves:     reviewParkServes(st, ag, on),
 			PostMerge:  ag.Park.PostMerge,
-			Worktree:   ag.Park.Worktree,
+			Worktree:   worktreeDir,
 		}
-		if loopInTurn(l.a, ag.Party) {
-			l.sayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
-			continue
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.UpsertReviewPark(rp)
+			return nil, nil
+		}); err != nil {
+			return err
 		}
 		if ref := ag.Execution; ref != nil {
 			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
@@ -1858,31 +1883,30 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 					l.sayOnce("stop "+ag.Name, "SUPERVISOR STOP FAILED %s: %v", ag.Name, err)
 					continue
 				}
+				if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+					if r, _ := executionRecord(current, *ref); r != nil {
+						r.Observation.StopAcknowledged = true
+						r.Observation.ProcessState = execution.Exited
+					}
+					return nil, nil
+				}); err != nil {
+					return err
+				}
 			}
 		}
 		if _, err := l.run(ctx, agentsName, loopRemove, ag.Name); err != nil {
 			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
 			continue
 		}
-		worktreeDir := ag.Park.Worktree
-		if worktreeDir == "" {
-			if k := st.StartIndex(ag.Party); k >= 0 {
-				worktreeDir = st.Starts[k].Dir
-			}
-		}
-		_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.UpsertReviewPark(rp)
-			if ag.Execution != nil {
-				if r, _ := executionRecord(current, *ag.Execution); r != nil {
-					r.Observation.StopAcknowledged = true
-					r.Observation.ProcessState = execution.Exited
-				}
-			}
 			if i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) }); i >= 0 {
 				removeAgent(current, i)
 			}
 			return nil, nil
-		})
+		}); err != nil {
+			return err
+		}
 		l.a.cleanRemovedWorktree(ctx, worktreeDir, ag.Park.ReviewHead)
 	}
 	return nil
@@ -1895,15 +1919,22 @@ func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, 
 	return l.startFixer(ctx, st, act)
 }
 
-const defaultFixerBrief = `Fix the findings on {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
+const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{else}}Fix{{end}} the findings on {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
 
 {{.Task}}
 
 Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
-cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}} "desk review"
+cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
-func (l *supervisorLoop) startFixer(ctx context.Context, _ *state.State, act superloop.Action) error {
+const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
+
+{{.Task}}
+
+Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Complete the remaining work and finish with beekeeper agents idle --done --report and --problem.
+`
+
+func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
 	if l.startsHeld {
 		return errLoopLater
 	}
@@ -1911,12 +1942,15 @@ func (l *supervisorLoop) startFixer(ctx context.Context, _ *state.State, act sup
 	if !ok {
 		return refused("invalid pull request ref %q", act.Ref)
 	}
-	branch := ""
-	if p, err := readLoopPull(ctx, act.Ref); err == nil {
-		branch = p.Branch
-	}
-	if branch == "" {
-		branch = fmt.Sprintf("pr-%d", r.N)
+	rp, hasRP := st.ReviewParkFor(act.Ref)
+	var servesURL, postMerge string
+	if hasRP {
+		if rp.Serves != "" && !strings.EqualFold(rp.Serves, act.Ref) {
+			servesURL = issueURL(rp.Serves)
+		}
+		if rp.PostMerge != nil {
+			postMerge = strings.TrimSpace(*rp.PostMerge)
+		}
 	}
 	place, err := l.startPlacement(ctx, r.Repo, false, false)
 	if err != nil {
@@ -1926,17 +1960,38 @@ func (l *supervisorLoop) startFixer(ctx context.Context, _ *state.State, act sup
 		}
 		return err
 	}
-	if place.remote() {
-		place.Ref = branch
+	tmpl := defaultFixerBrief
+	branch := ""
+	head := act.Head
+	if act.Kind == superloop.KindEnd {
+		tmpl = defaultContinuationBrief
+		merged := l.merged[act.Ref]
+		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
+		branch = cmp.Or(place.Ref, merged.Base, "main")
+		if place.remote() && place.Ref == "" {
+			place.Ref = cmp.Or(merged.Base, merged.MergeCommit, "main")
+		}
+	} else {
+		if p, err := readLoopPull(ctx, act.Ref); err == nil {
+			branch = p.Branch
+		}
+		if branch == "" {
+			branch = fmt.Sprintf("pr-%d", r.N)
+		}
+		if place.remote() {
+			place.Ref = branch
+		}
 	}
-	brief, err := l.brief("", defaultFixerBrief, act.Key, briefData{
-		URL:    act.URL,
-		Repo:   r.Repo,
-		Number: r.N,
-		Head:   act.Head,
-		Branch: branch,
-		Worker: act.Agent,
-		Task:   act.Message,
+	brief, err := l.brief("", tmpl, act.Key, briefData{
+		URL:       act.URL,
+		Repo:      r.Repo,
+		Number:    r.N,
+		Head:      head,
+		Branch:    branch,
+		Worker:    act.Agent,
+		Task:      act.Message,
+		ServesURL: servesURL,
+		PostMerge: postMerge,
 	})
 	if err != nil {
 		return err
@@ -1966,13 +2021,23 @@ func (l *supervisorLoop) startFixer(ctx context.Context, _ *state.State, act sup
 		}
 		return err
 	}
+	if hasRP && rp.Serves != "" {
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			if i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }); i >= 0 {
+				inheritReviewParkOnAgent(current, &current.Agents[i], rp, l.a.now.UTC())
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Branch, Worker, Task string
-	Number, Round                         int
+	URL, Repo, Head, Branch, Worker, Task, ServesURL, PostMerge string
+	Number, Round                                               int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.

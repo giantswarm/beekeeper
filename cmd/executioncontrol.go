@@ -350,10 +350,19 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
-			if v.PostMerge == nil {
-				empty := ""
-				v.PostMerge = &empty
+			pm := ""
+			if v.PostMerge != nil {
+				pm = *v.PostMerge
 			}
+			if pm == "" && ag.Park != nil && ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
+				pm = *ag.Park.PostMerge
+			}
+			if pm == "" {
+				if rp, ok := st.ReviewParkFor(v.On); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
+					pm = *rp.PostMerge
+				}
+			}
+			v.PostMerge = &pm
 			if ag.Execution != nil {
 				if r, _ := executionRecord(st, *ag.Execution); r != nil {
 					r.Completed = true
@@ -362,10 +371,13 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		} else {
 			v.PostMerge = nil
 		}
-		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		if v.On != "" {
+			if rp, ok := st.ReviewParkFor(v.On); ok {
+				inheritReviewParkOnAgent(st, ag, rp, a.now.UTC())
+			}
 			st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
 		}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {
 			if st.Records[i].Session.Is(me) {
 				st.Records[i].Waits = oneLine(v.Waits)

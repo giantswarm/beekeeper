@@ -219,6 +219,14 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			if len(postMerge) > 0 {
 				pm = postMerge[0]
 			}
+			if pm == "" && st.Agents[i].Park != nil && st.Agents[i].Park.PostMerge != nil && *st.Agents[i].Park.PostMerge != "" {
+				pm = *st.Agents[i].Park.PostMerge
+			}
+			if pm == "" {
+				if rp, ok := st.ReviewParkFor(on); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
+					pm = *rp.PostMerge
+				}
+			}
 			park.PostMerge = &pm
 			park.Worktree = parkWorktree(".")
 		}
@@ -231,11 +239,14 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		self := me
 		if i >= 0 {
 			self = st.Agents[i].Party
-			st.Agents[i].Park = park
-			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
 			if on != "" {
+				if rp, ok := st.ReviewParkFor(on); ok {
+					inheritReviewParkOnAgent(st, &st.Agents[i], rp, a.now.UTC())
+				}
 				st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, on) })
 			}
+			st.Agents[i].Park = park
+			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
 		} else {
 			// A session off the roster parks too: the watch wakes it by
 			// its session id once the wait settles, as it does an agent.
@@ -280,6 +291,23 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		}
 	}
 	return line, err
+}
+
+func inheritReviewParkOnAgent(st *state.State, ag *state.Agent, rp state.ReviewPark, now time.Time) {
+	if st == nil || ag == nil || rp.Serves == "" {
+		return
+	}
+	if loopServes(st, *ag) == "" {
+		st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(ag.Party) })
+		st.Records = append(st.Records, state.Record{Session: ag.Party, Issue: rp.Serves, By: ag.Party, At: now})
+	}
+	if u := issueURL(rp.Serves); u != "" && !strings.Contains(ag.Task, rp.Serves) && !strings.Contains(ag.Task, u) {
+		if ag.Task == "" {
+			ag.Task = "Continue " + u
+		} else {
+			ag.Task = u + ": " + ag.Task
+		}
+	}
 }
 
 // leaseParkOn is the On of a park on the lease res (lease claim --park):
