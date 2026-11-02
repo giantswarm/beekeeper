@@ -54,6 +54,9 @@ type escalation struct {
 	// on the same State.
 	Skip      string `json:"skip,omitempty"`
 	Unchanged bool   `json:"unchanged,omitempty"`
+	// Asked is the State the last note on it was filed on, "" for none: a
+	// skip's re-check keeps it, so a skip never makes an unchanged item new.
+	Asked string `json:"asked,omitempty"`
 
 	item board.Item
 }
@@ -175,6 +178,7 @@ func (a *app) judge(e escalation, f escalateFacts) escalation {
 	}
 	last := lastPersonComment(f.Comments)
 	e.State = stateOf(it, last)
+	e.Asked = f.Asked
 
 	// What it waits on and since when.
 	since := "since an unknown time: the board records no change of its Status"
@@ -209,7 +213,7 @@ func (a *app) judge(e escalation, f escalateFacts) escalation {
 	default:
 		e.Evidence = append(e.Evidence, fmt.Sprintf("newest comment by a person: %s on %s, %s", last.Login, last.At.UTC().Format(time.DateOnly), last.URL))
 		if !last.Member && !board.ContainsFold(f.People, last.Login) {
-			who = append(who, last.Login+" (outside the organisation)")
+			who = append(who, fmt.Sprintf("%s (outside the organisation, GitHub's association %s)", last.Login, last.Association))
 		}
 	}
 	e.Who = strings.Join(who, ", ")
@@ -236,7 +240,7 @@ func (a *app) judge(e escalation, f escalateFacts) escalation {
 		an := answeredOn()
 		e.Skip = fmt.Sprintf("%s answered on its thread %s: %q", an.For, an.At.UTC().Format(time.DateOnly), truncate(oneLine(an.Answer), 160))
 	case last != nil && !last.Member && !board.ContainsFold(f.People, last.Login):
-		e.Skip = fmt.Sprintf("its newest comment by a person is %s's, outside the organisation (%s): the wait is on them", last.Login, last.URL)
+		e.Skip = fmt.Sprintf("its newest comment by a person is %s's, outside the organisation (GitHub's association %s; a teammate's login belongs in board.people) (%s): the wait is on them", last.Login, last.Association, last.URL)
 	case f.Asked != "" && f.Asked == e.State:
 		e.Unchanged = true
 	}
@@ -312,7 +316,7 @@ func (a *app) beekeeperStep(ctx context.Context, name, ref string, args []string
 // filed on: while that State holds, it is not asked again.
 func (a *app) escalate(ctx context.Context, me state.Party, e escalation, every time.Duration) error {
 	if e.Skip != "" {
-		return a.recheck(ctx, me, e, every, "")
+		return a.recheck(ctx, me, e, every, e.Asked)
 	}
 	if e.Unchanged {
 		return a.recheck(ctx, me, e, every, e.State)
@@ -376,7 +380,23 @@ func (a *app) judgeAll(ctx context.Context, st *state.State, es []escalation, as
 	if len(es) == 0 {
 		return nil, nil
 	}
-	answers, err := a.answeredSince(time.Time{})
+	// An answer counts from when its item's Status was set: the oldest of
+	// those bounds the read, unless one is unknown.
+	from := es[0].Since
+	for _, e := range es {
+		if e.Since.IsZero() {
+			from = time.Time{}
+			break
+		}
+		if e.Since.Before(from) {
+			from = e.Since
+		}
+	}
+	if !from.IsZero() {
+		// answeredSince reads after it; judge counts one at it too.
+		from = from.Add(-time.Nanosecond)
+	}
+	answers, err := a.answeredSince(from)
 	if err != nil {
 		return nil, err
 	}

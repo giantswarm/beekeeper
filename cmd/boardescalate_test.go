@@ -336,3 +336,39 @@ func TestEscalateTimerCarriesTheAskedState(t *testing.T) {
 		}
 	}
 }
+
+// A skip keeps the state the last note was filed on: fire, skip (the
+// person's queue holds a note on it), fire again unchanged once that note
+// closed without an answer: no note is filed.
+func TestEscalateSkipKeepsTheAskedState(t *testing.T) {
+	r := newLoopRig(t)
+	e, f := judgedItem(r)
+	asked := r.a.judge(e, f).State
+	// Fire: a note on it is open, so it is skipped, and its re-check keeps
+	// the asked state.
+	f.Asked = asked
+	f.Notes = []state.Note{{ID: 4, For: loopPerson, Refs: []string{refOne}}}
+	skipped := r.a.judge(e, f)
+	if skipped.Skip == "" || skipped.Asked != asked {
+		t.Fatalf("judged %+v, want a skip that keeps %s", skipped, asked)
+	}
+	if err := r.a.escalate(context.Background(), loopParty, skipped, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls) != 1 || !strings.HasSuffix(r.calls[0][5], " board escalate --asked '"+asked+"' 'o/r#1'") {
+		t.Fatalf("calls %q, want only the timer carrying %s", r.calls, asked)
+	}
+	// Fire again: the note closed unanswered, the item unchanged.
+	f.Notes = nil
+	again := r.a.judge(e, f)
+	if !again.Unchanged {
+		t.Fatalf("judged %+v, want it unchanged", again)
+	}
+	r.calls = nil
+	if err := r.a.escalate(context.Background(), loopParty, again, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls) != 1 || r.calls[0][0] != loopTimer {
+		t.Errorf("calls %q, want only the timer and no note", r.calls)
+	}
+}
