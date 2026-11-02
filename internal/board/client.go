@@ -76,7 +76,7 @@ const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt number sta
 
 // itemFields is what a move takes of an item: its id, its board and the
 // board fields with the Team.
-const itemFields = `id project{id number owner{...on ProjectV2Owner{login}}} ` + boardFields + `
+const itemFields = `id project{id number owner{...on User{login} ...on Organization{login}}} ` + boardFields + `
 team:fieldValueByName(name:"` + TeamField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
 type issueJSON struct {
@@ -1267,12 +1267,6 @@ type projectItem struct {
 			Login string `json:"login"`
 		} `json:"owner"`
 	} `json:"project"`
-	Home *struct {
-		Number int `json:"number"`
-		Owner  *struct {
-			Login string `json:"login"`
-		} `json:"owner"`
-	} `json:"home"`
 	Status *struct {
 		Name      string
 		UpdatedAt time.Time `json:"updatedAt"`
@@ -1284,9 +1278,6 @@ type projectItem struct {
 func (p projectItem) boardName() string {
 	if p.Project.Owner != nil && p.Project.Owner.Login != "" && p.Project.Number != 0 {
 		return fmt.Sprintf("%s/%d", p.Project.Owner.Login, p.Project.Number)
-	}
-	if p.Home != nil && p.Home.Owner != nil && p.Home.Owner.Login != "" && p.Home.Number != 0 {
-		return fmt.Sprintf("%s/%d", p.Home.Owner.Login, p.Home.Number)
 	}
 	return p.Project.ID
 }
