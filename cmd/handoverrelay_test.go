@@ -77,18 +77,18 @@ func relayGH(_ context.Context, args ...string) ([]byte, error) {
 }
 
 func (is relayIssue) node() string {
-	priority, deps, blockedBy := jsonNull, `{"blockedBy":0,"totalBlockedBy":0}`, ""
+	priority, blockedBy, blockers := jsonNull, "", 0
 	if is.rank > 0 {
 		priority = fmt.Sprintf(`{"number":%d,"updatedAt":"2026-10-01T00:00:00Z","creator":{"login":"teemow"}}`, is.rank)
 	}
 	if is.blocker > 0 {
-		deps = `{"blockedBy":1,"totalBlockedBy":1}`
+		blockers = 1
 		blockedBy = fmt.Sprintf(`{"closedAt":null,"number":%d,"state":"OPEN","repository":{"nameWithOwner":"o/r"}}`, is.blocker)
 	}
 	return fmt.Sprintf(`{"id":"IT%d","status":{"name":%q,"updatedAt":"2026-10-01T00:00:00Z"},"kind":{"name":%q},"priority":%s,
 "content":{"number":%d,"url":"https://github.com/o/r/issues/%d","title":%q,"state":"OPEN","createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-01T00:00:00Z",
-"repository":{"nameWithOwner":"o/r"},"labels":{"nodes":[]},"assignees":{"nodes":[]},"issueDependenciesSummary":%s,"subIssuesSummary":{"total":0,"completed":0},
-"parent":null,"blockedBy":{"nodes":[%s]}}}`, is.n, is.status, is.kind, priority, is.n, is.n, is.title, deps, blockedBy)
+"repository":{"nameWithOwner":"o/r"},"labels":{"nodes":[]},"assignees":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},
+"parent":null,"blockedBy":{"totalCount":%d,"nodes":[%s]}}}`, is.n, is.status, is.kind, priority, is.n, is.n, is.title, blockers, blockedBy)
 }
 
 // promptSection is the part of a prompt from the heading title to the next
