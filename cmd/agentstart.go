@@ -1831,7 +1831,10 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 			st.Records = append(st.Records, state.Record{Session: s.Party, Issue: serves, By: s.By, At: s.At})
 		}
 	}
-	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return x.Execution == nil && s.At.Sub(x.At) > startsKept })
+	// A released execution never ran: nothing reconciles it again.
+	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool {
+		return (x.Execution == nil || !x.Execution.Released.IsZero()) && s.At.Sub(x.At) > startsKept
+	})
 	st.Starts = append(st.Starts, s)
 	return reg, nil
 }

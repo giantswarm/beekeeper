@@ -215,13 +215,57 @@ func activeExecution(st *state.State, ref execution.Ref) bool {
 }
 
 func executionNeedsSync(st *state.State, r *state.ExecutionRecord) bool {
-	if r == nil {
+	if r == nil || !r.Released.IsZero() {
 		return false
 	}
 	if !r.Terminal() || r.Observation.Reachability != execution.Reachable {
 		return true
 	}
 	return !r.Settled && !r.Completed && !r.Observation.StopAcknowledged && activeExecution(st, r.Handle.Ref)
+}
+
+// unstartedGrace is how long a pending reservation may stay unconfirmed
+// before the watch takes its start for dead: its own start or recovery
+// resolves the source and reaches the host well inside it.
+const unstartedGrace = 15 * time.Minute
+
+// releaseStaleReservation releases r when it is a pending reservation past
+// unstartedGrace that never started on its host: nothing of it was sent,
+// or the host confirms it holds no journal of it. Any other inspection
+// outcome leaves it to the reconciliation that follows.
+func (a *app) releaseStaleReservation(ctx context.Context, r *state.ExecutionRecord) (bool, error) {
+	now := a.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if r.Phase != executionPending || r.StopRequest != nil || r.Terminal() || now.Sub(r.ReservedAt) < unstartedGrace {
+		return false, nil
+	}
+	ref := r.Handle.Ref
+	why := "its start never reached the host"
+	if !r.Unsent {
+		_, h, err := a.recordedExecution(ref)
+		if err != nil {
+			return false, err
+		}
+		if _, err := a.executionClient(h).Inspect(ctx, ref); !errors.Is(err, execution.ErrNotFound) {
+			return false, nil
+		}
+		why = "the host holds no journal of it"
+		if r.Observation.LastError != "" {
+			why += " after " + r.Observation.LastError
+		}
+	}
+	released := false
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		evs := releaseReservation(st, ref, r.Unsent, why, now)
+		released = len(evs) > 0
+		return evs, nil
+	})
+	if released {
+		a.dropExecutionSource(ref)
+	}
+	return released, err
 }
 
 func isUnreachable(err error) bool {
@@ -274,6 +318,18 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		}
 		r := st.Starts[idx].Execution
 		ref := r.Handle.Ref
+		opCtx, cancel := withTimeout(ctx)
+		released, releaseErr := a.releaseStaleReservation(opCtx, r)
+		cancel()
+		if releaseErr != nil {
+			failures = append(failures, releaseErr.Error())
+			if isUnreachable(releaseErr) || ctx.Err() != nil {
+				break
+			}
+		}
+		if released {
+			continue
+		}
 		if st.Stop != nil && !r.Terminal() && r.StopRequest == nil {
 			opCtx, cancel := withTimeout(ctx)
 			stopErr := a.stopExecution(opCtx, ref, st.Stop.Reason)
@@ -285,7 +341,7 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 				}
 			}
 		}
-		opCtx, cancel := withTimeout(ctx)
+		opCtx, cancel = withTimeout(ctx)
 		_, syncErr := syncer.SyncControl(opCtx, ref)
 		cancel()
 		if syncErr != nil {
