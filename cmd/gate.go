@@ -878,7 +878,15 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	if err == nil {
 		err = errors.New("no document")
 	}
-	return "", fmt.Errorf("%s release promote %s --dry-run: %w: %s", merge.Tool, repo, err, lastOf(stderr.String()))
+	// CommandContext reports a killed process rather than its deadline. Keep
+	// both causes, and use our buffer even when exec.ExitError has no Stderr.
+	if cause := ctx.Err(); cause != nil {
+		err = fmt.Errorf("%w (%w)", err, cause)
+	}
+	if tail := lastOf(stderr.String()); tail != "" {
+		err = fmt.Errorf("%w: %s", err, tail)
+	}
+	return "", fmt.Errorf("%s release promote %s --dry-run: %w", merge.Tool, repo, err)
 }
 
 // outsideCheck is how often a merge waiting in a lane asks GitHub about the

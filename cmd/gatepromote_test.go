@@ -5,6 +5,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,47 @@ const (
 	candidateA = "v1.2.4-rc.1"
 	candidateB = "v1.2.4-rc.2"
 )
+
+func TestPromoteCandidateKeepsKilledChildStderr(t *testing.T) {
+	const cause = "dial tcp: connect: network is unreachable"
+	fakeDevctl(t, "echo '"+cause+"' >&2\nexec sleep 30")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	candidate, err := promoteCandidate(ctx, scratchRepo)
+	if candidate != "" || err == nil {
+		t.Fatalf("candidate %q, error %v; want the killed child's error", candidate, err)
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.Success() {
+		t.Fatalf("error %v does not retain the child failure", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error %v does not name the deadline", err)
+	}
+	for _, want := range []string{"devctl release promote " + scratchRepo + " --dry-run", cause} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestGateReportsKilledCandidateRead(t *testing.T) {
+	a := queueApp(t)
+	const cause = "dial tcp: connect: connection refused"
+	fakeDevctl(t, "echo '"+cause+"' >&2\nexec sleep 30")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var err error
+	stderr := gateStderr(t, func() { err = a.gate(ctx, promoteArgv(), 0, 0, false) })
+	if Code(err) != ExitGateRefused {
+		t.Fatalf("gate: %v, want refusal", err)
+	}
+	for _, want := range []string{cause, context.DeadlineExceeded.Error(), "nothing promoted"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("gate stderr %q missing %q", stderr, want)
+		}
+	}
+}
 
 // promoteArgv is devctl release promote o/r with extra flags.
 func promoteArgv(extra ...string) []string {
