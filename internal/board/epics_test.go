@@ -120,12 +120,12 @@ func TestAnEpicNotScheduledForPlanningIsNeverOffered(t *testing.T) {
 	// With sub-issues, under a step that offers them, in Backlog, Inbox or
 	// without a Status: neither it nor any issue under it is offered.
 	for _, status := range []string{backlog, statuses[0], ""} {
-		o := slices.Insert(order(), 0, config.BoardStep{Name: "epics", Kind: []string{defaultEpicKind}, SubIssues: true})
+		o := slices.Insert(order(), 0, config.BoardStep{Name: "every epic", Kind: []string{defaultEpicKind}, SubIssues: true})
 		snap = gatedBoard(t, o)
 		snap.Items[0].Status = status
 		in := cmp.Or(status, "without a Status")
 		ep := ranked(snap)[0]
-		if !strings.HasPrefix(ep, "o/r#50 epics") || !strings.Contains(ep, ": epic "+in+", not scheduled for planning: ") {
+		if !strings.HasPrefix(ep, "o/r#50 every epic") || !strings.Contains(ep, ": epic "+in+", not scheduled for planning: ") {
 			t.Errorf("%s epic: %s", in, ep)
 		}
 		for _, c := range Rank(snap, deskBoard(), now) {
