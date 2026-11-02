@@ -135,6 +135,17 @@ func (s *Server) runOmp(ctx context.Context, ref Ref, j Journal) error {
 				accepted = true
 				startup.Stop()
 			} else {
+				current, err := s.Read(ref)
+				if err != nil {
+					return err
+				}
+				delivery, ok := current.Messages.Entries[ev.ID]
+				if !ok || delivery.Stage != Uncertain && delivery.Stage != Accepted {
+					return s.codexEnd(ctx, ref, Failed, "omp acknowledged an unowned or unattempted message")
+				}
+				if delivery.Stage == Accepted {
+					continue
+				}
 				if err := s.acceptCodexMessage(ctx, ref, j.Handle.ConversationID, ev.ID); err != nil {
 					return err
 				}

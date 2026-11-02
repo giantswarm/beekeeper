@@ -45,6 +45,7 @@ echo '{"type":"beekeeper_guard_ready","session_id":"fixture-omp-thread"}'
 while IFS= read -r line; do
  printf '%s\n' "$line" >> "$root/prompts"
  id=$(printf '%s' "$line" | sed 's/.*"id":"\([^"]*\)".*/\1/')
+ if test -e "$root/foreign-ack"; then id=unowned; fi
  printf '{"type":"response","command":"prompt","id":"%s","success":true}\n' "$id"
  echo '{"type":"agent_start"}'
  echo '{"type":"agent_end"}'
@@ -141,6 +142,21 @@ func TestExecutionOmpTurnFailureAfterAdmission(t *testing.T) {
 	j, err := f.s.Read(f.r.Ref)
 	if err != nil || j.Phase != Failed || !j.Ready || j.InTurn {
 		t.Fatalf("failed journal %+v: %v", j, err)
+	}
+}
+
+func TestExecutionOmpRejectsUnownedAcknowledgement(t *testing.T) {
+	f, dir := ompFixture(t)
+	ctx := startOmpFixture(t, f)
+	if err := os.WriteFile(filepath.Join(dir, "foreign-ack"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Run(ctx, f.r.Ref); err == nil {
+		t.Fatal("accepted an unowned acknowledgement")
+	}
+	evidence := filepath.Join(f.s.Root, string(f.r.Ref.Execution)+"-unowned.accepted")
+	if _, err := os.Stat(evidence); !os.IsNotExist(err) {
+		t.Fatalf("unowned acknowledgement wrote receipt evidence: %v", err)
 	}
 }
 
