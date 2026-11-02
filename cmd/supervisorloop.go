@@ -1125,7 +1125,7 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	detail := superloop.Detail(act, what)
 	kind := act.Kind
 	if kind == superloop.KindGo {
-		kind = "merge"
+		kind = superloop.KindMerge
 	}
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
 		return err

@@ -174,6 +174,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
 	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
+	wasBehind := readReviewedBehind
+	t.Cleanup(func() { readReviewedBehind = wasBehind })
+	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
 	if err := store.Record(event(watchParty, "watch.budget-state", "false")); err != nil {
 		t.Fatal(err)
@@ -187,7 +190,7 @@ func newLoopRig(t *testing.T) *loopRig {
 	}
 	r.answer = func([]string) (string, int) { return "", 0 }
 	r.command = func(argv []string) (string, int) {
-		if len(argv) > 2 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == "merge" {
+		if len(argv) > 2 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == superloop.KindMerge {
 			r.pull.State = superloop.Merged
 			r.pull.MergeCommit = loopFixed
 			r.lastMerged = r.pull.Head

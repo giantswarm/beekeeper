@@ -12,13 +12,20 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const (
+	loopMergeRepo       = "o/r"
+	reviewedStoppedCase = "stopped"
+	reviewedHeldCase    = "held"
+	reviewedRedCase     = "red"
+)
+
 func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.command = func(argv []string) (string, int) {
-		if slices.Contains(argv, "merge") {
+		if slices.Contains(argv, superloop.KindMerge) {
 			r.pull.State = superloop.Merged
 			r.pull.MergeCommit = loopFixed
 		}
@@ -27,7 +34,7 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	r.pass(t)
 	var merged bool
 	for _, argv := range r.cmds {
-		if len(argv) > 3 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == "merge" {
+		if len(argv) > 3 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == superloop.KindMerge {
 			merged = slices.Contains(argv, "--match-head-commit") && slices.Contains(argv, loopHead)
 		}
 	}
@@ -45,7 +52,7 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 
 func TestLoopMergeRepairAndAdmin(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Admin = []string{"o/r"}
+	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
@@ -100,7 +107,7 @@ func TestLoopMergeEndDeclaresRemainingWork(t *testing.T) {
 }
 
 func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
-	for _, scenario := range []string{"unclaimed", "moved", "red", "stopped", "held", "behind", "conflict"} {
+	for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "behind", "conflict"} {
 		t.Run(scenario, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, time.Now())
@@ -116,21 +123,21 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 				r.pull.Mergeable = "CONFLICTING"
 			case "moved":
 				r.pull.Head = loopFixed
-			case "red":
+			case reviewedRedCase:
 				r.pull.Green = false
-			case "stopped":
+			case reviewedStoppedCase:
 				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
 					t.Fatal(err)
 				}
-			case "held":
+			case reviewedHeldCase:
 				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-					st.Holds = append(st.Holds, state.Hold{Target: "o/r", Reason: "held"})
+					st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
 					return nil, nil
 				}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			doc := r.a.reviewedMerge(t.Context(), "o/r", 7, loopHead)
+			doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 			if doc.ExitCode == 0 || len(r.cmds) > 0 {
 				t.Fatalf("unsafe mutation: doc %+v commands %v", doc, r.cmds)
 			}
@@ -140,12 +147,12 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 
 func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Methods = map[string]string{"o/r": "rebase"}
-	r.a.cfg.Merge.Admin = []string{"o/r"}
+	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: "rebase"}
+	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	doc := r.a.reviewedMerge(t.Context(), "o/r", 7, loopHead)
+	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 	if doc.ExitCode != 0 {
 		t.Fatalf("merge %+v", doc)
 	}
@@ -155,7 +162,7 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 			t.Fatalf("missing %s in %v", flag, argv)
 		}
 	}
-	g := gateRun{app: r.a, repo: "o/r", pr: 7, reviewedHead: loopHead, argv: []string{"devctl", "pr", "merge", "o/r", "7"}}
+	g := gateRun{app: r.a, repo: loopMergeRepo, pr: 7, reviewedHead: loopHead, argv: []string{"devctl", "pr", superloop.KindMerge, loopMergeRepo, "7"}}
 	pinned, err := g.mergeArgv()
 	if err != nil || !slices.Contains(pinned, "--head") || !slices.Contains(pinned, loopHead) {
 		t.Fatalf("gate lost its pin: %v %v", pinned, err)
@@ -173,14 +180,14 @@ func TestLoopMergeDoesNotGrantWorkerAuthority(t *testing.T) {
 
 func TestReviewedAdminMergeRefusesANonStrictBehindBase(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Admin = []string{"o/r"}
+	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
 	was := readReviewedBehind
 	t.Cleanup(func() { readReviewedBehind = was })
 	readReviewedBehind = func(_ context.Context, _ superloop.Pull) (int, error) { return 1, nil }
-	doc := r.a.reviewedMerge(t.Context(), "o/r", 7, loopHead)
+	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 	if doc.ExitCode != github.SquashNotApplicable || len(r.cmds) != 0 || !strings.Contains(doc.Reason, "behind") {
 		t.Fatalf("behind admin merge: %+v %v", doc, r.cmds)
 	}
@@ -208,8 +215,8 @@ func TestLoopEscalationRequiresVerifiedAnswerAndAcceptsGuideDialog(t *testing.T)
 		t.Fatal("no escalation")
 	}
 	n := state.Note{ID: 9, By: loopParty, Text: superloop.EscalationQuestion(loopURL, third)}
-	recorder := state.Party{Session: "guide-session", Name: verifyGuide}
-	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, Answer: "Merge", Note: 9}
+	recorder := state.Party{Session: dialogSession, Name: verifyGuide}
+	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, Answer: dialogMergeChoice, Note: 9}
 	if err := r.a.store.Record(answerEvent(recorder, &rec, &n)); err != nil {
 		t.Fatal(err)
 	}

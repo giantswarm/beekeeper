@@ -16,8 +16,10 @@ import (
 
 // The kinds of action, each logged as "supervisor.<kind>".
 const (
-	KindReview  = "review"
-	KindGo      = "go"
+	KindReview = "review"
+	KindGo     = "go"
+	// KindMerge records a coordinator mutation, never a worker grant.
+	KindMerge   = "merge"
 	KindForward = "forward"
 	// KindRework tells the worker that parked again on the head whose
 	// findings stand, with no change-request round left, to fix them: the
@@ -74,7 +76,7 @@ const (
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
 	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
-		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, "merge"}
+		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindMerge}
 }
 
 // The verbs of the events the rules act on.
@@ -394,7 +396,7 @@ func (a Action) Line(what string) string { return "[" + a.Key + "] " + what }
 func ParseTaken(at time.Time, verb, subject, detail string) (Taken, bool) {
 	kind, ok := strings.CutPrefix(verb, "supervisor.")
 	// New loops execute a merge; old go records remain readable for recovery.
-	if kind == "merge" {
+	if kind == KindMerge {
 		kind = KindGo
 	}
 	if !ok || !slices.Contains(Verbs(), kind) {

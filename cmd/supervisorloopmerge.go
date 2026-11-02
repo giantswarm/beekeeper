@@ -59,7 +59,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
-	out, code, err := beekeeperRun(ctx, l.as(gateCmdName, "--limit", "0", "--reviewed-head", act.Head, "--", "devctl", "pr", "merge", ref.Repo, fmt.Sprint(ref.N))...)
+	out, code, err := beekeeperRun(ctx, l.as(gateCmdName, "--limit", "0", "--reviewed-head", act.Head, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))...)
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.
 	p, readErr := readLoopPull(ctx, act.Ref)
@@ -163,7 +163,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if method == "" {
 		method = "squash"
 	}
-	if method != "squash" && method != "rebase" && method != "merge" {
+	if method != "squash" && method != "rebase" && method != superloop.KindMerge {
 		doc.Reason = "invalid configured merge method"
 		return doc
 	}
@@ -252,7 +252,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "merge held by desk policy"
 		return doc
 	}
-	argv := []string{"gh", "pr", "merge", fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", head}
+	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", head}
 	if a.cfg.Merge.AdminMerge(repo) {
 		argv = append(argv, "--admin")
 	}

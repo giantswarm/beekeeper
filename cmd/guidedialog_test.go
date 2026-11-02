@@ -10,17 +10,24 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	dialogSession       = "guide-session"
+	dialogWorkerSession = "worker-session"
+	dialogMergeChoice   = "Merge"
+	dialogSessionKey    = "session_id"
+)
+
 func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
 	for _, tc := range []struct {
 		name, session, words string
 		choice               int
 		want                 bool
 	}{
-		{"selection", "guide-session", "", 1, true},
-		{"verbatim", "guide-session", "Merge", 1, true},
-		{"different choice", "guide-session", "", 2, false},
-		{"invented words", "guide-session", "merge anything", 1, false},
-		{"worker relay", "worker-session", "", 1, false},
+		{"selection", dialogSession, "", 1, true},
+		{"verbatim", dialogSession, dialogMergeChoice, 1, true},
+		{"different choice", dialogSession, "", 2, false},
+		{"invented words", dialogSession, "merge anything", 1, false},
+		{"worker relay", dialogWorkerSession, "", 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := answerApp(t)
@@ -28,7 +35,7 @@ func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
 			stubWakes(t)
 			stubSeat(t, tc.session, false)
 			verifyNote(t, a)
-			guide := state.Party{Session: "guide-session", Name: verifyGuide}
+			guide := state.Party{Session: dialogSession, Name: verifyGuide}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Notes[0].Options = []string{"Merge: merge this head", "Rework: fix the branch"}
 				st.Notes[0].At = time.Now().Add(-time.Minute)
@@ -38,9 +45,9 @@ func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := "Merge https://github.com/o/private/pull/7 at abc1234? Status quo: reviewed. Why: review limit."
-			raw, _ := json.Marshal(map[string]any{"hook_event_name": guard.PostToolUseEvent, "session_id": "guide-session", "tool_name": guard.AskTool,
-				"tool_input":    map[string]any{"questions": []any{map[string]any{"question": q, "options": []any{map[string]any{"label": "Merge"}, map[string]any{"label": "Rework"}}}}},
-				"tool_response": map[string]any{"answers": map[string]string{q: "Merge"}}})
+			raw, _ := json.Marshal(map[string]any{"hook_event_name": guard.PostToolUseEvent, dialogSessionKey: dialogSession, "tool_name": guard.AskTool,
+				transcriptInputKey: map[string]any{"questions": []any{map[string]any{"question": q, "options": []any{map[string]any{"label": dialogMergeChoice}, map[string]any{"label": "Rework"}}}}},
+				"tool_response":    map[string]any{"answers": map[string]string{q: dialogMergeChoice}}})
 			a.redactResult(raw)
 			// Use the real session identity, not a caller-supplied role name.
 			a.as = ""
@@ -70,7 +77,7 @@ func TestGuideDialogIgnoresCancelledStaleAndForeignResults(t *testing.T) {
 	a, _ := answerApp(t)
 	a.now = time.Now()
 	verifyNote(t, a)
-	guide := state.Party{Session: "guide-session", Name: verifyGuide}
+	guide := state.Party{Session: dialogSession, Name: verifyGuide}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: guide}, Asking: 1})
 		return nil, nil
