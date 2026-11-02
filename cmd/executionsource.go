@@ -55,6 +55,7 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 	if err != nil {
 		return r, nil, err
 	}
+	originalRef := r.GitRef
 	r.GitRef, r.SourceDigest = head, execution.Digest(data)
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		rec, _ := executionRecord(st, r.Ref)
@@ -66,6 +67,9 @@ func (a *app) prepareExecutionSource(ctx context.Context, r execution.StartReque
 		}
 		if err := os.Rename(stagedBundle, bundle); err != nil {
 			return nil, err
+		}
+		if rec.Published == nil && originalRef != "" && originalRef != "HEAD" && originalRef != "main" && originalRef != "master" && !publicationCommit(originalRef) {
+			rec.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: originalRef, Head: head}
 		}
 		rec.Request, rec.RequestDigest = r, r.Digest()
 		return nil, nil

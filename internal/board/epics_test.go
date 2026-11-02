@@ -1,6 +1,7 @@
 package board
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -105,9 +106,47 @@ func TestAnUpNextEpicIsInPlanningAndInProgressIsTheGo(t *testing.T) {
 	}
 }
 
+func TestAnEpicNotScheduledForPlanningIsNeverOffered(t *testing.T) {
+	// A fresh Backlog epic without sub-issues, the one a worker was started
+	// on: the Backlog step matches it, the gate holds it.
+	snap := gatedBoard(t, order())
+	snap.Items[0].Status, snap.Items[0].OpenSubIssues, snap.Items[0].SubIssues = backlog, 0, nil
+	snap.Items = snap.Items[:1]
+	snap.Plans = nil
+	want := []string{`o/r#50 Backlog (Backlog 📦): epic Backlog 📦, not scheduled for planning: no plan and no go, board move o/r#50 "Up Next ➡️" schedules its planning`}
+	if got := ranked(snap); !slices.Equal(got, want) {
+		t.Errorf("a Backlog epic:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// With sub-issues, under a step that offers them, in Backlog, Inbox or
+	// without a Status: neither it nor any issue under it is offered.
+	for _, status := range []string{backlog, statuses[0], ""} {
+		o := slices.Insert(order(), 0, config.BoardStep{Name: "every epic", Kind: []string{defaultEpicKind}, SubIssues: true})
+		snap = gatedBoard(t, o)
+		snap.Items[0].Status = status
+		in := cmp.Or(status, "without a Status")
+		ep := ranked(snap)[0]
+		if !strings.HasPrefix(ep, "o/r#50 every epic") || !strings.Contains(ep, ": epic "+in+", not scheduled for planning: ") {
+			t.Errorf("%s epic: %s", in, ep)
+		}
+		for _, c := range Rank(snap, deskBoard(), now) {
+			if c.Skip == "" && c.Ref != "o/r#10" {
+				t.Errorf("%s epic: %s offered (%s)", in, c.Ref, c.Why())
+			}
+		}
+		if got, want := ranked(snap)[1], "o/r#53 Up Next (Up Next ➡️): sub-issue of epic o/r#50, not scheduled for planning ("+in+")"; got != want {
+			t.Errorf("under the %s epic: %s, want %s", in, got, want)
+		}
+	}
+	// Scheduled for planning, then the go: the gate's other holds.
+	snap = gatedBoard(t, order())
+	if got := ranked(snap)[0]; !strings.Contains(got, "epic in planning (Up Next ➡️)") {
+		t.Errorf("in planning: %s", got)
+	}
+}
+
 func TestResolveGate(t *testing.T) {
 	g, err := ResolveGate(config.EpicGate{}, statuses, []string{epic})
-	if err != nil || !slices.Equal(g.Kind, []string{epic}) || !slices.Equal(g.Planning, []string{upNext}) || g.Go != inProgress {
+	if err != nil || !slices.Equal(g.Kind, []string{epic}) || !slices.Equal(g.Planning, []string{upNext}) || g.Go != inProgress || !slices.Equal(g.Ahead, statuses[:2]) {
 		t.Errorf("default gate = %+v, %v", g, err)
 	}
 	// A board without the default values has no gate.
@@ -119,7 +158,7 @@ func TestResolveGate(t *testing.T) {
 		t.Errorf("unknown kind = %v", err)
 	}
 	g, err = ResolveGate(config.EpicGate{Kind: []string{defaultEpicKind, "bug"}, Planning: []string{"backlog", "next"}, Go: "waiting"}, statuses, []string{epic, bug})
-	if err != nil || !slices.Equal(g.Kind, []string{epic, bug}) || !slices.Equal(g.Planning, []string{backlog, upNext}) || g.Go != blocked {
+	if err != nil || !slices.Equal(g.Kind, []string{epic, bug}) || !slices.Equal(g.Planning, []string{backlog, upNext}) || g.Go != blocked || !slices.Equal(g.Ahead, statuses[:1]) {
 		t.Errorf("configured gate = %+v, %v", g, err)
 	}
 }
@@ -260,6 +299,7 @@ type goGH struct {
 }
 
 func (f *goGH) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
 	checkedQuery(f.t, q)
 	f.repos = append(f.repos, github.Repo(ctx))

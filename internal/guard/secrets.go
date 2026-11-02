@@ -177,6 +177,10 @@ var kubectlValue = map[string]bool{
 	"-l": true, "--selector": true, "-o": true, flagOutput: true, "--field-selector": true, flagTemplate: true,
 	"-f": true, "--filename": true, "-c": true, "--container": true, "--sort-by": true, "--chunk-size": true, "--label-columns": true, "-L": true,
 	"--raw": true,
+	// Global flags shared with kubectl-gs: values before a verb or plugin
+	// subcommand must not select it, including read-looking values.
+	"--as-uid": true, "--cache-dir": true, "--certificate-authority": true,
+	"--client-certificate": true, "--client-key": true, "--tls-server-name": true,
 }
 
 // secretGuard is the Secret guard of one call: the commands that unlock the
