@@ -375,6 +375,7 @@ const metaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"n
 {"id":"FT","name":"Team","options":[{"id":"t1","name":"X 🐝"},{"id":"t2","name":"Y"}]}]}}}}}`
 
 func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
 	checkedQuery(f.t, q)
 	f.queries = append(f.queries, q)
@@ -560,7 +561,7 @@ const labIssue7 = "teemow/lab#7"
 
 // homeItem is an item of the issue on project number of owner.
 func homeItem(id, project, owner string, number int, status string) string {
-	st := "null"
+	st := jsonNull
 	if status != "" {
 		st = fmt.Sprintf(`{"name":%q}`, status)
 	}
