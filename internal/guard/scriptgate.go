@@ -268,17 +268,17 @@ func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, di
 	case interp:
 		switch p := readProgram(args, ip); p.kind {
 		case programCode:
-			if u := h.textUngated(p.arg, name+"'s code ("+p.opt+")", kindOf(mode == modeShell)); u != nil {
-				return u, ""
-			}
 			if mode == modeShell {
+				// hiddenMerges judges commands written in the string;
+				// recurse here to find the script files it runs.
 				for _, d := range dirs {
 					if u := h.ungated(p.arg, d, depth+1); u != nil {
 						return u, ""
 					}
 				}
+				return nil, ""
 			}
-			return nil, ""
+			return h.textUngated(p.arg, name+"'s code ("+p.opt+")", textCode), ""
 		case programScript:
 			return h.scriptUngated(p.arg, mode, true, dirs, vars, depth)
 		case programInput:
