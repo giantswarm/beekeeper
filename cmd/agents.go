@@ -357,6 +357,15 @@ started is never archived nor stopped.`,
 			if err != nil {
 				return err
 			}
+			lines, err := a.stopWorktreeOrphans(me, false)
+			if err != nil {
+				return err
+			}
+			for _, line := range lines {
+				if _, err := fmt.Fprintln(a.out, line); err != nil {
+					return err
+				}
+			}
 			if _, err := fmt.Fprintf(a.out, "removed %s\n", gone.Name); err != nil || keepDesktop {
 				return err
 			}
@@ -457,6 +466,10 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 // removeAgent takes the agent at i off the roster; its session no longer
 // waits on anyone.
 func removeAgent(st *state.State, i int) {
+	ag := st.Agents[i]
+	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") && !slices.ContainsFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }) {
+		st.EndedWorkers = append(st.EndedWorkers, state.Start{Party: ag.Party, At: ag.Registered})
+	}
 	for j := range st.Records {
 		if st.Records[j].Session.Is(st.Agents[i].Party) {
 			st.Records[j].Waits = ""

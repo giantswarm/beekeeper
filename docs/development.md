@@ -35,6 +35,12 @@ files together, so a change that adds or removes a string in `cmd/snapshot.go` c
 in an untouched `cmd/*_test.go`: that finding is the change's, and CI reports it too. A lint of a
 worktree of `origin/main` tells main's findings from a change's.
 
+Run `gitleaks detect --redact --log-opts=--all` from the repository root to scan the full
+history, or `gitleaks detect --redact --no-git` to scan the working tree. Both load
+`.gitleaks.toml`, which extends all default detection rules. Its signing-test exception
+requires the exact fake GPG key ID and `cmd/sandboxsign_test.go` together, and applies
+only to `generic-api-key`; other values and files remain scanned.
+
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
@@ -587,3 +593,28 @@ reason. Successful starts log the kind, harness, model and choice under
 `agents.start`; the roster retains the model for comparing outcomes. Explicit
 models select a target but cannot make an automatic pick ignore a model-policy
 rejection, even with `--force`.
+## Worktree orphan cleanup
+
+The doctor stops reparented process trees left in linked worktrees by known local
+workers that have left the roster. It sends SIGTERM, then SIGKILL after
+two seconds, checking the process start time, user and worktree before each
+signal. Each targeted PID and masked command is recorded as `agents.archive`.
+`doctor --dry-run` reports candidates without signalling; `ps` marks the same
+candidates `[orphan: <worktree>]` (JSON: `orphan`, `worktree`), beside their age.
+A roster entry, including a done worker awaiting removal, or a live CLI protects
+its worktree. Main checkouts, arbitrary directories, unknown starts and remote
+executions are excluded. Inherited worker IDs also identify servers whose tool
+shell changed into a different worktree after the session started. Cleanup is
+retried by later doctor runs if a live CLI still protects a finished worktree.
+
+`TestStopWorktreeOrphansLive` starts an adopted, TERM-ignoring server in a scratch
+worktree and proves dry-run preservation, escalation and archive logging.
+`TestWorktreeOrphans` covers shared worktrees, rostered/done sessions, live CLIs,
+remote starts, older processes and changed working directories.
+
+Removed manually registered workers retain their identity and registration time
+in `endedWorkers`, so their inherited session ID also identifies leftovers.
+This cleanup history grants no permissions to the start or permission hooks.
+Ownership and roster protection both use Claude session IDs or normalized
+Codex, omp and agy host-session IDs; a hosted harness takes precedence over
+a launching Claude session inherited in the same environment.

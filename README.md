@@ -1539,6 +1539,14 @@ prints; it orders and gates nothing.
 
 ## The merge gate
 
+A merge waiting behind a live gate reads only its local queue position: it makes no GitHub
+calls and does not rewrite the state. Its sleeps back off from five seconds to one minute,
+so the next merge notices its turn within one minute. A dropped place, a paired refusal,
+a dead predecessor, or the turn itself resumes the ordinary gate checks; deadlines and
+cancellation still bound the wait. A live gate keeps its queue place without heartbeat writes.
+Before handing the wait to a detached run, it renews the place once so the queue TTL covers
+the successor registering after the original process exits.
+
 Sessions keep typing `devctl pr merge <owner/repo> <n> [flags]`; beekeeper never replaces devctl.
 `devctl release promote <owner/repo>` (one repository, no `--dry-run`) passes the same gate: it
 queues in its repository's lane and runs like a merge, and the stable release it dispatches
@@ -3384,8 +3392,9 @@ notes and exits 69; `guide queue` and `guide next` warn on stderr and serve the 
 
 A lane whose installation is central queues centrally too, so two people's merges into it roll
 one after the other. The gate queues the merge in the central lane (`lane_queue`) as well as
-the machine's, asks for its turn there every 15 seconds while it waits, and runs devctl only when
-the merge is next in both. It makes it the central lane's running merge (`lane_settle`), reports
+the machine's, asks for its turn there every 15 seconds while it heads the local lane, and runs
+devctl only when the merge is next in both. Behind a live local gate those checks back off to
+one minute, always within half of `merge.queueTTL`. It makes it the central lane's running merge (`lane_settle`), reports
 its outcome (merged: the lane settles; otherwise it leaves with `lane_leave`), and the watch takes
 it out once its release rolled on the installation. A waiting place whose gate stopped asking
 for `merge.queueTTL` holds up nobody. A hold on a central lane (`hold set --lane`) or on a
