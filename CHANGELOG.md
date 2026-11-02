@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `beekeeper run` without `--class` runs a command that cannot build at once, uncapped and outside the build slot queue: a single `true`, `false`, `echo` or `printf`, or a command that only prints its help or version (`go version`, `make help`, `kubectl --help`). It waited for a build slot like a build ([#919](https://github.com/giantswarm/beekeeper/issues/919)).
 
 - PR parks request desk review only when made from the PR's published worktree, with matching branch and HEAD. Other parks remain plain waits and resume on merge or close. After upgrading, reissue existing PR review parks from their published worktrees: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"` ([https://github.com/giantswarm/beekeeper/issues/1824](https://github.com/giantswarm/beekeeper/issues/1824)).
+- `browse --help` says a sign-in on the lab's identity provider at `localhost` needs no fallback: the lab's certificate authority is trusted by Chrome, and clicks, keys and screenshots that do nothing there are a tab behind another or a window not drawn, which the front-tab and draw checks handle. Regression tests pin the flow: a localhost Dex authorization-code sign-in runs with the lab's rule and the hook allows its email login page ([https://github.com/giantswarm/beekeeper/issues/923](https://github.com/giantswarm/beekeeper/issues/923)).
 
 ### Changed
 
