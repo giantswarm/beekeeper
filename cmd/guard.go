@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -1037,6 +1038,9 @@ func (a *app) firstReads(session, repo string) bool {
 
 // loadConfig reads the configuration without opening the state.
 func (a *app) loadConfig() error {
+	if home := os.Getenv(execution.EnvHome); filepath.IsAbs(home) {
+		_ = os.Setenv("HOME", filepath.Clean(home))
+	}
 	path, err := config.Path(a.cfgPath)
 	if err != nil {
 		return err
