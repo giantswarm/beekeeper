@@ -304,6 +304,17 @@ proved, retain the reservation and report unknown outcome. Never start a
 replacement. A known preparation failure may release the reservation after
 recording the terminal failure; retain its workspace and audit record.
 
+A reservation records whether any request of it (source upload, start) has
+been sent. A start that fails before the first send releases its reservation
+at once: its record turns terminal (`released`), its agent leaves the roster,
+and it holds no host `maxBusy` or desk slot. The watch's host reconciliation
+releases a pending reservation older than 15 minutes that was never sent (its
+start died), or whose host confirms it has no journal (`ErrNotFound`); an
+ambiguous or unreachable inspection keeps the reservation. `agents recover` of
+a reservation its host holds nothing of binds the request to the host's
+current policy digest before sending it, and releases it when the host no
+longer lists its harness or repository.
+
 ## Worker control and durable delivery
 
 Every managed runner installs `BEEKEEPER_EXECUTION_ID` and a managed worker

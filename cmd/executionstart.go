@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -144,7 +145,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if executionHostBusy(current, host.Identity) >= host.MaxBusy {
 			return nil, refused("execution host maxBusy reached")
 		}
-		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
+		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Unsent: true, Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Execution: rec}
 		if _, err := recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
@@ -309,32 +310,48 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 	}
 	r := rec.Request
 	if rec.Phase == executionPending {
-		if uploader, ok := client.(execution.SourceUploader); ok {
+		// absent says the host holds nothing of the reservation: nothing of
+		// it was sent, or the host's inspection confirmed no journal. Only
+		// then may its request change, or a failed start release it.
+		absent := rec.Unsent
+		uploader, uploads := client.(execution.SourceUploader)
+		existing := false
+		if uploads && r.SourceDigest == "" {
 			// A pending coordinator may have lost a legacy preparation reply.
 			// Preserve its original request/digest whenever the host journal
 			// already exists. Only confirmed absence permits source pinning.
-			existing := false
-			if r.SourceDigest == "" {
-				_, inspectErr := client.Inspect(ctx, ref)
-				switch {
-				case inspectErr == nil:
-					existing = true
-				case errors.Is(inspectErr, execution.ErrNotFound):
-				default:
-					a.executionFailure(ref, inspectErr)
-					return fmt.Errorf("cannot reconcile pending preparation: %w", inspectErr)
-				}
+			_, inspectErr := client.Inspect(ctx, ref)
+			switch {
+			case inspectErr == nil:
+				existing, absent = true, false
+			case errors.Is(inspectErr, execution.ErrNotFound):
+				absent = true
+			default:
+				a.executionFailure(ref, inspectErr)
+				return a.releaseUnstarted(ref, absent, fmt.Errorf("cannot reconcile pending preparation: %w", inspectErr))
 			}
-			if !existing {
-				var data []byte
-				r, data, err = a.prepareExecutionSource(ctx, r)
-				if err != nil {
-					return err
-				}
-				if err := uploader.UploadSource(ctx, ref, data); err != nil {
-					return err
-				}
+		}
+		if absent {
+			if r, err = a.rebindExecution(ref, host, r); err != nil {
+				return a.releaseUnstarted(ref, absent, err)
 			}
+		}
+		if uploads && !existing {
+			var data []byte
+			r, data, err = a.prepareExecutionSource(ctx, r)
+			if err != nil {
+				return a.releaseUnstarted(ref, absent, err)
+			}
+			if err := a.markExecutionSent(ref); err != nil {
+				return err
+			}
+			if err := uploader.UploadSource(ctx, ref, data); err != nil {
+				a.executionFailure(ref, err)
+				return err
+			}
+		}
+		if err := a.markExecutionSent(ref); err != nil {
+			return err
 		}
 		handle, err := client.Start(ctx, r)
 		if err != nil {
@@ -354,6 +371,9 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 			}
 			if x.StopRequest != nil {
 				return nil, refused("execution has a stop request")
+			}
+			if x.Terminal() {
+				return nil, refused("execution reservation was released")
 			}
 			x.Handle, x.Phase, current.Starts[i].Dir = handle, execution.Prepared, handle.Workspace
 			return []state.Event{event(current.Starts[i].By, "execution.prepared", "%s: registered handle on %s", current.Starts[i].Name, ref.Host)}, nil
@@ -381,7 +401,7 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		}
 		if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 			x, _ := executionRecord(current, ref)
-			if x == nil || x.StopRequest != nil {
+			if x == nil || x.StopRequest != nil || x.Terminal() {
 				return nil, refused("execution reservation is no longer active")
 			}
 			if err := a.refuseStopped(current, "activating an SSH execution"); err != nil {
@@ -427,6 +447,92 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// markExecutionSent records, before the first request of a reservation
+// goes to its host, that the host may hold it from now on.
+func (a *app) markExecutionSent(ref execution.Ref) error {
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		x, _ := executionRecord(st, ref)
+		if x == nil || x.StopRequest != nil || x.Terminal() || x.Phase != executionPending {
+			return nil, refused("execution reservation is no longer active")
+		}
+		x.Unsent = false
+		return nil, nil
+	})
+}
+
+// rebindExecution binds a reservation its host holds nothing of to the
+// host's current policy: a request reserved under a policy the host has
+// since replaced would be refused there on every recovery.
+func (a *app) rebindExecution(ref execution.Ref, host execution.Host, r execution.StartRequest) (execution.StartRequest, error) {
+	if !host.Supports(r.Harness) {
+		return r, refused("execution host %s no longer lists harness %s", host.Identity, r.Harness)
+	}
+	if _, ok := host.Repositories[r.Repository]; !ok {
+		return r, refused("repository is no longer mapped on execution host %s", host.Identity)
+	}
+	if r.PolicyDigest == host.PolicyDigest {
+		return r, nil
+	}
+	r.PolicyDigest = host.PolicyDigest
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		x, i := executionRecord(st, ref)
+		if x == nil || x.StopRequest != nil || x.Terminal() || x.Phase != executionPending {
+			return nil, refused("execution reservation changed while rebinding its policy")
+		}
+		x.Request, x.RequestDigest = r, r.Digest()
+		return []state.Event{event(st.Starts[i].By, "execution.rebound", "%s: never started on %s, bound to its current policy", st.Starts[i].Name, ref.Host)}, nil
+	})
+	return r, err
+}
+
+// releaseUnstarted releases ref's reservation when its host holds nothing
+// of it (absent) and returns failure, saying so. A reservation that may
+// have reached its host keeps its slots until the host confirms otherwise.
+func (a *app) releaseUnstarted(ref execution.Ref, absent bool, failure error) error {
+	if !absent {
+		return failure
+	}
+	released := false
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		evs := releaseReservation(st, ref, false, failure.Error(), a.now)
+		released = len(evs) > 0
+		return evs, nil
+	})
+	if err != nil || !released {
+		return failure
+	}
+	a.dropExecutionSource(ref)
+	return fmt.Errorf("%w; the reservation never started on %s and is released, start again", failure, ref.Host)
+}
+
+// releaseReservation lets go of ref's pending reservation, which never
+// started on its host: it holds no host or desk slot after, and its agent,
+// which never ran, leaves the roster. Nothing else is touched.
+// unsent asks that still nothing of it was sent, as the caller saw it.
+func releaseReservation(st *state.State, ref execution.Ref, unsent bool, why string, now time.Time) []state.Event {
+	x, i := executionRecord(st, ref)
+	if x == nil || x.Phase != executionPending || x.StopRequest != nil || x.Terminal() || unsent && !x.Unsent {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	x.Released, x.Release, x.Phase, x.Settled = now.UTC(), oneLine(why), execution.Failed, true
+	name := st.Starts[i].Name
+	if j := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Execution != nil && *ag.Execution == ref }); j >= 0 {
+		p := st.Agents[j].Party
+		removeAgent(st, j)
+		st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(p) })
+	}
+	return []state.Event{event(st.Starts[i].By, "execution.released", "%s: never started on %s, its reservation is released: %s", name, ref.Host, oneLine(why))}
+}
+
+// dropExecutionSource removes the source a released reservation pinned:
+// no recovery reads it again.
+func (a *app) dropExecutionSource(ref execution.Ref) {
+	_ = os.RemoveAll(filepath.Join(a.cfg.StateDir, "execution-sources", string(ref.Execution)))
 }
 
 func (a *app) executionFailure(ref execution.Ref, failure error) {

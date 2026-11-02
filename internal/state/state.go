@@ -817,7 +817,15 @@ type ExecutionRecord struct {
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
 	Published *ExecutionPublication `json:"published,omitempty"`
-	rest      rest
+	// Unsent says no request of the reservation has reached its host yet:
+	// no source upload, no start. A record written before it was kept reads
+	// false, a reservation that may have reached its host.
+	Unsent bool `json:"unsent,omitempty"`
+	// Released is when a reservation that never started on its host was
+	// let go, and Release why: it holds no host or desk slot.
+	Released time.Time `json:"released,omitzero"`
+	Release  string    `json:"release,omitempty"`
+	rest     rest
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
@@ -839,6 +847,9 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if !r.Released.IsZero() {
+		return true
+	}
 	if r.StopRequest != nil && !r.Observation.StopAcknowledged {
 		return false
 	}
