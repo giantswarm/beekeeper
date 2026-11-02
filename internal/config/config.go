@@ -866,6 +866,8 @@ type Stop struct {
 
 // Agents configures the hand-over of registered agents.
 type Agents struct {
+	// RemoteMCP exposes only explicitly named coordinator tools to SSH workers.
+	RemoteMCP map[string]execution.MCPServer `yaml:"remoteMCP,omitempty"`
 	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
 	// the existing local launch path. Execution configures this machine only
 	// when it is itself an execution host; authentication is provisioned there.
@@ -886,8 +888,9 @@ type Agents struct {
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
-	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
-	// the roster before the doctor takes it off (24h).
+	// StaleAfter bounds inactivity without a running CLI (24h). An idle or
+	// unkept task holder is retired after this age; gone task holders free
+	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
 	// ArchiveAgreement says where the person agreed that the desktop
 	// sessions of finished workers beekeeper started are archived without
@@ -2152,7 +2155,7 @@ type Supervisor struct {
 	NoteDue         Duration `yaml:"noteDue"`
 	// FillRetryEvery bounds repeated empty or failed board reads while
 	// capacity's ceiling stays unchanged and no agent is done or removed
-	// (5m).
+	// (5m), doubled for each further one in a row up to four times.
 	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
@@ -2227,7 +2230,7 @@ type Role struct {
 	// instead.
 	Instructions string `yaml:"instructions"`
 	// RelayAt is the role's session context, in tokens, at which the watch
-	// reports the relay due ("400k"; the guide's default is 150k).
+	// reports the relay due ("200k" for the guide).
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
@@ -3196,7 +3199,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Feedback.Window, 24*time.Hour)
 	// The guide's context is the person's conversation: it relays early.
 	if c.Guide.RelayAt == 0 {
-		c.Guide.RelayAt = 150_000
+		c.Guide.RelayAt = 200_000
 	}
 	c.Guide.defaults(home)
 	setDur(&c.Guide.WaitingTTL, 2*time.Hour)
@@ -3625,12 +3628,15 @@ func (c *Config) validate() error {
 			return fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths")
 		}
 	}
+	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
+		return fmt.Errorf("agents.remoteMCP: %w", err)
+	}
 	identities := map[execution.HostID]bool{}
 	for selector, host := range c.Agents.Hosts {
 		if selector == "local" || !execution.ValidIdentity(selector) || identities[host.Identity] {
 			return errors.New("agents.hosts requires unique identities and selectors; local is reserved")
 		}
-		if err := host.Validate(); err != nil {
+		if err := host.ValidateCatalog(); err != nil {
 			return fmt.Errorf("agents.hosts.%s: %w", selector, err)
 		}
 		identities[host.Identity] = true

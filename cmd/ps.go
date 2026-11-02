@@ -22,7 +22,9 @@ type psRow struct {
 	RSSMiB  int    `json:"rssMiB"`
 	Command string `json:"command"`
 	// Masked says the command line lost words: values, not an empty line.
-	Masked bool `json:"masked"`
+	Masked   bool   `json:"masked"`
+	Orphan   bool   `json:"orphan,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
 }
 
 func (a *app) psCmd() *cobra.Command {
@@ -44,7 +46,11 @@ and names this command instead.
 
 Arguments narrow the list: a number is a PID, any other word matches the
 masked command line or the process name. The match never sees an unmasked
-value.`,
+value.
+
+An adopted process tree left in an ended worker's linked worktree is marked
+[orphan: <worktree>], beside its age. Rostered and live sessions protect
+their worktrees. The doctor stops these orphans and records every PID.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			t, err := plat.Machine.Processes()
@@ -52,6 +58,19 @@ value.`,
 				return err
 			}
 			rows := psRows(t, time.Now(), args)
+			st, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			orphans := worktreeOrphans(st, t, discover(a.cfg, t, time.Now()), t.Cwd, t.Environ)
+			for i := range rows {
+				for _, o := range orphans {
+					if rows[i].PID == o.process.PID {
+						rows[i].Orphan = true
+						rows[i].Worktree = o.dir
+					}
+				}
+			}
 			if a.json {
 				return a.printJSON(rows)
 			}
@@ -59,6 +78,9 @@ value.`,
 			_, _ = fmt.Fprintln(w, "PID\tPPID\tAGE\tCPU\tRSS\tCOMMAND")
 			for _, r := range rows {
 				cmd := r.Command
+				if r.Orphan {
+					cmd += " [orphan: " + r.Worktree + "]"
+				}
 				if r.Masked {
 					cmd += " (masked)"
 				}
