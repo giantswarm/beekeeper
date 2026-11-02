@@ -517,6 +517,15 @@ its key first in the detail):
             supervisor.postInstall once, then self-update --check must
             find it the latest. A loop whose binary was replaced
             re-executes the installed one at its next pass
+  hosts     every pass, each execution host (agents.hosts) whose pin is
+            not this coordinator's release: agents hosts update installs
+            the release there, verified, and pins the policy digest it
+            prepared in beekeeper's state. A host with executions drains
+            first (no new start); a host whose update fails is held (no
+            start there), handed on once as a finding like file's, and
+            tried again hourly; the other hosts keep running. A
+            development build updates none, and nothing while beekeeper
+            stop stands
   classify  a report or park the rules cannot place: agents.report without
             agents.done; a park on nothing of an agent still parked
             on nothing, with no timer that wakes it (timer add --wake), no
@@ -837,6 +846,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.tidy(ctx, st)
+		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}

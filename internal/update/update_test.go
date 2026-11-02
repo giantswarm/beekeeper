@@ -121,11 +121,12 @@ func (v *acceptingValidator) Validate(asset string, binary, bundle []byte) error
 // stays the real one unless a test replaces it.
 func setup(t *testing.T, current string, src selfupdate.Source) {
 	t.Helper()
-	prevSource, prevValidator, prevExe, prevVersion := newSource, newValidator, executable, currentVersion
+	prevSource, prevTag, prevValidator, prevExe, prevVersion := newSource, newTagSource, newValidator, executable, currentVersion
 	newSource = func(bool) (selfupdate.Source, error) { return src, nil }
+	newTagSource = func(string) (selfupdate.Source, error) { return src, nil }
 	currentVersion = func() string { return current }
 	t.Cleanup(func() {
-		newSource, newValidator, executable, currentVersion = prevSource, prevValidator, prevExe, prevVersion
+		newSource, newTagSource, newValidator, executable, currentVersion = prevSource, prevTag, prevValidator, prevExe, prevVersion
 	})
 }
 
@@ -414,5 +415,84 @@ func TestReportsSourceInitializationFailure(t *testing.T) {
 	_, err := Run(context.Background(), io.Discard, true)
 	if !errors.Is(err, failure) {
 		t.Fatalf("Run() error=%v, want initialization failure", err)
+	}
+}
+
+func TestInstallVersionInstallsThatReleaseAndKeepsThePrevious(t *testing.T) {
+	src := &fakeSource{
+		releases: []selfupdate.SourceRelease{release("v0.4.0"), release(latestV)},
+		assets:   map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte("its bundle")},
+	}
+	setup(t, running, src)
+	exe, content := installed(t)
+	v := &acceptingValidator{}
+	newValidator = func() selfupdate.Validator { return v }
+
+	var out bytes.Buffer
+	res, err := InstallVersion(context.Background(), &out, latestV)
+	if err != nil {
+		t.Fatalf("InstallVersion() = %v\n%s", err, out.String())
+	}
+	if !res.Updated || res.Latest != latestV {
+		t.Errorf("result %+v", res)
+	}
+	if got, _ := os.ReadFile(filepath.Clean(exe)); string(got) != newBinary {
+		t.Errorf("executable holds %q after the update", got)
+	}
+	if string(v.bundle) != "its bundle" {
+		t.Errorf("validated against bundle %q", v.bundle)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if got, err := os.ReadFile(Previous(exe)); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("previous binary %q, %v; want the replaced one", got, err)
+	}
+	link, _ := executable()
+	if err := Rollback(link); err != nil {
+		t.Fatal(err)
+	}
+	assertUnchanged(t, exe, content)
+	if _, err := os.Stat(Previous(exe)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("previous binary left after the rollback: %v", err)
+	}
+}
+
+func TestInstallVersionLeavesTheRunningRelease(t *testing.T) {
+	src := &fakeSource{}
+	setup(t, latestV, src)
+	exe, content := installed(t)
+	res, err := InstallVersion(context.Background(), io.Discard, latestV)
+	if err != nil || res.Updated {
+		t.Fatalf("InstallVersion() = %+v, %v", res, err)
+	}
+	if src.calls.Load() != 0 {
+		t.Errorf("GitHub asked %d times for the running release", src.calls.Load())
+	}
+	assertUnchanged(t, exe, content)
+}
+
+func TestInstallVersionRefusesAMissingOrUnsignedRelease(t *testing.T) {
+	for name, src := range map[string]*fakeSource{
+		"missing":  {releases: []selfupdate.SourceRelease{release("v0.4.0")}},
+		"unsigned": {releases: []selfupdate.SourceRelease{fakeRelease{tag: latestV, assets: []selfupdate.SourceAsset{fakeAsset{binaryID, binaryName()}}}}, assets: map[int64][]byte{binaryID: []byte(newBinary)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setup(t, running, src)
+			exe, content := installed(t)
+			if _, err := InstallVersion(context.Background(), io.Discard, latestV); err == nil {
+				t.Fatal("InstallVersion() installed a release it must refuse")
+			}
+			assertUnchanged(t, exe, content)
+		})
+	}
+}
+
+func TestInstallVersionRefusesNoReleaseVersion(t *testing.T) {
+	setup(t, running, &fakeSource{})
+	for _, v := range []string{"", "0.3.0", "v0.3", "latest", "v0.3.0; rm"} {
+		if _, err := InstallVersion(context.Background(), io.Discard, v); err == nil {
+			t.Errorf("InstallVersion(%q) accepted", v)
+		}
 	}
 }
