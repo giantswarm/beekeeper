@@ -485,6 +485,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			switch req.Operation {
 			case "check":
 				value, err = s.Check(ctx)
+			case "source-chunk":
+				var chunk SourceChunk
+				err = Decode(req.Payload, &chunk)
+				if err == nil {
+					err = s.ReceiveSource(ctx, req.Ref, chunk)
+				}
+				value = struct{}{}
 			case "start":
 				var r StartRequest
 				err = Decode(req.Payload, &r)
@@ -494,7 +501,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err == nil {
 					value, err = s.Start(ctx, r)
 				}
-			case "inspect":
+			case inspectOperation:
 				value, err = s.Inspect(ctx, req.Ref)
 			case "sync-control":
 				value, err = s.SyncControl(ctx, req.Ref, nil)
@@ -526,6 +533,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
+				if req.Operation == inspectOperation && errors.Is(err, os.ErrNotExist) {
+					reply.Code = "not-found"
+				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
 				}

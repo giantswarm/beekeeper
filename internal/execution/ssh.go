@@ -218,6 +218,9 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
+		if op == inspectOperation && reply.Code == "not-found" {
+			return ErrNotFound
+		}
 		if reply.Code == "unsupported" {
 			return ErrUnsupported
 		}
@@ -256,6 +259,9 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 	if x.Ref != r.Ref || x.ConversationID != r.ConversationID || x.Repository != r.Repository || x.Unit != UnitName(r.Ref) || x.Workspace != path.Join(h.WorkspaceRoot, string(r.Ref.Execution), "workspace") {
 		return errors.New("start handle identity or workspace mismatch")
 	}
+	if r.SourceDigest != "" && x.Commit != r.GitRef {
+		return errors.New("start handle does not match coordinator-pinned commit")
+	}
 	if len(x.Commit) != 40 && len(x.Commit) != 64 {
 		return errors.New("invalid pinned commit")
 	}
@@ -268,7 +274,7 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 }
 func (t SSHTransport) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	var x Observation
-	err := t.Call(ctx, "inspect", r, nil, &x)
+	err := t.Call(ctx, inspectOperation, r, nil, &x)
 	if err == nil && x.Handle.Ref != r {
 		err = errors.New("observation identity mismatch")
 	}
