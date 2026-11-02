@@ -487,7 +487,9 @@ func (h Hook) textUngated(text, where string, kind textKind) *ungated {
 }
 
 // firstShellUngated is the offset of the first blocking devctl command of a
-// shell command line that the gate does not precede, -1 for none.
+// shell command line that the gate does not precede, -1 for none: at a
+// command position, in a -c or eval string, or run by a runner from its
+// arguments or a backquote substitution (runnerMerges).
 func firstShellUngated(text string) int {
 	at := -1
 	for _, m := range owned.FindAllStringSubmatchIndex(text, -1) {
@@ -495,6 +497,9 @@ func firstShellUngated(text string) int {
 			at = m[2]
 			break
 		}
+	}
+	if _, in := runnerMerges(text); len(in) > 0 && (at < 0 || in[0] < at) {
+		at = in[0]
 	}
 	for _, cs := range shellStrings(text) {
 		for _, mm := range anyOwned.FindAllStringIndex(cs.text, -1) {

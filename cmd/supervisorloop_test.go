@@ -211,10 +211,14 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
-	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge
+	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge, changedPast := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge, readChangedPast
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge, readChangedPast = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge, changedPast
 	})
+	// No comparison by default: a head past the reviews goes to the person.
+	readChangedPast = func(context.Context, superloop.Pull, string) ([]string, error) {
+		return nil, errors.New("no comparison in this rig")
+	}
 	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
 		r.baseReads = append(r.baseReads, approved+".."+p.Head)
 		return r.baseMerge(p, approved)
@@ -1091,6 +1095,55 @@ func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 	}
 }
 
+// A park on nothing the loop cannot place files no note for the person,
+// who could weigh no option of it: the worker is woken, once for the
+// park, to park on a wait the loop watches. A park a sure classifier
+// places still reaches the guide with its class.
+func TestLoopWakesAWorkerWhoseParkItCannotPlace(t *testing.T) {
+	for name, c := range map[string]struct {
+		classifier []string
+		answer     string
+		note       string
+	}{
+		"no classifier":        {},
+		"an unsure classifier": {classifier: []string{loopClassifier}, answer: `{"class":"needs-person","confidence":0.5}`},
+		"a sure classifier":    {classifier: []string{loopClassifier}, answer: `{"class":"needs-person","confidence":0.9}`, note: "(needs-person)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Supervisor.Classifier = c.classifier
+			r.command = func([]string) (string, int) { return c.answer, 0 }
+			r.park(t, "", time.Now().Add(-time.Minute))
+			r.pull.State = superloop.Merged
+			if err := r.a.store.Record(event(state.Party{Name: loopWorker}, parkEvent, "%s: parked: live proof, waiting for the loop's first board escalate", loopWorker)); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			note, wake := r.called("note", loopAdd), r.called(agentsName, agentWakeName)
+			if c.note != "" {
+				if note == nil || !strings.Contains(note[len(note)-1], c.note) || wake != nil {
+					t.Fatalf("note %v, wake %v\n%s", note, wake, r.out)
+				}
+				return
+			}
+			if note != nil {
+				t.Fatalf("an unclassified park filed a note for the person: %v", note)
+			}
+			if wake == nil || wake[2] != loopWorker || !strings.Contains(wake[3], "names no wait the supervisor loop watches") || !strings.Contains(wake[3], "live proof") {
+				t.Fatalf("wake = %v\n%s", wake, r.out)
+			}
+			if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "no note for the person") {
+				t.Errorf("logged %+v", evs)
+			}
+			// Once for the park: the next pass wakes nobody again.
+			r.pass(t)
+			if again := r.called(agentsName, agentWakeName); again != nil {
+				t.Errorf("a second pass woke %v", again)
+			}
+		})
+	}
+}
+
 // Findings are status reports, including those the real note gate refuses.
 // Delivery through the guide's feed must preserve their words and settle
 // once, across loop and guide restarts, with or without a task thread.
@@ -1432,6 +1485,68 @@ func TestLoopDoesNotRepeatAnActionWhoseRecordWasLost(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.merge"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
 		t.Errorf("the go logged as %+v", evs)
+	}
+}
+
+// unclassifiedPark parks the rig's worker on nothing and logs the park the
+// loop cannot place.
+func (r *loopRig) unclassifiedPark(t *testing.T) {
+	t.Helper()
+	r.park(t, "", time.Now().Add(-time.Minute))
+	r.pull.State = superloop.Merged
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, parkEvent, "%s: parked: live proof, waiting", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An unclassified park's wake whose record was lost is settled by its own
+// agents.wake line: the worker is not woken twice.
+func TestLoopDoesNotRepeatAnUnclassifiedParksWake(t *testing.T) {
+	r := newLoopRig(t)
+	r.unclassifiedPark(t)
+	r.failRecord = func(e state.Event) bool { return e.Verb == "supervisor.classify" }
+	if err := r.passErr(); err == nil {
+		t.Fatal("the lost record was not an error")
+	}
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("no wake: %v", r.calls)
+	}
+	r.failRecord = func(state.Event) bool { return false }
+	r.pass(t)
+	if c := r.called(agentsName, agentWakeName); c != nil {
+		t.Errorf("the wake was sent again after the restart: %v", c)
+	}
+	if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || !strings.Contains(evs[0].Detail, "before an interruption") {
+		t.Errorf("the wake logged as %+v", evs)
+	}
+}
+
+// A claimed wake that never ran is taken after the restart, whatever note
+// the loop filed about the worker meanwhile.
+func TestLoopWakesForAnUnclassifiedParkWhoseClaimedWakeNeverRan(t *testing.T) {
+	r := newLoopRig(t)
+	answer := r.answer
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentWakeName {
+			return "wake failed", 1
+		}
+		return answer(args)
+	}
+	r.unclassifiedPark(t)
+	_ = r.passErr()
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("no wake tried: %v", r.calls)
+	}
+	if err := r.a.store.Record(event(loopParty, "note.add", "#5 for %s: %s escalated on %s", loopPerson, loopWorker, loopURL)); err != nil {
+		t.Fatal(err)
+	}
+	r.answer = answer
+	r.pass(t)
+	if r.called(agentsName, agentWakeName, loopWorker) == nil {
+		t.Fatalf("the claimed wake was read as taken: %v\n%s", r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.classify"); len(evs) != 1 || strings.Contains(evs[0].Detail, "before an interruption") {
+		t.Errorf("the wake logged as %+v", evs)
 	}
 }
 
