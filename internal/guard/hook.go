@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -111,6 +112,10 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// Panic records the failing check and stack without exposing them to the tool.
+	Panic func(check string, stack []byte)
+	check *string
+
 	// MergeGo checks the durable supervisor go for this session and exact head.
 	MergeGo func(session, repo string, pr int, head string) string
 	// GatedOwners are merge.devctlOwners: a merge of their repositories is
@@ -270,19 +275,25 @@ type hookOutput struct {
 // pass unchanged. Malformed input passes. A call the hook does not refuse
 // that is the session's first write in another repository carries that
 // repository's instructions as additional context.
-func (h Hook) Decide(input []byte) []byte {
+func (h Hook) Decide(input []byte) (out []byte) {
+	h.beginCheck("decode")
+	defer h.recoverDecision(&out, func(r string) []byte { return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r}) })
 	var ev event
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	if dec.Decode(&ev) != nil {
 		return nil
 	}
+	h.beginCheck("freshLabs")
 	h.freshLabs(ev)
-	out := h.labProxy(ev, h.decide(ev))
+	out = h.decide(ev)
+	h.beginCheck("labProxy")
+	out = h.labProxy(ev, out)
 	var o map[string]hookOutput
 	if out != nil && (json.Unmarshal(out, &o) != nil || o["hookSpecificOutput"].PermissionDecision == decisionDeny) {
 		return out
 	}
+	h.beginCheck("repoReads")
 	reads := h.repoReads(ev)
 	if reads == "" {
 		return out
@@ -294,61 +305,80 @@ func (h Hook) Decide(input []byte) []byte {
 
 func (h Hook) decide(ev event) []byte {
 	h.mergeSession = ev.Session
+	h.beginCheck("guideRefusal")
 	if r := h.guideRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("sandboxRefusal")
 	if r := h.sandboxRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("desktopBrowserRefusal")
 	if r := h.desktopBrowserRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("subscriptionRefusal")
 	if r := subscriptionRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("tabCloseRefusal")
 	if r := tabCloseRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("leaveRefusal")
 	if r := leaveRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("sharedRefusal")
 	if r := sharedRefusal(ev, h.Shared); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("uploadRefusal")
 	if r := uploadRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("frozenRefusal")
 	if r := frozenRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("consent")
 	if out := h.consent(ev); out != nil {
 		return out
 	}
 	if ev.ToolName == AskTool {
+		h.beginCheck("ask")
 		return h.ask(ev.Session, ev.ToolInput)
 	}
 	if ev.ToolName == SendMessageTool {
+		h.beginCheck("sendMessage")
 		return h.sendMessage(ev.Session, ev.ToolInput)
 	}
 	if ev.ToolName == TaskStopTool {
+		h.beginCheck("taskStop")
 		return h.taskStop(ev.Session, ev.ToolInput)
 	}
+	h.beginCheck("mentionRefusal")
 	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("transcriptFileRefusal")
 	if r := h.transcriptFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("secretFileRefusal")
 	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("folderRefusal")
 	if r := h.folderRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("connectorWrite")
 	if w := h.Upstream.connectorWrite(ev.ToolName, ev.ToolInput); w != nil {
 		return h.refuseUpstream(ev.Session, *w)
 	}
 	if ev.ToolName != bashTool {
+		h.beginCheck("toolRefusal")
 		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 		}
@@ -366,45 +396,59 @@ func (h Hook) decide(ev event) []byte {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
+	h.beginCheck("bashWrite")
 	if w := h.Upstream.bashWrite(cmd, cwd); w != nil {
 		return h.refuseUpstream(ev.Session, *w)
 	}
+	h.beginCheck("kubeRefusal")
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("browserRefusal")
 	if r := h.browserRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("modelServerRefusal")
 	if r := h.modelServerRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("boardReadRefusal")
 	if r := h.boardReadRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("membersRefusal")
 	if r := h.membersRefusal(cmd, ev.Session, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("searchRefusal")
 	if r := h.searchRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("deleteRefusal")
 	if r := deleteRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("liveWorktreeRefusal")
 	if r := h.liveWorktreeRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("secretGuard")
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
+	h.beginCheck("goCacheRefusal")
 	if r := h.goCacheRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("bashRefusal")
 	if r := h.Outbound.bashRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	origCmd := cmd
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
+	h.beginCheck("gate")
 	cmd, gated := h.gate(cmd, bg)
+	h.beginCheck("hiddenMerges")
 	fixed, hidden, unread := h.hiddenMerges(cmd, bg)
 	if hidden {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, release promote, pr wait, release wait or rollout wait " +
@@ -414,18 +458,23 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a shell's -c or eval string names devctl in a form the merge gate cannot read " +
 			"(a command substitution, a quote left open), so a merge, promote or wait in it would run outside the gate. Run devctl as its own command."})
 	}
+	h.beginCheck("runnerRefusal")
 	if r := h.runnerRefusal(cmd, bg); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("heldMerges")
 	if r := heldMerges(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("ungatedRefusal")
 	if r := h.ungatedRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("pushRefusal")
 	if r := h.pushRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("ghBodyRefusal")
 	if r := h.ghBodyRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
@@ -433,6 +482,7 @@ func (h Hook) decide(ev event) []byte {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
 	}
 
+	h.beginCheck("labRuntime")
 	if h.Sandbox != nil {
 		if m := commandMatch(labRuntime, cmd, notHelp); m != nil {
 			var held []lease.Holder
@@ -446,6 +496,7 @@ func (h Hook) decide(ev event) []byte {
 				strings.TrimSpace(cmd[m[2]:m[3]]), leaseLines(held))})
 		}
 	}
+	h.beginCheck("labLimit")
 	if m := commandMatch(lab, cmd, notHelp); m != nil {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
@@ -1157,4 +1208,27 @@ func ShellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// beginCheck shares the current check across Hook copies used by adapters.
+func (h *Hook) beginCheck(name string) {
+	if h.check == nil {
+		h.check = new(string)
+	}
+	*h.check = name
+}
+
+func (h *Hook) recoverDecision(out *[]byte, deny func(string) []byte) {
+	if recover() == nil {
+		return
+	}
+	check := "PreToolUse"
+	if h.check != nil {
+		check = *h.check
+	}
+	stack := debug.Stack()
+	*out = deny("Refused: internal panic in PreToolUse check " + check + "; failing closed. See beekeeper log (hook.panic).")
+	if h.Panic != nil {
+		h.Panic(check, stack)
+	}
 }

@@ -100,8 +100,8 @@ func TestCodexFailClosed(t *testing.T) {
 	// Panic inside a hook callback is recovered and fails closed.
 	panicHook := h
 	panicHook.Clusters = func() []string { panic("simulated callback panic") }
-	if d := decideCodexCmd(t, panicHook, featRepo, "kind create cluster"); d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "simulated callback panic") {
-		t.Errorf("panic recovery: got %+v, want deny naming panic", d)
+	if d := decideCodexCmd(t, panicHook, featRepo, "kind create cluster"); d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "PreToolUse check") {
+		t.Errorf("panic recovery: got %+v, want deny naming check", d)
 	}
 }
 

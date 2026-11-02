@@ -1,0 +1,42 @@
+package guard
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestGuardPanicNamesCheckAndLogsStack(t *testing.T) {
+	for _, format := range []string{"claude", "codex", "agy"} {
+		t.Run(format, func(t *testing.T) {
+			lt := newLiveTree(t)
+			var check, stack string
+			h := Hook{Self: self, Shell: testShell, LiveDirs: func() []string { panic("injected") }, Panic: func(c string, s []byte) { check, stack = c, string(s) }}
+			ev := toolEvent(bashTool, map[string]any{commandKey: "git worktree move " + lt.live + " /aside"})
+			ev["cwd"] = lt.root
+			ev["hook_event_name"] = "PreToolUse"
+			if format == "agy" {
+				ev = map[string]any{"conversationId": "test", "workspacePaths": []string{lt.root}, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": "git worktree move " + lt.live + " /aside", "Cwd": lt.root}}}
+			}
+			raw, _ := json.Marshal(ev)
+			var out []byte
+			switch format {
+			case "codex":
+				out = h.DecideCodex(raw)
+			case "agy":
+				out = h.DecideAgy(raw)
+			default:
+				out = h.Decide(raw)
+			}
+			if !strings.Contains(string(out), "deny") || !strings.Contains(string(out), "liveWorktreeRefusal") {
+				t.Fatalf("response: %s", out)
+			}
+			if check != "liveWorktreeRefusal" || !strings.Contains(stack, "TestGuardPanicNamesCheckAndLogsStack") {
+				t.Fatalf("check=%s stack=%s", check, stack)
+			}
+			if strings.Contains(string(out), "goroutine") {
+				t.Fatal("stack exposed")
+			}
+		})
+	}
+}
