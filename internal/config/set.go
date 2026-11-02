@@ -13,6 +13,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const yamlNullTag = "!!null"
+
 // ErrInvalid refuses a Set whose result does not load.
 var ErrInvalid = errors.New("refused")
 
@@ -71,7 +73,7 @@ func apply(raw []byte, settings []Setting) ([]byte, error) {
 	if doc.Kind == 0 {
 		doc = yaml.Node{Kind: yaml.DocumentNode}
 	}
-	if len(doc.Content) == 0 || doc.Content[0].Tag == "!!null" {
+	if len(doc.Content) == 0 || doc.Content[0].Tag == yamlNullTag {
 		// an empty file, or one of comments alone
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}
 	}
@@ -80,7 +82,7 @@ func apply(raw []byte, settings []Setting) ([]byte, error) {
 		if err := yaml.Unmarshal([]byte(s.Value), &v); err != nil {
 			return nil, fmt.Errorf("%s: %w", s.Key, err)
 		}
-		value := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null"}
+		value := &yaml.Node{Kind: yaml.ScalarNode, Tag: yamlNullTag}
 		if v.Kind == yaml.DocumentNode {
 			value = v.Content[0]
 		}
