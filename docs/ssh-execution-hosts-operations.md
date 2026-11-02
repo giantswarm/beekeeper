@@ -102,8 +102,17 @@ beekeeper --config /etc/beekeeper/host.yaml agents hosts bundle > /srv/beekeeper
 beekeeper --config /etc/beekeeper/host.yaml agents hosts prepare --bundle /srv/beekeeper/bundle.json
 ```
 
-`prepare` prints the policy digest to pin in the coordinator catalog. Add the
-following to the coordinator configuration, substituting that digest:
+`prepare` prints the policy digest. The coordinator records the digest it
+pins in its own state, not in its configuration: once the host runs a release
+with `agents hosts self-update`, run on the coordinator
+
+```sh
+beekeeper agents hosts update host-a
+```
+
+which has the host install the coordinator's release (below) and pins the
+digest the host prepared once `hosts check` passes with it. The coordinator
+configuration names the host and its limits only:
 
 ```yaml
 agents:
@@ -117,22 +126,52 @@ agents:
       repositories:
         example/repository: /srv/checkouts/repository
       harnesses: [claude]
-      policyDigest: <prepared-policy-digest>
       maxBusy: 2
       connectTimeout: 10s
       operationTimeout: 30s
 ```
 
-Coordinator and host releases may differ while they use the same execution
-protocol. A coordinator self-update does not require reinstalling or re-preparing
-the hosts. `hosts check` reports each host's release for diagnostics, and still
-requires the expected identity, protocol, pinned policy, harness and fresh resource
-observation. A different protocol is refused; upgrade the host to a release with
-the coordinator's protocol before starting new work.
+An entry's own `policyDigest` is deprecated: it still pins a host beekeeper
+never updated, and beekeeper's recorded pin replaces it.
 
-Changing the host binary, rules, settings, or protected host configuration invalidates
-the policy. Prepare and pin a matching bundle again before starting new work.
-Do not weaken a required guard to make a check pass.
+### Host updates follow the coordinator
+
+Hosts run the coordinator's release. `agents hosts update <host>` connects
+over the host's SSH route and runs `agents hosts self-update --version
+<coordinator release>` there. With no execution running, the host holds its
+admission, installs exactly that release once its Sigstore bundle verifies (as
+`self-update` does; the replaced binary is kept beside it as
+`.beekeeper.previous`), and has the installed release prepare its own policy.
+A release that does not prepare is rolled back and the old one prepares again.
+The coordinator then runs `hosts check` with the digest the host answered and
+records the release and digest in its state (`hostPins`): every start on the
+host is pinned to it. No configuration change and no person is involved.
+
+The supervisor loop runs the update for every `agents.hosts` entry whose pin
+is not the coordinator's release, so a coordinator self-update carries the
+hosts with it. A coordinator that runs a release starts nothing on a host
+until the host runs that release:
+
+- a host with running executions drains: no new start there, and it updates
+  once they end;
+- a host whose update fails (unreachable, no signed release, a prepare or
+  check that fails) is held: no start there until an update succeeds. The
+  loop hands the hold on once as a finding (`supervisor.file`, delivered by
+  `guide watch`) and tries the host again hourly; the other hosts keep
+  running. `beekeeper agents hosts update <host>` retries it at once.
+
+A host first needs a release with `agents hosts self-update` installed by
+hand; from then on it follows the coordinator. A development build of the
+coordinator updates no host and gates no start on a host's release.
+
+`hosts check` reports each host's release for diagnostics, and still requires
+the expected identity, protocol, pinned policy, harness and fresh resource
+observation.
+
+Changing the host binary, rules, settings, or protected host configuration
+invalidates the policy: the host's `hosts check` fails on a digest mismatch
+until `agents hosts update <host>` prepares and pins it again. Do not weaken
+a required guard to make a check pass.
 
 The pinned digest covers every host setting that changes what a worker may start
 under or how much it may consume: the security sections, the execution host
@@ -143,7 +182,7 @@ floor (`capacity.availMinMiB`), the swap guard (`capacity.swapGrowthMaxMiB` and
 the build slots and their caps (`memcap.slots`, `memcap.max`, `memcap.cpuQuota`,
 `memcap.cpuWeight`) and the kind lab cap (`maxKindClusters`). Weakening one of
 them on the host is a digest mismatch in `agents hosts check` until a matching
-bundle is prepared and pinned again. What stays host-local on purpose is the
+policy is prepared and pinned again (`agents hosts update <host>`). What stays host-local on purpose is the
 machine's own watch and desk pacing, which never bounds a pinned remote worker:
 the supervisor's target and pace (`capacity.floor`, `capacity.ceiling` and the
 rest of `capacity` beyond the guards above), watch's alert thresholds and

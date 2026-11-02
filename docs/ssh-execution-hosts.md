@@ -61,7 +61,6 @@ agents:
       repositories:
         giantswarm/beekeeper: /srv/beekeeper/checkouts/beekeeper
       harnesses: [claude]
-      policyDigest: sha256:<installed-policy-digest>
       maxBusy: 2
       connectTimeout: 10s
       operationTimeout: 30s
@@ -83,6 +82,7 @@ Proposed component CLI:
 ```text
 beekeeper agents hosts check <host>
 beekeeper agents hosts prepare --bundle <file>       # run on execution host
+beekeeper agents hosts update <host>                 # install the coordinator's release there, pin its policy digest
 beekeeper agents start <name> <brief-file> --host <host> --repo <owner/repo> --ref <git-ref> --model <model>
 beekeeper agents inspect <agent>
 beekeeper agents logs <agent> --after <cursor> --limit <bytes>

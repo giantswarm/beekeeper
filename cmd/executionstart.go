@@ -33,6 +33,9 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
+	if err := a.admitExecution(o.Host, host); err != nil {
+		return err
+	}
 	if o.Repository == "" || o.GitRef == "" || o.Dir != "" || o.Desktop || o.Mode != "" && o.Mode != "headless" {
 		return usageErr("remote starts require --repo and --ref, use headless mode and do not accept --dir or --desktop")
 	}

@@ -3684,7 +3684,7 @@ func (c *Config) validate() error {
 		if selector == "local" || !execution.ValidIdentity(selector) || identities[host.Identity] {
 			return errors.New("agents.hosts requires unique identities and selectors; local is reserved")
 		}
-		if err := host.Validate(); err != nil {
+		if err := host.ValidateCatalog(); err != nil {
 			return fmt.Errorf("agents.hosts.%s: %w", selector, err)
 		}
 		identities[host.Identity] = true
