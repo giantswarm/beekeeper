@@ -188,10 +188,10 @@ const largeMeta = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"
 func (b *largeBoard) order() config.Board {
 	return config.Board{Owner: "o", Project: 7, Team: "X", People: []string{"me"}, Order: []config.BoardStep{
 		{Name: "page", Kind: []string{"alert"}},
-		{Name: "In Progress", Status: []string{"in progress"}, SubIssues: true},
-		{Name: "Up Next", Status: []string{"up next"}},
-		{Name: "queue", Search: "repo:o/q"},
-		{Name: "Backlog", Status: []string{"backlog"}},
+		{Name: "epics and work", Status: []string{defaultGo}, SubIssues: true},
+		{Name: "queued next", Status: []string{typedNext}},
+		{Name: "searched", Search: "repo:o/q"},
+		{Name: backlogStep, Status: []string{backlog}},
 	}}
 }
 
@@ -225,6 +225,11 @@ var (
 	threadAlias = regexp.MustCompile(`e(\d+):repository\(owner:"o",name:"r"\)\{isPrivate`)
 	searchAlias = regexp.MustCompile(`([sp]\d+):search\(`)
 )
+
+// dataOf is an answer whose data holds the aliased fields of parts.
+func dataOf(parts []string) []byte {
+	return fmt.Appendf(nil, `{"data":{%s}}`, strings.Join(parts, ","))
+}
 
 func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 	q := strings.TrimPrefix(args[3], "query=")
@@ -271,19 +276,19 @@ func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 		for _, m := range searchAlias.FindAllStringSubmatch(q, -1) {
 			parts = append(parts, fmt.Sprintf(`%q:{"nodes":[%s]}`, m[1], issue(9000, "")))
 		}
-		return fmt.Appendf(nil, `{"data":{%s}}`, strings.Join(parts, ",")), nil
+		return dataOf(parts), nil
 	case strings.Contains(q, "is:pr"):
 		var parts []string
 		for _, m := range searchAlias.FindAllStringSubmatch(q, -1) {
 			parts = append(parts, fmt.Sprintf(`%q:{"nodes":[]}`, m[1]))
 		}
-		return fmt.Appendf(nil, `{"data":{%s}}`, strings.Join(parts, ",")), nil
+		return dataOf(parts), nil
 	case strings.Contains(q, "isPrivate issue("):
 		var parts []string
 		for _, m := range threadAlias.FindAllStringSubmatch(q, -1) {
 			parts = append(parts, fmt.Sprintf(`"e%s":{"isPrivate":false,"issue":{"comments":{"nodes":[]}}}`, m[1]))
 		}
-		return fmt.Appendf(nil, `{"data":{%s}}`, strings.Join(parts, ",")), nil
+		return dataOf(parts), nil
 	}
 	b.t.Fatalf("unexpected request %s", q)
 	return nil, nil
