@@ -339,6 +339,9 @@ func (h Hook) consent(ev event) []byte {
 			}
 			if page, ok := pageOf(pages, c.tab); ok {
 				d = Click(apps, page, c.words)
+				if c.disclosure && permissionDisclosure(page, c.words) {
+					d = Decision{Allow, "beekeeper allows the disclosure click: it only reveals or hides part of the permissions page; it changes no permission and submits no grant"}
+				}
 				if c.typed && d.Decision == Allow {
 					d = typedCallback(apps, page, c.text, d)
 					d = typedDeviceCode(page, c.text, d)
@@ -393,6 +396,8 @@ type chromeCall struct {
 	// tool's), which lands only where Chrome draws it; a form value is set
 	// on the element.
 	pointer bool
+	// disclosure limits UI-only exceptions to a single left click.
+	disclosure bool
 }
 
 // chromeCalls are the calls of a Chrome tool call the hook decides: a
@@ -408,7 +413,7 @@ func chromeCalls(tool string, input map[string]any) []chromeCall {
 		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey), text: valueOf(input, valueKey), typed: true}}
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(acting, action) {
-			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), text: valueOf(input, textKey), typed: !strings.HasSuffix(action, "click"), pointer: true}}
+			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), text: valueOf(input, textKey), typed: !strings.HasSuffix(action, "click"), pointer: true, disclosure: action == actionLeftClick}}
 		}
 	case chromeBatch:
 		actions, _ := input["actions"].([]any)

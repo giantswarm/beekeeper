@@ -172,3 +172,15 @@ func squash(s string) string {
 func containsFold(s, sub string) bool {
 	return sub != "" && strings.Contains(strings.ToLower(s), strings.ToLower(sub))
 }
+
+// permissionDisclosure identifies a UI-only step by its effect and control
+// role, not by the surrounding page's grant vocabulary. Match the whole
+// description: a step that also selects a level or submits is not covered.
+// Only the known section/tab labels qualify; an arbitrary button does not.
+var permissionDisclosureWords = regexp.MustCompile(`(?i)^(?:(?:expand|expands|collapse|collapses) (?:the )?(?:organization|repository|account) permissions section|(?:switch|switches) to (?:the )?(?:organization|repository|account) permissions tab)\.?$`)
+
+func permissionDisclosure(page Page, words string) bool {
+	u, err := url.Parse(page.URL)
+	return err == nil && strings.EqualFold(u.Hostname(), githubHost) && permissionsPath.MatchString(u.Path) &&
+		permissionDisclosureWords.MatchString(strings.TrimSpace(words))
+}
