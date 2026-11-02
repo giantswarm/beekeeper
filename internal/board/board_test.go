@@ -371,6 +371,7 @@ const metaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"n
 {"id":"FT","name":"Team","options":[{"id":"t1","name":"X 🐝"},{"id":"t2","name":"Y"}]}]}}}}}`
 
 func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSchema(f.t, args)
 	q := args[3]
 	f.queries = append(f.queries, q)
 	f.repos = append(f.repos, github.Repo(ctx))
