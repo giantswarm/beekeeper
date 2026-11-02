@@ -324,7 +324,10 @@ host (*.127.0.0.<n>.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
 that name such a host run with the lab's rule, the prompt's exception for
 the fixture user's credential the steps give, and "allowed lab sign-in:"
-below the report.
+below the report. Such a page needs no fallback: the lab's certificate
+authority is one Chrome trusts, and a sign-in there whose clicks and keys
+do nothing and whose screenshots fail is a tab behind another or a window
+not drawn, which the front-tab and draw checks below handle as on any host.
 
 Every other grant stays refused. A call the classifier refused is named
 below the report, one "refused:" line per call, with the call's own words
