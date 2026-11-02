@@ -23,17 +23,15 @@ var browserOpener = regexp.MustCompile(`(?m)` + pos + `(gh\s+auth\s+login\b[^;&|
 // (group 2).
 var musterLogin = regexp.MustCompile(`(?m)` + start + `(` + posWrappers + `)muster\s+auth\s+login\b([^;&|\n]*)`)
 
-// musterNoBrowserFlag: an argument with which muster opens no browser: the
-// flag (its value, if given, in group 1) or a help request.
-var musterNoBrowserFlag = regexp.MustCompile(`(?:^|\s)(?:--no-browser(?:=(\S*))?|-h|--help)(?:\s|$)`)
+// musterBoolFlags are the boolean flags of muster auth login and its parents:
+// they take no separate value. Every other flag without "=" may take the next
+// word as its value, as pflag reads it, so a --no-browser right after one is
+// no flag of its own.
+var musterBoolFlags = map[string]bool{allFlag: true, "--silent": true, "--force": true, "--quiet": true, "-q": true}
 
-// musterNoBrowserEnv: an assignment of the environment variable muster reads
-// in place of the flag, its value in group 1; musterNoBrowserExport its
-// export by an earlier command of the call.
-var (
-	musterNoBrowserEnv    = regexp.MustCompile(`(?:^|\s)MUSTER_NO_BROWSER=(\S*)`)
-	musterNoBrowserExport = regexp.MustCompile(`(?m)` + start + `export\s+MUSTER_NO_BROWSER=([^\s;&|)]*)`)
-)
+// musterNoBrowserEnv is the environment variable muster reads in place of
+// --no-browser.
+const musterNoBrowserEnv = "MUSTER_NO_BROWSER"
 
 // browserRefusal returns why the hook refuses cmd, "" when it passes. A muster
 // sign-in that opens a browser is refused in every session (musterLoginRefusal);
@@ -68,7 +66,7 @@ func (h Hook) browserRefusal(cmd, session string) string {
 func musterLoginRefusal(cmd string) string {
 	for _, m := range musterLogin.FindAllStringSubmatchIndex(cmd, -1) {
 		prefix, args := cmd[m[2]:m[3]], cmd[m[4]:m[5]]
-		if noBrowserFlag(args) || noBrowserEnv(musterNoBrowserEnv.FindStringSubmatch(prefix)) || noBrowserExported(cmd[:m[0]]) {
+		if noBrowserArgs(args) || noBrowserAssigned(prefix) {
 			continue
 		}
 		return "Refused: `muster auth login` opens the person's default browser, outside the Claude in Chrome tab group, " +
@@ -82,40 +80,77 @@ func musterLoginRefusal(cmd string) string {
 	return ""
 }
 
-// noBrowserFlag reports whether a muster sign-in's arguments say it opens no
-// browser: --no-browser (a value, if given, true as a boolean flag reads it)
-// or a help request.
-func noBrowserFlag(args string) bool {
-	m := musterNoBrowserFlag.FindStringSubmatch(args)
-	if m == nil {
-		return false
+// noBrowserArgs reports whether a muster sign-in's arguments make it open no
+// browser, read in order as pflag reads them: the last --no-browser decides
+// (--no-browser=<v> as a boolean), a help request shows help and signs in to
+// nothing, a value-taking flag swallows the next word, "--" ends the flags,
+// and a shell comment ends the arguments.
+func noBrowserArgs(args string) bool {
+	noBrowser := false
+	words := shellWords(stripComment(args))
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		switch {
+		case w == "--":
+			return noBrowser
+		case w == "-h" || w == "--help":
+			return true
+		case w == "--no-browser":
+			noBrowser = true
+		case strings.HasPrefix(w, "--no-browser="):
+			on, err := strconv.ParseBool(strings.TrimPrefix(w, "--no-browser="))
+			noBrowser = err == nil && on
+		case strings.HasPrefix(w, "-") && !strings.Contains(w, "=") && !musterBoolFlags[w]:
+			i++ // the flag's value, whatever it looks like
+		}
 	}
-	if !strings.Contains(m[0], "--no-browser=") {
-		return true
-	}
-	on, err := strconv.ParseBool(m[1])
-	return err == nil && on
+	return noBrowser
 }
 
-// noBrowserExported reports whether an earlier command of the call exports
-// MUSTER_NO_BROWSER, the last export with a value that disables the browser.
-func noBrowserExported(before string) bool {
-	ms := musterNoBrowserExport.FindAllStringSubmatch(before, -1)
-	return len(ms) > 0 && noBrowserEnv(ms[len(ms)-1])
+// stripComment cuts a shell comment off s: an unquoted # that starts a word.
+func stripComment(s string) string {
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else if c == '\\' && quote == '"' {
+				i++
+			}
+		case c == '\\':
+			i++
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '#' && (i == 0 || s[i-1] == ' ' || s[i-1] == '\t'):
+			return s[:i]
+		}
+	}
+	return s
 }
 
-// noBrowserEnv reports whether an assignment of MUSTER_NO_BROWSER (its value in
-// m[1]) disables muster's browser as muster reads it: any value but empty or a
-// false one (0, f, false, no, off).
-func noBrowserEnv(m []string) bool {
-	if m == nil {
-		return false
+// noBrowserAssigned reports whether the assignments in front of a muster
+// sign-in (prefix) disable its browser: the last MUSTER_NO_BROWSER assignment
+// there, read as muster reads it (any value but empty or a false one). The
+// session's environment and an earlier export are not this command's to
+// judge (a later assignment, unset or subshell may undo them), so they never
+// exempt it.
+func noBrowserAssigned(prefix string) bool {
+	on := false
+	for _, w := range shellWords(prefix) {
+		v, ok := strings.CutPrefix(w, musterNoBrowserEnv+"=")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "", "0", "f", "false", "no", "off":
+			on = false
+		default:
+			on = true
+		}
 	}
-	switch strings.ToLower(strings.Trim(m[1], `"'`)) {
-	case "", "0", "f", "false", "no", "off":
-		return false
-	}
-	return true
+	return on
 }
 
 // heldBy reports whether the session holds the lease l.

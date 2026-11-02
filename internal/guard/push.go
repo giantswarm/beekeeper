@@ -14,6 +14,7 @@ const (
 	forWord       = "for"
 	pushSubcmd    = "push"
 	branchesFlag  = "--branches"
+	allFlag       = "--all"
 	gitHeadRef    = "HEAD"
 	namespaceFlag = "--namespace"
 	homeVar       = "HOME"
