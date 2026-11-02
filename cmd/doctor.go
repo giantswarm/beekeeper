@@ -325,6 +325,11 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	}
 	rep.faults = checkFaults(ctx, a.cfg.Doctor.Faults, fix, run)
 	if r.dryRun {
+		lines, err := a.stopWorktreeOrphans(r.by, true)
+		if err != nil {
+			return rep, err
+		}
+		rep.chores = append(rep.chores, lines...)
 		for _, c := range chores {
 			if c.archive && (st.StartIndex(c.agent.Party) < 0 || !st.Starts[st.StartIndex(c.agent.Party)].Background) {
 				if host, why := a.archivable(st, c.agent.Party); why != "" {
@@ -365,6 +370,11 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, rosterLines...)
+	orphanLines, err := a.stopWorktreeOrphans(r.by, false)
+	if err != nil {
+		return rep, err
+	}
+	rep.chores = append(rep.chores, orphanLines...)
 	rep.unagreed += unagreed
 	st, err = a.store.Read()
 	if err != nil {

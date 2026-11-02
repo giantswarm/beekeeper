@@ -137,3 +137,25 @@ func (snap *snapshot) pruneClosed(want *snapshot, now time.Time) bool {
 	}
 	return pruned
 }
+
+// LookupNote reads the complete retained note and its atomic close record.
+func (s *Store) LookupNote(id int) (*state.Note, *state.Event, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	snap, err := s.load(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, n := range snap.notes {
+		if n.Spec.ID != id {
+			continue
+		}
+		note := noteOf(n)
+		var closure *state.Event
+		if c := n.Status.Closure; c != nil {
+			closure = &state.Event{At: c.At.Time, By: party(c.By), Verb: c.Verb, Detail: c.Detail}
+		}
+		return &note, closure, nil
+	}
+	return nil, nil, nil
+}
