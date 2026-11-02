@@ -148,3 +148,32 @@ func TestModelPolicyForcedSSHAdmissionCannotBypass(t *testing.T) {
 		}
 	}
 }
+
+func TestModelPolicyCheckedBeforeReviewCapacityShortcut(t *testing.T) {
+	p := newPickRig(t, subscriptionChoices)
+	p.configure("  taskPolicies:\n    review: {minClass: 3}\n")
+	a, _ := p.app(false)
+	a.selectionKind = taskKindReview
+	v, err := a.startCapacityForAuto(t.Context(), false, nil, forReview, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A competing start exhausts the review allowance before target admission.
+	v.withReviewHeadroom(0, 1, 1, forReview)
+	v = v.forTarget(a.liveCapacity(), claudeComm, pickOpus)
+	if _, err := gateStart(v, true); Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
+		t.Fatalf("exhausted review room hid target policy: %v", err)
+	}
+}
+
+func TestModelPolicySSHRequiresMetadataWithoutProviders(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	a.cfg.Capacity.Providers, a.cfg.Capacity.Choices = nil, nil
+	a.cfg.Capacity.TaskPolicies = map[string]config.TaskPolicy{testTaskAudit: {MinClass: 3}}
+	_, err := runAgents(a, agentStartName, workerRole, brief, loopHostFlag, sshTestSelector,
+		loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch, testHarnessFlag, claudeComm,
+		modelFlag, bgModel, taskKindArg, testTaskAudit, usageForceFlag, testDryRunFlag)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
+		t.Fatalf("missing provider metadata hid target policy: %v", err)
+	}
+}

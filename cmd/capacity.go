@@ -2146,7 +2146,7 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 }
 
 func (v *capacityView) forPoolTarget(k config.Capacity, harness, model string) *capacityView {
-	if v == nil || v.Stopped != "" || v.reviewLimitReached || harness == harnessAuto || len(v.Providers) == 0 {
+	if v == nil || v.Stopped != "" || harness == harnessAuto {
 		return v
 	}
 	task := cmp.Or(k.TaskKind, workerRole)
@@ -2170,6 +2170,9 @@ func (v *capacityView) forPoolTarget(k config.Capacity, harness, model string) *
 				return v
 			}
 		}
+	}
+	if v.reviewLimitReached || len(v.Providers) == 0 {
+		return v
 	}
 
 	prov, bucket := resolveAgentProviderBucket(k, harness, model)
