@@ -329,7 +329,7 @@ func (h Hook) consent(ev event) []byte {
 	var pages map[string]Page
 	var checks map[string]pageCheck
 	allowed := ""
-	for _, c := range calls {
+	for i, c := range calls {
 		var d Decision
 		if c.navigate != "" {
 			d = Navigation(apps, c.navigate)
@@ -339,6 +339,9 @@ func (h Hook) consent(ev event) []byte {
 			}
 			if page, ok := pageOf(pages, c.tab); ok {
 				d = Click(apps, page, c.words)
+				if i == 0 && c.disclosure && permissionDisclosure(page, c.words, permissionRef(ev.TranscriptPath, tabFor(pages, c.tab), page.URL, c.ref), c.ref) {
+					d = Decision{Allow, "beekeeper allows the disclosure click: it only reveals or hides part of the permissions page; it changes no permission and submits no grant"}
+				}
 				if c.typed && d.Decision == Allow {
 					d = typedCallback(apps, page, c.text, d)
 					d = typedDeviceCode(page, c.text, d)
@@ -384,6 +387,7 @@ var acting = []string{actionLeftClick, "right_click", "double_click", "triple_cl
 // value).
 type chromeCall struct {
 	navigate, tab, words string
+	ref                  string
 	// text is the input alone: the typed text, the key, the form value.
 	text string
 	// typed says the call enters input: a typed text, a key, a drag, a
@@ -393,6 +397,8 @@ type chromeCall struct {
 	// tool's), which lands only where Chrome draws it; a form value is set
 	// on the element.
 	pointer bool
+	// disclosure limits UI-only exceptions to a single left click.
+	disclosure bool
 }
 
 // chromeCalls are the calls of a Chrome tool call the hook decides: a
@@ -408,7 +414,7 @@ func chromeCalls(tool string, input map[string]any) []chromeCall {
 		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey), text: valueOf(input, valueKey), typed: true}}
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(acting, action) {
-			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), text: valueOf(input, textKey), typed: !strings.HasSuffix(action, "click"), pointer: true}}
+			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), text: valueOf(input, textKey), typed: !strings.HasSuffix(action, "click"), pointer: true, ref: valueOf(input, refKey), disclosure: action == actionLeftClick}}
 		}
 	case chromeBatch:
 		actions, _ := input["actions"].([]any)

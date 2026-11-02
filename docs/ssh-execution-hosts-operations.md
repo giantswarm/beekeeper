@@ -1,7 +1,8 @@
 # Operating SSH execution hosts
 
 Managed, headless Claude Code sessions run on an explicitly selected SSH host.
-Each execution gets an isolated clone, an owned user service,
+Each execution gets its own linked worktree and branch backed by an isolated
+bare repository copy, an owned user service,
 a conversation identifier, and one coordinator roster registration. Omitting
 `--host`, or selecting `--host local`, keeps the local launch path.
 
@@ -29,6 +30,20 @@ in the supported family (`>= 2.1.268, < 3.0.0`), a pinned Codex CLI (see
 there independently. `agents hosts check` reads version and authentication
 metadata; it makes no model request. Starting a session never copies a provider
 credential store or forwards an authentication agent.
+
+Provision the worker toolchain the same way on every host, and pin it under
+`tools`: the GitHub CLI (`gh`) everywhere, and Go for each served repository
+whose source checkout has a `go.mod`, at least at the version its `toolchain`
+line (or, without one, its `go` line) names. Each pin is an absolute executable
+named `go` or `gh` and the version it reports (`go version` with
+`GOTOOLCHAIN=local`, `gh --version`). `agents hosts check`, and every start,
+refuses a host whose required tool is unpinned, reports another version than its
+pin, or is older than a served `go.mod` asks for, naming each one; a passing
+check lists the pinned versions under `tools`. The runner puts each tool's
+directory on the worker's PATH right after the component's, so a worker runs
+`go` and `gh` by bare name. The tools are part of the pinned policy: changing
+one, or raising Go when a `go.mod` moves to a newer toolchain, needs a new
+`prepare` and digest.
 
 Provision SSH authentication and known-host keys separately in both directions:
 the coordinator calls the host's component, and the managed worker calls the
@@ -78,6 +93,13 @@ agents:
         executable: /usr/local/bin/claude
         version: 2.1.290
         configDir: /srv/beekeeper/claude
+    tools:
+      go:
+        executable: /srv/tools/go1.27.3/bin/go
+        version: 1.27.3
+      gh:
+        executable: /usr/bin/gh
+        version: 2.83.0
     coordinators:
       coordinator:
         publicKey: <coordinator-public-key>

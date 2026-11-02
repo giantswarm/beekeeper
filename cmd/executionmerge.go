@@ -45,7 +45,10 @@ var runExecutionMerge = func(ctx context.Context, use execution.MergeUse) error 
 
 func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execution.MergeUse) error {
 	r, _ := executionRecord(st, use.Ref)
-	if r == nil || r.Request.Repository != use.Repository || !execution.SupportedHarness(r.Request.Harness) || !r.Request.LeaseRequired || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || r.StopRequest != nil || r.Completed || r.Terminal() || st.Stop != nil {
+	if r == nil || r.Request.Repository != use.Repository || !execution.SupportedHarness(r.Request.Harness) || !r.Request.LeaseRequired || st.Stop != nil {
+		return refused("execution merge authority stopped or mismatched")
+	}
+	if use.ID != "" && (r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || r.StopRequest != nil || r.Completed || r.Terminal()) {
 		return refused("execution merge authority stopped or mismatched")
 	}
 	owner, _, _ := strings.Cut(use.Repository, "/")
