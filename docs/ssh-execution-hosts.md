@@ -316,7 +316,12 @@ its journal. The loop's host sync releases a reservation still unacknowledged
 it holds no journal. `agents recover` binds a reservation the host never
 acknowledged to the host's current `policyDigest` (checked against the host
 first) before sending the start, and refuses to change one the host already
-holds a journal of.
+holds a journal of. A stop (desk or execution) recorded before the start
+leaves keeps it from being sent. Stopping an unacknowledged reservation
+releases it instead of asking a host that holds no journal of it; a start
+sent inside its window with no journal yet refuses the stop until it
+settles. Host sync asks the host nothing about a reservation whose start
+never left, and a released reservation is never stopped or synced again.
 
 ## Worker control and durable delivery
 

@@ -79,6 +79,12 @@ func (a *app) preparePendingExecution(ctx context.Context, client execution.Tran
 		if x == nil || x.Released() || x.Phase != executionPending || !x.StartSentAt.Equal(sentAt) {
 			return nil, refused("execution reservation changed before its start was sent")
 		}
+		if err := a.refuseStopped(current, "starting an SSH execution"); err != nil {
+			return nil, err
+		}
+		if x.StopRequest != nil {
+			return nil, refused("execution has a stop request")
+		}
 		x.StartUnsent, x.StartSentAt = false, sent
 		return nil, nil
 	}); err != nil {
@@ -191,6 +197,26 @@ func (a *app) releaseStaleReservation(ctx context.Context, client execution.Tran
 		}
 	}
 	return a.releaseUnstarted(ref, rec.StartSentAt, fmt.Sprintf("unacknowledged for %s: %s", unstartedReleaseAfter, why))
+}
+
+// releaseStoppedReservation settles the stop of a reservation its host
+// never acknowledged, done once it is decided: released when no start left
+// the coordinator, or when the host holds no journal of a start sent past
+// unstartedReleaseAfter; refused while a start sent inside that window may
+// still land. A host journal, or an inspection that cannot tell, leaves the
+// stop to the host (done false).
+func (a *app) releaseStoppedReservation(ctx context.Context, client execution.Transport, rec *state.ExecutionRecord, now time.Time) (bool, error) {
+	ref := rec.Handle.Ref
+	if rec.StartUnsent {
+		return a.releaseUnstarted(ref, rec.StartSentAt, "stopped before its start was sent")
+	}
+	if _, err := client.Inspect(ctx, ref); !errors.Is(err, execution.ErrNotFound) {
+		return false, nil
+	}
+	if now.Sub(rec.StartSentAt) < unstartedReleaseAfter {
+		return true, refused("its start sent at %s has no host journal yet and may still land; stop it again after %s", rec.StartSentAt.Format(time.RFC3339), rec.StartSentAt.Add(unstartedReleaseAfter).Format(time.RFC3339))
+	}
+	return a.releaseUnstarted(ref, rec.StartSentAt, "stopped; its host holds no journal of it")
 }
 
 // releaseUnstarted gives up a reservation its host never acknowledged: it

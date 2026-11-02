@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -257,5 +259,155 @@ func TestExecutionRecoverRebindsUnstartedReservationToCurrentPolicy(t *testing.T
 				t.Fatal("recover did not rebind the reservation to the host's current policy")
 			}
 		})
+	}
+}
+
+// lostReplyReservation records a reservation whose start reply was lost and
+// rewinds it to the given send state: unsent (mid-preparation) or sent at.
+func lostReplyReservation(t *testing.T, a *app, brief string, fake *testExecutionTransport, unsent bool, sentAgo time.Duration) execution.Ref {
+	t.Helper()
+	fake.start = func(context.Context, execution.StartRequest) (execution.Handle, error) {
+		return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: errors.New("fixture reply lost")}
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	ref := startUnacknowledged(t, a, brief, "rewound-worker")
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, ref)
+		rec.StartUnsent = unsent
+		rec.Observation = execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}
+		rec.ReservedAt = rec.ReservedAt.Add(-sentAgo)
+		rec.StartSentAt = time.Time{}
+		if !unsent {
+			rec.StartSentAt = time.Now().Add(-sentAgo)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+// A stop of a reservation its host never acknowledged releases it instead
+// of asking the host, which holds no journal of it; a released one is not
+// stopped again, and a start sent inside its window waits for it to settle.
+func TestExecutionStopReleasesUnacknowledgedReservation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		unsent   bool
+		sentAgo  time.Duration
+		released bool
+	}{
+		{name: "start never sent", unsent: true, released: true},
+		{name: "sent start past its window", sentAgo: 2 * unstartedReleaseAfter, released: true},
+		{name: "sent start inside its window", sentAgo: time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, brief := sshStartTestApp(t)
+			stops := 0
+			fake := &testExecutionTransport{inspect: notFound, stop: func(context.Context, execution.Ref, execution.StopRequest) (execution.Ack, error) {
+				stops++
+				return execution.Ack{}, errors.New("open journal: no such file or directory")
+			}}
+			ref := lostReplyReservation(t, a, brief, fake, tc.unsent, tc.sentAgo)
+			err := a.stopExecution(context.Background(), ref, "fixture release stop")
+			st, readErr := a.store.Read()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			rec, _ := executionRecord(st, ref)
+			if stops != 0 || rec.Observation.Reachability == execution.Unreachable {
+				t.Fatal("the stop asked a host that holds no journal of the reservation")
+			}
+			if !tc.released {
+				if Code(err) != ExitRefused || rec.Released() || rec.StopRequest == nil {
+					t.Fatalf("a start inside its window was released or lost its stop: %v", err)
+				}
+				return
+			}
+			if err != nil || !rec.Released() || len(st.Agents) != 0 || executionHostBusy(st, ref.Host) != 0 {
+				t.Fatalf("the stopped reservation was not released: %v", err)
+			}
+			// beekeeper stop, agents stop and the loop stop a released
+			// reservation no more.
+			if err := a.stopExecution(context.Background(), ref, "fixture release stop again"); err != nil || stops != 0 {
+				t.Fatalf("stopping a released reservation: %v", err)
+			}
+		})
+	}
+}
+
+// A stop recorded while the start pins and uploads its source keeps the
+// start request from leaving: nothing reaches the host, and the
+// reservation is released.
+func TestExecutionStopDuringPreparationSendsNoStart(t *testing.T) {
+	for _, desk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("desk stop %v", desk), func(t *testing.T) {
+			a, brief := sshStartTestApp(t)
+			gitBefore := executionPublishGit
+			t.Cleanup(func() { executionPublishGit = gitBefore })
+			executionPublishGit = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				switch args[0] {
+				case "rev-parse":
+					return []byte(strings.Repeat("b", 40) + "\n"), nil
+				case "bundle":
+					return nil, os.WriteFile(args[2], []byte("fixture bundle"), 0o600)
+				}
+				return nil, nil
+			}
+			sends := 0
+			fake := &testExecutionTransport{inspect: notFound, start: func(context.Context, execution.StartRequest) (execution.Handle, error) {
+				sends++
+				return execution.Handle{}, errors.New("start sent after a stop")
+			}}
+			uploader := &sourceRecoveryTransport{testExecutionTransport: fake, upload: func(_ context.Context, ref execution.Ref, _ []byte) error {
+				return a.store.Update(func(st *state.State) ([]state.Event, error) {
+					if desk {
+						st.Stop = &state.Stop{Reason: "fixture desk stop", At: time.Now()}
+						return nil, nil
+					}
+					rec, _ := executionRecord(st, ref)
+					rec.StopRequest = &execution.StopRequest{ID: "fixture-stop", Reason: "fixture release stop"}
+					return nil, nil
+				})
+			}}
+			a.executionTransport = func(execution.Host) execution.Transport { return uploader }
+			ref := startUnacknowledged(t, a, brief, "stopped-worker")
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := executionRecord(st, ref)
+			if sends != 0 || !rec.StartUnsent || !rec.Released() || executionHostBusy(st, ref.Host) != 0 {
+				t.Fatal("a stop during preparation let the start leave or kept the reservation")
+			}
+		})
+	}
+}
+
+// Host sync asks the host nothing about a reservation whose start never
+// left the coordinator: no not-found failure marks it or the host.
+func TestExecutionSyncSkipsUnsentReservation(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	calls := 0
+	fake := &testExecutionTransport{}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		calls++
+		return execution.Observation{}, execution.ErrNotFound
+	}
+	ref := lostReplyReservation(t, a, brief, fake, true, 0)
+	fake.sync = func(context.Context, execution.Ref) (execution.ControlResult, error) {
+		calls++
+		return execution.ControlResult{}, errors.New("journal not found")
+	}
+	if err := a.syncExecutionHost(context.Background(), sshTestSelector); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := executionRecord(st, ref)
+	if calls != 0 || rec.Released() || rec.Observation.Reachability == execution.Unreachable || rec.Observation.LastError != "" {
+		t.Fatal("host sync contacted the host about an unsent reservation or released it inside its window")
 	}
 }
