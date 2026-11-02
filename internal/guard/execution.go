@@ -133,16 +133,6 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 	}
 	if ev.CWD == "" {
 		ev.CWD = workspace
-		var top map[string]any
-		if json.Unmarshal(raw, &top) != nil {
-			return ExecutionDenyCodex("invalid managed execution tool event")
-		}
-		top["cwd"] = workspace
-		b, err := json.Marshal(top)
-		if err != nil {
-			return ExecutionDenyCodex("invalid managed execution tool event")
-		}
-		raw = b
 	}
 	if !filepath.IsAbs(ev.CWD) || !executionWithin(workspace, ev.CWD) {
 		return ExecutionDenyCodex("tool working directory is outside its owned workspace")
@@ -190,6 +180,9 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 	case ev.ToolName == codexUpdatePlanTool || ev.ToolName == codexWebTool:
 	default:
 		return ExecutionDenyCodex("tool is not supported by the managed remote adapter; use component commands for notes and reports")
+	}
+	if h.Project == "" {
+		h.Project = workspace
 	}
 	h.Transcripts.Managed = func(string) (bool, error) { return true, nil }
 	return h.DecideCodex(raw)

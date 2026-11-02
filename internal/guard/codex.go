@@ -174,11 +174,9 @@ func ValidateCodexInput(input []byte) string {
 		if _, _, ok := extractCodexShellCommand(toolInput); !ok {
 			return "Refused: " + toolName + " call is missing a string `command` in tool_input; failing closed."
 		}
-		for _, k := range []string{codexWorkdirKey, "cwd"} {
-			if rawWD, exists := toolInput[k]; exists && rawWD != nil {
-				if _, isStr := rawWD.(string); !isStr {
-					return codexFailClosedMsg
-				}
+		if rawWD, exists := toolInput[codexWorkdirKey]; exists && rawWD != nil {
+			if _, isStr := rawWD.(string); !isStr {
+				return codexFailClosedMsg
 			}
 		}
 	case toolName == codexApplyPatchTool:
@@ -342,16 +340,19 @@ func (h Hook) DecideSandboxCodex(input []byte) (out []byte) {
 	if json.Unmarshal(input, &ev) != nil {
 		return DenyCodex(codexFailClosedMsg)
 	}
-	ev.CWD = codexCWD(ev.CWD)
+	ev.CWD = h.codexCWD(ev.CWD)
 	if r := h.codexSandboxCheck(ev); r != "" {
 		return DenyCodex(r)
 	}
 	return PassCodex()
 }
 
-func codexCWD(rawCWD string) string {
+func (h Hook) codexCWD(rawCWD string) string {
 	if s := strings.TrimSpace(rawCWD); s != "" {
 		return expandHome(s)
+	}
+	if h.Project != "" {
+		return h.Project
 	}
 	if wd, err := os.Getwd(); err == nil {
 		return wd
@@ -360,18 +361,13 @@ func codexCWD(rawCWD string) string {
 }
 
 func codexShellWorkdir(baseCWD string, toolInput map[string]any) string {
-	if toolInput == nil {
-		return baseCWD
-	}
-	for _, k := range []string{codexWorkdirKey, "cwd"} {
-		if s, ok := toolInput[k].(string); ok {
-			if s = strings.TrimSpace(s); s != "" {
-				dir := expandHome(s)
-				if !filepath.IsAbs(dir) && baseCWD != "" {
-					dir = filepath.Join(baseCWD, dir)
-				}
-				return filepath.Clean(dir)
+	if s, ok := toolInput[codexWorkdirKey].(string); ok {
+		if s = strings.TrimSpace(s); s != "" {
+			dir := expandHome(s)
+			if !filepath.IsAbs(dir) && baseCWD != "" {
+				dir = filepath.Join(baseCWD, dir)
 			}
+			return filepath.Clean(dir)
 		}
 	}
 	return baseCWD
@@ -443,7 +439,7 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 	if err := json.Unmarshal(input, &ev); err != nil {
 		return DenyCodex(codexFailClosedMsg)
 	}
-	ev.CWD = codexCWD(ev.CWD)
+	ev.CWD = h.codexCWD(ev.CWD)
 	if h.Project == "" {
 		h.Project = ev.CWD
 	}

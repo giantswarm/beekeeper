@@ -638,10 +638,10 @@ func TestCodexExecCommandWorkdirBodyFile(t *testing.T) {
 	}
 
 	raw, _ := json.Marshal(map[string]any{
-		sessionKey:   "sess-codex-wd",
-		"cwd":        sessionDir,
-		hookEventKey: PreToolUseEvent,
-		toolNameKey:  codexExecCommand,
+		sessionKey:          "sess-codex-wd",
+		executionWorkingDir: sessionDir,
+		hookEventKey:        PreToolUseEvent,
+		toolNameKey:         codexExecCommand,
 		toolInputKey: map[string]any{
 			codexCmdKey:     createCmd,
 			codexWorkdirKey: filepath.Join("worktrees", "beekeeper"),
@@ -655,7 +655,7 @@ func TestCodexExecCommandWorkdirBodyFile(t *testing.T) {
 		hookEventKey: PreToolUseEvent,
 		toolNameKey:  codexExecCommand,
 		toolInputKey: map[string]any{
-			codexCmdKey:     "git status",
+			codexCmdKey:     codexGitStatus,
 			codexWorkdirKey: 123,
 		},
 	})
