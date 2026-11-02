@@ -20,6 +20,8 @@ import (
 
 const (
 	fixtureClaudeExecutable = "/usr/local/bin/claude"
+	fixtureGitHubExecutable = "/srv/tools/bin/gh"
+	fixtureGitHubVersion    = "2.83.0"
 	fixtureWorker           = "worker"
 	fixtureHost             = "host-a"
 	fixtureCoordinator      = "coordinator"
@@ -110,7 +112,7 @@ func testFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	callback := Endpoint{SSH: "coordinator.example", Executable: hostExecutable, Config: "/etc/beekeeper/config.yaml"}
-	cfg := HostConfig{Identity: fixtureHost, WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{"giantswarm/beekeeper": source}, Harnesses: map[string]HarnessConfig{HarnessClaude: {Executable: fixtureClaudeExecutable, Version: "2.1.290", ConfigDir: "/srv/beekeeper/auth"}}, Coordinators: map[string]Coordinator{fixtureCoordinator: {PublicKey: PublicKey(key), Callback: callback}}, MaxBusy: 2}
+	cfg := HostConfig{Identity: fixtureHost, WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{"giantswarm/beekeeper": source}, Harnesses: map[string]HarnessConfig{HarnessClaude: {Executable: fixtureClaudeExecutable, Version: "2.1.290", ConfigDir: "/srv/beekeeper/auth"}}, Coordinators: map[string]Coordinator{fixtureCoordinator: {PublicKey: PublicKey(key), Callback: callback}}, MaxBusy: 2, Tools: map[string]ToolConfig{ToolGitHub: {Executable: fixtureGitHubExecutable, Version: fixtureGitHubVersion}}}
 	launcher := &fakeLauncher{states: map[string]string{"personal.service": unitActive}}
 	cfg.RulesFile = filepath.Join(root, "host-rules.md")
 	if err := os.WriteFile(cfg.RulesFile, []byte("fixture host rules"), 0o600); err != nil {
@@ -126,6 +128,9 @@ func testFixture(t *testing.T) fixture {
 				return []byte(`{"loggedIn":true,"configDirectory":"/srv/beekeeper/auth","authMethod":"claude.ai"}`), nil
 			}
 			return []byte("2.1.290 (Claude Code)"), nil
+		}
+		if bin == fixtureGitHubExecutable {
+			return []byte("gh version " + fixtureGitHubVersion + " (2026-10-01)\nhttps://github.com/cli/cli/releases/tag/v" + fixtureGitHubVersion + "\n"), nil
 		}
 		return hostCommand(ctx, dir, env, bin, args...)
 	}
