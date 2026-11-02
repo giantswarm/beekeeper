@@ -1,0 +1,8 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "initial-list", "name": "mcp__claude-in-chrome__list_connected_browsers", "input": {}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "initial-list", "is_error": false, "content": "[{\"deviceId\":\"fixture-browser\",\"name\":\"Browser 1\",\"osPlatform\":\"Linux\",\"isLocal\":true,\"inUse\":true}]"}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "open", "name": "mcp__claude-in-chrome__navigate", "input": {"url": "https://example.test/", "tabId": 1}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "open", "is_error": false, "content": "Navigated to https://example.test/"}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "read", "name": "mcp__claude-in-chrome__get_page_text", "input": {"tabId": 1}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "read", "is_error": false, "content": "⚠️ **Claude in Chrome is not connected**\n\nThe Chrome extension isn't reachable right now. If browser tools were working earlier in this session, this is usually transient — retry in a moment."}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "lost-list", "name": "mcp__claude-in-chrome__list_connected_browsers", "input": {}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "lost-list", "is_error": false, "content": "[]"}]}}
