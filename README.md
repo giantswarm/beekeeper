@@ -2501,11 +2501,13 @@ watch included, reads its size every `doctor.goCacheEvery` (1h) and, over the ca
 least recently used entries down to three quarters of it; it does not start while one of the user's
 `go` commands runs and stops when one begins, trying again five minutes later, until the cache is
 past the cap by a quarter: then it trims whatever `go` command runs outside a `beekeeper run`,
-since the go command takes a removed entry for a miss and builds it again. No trim, forced or not,
-runs while a `beekeeper run` holds the cache: every run holds the cache's use lock
-(`beekeeper-use.lock` at the top of the cache) shared for the length of its command, a trim takes
-it exclusive for the length of the trim and otherwise waits five minutes, and a run that begins
-during a trim waits for its end, up to its `--wait`. One process trims at a time, and each trim is one `gocache.trim` event
+since the go command takes a removed entry for a miss and builds it again. No trim runs while a
+`beekeeper run` holds the cache: every run holds the cache's use lock (`beekeeper-use.lock` at the
+top of the cache) shared for the length of its command, and a trim takes it exclusive for the length
+of the trim. Under the margin a trim the runs hold back tries again five minutes later; past it, the
+trim waits for them as `beekeeper cache clear go` does, up to five minutes, new runs waiting behind
+it, so overlapping runs never hold it off for ever. A run that begins during a trim waits for its
+end, up to its `--wait`. One process trims at a time, and each trim is one `gocache.trim` event
 with the size before and after; a cache that stayed over the cap across two `doctor.goCacheEvery`
 intervals is one `GO CACHE` line with its size, the cap and how long it has waited, as is a cache
 it cannot read.
