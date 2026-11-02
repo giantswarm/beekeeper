@@ -57,6 +57,17 @@ creation time, without an invented filer identity. Listing does not repair statu
 another object's update. Apply the generated Note CRD before running the new server so
 Kubernetes preserves these optional spec fields.
 
+`note show <id>` reads one note in full, with its status, audience and retained answer;
+`--json` returns the note fields plus `status`, `answer` and `closure`. Open central
+notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
+while `#<n>` selects the local record. The central instance's own CLI can also
+read retained closed Note resources. File-backed stores can recover answered
+notes while their full `answer.recorded` event remains, without a record-size cap.
+New answer events retain the original audience separately from the answerer;
+older events without that audience show it as unknown rather than naming the
+answerer as the addressee. Other removed or expired
+records are reported as unavailable, never reconstructed from a truncated log.
+
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
 successful filing followed by an empty listing can mean it was answered between those
 calls. Check the server's `note_add` and `note_answer` audit lines before diagnosing a lost
