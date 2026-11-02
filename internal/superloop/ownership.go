@@ -222,6 +222,10 @@ func ownerApproved(p Pull) bool {
 // leaveKey, relayKey and ownershipKey are the keys of a leave, a relayed
 // review and the person's decision on a pull request's ownership.
 func leaveKey(ref, reason string) string { return fmt.Sprintf("leave %s %s", ref, reason) }
+
+// leftUnreviewed is the reason a green head past its approval waits for a
+// new park: one leave line per head.
+func leftUnreviewed(head string) string  { return "unreviewed@" + short(head) }
 func relayKey(ref, review string) string { return fmt.Sprintf("relay %s %s", ref, review) }
 func ownershipKey(ref string) string     { return "ownership " + ref }
 func overrideKey(ref string) string      { return "override " + ref }
