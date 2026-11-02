@@ -828,3 +828,24 @@ func TestBlockingForAdmitsTheHoldsSession(t *testing.T) {
 		}
 	}
 }
+
+// A merge GitHub judged settles from its merge time when it is recorded
+// after it; any other outcome, or a merge time after the record (clock
+// skew), settles from the record time.
+func TestSettlesFrom(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		out  Outcome
+		want time.Time
+	}{
+		{"merged before the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(-time.Hour)}), now.Add(-time.Hour)},
+		{"merged after the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(time.Second)}), now},
+		{"not merged", Judged(github.Pull{State: github.Closed, MergedAt: now.Add(-time.Hour)}), now},
+		{"devctl's document", Outcome{Merged: true, Release: "v1.0.0"}, now},
+	} {
+		if got := c.out.SettlesFrom(now); !got.Equal(c.want) {
+			t.Errorf("%s: settles from %s, want %s", c.name, got, c.want)
+		}
+	}
+}

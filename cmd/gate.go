@@ -1967,8 +1967,9 @@ type runOutcome struct {
 // no installation to roll leaves it (in that lane once its release is known),
 // so does one with nothing merged (its
 // place dies with its run), and one nothing could judge settles by the
-// settle rule. A devctl merge's or promotion's release window records the
-// release, or lifts when nothing merged, when the release is a candidate (no
+// settle rule. A merge settles from GitHub's merge time when it is recorded
+// after it, from now otherwise. A devctl merge's or promotion's release
+// window records the release, or lifts when nothing merged, when the release is a candidate (no
 // update installs it) or when a promotion ended without its document. It returns the events, with note appended.
 func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOutcome, now time.Time, note string) []state.Event {
 	m := &st.Merges[i]
@@ -1984,7 +1985,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	case r.unanswered != nil:
 		m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
 	case out.Merged && !out.NoRelease && handCut == "" && (lane.Installation != "" || out.Release == ""):
-		m.Phase, m.Finished, m.Exit, m.Release, m.ReleaseFailed = state.Settling, now, rc, out.Release, out.ReleaseFailed
+		m.Phase, m.Finished, m.Exit, m.Release, m.ReleaseFailed = state.Settling, out.SettlesFrom(now), rc, out.Release, out.ReleaseFailed
 	default:
 		st.Merges = slices.Delete(st.Merges, i, i+1)
 	}
