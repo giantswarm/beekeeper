@@ -284,7 +284,7 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 	r.pull.Head = loopFixed
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		party := state.Party{Name: loopWorker, Session: "worker-session-2"}
-		st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Park: &state.Park{On: loopPR, At: time.Now().Add(time.Minute), Waits: "desk review", ReviewHead: loopFixed, PostMerge: &work}})
+		st.Agents = append(st.Agents, state.Agent{Party: party, Task: "fix " + loopURL, Park: &state.Park{On: loopPR, At: time.Now().Add(time.Minute), Waits: deskReviewWait, ReviewHead: loopFixed, PostMerge: &work}})
 		st.Starts = append(st.Starts, state.Start{Party: party, By: loopParty, At: time.Now().Add(time.Minute)})
 		return nil, nil
 	}); err != nil {

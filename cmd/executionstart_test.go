@@ -473,7 +473,7 @@ func TestExecutionParkedWorkerCountsParkedNotBusy(t *testing.T) {
 		t.Fatalf("before park executionHostBusy = %d, want 1", got)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Park = &state.Park{On: sshTestRepository + "#7", At: a.now, Waits: "desk review", ReviewHead: strings.Repeat("a", 40)}
+		st.Agents[0].Park = &state.Park{On: sshTestRepository + "#7", At: a.now, Waits: deskReviewWait, ReviewHead: strings.Repeat("a", 40)}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
