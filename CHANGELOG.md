@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SSH execution hosts can run guarded omp workers with host-local authentication, durable RPC wake receipts and the shared coordinator-owned capacity, publication and merge contracts (https://github.com/giantswarm/beekeeper/issues/1943).
 - `beekeeper hold set starts --reason …` pauses new starts only: every start of a worker or reviewer (`--force` included, locally, on an SSH host and the supervisor loop's fill) and a done agent's wake are refused, and `capacity` and `capacity pick` say no start, while running and parked workers, the loop's merges, the guide and role successors go on; `beekeeper status` starts with STARTS HELD and who set it; `beekeeper hold lift starts` ends it (https://github.com/giantswarm/beekeeper/issues/2208).
 
 - Issue repository-scoped, short-lived GitHub App credentials for SSH workers,
@@ -29,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - agy drops its whole `hooks.json` when any one entry is malformed, beekeeper's guard with it. `beekeeper doctor` and `beekeeper install` now check every entry of the merged `~/.gemini/config/hooks.json` against the shape agy accepts (a tool event's items are matchers with command hooks, a lifecycle event's such as `PreInvocation` the command hooks themselves), not only beekeeper's own: install still writes its entry, never rewrites another's, and fails after its other steps naming the rejected entry and the file to fix, a symlink's target included. A local agy worker start refuses while that file would load no beekeeper guard, and `agents hosts check`, and every remote start, refuse agy while agy would reject the managed `hooks.json` ([https://github.com/giantswarm/beekeeper/issues/2161](https://github.com/giantswarm/beekeeper/issues/2161)).
+- A relay no longer stops or archives the relieved guide's session: its conversation stays in the person's session list until they close it. The relay's start message and the watch's `RELAY TAKEN` line say where it is (`claude attach <id>` continues a background session, `claude stop <id>` ends it). The revive guard lets a relieved run the person or the desktop brings back run on, and neither the watch nor the doctor stops, archives, seeds or reseeds an archive of it; an archive owed by an earlier version is dropped. A session whose start took the guide's role stays the person's also after a take-over (a crash or reboot without a relay) and once its relief is forgotten.
+
 - Start one independent review for each new unapproved pull-request head even after historical review rounds are exhausted; fixes no longer receive a merge go the exact-head execution gate cannot accept (https://github.com/giantswarm/beekeeper/issues/2247).
 
 - Report local leases held past their purpose’s duration (or `leaseRound`, default `1h`) in the watch and queued claims, with the holder, claim time and overrun.
