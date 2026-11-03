@@ -144,7 +144,7 @@ func TestMergeAskIsRefusedFromAnyone(t *testing.T) {
 	for _, q := range []string{
 		"Merge " + prURL + " at head 3333333 without a third review, or have it reworked?",
 		"May I merge " + prURL + " now that the review approved it?",
-		"Can we merge it?",
+		mergeIt,
 		"Is " + prURL + " ok to merge?",
 		"Approve the merge of " + decisionRef + "?",
 		"Confirm merging " + prURL + " at head abc1234?",
@@ -174,9 +174,39 @@ func TestMergeAskIsRefusedFromAnyone(t *testing.T) {
 		"Rebase onto main or merge main into the branch?",
 		superloop.OwnershipQuestion(prURL, "team-x"),
 		"Approve publishing the release " + prURL + " to the public registry?",
+		"Merge the two Helm charts into one, or keep them separate?",
+		"Merge main into the release branch or cut a new one?",
+		"Do we merge the staging and production clusters?",
+		"Allow squash merge only on o/r? It changes the repository settings.",
+		"Confirm the merge of the two Slack channels?",
+		"Should we merge https://github.com/o/r/issues/12 into https://github.com/o/r/issues/13 as duplicates?",
 	} {
 		if err := addNote(a, append(slices.Clone(decisionArgs), q)...); err != nil {
 			t.Errorf("%s: %v", q, err)
+		}
+	}
+}
+
+// mergeIt asks to merge the pull request of the note's ref.
+const mergeIt = "Can we merge it?"
+
+// A merge of "it" is a pull request's merge only when the note's ref is
+// a pull request: owner/repo#n or a pull request's URL, never an issue's.
+func TestMergeOfItNeedsAPullRequestRef(t *testing.T) {
+	for _, c := range []struct {
+		q    string
+		refs []string
+		want bool
+	}{
+		{mergeIt, []string{decisionRef}, true},
+		{"Is this ready to merge?", []string{prURL}, true},
+		{mergeIt, []string{"https://github.com/o/r/issues/12"}, false},
+		{mergeIt, nil, false},
+		{"Merge the two Helm charts into one, or keep them separate?", []string{decisionRef}, false},
+		{"Merge " + decisionRef + " now?", nil, true},
+	} {
+		if got := isMergeAsk(c.q, c.refs); got != c.want {
+			t.Errorf("%q with %v: %v, want %v", c.q, c.refs, got, c.want)
 		}
 	}
 }
