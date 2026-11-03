@@ -169,8 +169,8 @@ func (s *Server) Policy() Policy {
 func (s *Server) codexHomeDir() string { return filepath.Join(s.Root, "codex-home") }
 
 // codexConfig is the managed home's config.toml, the local worker's settings
-// without any person's project trust: the hook surface is the only extension,
-// and browser, computer, code-mode, image and plugin tools are off.
+// without any person's project trust. Code-mode provides the worker's tools;
+// hooks guard execution, while browser, computer, image and plugin tools are off.
 const codexConfig = `project_doc_max_bytes = 262144
 
 [shell_environment_policy]
@@ -188,7 +188,7 @@ browser_use = false
 browser_use_external = false
 browser_use_full_cdp_access = false
 computer_use = false
-code_mode_host = false
+code_mode_host = true
 image_generation = false
 remote_plugin = false
 skill_mcp_dependency_install = false
