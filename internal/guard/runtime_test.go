@@ -41,6 +41,24 @@ func TestRunTimeout(t *testing.T) {
 	}
 }
 
+func TestLintTimeoutSlotlessClasses(t *testing.T) {
+	for _, class := range []string{ClassLab, ClassBenchmark} {
+		t.Run(class, func(t *testing.T) {
+			argv := []string{"golangci-lint", "run", "./..."}
+			for _, timeout := range []time.Duration{0, time.Hour} {
+				deadline := RunTimeout(Options{Class: class, Timeout: timeout}, argv)
+				want := argv
+				if timeout > 0 {
+					want = []string{"golangci-lint", "run", "--timeout=1h0m0s", "./..."}
+				}
+				if got := lintTimeout(argv, deadline); !reflect.DeepEqual(got, want) {
+					t.Errorf("override %s: got %v, want %v", timeout, got, want)
+				}
+			}
+		})
+	}
+}
+
 type deadlineCapper struct {
 	fakeCapper
 	command *exec.Cmd
