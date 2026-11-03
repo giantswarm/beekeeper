@@ -739,3 +739,44 @@ func (c *Client) RankAnchor(ctx context.Context, ref, from string) (string, erro
 	}
 	return "", nil
 }
+
+// RankOf returns the priority rank of ref on the board (1 the top, 0 when
+// unranked): its own rank, the rank of the first issue it closes when ref is a
+// pull request, or the rank inherited from its nearest ranked ancestor epic.
+func (c *Client) RankOf(ctx context.Context, ref string) (int, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return 0, err
+	}
+	normRef := fmt.Sprintf("%s/%s#%d", owner, repo, n)
+	m, err := c.meta(github.ActingOn(ctx, owner+"/"+repo))
+	if err != nil {
+		return 0, err
+	}
+	list, err := c.priorities(ctx, m)
+	if err != nil || len(list) == 0 {
+		return 0, err
+	}
+	ranks := list.Ranks()
+	cur := normRef
+	for depth := range maxDepth {
+		if cur == "" {
+			return 0, nil
+		}
+		if r := ranks[strings.ToLower(cur)]; r > 0 {
+			return r, nil
+		}
+		_, parent, _, _, err := c.lookupOrigin(ctx, m, cur, false)
+		if err != nil {
+			if depth == 0 {
+				if closes, cerr := c.Closes(ctx, []string{cur}); cerr == nil && len(closes[strings.ToLower(cur)]) > 0 {
+					cur = closes[strings.ToLower(cur)][0]
+					continue
+				}
+			}
+			return 0, nil
+		}
+		cur = parent
+	}
+	return 0, nil
+}
