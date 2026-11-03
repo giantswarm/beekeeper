@@ -41,7 +41,7 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 	t.Helper()
 	// Model the configured lint command independently of the test runner image.
 	lintDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -372,7 +372,7 @@ func TestMergeResultRequiresFreshRefs(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Disk.Checkouts = []string{repo.dir}
 	// A cached origin/main still exists but origin is now unavailable.
-	c := exec.CommandContext(t.Context(), "git", "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	c := exec.CommandContext(t.Context(), "git", "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git")) //nolint:gosec // fixed git command in the test-owned repository
 	c.Dir = repo.dir
 	if err := c.Run(); err != nil {
 		t.Fatal(err)
@@ -423,7 +423,7 @@ func TestReviewedMergeQueueIsRequired(t *testing.T) {
 
 func TestMergeResultChecksDependencyOnlyChanges(t *testing.T) {
 	repo := newMergeCheckRepo(t, map[string]string{"go.mod": "module example.com/r\n\ngo 1.24.0\n"}, map[string]string{testGuardPR2File: "package guard\nvar B=2\n"}, map[string]string{"guard/budget_test.go": "package guard\nimport \"testing\"\nfunc TestDependencyCheck(t *testing.T){t.Fatal(\"dependency regression\")}\n"})
-	c := exec.CommandContext(t.Context(), "git", "checkout", "-q", repo.head1)
+	c := exec.CommandContext(t.Context(), "git", "checkout", "-q", repo.head1) //nolint:gosec // fixed git command in the test-owned repository
 	c.Dir = repo.dir
 	if err := c.Run(); err != nil {
 		t.Fatal(err)
@@ -437,7 +437,7 @@ func TestMergeResultChecksDependencyOnlyChanges(t *testing.T) {
 func TestFetchReviewedMergeRefsDoesNotUseCachedBase(t *testing.T) {
 	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: "package guard\nvar A=1\n"}, map[string]string{testGuardPR2File: "package guard\nvar B=2\n"}, nil)
 	want := repo.advanceMain(t, repo.head1)
-	c := exec.CommandContext(t.Context(), "git", "update-ref", "refs/remotes/origin/"+mainBranch, repo.base)
+	c := exec.CommandContext(t.Context(), "git", "update-ref", "refs/remotes/origin/"+mainBranch, repo.base) //nolint:gosec // fixed git command in the test-owned repository
 	c.Dir = repo.dir
 	if err := c.Run(); err != nil {
 		t.Fatal(err)
@@ -454,7 +454,7 @@ func TestFetchReviewedMergeRefsDoesNotUseCachedBase(t *testing.T) {
 func TestMergeResultConfiguredLintFailure(t *testing.T) {
 	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: "package guard\nvar A=1\n"}, map[string]string{testGuardPR2File: "package guard\nvar B=2\n"}, nil)
 	lintDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\necho 'configured gosec failure'\nexit 1\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\necho 'configured gosec failure'\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))

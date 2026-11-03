@@ -20,6 +20,7 @@ import (
 )
 
 const loopWorkerMergeGo = "merge go given"
+const reviewedMergeQueued = "queued"
 
 func pullNeedsBranchRepair(p superloop.Pull) bool {
 	return p.Draft || p.Mergeable == "CONFLICTING" || p.MergeState == "BEHIND"
@@ -152,7 +153,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		}
 		return "", refused("merge gate refused: %s", oneLine(out))
 	}
-	if code == 0 && mutationResult && reply.Verdict == "queued" {
+	if code == 0 && mutationResult && reply.Verdict == reviewedMergeQueued {
 		return "", errLoopLater
 	}
 	if mutationResult && code == github.SquashTooling {
@@ -541,7 +542,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.MergeCommitSha = p.MergeCommit
 		doc.Verdict = "merged"
 	case runErr == nil && code == 0 && p.State == superloop.Open && p.Head == merging:
-		doc.ExitCode, doc.Verdict = 0, "queued"
+		doc.ExitCode, doc.Verdict = 0, reviewedMergeQueued
 		doc.Reason = "merge queued; awaiting server-side merge-result checks"
 	case p.State != superloop.Open || p.Head != merging || !p.Green:
 		doc.ExitCode = github.SquashRefused
