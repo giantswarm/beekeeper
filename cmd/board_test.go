@@ -966,7 +966,8 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 }
 
 func TestBoardRankLogsCallerAndWritesPosition(t *testing.T) {
-	for _, subcmd := range []string{"rank", "order"} {
+	rc := (&app{}).boardRankCmd()
+	for _, subcmd := range append([]string{rc.Name()}, rc.Aliases...) {
 		t.Run(subcmd, func(t *testing.T) {
 			a, _ := stubApp(t)
 			a.cfg.Board.Owner, a.cfg.Board.Project = "o", 1
