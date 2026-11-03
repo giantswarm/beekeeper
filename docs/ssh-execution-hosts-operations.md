@@ -760,7 +760,11 @@ and the coordinator verifies it against GitHub and the parked workspace commit
 before requesting desk review. Force pushes, other branches and alternate push
 remotes are refused. Local Git commands run without a credential. Network Git
 uses the pinned HTTPS origin and disables inherited credential helpers, global
-Git configuration, hooks and redirects. Merges continue through the coordinator's
+Git configuration, hooks and redirects. Authenticated pushes use a disposable
+bare repository with only the resolved workspace commit and object storage;
+workspace Git configuration and refs cannot add tags, mirror other branches or
+redirect the transport. Inherited Git environment overrides are removed.
+Merges continue through the coordinator's
 review and exact-head authorization, never a worker's `gh pr merge`.
 
 GitHub installation tokens expire after an hour. The coordinator caches them

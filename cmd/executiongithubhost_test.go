@@ -100,7 +100,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	// The same dispatch path invokes git on the host, with the owned branch
 	// and token in its environment, while local commands never ask for one.
 	git := filepath.Join(root, "git")
-	gitScript := "#!/bin/sh\nif [ \"$1\" = rev-parse ]; then exit 42; fi\nif [ \"$1\" = status ]; then [ -z \"$GH_TOKEN\" ] || exit 9; printf 'local git proof\\n'; exit 0; fi\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\n" +
+	gitScript := "#!/bin/sh\nif [ \"$1\" = rev-parse ]; then case \"$2\" in --show-object-format) echo sha1; exit 0;; --path-format=absolute) echo /tmp/fixture; exit 0;; --verify) if [ \"$3\" = 'HEAD^{commit}' ]; then echo 0123456789012345678901234567890123456789; exit 0; fi;; esac; fi\nif [ \"$1\" = rev-parse ]; then exit 42; fi\nif [ \"$1\" = status ]; then [ -z \"$GH_TOKEN\" ] || exit 9; printf 'local git proof\\n'; exit 0; fi\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\n" +
 		"if [ \"$GH_REPO\" = 'example/private' ]; then matched=0; for arg in \"$@\"; do [ \"$arg\" = 'remote.origin.url=https://github.com/example/private.git' ] && matched=1; done; [ \"$matched\" = 1 ] || exit 10; printf 'host read proof\\n'; else printf 'host push proof\\n'; fi\n"
 	if err := os.WriteFile(git, []byte(gitScript), 0o700); err != nil { //nolint:gosec // executable fixture in this test's temporary directory
 		t.Fatal(err)
@@ -148,6 +148,72 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	}
 	if calls != 5 || !strings.Contains(output.String(), "host push proof") || !strings.Contains(output.String(), "local git proof") || !strings.Contains(output.String(), "host read proof") {
 		t.Fatal("git did not separate local and scoped read/write commands")
+	}
+
+	// Exercise the authenticated dispatch with real Git. Only the test transport
+	// shim rewrites the canonical GitHub URL to a disposable local destination.
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(dir string, args ...string) string {
+		t.Helper()
+		c := exec.Command(realGit, args...) //nolint:gosec // real Git and test-owned local repositories
+		c.Dir = dir
+		c.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull}
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("fixture git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	destination := filepath.Join(root, "destination.git")
+	runGit(root, "init", "--bare", destination)
+	runGit(workspace, "init")
+	runGit(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture")
+	runGit(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "tag", "-a", "unexpected-tag", "-m", "fixture")
+	runGit(workspace, "branch", "unexpected-branch")
+	runGit(workspace, "config", "push.followTags", "true")
+	shim := "#!/bin/sh\nexec '" + realGit + "' -c 'protocol.file.allow=always' -c 'url.file://" + destination + ".insteadOf=https://github.com/" + r.Repository + ".git' \"$@\"\n"
+	if err := os.WriteFile(git, []byte(shim), 0o700); err != nil { //nolint:gosec // executable local-only Git transport fixture
+		t.Fatal(err)
+	}
+	for _, polluted := range []bool{false, true} {
+		if polluted {
+			// Ambient Git settings must not redirect the source or load extra config.
+			t.Setenv("GIT_DIR", filepath.Join(root, "foreign.git"))
+			t.Setenv("GIT_CONFIG_COUNT", "1")
+			t.Setenv("GIT_CONFIG_KEY_0", "push.followTags")
+			t.Setenv("GIT_CONFIG_VALUE_0", "true")
+
+			runGit(workspace, "config", "remote.origin.mirror", "true")
+			runGit(workspace, "config", "remote.origin.receivepack", "/does-not-exist")
+			runGit(workspace, "config", "--add", "remote.origin.pushurl", filepath.Join(root, "unwanted.git"))
+			runGit(workspace, "config", "push.recurseSubmodules", "on-demand")
+			// A failing hook proves the push did not consult workspace hooks either.
+			if err := os.WriteFile(filepath.Join(workspace, ".git", "hooks", "pre-push"), []byte("#!/bin/sh\nexit 99\n"), 0o700); err != nil { //nolint:gosec // executable fixture hook in the test-owned repository
+				t.Fatal(err)
+			}
+		}
+		wantRepo, wantWrite = r.Repository, true
+		push := a.executionGitHubCommands()[1]
+		push.SetArgs([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + execution.GitHubBranch(r.Ref)})
+		push.SetOut(&output)
+		push.SetErr(&output)
+		if err := push.ExecuteContext(context.Background()); err != nil {
+			t.Fatalf("isolated real Git push: %v: %s", err, output.String())
+		}
+		refs := runGit(root, "--git-dir="+destination, "for-each-ref", "--format=%(refname)")
+		if refs != "refs/heads/"+execution.GitHubBranch(r.Ref) {
+			t.Fatalf("push widened authority: %s", refs)
+		}
+		got := runGit(root, "--git-dir="+destination, "rev-parse", "refs/heads/"+execution.GitHubBranch(r.Ref))
+		if got != runGit(workspace, "rev-parse", "HEAD") {
+			t.Fatal("push did not publish exactly the owned HEAD with scoped issuance")
+		}
+	}
+	if calls != 7 {
+		t.Fatal("real pushes did not request their scoped credentials")
 	}
 
 }

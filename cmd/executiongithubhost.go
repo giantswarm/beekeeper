@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -161,13 +163,21 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 			clean := env[:0]
 			for _, kv := range env {
 				key, _, _ := strings.Cut(kv, "=")
-				if key != "GITHUB_TOKEN" && !strings.HasPrefix(key, "GH_") && !strings.HasPrefix(key, "GIT_CONFIG_") {
+				if key != "GITHUB_TOKEN" && !strings.HasPrefix(key, "GH_") && !strings.HasPrefix(key, "GIT_") {
 					clean = append(clean, kv)
 				}
 			}
 			env = append(clean, "GH_REPO="+request.Repository, "GH_HOST=github.com", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
 			if needsToken {
 				env = append(env, "GH_TOKEN="+token.Token)
+			}
+			if name == "github-git" && request.Write {
+				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, j.Handle.Workspace, request.Repository, execution.GitHubBranch(j.Handle.Ref), env)
+				if err != nil {
+					return err
+				}
+				defer cleanup()
+				args, env = isolatedArgs, isolatedEnv
 			}
 			child := exec.CommandContext(ctx, binary, args...) //nolint:gosec // policy-pinned gh or system git; arguments validated above
 			child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = j.Handle.Workspace, env, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
@@ -192,4 +202,65 @@ func workerGitHubCommandError(err error) error {
 		return &exitError{code: code, msg: err.Error()}
 	}
 	return fmt.Errorf("worker GitHub command failed: %w", err)
+}
+
+// Push from a disposable repository with no workspace refs or configuration.
+// Only object storage and the resolved HEAD cross this boundary. In particular,
+// multi-valued pushurls, URL rewrites, mirrors, tags, includes, proxy settings,
+// custom receive-pack commands and hooks cannot change authenticated dispatch.
+func workerGitHubIsolatedPush(ctx context.Context, binary, workspace, repository, branch string, env []string) ([]string, []string, func(), error) {
+	env = append(env, "GIT_NO_REPLACE_OBJECTS=1")
+	inspect := func(args ...string) (string, error) {
+		command := exec.CommandContext(ctx, binary, args...) //nolint:gosec // system git; fixed read-only revision queries without credentials
+		command.Dir = workspace
+		for _, kv := range env {
+			if !strings.HasPrefix(kv, "GH_TOKEN=") {
+				command.Env = append(command.Env, kv)
+			}
+		}
+		out, err := command.Output()
+		if err != nil {
+			return "", errors.New("cannot resolve worker push source")
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	head, err := inspect("rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	common, err := inspect("rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	format, err := inspect("rev-parse", "--show-object-format")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if format != "sha1" && format != "sha256" {
+		return nil, nil, nil, errors.New("unsupported worker object format")
+	}
+	dir, err := os.MkdirTemp("", "beekeeper-push-*")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) } //nolint:gosec // disposable directory returned by MkdirTemp, never a workspace path
+	config := "[core]\nrepositoryformatversion = 0\nbare = true\n"
+	if format == "sha256" {
+		config = "[core]\nrepositoryformatversion = 1\nbare = true\n[extensions]\nobjectFormat = sha256\n"
+	}
+	for _, name := range []string{"objects", "refs"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			cleanup()
+			return nil, nil, nil, err
+		}
+	}
+	for name, contents := range map[string]string{"config": config, "HEAD": head + "\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil { //nolint:gosec // fixed config and HEAD names in a new private temporary repository
+			cleanup()
+			return nil, nil, nil, err
+		}
+	}
+	env = append(env, "GIT_DIR="+dir, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+strconv.Quote(filepath.Join(common, "objects")))
+	args := []string{"-c", "credential.helper=", "-c", workerGitHubCredentialHelper, "-c", "http.followRedirects=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "push.followTags=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "push", "--no-follow-tags", "https://github.com/" + repository + ".git", head + ":refs/heads/" + branch}
+	return args, env, cleanup, nil
 }
