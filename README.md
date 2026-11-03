@@ -2436,6 +2436,16 @@ entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board nex
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
 returns the entry to `agents.staleAfter`.
 
+A Claude worker's security reviews follow its model. The security-guidance plugin reviews a
+session's Stop, commit and push in a session of its own (entrypoint `sdk-py`) on
+`SECURITY_REVIEW_MODEL`; every headless turn beekeeper starts or wakes on a model (`--model`,
+`agents.models`, the task kind's) carries that model as `SECURITY_REVIEW_MODEL` in its `--settings`
+(added to a per-model copy of a profile's settings file), which outranks the person's settings. A
+turn without a model, and a desktop turn, keep the person's setting. `agents` lists each worker's
+reviews in its SDK-PY column, as their count, cost and models (`--json`: `sdkChildren`, one entry per
+review): the `sdk-py` sessions of the worker's transcript folder since it registered, each owned
+by the worker in that folder that registered last before its first request.
+
 A task holder with no running CLI or turn and no transcript or roster activity
 for `agents.staleAfter` is **gone**. Kept and parked agents, agents with a wake
 timer, and remote executions are protected. `capacity` releases its busy and
