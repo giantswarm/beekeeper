@@ -84,6 +84,9 @@ func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason strin
 	if err != nil {
 		return err
 	}
+	if revokeErr := a.revokeWorkerGitHub(ctx, ref); revokeErr != nil {
+		return revokeErr
+	}
 	if released {
 		return nil
 	}

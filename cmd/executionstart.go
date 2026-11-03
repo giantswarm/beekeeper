@@ -29,6 +29,15 @@ type executionStartOptions struct {
 }
 
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
+	if err := a.cfg.GitHub.WorkerApp.Validate(); err != nil {
+		return err
+	}
+	if w := a.cfg.GitHub.WorkerApp; w != nil {
+		owner, _, _ := strings.Cut(strings.ToLower(o.Repository), "/")
+		if w.Installations[owner] <= 0 || !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
+			return refused("task owner needs a github.workerApp installation and github.allowedOrgs entry")
+		}
+	}
 	host, err := a.executionHost(o.Host)
 	if err != nil {
 		return err
@@ -73,6 +82,10 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if err != nil {
 		return err
 	}
+	if a.cfg.GitHub.WorkerApp != nil && !caps.GitHub {
+		return refused("execution host lacks the per-worker GitHub adapter; update and check the host before starting")
+	}
+
 	readings := a.executionReadings(ctx, k)
 	var legacy *usageView
 	if len(k.Providers) == 0 {
@@ -115,8 +128,13 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
-	prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. Before the desk review approves the PR, merge upstream changes without a GitHub credential on this host with `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again; after approval only the merge moves the head (it updates a behind branch itself), so sync the base then only to resolve a conflict the supervisor reports. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
-	r := execution.StartRequest{MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	if a.cfg.GitHub.WorkerApp != nil {
+		prompt += "\n\nWorker GitHub access: use gh for issues, PRs and checks. Cross-repository reads name --repo owner/repo; gh api uses repos/owner/repo/.... Commit in the owned workspace and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open the PR with gh pr create, then park on its URL for independent review. Merges stay on the coordinator. Never expose credential environment values.\n"
+	} else {
+		prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. Before the desk review approves the PR, merge upstream changes without a GitHub credential on this host with `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again; after approval only the merge moves the head (it updates a behind branch itself), so sync the base then only to resolve a conflict the supervisor reports. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
+	}
+
+	r := execution.StartRequest{GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
@@ -436,7 +454,14 @@ func (a *app) executionFailure(ref execution.Ref, failure error) {
 	})
 }
 
-func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observation) error {
+func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observation) (saveErr error) {
+	defer func() {
+		if saveErr == nil && (o.ProcessState == execution.Exited || o.ProcessState == execution.Failed || o.StopRequested) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			saveErr = a.revokeWorkerGitHub(ctx, ref)
+		}
+	}()
 	if o.Handle.Ref != ref {
 		return refused("remote observation identity mismatch")
 	}

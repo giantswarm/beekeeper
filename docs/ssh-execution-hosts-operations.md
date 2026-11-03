@@ -719,3 +719,56 @@ workspace's `go.mod` against those tools. A newer toolchain requirement in a
 new repository or ref refuses preparation before the harness launches; update
 the installed toolchain and its policy pin before retrying. Tools remain
 host installations shared by workers, rather than per-worker downloads.
+
+### Per-worker GitHub credentials
+
+The coordinator can issue GitHub App installation tokens separately for each
+execution, repository and permission level. Configure only the coordinator:
+
+```yaml
+github:
+  allowedOrgs: [example]
+  workerApp:
+    appID: 12345
+    privateKey: op://Shared/worker-app/private-key
+    installations:
+      example: 67890
+```
+
+The App needs Contents, Pull requests, Issues, Checks, Actions, Commit statuses
+and Metadata read access. Contents, Workflows and Pull requests write access are needed for
+the task repository. Its installation must include every repository workers
+need to research. The private-key reference is resolved in the coordinator;
+no App key, refresh token or permanent GitHub login is installed on a host.
+This configuration enables GitHub for newly started executions. Existing
+executions retain their recorded publication mode.
+
+In an enabled execution `gh issue view`, `gh pr view` and `gh pr checks` use a
+short-lived credential fetched over the authenticated SSH callback. Cross-repo
+calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Read tokens
+reach only the named repository in a configured owner. A write token reaches
+only the execution's task repository. Read-only Git clone, fetch and ls-remote
+operations may also name an explicit GitHub repository URL in those owners.
+The runner installs dispatch scripts for
+`gh` and `git` ahead of the pinned tools; scripts and journals contain no token.
+Only the launched GitHub client receives it, through its environment.
+
+Push from the owned workspace with
+`git push origin HEAD:refs/heads/beekeeper-execution/<execution>/<generation>`,
+then open the PR with `gh pr create`. The adapter supplies that same head branch,
+and the coordinator verifies it against GitHub and the parked workspace commit
+before requesting desk review. Force pushes, other branches and alternate push
+remotes are refused. Local Git commands run without a credential. Network Git
+uses the pinned HTTPS origin and disables inherited credential helpers, global
+Git configuration, hooks and redirects. Merges continue through the coordinator's
+review and exact-head authorization, never a worker's `gh pr merge`.
+
+GitHub installation tokens expire after an hour. The coordinator caches them
+until five minutes before expiry and retains a private revocation ledger under
+its own state directory, outside scheduling state and event logs. Runner exit,
+completion, explicit stop and terminal inspection revoke credentials; a failed
+revocation retains the ledger and reports an error for retry. An unreachable
+host does not prevent coordinator revocation. The managed command hooks are the
+same policy boundary as the rest of SSH execution, not an OS sandbox: a GitHub
+installation token cannot itself limit Contents writes to one branch. Hosts
+therefore still require the managed guards and owned execution identity.
