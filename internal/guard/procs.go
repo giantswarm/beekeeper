@@ -64,7 +64,7 @@ const (
 )
 
 // procReaders are the commands that name a /proc file without printing it.
-var procReaders = map[string]bool{"ls": true, statCommand: true, testCommand: true, "[": true, "wc": true, "file": true}
+var procReaders = map[string]bool{"ls": true, statCommand: true, testCommand: true, "[": true, "wc": true, fileCommand: true}
 
 // Options that take a value, so that the value is not taken for options.
 var (
@@ -127,7 +127,7 @@ func psLeaks(args []string) bool {
 		case strings.HasPrefix(a, "--"):
 			name, val, eq := strings.Cut(a, "=")
 			switch name {
-			case "--format":
+			case formatFlag:
 				if !eq && i+1 < len(args) {
 					i++
 					val = args[i]
@@ -236,7 +236,7 @@ func containerLeak(name string, args []string) string {
 	for i, a := range args {
 		n, val, eq := strings.Cut(a, "=")
 		// -f is inspect's --format, but ps's --filter.
-		if n == "--format" || n == "-f" && inspect {
+		if n == formatFlag || n == "-f" && inspect {
 			if !eq && i+1 < len(args) {
 				val = args[i+1]
 			}

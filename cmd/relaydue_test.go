@@ -42,34 +42,34 @@ func TestRelayDueOncePerWatchProcess(t *testing.T) {
 	const relayAt = 150_000
 	since, first := relayNow.Add(-3*time.Hour), relayNow.Add(-2*time.Hour)
 	st := &state.State{
-		Supervisor: &state.Supervisor{Party: supA, Since: since},
-		RelayDue:   &state.RelayDue{Supervisor: supA, Since: since, Reported: first, Context: 151_000, RelayAt: relayAt},
+		Guide: &state.Role{Holder: &state.Supervisor{Party: supA, Since: since},
+			RelayDue: &state.RelayDue{Supervisor: supA, Since: since, Reported: first, Context: 151_000, RelayAt: relayAt}},
 	}
 	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
 	q := func(said relayDues, now time.Time) quietness {
-		c := relayContext(st, sessions, now, relayAt, said)
+		c := roleContext(st.GuideRole(), sessions, now, relayAt, said)
 		return quietness{checked: c > 0, context: c, relayAt: relayAt}
 	}
-	if c := relayContext(st, sessions, relayNow, relayAt, nil); c != 0 {
+	if c := roleContext(st.GuideRole(), sessions, relayNow, relayAt, nil); c != 0 {
 		t.Fatalf("a watch --once reads the context of a said relay due: %d", c)
 	}
-	if lines, _ := fireRelayDue(st, q(nil, relayNow), nil, relayNow); lines != nil {
+	if lines, _ := guideRole.fireRelayDue(st, q(nil, relayNow), nil, relayNow); lines != nil {
 		t.Fatalf("a watch --once said a standing relay due: %q", lines)
 	}
 	for i, said := range []relayDues{{}, {}} {
 		now := relayNow.Add(time.Duration(i) * time.Hour)
 		for pass := range 2 { // the poll's read, then its write under the lock
-			if lines, _ := fireRelayDue(st, q(said, now), said, now); len(lines) != 1 {
+			if lines, _ := guideRole.fireRelayDue(st, q(said, now), said, now); len(lines) != 1 {
 				t.Fatalf("watch %d, pass %d: %q", i, pass, lines)
 			}
 		}
 		later := now.Add(time.Minute)
-		if lines, _ := fireRelayDue(st, q(said, later), said, later); lines != nil {
+		if lines, _ := guideRole.fireRelayDue(st, q(said, later), said, later); lines != nil {
 			t.Fatalf("watch %d said it on its next poll: %q", i, lines)
 		}
 	}
-	if !st.RelayDue.Reported.Equal(first) {
-		t.Fatalf("a repeat moved the report: %v", st.RelayDue.Reported)
+	if !st.Guide.RelayDue.Reported.Equal(first) {
+		t.Fatalf("a repeat moved the report: %v", st.Guide.RelayDue.Reported)
 	}
 }
 
@@ -98,17 +98,14 @@ func TestPastRelayGrace(t *testing.T) {
 	}
 }
 
-// The standby watch relays a live supervisor or guide that stays over its
-// relayAt past relayGrace after its relay due; the supervisor only at a
-// quiet moment, and a role once until the backoff passed.
+// The standby watch relays a live guide that stays over its relayAt past
+// relayGrace after its relay due, once until the backoff passed.
 func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 	for _, rl := range roles {
 		t.Run(rl.name, func(t *testing.T) {
 			w, _, out := notifyingWatch(t, t.TempDir(), true)
 			w.cfg.LeaseDir = t.TempDir()
-			for _, c := range []*config.Role{&w.cfg.Supervisor.Role, &w.cfg.Guide.Role} {
-				c.RelayAt = 150_000
-			}
+			w.cfg.Guide.RelayAt = 150_000
 			var from atomic.Value
 			var started atomic.Int32
 			w.stand = standbyWatch{succeed: func(_ context.Context, got role, holder state.Party) (state.Party, error) {
@@ -126,20 +123,12 @@ func TestStandbyRelaysAHolderOverItsRelayAt(t *testing.T) {
 				RelayDue: &state.RelayDue{Supervisor: supA, Since: sup.Since, Reported: relayNow.Add(-31 * time.Minute), RelayAt: 150_000}})
 			sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
 
-			if rl.grants {
-				st.Merges = []state.Merge{{Repo: modelManager, PR: 172, Phase: state.Running, PID: 1}}
-				w.relayOverdue(context.Background(), rl, st, sessions)
-				if started.Load() != 0 {
-					t.Fatal("relayed the supervisor while a merge runs")
-				}
-				st.Merges = nil
-			}
 			w.relayOverdue(context.Background(), rl, st, sessions)
 			w.stand.inflight.Wait()
 			if started.Load() != 1 || from.Load() != supA.Name {
 				t.Fatalf("%d relays from %v", started.Load(), from.Load())
 			}
-			if l := out.String(); !strings.Contains(l, rl.tag+`RELAYED: "Supervisor run 11" is at 163k tokens of context, over 150k`) || !strings.Contains(l, `started "Supervisor run 12"`) {
+			if l := out.String(); !strings.Contains(l, rl.tag+`RELAYED: "`+supA.Name+`" is at 163k tokens of context, over 150k`) || !strings.Contains(l, `started "`+supB.Name+`"`) {
 				t.Fatalf("watch lines:\n%s", l)
 			}
 			w.relayOverdue(context.Background(), rl, st, sessions)

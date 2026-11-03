@@ -276,8 +276,11 @@ func TestEnvtestRecords(t *testing.T) {
 		t.Errorf("notes in the team namespace: %+v, %v", notes.Items, err)
 	}
 
-	// Removing a record deletes its object.
-	if err := a.Update(func(st *state.State) ([]state.Event, error) { st.Notes = nil; return nil, nil }); err != nil {
+	// Closing a note retains its reason outside the open state.
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = nil
+		return []state.Event{{By: ana, Verb: noteDoneEvent, Detail: "#1 withdrawn"}}, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := a.Read(); len(st.Notes) != 0 {
@@ -296,8 +299,8 @@ func TestEnvtestRefusals(t *testing.T) {
 		"local member of a shared record": {func(st *state.State) {
 			st.Merges = nil
 			st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()})
-			st.Supervisor = &state.Supervisor{Party: ana}
-		}, "supervisor"},
+			st.Guide = &state.Role{Holder: &state.Supervisor{Party: ana}}
+		}, "guide"},
 		"two objects": {func(st *state.State) {
 			st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()},
 				state.Grant{Resource: "glean", To: ana, By: bo, At: time.Now()})
@@ -337,7 +340,7 @@ func TestEnvtestRefusals(t *testing.T) {
 }
 
 // A decision closed by its default stays a Note in state defaulted, read
-// back as Defaulted, until it leaves Defaulted, which deletes it.
+// back as Defaulted, until it leaves Defaulted, retaining the close reason.
 func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 	a, _, c := envtestStore(t)
 	namespace(t, c, team)
@@ -354,7 +357,7 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == 1 })
 		st.Defaulted = append(st.Defaulted, st.Notes[i])
 		st.Notes = slices.Delete(st.Notes, i, i+1)
-		return nil, nil
+		return []state.Event{{By: ana, Verb: noteDefaultedEvent, Detail: firstDefaulted}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -381,8 +384,8 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if s := stateOf(1); !strings.Contains(s, "not found") {
-		t.Errorf("an answered default's Note: %q", s)
+	if s := stateOf(1); s != noteClosed {
+		t.Errorf("an expired default's retained Note: %q", s)
 	}
 }
 
@@ -404,7 +407,7 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 	}
 	if err := a.Update(func(st *state.State) ([]state.Event, error) {
 		st.Defaulted, st.Notes = st.Notes[:1], st.Notes[1:]
-		return nil, nil
+		return []state.Event{{By: ana, Verb: noteDefaultedEvent, Detail: firstDefaulted}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -412,8 +415,8 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 	if err := a.Update(func(st *state.State) ([]state.Event, error) {
 		st.Defaulted, st.Notes = st.Notes, nil
 		return []state.Event{
-			{By: bo, Verb: "note.defaulted", Detail: "#2 defaulted"},
-			{By: bo, Verb: "note.defaulted", Detail: "#3 defaulted"},
+			{By: bo, Verb: noteDefaultedEvent, Detail: "#2 defaulted"},
+			{By: bo, Verb: noteDefaultedEvent, Detail: "#3 defaulted"},
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -495,7 +498,7 @@ func closeNote(t *testing.T, s *Store, id int) {
 	t.Helper()
 	if err := s.Update(func(st *state.State) ([]state.Event, error) {
 		st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool { return n.ID == id })
-		return nil, nil
+		return []state.Event{{Verb: noteDoneEvent, Detail: "#" + strconv.Itoa(id) + " withdrawn"}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

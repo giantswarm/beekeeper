@@ -653,6 +653,30 @@ func TestBrowseConsent(t *testing.T) {
 	}
 }
 
+// A sign-in on the lab's identity provider at localhost, an
+// authorization-code flow to a CLI's loopback callback, runs with the lab's
+// rule and words and the front-tab and draw checks every turn has, and the
+// report says the lab sign-in was allowed.
+func TestBrowseLocalhostLabSignIn(t *testing.T) {
+	const steps = "Open https://localhost:32000/dex/auth?client_id=kubernetes&redirect_uri=http%3A%2F%2F127.0.0.1%3A5555%2Fcallback" +
+		"&response_type=code. Sign in as viewer@lab.local with the fixture password 'password' and press Login."
+	if !namesLoopback(steps) {
+		t.Fatalf("namesLoopback(%q) = false", steps)
+	}
+	if rules := browseRules("", nil, true); len(rules) != 1 || rules[0] != labRule {
+		t.Errorf("browseRules of the lab = %q", rules)
+	}
+	p := browsePrompt(steps, "", nil, true, nil)
+	for _, w := range []string{frontWords, drawWords, windowWords, labWords} {
+		if !strings.Contains(p, w) {
+			t.Errorf("browsePrompt of a localhost sign-in lacks %q", bounded(w, 60))
+		}
+	}
+	if l := (browseFindings{}).lines(steps, "", nil, true); len(l) != 1 || !strings.HasPrefix(l[0], "allowed lab sign-in: ") {
+		t.Errorf("lines of a localhost sign-in = %q", l)
+	}
+}
+
 // A browse turn reads the Apps on record: steps naming one run with its rule
 // and prompt words and the report says so; the turn's start record, which
 // has the hook act in the turn wherever it runs, exists while the turn runs
@@ -1175,6 +1199,8 @@ func TestReadFindingsNotDrawn(t *testing.T) {
 // the command fails on the timeout, the lines say a cleanup ran and that the
 // turn closed its tab. A stopped turn with no tab open runs no cleanup.
 func TestBrowseCleansUpAfterTimeout(t *testing.T) {
+	// Leave room for shell startup under race instrumentation on a busy runner.
+	const turnTimeout = 3 * time.Second
 	a, out := stubApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "count")
@@ -1185,7 +1211,7 @@ func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 		": > \"$BROWSE_ARGV.$n\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV.$n\"\n" +
 		"  case \"$prev\" in --session-id|--resume) id=$a;; esac\n  prev=$a\ndone\n" +
 		"mkdir -p \"$BROWSE_PROJECT\" && cat \"$BROWSE_TRANSCRIPT.$n\" >> \"$BROWSE_PROJECT/$id.jsonl\"\n" +
-		"if [ \"$n\" = 1 ]; then exec sleep 5; fi\necho cleaned up\n"
+		"if [ \"$n\" = 1 ]; then exec sleep 30; fi\necho cleaned up\n"
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
 		t.Fatal(err)
 	}
@@ -1199,7 +1225,7 @@ func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 	writeFile(t, transcript+".1", chromeUse("t1", "tabs_context_mcp", `{"createIfEmpty":true}`)+chromeAnswer("t1", group))
 	writeFile(t, transcript+".2", chromeUse("t2", "tabs_close_mcp", `{"tabId":5}`)+
 		chromeAnswer("t2", "Closed tab 5. Group is now empty (auto-removed). \n\nTab Context:\n- Available tabs:\n"))
-	err := a.browse(t.Context(), "Open the portal.", bin, "", time.Second, "", nil, nil)
+	err := a.browse(t.Context(), "Open the portal.", bin, "", turnTimeout, "", nil, nil)
 	if !errors.Is(err, errTurnStopped) || strings.Contains(err.Error(), "left") {
 		t.Errorf("browse of a stopped turn = %v", err)
 	}
@@ -1221,10 +1247,79 @@ func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, transcript+".1", chromeUse("t1", "list_connected_browsers", `{}`)+chromeAnswer("t1", oneBrowser))
-	if err := a.browse(t.Context(), "Open the portal.", bin, "", time.Second, "", nil, nil); !errors.Is(err, errTurnStopped) {
+	if err := a.browse(t.Context(), "Open the portal.", bin, "", turnTimeout, "", nil, nil); !errors.Is(err, errTurnStopped) {
 		t.Errorf("browse of a stopped turn without tabs = %v", err)
 	}
 	if b, _ := os.ReadFile(count); strings.TrimSpace(string(b)) != "1" { //nolint:gosec // the test's own file
 		t.Errorf("the fake claude ran %s times without tabs, want 1", b)
+	}
+}
+
+// A path is printed only for a file written: none taken, or none saved with
+// the reason, prints no shot path; saved files print the line naming
+// beekeeper's record, then their paths.
+func TestShotLines(t *testing.T) {
+	if got := shotLines(nil, nil); !slices.Equal(got, []string{noShots}) {
+		t.Errorf("shotLines(none) = %q", got)
+	}
+	if got := shotLines(nil, errors.New("disk full")); !slices.Equal(got, []string{"screenshot: none saved: disk full"}) {
+		t.Errorf("shotLines(none, err) = %q", got)
+	}
+	if got := shotLines([]string{"/s/shot-1.jpg"}, errors.New("disk full")); !slices.Equal(got, []string{shotsSaved, "screenshot: /s/shot-1.jpg"}) {
+		t.Errorf("shotLines(one, err) = %q", got)
+	}
+}
+
+// A turn's report is printed as the turn wrote it, a finding that something
+// on the page was not saved included. A turn that took a screenshot and
+// reports it not saved prints beekeeper's record line, which says the turn
+// writes no file, and the saved shot's path; a turn that took none prints no
+// shot path.
+func TestBrowseReportsSavedShots(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	transcript, reportFile := filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "report")
+	script := "#!/bin/sh\nid=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\ncat \"$BROWSE_REPORT\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_REPORT", reportFile)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	const steps = "Open the demo page and take a screenshot."
+	const unsaved = "Opened the page and took a screenshot (not saved to disk). The page says deployed."
+	// What the page showed as not saved stays the turn's finding.
+	pageUnsaved := []string{
+		"The agent settings were not saved, as the screenshot shows.",
+		"The avatar image was not saved: the form shows an error.",
+		"Screenshot: the change was never persisted to the cluster.",
+	}
+	writeFile(t, reportFile, unsaved+"\n"+strings.Join(pageUnsaved, "\n")+"\n")
+
+	jpg := base64.StdEncoding.EncodeToString([]byte("jpg-bytes"))
+	writeFile(t, transcript, chromeUse("t1", "computer", `{"action":"screenshot"}`)+
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Successfully captured screenshot"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"`+jpg+`"}}]}]}}`+"\n")
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse with a screenshot: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 7 || got[0] != unsaved || !slices.Equal(got[1:4], pageUnsaved) || !strings.HasPrefix(got[4], "transcript: ") ||
+		got[5] != shotsSaved || !strings.HasPrefix(got[6], "screenshot: ") || !strings.HasSuffix(got[6], "shot-1.jpg") {
+		t.Fatalf("browse with a screenshot printed %q", got)
+	}
+	if b, err := os.ReadFile(strings.TrimPrefix(got[6], "screenshot: ")); err != nil || string(b) != "jpg-bytes" {
+		t.Errorf("the printed shot holds %q, %v", b, err)
+	}
+
+	out.Reset()
+	writeFile(t, transcript, chromeUse("t1", "navigate", `{"url":"https://example.test/"}`)+chromeAnswer("t1", "Navigated to https://example.test/"))
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse without a screenshot: %v\n%s", err, out.String())
+	}
+	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
+		t.Errorf("browse without a screenshot printed %q", got)
 	}
 }

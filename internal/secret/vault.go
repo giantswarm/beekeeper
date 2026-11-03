@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"errors"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -25,13 +26,19 @@ const Locked = "vault locked: waiting for the broker's sign-in"
 // ErrLocked is a vault the person did not unlock in time.
 var ErrLocked = errors.New("vault locked")
 
+// ErrNoHandover is an expected empty, revoked or expired handover. The broker
+// starts locked and continues serving its other operations.
+var ErrNoHandover = errors.New("no usable vault handover")
+
 // Keeper holds the vault session in memory, for its lifetime at most.
 type Keeper struct {
-	mu       sync.Mutex
-	unlocked bool
-	env      string // OP_SESSION_<id>=<token>
-	since    time.Time
-	until    time.Time
+	handover    *os.File
+	handoverEnd *time.Timer
+	mu          sync.Mutex
+	unlocked    bool
+	env         string // OP_SESSION_<id>=<token>
+	since       time.Time
+	until       time.Time
 	// dropped is why op stopped taking the last session and when, until
 	// the next unlock.
 	dropped   string
@@ -66,6 +73,7 @@ func (k *Keeper) Unlock(name, token string, now time.Time) error {
 
 func (k *Keeper) unlock(env string, now time.Time) {
 	k.mu.Lock()
+	k.invalidateHandover()
 	if !k.unlocked {
 		close(k.ready)
 	}
@@ -109,6 +117,7 @@ func (k *Keeper) lockSession(since time.Time) {
 
 // lockLocked forgets the session with k.mu held, and releases it.
 func (k *Keeper) lockLocked() {
+	k.invalidateHandover()
 	if !k.unlocked {
 		k.mu.Unlock()
 		return
@@ -188,4 +197,17 @@ func NeedsVault(args []string) bool {
 		}
 	}
 	return false
+}
+
+// invalidateHandover revokes the shared memory snapshot with the mutex held.
+func (k *Keeper) invalidateHandover() {
+	if k.handoverEnd != nil {
+		k.handoverEnd.Stop()
+		k.handoverEnd = nil
+	}
+	if k.handover != nil {
+		_ = k.handover.Truncate(0)
+		_ = k.handover.Close()
+		k.handover = nil
+	}
 }

@@ -3,6 +3,7 @@ package install
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"maps"
@@ -20,6 +21,8 @@ import (
 
 // reload is the fake service manager's reload command.
 const reload = "reload"
+
+const replacementExe = "/new/bin/beekeeper"
 
 // fakeSetup is a service manager whose service is a unit file in the
 // home's unit directory and a guard file beside it.
@@ -296,7 +299,7 @@ func TestUpdatesWhatItWrote(t *testing.T) {
 	if err := Install(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
-	e.Exe, e.Spec.Exe = "/new/bin/beekeeper", "/new/bin/beekeeper"
+	e.Exe, e.Spec.Exe = replacementExe, replacementExe
 	f.ran = nil
 	out.Reset()
 	if err := Install(context.Background(), e); err != nil {
@@ -755,6 +758,103 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 	}
 }
 
+// rejectedAgyHook is the beekeeper entry earlier installs wrote: its
+// PreInvocation item is a matcher entry, so agy refuses the whole entry
+// ("command hook must specify 'command'") and neither hook runs.
+const rejectedAgyHook = `{
+  "beekeeper": {
+    "PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/opt/bin/beekeeper hook preinvocation", "timeout": 30}]}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/opt/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]
+  }
+}
+`
+
+// The entry install writes for agy lists the PreInvocation command itself,
+// as agy reads that event, and PreToolUse as a matcher with its command; the
+// doctor fails on the entry earlier installs wrote, which agy rejects, and
+// install replaces it.
+func TestAgyHookIsTheShapeAgyAccepts(t *testing.T) {
+	var events struct {
+		PreInvocation []map[string]any `json:"PreInvocation"`
+		PreToolUse    []struct {
+			Matcher string           `json:"matcher"`
+			Hooks   []map[string]any `json:"hooks"`
+		} `json:"PreToolUse"`
+	}
+	if err := json.Unmarshal(AgyHook("/opt/bin/beekeeper"), &events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events.PreInvocation) != 1 || events.PreInvocation[0]["type"] != "command" ||
+		events.PreInvocation[0]["command"] != "/opt/bin/beekeeper hook preinvocation" ||
+		events.PreInvocation[0]["matcher"] != nil || events.PreInvocation[0]["hooks"] != nil {
+		t.Errorf("PreInvocation = %v, want the one command itself", events.PreInvocation)
+	}
+	if len(events.PreToolUse) != 1 || events.PreToolUse[0].Matcher != "*" || len(events.PreToolUse[0].Hooks) != 1 ||
+		events.PreToolUse[0].Hooks[0]["command"] != "/opt/bin/beekeeper hook pretooluse --format agy" {
+		t.Errorf("PreToolUse = %+v, want matcher * with the guard", events.PreToolUse)
+	}
+
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	write(t, e.AgyHooks, rejectedAgyHook)
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "agy rejects the beekeeper entry") ||
+		!strings.Contains(got, "PreInvocation: command hook must specify 'command'") {
+		t.Errorf("rejected entry: CheckAgyHooks = %q", got)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "update  ~/.gemini/config/hooks.json: beekeeper PreToolUse hook") {
+		t.Errorf("install output:\n%s", out)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {
+		t.Errorf("after install: CheckAgyHooks = %q, want empty", got)
+	}
+	raw, err := os.ReadFile(e.AgyHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &file); err != nil || !sameJSON(file["beekeeper"], AgyHook(e.Exe)) {
+		t.Errorf("hooks.json after install:\n%s", raw)
+	}
+}
+
+// Install never writes agy's hooks.json through a link, as it never writes
+// skills.json through one: it keeps the link and its target, and the doctor
+// names the target to edit.
+func TestAgyHooksNeverWritesThroughALink(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	target := filepath.Join(home, "dotfiles", "hooks.json")
+	write(t, target, priorAgyHooks)
+	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(e.AgyHooks), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, e.AgyHooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Clean(target)); string(raw) != priorAgyHooks {
+		t.Errorf("install wrote through the link:\n%s", raw)
+	}
+	if !symlink(e.AgyHooks) {
+		t.Errorf("install replaced the link")
+	}
+	if !strings.Contains(out.String(), "keep    ~/.gemini/config/hooks.json") || !strings.Contains(out.String(), "install never writes through a link") {
+		t.Errorf("install output:\n%s", out)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "lacks the beekeeper PreToolUse hook; edit ~/dotfiles/hooks.json") {
+		t.Errorf("linked file: CheckAgyHooks = %q", got)
+	}
+}
+
 const priorAgySkills = `{
   "inherits": [
     {
@@ -1055,5 +1155,79 @@ func TestCodexHooksAndSkills(t *testing.T) {
 	}
 	if got := CheckAgySkills(e.AgySkills, e.StateDir, home); got != "" {
 		t.Errorf("Agy skills broken after Codex-only uninstall: %q", got)
+	}
+}
+
+// upgradeSetup puts the broker before the services a first upgrade must finish.
+type upgradeSetup struct{ fakeSetup }
+
+func (f *upgradeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
+	var files []platform.File
+	for _, name := range []string{"beekeeper-sandbox.service", "beekeeper-supervisor-loop.service", "beekeeper-teleport.timer"} {
+		files = append(files, platform.File{Path: filepath.Join(s.ConfigDir, "units", name), Content: []byte("ExecStart=" + s.Exe + " watch\n"), Service: true})
+	}
+	return files, nil
+}
+
+func TestInstallDefersOnlyRefusedRestart(t *testing.T) {
+	f := &upgradeSetup{}
+	e, out := env(t, t.TempDir(), f, f.run)
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	e.Exe, e.Spec.Exe = replacementExe, replacementExe
+	f.ran = nil
+	e.BeforeRestart = func(_ context.Context, name string) error {
+		if name == "beekeeper-sandbox.service" {
+			return errors.New("unknown request prepare-handover")
+		}
+		return nil
+	}
+	e.DryRun = true
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ran) != 0 {
+		t.Fatal("dry run invoked service manager")
+	}
+	e.DryRun = false
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal("refusal aborted the remaining install", err)
+	}
+	if slices.Contains(f.ran, "restart beekeeper-sandbox.service") {
+		t.Fatal("refused broker was restarted")
+	}
+	for _, name := range []string{"beekeeper-supervisor-loop.service", "beekeeper-teleport.timer"} {
+		if !slices.Contains(f.ran, "restart "+name) {
+			t.Fatal("later service was skipped", name)
+		}
+	}
+	if !strings.Contains(out.String(), "restart deferred") {
+		t.Fatal("refusal was not reported")
+	}
+}
+
+func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
+	f := &fakeSetup{}
+	e, _ := env(t, t.TempDir(), f, f.run)
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	e.Exe, e.Spec.Exe = replacementExe, replacementExe
+	prepared, revoked := false, false
+	e.BeforeRestart = func(context.Context, string) error { prepared = true; return nil }
+	e.RestartFailed = func(context.Context, string) error { revoked = true; return nil }
+	e.Run = func(ctx context.Context, args []string) error {
+		if args[0] == "restart" {
+			return errors.New("restart failed")
+		}
+		return f.run(ctx, args)
+	}
+	if err := Install(context.Background(), e); err == nil {
+		t.Fatal("restart failure ignored")
+	}
+	if !prepared || !revoked {
+		t.Fatal("failed restart left its prepared state")
 	}
 }

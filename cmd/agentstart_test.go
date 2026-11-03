@@ -586,7 +586,7 @@ func TestUndeliveredTaskIsLoud(t *testing.T) {
 	if err == nil || !errors.Is(err, why) || !strings.Contains(err.Error(), "task not delivered") {
 		t.Fatalf("error %v, want a task-not-delivered error wrapping the reason", err)
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.start" })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbStart })
 	if err != nil {
 		t.Fatal(err)
 	}

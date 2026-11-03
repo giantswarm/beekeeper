@@ -7,9 +7,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -58,7 +61,7 @@ func answer(t *testing.T, w *watcher) {
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
 		st.Notes = nil
-		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Answer: parkAnswer, Note: n.ID}
+		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Channel: channelTerminal, Answer: parkAnswer, Note: n.ID}
 		return []state.Event{answerEvent(state.Party{Name: personTimo, Person: personTimo}, rec, &n)}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -97,7 +100,7 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 		t.Fatalf("agent %+v park %+v", ag, ag.Park)
 	}
 	st, _ := w.store.Read()
-	c := countAgents(st, nil, relayNow)
+	c := countAgents(st, nil, relayNow, nil)
 	if len(c.Busy) != 0 || len(c.Parked) != 1 || !strings.Contains(c.Parked[0], "parked on #3: Timo's answer on the rollout") {
 		t.Errorf("count %+v", c)
 	}
@@ -183,6 +186,53 @@ func TestMergedPullRequestMakesTheParkResumable(t *testing.T) {
 	}
 }
 
+// --as <name> acts as the registered agent of that name for agents park and
+// agents idle, though a session registered it: a session of another harness
+// or a wrapper script parks and reports as its agent without a harness's
+// session variables. A managed SSH execution's entry is not reached by name.
+func TestAsNamesTheRegisteredAgent(t *testing.T) {
+	const session = "5f0c2a7e-0000-4000-8000-000000000001"
+	w := parkingWatch(t, nil)
+	agent := state.Party{Session: session, HostSession: "local_" + session, Name: agentOne}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Party = agent
+		st.Records = []state.Record{{Session: agent}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "3", "Timo's answer on the rollout"); err != nil {
+		t.Fatalf("park --as %s: %v", agentOne, err)
+	}
+	st, _ := w.store.Read()
+	if ag := st.Agents[0]; ag.Park == nil || ag.Park.On != "#3" || len(st.Parks) != 0 {
+		t.Fatalf("agent %+v park %+v, parks off the roster %+v", ag, ag.Park, st.Parks)
+	}
+	if st.Records[0].Waits != "Timo's answer on the rollout" {
+		t.Errorf("the agent's session record waits %q", st.Records[0].Waits)
+	}
+	c := w.agentsCmd()
+	c.SetOut(w.out)
+	c.SetErr(w.out)
+	c.SetArgs([]string{stateIdle, "--done", "--report", "https://github.com/giantswarm/beekeeper/issues/86 done", "--problem", noProblems})
+	if err := c.Execute(); err != nil {
+		t.Fatalf("idle --done --as %s: %v", agentOne, err)
+	}
+	if ag := agentOf(t, w); !ag.Done || ag.Task != "" || ag.Session != session {
+		t.Errorf("agent after idle --done %+v", ag)
+	}
+
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: agent, Task: parkTask, AssignedAt: relayNow, Execution: &execution.Ref{}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "3", "an answer"); err == nil || !strings.Contains(err.Error(), "no session id") {
+		t.Errorf("park --as an SSH execution's entry: %v", err)
+	}
+}
+
 // A park without --on is resumed by hand, its turn naming who resumed it.
 func TestResumeByHand(t *testing.T) {
 	w := parkingWatch(t, nil)
@@ -196,6 +246,138 @@ func TestResumeByHand(t *testing.T) {
 	want := resumer + " → " + agentOne + ": Your park on the supervisor's go is over: " + resumer + " resumed you by hand. Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q", *woke)
+	}
+}
+
+// resume runs agents resume as the calling session (agentOne) with args.
+func resume(t *testing.T, w *watcher, args ...string) error {
+	t.Helper()
+	c := w.agentResumeCmd()
+	c.SetArgs(args)
+	c.SetOut(w.out)
+	c.SetErr(w.out)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	return c.Execute()
+}
+
+// A parked agent leaves its own park once the wait settled: agents resume
+// without an agent, or naming itself, ends the park, wakes nobody and prints
+// what settled it.
+func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
+	for _, args := range [][]string{nil, {agentOne}} {
+		w := parkingWatch(t, nil)
+		woke := stubWakes(t)
+		if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+			t.Fatal(err)
+		}
+		answer(t, w)
+		w.pending(context.Background(), nil)
+		w.out.(*bytes.Buffer).Reset()
+		if err := resume(t, w, args...); err != nil {
+			t.Fatalf("resume %q: %v", args, err)
+		}
+		out := w.out.(*bytes.Buffer).String()
+		want := agentOne + ": your park ended, nobody is woken. Your park on #3 (Timo's answer) is over: note #3 answered by Timo: " + parkAnswer
+		if !strings.Contains(out, want) {
+			t.Errorf("resume %q said:\n%s\nwant %q", args, out, want)
+		}
+		if len(*woke) > 0 {
+			t.Errorf("resume %q woke %q", args, *woke)
+		}
+		if ag := agentOf(t, w); ag.Park != nil || ag.Task != parkTask {
+			t.Errorf("resume %q: task %q park %+v", args, ag.Task, ag.Park)
+		}
+		if err := resume(t, w, args...); err == nil || !strings.Contains(err.Error(), "is not parked") {
+			t.Errorf("second resume %q: %v", args, err)
+		}
+	}
+}
+
+// An agent of a harness beekeeper has no message route to (one that
+// registered itself with agents register --harness, not started under its
+// harness's host prefix) is never woken headless: its park line and the
+// watch's AGENT RESUMABLE say so, agents.autoResume leaves it resumable,
+// and agents resume by another ends its park and says so.
+func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
+	w := parkingWatch(t, nil)
+	w.cfg.Agents.AutoResume = true
+	woke := stubWakes(t)
+	w.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-omp-rpc")
+	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
+	register := func(args ...string) error {
+		c := w.agentsCmd()
+		c.SetArgs(append([]string{"register"}, args...))
+		c.SetOut(w.out)
+		c.SetErr(w.out)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		return c.Execute()
+	}
+	if err := register("--harness", "pi"); Code(err) != ExitUsage {
+		t.Fatalf("register --harness pi: %v", err)
+	}
+	if err := register("--harness", omp.Harness); err != nil {
+		t.Fatal(err)
+	}
+	if ag := agentOf(t, w); ag.Harness != omp.Harness || ag.Session != "s-omp-rpc" || ag.Task != parkTask {
+		t.Fatalf("registered %+v", ag)
+	}
+	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, unroutedResume) || strings.Contains(out, "the watch resumes it") {
+		t.Errorf("park said:\n%s", out)
+	}
+	answer(t, w)
+	w.out.(*bytes.Buffer).Reset()
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, `AGENT RESUMABLE "`+agentOne+`"`) || !strings.Contains(out, unroutedResume) ||
+		strings.Contains(out, "the watch resumes it") {
+		t.Errorf("watch said:\n%s", out)
+	}
+	if ag := agentOf(t, w); len(*woke) > 0 || ag.Park == nil || ag.Park.Resumable.IsZero() {
+		t.Fatalf("autoResume of an unrouted harness: woke %q park %+v", *woke, ag.Park)
+	}
+	w.out.(*bytes.Buffer).Reset()
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
+		t.Fatal(err)
+	}
+	out := w.out.(*bytes.Buffer).String()
+	if !strings.Contains(out, agentOne+": its park ended; it runs on omp, which beekeeper has no message route to, so nobody is woken") ||
+		!strings.Contains(out, parkAnswer) {
+		t.Errorf("resume said:\n%s", out)
+	}
+	if ag := agentOf(t, w); len(*woke) > 0 || ag.Park != nil {
+		t.Errorf("after the resume: woke %q park %+v", *woke, ag.Park)
+	}
+}
+
+// A session off the roster leaves its own park too, waking nobody.
+func TestOffRosterSessionLeavesItsOwnPark(t *testing.T) {
+	w := parkingWatch(t, nil)
+	woke := stubWakes(t)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		st.Parks = []state.Park{{By: state.Party{Name: agentOne}, At: relayNow, Waits: "a reply on my branch"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := resume(t, w); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, agentOne+": your park ended, nobody is woken.") {
+		t.Errorf("resume said:\n%s", out)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*woke) > 0 || len(st.Parks) > 0 {
+		t.Errorf("woke %q parks %+v", *woke, st.Parks)
 	}
 }
 
@@ -236,5 +418,344 @@ func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 	out := w.out.(*bytes.Buffer).String()
 	if n := strings.Count(out, `AGENT RESUMABLE "`); n != 1 || !strings.Contains(out, "nothing holds merges any more: run the refused command again") {
 		t.Errorf("%d lines:\n%s", n, out)
+	}
+}
+
+func TestPublishedParkHead(t *testing.T) {
+	const branch = "fix/example"
+	const repo = "o/r"
+	for _, tc := range []struct {
+		name, localBranch, remoteBranch, localHead, remoteHead, remoteRepo string
+		readErr                                                            bool
+		want                                                               string
+	}{
+		{name: "published branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, want: loopHead},
+		{name: "other branch same commit", localBranch: branch, remoteBranch: "another-feature", localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
+		{name: "unpushed head", localBranch: branch, remoteBranch: branch, localHead: loopFixed, remoteHead: loopHead, remoteRepo: repo},
+		{name: "fork same branch", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: "other/r"},
+		{name: "detached", remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo},
+		{name: "unreachable", localBranch: branch, remoteBranch: branch, localHead: loopHead, remoteHead: loopHead, remoteRepo: repo, readErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			git := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				var out string
+				switch args[0] {
+				case "remote":
+					out = "git@github.com:o/r.git"
+				case "symbolic-ref":
+					out = tc.localBranch
+				case "rev-parse":
+					out = tc.localHead
+				default:
+					t.Fatalf("unexpected git call %v", args)
+				}
+				return []byte(out), nil
+			}
+			gh := func(ctx context.Context, args ...string) ([]byte, error) {
+				if github.Repo(ctx) != repo || !slices.Equal(args, []string{"api", "repos/o/r/pulls/7"}) {
+					t.Fatalf("gh call %v", args)
+				}
+				if tc.readErr {
+					return nil, fmt.Errorf("unreachable")
+				}
+				return []byte(fmt.Sprintf(`{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, tc.remoteBranch, tc.remoteHead, tc.remoteRepo)), nil
+			}
+			if got := publishedParkHead(context.Background(), loopPR, ".", git, gh); got != tc.want {
+				t.Fatalf("head %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParkSaysReviewRequestOrPlainWait(t *testing.T) {
+	was := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = was })
+	for _, head := range []string{"", loopHead} {
+		w := parkingWatch(t, map[string]string{refOne: github.Open})
+		parkReviewHead = func(string) string { return head }
+		if err := park(t, w, "--on", refOne, "waiting"); err != nil {
+			t.Fatal(err)
+		}
+		if ag := agentOf(t, w); ag.Park.ReviewHead != head {
+			t.Fatalf("park %+v", ag.Park)
+		}
+		if !strings.Contains(w.out.(*bytes.Buffer).String(), parkReviewMode(head)) {
+			t.Fatalf("output %s", w.out)
+		}
+		if head == "" && !strings.Contains(w.out.(*bytes.Buffer).String(), `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`) {
+			t.Fatalf("plain wait must explain how to request review: %s", w.out)
+		}
+	}
+}
+
+func TestPlainPullWaitWakesOnMergeOrClose(t *testing.T) {
+	for _, status := range []string{github.Merged, github.Closed} {
+		t.Run(status, func(t *testing.T) {
+			refs := map[string]string{refOne: github.Open}
+			w := parkingWatch(t, refs)
+			w.cfg.Agents.AutoResume = true
+			woke := stubWakes(t)
+			if err := park(t, w, "--on", refOne, "another worker's pull request"); err != nil {
+				t.Fatal(err)
+			}
+			if agentOf(t, w).Park.ReviewHead != "" {
+				t.Fatal("plain wait requested review")
+			}
+			w.pending(context.Background(), nil)
+			if len(*woke) != 0 {
+				t.Fatalf("woke while open: %v", *woke)
+			}
+			refs[refOne] = status
+			w.pending(context.Background(), nil)
+			w.pending(context.Background(), nil)
+			if len(*woke) != 1 || !strings.Contains((*woke)[0], strings.ToLower(status)) || agentOf(t, w).Park != nil {
+				t.Fatalf("settled %s: %v", status, *woke)
+			}
+		})
+	}
+}
+
+// reviewerLogin reviews the pull request a session parked on.
+const reviewerLogin = "a-reviewer"
+
+// offSession is a desktop session no roster entry names.
+var offSession = state.Party{Session: "0b7c2a52-6a8e-4d3e-9a51-2f8f4f8b1c11", Name: "a hand-started session"}
+
+// replyingRefs has GitHub answer o/r#1 open, with reply as its newest
+// review or comment by anyone but its author.
+func replyingRefs(t *testing.T, reply *github.Reply) {
+	t.Helper()
+	prev := refStates
+	t.Cleanup(func() { refStates = prev })
+	refStates = func(_ context.Context, rs []github.PR) (map[github.PR]github.RefState, error) {
+		m := map[github.PR]github.RefState{}
+		for _, r := range rs {
+			m[r] = github.RefState{Kind: github.RefPullRequest, State: github.Open, Reply: *reply}
+		}
+		return m, nil
+	}
+}
+
+// A session off the roster parks on a pull request; a review by anyone but
+// its author after the park settles it, and with agents.autoResume the watch
+// wakes the session by its id, once, and drops the park.
+func TestAReviewResumesASessionParkedOffTheRoster(t *testing.T) {
+	w := parkingWatch(t, nil)
+	w.cfg.Agents.AutoResume = true
+	reply := &github.Reply{By: reviewerLogin, At: relayNow.Add(-time.Hour), Kind: "review COMMENTED"}
+	replyingRefs(t, reply)
+	woke := stubWakes(t)
+	line, err := w.park(offSession, "o/r#1", "the desk review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(line, "off the roster, woken by its session id") || !strings.Contains(line, "the watch resumes it with what settles o/r#1") {
+		t.Errorf("line %q", line)
+	}
+	if st, _ := w.store.Read(); len(st.Parks) != 1 || len(st.Agents) != 1 || st.Agents[0].Park != nil {
+		t.Fatalf("parks %+v agents %+v", st.Parks, st.Agents)
+	}
+	w.pending(context.Background(), nil)
+	if len(*woke) > 0 {
+		t.Fatalf("a review older than the park resumed it: %q", *woke)
+	}
+	*reply = github.Reply{By: reviewerLogin, At: relayNow.Add(time.Minute), Kind: "review CHANGES_REQUESTED"}
+	for range 3 {
+		w.pending(context.Background(), nil)
+	}
+	want := watchParty.Name + " → " + offSession.Session + ": Your park on o/r#1 (the desk review) is over: o/r#1 has a new review changes_requested by " + reviewerLogin + " at " +
+		relayNow.Add(time.Minute).UTC().Format(time.RFC3339) + ": read and answer its reviews and comments since the park. Re-query the live state of your task and continue it."
+	if !slices.Equal(*woke, []string{want}) {
+		t.Errorf("woke %q\nwant %q", *woke, want)
+	}
+	if out := w.out.(*bytes.Buffer).String(); strings.Count(out, `AGENT RESUMABLE "`+offSession.Session+`"`) != 1 {
+		t.Errorf("out:\n%s", out)
+	}
+	if st, _ := w.store.Read(); len(st.Parks) != 0 {
+		t.Errorf("park left: %+v", st.Parks)
+	}
+}
+
+// A roster agent's park on a pull request settles on a review too, never on
+// one older than the park.
+func TestAReviewMakesAnAgentsParkResumable(t *testing.T) {
+	w := parkingWatch(t, nil)
+	reply := &github.Reply{By: reviewerLogin, At: relayNow.Add(time.Minute), Kind: "comment"}
+	replyingRefs(t, reply)
+	if err := park(t, w, "--on", "o/r#1", "the desk review"); err != nil {
+		t.Fatal(err)
+	}
+	w.pending(context.Background(), nil)
+	if ag := agentOf(t, w); ag.Park == nil || ag.Park.Resumable.IsZero() || !strings.Contains(ag.Park.Answer, "o/r#1 has a new comment by "+reviewerLogin) {
+		t.Errorf("park %+v", ag.Park)
+	}
+}
+
+// A session parked off the roster is resumed by hand by its id; one whose
+// session is gone by then gets no wake and one line, and its park is gone.
+func TestResumeOffTheRoster(t *testing.T) {
+	w := parkingWatch(t, nil)
+	woke := stubWakes(t)
+	if _, err := w.park(offSession, "", "the supervisor's go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, offSession.Session); err != nil {
+		t.Fatal(err)
+	}
+	if len(*woke) != 1 || !strings.HasPrefix((*woke)[0], resumer+" → "+offSession.Session+": Your park on the supervisor's go is over") {
+		t.Errorf("woke %q", *woke)
+	}
+
+	if _, err := w.park(offSession, "", "the supervisor's go"); err != nil {
+		t.Fatal(err)
+	}
+	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
+		return goneRefusal("%s: session %s has no transcript under /p to resume", offSession.Session, offSession.Session)
+	}
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, offSession.Name); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := w.store.Events(0, func(e state.Event) bool { return e.Verb == resumedEvent && strings.Contains(e.Detail, "is not woken") })
+	st, _ := w.store.Read()
+	if len(evs) != 1 || len(st.Parks) != 0 {
+		t.Errorf("events %+v parks %+v", evs, st.Parks)
+	}
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, offSession.Session); err == nil {
+		t.Error("resumed a session no longer parked")
+	}
+}
+
+// A session that parked off the roster and then joins it ends that park: a
+// later settle wakes nobody, through registerAgent or any other way onto the
+// roster.
+func TestJoiningTheRosterEndsAParkOffIt(t *testing.T) {
+	for _, viaRegister := range []bool{true, false} {
+		w := parkingWatch(t, nil)
+		w.cfg.Agents.AutoResume = true
+		reply := &github.Reply{}
+		replyingRefs(t, reply)
+		woke := stubWakes(t)
+		if _, err := w.park(offSession, "o/r#1", "the desk review"); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			if viaRegister {
+				_, err := registerAgent(st, offSession, func(state.Party) bool { return false }, relayNow)
+				return nil, err
+			}
+			st.Agents = append(st.Agents, state.Agent{Party: offSession, Task: parkTask})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if st, _ := w.store.Read(); viaRegister && len(st.Parks) != 0 {
+			t.Errorf("the park off the roster outlived the registration: %+v", st.Parks)
+		}
+		*reply = github.Reply{By: reviewerLogin, At: relayNow.Add(time.Minute), Kind: "comment"}
+		for range 2 {
+			w.pending(context.Background(), nil)
+		}
+		if len(*woke) != 0 {
+			t.Errorf("register %v: a stale park woke the agent: %q", viaRegister, *woke)
+		}
+		if st, _ := w.store.Read(); len(st.Parks) != 0 {
+			t.Errorf("register %v: parks %+v", viaRegister, st.Parks)
+		}
+	}
+}
+
+// Publication evidence and its mode survive the shared park path for a
+// session off the roster, as they do for registered workers.
+func TestOffRosterParkRetainsReviewMode(t *testing.T) {
+	was := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = was })
+	for _, head := range []string{"", loopHead} {
+		w := parkingWatch(t, map[string]string{refOne: github.Open})
+		parkReviewHead = func(string) string { return head }
+		line, err := w.park(offSession, refOne, "waiting")
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := w.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || strings.Contains(line, "review request recorded") {
+			t.Fatalf("parks %+v, line %q", st.Parks, line)
+		}
+	}
+}
+
+func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
+	for _, exhausted := range []bool{false, true} {
+		t.Run(fmt.Sprint(exhausted), func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			w.loopOwned = true
+			w.cfg.GitHub.Floor = 2500
+			w.cfg.Agents.AutoResume = true
+			woke := stubWakes(t)
+			if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+				t.Fatal(err)
+			}
+			if exhausted {
+				if err := w.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{Reset: w.now.Add(time.Hour), Spent: loopGraphQLLimit}); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Budget = &state.Budget{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour), GraphQL: &state.GraphQL{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour)}}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} // Otherwise GraphQL is unknown and must fail closed.
+			previous := readLoopGraphQLBudget
+			t.Cleanup(func() { readLoopGraphQLBudget = previous })
+			readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+				t.Fatal("local-note settlement probed GitHub under a held budget")
+				return github.Budget{}, nil
+			}
+			answer(t, w)
+			w.pending(t.Context(), nil)
+			if p := agentOf(t, w).Park; p == nil || p.Resumable.IsZero() || !strings.Contains(p.Answer, parkAnswer) {
+				t.Fatalf("answered local note did not become resumable: %+v", p)
+			}
+			w.pending(t.Context(), nil)
+			if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) || agentOf(t, w).Park != nil {
+				t.Fatalf("answered local note did not wake once with answer: %v", *woke)
+			}
+		})
+	}
+}
+
+func TestSettledParksKeepsPartialBatchResultsOnError(t *testing.T) {
+	w := parkingWatch(t, nil)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: w.now, On: refOne}
+		st.Parks = []state.Park{{By: offSession, At: w.now, On: refTwo}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := refStates
+	t.Cleanup(func() { refStates = prev })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		return map[github.PR]github.RefState{
+			refs[0]: {Kind: github.RefPullRequest, State: github.Merged},
+		}, errParkLookup
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := w.settledParks(t.Context(), st)
+	if len(settled) != 1 || settled[0].on != refOne {
+		t.Fatalf("partial batch result did not settle %s: %+v", refOne, settled)
+	}
+	st, err = w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Park == nil || st.Agents[0].Park.RefKind != github.RefPullRequest {
+		t.Fatalf("partial batch result did not cache RefKind: %+v", st.Agents[0].Park)
 	}
 }

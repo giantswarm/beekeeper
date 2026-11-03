@@ -76,8 +76,34 @@ func daemonRan(ctx context.Context, id string) bool {
 	return err == nil && slices.ContainsFunc(rows, func(r bgSession) bool { return r.SessionID == id && r.Kind == bgKind })
 }
 
+// daemonRunning returns the session ids the claude daemon lists as running
+// right now (claude agents --json without --all).
+func daemonRunning(ctx context.Context, config string) map[string]bool {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return nil
+	}
+	rows, err := bgList(ctx, bin, cleanEnv(os.Environ(), config), false)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if r.SessionID != "" {
+			out[r.SessionID] = true
+		}
+	}
+	return out
+}
+
 // bgKind is the kind claude agents gives a session the daemon runs.
 const bgKind = "background"
+
+// desktopMode reports whether the desk runs its sessions in the desktop
+// (agents.mode desktop, the default).
+func (a *app) desktopMode() bool {
+	return a == nil || a.cfg == nil || cmp.Or(strings.TrimSpace(a.cfg.Agents.Mode), config.ModeDesktop) == config.ModeDesktop
+}
 
 // desktopStarted reports whether p's session is one of beekeeper's starts
 // that the desktop shows: a background start has no desktop row to miss.
@@ -85,8 +111,8 @@ func desktopStarted(st *state.State, p state.Party) bool {
 	if !started(st, p) {
 		return false
 	}
-	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Session == p.Session })
-	return !st.Starts[i].Background
+	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Execution == nil && s.Session == p.Session })
+	return i >= 0 && !st.Starts[i].Background
 }
 
 // cleanEnv is environ without the caller's session and harness variables
@@ -278,7 +304,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 		if reg, err = recordStart(st, s, sp.task, sp.serves, live); err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: background session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, model %s, bypassPermissions, busy with %q", sp.name, id, dir, cmp.Or(sp.model, harnessDefaultModel), reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -334,7 +360,7 @@ func (a *app) wakeBackground(ctx context.Context, by state.Party, w wakeTarget, 
 // stopBackgroundStart stops p's background session when beekeeper started
 // it as one (claude stop, which keeps its conversation) and says what it
 // did; false for any other session. One that runs a turn, or holds or held
-// the supervisor's or the guide's role, stays.
+// the guide's role, stays.
 func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.Party) (string, bool) {
 	i := st.StartIndex(p)
 	if i < 0 || !st.Starts[i].Background {
@@ -343,10 +369,13 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	id := st.Starts[i].Session
 	short := id[:min(8, len(id))]
 	if roleKeeps(st, p) {
-		return fmt.Sprintf("its background session %s stays: it holds or held the supervisor's or the guide's role, and no relay relieved it", short), true
+		return fmt.Sprintf("its background session %s stays: it holds or held the guide's role, and no relay relieved it", short), true
 	}
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
+	}
+	if loopInTurn(a, p) {
+		return fmt.Sprintf("its background session %s stays: its CLI is in a turn", short), true
 	}
 	if err := a.bgStop(ctx, id); err != nil {
 		return fmt.Sprintf("its background session %s stays: %v", short, err), true
@@ -390,7 +419,9 @@ const parkStoppedEvent = "agents.parkstop"
 // --resume). A session in a turn (a headless turn of it in t, a running
 // command, its transcript or a subagent's written within stewardQuiet of
 // now), a park already resumable (the watch resumes it), an agent on an
-// execution host and the supervisor's or the guide's session stay.
+// execution host and the guide's session stay. stopParkedSession looks once
+// more, at the transcript's own proof that the last turn ended, before it
+// stops: a turn a wake or resume started is never stopped mid-way.
 func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time) []state.Party {
 	var out []state.Party
 	for _, ag := range st.Agents {
@@ -527,10 +558,15 @@ func (w *watcher) stopParked(ctx context.Context, st *state.State, sessions []*c
 // (parkStopLock), which every wake of p takes too: a wake in flight keeps
 // it running this poll, one that comes meanwhile waits for the stop and
 // then resumes the stopped session. Under the lock it looks again: p still
-// parked on the park seen in seen, not woken within stewardQuiet, and,
-// read anew, still running with its turn ended; false when it stays. The
-// lock holds until the stopped CLI exits, so the next wake finds it gone.
+// parked on the park seen in seen, not woken within stewardQuiet, still
+// running with its turn ended (the transcript's last message of its own
+// answers the last message and stopped — TurnDone — so a turn a wake or
+// resume started is never stopped mid-way, even while its model thinks and
+// the transcript stays quiet), and, read anew, still running; false when it
+// stays. The lock holds until the stopped CLI exits, so the next wake finds
+// it gone.
 func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.Party) (bool, error) {
+	defer a.recordStoppedGates(ctx)
 	l, err := a.parkStopLock(p.Session)
 	if err != nil {
 		return false, err
@@ -555,6 +591,21 @@ func (a *app) stopParkedSession(ctx context.Context, seen *state.State, p state.
 	}
 	if !slices.ContainsFunc(parkedResident(st, sessions, t, a.now), p.Is) {
 		return false, nil
+	}
+	// The quiet look is the transcript's last write: while a turn runs but
+	// writes nothing yet (the model of a wake or resume thinks over the
+	// message it was given, the next model call of a long turn), the
+	// transcript stays quiet and the session would read as idle. Stop only
+	// once the transcript proves the last turn answered and ended, so a stop
+	// never undoes a turn a wake or resume started (the wake's stamp holds
+	// the first stewardQuiet of it off; this is the rest of the turn).
+	for _, s := range sessions {
+		if s.ID != p.Session {
+			continue
+		}
+		if !claude.TurnDone(cmp.Or(s.Transcript, transcriptOf(a.cfg, s.ID))) {
+			return false, nil // in a turn, or a transcript that cannot prove it ended
+		}
 	}
 	if err := a.bgStop(ctx, p.Session); err != nil {
 		return false, err

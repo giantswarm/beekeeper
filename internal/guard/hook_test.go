@@ -452,6 +452,11 @@ func TestHookGatesMerges(t *testing.T) {
 		{"bash <<'EOF'\nset -e\n  devctl pr merge o/r 7\nEOF", "bash <<'EOF'\nset -e\n  " + g + "devctl pr merge o/r 7\nEOF", false},
 		{"cat <<'EOF' | sh\ndevctl release promote o/r\nEOF", "cat <<'EOF' | sh\n" + g + "devctl release promote o/r\nEOF", false},
 		{"eval devctl pr merge o/r 7", "eval " + g + "devctl pr merge o/r 7", false},
+		// The reserved words that start a command are command positions: if, while, until, ! and {.
+		{"if devctl pr merge o/r 7; then echo ok; fi", "if " + g + "devctl pr merge o/r 7; then echo ok; fi", false},
+		{"cd x && ! devctl pr wait o/r 7", "cd x && ! " + g + "devctl pr wait o/r 7", false},
+		{"until devctl pr wait o/r 7; do :; done", "until " + g + "devctl pr wait o/r 7; do :; done", false},
+		{"{ devctl pr merge o/r 7; } >| m.json", "{ " + g + "devctl pr merge o/r 7; } >| m.json", false},
 		// A real merge beside a quoted argument naming one: only the real one is gated.
 		{`gh pr comment 7 --repo o/r --body 'Next: x; devctl pr merge o/r 7' && devctl pr merge o/r 7`,
 			`gh pr comment 7 --repo o/r --body 'Next: x; devctl pr merge o/r 7' && ` + g + `devctl pr merge o/r 7`, false},
@@ -803,12 +808,19 @@ func TestHookGatesRealMerges(t *testing.T) {
 		var c struct {
 			Command string `json:"command"`
 			Merges  int    `json:"merges"`
+			Refused bool   `json:"refused"`
 		}
 		if err := json.Unmarshal([]byte(line), &c); err != nil {
 			t.Fatal(err)
 		}
 		n++
 		d := decide(t, h, t.TempDir(), c.Command, nil)
+		if c.Refused {
+			if d == nil || d.PermissionDecision != decisionDeny {
+				t.Errorf("unsafe raw merge passed: %s (%+v)", c.Command, d)
+			}
+			continue
+		}
 		if d == nil || d.PermissionDecision != decisionAllow {
 			t.Errorf("%q: not gated: %+v", c.Command, d)
 			continue

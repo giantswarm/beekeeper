@@ -39,7 +39,8 @@ const browseWait = 8 * time.Minute
 const (
 	browsePreamble = "beekeeper browse: you run browser steps for another Claude session, with the Claude in Chrome tools only. " +
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
-		"Take a screenshot of each page the steps name as their proof. End with a short plain report of what you saw and did, " +
+		"Take a screenshot of each page the steps name as their proof; beekeeper saves each one and prints its path below your report, " +
+		"so your report never says whether a screenshot was saved or where. End with a short plain report of what you saw and did, " +
 		"or of what stopped you. " + controlWords
 
 	browseSteps = "The steps:\n\n"
@@ -51,7 +52,11 @@ const (
 const controlWords = "Click only the element a step names: a computer click by that element's ref, its action_summary naming that element; " +
 	"a scripted click (javascript_tool) selects that one element by its own selector (an id, a data-testid, an aria-label), never by a sweep " +
 	"over the page's buttons or links. Never click " + guard.SubscriptionControls + " (GitHub's Subscribe, Unsubscribe, Watch, Star and " +
-	"Notifications buttons): such a click changes the person's own notifications, which no token restores. "
+	"Notifications buttons): such a click changes the person's own notifications, which no token restores. " +
+	"For a UI-only disclosure on an App permissions page, name the effect and role, for example 'Expands the Organization permissions section', " +
+	"'Collapses the Repository permissions section' or 'Switches to the Account permissions tab', without the App or permission name. " +
+	"First read_page or find on the clicked tab so the hook can verify that ref's button or tab role and label; read it again after a page-changing action. " +
+	"Use that description only for the disclosure itself, never for selecting a level or submitting a grant. "
 
 // lostLine is the line a turn ends its report with when the Chrome
 // connection is gone, the steps not done after it.
@@ -88,7 +93,7 @@ const (
 		"with that callback, click Authorize once; click nothing else that grants access. "
 	permissionWords = "The person's own App %s is declared and on record for one permission change, %s: once the steps reach its permissions " +
 		"page (organizations/%s/settings/apps/%s/permissions) set exactly that permission and click Save changes once, and on the organisation's " +
-		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each call's summary; " +
+		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each change call's summary; " +
 		"change nothing else. "
 	callbackWords = "The person's own App %s is declared and on record for one callback URL, %q: once the steps reach its settings page " +
 		"(organizations/%s/settings/apps/%s) click Add Callback URL, type exactly that URL into the new field and click Save changes once; name the " +
@@ -218,11 +223,25 @@ Desktop holds such a session's navigate to a new site for a person's site
 approval, which neither bypassPermissions nor a hook answers (beekeeper
 hook pretooluse refuses those calls and names this command). The turn's
 report is printed, then its transcript and each screenshot it took, saved
-under <stateDir>/browse/<id>/ as an image file the caller reads.
+under <stateDir>/browse/<id>/ as an image file the caller reads
+("screenshot: <path>", a path only for a file written; "screenshot: none
+taken" or "screenshot: none saved: <why>" otherwise). The files saved are
+the one record of the screenshots: the turn writes no file, and the line
+heading the paths says a report calling a screenshot not saved speaks for
+the turn alone. The report is printed as the turn wrote it.
 
 The turn shares the person's Chrome: hold the browser lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
 a page that waits on a person (a sign-in form, a dialog) is the usual cause.
+
+A muster sign-in is "muster auth login --no-browser" (the hook refuses it
+without the flag in every session: muster would open the person's default
+browser, outside the Claude in Chrome tab group this turn works in), run in
+the background: it prints the sign-in URL and waits for the callback. This
+command then opens the URL under the browser lease, for example:
+
+  beekeeper browse "Open <the printed URL>, sign in with its SSO button,
+  report the final page."
 
 A consent page (an OAuth grant: GitHub's green Authorize button, an identity
 provider's Allow) is a permission grant to the turn's classifier, which
@@ -260,6 +279,19 @@ permissions page of any other App and any other call there; a turn whose
 steps name the App runs with that change's rule, its prompt says to set
 exactly that permission, and "allowed permission: <name> (<change>,
 declared in <manifest>)" goes below the report.
+
+A click that only reveals or hides a permissions section is a disclosure,
+not a grant. Name its effect and control role in action_summary, for example
+"Expands the Organization permissions section", "Collapses the Repository
+permissions section" or "Switches to the Account permissions tab". These
+UI-only clicks need neither the App name nor a permission on record. Do not
+combine them with selecting a level, Save changes or Accept new permissions;
+those actions still need the corresponding grant record. Check that Chrome
+draws the page before a disclosure click, as for every other click. First
+use read_page or find on that tab: the hook requires the clicked ref's role
+and label to match the named section or tab on the current URL. Missing,
+stale or mismatched evidence retains the grant decision. Read again after
+a page-changing action; run the disclosure as its own call.
 
 Adding a callback URL to an App's settings is such a change too. One URL
 the person asked for, on a callback host the App's manifest declares, is
@@ -324,7 +356,10 @@ host (*.127.0.0.<n>.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
 that name such a host run with the lab's rule, the prompt's exception for
 the fixture user's credential the steps give, and "allowed lab sign-in:"
-below the report.
+below the report. Such a page needs no fallback: the lab's certificate
+authority is one Chrome trusts, and a sign-in there whose clicks and keys
+do nothing and whose screenshots fail is a tab behind another or a window
+not drawn, which the front-tab and draw checks below handle as on any host.
 
 Every other grant stays refused. A call the classifier refused is named
 below the report, one "refused:" line per call, with the call's own words
@@ -704,12 +739,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
 	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
 	lines = append(lines, "transcript: "+path)
-	for _, s := range shots {
-		lines = append(lines, "screenshot: "+s)
-	}
-	if len(shots) == 0 {
-		lines = append(lines, "screenshot: none taken")
-	}
+	lines = append(lines, shotLines(shots, serr)...)
 	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
@@ -1691,7 +1721,7 @@ func browseEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
-		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == stageRootEnv || k == guard.SharedEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") ||
+		if k == claudeCodeEnv || k == "CLAUDE_PID" || k == stageRootEnv || k == guard.SharedEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") ||
 			k == omp.EnvAgent || k == omp.EnvName || k == omp.EnvCredentials ||
 			k == agy.EnvAgent || k == agy.EnvName ||
 			k == codex.EnvAgent || k == codex.EnvName ||
@@ -1882,6 +1912,30 @@ func sharedLines(shared []sharedFile) []string {
 	out := make([]string, 0, len(shared))
 	for _, f := range shared {
 		out = append(out, "shared for upload: "+f.Named)
+	}
+	return out
+}
+
+// shotsSaved heads the screenshot lines when beekeeper wrote a file: the
+// turn cannot write one, its Chrome tool keeps a screenshot in the
+// transcript only, so a report calling a screenshot not saved speaks for the
+// turn alone and these lines are the record.
+const shotsSaved = "screenshots saved by beekeeper from the turn's transcript (the turn writes no file; a report line calling a screenshot not saved is the turn's own view):"
+
+// shotLines are the lines below the report for the screenshots: with files
+// saved, shotsSaved and one path per file; with none, one line saying none
+// was taken or why none was saved. A path is printed only for a file written.
+func shotLines(shots []string, err error) []string {
+	if len(shots) == 0 {
+		if err != nil {
+			return []string{"screenshot: none saved: " + err.Error()}
+		}
+		return []string{"screenshot: none taken"}
+	}
+	out := make([]string, 0, len(shots)+1)
+	out = append(out, shotsSaved)
+	for _, s := range shots {
+		out = append(out, "screenshot: "+s)
 	}
 	return out
 }
