@@ -3574,7 +3574,7 @@ func TestLoopPlacesGitHubReviewersOnExecutionHosts(t *testing.T) {
 	branch := ghDefaultBranch
 	t.Cleanup(func() { ghDefaultBranch = branch })
 	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
-	for _, harness := range []string{claudeComm, "codex"} {
+	for _, harness := range []string{claudeComm, execution.HarnessCodex} {
 		for _, first := range []bool{false, true} {
 			for _, localRoom := range []bool{false, true} {
 				for _, selfHosted := range []bool{false, true} {
