@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -153,7 +154,7 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 		lane: r.a.cfg.LaneOf(loopMergeRepo),
 		me:   state.Party{Name: loopWorker},
 		pid:  os.Getpid(),
-		argv: []string{"devctl", "pr", "merge", loopMergeRepo, "7", "--head", loopFixed},
+		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7", "--head", loopFixed},
 	}
 	why, err := g.reviewHold()
 	if err != nil {
@@ -174,5 +175,32 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 	why, err = g.reviewHold()
 	if err != nil || why != "" {
 		t.Fatalf("reviewHold after exact-head supervisor.go = %q, %v; want empty", why, err)
+	}
+}
+
+// Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
+// the gate takes the loop's exact-head merge claim as the go, as
+// reviewedMerge does: the planner's go for a head that carries the last
+// round's fixes merges on either route.
+func TestGateTakesTheLoopClaimAsTheExactHeadGo(t *testing.T) {
+	stubGitHub(t, github.Open, devctlFrom)
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix bug")
+	r.pull.Head = loopFixed
+	mergeAuthority = gateMergeHeadAuthority
+	g := &gateRun{app: r.a, ctx: t.Context(), repo: loopMergeRepo, pr: 7, lane: r.a.cfg.LaneOf(loopMergeRepo),
+		me: loopParty, pid: os.Getpid(), reviewedHead: loopFixed,
+		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7"}}
+	if why, err := g.reviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
+		t.Fatalf("reviewHold without a claim = %q, %v; want a refusal", why, err)
+	}
+	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	reviewGuard = func(context.Context, string, int) (string, error) {
+		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
+	}
+	if why, err := g.reviewHold(); err != nil || why != "" {
+		t.Fatalf("reviewHold with the loop's exact-head claim = %q, %v; want none", why, err)
 	}
 }

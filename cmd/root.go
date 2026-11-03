@@ -10,7 +10,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"text/tabwriter"
 	"time"
@@ -176,10 +175,6 @@ type app struct {
 	// in this process runs into: status and the watch say it while the
 	// command holds the machine's lock.
 	serveModeSwitchingTo map[string]string
-	// baseMerges caches readBaseMerge answers by pull request, approved
-	// head and head: two commits' relation does not change.
-	baseMergesMu sync.Mutex
-	baseMerges   map[string]bool
 }
 
 // requesterOrigin is a brokered request's working directory and the keys'

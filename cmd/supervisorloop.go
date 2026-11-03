@@ -43,9 +43,13 @@ var loopParty = state.Party{Name: "supervisor loop"}
 const loopStartVerb = "supervisor.loop"
 
 // loopClaimVerb logs an action the loop is about to take, before its side
-// effect; loopStageVerb a finished stage of a release.
+// effect; loopStageVerb a finished stage of a release. loopGoVerb logs a
+// merge go given to a worker, loopMergeVerb a merge the loop ran itself.
 const (
 	loopClaimVerb    = "supervisor.claim"
+	loopGoVerb       = "supervisor." + superloop.KindGo
+	loopMergeVerb    = "supervisor." + superloop.KindMerge
+	loopEndVerb      = "supervisor." + superloop.KindEnd
 	loopFileVerb     = "supervisor." + superloop.KindFile
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
@@ -1232,6 +1236,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if r, ok := parseRef(ref); ok {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
+		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
 		if p.State == superloop.Merged {
 			l.mu.Lock()
@@ -1573,36 +1578,24 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 // no: the new head gets its review.
 func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
 	key := p.Ref + " " + approved + " " + p.Head
-	ok, err := l.a.baseMerged(ctx, p, approved)
+	l.mu.Lock()
+	if ok, read := l.baseMerges[key]; read {
+		l.mu.Unlock()
+		return ok
+	}
+	l.mu.Unlock()
+	ok, err := readBaseMerge(ctx, p, approved)
 	if err != nil {
 		l.sayOnce("base merge "+key, "SUPERVISOR LOOP cannot tell whether %s's head only merges its base: %v", p.Ref, err)
 		return false
 	}
+	l.mu.Lock()
+	if l.baseMerges == nil {
+		l.baseMerges = map[string]bool{}
+	}
+	l.baseMerges[key] = ok
+	l.mu.Unlock()
 	return ok
-}
-
-// baseMerged reports whether p's head only merges its base into approved,
-// caching successful reads on the app so the loop and the merge gate share
-// them.
-func (a *app) baseMerged(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
-	key := p.Ref + " " + approved + " " + p.Head
-	a.baseMergesMu.Lock()
-	if ok, read := a.baseMerges[key]; read {
-		a.baseMergesMu.Unlock()
-		return ok, nil
-	}
-	a.baseMergesMu.Unlock()
-	ok, err := readBaseMerge(ctx, p, approved)
-	if err != nil {
-		return false, err
-	}
-	a.baseMergesMu.Lock()
-	if a.baseMerges == nil {
-		a.baseMerges = map[string]bool{}
-	}
-	a.baseMerges[key] = ok
-	a.baseMergesMu.Unlock()
-	return ok, nil
 }
 
 // changed lists the files p's head changes past the change of reviewed,
@@ -3380,7 +3373,10 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	blockStage := act.Key + " blocked"
-	if act.Block != "" && !l.stages[blockStage] && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+	l.mu.Lock()
+	blocked := l.stages[blockStage]
+	l.mu.Unlock()
+	if act.Block != "" && !blocked && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
 		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
 			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
 		}
@@ -3390,7 +3386,9 @@ func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act su
 		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
 			return "", err
 		}
+		l.mu.Lock()
 		l.stages[blockStage] = true
+		l.mu.Unlock()
 	}
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err

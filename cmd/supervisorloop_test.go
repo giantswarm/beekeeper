@@ -361,7 +361,7 @@ func (r *loopRig) passErr() error {
 
 // verdict has the round's reviewer post its verdict on head now.
 func (r *loopRig) verdict(id, head, verdict, body string) {
-	r.pull.Reviews = append(r.pull.Reviews, superloop.Review{ID: id, Head: head, Verdict: verdict, Body: body, At: time.Now()})
+	r.pull.Reviews = append(r.pull.Reviews, superloop.Review{ID: id, Author: loopDesk, Head: head, Verdict: verdict, Body: body, At: time.Now()})
 }
 
 // called is the call whose line starts with prefix.
@@ -3349,7 +3349,7 @@ func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	capOut, capCode := "no room", 1
+	capOut, capCode := "capacity full", 1
 	boardCalls := 0
 	r.answer = func(args []string) (string, int) {
 		if len(args) > 0 && args[0] == loopBoard {

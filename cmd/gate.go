@@ -1098,15 +1098,20 @@ func (g *gateRun) reviewHold() (string, error) {
 	return why, err
 }
 
+// headFlag is the flag naming a head: a commit to merge, a branch to open.
+const headFlag = "--head"
+
+// mergeTargetHead is the head the gated merge pins: --reviewed-head, else
+// the command's --head or --match-head-commit.
 func (g *gateRun) mergeTargetHead() string {
 	if g.reviewedHead != "" {
 		return g.reviewedHead
 	}
 	for i, arg := range g.argv {
-		if (arg == "--head" || arg == "--match-head-commit") && i+1 < len(g.argv) {
+		if (arg == headFlag || arg == "--match-head-commit") && i+1 < len(g.argv) {
 			return g.argv[i+1]
 		}
-		if v, ok := strings.CutPrefix(arg, "--head="); ok && v != "" {
+		if v, ok := strings.CutPrefix(arg, headFlag+"="); ok && v != "" {
 			return v
 		}
 		if v, ok := strings.CutPrefix(arg, "--match-head-commit="); ok && v != "" {
@@ -1150,7 +1155,7 @@ func (a *app) gateCaller(repo string, pr int, argv []string, queued bool) state.
 					byPID[s.PID] = s
 				}
 				envKeys := []string{
-					"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME",
+					orphanSessionEnv, "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME",
 					omp.EnvAgent, omp.EnvName,
 					agy.EnvAgent, agy.EnvName,
 					codex.EnvAgent, codex.EnvName,
@@ -1766,7 +1771,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		argv := []string{self, squashMergeCmd, g.repo, fmt.Sprint(g.pr), "--head", g.reviewedHead}
+		argv := []string{self, squashMergeCmd, g.repo, fmt.Sprint(g.pr), headFlag, g.reviewedHead}
 		if g.release != nil && g.release.Auto {
 			argv = append(argv, "--release-wait")
 		}

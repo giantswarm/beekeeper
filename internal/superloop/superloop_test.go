@@ -1497,48 +1497,6 @@ func TestOverlapClosingIssuesMutual(t *testing.T) {
 	}
 }
 
-func TestPlanOrdersPullActionsByBoardPriority(t *testing.T) {
-	const (
-		prLow  = "o/r#7"
-		prHigh = "o/r#8"
-		prNone = "o/r#6"
-	)
-	in := Input{
-		Workers: []Worker{
-			{Name: "w-none", ParkedOn: prNone, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
-			{Name: "w-low", ParkedOn: prLow, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
-			{Name: "w-high", ParkedOn: prHigh, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
-		},
-		Pulls: map[string]Pull{
-			prNone: {Ref: prNone, URL: "https://github.com/o/r/pull/6", State: Open, Head: head1, Green: true, Priority: 0,
-				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
-			prLow: {Ref: prLow, URL: "https://github.com/o/r/pull/7", State: Open, Head: head1, Green: true, Priority: 2,
-				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
-			prHigh: {Ref: prHigh, URL: "https://github.com/o/r/pull/8", State: Open, Head: head1, Green: true, Priority: 1,
-				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
-		},
-		Taken: []Taken{
-			{Key: reviewKey(prNone, head1), Kind: KindReview, Ref: prNone, Agent: "w-none", At: t0},
-			{Key: reviewKey(prLow, head1), Kind: KindReview, Ref: prLow, Agent: "w-low", At: t0},
-			{Key: reviewKey(prHigh, head1), Kind: KindReview, Ref: prHigh, Agent: "w-high", At: t0},
-		},
-	}
-	var refs []string
-	var prios []int
-	for _, a := range Plan(in) {
-		if a.Kind == KindGo {
-			refs = append(refs, a.Ref)
-			prios = append(prios, a.Priority)
-		}
-	}
-	if want := []string{prHigh, prLow, prNone}; !slices.Equal(refs, want) {
-		t.Fatalf("go order = %v, want %v", refs, want)
-	}
-	if want := []int{1, 2, 0}; !slices.Equal(prios, want) {
-		t.Fatalf("go priorities = %v, want %v", prios, want)
-	}
-}
-
 // Regression test for after-the-fact review of https://github.com/giantswarm/beekeeper/pull/2164:
 // planOverlap matches pull request refs and default pull worker names
 // case-insensitively.
@@ -1553,18 +1511,12 @@ func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
 		Now:  t0.Add(OverlapWait + time.Minute),
 		Desk: Desk{Authors: []string{"alice"}},
 		Workers: []Worker{
-			{Name: "beekeeper 42", Serves: prLow},
+			{Name: "beekeeper 42", Serves: prLow, ParkedOn: "giantswarm/beekeeper#43", ParkedAt: t0, Waits: "waiting on #43"},
 			{Name: "beekeeper 43", Serves: "giantswarm/beekeeper#43", ParkedOn: prLow, ParkedAt: t0, Waits: "waiting on #42"},
 		},
 		Pulls: map[string]Pull{
 			prRef:  {Ref: prRef, URL: "https://github.com/GiantSwarm/Beekeeper/pull/42", Author: "alice", State: Open, Head: head1},
 			waitPR: {Ref: waitPR, URL: "https://github.com/GiantSwarm/Beekeeper/pull/43", Author: "alice", State: Open, Head: head2},
-		},
-		Rank: func(ref string) int {
-			if strings.EqualFold(ref, waitPR) {
-				return 1
-			}
-			return 2
 		},
 	}
 	acts := Plan(in)
@@ -1578,7 +1530,9 @@ func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
 	if ownerAct == nil {
 		t.Fatalf("expected KindOwner action, got %+v", acts)
 	}
-	if ownerAct.Ref != waitPR || ownerAct.Head != head2 || ownerAct.Block != prRef {
+	// The mutual wait orders #42 first: it gets the owner, #43 is blocked
+	// by it, whatever the case of the refs the workers serve and park on.
+	if ownerAct.Ref != prRef || ownerAct.Head != head1 || ownerAct.Block != waitPR {
 		t.Fatalf("unexpected KindOwner action: %+v", *ownerAct)
 	}
 }

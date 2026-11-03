@@ -79,7 +79,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if request.Write && args[1] == workerGitHubCreate {
 					branch := execution.GitHubBranch(j.Handle.Ref)
 					for i, arg := range args {
-						if arg == "--head" || arg == "-H" {
+						if arg == headFlag || arg == "-H" {
 							if i+1 >= len(args) || args[i+1] != branch {
 								return refused("PR must use its execution branch")
 							}
@@ -88,7 +88,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 							return refused("PR must use its execution branch")
 						}
 					}
-					args = append(args, "--head", branch)
+					args = append(args, headFlag, branch)
 				}
 				binary = s.Config.Tools[execution.ToolGitHub].Executable
 			} else {

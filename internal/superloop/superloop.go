@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 // The kinds of action, each logged as "supervisor.<kind>".
@@ -1848,14 +1850,8 @@ func Verdict(state, body string) string {
 	case "CHANGES_REQUESTED":
 		return ChangesRequested
 	case stateCommented:
-		first, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
-		first = strings.ToLower(strings.TrimRight(strings.TrimSpace(first), ".!"))
-		switch {
-		case strings.HasSuffix(first, ": "+Approved):
-			return Approved
-		case strings.HasSuffix(first, ": "+ChangesRequested):
-			return ChangesRequested
-		}
+		// The review guard reads the same line: one parser keeps them alike.
+		return Verdict(github.DeskVerdict(body), "")
 	}
 	return ""
 }

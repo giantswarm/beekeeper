@@ -729,10 +729,11 @@ func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
 }
 
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
-// reviewedMerge refuses a head whose only desk review requested changes on an
-// older head and has no explicit exact-head supervisor go, even if a
-// supervisor.claim is present.
-func TestReviewedMergeRefusesChangesRequestedHeadWithoutSupervisorGo(t *testing.T) {
+// the loop's own exact-head merge claim is its go. A head that carries the
+// fixes of the last round's findings, which the planner sends to merge with
+// no further review, merges through reviewedMerge as it does through the
+// gate; a desk review requesting changes on that head refuses it.
+func TestReviewedMergeTakesTheLoopClaimAsItsExactHeadGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix planOverlap case matching")
 	r.pull.Head = loopFixed
@@ -740,14 +741,84 @@ func TestReviewedMergeRefusesChangesRequestedHeadWithoutSupervisorGo(t *testing.
 		t.Fatal(err)
 	}
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
+	if doc.ExitCode != 0 || len(r.cmds) != 1 {
+		t.Fatalf("fixes-only go with the loop's claim: %+v cmds=%v, want a merge", doc, r.cmds)
+	}
+	if doc.RequestedBy != "supervisor loop (for "+loopWorker+")" {
+		t.Fatalf("RequestedBy = %q", doc.RequestedBy)
+	}
+
+	r = newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix planOverlap case matching")
+	r.pull.Head = loopFixed
+	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	r.verdict("R2", loopFixed, superloop.ChangesRequested, "Review: changes requested\n\nstill broken")
+	doc = r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
 	if doc.ExitCode != github.SquashRefused || len(r.cmds) != 0 {
-		t.Fatalf("expected refusal with no merge command, got %+v cmds=%v", doc, r.cmds)
+		t.Fatalf("changes requested on the claimed head: %+v cmds=%v, want a refusal", doc, r.cmds)
 	}
 	if !strings.Contains(doc.Reason, "no approved desk review") || !strings.Contains(doc.Reason, "no supervisor go") {
 		t.Fatalf("unexpected refusal reason: %q", doc.Reason)
 	}
-	if doc.RequestedBy != "supervisor loop (for "+loopWorker+")" {
-		t.Fatalf("RequestedBy = %q", doc.RequestedBy)
+}
+
+// Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
+// a verdict counts only from the desk's login or the repository's members:
+// an outsider's "Review: approved" authorizes nothing, and an outsider's
+// "Review: changes requested" holds nothing.
+func TestMergeHeadAuthorityTrustsOnlyDeskAndMemberVerdicts(t *testing.T) {
+	r := newLoopRig(t)
+	p := superloop.Pull{Ref: loopPR, Head: loopFixed, Reviews: []superloop.Review{
+		{ID: "R1", Author: "mallory", Head: loopFixed, Verdict: superloop.Approved, Body: "Review: approved", At: time.Now()},
+	}}
+	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || !strings.Contains(why, "no approved desk review") {
+		t.Fatalf("outsider approval: %q, %v; want a refusal", why, err)
+	}
+	p.Reviews[0].Member = true
+	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || why != "" {
+		t.Fatalf("member approval: %q, %v; want authorized", why, err)
+	}
+	p.Reviews = []superloop.Review{
+		{ID: "R1", Author: loopDesk, Head: loopFixed, Verdict: superloop.Approved, Body: "Review: approved", At: time.Now().Add(-time.Minute)},
+		{ID: "R2", Author: "mallory", Head: loopFixed, Verdict: superloop.ChangesRequested, Body: "Review: changes requested", At: time.Now()},
+	}
+	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || why != "" {
+		t.Fatalf("desk approval past an outsider's changes requested: %q, %v; want authorized", why, err)
+	}
+}
+
+// Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
+// an issued execution merge grant names its head after " at ", behind a
+// grant id whose first group is hex too; the grant is logged without a
+// subject and counts as the exact-head go of the pull request its URL names.
+func TestMergeHeadAuthorityReadsTheHeadOfAnIssuedGrant(t *testing.T) {
+	const grant = "7a6aca80-a22d-4a36-b60a-182367592c4c"
+	for text, want := range map[string]string{
+		grant + " for https://github.com/o/r/pull/7 at " + loopFixed:                    loopFixed,
+		"https://github.com/o/r/pull/7 at " + loopFixed + ": supervisor go checked":     loopFixed,
+		"Merge https://github.com/o/r/pull/7 at head 1a2b3c4d5 without a third review?": "1a2b3c4d5",
+		"20261103T101500Z at noon":            "",
+		"answered at 20261103T101500Z":        "",
+		grant + " for https://github.com/o/r": "",
+	} {
+		if got := headAfterAt(text); got != want {
+			t.Errorf("headAfterAt(%q) = %q, want %q", text, got, want)
+		}
+	}
+
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix handler")
+	p := r.pull
+	p.Head = loopFixed
+	ref, _ := parseRef(loopPR)
+	if err := r.a.store.Record(event(loopParty, "execution.merge-issued", "%s for https://github.com/%s/pull/%d at %s", grant, ref.Repo, ref.N, loopFixed)); err != nil {
+		t.Fatal(err)
+	}
+	why, explicit, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed)
+	if err != nil || why != "" || !explicit {
+		t.Fatalf("issued grant: %q, %v, %v; want an explicit go", why, explicit, err)
 	}
 }
 
