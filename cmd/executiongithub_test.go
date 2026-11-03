@@ -53,6 +53,16 @@ func workerGitHubTestApp(t *testing.T) (*app, execution.StartRequest) {
 	return a, r
 }
 
+func writeTestOAuthToken(w http.ResponseWriter, access, refresh string) {
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // synthetic OAuth response in unit test server
+		"access_token":                access,
+		"token_type":                  "bearer",
+		"expires_in":                  28800,
+		workerGitHubRefreshTokenField: refresh,
+	})
+}
+
 func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
 	rotations := 0
@@ -66,7 +76,7 @@ func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 		if err := req.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
-		if req.Form.Get("client_id") != workerGitHubClientIDFixture || req.Form.Get("grant_type") != "refresh_token" || req.Form.Get("refresh_token") != wantRefresh {
+		if req.Form.Get(workerGitHubClientIDField) != workerGitHubClientIDFixture || req.Form.Get("grant_type") != workerGitHubRefreshTokenField || req.Form.Get(workerGitHubRefreshTokenField) != wantRefresh {
 			t.Errorf("unexpected refresh form: %v (want refresh_token %s)", req.Form, wantRefresh)
 		}
 		rotations++
@@ -75,13 +85,7 @@ func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 		if rotations > 1 {
 			tok = workerTokenFixture + "-" + strconv.Itoa(rotations)
 		}
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token":  tok,
-			"token_type":    "bearer",
-			"expires_in":    28800,
-			"refresh_token": wantRefresh,
-		})
+		writeTestOAuthToken(w, tok, wantRefresh)
 	}))
 	defer server.Close()
 	prevWeb, prevAPI := githubWeb, githubAPI
@@ -169,23 +173,13 @@ func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(map[string]any{"error": "authorization_pending"})
 					return
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"access_token":  workerTokenFixture,
-					"token_type":    "bearer",
-					"expires_in":    28800,
-					"refresh_token": "ghr_from_device_flow",
-				})
+				writeTestOAuthToken(w, workerTokenFixture, "ghr_from_device_flow")
 				return
 			}
-			if req.Form.Get("refresh_token") != "ghr_from_device_flow" {
-				t.Errorf("unexpected SOPS refresh token: %q", req.Form.Get("refresh_token"))
+			if req.Form.Get(workerGitHubRefreshTokenField) != "ghr_from_device_flow" {
+				t.Errorf("unexpected SOPS refresh token: %q", req.Form.Get(workerGitHubRefreshTokenField))
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"access_token":  workerTokenFixture + "-rotated",
-				"token_type":    "bearer",
-				"expires_in":    28800,
-				"refresh_token": "ghr_rotated_sops",
-			})
+			writeTestOAuthToken(w, workerTokenFixture+"-rotated", "ghr_rotated_sops")
 		case "/user":
 			if req.Header.Get("Authorization") != "Bearer "+workerTokenFixture {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -319,13 +313,7 @@ func TestWorkerGitHubExpiredLeaseRevokesWithoutHostContact(t *testing.T) {
 			t.Error("unexpected revocation request")
 		}
 		revoked++
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token":  workerTokenFixture + "-rotated",
-			"token_type":    "bearer",
-			"expires_in":    28800,
-			"refresh_token": "ghr_rotated_after_lease",
-		})
+		writeTestOAuthToken(w, workerTokenFixture+"-rotated", "ghr_rotated_after_lease")
 	}))
 	defer server.Close()
 	prevWeb, prevAPI := githubWeb, githubAPI

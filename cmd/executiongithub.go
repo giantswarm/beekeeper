@@ -55,11 +55,13 @@ const (
 )
 
 const (
-	workerGitHubOAuthTokenPath = "/login/oauth/access_token" //nolint:gosec // G101: GitHub OAuth endpoint path, not a credential
-	workerGitHubDeviceCodePath = "/login/device/code"
-	workerGitHubDeviceGrant    = "urn:ietf:params:oauth:grant-type:device_code"
-	workerGitHubCurrentKey     = "current"
-	workerGitHubReadSuffix     = "/read"
+	workerGitHubOAuthTokenPath    = "/login/oauth/access_token" //nolint:gosec // G101: GitHub OAuth endpoint path, not a credential
+	workerGitHubDeviceCodePath    = "/login/device/code"
+	workerGitHubDeviceGrant       = "urn:ietf:params:oauth:grant-type:device_code"
+	workerGitHubClientIDField     = "client_id"
+	workerGitHubRefreshTokenField = "refresh_token"
+	workerGitHubCurrentKey        = "current"
+	workerGitHubReadSuffix        = "/read"
 )
 
 var workerGitHubPollSleep = func(ctx context.Context, d time.Duration) error {
@@ -337,7 +339,7 @@ func (a *app) revokeWorkerGitHub(ctx context.Context, ref execution.Ref) error {
 // user-to-server access token at GitHub without holding the App client secret.
 func (a *app) revokeWorkerGitHubToken(ctx context.Context, token string) error {
 	oauthPath := a.workerGitHubOAuthPath()
-	if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil { //nolint:gosec // operator-owned coordinator state directory
 		return err
 	}
 	lock := flock.New(oauthPath + ".lock")
@@ -360,7 +362,7 @@ func (a *app) revokeWorkerGitHubToken(ctx context.Context, token string) error {
 
 func (a *app) mintWorkerGitHub(ctx context.Context, _ workerGitHubRequest) (workerGitHubToken, error) {
 	oauthPath := a.workerGitHubOAuthPath()
-	if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil { //nolint:gosec // operator-owned coordinator state directory
 		return workerGitHubToken{}, err
 	}
 	lock := flock.New(oauthPath + ".lock")
@@ -402,9 +404,9 @@ func (a *app) refreshWorkerGitHubToken(ctx context.Context, oauthPath string) (w
 			return errors.New("empty worker GitHub refresh token")
 		}
 		resp, err := githubSend(ctx, http.MethodPost, githubWeb+workerGitHubOAuthTokenPath, "application/json", "", url.Values{
-			"client_id":     {w.ClientID},
-			"grant_type":    {"refresh_token"},
-			"refresh_token": {refreshToken},
+			workerGitHubClientIDField:     {w.ClientID},
+			"grant_type":                  {workerGitHubRefreshTokenField},
+			workerGitHubRefreshTokenField: {refreshToken},
 		})
 		if err != nil {
 			return errors.New("worker GitHub token transport failed")
@@ -484,7 +486,7 @@ func (a *app) authorizeWorkerGitHub(ctx context.Context, clientID, refreshRef st
 	if err != nil || !ref.Single() {
 		return usageErr("invalid github.workerApp.refreshToken reference")
 	}
-	resp, err := githubSend(ctx, http.MethodPost, githubWeb+workerGitHubDeviceCodePath, "application/json", "", url.Values{"client_id": {w.ClientID}})
+	resp, err := githubSend(ctx, http.MethodPost, githubWeb+workerGitHubDeviceCodePath, "application/json", "", url.Values{workerGitHubClientIDField: {w.ClientID}})
 	if err != nil {
 		return fmt.Errorf("requesting GitHub device code: %w", err)
 	}
@@ -524,9 +526,9 @@ func (a *app) authorizeWorkerGitHub(ctx context.Context, clientID, refreshRef st
 			return err
 		}
 		pollResp, err := githubSend(ctx, http.MethodPost, githubWeb+workerGitHubOAuthTokenPath, "application/json", "", url.Values{
-			"client_id":   {w.ClientID},
-			"device_code": {dc.DeviceCode},
-			"grant_type":  {workerGitHubDeviceGrant},
+			workerGitHubClientIDField: {w.ClientID},
+			"device_code":             {dc.DeviceCode},
+			"grant_type":              {workerGitHubDeviceGrant},
 		})
 		if err != nil {
 			return fmt.Errorf("polling GitHub device flow: %w", err)
@@ -564,7 +566,7 @@ func (a *app) authorizeWorkerGitHub(ctx context.Context, clientID, refreshRef st
 			return err
 		}
 		oauthPath := a.workerGitHubOAuthPath()
-		if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil { //nolint:gosec // operator-owned coordinator state directory
 			return err
 		}
 		if err := writeWorkerGitHub(oauthPath, map[string]workerGitHubToken{workerGitHubCurrentKey: {Token: tok.AccessToken, Expires: expires}}); err != nil {
