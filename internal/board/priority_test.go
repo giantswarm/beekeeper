@@ -533,4 +533,3 @@ func TestRankOfResolvesEpicSubIssueAndClosingPullRequest(t *testing.T) {
 		t.Fatalf("RankOf(unranked o/r#55) = %d, %v; want 0", got, err)
 	}
 }
-

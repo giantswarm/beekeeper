@@ -94,10 +94,12 @@ func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
 // openIssue and closedIssue are an issue's state as fakeDeps keeps it,
 // pr7 a pull request.
 const (
-	openIssue   = `{"state":"OPEN"}`
-	closedIssue = `{"state":"CLOSED"}`
-	pr7         = "o/r#7"
-	repoR       = "o/r"
+	openIssue      = `{"state":"OPEN"}`
+	closedIssue    = `{"state":"CLOSED"}`
+	pr7            = "o/r#7"
+	repoR          = "o/r"
+	issueQ3        = "o/q#3"
+	addBlockedR5Q3 = "addBlockedBy r#5 q#3"
 )
 
 func newFakeDeps(t *testing.T) *fakeDeps {
@@ -116,8 +118,8 @@ func TestBlockResolvesPullRequestsToClosingIssues(t *testing.T) {
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7}}
 	ctx := context.Background()
 	h, err := c.Block(ctx, "o/r#15", "o/q#13")
-	if err != nil || *h != (Held{Ref: issue5, By: "o/q#3", ByOpen: true, Changed: true, Blockers: 1, OpenBlockers: 1}) ||
-		!slices.Equal(f.mutations, []string{"addBlockedBy r#5 q#3"}) {
+	if err != nil || *h != (Held{Ref: issue5, By: issueQ3, ByOpen: true, Changed: true, Blockers: 1, OpenBlockers: 1}) ||
+		!slices.Equal(f.mutations, []string{addBlockedR5Q3}) {
 		t.Fatalf("Block(PR, PR) = %+v, %v; mutations %v", h, err, f.mutations)
 	}
 }

@@ -780,4 +780,3 @@ func (c *Client) RankOf(ctx context.Context, ref string) (int, error) {
 	}
 	return 0, nil
 }
-

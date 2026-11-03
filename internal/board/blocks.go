@@ -194,12 +194,12 @@ func (c *Client) depNode(ctx context.Context, owner, repo string, n int, extra s
 // closes one; a pull request that closes none stays a pull request so notIssue
 // refuses it.
 func closingIssue(x resolved, ref string) (resolved, string) {
-	if x.node == nil || x.node.Type != "PullRequest" || len(x.node.Closing.Nodes) == 0 || x.node.Closing.Nodes[0] == nil {
+	if x.node == nil || x.node.Type != github.RefPullRequest || len(x.node.Closing.Nodes) == 0 || x.node.Closing.Nodes[0] == nil {
 		return x, ref
 	}
 	c := *x.node.Closing.Nodes[0]
 	if c.Type == "" {
-		c.Type = "Issue"
+		c.Type = github.RefIssue
 	}
 	x.node = &c
 	if c.Repository.NameWithOwner != "" && c.Number > 0 {
@@ -215,9 +215,9 @@ func notIssue(x resolved, ref, rule string) string {
 	switch {
 	case x.node == nil:
 		return ref + " is no issue" + x.partial.reason()
-	case x.node.Type == "PullRequest":
+	case x.node.Type == github.RefPullRequest:
 		return ref + " is a pull request: " + rule
-	case x.node.Type != "Issue" || x.node.ID == "":
+	case x.node.Type != github.RefIssue || x.node.ID == "":
 		return ref + " is no issue"
 	}
 	return ""

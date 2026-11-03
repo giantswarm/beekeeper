@@ -1334,30 +1334,36 @@ func TestTwoMergedPullsDoNotRetireTheWorkerOfAThird(t *testing.T) {
 	}
 }
 
+const (
+	overlapPRB    = "o/r#8"
+	overlapPRBURL = "https://github.com/o/r/pull/8"
+	overlapPRA    = "o/r#5"
+	overlapWaiter = "worker A"
+	overlapOwnerB = "r 8"
+)
+
 func TestWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
-	const prB = "o/r#8"
-	const prBURL = "https://github.com/o/r/pull/8"
 	workers := []Worker{{
-		Name:     "worker A",
-		Serves:   "o/r#5",
-		ParkedOn: prB,
+		Name:     overlapWaiter,
+		Serves:   overlapPRA,
+		ParkedOn: overlapPRB,
 		ParkedAt: t0,
-		Waits:    "overlap with o/r#8",
+		Waits:    "waiting on overlapping pull request",
 		Started:  true,
 	}}
-	if got := Tracked(workers, nil, nil, Desk{}); !slices.Equal(got, []string{prB}) {
-		t.Fatalf("Tracked = %v, want [%s]", got, prB)
+	if got := Tracked(workers, nil, nil, Desk{}); !slices.Equal(got, []string{overlapPRB}) {
+		t.Fatalf("Tracked = %v, want [%s]", got, overlapPRB)
 	}
 	in := Input{
 		Workers: workers,
 		Now:     t0.Add(time.Minute),
 		Pulls: map[string]Pull{
-			prB: {Ref: prB, URL: prBURL, State: Open, Head: head1, Green: true},
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, State: Open, Head: head1, Green: true},
 		},
 	}
 	act := only(t, Plan(in), KindOwner)
-	if act.Ref != prB || act.Agent != "r 8" || act.Block != "o/r#5" || act.Head != head1 {
-		t.Fatalf("owner action = %+v, want Ref=%s Agent=r 8 Block=o/r#5 Head=%s", act, prB, head1)
+	if act.Ref != overlapPRB || act.Agent != overlapOwnerB || act.Block != overlapPRA || act.Head != head1 {
+		t.Fatalf("owner action = %+v, want Ref=%s Agent=%s Block=%s Head=%s", act, overlapPRB, overlapOwnerB, overlapPRA, head1)
 	}
 	// Once taken, the same head and park do not start a second owner.
 	in.Taken = taken(t, t1, act)
@@ -1367,22 +1373,20 @@ func TestWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 }
 
 func TestOverlapWaitEscalatesAfter30MinutesOfNoProgress(t *testing.T) {
-	const prB = "o/r#8"
-	const prBURL = "https://github.com/o/r/pull/8"
 	workers := []Worker{
 		{
-			Name:            "r 8",
-			ParkedOn:        prB,
+			Name:            overlapOwnerB,
+			ParkedOn:        overlapPRB,
 			ParkedAt:        t0,
 			ReviewRequested: true,
 			ParkedHead:      head1,
 		},
 		{
-			Name:     "worker A",
-			Serves:   "o/r#5",
-			ParkedOn: prB,
+			Name:     overlapWaiter,
+			Serves:   overlapPRA,
+			ParkedOn: overlapPRB,
 			ParkedAt: t0.Add(time.Minute),
-			Waits:    "overlap with o/r#8",
+			Waits:    "waiting on stalled overlap",
 			Started:  true,
 		},
 	}
@@ -1391,7 +1395,7 @@ func TestOverlapWaitEscalatesAfter30MinutesOfNoProgress(t *testing.T) {
 		Workers: workers,
 		Now:     t0.Add(15 * time.Minute),
 		Pulls: map[string]Pull{
-			prB: {Ref: prB, URL: prBURL, State: Open, Head: head1, Green: false},
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, State: Open, Head: head1, Green: false},
 		},
 	}
 	if got := Plan(in); len(got) != 0 {
@@ -1401,27 +1405,25 @@ func TestOverlapWaitEscalatesAfter30MinutesOfNoProgress(t *testing.T) {
 	// which gives PR B an owner.
 	in.Now = t0.Add(time.Minute + OverlapWait)
 	act := only(t, Plan(in), KindOwner)
-	if act.Ref != prB || act.Agent != "r 8" || act.Block != "o/r#5" || !strings.Contains(act.Message, "no progress") {
+	if act.Ref != overlapPRB || act.Agent != overlapOwnerB || act.Block != overlapPRA || !strings.Contains(act.Message, "no progress") {
 		t.Fatalf("after 30m: got %+v", act)
 	}
 }
 
 func TestOverlappingPullsOrderedByBoardRankGivesFirstALiveOwner(t *testing.T) {
-	const prA, prB = "o/r#5", "o/r#8"
-	const prBURL = "https://github.com/o/r/pull/8"
 	workers := []Worker{
 		{
-			Name:     "worker A",
-			Serves:   prA,
-			ParkedOn: prB,
+			Name:     overlapWaiter,
+			Serves:   overlapPRA,
+			ParkedOn: overlapPRB,
 			ParkedAt: t0,
 			Waits:    "overlap with o/r#8",
 			Started:  true,
 		},
 		{
 			Name:     "worker B",
-			Serves:   prB,
-			ParkedOn: prA,
+			Serves:   overlapPRB,
+			ParkedOn: overlapPRA,
 			ParkedAt: t0,
 			Waits:    "overlap with o/r#5",
 			Started:  true,
@@ -1432,23 +1434,22 @@ func TestOverlappingPullsOrderedByBoardRankGivesFirstALiveOwner(t *testing.T) {
 		Now:     t0.Add(time.Minute),
 		Rank: func(ref string) int {
 			switch ref {
-			case prA:
+			case overlapPRA:
 				return 1
-			case prB:
+			case overlapPRB:
 				return 2
 			}
 			return 0
 		},
 		Pulls: map[string]Pull{
-			prA: {Ref: prA, URL: "https://github.com/o/r/pull/5", State: Open, Head: head1, Green: true},
-			prB: {Ref: prB, URL: prBURL, State: Open, Head: head2, Green: true},
+			overlapPRA: {Ref: overlapPRA, URL: "https://github.com/o/r/pull/5", State: Open, Head: head1, Green: true},
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, State: Open, Head: head2, Green: true},
 		},
 	}
-	// prA ranks ahead of prB (rank 1 vs 2): worker A is woken to own prA first,
-	// and prB is recorded blocked by prA.
+	// overlapPRA ranks ahead of overlapPRB (rank 1 vs 2): worker A is woken to own
+	// overlapPRA first, and overlapPRB is recorded blocked by overlapPRA.
 	act := only(t, Plan(in), KindOwner)
-	if act.Ref != prA || act.Block != prB || act.Agent != "worker A" {
-		t.Fatalf("ranked overlap action = %+v, want Ref=%s Block=%s Agent=worker A", act, prA, prB)
+	if act.Ref != overlapPRA || act.Block != overlapPRB || act.Agent != overlapWaiter {
+		t.Fatalf("ranked overlap action = %+v, want Ref=%s Block=%s Agent=%s", act, overlapPRA, overlapPRB, overlapWaiter)
 	}
 }
-
