@@ -34,6 +34,9 @@ type Turn struct {
 	Tool   string    `json:"tool,omitempty"`
 	Text   string    `json:"text"`
 	Result string    `json:"result,omitempty"`
+	// Phase is a Codex assistant message's phase ("commentary",
+	// "final_answer"), empty where the harness names none.
+	Phase string `json:"phase,omitempty"`
 }
 
 // Meta is the persisted metadata of one session's transcript in the store.
@@ -429,7 +432,9 @@ func (s Store) IngestFile(meta Meta, path string) (Meta, bool, error) {
 
 // AppendRemoteLog appends a page of an SSH execution's stream log (after
 // redacting secret values), reparses the accumulated stream with any prompt
-// turns from the execution record, and updates the stored transcript.
+// turns from the execution record, and updates the stored transcript. The
+// chunk ends at a record boundary: redaction matches whole records only, so
+// a secret split across two chunks would reach the raw stream unmasked.
 func (s Store) AppendRemoteLog(meta Meta, chunk []byte, nextCursor string, prompts []Turn) (Meta, error) {
 	if s.Root == "" {
 		return Meta{}, errors.New("transcript store root is empty")

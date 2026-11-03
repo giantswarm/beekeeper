@@ -266,3 +266,21 @@ func TestAccessControl(t *testing.T) {
 		t.Fatalf("worker expired Filter = %d, want 2", len(gotExpired))
 	}
 }
+
+func TestCodexNativeKeepsCommentary(t *testing.T) {
+	lines := strings.Join([]string{
+		`{"timestamp":"2026-10-05T11:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the release flow"}]}}`,
+		`{"timestamp":"2026-10-05T11:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Keeping the old flag because the promotion depends on it."}]}}`,
+		`{"timestamp":"2026-10-05T11:00:05Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Release flow fixed."}]}}`,
+	}, "\n") + "\n"
+	p := parseCodex(strings.NewReader(lines))
+	if len(p.Turns) != 3 {
+		t.Fatalf("turns = %+v, want user, commentary and final answer", p.Turns)
+	}
+	if c := p.Turns[1]; c.Role != RoleAssistant || c.Phase != "commentary" || !strings.Contains(c.Text, "Keeping the old flag") {
+		t.Fatalf("commentary turn = %+v", c)
+	}
+	if f := p.Turns[2]; f.Phase != "final_answer" || f.Text != "Release flow fixed." {
+		t.Fatalf("final turn = %+v", f)
+	}
+}

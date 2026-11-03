@@ -172,7 +172,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.syncAllTranscripts(ctx, st, false)
+	_ = a.syncAllTranscripts(ctx, st, false) // queries read the stored transcripts; transcripts sync reports a refresh failure
 	remoteMeta, prompts := a.executionTranscriptMeta(st, st.Starts[2], st.Starts[2].Execution)
 	remoteLog := `{"step_index":1,"type":"PLANNER_RESPONSE","created_at":"2026-11-03T09:45:00Z","content":"Remote Agy worker finished verification."}` + "\n"
 	if _, err := a.transcriptStore().AppendRemoteLog(remoteMeta, []byte(remoteLog), "120", prompts); err != nil {

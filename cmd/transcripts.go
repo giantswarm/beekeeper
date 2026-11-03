@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -466,16 +469,16 @@ func (a *app) transcriptsSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			a.syncAllTranscripts(cmd.Context(), st, true)
+			syncErr := a.syncAllTranscripts(cmd.Context(), st, true)
 			metas, err := a.transcriptStore().List()
 			if err != nil {
-				return err
+				return errors.Join(syncErr, err)
 			}
 			if a.json {
-				return a.printJSON(metas)
+				return errors.Join(a.printJSON(metas), syncErr)
 			}
 			_, err = fmt.Fprintf(a.out, "synced %d transcript(s) in %s\n", len(metas), a.transcriptStore().Root)
-			return err
+			return errors.Join(err, syncErr)
 		},
 	}
 }
@@ -538,7 +541,7 @@ func (a *app) listTranscriptsLocal(ctx context.Context, req remoteTranscriptList
 	if err != nil {
 		return nil, err
 	}
-	a.syncAllTranscripts(ctx, st, false)
+	_ = a.syncAllTranscripts(ctx, st, false) // queries read the stored transcripts; transcripts sync reports a refresh failure
 	caller, _ := a.resolveTranscriptCaller(st)
 	return a.listTranscriptsForCaller(st, caller, req)
 }
@@ -570,7 +573,7 @@ func (a *app) searchTranscriptsLocal(ctx context.Context, req remoteTranscriptSe
 	if err != nil {
 		return nil, err
 	}
-	a.syncAllTranscripts(ctx, st, false)
+	_ = a.syncAllTranscripts(ctx, st, false) // queries read the stored transcripts; transcripts sync reports a refresh failure
 	caller, _ := a.resolveTranscriptCaller(st)
 	return a.searchTranscriptsForCaller(st, caller, req)
 }
@@ -615,7 +618,7 @@ func (a *app) readTranscriptLocal(ctx context.Context, req remoteTranscriptReadR
 	if err != nil {
 		return remoteTranscriptReadResp{}, err
 	}
-	a.syncAllTranscripts(ctx, st, false)
+	_ = a.syncAllTranscripts(ctx, st, false) // queries read the stored transcripts; transcripts sync reports a refresh failure
 	caller, _ := a.resolveTranscriptCaller(st)
 	return a.readTranscriptForCaller(ctx, st, caller, req)
 }
@@ -644,7 +647,9 @@ func (a *app) readTranscriptForCaller(ctx context.Context, st *state.State, call
 	if m.Execution != "" {
 		for _, s := range st.Starts {
 			if s.Execution != nil && string(s.Execution.Handle.Ref.Execution) == m.Execution {
-				_ = a.pullExecutionTranscript(ctx, st, s, s.Execution)
+				// A failed pull leaves the stored transcript to read; the
+				// host reconciliation keeps collecting a pending one.
+				_ = a.collectExecutionTranscript(ctx, st, s, s.Execution)
 				if updated, ok, _ := store.ReadMeta(m.Key); ok {
 					m = updated
 				}
@@ -814,9 +819,9 @@ var issueRefInText = issueRef
 // syncAllTranscripts ingests local transcripts across all harnesses and
 // records metadata (and optional incremental remote log pages) for SSH
 // executions.
-func (a *app) syncAllTranscripts(ctx context.Context, st *state.State, pullRemote bool) {
+func (a *app) syncAllTranscripts(ctx context.Context, st *state.State, pullRemote bool) error {
 	a.syncLocalTranscripts(st)
-	a.syncRemoteTranscripts(ctx, st, pullRemote)
+	return a.syncRemoteTranscripts(ctx, st, pullRemote)
 }
 
 func (a *app) syncLocalTranscripts(st *state.State) {
@@ -1124,70 +1129,172 @@ func (a *app) executionTranscriptMeta(st *state.State, start state.Start, r *sta
 	return meta, prompts
 }
 
-func (a *app) syncRemoteTranscripts(ctx context.Context, st *state.State, pullLogs bool) {
+// syncRemoteTranscripts records each SSH execution's transcript metadata
+// and, with pullLogs, collects its stream log. It returns every failure to
+// collect or persist one; the caller says whether that fails it.
+func (a *app) syncRemoteTranscripts(ctx context.Context, st *state.State, pullLogs bool) error {
 	store := a.transcriptStore()
+	var errs []error
 	for _, s := range st.Starts {
 		if s.Execution == nil {
 			continue
 		}
 		r := s.Execution
 		if pullLogs {
-			if err := a.pullExecutionTranscript(ctx, st, s, r); err == nil {
+			err := a.collectExecutionTranscript(ctx, st, s, r)
+			if err == nil {
 				continue
 			}
+			errs = append(errs, fmt.Errorf("transcript of execution %s not collected: %w", r.Handle.Ref.Execution, err))
 		}
 		meta, prompts := a.executionTranscriptMeta(st, s, r)
+		var err error
 		if prev, ok, _ := store.ReadMeta(meta.Key); ok && prev.Turns > 0 {
-			_, _ = store.UpdateMeta(meta)
+			_, err = store.UpdateMeta(meta)
 		} else {
-			_, _ = store.AppendRemoteLog(meta, nil, "", prompts)
+			_, err = store.AppendRemoteLog(meta, nil, "", prompts)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("transcript of execution %s not stored: %w", r.Handle.Ref.Execution, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
-func (a *app) pullExecutionTranscript(ctx context.Context, st *state.State, start state.Start, r *state.ExecutionRecord) error {
+// A transcript pull reads pages of transcriptPageLimit bytes. It stops after
+// transcriptPullPages pages once it holds a complete record, and persists
+// only through the last complete record: a secret split across two pages is
+// redacted whole on a later pull, never written in two unmatched fragments.
+// A single record longer than transcriptMaxRecord is persisted as it stands.
+const (
+	transcriptPageLimit = 256 << 10
+	transcriptPullPages = 4
+	transcriptMaxRecord = 64 << 20
+)
+
+// executionTranscriptPending says r ended but its stream log is not yet
+// collected to EOF: the host reconciliation keeps pulling it after the
+// execution settled.
+func executionTranscriptPending(r *state.ExecutionRecord) bool {
+	return r != nil && !r.Released() && r.Terminal() && !r.TranscriptCollected
+}
+
+// collectExecutionTranscript pulls r's stream log and, once a terminal
+// execution's log is persisted to EOF, records it collected.
+func (a *app) collectExecutionTranscript(ctx context.Context, st *state.State, start state.Start, r *state.ExecutionRecord) error {
+	done, err := a.pullExecutionTranscript(ctx, st, start, r)
+	if err != nil || !done || r.TranscriptCollected {
+		return err
+	}
+	return a.store.Update(func(current *state.State) ([]state.Event, error) {
+		if rec, _ := executionRecord(current, r.Handle.Ref); rec != nil && rec.Terminal() {
+			rec.TranscriptCollected = true
+		}
+		return nil, nil
+	})
+}
+
+// pullExecutionTranscript persists the next complete records of r's stream
+// log and says whether the log of a terminal execution is persisted to EOF.
+func (a *app) pullExecutionTranscript(ctx context.Context, st *state.State, start state.Start, r *state.ExecutionRecord) (bool, error) {
 	if r == nil {
-		return nil
+		return true, nil
 	}
 	h, err := a.executionHost(r.Selector)
 	if err != nil {
-		return err
+		return false, err
 	}
 	store := a.transcriptStore()
 	meta, prompts := a.executionTranscriptMeta(st, start, r)
-	prev, _, _ := store.ReadMeta(meta.Key)
-	cursor := prev.RemoteCursor
+	prev, _, err := store.ReadMeta(meta.Key)
+	if err != nil {
+		return false, err
+	}
+	// The record's terminal state is read before the log: a log read to EOF
+	// after the process ended holds every record it will ever hold.
+	terminal := r.Terminal()
+	base, err := strconv.ParseInt(cmp.Or(prev.RemoteCursor, "0"), 10, 64)
+	if err != nil || base < 0 {
+		return false, fmt.Errorf("transcript cursor %q of %s is no byte offset", prev.RemoteCursor, meta.Key)
+	}
 	client := a.executionClient(h)
-	pulled := false
-	for range 4 {
-		page, err := client.Logs(ctx, r.Handle.Ref, execution.LogRequest{After: cursor, Limit: 256 << 10})
+	var buf []byte
+	after := strconv.FormatInt(base, 10)
+	eof := false
+	var pullErr error
+	for pages := 1; ; pages++ {
+		page, err := client.Logs(ctx, r.Handle.Ref, execution.LogRequest{After: after, Limit: transcriptPageLimit})
 		if err != nil {
-			if !pulled {
-				_, _ = store.AppendRemoteLog(meta, nil, cursor, prompts)
-			}
-			return err
-		}
-		pulled = true
-		next := cmp.Or(page.Next, cursor)
-		_, _ = store.AppendRemoteLog(meta, page.Data, next, prompts)
-		if !page.Truncated || next == cursor || len(page.Data) == 0 {
+			pullErr = err
 			break
 		}
-		cursor = next
+		buf = append(buf, page.Data...)
+		if !page.Truncated {
+			eof = true
+			break
+		}
+		next := cmp.Or(page.Next, after)
+		if next == after || len(page.Data) == 0 {
+			pullErr = fmt.Errorf("execution %s log stalled at %s", r.Handle.Ref.Execution, after)
+			break
+		}
+		after = next
+		if (pages >= transcriptPullPages && bytes.IndexByte(buf, '\n') >= 0) || len(buf) >= transcriptMaxRecord {
+			break
+		}
 	}
-	return nil
+	cut := bytes.LastIndexByte(buf, '\n') + 1
+	if (eof && terminal) || (cut == 0 && len(buf) >= transcriptMaxRecord) {
+		cut = len(buf)
+	}
+	if _, err := store.AppendRemoteLog(meta, buf[:cut], strconv.FormatInt(base+int64(cut), 10), prompts); err != nil {
+		return false, errors.Join(pullErr, err)
+	}
+	if errors.Is(pullErr, execution.ErrNotFound) && terminal {
+		// The host holds no journal of the ended execution: nothing more
+		// to collect.
+		return true, nil
+	}
+	if pullErr != nil {
+		return false, pullErr
+	}
+	return eof && terminal, nil
 }
 
-func (a *app) syncRemoteExecutionTranscriptByRef(ctx context.Context, ref execution.Ref) {
+// syncRemoteExecutionTranscriptByRef collects the transcript of the
+// execution ref and records the outcome on its record: a failure is an
+// execution.transcript-unsaved event once, and kept until a pull succeeds.
+// It returns the failure, which costs the host's reconciliation nothing
+// unless the host is unreachable.
+func (a *app) syncRemoteExecutionTranscriptByRef(ctx context.Context, ref execution.Ref) error {
 	st, err := a.store.Read()
 	if err != nil {
-		return
+		return err
 	}
 	r, i := executionRecord(st, ref)
 	if r == nil || i < 0 {
-		return
+		return nil
 	}
-	_ = a.pullExecutionTranscript(ctx, st, st.Starts[i], r)
+	pullErr := a.collectExecutionTranscript(ctx, st, st.Starts[i], r)
+	why := ""
+	if pullErr != nil {
+		why = pullErr.Error()
+	}
+	if why == r.TranscriptError {
+		return pullErr
+	}
+	return errors.Join(pullErr, a.store.Update(func(current *state.State) ([]state.Event, error) {
+		rec, j := executionRecord(current, ref)
+		if rec == nil || rec.TranscriptError == why {
+			return nil, nil
+		}
+		was := rec.TranscriptError
+		rec.TranscriptError = why
+		if why == "" || was != "" {
+			return nil, nil
+		}
+		return []state.Event{event(current.Starts[j].By, "execution.transcript-unsaved", "%s: %s", current.Starts[j].Name, why)}, nil
+	}))
 }
 
 func (a *app) executionTranscriptRPC(ctx context.Context, host string, req execution.CallbackRequest) (any, error) {
@@ -1199,7 +1306,7 @@ func (a *app) executionTranscriptRPC(ctx context.Context, host string, req execu
 	if r == nil || i < 0 || req.Protocol != execution.Protocol || req.RequestID == "" || req.Ref.Validate() != nil || string(req.Ref.Host) != host || !execution.VerifyCallback(req, r.Request.ControlKey) {
 		return nil, refused("unauthenticated execution callback")
 	}
-	a.syncAllTranscripts(ctx, st, false)
+	_ = a.syncAllTranscripts(ctx, st, false) // queries read the stored transcripts; transcripts sync reports a refresh failure
 	caller := a.workerCallerForParty(st, st.Starts[i].Party, st.Starts[i].Name)
 	switch req.Operation {
 	case transcriptsListOp:

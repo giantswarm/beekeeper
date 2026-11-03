@@ -848,6 +848,13 @@ type ExecutionRecord struct {
 	StartUnsent bool `json:"startUnsent,omitempty"`
 	// StartSentAt is when the coordinator last sent its start request.
 	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// TranscriptCollected says the ended execution's stream log is
+	// persisted to the transcript store to EOF; until then its host
+	// reconciliation keeps collecting it, also after Settled.
+	TranscriptCollected bool `json:"transcriptCollected,omitempty"`
+	// TranscriptError is why the last pull of the execution's transcript
+	// failed, empty once one succeeded.
+	TranscriptError string `json:"transcriptError,omitempty"`
 	// ReleasedAt is when a reservation the host never acknowledged was
 	// given up, ReleaseReason why: it holds no host or desk slot since.
 	ReleasedAt    time.Time `json:"releasedAt,omitzero"`

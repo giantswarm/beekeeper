@@ -613,9 +613,6 @@ func parseCodex(r io.Reader) Parsed {
 				if role != RoleUser && role != RoleAssistant {
 					return
 				}
-				if role == RoleAssistant && ev.Payload.Phase == "commentary" {
-					return
-				}
 				var parts []string
 				for _, c := range ev.Payload.Content {
 					if (c.Type == "input_text" || c.Type == "output_text" || c.Type == contentTypeText) && isCodexUserOrAssistantTurn(role, c.Text) {
@@ -623,7 +620,9 @@ func parseCodex(r io.Reader) Parsed {
 					}
 				}
 				if joined := strings.TrimSpace(strings.Join(parts, "\n")); joined != "" {
-					p.Turns = append(p.Turns, Turn{At: ev.Timestamp, Role: role, Text: joined})
+					// Commentary (progress, explanations, decisions) is
+					// part of the conversation as much as the final answer.
+					p.Turns = append(p.Turns, Turn{At: ev.Timestamp, Role: role, Phase: ev.Payload.Phase, Text: joined})
 				}
 			case "function_call":
 				if ev.Payload.Name != "" {
