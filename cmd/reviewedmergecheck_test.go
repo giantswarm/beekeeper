@@ -521,11 +521,11 @@ func TestMergeCheckIgnoresHostLocale(t *testing.T) {
 
 func TestMergeCheckEnvironmentFailures(t *testing.T) {
 	for name, args := range map[string][]string{
-		"missing":      {"beekeeper-test-nonexistent-command"},
-		"signal":       {"sh", "-c", "kill -KILL $$"},
-		"disk":         {"sh", "-c", "echo 'write: no space left on device'; exit 1"},
-		"resource":     {"sh", "-c", "echo 'fork: resource temporarily unavailable'; exit 2"},
-		"test failure": {"sh", "-c", "echo '--- FAIL: TestRegression'; exit 1"},
+		"absent executable": {"beekeeper-test-nonexistent-command"},
+		"signal":            {"sh", "-c", "kill -KILL $$"},
+		"exhausted disk":    {"sh", "-c", "echo 'write: no space left on device'; exit 1"},
+		"resource":          {"sh", "-c", "echo 'fork: resource temporarily unavailable'; exit 2"},
+		"test failure":      {"sh", "-c", "echo '--- FAIL: TestRegression'; exit 1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := runMergeCheckCmd(t.Context(), t.TempDir(), args[0], args[1:]...)
