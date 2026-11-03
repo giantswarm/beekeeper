@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -17,10 +18,12 @@ const hostDrainRetry = 10 * time.Minute
 
 // updateHosts brings every execution host (agents.hosts) to the release
 // this coordinator runs, with agents hosts update, once the coordinator
-// runs a newer one than the host's pin: a host on which executions run
-// drains first, a held host is tried again hourly, and a development build
+// runs a newer one than the host's pin: a host on which executions are in a
+// turn drains first (a parked worker's execution between turns does not hold
+// it back), a held host is tried again hourly, and a development build
 // updates none. Nothing is updated while beekeeper stop stands. Each new
-// hold is handed on once as the loop's finding.
+// hold is handed on once as the loop's finding, and so is a host that stays
+// behind for more than one release, with why.
 func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 	a := l.a
 	version := coordinatorVersion()
@@ -41,18 +44,73 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 			continue
 		}
 		if n := hostExecutions(st, selector); n > 0 {
-			l.sayOnce("host drains "+selector+" "+version, "SUPERVISOR HOST DRAINS %s: %d executions run on it; it updates to %s once they end", selector, n, version)
+			reason := fmt.Sprintf("%d executions are in a turn on it (%s); it updates to %s once they are between turns", n, strings.Join(drainingWorkerNames(st, selector), ", "), version)
+			l.sayOnce("host drains "+selector+" "+version, "SUPERVISOR HOST DRAINS %s: %s", selector, reason)
+			l.noteBehind(selector, version, reason)
 			continue
 		}
 		out, err := l.run(ctx, agentsName, "hosts", hostUpdateCmdName, selector)
 		if err != nil {
 			l.sayOnce("host update "+selector+" "+version, "SUPERVISOR HOST WAITS %s: %v", selector, err)
+			l.noteBehind(selector, version, oneLine(err.Error()))
 			continue
 		}
 		_, _ = fmt.Fprintln(a.out, "SUPERVISOR HOST UPDATED "+oneLine(out))
 	}
 	if err := l.reportHeldHosts(); err != nil {
 		l.sayOnce("host held report", "SUPERVISOR HOST HELD not reported: %v", err)
+	}
+}
+
+// drainingWorkerNames names the workers whose executions hold the host
+// selector's update back (hostExecutions).
+func drainingWorkerNames(st *state.State, selector string) []string {
+	var names []string
+	for i := range st.Starts {
+		if x := st.Starts[i].Execution; x != nil && x.Selector == selector && !x.Terminal() && !parkedBetweenTurns(st, x) {
+			names = append(names, st.Starts[i].Name)
+		}
+	}
+	return names
+}
+
+// noteBehind records that the host selector did not follow the
+// coordinator's release version (drains or waits, for reason), and hands it
+// on once as the loop's finding when the host stays behind past the first
+// release it missed. A held host is handed on by its hold instead.
+func (l *supervisorLoop) noteBehind(selector, version, reason string) {
+	a := l.a
+	var finding string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		finding = ""
+		pin := st.HostPin(selector)
+		if pin == nil {
+			st.HostPins = append(st.HostPins, state.HostPin{Selector: selector, Identity: a.cfg.Agents.Hosts[selector].Identity})
+			pin = &st.HostPins[len(st.HostPins)-1]
+		}
+		switch {
+		case pin.Version == version || pin.Held != "":
+			return nil, nil
+		case pin.Behind == "":
+			pin.Behind = version
+			return nil, nil
+		case pin.Behind == version || pin.BehindReported:
+			return nil, nil
+		}
+		pin.BehindReported = true
+		on := pin.Version
+		if on == "" {
+			on = "a release it was never pinned to"
+		}
+		finding = fmt.Sprintf("Execution host %s stays on %s for more than one release: it did not follow %s and does not follow %s either, so it takes no start: %s. beekeeper agents hosts update %s retries it at once.", selector, on, pin.Behind, version, reason, selector)
+		return []state.Event{event(loopParty, "supervisor."+superloop.KindFile, "[host-behind %s %s] execution host %s behind since %s%s%s", selector, version, selector, pin.Behind, fileReportSeparator, finding)}, nil
+	})
+	if err != nil {
+		l.sayOnce("host behind report "+selector, "SUPERVISOR HOST BEHIND not reported: %v", err)
+		return
+	}
+	if finding != "" {
+		_, _ = fmt.Fprintln(a.out, "SUPERVISOR HOST BEHIND "+finding)
 	}
 }
 
