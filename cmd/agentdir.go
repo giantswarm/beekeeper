@@ -10,8 +10,9 @@ import (
 // (empty: agents.dir, else the caller's). With agents.dir set it must be
 // agents.dir or under one of agents.roots: a session runs in its folder for
 // good, and one started anywhere else loads none of the desk's project
-// instructions.
-func (a *app) agentDir(dir string) (string, error) {
+// instructions. A role may also start in its own configured folder; this
+// exception is never available to a worker start.
+func (a *app) agentDir(dir, roleName string) (string, error) {
 	home := a.cfg.Agents.Dir
 	if dir == "" {
 		dir = home
@@ -25,6 +26,18 @@ func (a *app) agentDir(dir string) (string, error) {
 	}
 	if home == "" {
 		return abs, nil
+	}
+	for _, rl := range roles {
+		if rl.name != roleName || rl.cfg(a.cfg).Dir == "" {
+			continue
+		}
+		roleDir, err := filepath.Abs(homePath(rl.cfg(a.cfg).Dir))
+		if err != nil {
+			return "", err
+		}
+		if abs == roleDir {
+			return abs, nil
+		}
 	}
 	if abs == filepath.Clean(homePath(home)) {
 		return abs, nil

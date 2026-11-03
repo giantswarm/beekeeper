@@ -1,0 +1,94 @@
+package state
+
+import (
+	"strings"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/execution"
+)
+
+// DeskReview binds an independent round to the concrete sessions the
+// coordinating component started. A display name alone is never a credential.
+type DeskReview struct {
+	ID         string            `json:"id"`
+	Ref        string            `json:"ref"`
+	Head       string            `json:"head"`
+	Round      int               `json:"round"`
+	Worker     Party             `json:"worker"`
+	Reviewer   Party             `json:"reviewer"`
+	AssignedAt time.Time         `json:"assignedAt"`
+	Result     *DeskReviewResult `json:"result,omitempty"`
+}
+
+// DeskReviewResult authenticates a specific public review through the assigned
+// reviewer's durable completion report, not through their shared GitHub login.
+type DeskReviewResult struct {
+	ID           string    `json:"id"`
+	URL          string    `json:"url"`
+	Author       string    `json:"author"`
+	Verdict      string    `json:"verdict"`
+	BodyDigest   string    `json:"bodyDigest"`
+	ReportDigest string    `json:"reportDigest"`
+	ReportedAt   time.Time `json:"reportedAt"`
+	By           Party     `json:"by"`
+}
+
+// ReviewPark records a pull request whose worker parked for a desk review and
+// ended so its slot and workspace could be freed while the loop runs the
+// review, merges on approval or starts a fresh fixer worker on changes.
+type ReviewPark struct {
+	On         string         `json:"on"`
+	At         time.Time      `json:"at"`
+	ReviewHead string         `json:"reviewHead"`
+	Agent      string         `json:"agent"`
+	Party      Party          `json:"party"`
+	Execution  *execution.Ref `json:"execution,omitempty"`
+	Selector   string         `json:"selector,omitempty"`
+	Model      string         `json:"model,omitempty"`
+	Serves     string         `json:"serves,omitempty"`
+	PostMerge  *string        `json:"postMerge,omitempty"`
+	Worktree   string         `json:"worktree,omitempty"`
+}
+
+// ReviewParkFor returns the recorded desk-review park for on (owner/repo#n).
+func (st *State) ReviewParkFor(on string) (ReviewPark, bool) {
+	if st == nil {
+		return ReviewPark{}, false
+	}
+	for _, rp := range st.ReviewParks {
+		if strings.EqualFold(rp.On, on) {
+			return rp, true
+		}
+	}
+	return ReviewPark{}, false
+}
+
+// UpsertReviewPark records or updates the desk-review park for rp.On.
+func (st *State) UpsertReviewPark(rp ReviewPark) {
+	if st == nil || rp.On == "" || rp.ReviewHead == "" {
+		return
+	}
+	for i, cur := range st.ReviewParks {
+		if !strings.EqualFold(cur.On, rp.On) {
+			continue
+		}
+		if rp.Serves == "" {
+			rp.Serves = cur.Serves
+		}
+		if (rp.PostMerge == nil || *rp.PostMerge == "") && cur.PostMerge != nil && *cur.PostMerge != "" {
+			rp.PostMerge = cur.PostMerge
+		}
+		if rp.Selector == "" {
+			rp.Selector = cur.Selector
+		}
+		if rp.Model == "" {
+			rp.Model = cur.Model
+		}
+		if rp.Worktree == "" {
+			rp.Worktree = cur.Worktree
+		}
+		st.ReviewParks[i] = rp
+		return
+	}
+	st.ReviewParks = append(st.ReviewParks, rp)
+}

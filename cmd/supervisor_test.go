@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,295 +12,162 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
-	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const browser = "browser"
 
+// The role holders of the relay tests (the guide's role: the supervisor
+// holds none), and two agents.
 var (
-	supA   = state.Party{Session: "sA", HostSession: "local_A", Name: "Supervisor run 11"}
-	supB   = state.Party{Session: "sB", HostSession: "local_B", Name: "Supervisor run 12"}
+	supA   = state.Party{Session: "sA", HostSession: "local_A", Name: "Guide run 11"}
+	supB   = state.Party{Session: "sB", HostSession: "local_B", Name: guideRole.runName(12)}
 	agentC = state.Party{Session: "sC", Name: "Agent three"}
 	agentD = state.Party{Session: "sD", Name: "Agent five"}
 )
 
+// handOverState is a desk whose guide is supA, with two grants queued.
 func handOverState() *state.State {
 	return &state.State{
-		Supervisor: &state.Supervisor{Party: supA, Since: relayNow.Add(-8 * time.Hour)},
+		Guide: &state.Role{Holder: &state.Supervisor{Party: supA, Since: relayNow.Add(-8 * time.Hour)}},
 		Grants: []state.Grant{
-			{Resource: browser, To: four, By: supA, At: relayNow.Add(-time.Minute)},
-			{Resource: browser, To: agentD, By: supA, At: relayNow},
+			{Resource: browser, To: four, By: loopParty, At: relayNow.Add(-time.Minute)},
+			{Resource: browser, To: agentD, By: loopParty, At: relayNow},
 		},
 	}
 }
 
-// claimGated checks a claim of the browser by who against st's supervisor.
-func claimGated(st *state.State, who state.Party) error {
-	_, err := lease.Check(st, lease.Gate{Resource: browser, Caller: who, Supervisor: st.Supervisor, Held: true, Now: relayNow, TTL: 30 * time.Minute})
-	return err
-}
-
-func TestRelayMovesTheRoleAndTheGrants(t *testing.T) {
+func TestRelayMovesTheRole(t *testing.T) {
 	st := handOverState()
 	var log []state.Event
-	if _, _, err := relayRole(st, supB, agentC, relayNow, 15*time.Minute); Code(err) != ExitRefused {
-		t.Fatalf("a session that does not supervise relayed: %v", err)
+	if _, _, err := guideRole.relay(st, supB, agentC, relayNow, 15*time.Minute); Code(err) != ExitRefused {
+		t.Fatalf("a session that does not guide relayed: %v", err)
 	}
-	msg, evs, err := relayRole(st, supA, supB, relayNow, 15*time.Minute)
-	if err != nil || !strings.Contains(msg, `relayed to "Supervisor run 12"`) {
+	msg, evs, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute)
+	if err != nil || !strings.Contains(msg, `relayed to "Guide run 12"`) {
 		t.Fatalf("relay: %q, %v", msg, err)
 	}
 	log = append(log, evs...)
-	if claimGated(st, agentC) == nil || claimGated(st, agentD) == nil {
-		t.Fatal("a claim went ungated during the hand-over")
-	}
-	if _, _, err := startRole(st, agentC, true, false, relayNow); Code(err) != ExitRefused || !strings.Contains(err.Error(), `its relay names "Supervisor run 12", not you`) {
+	if _, _, err := guideRole.start(st, agentC, true, false, relayNow); Code(err) != ExitRefused || !strings.Contains(err.Error(), `its relay names "Guide run 12", not you`) {
 		t.Fatalf("an unnamed start was not refused: %v", err)
 	}
-	if relievedBy(st, supA) != nil {
+	if relievedIn(st.GuideRole(), supA) != nil {
 		t.Fatal("relieved before the successor started")
 	}
-	msg, evs, err = startRole(st, supB, true, false, relayNow.Add(time.Minute))
-	if err != nil || !strings.Contains(msg, `relieving "Supervisor run 11"`) || !strings.Contains(msg, "2 grant(s) move over") {
+	msg, evs, err = guideRole.start(st, supB, true, false, relayNow.Add(time.Minute))
+	if err != nil || !strings.Contains(msg, `relieving "Guide run 11"`) || strings.Contains(msg, "grant") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
 	log = append(log, evs...)
-	if !st.Supervisor.Is(supB) {
-		t.Fatalf("supervisor is %q", st.Supervisor.Name)
+	if !st.Guide.Holder.Is(supB) {
+		t.Fatalf("guide is %q", st.Guide.Holder.Name)
 	}
 	for _, g := range st.Grants {
-		if !g.By.Is(supB) {
-			t.Errorf("grant of %s to %q is still by %q", g.Resource, g.To.Name, g.By.Name)
+		if g.By != loopParty {
+			t.Errorf("the guide's relay moved the grant of %s to %q", g.Resource, g.To.Name)
 		}
 	}
-	if claimGated(st, agentC) == nil || claimGated(st, agentD) == nil || claimGated(st, supA) == nil {
-		t.Fatal("a claim went ungated after the hand-over")
+	if relievedIn(st.GuideRole(), supA) == nil || relievedIn(st.GuideRole(), supB) != nil {
+		t.Fatal("status does not tell the outgoing guide it has been relieved")
 	}
-	if relievedBy(st, supA) == nil || relievedBy(st, supB) != nil {
-		t.Fatal("status does not tell the outgoing supervisor it has been relieved")
-	}
-	if len(log) != 2 || log[0].Verb != "supervisor.relay" || log[1].Verb != "supervisor.start" {
+	if len(log) != 2 || log[0].Verb != "guide.relay" || log[1].Verb != "guide.start" {
 		t.Fatalf("the event log lacks the two steps: %+v", log)
 	}
-	lines, _ := fireRelay(st, relayNow.Add(time.Minute))
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], "RELAY TAKEN:") {
+	lines, _ := guideRole.fireRelay(st, relayNow.Add(time.Minute))
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "GUIDE RELAY TAKEN:") {
 		t.Fatalf("taken: %q", lines)
 	}
-	if lines, _ := fireRelay(st, relayNow.Add(2*time.Minute)); len(lines) != 0 {
+	if lines, _ := guideRole.fireRelay(st, relayNow.Add(2*time.Minute)); len(lines) != 0 {
 		t.Fatalf("taken reported twice: %q", lines)
 	}
 }
 
 func TestRelayExpiresAndCancels(t *testing.T) {
 	st := handOverState()
-	if _, _, err := relayRole(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	later := relayNow.Add(16 * time.Minute)
-	if lines, _ := fireRelay(st, relayNow.Add(time.Minute)); len(lines) != 0 {
+	if lines, _ := guideRole.fireRelay(st, relayNow.Add(time.Minute)); len(lines) != 0 {
 		t.Fatalf("open relay reported: %q", lines)
 	}
-	if _, _, err := startRole(st, supB, true, false, later); Code(err) != ExitRefused || !strings.Contains(err.Error(), "its relay to you expired") {
+	if _, _, err := guideRole.start(st, supB, true, false, later); Code(err) != ExitRefused || !strings.Contains(err.Error(), "its relay to you expired") {
 		t.Fatalf("an expired relay was taken: %v", err)
 	}
-	if !st.Supervisor.Is(supA) {
-		t.Fatal("the outgoing supervisor lost the role to an expired relay")
+	if !st.Guide.Holder.Is(supA) {
+		t.Fatal("the outgoing guide lost the role to an expired relay")
 	}
-	lines, evs := fireRelay(st, later)
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], "RELAY EXPIRED:") || len(evs) != 1 {
+	lines, evs := guideRole.fireRelay(st, later)
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "GUIDE RELAY EXPIRED:") || len(evs) != 1 {
 		t.Fatalf("expired: %q", lines)
 	}
-	if lines, _ := fireRelay(st, later); len(lines) != 0 {
+	if lines, _ := guideRole.fireRelay(st, later); len(lines) != 0 {
 		t.Fatalf("expiry reported twice: %q", lines)
 	}
-
-	if _, _, err := relayRole(st, supA, supB, later, 15*time.Minute); err != nil {
+	if _, _, err := guideRole.relay(st, supA, supB, later, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	msg, evs, err := cancelRelay(st, supA, later)
-	if err != nil || st.Relay != nil || len(evs) != 1 || !strings.Contains(msg, "cancelled") {
+	msg, evs, err := guideRole.cancelRelay(st, supA, later)
+	if err != nil || st.Guide.Relay != nil || len(evs) != 1 || !strings.Contains(msg, "cancelled") {
 		t.Fatalf("cancel: %q, %v", msg, err)
 	}
-	if _, _, err := startRole(st, supB, true, false, later); Code(err) != ExitRefused {
+	if _, _, err := guideRole.start(st, supB, true, false, later); Code(err) != ExitRefused {
 		t.Fatalf("a cancelled relay was taken: %v", err)
 	}
-	if _, _, err := startRole(st, supB, false, false, later); err != nil || !st.Supervisor.Is(supB) {
-		t.Fatalf("a start over a gone supervisor: %v", err)
+	if _, _, err := guideRole.start(st, supB, false, false, later); err != nil || !st.Guide.Holder.Is(supB) {
+		t.Fatalf("a start over a gone guide: %v", err)
 	}
 }
 
-// supervisorTranscript is a real supervisor transcript's window, its content
+// supervisorTranscript is a real session transcript's window, its content
 // stripped to the usage lines: its last request read 163018 tokens.
 var supervisorTranscript = filepath.Join("..", "internal", "claude", "testdata", "transcript", "window.jsonl")
 
-func TestRelayDueAtTheContextOnceAtAQuietMoment(t *testing.T) {
-	cfg := &config.Config{
-		GrantTTL: config.Duration{Duration: 30 * time.Minute},
-		Lanes:    []config.Lane{{Name: serving, Installation: gazelle, Repositories: []string{modelManager}}},
-		Merge:    config.Merge{Settle: config.Duration{Duration: 5 * time.Minute}, SettleTimeout: config.Duration{Duration: 30 * time.Minute}},
-	}
-	now := relayNow
-	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
-	st := &state.State{Supervisor: &state.Supervisor{Party: supA, Since: now.Add(-3 * time.Hour)}}
-	if c := sessionContext(sessions, supA); c != 163018 {
-		t.Fatalf("the supervisor's context from its transcript: %d", c)
-	}
-	if c := relayContext(st, sessions, now, 200_000, nil); c != 0 {
-		t.Fatalf("relay due under relayAt: %d", c)
-	}
-	const relayAt = 150_000
-	if relayContext(st, sessions, now, relayAt, nil) != 163018 || relayContext(st, nil, now, relayAt, nil) != 0 {
-		t.Fatal("relayContext")
-	}
-	never := func(int) bool { return false }
-	notRolled := func(state.Merge, config.Lane) bool { return false }
-	quiet := func() quietness {
-		c := relayContext(st, sessions, now, relayAt, nil)
-		if c == 0 {
-			return quietness{}
-		}
-		return quietness{checked: true, context: c, relayAt: relayAt, busy: busyWith(st, cfg, map[string]bool{}, now, never, notRolled)}
-	}
-
-	st.Merges = []state.Merge{{Repo: modelManager, PR: 172, Lane: serving, Phase: state.Settling, Finished: now.Add(-time.Minute)}}
-	if q := quiet(); q.busy != "giantswarm/model-manager#172 settles" {
-		t.Fatalf("settling merge: %q", q.busy)
-	}
-	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 0 || st.RelayDue != nil {
-		t.Fatalf("relay due while a merge settles: %q", lines)
-	}
-	st.Merges = nil
-	st.Grants = []state.Grant{{Resource: browser, To: four, By: supA, At: now}}
-	if q := quiet(); q.busy != `browser is granted to "Agent four" and not claimed yet` {
-		t.Fatalf("waiting grant: %q", q.busy)
-	}
-	st.Grants = nil
-	lines, evs := fireRelayDue(st, quiet(), nil, now)
-	if want := `RELAY DUE: "Supervisor run 11" is at 163k tokens of context: beekeeper handover --prompt`; len(lines) != 1 || lines[0] != want || len(evs) != 1 {
-		t.Fatalf("relay due at a quiet moment: %q", lines)
-	}
-	if !st.RelayDue.Of(st.Supervisor) || st.RelayDue.Context != 163018 {
-		t.Fatalf("relay due record: %+v", st.RelayDue)
-	}
-	for i, q := range []quietness{quiet(), {checked: true, context: 170_000, relayAt: relayAt}, {checked: true, busy: "x merges", relayAt: relayAt}, {checked: true, context: 170_000, relayAt: relayAt}} {
-		now = now.Add(time.Minute)
-		if lines, evs := fireRelayDue(st, q, nil, now); len(lines) != 0 || len(evs) != 0 {
-			t.Fatalf("relay due again for the same supervisor (%d): %q", i, lines)
-		}
-	}
-
-	if _, _, err := relayRole(st, supA, supB, now, 15*time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	if q := quiet(); q.checked {
-		t.Fatal("quietness read while a relay is open")
-	}
-	if _, _, err := cancelRelay(st, supA, now); err != nil {
-		t.Fatal(err)
-	}
-	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 1 {
-		t.Fatalf("relay due not said again after a cancelled relay: %q", lines)
-	}
-	if _, _, err := relayRole(st, supA, supB, now, 15*time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	now = now.Add(time.Hour)
-	if lines, _ := fireRelay(st, now); len(lines) != 1 || !strings.HasPrefix(lines[0], "RELAY EXPIRED:") || st.RelayDue != nil {
-		t.Fatalf("an expired relay: %q, %+v", lines, st.RelayDue)
-	}
-	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 1 {
-		t.Fatalf("relay due not said again after an expired relay: %q", lines)
-	}
-
-	st.Supervisor = &state.Supervisor{Party: supB, Since: now}
-	sessions[0] = &claude.Session{ID: supB.Session, HostID: supB.HostSession, Name: supB.Name, Transcript: supervisorTranscript}
-	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 1 || !strings.Contains(lines[0], supB.Name) {
-		t.Fatalf("relay due not said to the next supervisor: %q", lines)
-	}
-}
-
-func TestSettlesByTheGateRule(t *testing.T) {
-	cfg := &config.Config{
-		Lanes: []config.Lane{{Name: serving, Installation: gazelle, Repositories: []string{modelManager}}},
-		Merge: config.Merge{Settle: config.Duration{Duration: 5 * time.Minute}, SettleTimeout: config.Duration{Duration: 30 * time.Minute}},
-	}
-	rolled := func(state.Merge, config.Lane) bool { return true }
-	notRolled := func(state.Merge, config.Lane) bool { return false }
-	m := state.Merge{Repo: modelManager, PR: 1, Lane: serving, Phase: state.Settling, Finished: relayNow.Add(-time.Minute)}
-	own := state.Merge{Repo: devctlRepo, PR: 2, Lane: devctlRepo, Phase: state.Settling, Finished: relayNow}
-	known := m
-	known.Release = "v1.2.3"
-	stuck := known
-	stuck.Finished = relayNow.Add(-time.Hour)
-	failed := m
-	failed.ReleaseFailed = true
-	for _, c := range []struct {
-		name   string
-		m      state.Merge
-		rolled func(state.Merge, config.Lane) bool
-		want   bool
-	}{
-		{"no installation to wait for", own, notRolled, false},
-		{"unknown release within settle", m, notRolled, true},
-		{"known release rolling", known, notRolled, true},
-		{"known release rolled", known, rolled, false},
-		{"past the settle timeout", stuck, notRolled, false},
-		{"release failed", failed, notRolled, false},
-	} {
-		if got := settles(c.m, cfg, relayNow, c.rolled); got != c.want {
-			t.Errorf("%s: settles %v, want %v", c.name, got, c.want)
-		}
-	}
-	m.Finished = relayNow.Add(-6 * time.Minute)
-	if settles(m, cfg, relayNow, notRolled) {
-		t.Error("an unknown release settles past merge.settle")
-	}
-}
-
 func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 	st := handOverState()
+	relieved := func(p state.Party) *state.Relief { return relievedIn(st.GuideRole(), p) }
 	step := func(at time.Duration, what string, err error) {
 		t.Helper()
 		if err != nil {
 			t.Fatalf("%s at +%s: %v", what, at, err)
 		}
-		if r := relievedBy(st, supA); r == nil || !r.By.Is(supB) {
+		if r := relieved(supA); r == nil || !r.By.Is(supB) {
 			t.Fatalf("after %s, A's status does not say B relieved it: %+v", what, r)
 		}
 	}
 	relay := func(from, to state.Party, at time.Duration) error {
-		_, _, err := relayRole(st, from, to, relayNow.Add(at), 15*time.Minute)
+		_, _, err := guideRole.relay(st, from, to, relayNow.Add(at), 15*time.Minute)
 		return err
 	}
 	start := func(who state.Party, at time.Duration) error {
-		_, _, err := startRole(st, who, true, false, relayNow.Add(at))
+		_, _, err := guideRole.start(st, who, true, false, relayNow.Add(at))
 		return err
 	}
-	if err := relay(supA, supB, 0); err != nil || relievedBy(st, supA) != nil {
+	if err := relay(supA, supB, 0); err != nil || relieved(supA) != nil {
 		t.Fatalf("relieved by an open relay: %v", err)
 	}
 	step(time.Minute, "B's start", start(supB, time.Minute))
 	step(2*time.Minute, "B's relay to C", relay(supB, agentC, 2*time.Minute))
-	_, _, err := cancelRelay(st, supB, relayNow.Add(3*time.Minute))
+	_, _, err := guideRole.cancelRelay(st, supB, relayNow.Add(3*time.Minute))
 	step(3*time.Minute, "B's cancel", err)
 	step(4*time.Minute, "B's relay to C again", relay(supB, agentC, 4*time.Minute))
 	step(5*time.Minute, "C's start", start(agentC, 5*time.Minute))
-	if r := relievedBy(st, supB); r == nil || !r.By.Is(agentC) {
+	if r := relieved(supB); r == nil || !r.By.Is(agentC) {
 		t.Fatalf("B is not relieved by C: %+v", r)
 	}
-	if relievedBy(st, agentC) != nil {
-		t.Fatal("the supervisor reads as relieved")
+	if relieved(agentC) != nil {
+		t.Fatal("the guide reads as relieved")
 	}
-	// A takes the role back through C's relay: supervising again ends its relief.
+	// A takes the role back through C's relay: guiding again ends its relief.
 	if err := relay(agentC, supA, 6*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := start(supA, 7*time.Minute); err != nil || relievedBy(st, supA) != nil {
-		t.Fatalf("A supervises again and still reads as relieved: %v", err)
+	if err := start(supA, 7*time.Minute); err != nil || relieved(supA) != nil {
+		t.Fatalf("A guides again and still reads as relieved: %v", err)
 	}
-	if len(st.Relieved) != 2 {
-		t.Fatalf("one relief per party: %+v", st.Relieved)
+	if len(st.Guide.Relieved) != 2 {
+		t.Fatalf("one relief per party: %+v", st.Guide.Relieved)
 	}
 	// A relief nobody asked about for reliefTTL goes with the next start.
 	if err := relay(supA, supB, reliefTTL+time.Hour); err != nil {
@@ -305,113 +176,233 @@ func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
 	if err := start(supB, reliefTTL+time.Hour+time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Relieved) != 1 || !st.Relieved[0].Party.Is(supA) {
-		t.Fatalf("stale reliefs stay: %+v", st.Relieved)
+	if len(st.Guide.Relieved) != 1 || !st.Guide.Relieved[0].Party.Is(supA) {
+		t.Fatalf("stale reliefs stay: %+v", st.Guide.Relieved)
 	}
 }
 
-func TestRestartGraceHoldsTheRuleThroughACLIRestart(t *testing.T) {
+// A holder's CLI back under the same session within the grace is a
+// restart, logged once; past the grace it is gone, and a new term has a
+// grace of its own.
+func TestRestartGraceThroughACLIRestart(t *testing.T) {
 	const grace = time.Minute
 	st := handOverState()
 	running := func(pid int) []*claude.Session {
 		return []*claude.Session{{PID: pid, ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}
 	}
-	gated := func(at time.Duration, sessions []*claude.Session) error {
-		sv := readSupervision(st, sessions, relayNow.Add(at), grace)
-		_, err := lease.Check(st, lease.Gate{Resource: browser, Caller: agentC, Supervisor: sv.sup, RestartUntil: sv.until, Gone: sv.down(),
-			Held: true, Now: relayNow.Add(at), TTL: 30 * time.Minute})
-		return err
+	read := func(at time.Duration, sessions []*claude.Session) supervision {
+		return readHolder(st.GuideRole(), sessions, relayNow.Add(at), grace)
 	}
-	if sv := readSupervision(st, nil, relayNow, grace); !sv.restarting() {
+	if sv := read(0, nil); !sv.restarting() {
 		t.Fatal("a CLI never seen in this term has no grace")
 	}
-	if changed, evs := observeCLI(st, running(100), relayNow); !changed || len(evs) != 0 || st.SupervisorCLI.PID != 100 {
-		t.Fatalf("first sighting: %v %+v %+v", changed, evs, st.SupervisorCLI)
+	if changed, evs := guideRole.observeCLI(st, running(100), relayNow); !changed || len(evs) != 0 || st.Guide.CLI.PID != 100 {
+		t.Fatalf("first sighting: %v %+v %+v", changed, evs, st.Guide.CLI)
 	}
-	if changed, _ := observeCLI(st, running(100), relayNow.Add(time.Second)); changed {
+	if changed, _ := guideRole.observeCLI(st, running(100), relayNow.Add(time.Second)); changed {
 		t.Fatal("an unchanged CLI changes the state")
 	}
-	// The CLI exits: gated before anyone recorded it gone, and after.
-	if err := gated(10*time.Second, nil); err == nil || !strings.Contains(err.Error(), "is restarting its CLI") {
-		t.Fatalf("unrecorded restart: %v", err)
-	}
-	if changed, _ := observeCLI(st, nil, relayNow.Add(10*time.Second)); !changed || st.SupervisorCLI.Gone.IsZero() {
+	if changed, _ := guideRole.observeCLI(st, nil, relayNow.Add(10*time.Second)); !changed || st.Guide.CLI.Gone.IsZero() {
 		t.Fatal("the CLI's absence is not recorded")
 	}
-	if err := gated(69*time.Second, nil); err == nil {
-		t.Fatal("a claim went ungated within the grace")
+	if sv := read(69*time.Second, nil); !sv.restarting() {
+		t.Fatal("gone within the grace")
 	}
-	// Back under the same session with a new PID: a restart, logged once.
-	changed, evs := observeCLI(st, running(200), relayNow.Add(16*time.Second))
-	if !changed || len(evs) != 1 || evs[0].Verb != "supervisor.restart" || !strings.Contains(evs[0].Detail, "CLI 100 back as 200 (gone for 6s)") {
+	changed, evs := guideRole.observeCLI(st, running(200), relayNow.Add(16*time.Second))
+	if !changed || len(evs) != 1 || evs[0].Verb != "guide.restart" || !strings.Contains(evs[0].Detail, "CLI 100 back as 200 (gone for 6s)") {
 		t.Fatalf("restart: %v %+v", changed, evs)
 	}
-	if err := gated(17*time.Second, running(200)); err == nil || strings.Contains(err.Error(), "restarting") {
-		t.Fatalf("after the restart: %v", err)
+	guideRole.observeCLI(st, nil, relayNow.Add(time.Hour))
+	if sv := read(time.Hour+grace-time.Second, nil); !sv.restarting() {
+		t.Fatalf("within the grace after the crash: %+v", sv)
 	}
-	// A crash: the CLI does not come back; the rule holds past the grace,
-	// and every claim waits for the successor.
-	observeCLI(st, nil, relayNow.Add(time.Hour))
-	if err := gated(time.Hour+grace-time.Second, nil); err == nil || !strings.Contains(err.Error(), "is restarting its CLI") {
-		t.Fatalf("within the grace: %v", err)
-	}
-	for _, at := range []time.Duration{grace, time.Hour, 24 * time.Hour} {
-		if err := gated(time.Hour+at, nil); err == nil || !strings.Contains(err.Error(), "is gone: a free lease is not a grant until its successor's") {
-			t.Fatalf("%s after the crash: %v", at, err)
-		}
-	}
-	if sv := readSupervision(st, nil, relayNow.Add(time.Hour+grace), grace); !sv.down() || !sv.gone.Equal(relayNow.Add(time.Hour)) {
+	if sv := read(time.Hour+grace, nil); !sv.down() || !sv.gone.Equal(relayNow.Add(time.Hour)) {
 		t.Fatalf("down: %+v", sv)
 	}
-	// The grants stay: the first in the queue still claims.
-	if _, err := lease.Check(st, lease.Gate{Resource: browser, Caller: four, Supervisor: st.Supervisor, Gone: true, Held: true, Now: relayNow.Add(2 * time.Hour), TTL: 30 * time.Minute}); err != nil {
-		t.Fatalf("a gone supervisor's grant: %v", err)
-	}
-	// A new term starts a new record: the successor's own grace.
-	if _, _, err := startRole(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
+	if _, _, err := guideRole.start(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if sv := readSupervision(st, nil, relayNow.Add(2*time.Hour), grace); !sv.restarting() || !sv.gone.Equal(relayNow.Add(2*time.Hour)) {
-		t.Fatalf("the previous term's CLI record counts for the new supervisor: %+v", sv)
+	if sv := read(2*time.Hour, nil); !sv.restarting() || !sv.gone.Equal(relayNow.Add(2*time.Hour)) {
+		t.Fatalf("the previous term's CLI record counts for the new guide: %+v", sv)
 	}
 }
 
-func TestSupervisorViewShowsTheContext(t *testing.T) {
-	a := &app{cfg: &config.Config{Supervisor: config.Supervisor{Role: config.Role{RelayAt: 400_000}}}, now: relayNow}
-	st := &state.State{Supervisor: &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}}
+func TestRoleViewShowsTheContext(t *testing.T) {
+	a := &app{cfg: &config.Config{Guide: config.Guide{Role: config.Role{RelayAt: 400_000}}}, now: relayNow}
+	r := state.Role{Holder: &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}}
 	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
-	v := a.viewSupervisor(st, sessions, supervision{live: true})
+	v := a.viewRole(guideRole, r, sessions, supervision{live: true})
 	if got := v.contextText(); got != ", 163k tokens of context (relay at 400k)" {
 		t.Fatalf("context: %q", got)
 	}
-	if got := a.viewSupervisor(st, nil, supervision{}).contextText(); got != "" {
+	if got := a.viewRole(guideRole, r, nil, supervision{}).contextText(); got != "" {
 		t.Fatalf("context of a gone session: %q", got)
 	}
-	if a.viewSupervisor(&state.State{}, sessions, supervision{}) != nil {
-		t.Fatal("a view of no supervisor")
+	if a.viewRole(guideRole, state.Role{}, sessions, supervision{}) != nil {
+		t.Fatal("a view of no holder")
 	}
 }
 
-func TestARenamedSupervisorIsKnownByItsCurrentTitle(t *testing.T) {
-	const renamedTitle = "Supervisor run 18"
+func TestARenamedHolderIsKnownByItsCurrentTitle(t *testing.T) {
+	const renamedTitle = "Guide run 18"
 	st := handOverState()
 	renamed := []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: renamedTitle}}
-	observeCLI(st, []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}, relayNow)
-	changed, evs := observeCLI(st, renamed, relayNow.Add(time.Second))
-	if !changed || st.Supervisor.Name != renamedTitle || st.SupervisorCLI.Supervisor.Name != renamedTitle {
-		t.Fatalf("the rename is not recorded: %v %+v %+v", changed, st.Supervisor, st.SupervisorCLI)
+	guideRole.observeCLI(st, []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}, relayNow)
+	changed, evs := guideRole.observeCLI(st, renamed, relayNow.Add(time.Second))
+	if !changed || st.Guide.Holder.Name != renamedTitle || st.Guide.CLI.Supervisor.Name != renamedTitle {
+		t.Fatalf("the rename is not recorded: %v %+v %+v", changed, st.Guide.Holder, st.Guide.CLI)
 	}
-	if len(evs) != 1 || evs[0].Verb != "supervisor.rename" || !strings.Contains(evs[0].Detail, `is now "`+renamedTitle+`"`) {
+	if len(evs) != 1 || evs[0].Verb != "guide.rename" || !strings.Contains(evs[0].Detail, `is now "`+renamedTitle+`"`) {
 		t.Fatalf("the rename is not logged once: %+v", evs)
 	}
-	if changed, evs := observeCLI(st, renamed, relayNow.Add(2*time.Second)); changed || len(evs) != 0 {
+	if changed, evs := guideRole.observeCLI(st, renamed, relayNow.Add(2*time.Second)); changed || len(evs) != 0 {
 		t.Fatalf("an unchanged title changes the state: %v %+v", changed, evs)
 	}
-	if !st.Supervisor.Is(supA) || !st.SupervisorCLI.Of(st.Supervisor) {
-		t.Fatal("the rename changes who holds the role")
+	if renameHolder(st.Guide.Holder, []*claude.Session{{PID: 100, ID: supA.Session}}) || st.Guide.Holder.Name != renamedTitle {
+		t.Fatalf("an untitled session erased the name: %+v", st.Guide.Holder)
 	}
-	// A session without a title keeps the recorded name.
-	if renameHolder(st.Supervisor, []*claude.Session{{PID: 100, ID: supA.Session}}) || st.Supervisor.Name != renamedTitle {
-		t.Fatalf("an untitled session erased the name: %+v", st.Supervisor)
+}
+
+// supervisorApp is an app on a fresh state whose supervisor command runs
+// with out as its output.
+func supervisorApp(t *testing.T) (*app, *bytes.Buffer) {
+	t.Helper()
+	var out bytes.Buffer
+	a := quietApp(t, &out)
+	return a, &out
+}
+
+// The supervisor is the supervisor loop: status reads the loop's PID marker,
+// exit 3 while no loop runs, and the command has no session subcommands.
+func TestSupervisorStatusReadsTheLoop(t *testing.T) {
+	a, out := supervisorApp(t)
+	if err := a.supervisorStatus(); Code(err) != ExitRefused || !strings.Contains(err.Error(), "the supervisor loop does not run") {
+		t.Fatalf("no loop: %v", err)
+	}
+	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.supervisorStatus(); err != nil || !strings.Contains(out.String(), "the supervisor loop runs (PID ") {
+		t.Fatalf("a running loop: %v, %q", err, out)
+	}
+	if err := a.store.WriteFile(loopPIDFile, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.supervisorStatus(); Code(err) != ExitRefused {
+		t.Fatalf("a stopped loop: %v", err)
+	}
+	for _, c := range a.supervisorCmd().Commands() {
+		switch c.Name() {
+		case "status", "loop":
+		default:
+			t.Errorf("the supervisor command has %q: no session holds the role", c.Name())
+		}
+	}
+}
+
+// fakeLoopService records the standby's restarts of the loop's service.
+type fakeLoopService struct {
+	state   string
+	starts  int
+	refusal error
+}
+
+func (f *fakeLoopService) service() *loopService {
+	return &loopService{
+		state: func(context.Context) string { return f.state },
+		start: func(context.Context) error {
+			f.starts++
+			return f.refusal
+		},
+	}
+}
+
+// While the supervisor loop is down the standby watch restarts its service,
+// at most once a minute, says SUPERVISOR LOOP DOWN once past the grace and
+// notifies, and never starts or relays a session: the supervisor session is
+// gone. A loop back is one line; a stop restarts nothing.
+func TestStandbyRestartsTheLoopAndStartsNoSession(t *testing.T) {
+	dir := t.TempDir()
+	w, d, out := notifyingWatch(t, dir, true)
+	svc := &fakeLoopService{state: "dead"}
+	w.stand.loopUnit = svc.service()
+	successors := 0
+	w.stand.succeed = func(context.Context, role, state.Party) (state.Party, error) {
+		successors++
+		return state.Party{}, errors.New("no successor")
+	}
+	poll := func(at time.Duration) {
+		w.now = relayNow.Add(at)
+		w.pending(context.Background(), nil)
+	}
+	downs := func() (n int) {
+		for _, m := range d.sent {
+			if m.Summary == "beekeeper: the supervisor loop is down" {
+				n++
+			}
+		}
+		return n
+	}
+	poll(0)
+	if svc.starts != 1 || !strings.Contains(out.String(), "SUPERVISOR LOOP RESTARTED") {
+		t.Fatalf("the first poll did not restart the loop: %d starts\n%s", svc.starts, out)
+	}
+	poll(30 * time.Second)
+	if svc.starts != 1 {
+		t.Fatalf("restarted again within a minute: %d", svc.starts)
+	}
+	if strings.Contains(out.String(), "SUPERVISOR LOOP DOWN") || downs() != 0 {
+		t.Fatalf("down within the grace:\n%s", out)
+	}
+	svc.state = "activating"
+	poll(90 * time.Second)
+	if svc.starts != 1 {
+		t.Fatalf("restarted a starting service: %d", svc.starts)
+	}
+	svc.state = "dead"
+	poll(2*time.Minute + time.Second)
+	poll(3 * time.Minute)
+	if svc.starts != 2 || strings.Count(out.String(), "SUPERVISOR LOOP DOWN") != 1 || downs() != 1 {
+		t.Fatalf("down: %d starts, %d notifications\n%s", svc.starts, downs(), out)
+	}
+	if successors != 0 {
+		t.Fatalf("the standby started %d supervisor sessions", successors)
+	}
+	// The loop runs again: one BACK line.
+	if err := w.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	poll(4 * time.Minute)
+	poll(5 * time.Minute)
+	if strings.Count(out.String(), "SUPERVISOR LOOP BACK") != 1 {
+		t.Fatalf("back:\n%s", out)
+	}
+	// A stop holds the loop: nothing restarts it.
+	if err := w.store.WriteFile(loopPIDFile, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Stop = &state.Stop{Reason: "maintenance", At: relayNow}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	starts := svc.starts
+	poll(10 * time.Minute)
+	poll(20 * time.Minute)
+	if svc.starts != starts || successors != 0 {
+		t.Fatalf("a stopped desk restarted the loop (%d) or started a session (%d)", svc.starts-starts, successors)
+	}
+	if downs() != 1 {
+		t.Fatalf("a stopped desk notified the loop down: %d", downs())
+	}
+}
+
+// A message to "the supervisor" is refused with where a worker reports,
+// waits and asks instead: no session holds the role.
+func TestAMessageToTheSupervisorIsRefused(t *testing.T) {
+	a, _ := supervisorApp(t)
+	if _, err := a.roleTarget(guard.RoleSupervisor); !errors.Is(err, errSupervisorMessage) {
+		t.Fatalf("a message to the supervisor: %v", err)
 	}
 }

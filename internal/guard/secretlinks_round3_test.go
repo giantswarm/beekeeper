@@ -16,12 +16,12 @@ func TestSecretLinkRoundTwoProbes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"auth.json", "other.json"} {
+	for _, name := range []string{authFixtureName, "other.json"} {
 		if err := os.WriteFile(filepath.Join(home, ".tool", name), []byte(`{"token":"synthetic"}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	h := Hook{SecretFiles: []string{authFixturePath, "~/.tool/other.json"}}
+	h := Hook{SecretFiles: []string{authFixturePath, otherFixturePath}}
 	for _, tc := range []struct {
 		name, command string
 		deny          bool

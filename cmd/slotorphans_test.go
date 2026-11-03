@@ -75,6 +75,11 @@ func slotTable() *proc.Table {
 		&proc.Process{PID: 300, PPID: 900, Comm: "kube-apiserver"},
 		&proc.Process{PID: 301, PPID: 300, Comm: "etcd"},
 		&proc.Process{PID: 400, PPID: 1, Comm: sleepComm},
+		&proc.Process{PID: 500, PPID: 50, Comm: sandboxInitCommand},
+		&proc.Process{PID: 501, PPID: 500, Comm: sleepComm},
+		&proc.Process{PID: 502, PPID: 501, Comm: sleepComm},
+		&proc.Process{PID: 503, PPID: 500, Comm: pluginName},
+		&proc.Process{PID: 504, PPID: 503, Comm: testShell},
 	)
 }
 
@@ -150,6 +155,10 @@ func TestOrphanedScope(t *testing.T) {
 		{"a live run's command beside an adopted one", []int{101, 300}, false},
 		{"processes gone from the table", []int{7, 8}, false},
 		{"no process", nil, false},
+		{"adopted by sandbox init with its child", []int{501, 502}, true},
+		{"live sandbox run's command", []int{504}, false},
+		{"live sandbox command beside an adopted child", []int{504, 501}, false},
+		{"sandbox init inside a live run's scope", []int{500, 501, 502}, false},
 	} {
 		if got := orphanedScope(table, c.pids); got != c.want {
 			t.Errorf("%s: orphanedScope(%v) = %v, want %v", c.name, c.pids, got, c.want)

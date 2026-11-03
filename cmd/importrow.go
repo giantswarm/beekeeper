@@ -75,9 +75,12 @@ func (a *app) importRow(ctx context.Context, id, name string) (string, error) {
 // runs a headless turn and has no row in the desktop: the person sees none
 // of their work.
 func (a *app) rowless(ctx context.Context, st *state.State, turning func(context.Context, string) bool) []state.Agent {
+	if !a.desktopMode() {
+		return nil
+	}
 	var out []state.Agent
 	for _, ag := range st.Agents {
-		if ag.Session == "" || !desktopStarted(st, ag.Party) || a.hasRow(ag.Session) || !turning(ctx, ag.Session) {
+		if ag.Execution != nil || ag.Session == "" || !desktopStarted(st, ag.Party) || a.hasRow(ag.Session) || !turning(ctx, ag.Session) {
 			continue
 		}
 		out = append(out, ag)
@@ -146,11 +149,11 @@ type rowlessWorker struct {
 // past rowGrace since the start; false for any other agent. A finished
 // worker is the doctor's archive chore, a role holder the standby watch's.
 func rowlessCandidate(st *state.State, ag state.Agent, now time.Time) (state.Start, bool) {
-	if ag.Task == "" || ag.Done || ag.Session == "" || holdsRole(st, ag.Party) {
+	if ag.Execution != nil || ag.Task == "" || ag.Done || ag.Session == "" || holdsRole(st, ag.Party) {
 		return state.Start{}, false
 	}
 	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Session == ag.Session })
-	if i < 0 || st.Starts[i].Background || now.Sub(st.Starts[i].At) < rowGrace {
+	if i < 0 || st.Starts[i].Execution != nil || st.Starts[i].Background || now.Sub(st.Starts[i].At) < rowGrace {
 		return state.Start{}, false
 	}
 	return st.Starts[i], true
@@ -162,7 +165,7 @@ func rowlessCandidate(st *state.State, ag state.Agent, now time.Time) (state.Sta
 // reopen of theirs running: only a reopen shows them again. record reads a
 // desktop session's record.
 func (a *app) rowlessWorkers(ctx context.Context, st *state.State, t *proc.Table, record func(host string) (*claude.Record, bool)) []rowlessWorker {
-	if t == nil {
+	if t == nil || !a.desktopMode() {
 		return nil
 	}
 	var out []rowlessWorker
@@ -269,7 +272,7 @@ func (a *app) launchReopen(unit, dir, arg, turn string) error {
 // desktop runs; before, the roster and the event log were its only signs.
 func (w *watcher) rowlessAgents(st *state.State) {
 	t := w.table
-	if t == nil || plat.Opener.Running(t).IsZero() {
+	if t == nil || !w.desktopMode() || plat.Opener.Running(t).IsZero() {
 		return
 	}
 	said := map[string]bool{}

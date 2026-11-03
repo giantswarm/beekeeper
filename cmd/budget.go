@@ -31,9 +31,17 @@ func (a *app) budgetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "budget",
 		Short: "The GitHub REST, GraphQL and search budget every session draws from, and who is drawing",
-		Long: `Read the person's GitHub core budget from the rate-limit headers of a real,
+		Long: `Read the stored gh login and the configured devctl App login explicitly,
+independent of the working directory or a gh link. Name both identities and
+their account logins, counters and reset times (JSON identities). Cache each
+identity separately; the top-level REST and GraphQL counters each select the
+lowest balance. Unreadable App provider metadata falls back to the stored gh
+login with a warning, retaining known unexpired App observations. Unreadable
+credentials or GitHub probes hold the gate, as does any refusal.
+
+Read each identity's GitHub core budget from the rate-limit headers of a real,
 conditional request (a 304 costs nothing; /rate_limit is exempt and lies),
-and the GraphQL limit from a real rateLimit query (one point, read again
+and the GraphQL limit from a real rateLimit query (one point per identity, read again
 after merge.budgetFresh), the search and code-search limits from
 /rate_limit (free; a spent one names its reset), and list the gh and devctl processes on the
 machine with the session each runs under: the callers drawing on it. A
@@ -69,6 +77,9 @@ unread core budget:
 			}
 			b, err := readBudget(a, cmd.Context())
 			if err != nil {
+				if a.json {
+					_ = a.printJSON(b)
+				}
 				return err
 			}
 			b.Search = probeSearch(cmd.Context())
@@ -91,18 +102,36 @@ unread core budget:
 				firstLine = fmt.Sprintf("merges first: %s, queued for the reset, go before the waits until they start, at %s at the latest (merge.resetFirst)",
 					merge.Keys(first), clock(a.now, merge.ResetFirstUntil(first, window)))
 			}
+			var loopSpend loopGraphQLSpend
+			_, _ = a.store.ReadFile(loopGraphQLFile, &loopSpend)
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
-					Floor   int            `json:"floor"`
-					Held    bool           `json:"held"`
-					Urgent  []state.Urgent `json:"urgent,omitempty"`
-					Gated   []gatedParty   `json:"gated,omitempty"`
-					Pollers []poller       `json:"pollers"`
-				}{b, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
+					Loop    *loopGraphQLSpend `json:"loop,omitempty"`
+					Floor   int               `json:"floor"`
+					Held    bool              `json:"held"`
+					Urgent  []state.Urgent    `json:"urgent,omitempty"`
+					Gated   []gatedParty      `json:"gated,omitempty"`
+					Pollers []poller          `json:"pollers"`
+				}{b, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
+				for _, warning := range b.Warnings {
+					_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
+				}
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
+				var identities []string
+				for id := range b.Identities {
+					identities = append(identities, id)
+				}
+				slices.Sort(identities)
+				for _, id := range identities {
+					profile := b.Identities[id]
+					_, _ = fmt.Fprintf(a.out, "identity %s (%s): %s\n", id, profile.Login, budgetLine(a, profile))
+				}
 				for _, l := range searchLines(a, b.Search) {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
+				if l := loopSpendLine(a, loopSpend); l != "" {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
 				for _, l := range urgent {
@@ -138,6 +167,9 @@ unread core budget:
 			}
 			if gate && b.GraphQL.Blocks(a.now) {
 				return refused("GitHub refuses GraphQL calls: %s", graphqlText(a, b.GraphQL))
+			}
+			if gate && b.GraphQL != nil && b.GraphQL.Remaining < a.cfg.GitHub.Floor {
+				return refused("GraphQL identity %s budget %d is under the floor %d: wait for its reset at %s", b.GraphQL.Identity, b.GraphQL.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.GraphQL.Reset))
 			}
 			if gate && b.Remaining < a.cfg.GitHub.Floor {
 				return refused("GitHub budget %d is under the floor %d: wait for the reset at %s", b.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.Reset))
@@ -208,12 +240,43 @@ func gateBuckets(a *app, s *github.Searches, buckets []string) error {
 
 // probeSearch reads the search limits; a failure is their Err.
 func probeSearch(ctx context.Context) *github.Searches {
-	token, err := github.Token(ctx)
-	if err != nil {
-		return &github.Searches{Err: err.Error()}
+	result := &github.Searches{}
+	minimum := func(old, next *github.Limit) *github.Limit {
+		if old == nil || next != nil && next.Remaining < old.Remaining {
+			return next
+		}
+		return old
 	}
-	s := github.ProbeSearch(ctx, &http.Client{Timeout: 20 * time.Second}, token)
-	return &s
+	for _, credential := range budgetCredentials(ctx) {
+		if credential.Err != nil {
+			return &github.Searches{Err: fmt.Sprintf("identity %s: %v", credential.Identity, credential.Err)}
+		}
+		s := github.ProbeSearch(ctx, &http.Client{Timeout: 20 * time.Second}, credential.Value)
+		if s.Err != "" {
+			return &github.Searches{Err: s.Err + " [identity " + credential.Identity + "]"}
+		}
+		result.Search, result.CodeSearch = minimum(result.Search, s.Search), minimum(result.CodeSearch, s.CodeSearch)
+	}
+	return result
+}
+
+func loopSpendLine(a *app, s loopGraphQLSpend) string {
+	if s.Spent == 0 && len(s.Steps) == 0 {
+		return ""
+	}
+	var steps []string
+	for step, points := range s.Steps {
+		steps = append(steps, fmt.Sprintf("%s %d", step, points))
+	}
+	slices.Sort(steps)
+	line := fmt.Sprintf("loop GraphQL spend: %d of %d", s.Spent, loopGraphQLLimit)
+	if len(steps) > 0 {
+		line += " (" + strings.Join(steps, ", ") + ")"
+	}
+	if !s.Reset.IsZero() {
+		line += ", resets " + clock(a.now, s.Reset)
+	}
+	return line
 }
 
 // searchLines are a row per search limit: its figures and reset, or that it

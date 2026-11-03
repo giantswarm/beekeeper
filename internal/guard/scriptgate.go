@@ -159,14 +159,18 @@ const (
 
 // ungated is a blocking devctl command the gate rewrite does not reach.
 type ungated struct {
-	what  string // the command: devctl pr merge
-	where string // the script /x/m.sh, python3's code (-c), the input bash reads
-	line  int
-	text  string // the line, trimmed
-	fixed string // the line with the gate written in; "" where it has no place
+	refusal string
+	what    string // the command: devctl pr merge
+	where   string // the script /x/m.sh, python3's code (-c), the input bash reads
+	line    int
+	text    string // the line, trimmed
+	fixed   string // the line with the gate written in; "" where it has no place
 }
 
 func (u *ungated) reason() string {
+	if u.refusal != "" {
+		return u.refusal
+	}
 	s := fmt.Sprintf("Refused: a %s in %s runs outside the gate (line %d: %s). Run it as its own Bash command line",
 		u.what, u.where, u.line, u.text)
 	if u.fixed == "" {
@@ -443,6 +447,9 @@ func kindOf(shell bool) textKind {
 // textUngated finds the first blocking devctl command in text that the gate
 // does not precede, as the text's kind runs it.
 func (h Hook) textUngated(text, where string, kind textKind) *ungated {
+	if why := h.hiddenDeskMerge(text, where, kind); why != "" {
+		return &ungated{refusal: why}
+	}
 	at, fix := -1, false
 	switch kind {
 	case textShell:
@@ -480,7 +487,9 @@ func (h Hook) textUngated(text, where string, kind textKind) *ungated {
 }
 
 // firstShellUngated is the offset of the first blocking devctl command of a
-// shell command line that the gate does not precede, -1 for none.
+// shell command line that the gate does not precede, -1 for none: at a
+// command position, in a -c or eval string, or run by a runner from its
+// arguments or a backquote substitution (runnerMerges).
 func firstShellUngated(text string) int {
 	at := -1
 	for _, m := range owned.FindAllStringSubmatchIndex(text, -1) {
@@ -488,6 +497,9 @@ func firstShellUngated(text string) int {
 			at = m[2]
 			break
 		}
+	}
+	if _, in := runnerMerges(text); len(in) > 0 && (at < 0 || in[0] < at) {
+		at = in[0]
 	}
 	for _, cs := range shellStrings(text) {
 		for _, mm := range anyOwned.FindAllStringIndex(cs.text, -1) {

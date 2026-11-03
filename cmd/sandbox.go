@@ -257,16 +257,17 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					return err
 				}
 			}
+			// Consume inherited vault descriptors before egress starts any child.
+			keeper, err := a.keepVault(ctx)
+			if err != nil {
+				return err
+			}
 			serveEgress, err := a.listenEgress(ctx)
 			if err != nil {
 				return err
 			}
 			egress := make(chan error, 1)
 			go func() { egress <- serveEgress() }()
-			keeper, err := a.keepVault(ctx)
-			if err != nil {
-				return err
-			}
 			secretCall := func(env []string) sandbox.Handler {
 				return a.secretCallLogged(brokeredCallTimeout, brokeredCall(exe, "/proc", 0, env, brokeredSecretArgv(a.cfg.Secret.Session)))
 			}

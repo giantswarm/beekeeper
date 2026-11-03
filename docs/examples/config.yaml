@@ -121,6 +121,9 @@ memcap:                     # beekeeper run's build slots and cap
   cpuWeight: 50             # memcap.slice's CPUWeight against the desktop's slices (100 each); the default
   holdBound: 30m            # watch says SLOT HELD LONG for a run holding a slot longer; the default
 
+run:                        # beekeeper run beyond the slots
+  tail: 256K                # the failed run's output tail beekeeper keeps and prints (see `beekeeper run tail`); the default, off keeps nothing
+
 ollama:                     # the host's ollama, whose loaded models sit in the iGPU's GTT; unset url, none
   url: http://localhost:11434   # GET /api/ps
   unit: ollama              # the systemd unit whose journal names the client that loaded a model
@@ -155,6 +158,7 @@ merge:
   ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
   toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
+  admin: []                    # the repositories (owner/repo) whose merge go names gh pr merge --admin --match-head-commit after the approved review
 
 units:
   quiet: false              # true counts every end of a started unit (any exit, SIGKILL, SIGTERM, SIGABRT) as success; for an isolated harness state only, never the desk's
@@ -190,31 +194,33 @@ alerts:
 upgrades:
   every: 5m                 # each installation's Cluster API upgrades are read this often; every watch.interval while one runs on it
 
-supervisor:                 # what handover --prompt tells the successor supervisor; unset skill and instructions, it opens without them
-  loop: false              # install the persistent supervisor loop user service (systemd or launchd); opt-in
-  skill: beekeeper:supervise   # the skill it runs (the plugin's role, see the README); or instructions: ~/supervisor.md, a file that opens the prompt
-  scope: The desk's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
-  relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
-  relayTTL: 15m             # a relay not taken by the successor's start expires
-  relayGrace: 30m           # still over relayAt this long after RELAY DUE, the standby watch relays the supervisor itself
-  restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE and a fresh successor
-  dir: ~/src/desk            # the folder a successor starts in (default: where its predecessor's desktop session started, never its worktree)
-  profile: ""                # the tool profile (agents.profiles or minimal) of its successors and its holder's headless wakes; empty: none
+supervisor:                 # the supervisor loop, which beekeeper install always installs as a user service (systemd or launchd); no session holds the role
+  postMergeWindow: 2h       # retain merged workers until done or this long without activity
+  hosts: []                # execution host selectors (agents.hosts) worker starts may run on, in order; with no room locally, or always with hostsFirst: true; a host must map the item's repository and pass its check (capacity --host); reviewers stay on the coordinator
+  hostsFirst: false        # prefer the first host with room over the coordinator's own machine, whatever its room is
+  # The loop owns a watch beside it, reading alerts every alerts.every;
+  # unowned pages become guide.person notes. A worker can wait on a named
+  # alert with agents park --on alert:<alertname|installation/alertname>.
+  # An unresumable parked session is replaced on its original task. Every
+  # watch poll reads the budget; the loop holds starts on low/stale budget
+  # or machine pressure. Watch lines are durable watch.* events.
+  fillRetryEvery: 5m        # retry an empty/failed board read, doubled per further empty read up to 4x; roster or capacity changes retry immediately
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
+  model: ""                 # guide successors: overrides the previous holder's model
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
   waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
-  relayAt: 150k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
+  relayAt: 200k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
   relayGrace: 30m
   restartGrace: 1m
   dir: ~/src/desk
 agents:                     # the hand-over of registered agents
-  relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
+  relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default 400k
   lastStepGrace: 30m        # an agent over relayAt in its task's last step (its serve record waits on the report or says the merge landed, or the gate saw its merge land) is HANDOVER HELD this long from that evidence, its report expected
   lastStepCeiling: 500k     # the context at which the hand-over is due whatever the last step; default: a quarter above relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
-  staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
+  staleAfter: 24h           # inactivity without a CLI: idle and gone task holders retire unless kept or parked; negative: off
   archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive
   dir: ~/src/desk           # every agent beekeeper starts runs here (start, handover, a role's successor); empty: the caller's folder
   roots: [~/src/worktrees]  # with dir set, a --dir is refused unless it is dir or under one of these
@@ -227,64 +233,68 @@ agents:                     # the hand-over of registered agents
       deny: []              # further permission rules refused (permissions.deny); a bare tool or mcp__<server> name takes it off the tool list
   mode: desktop             # desktop: started sessions are imported into Claude Desktop and woken through it; background: each is a claude --bg session with Remote Control, none of the caller's CLAUDE* variables, on the roster at once, woken by its messaging or claude --bg --resume
   model: ""                 # the model of a session beekeeper starts when the start names none; empty: Claude Code's default
+  requireModel: false       # true refuses a start with no resolved model (exit 3)
+  models: []                # first matching name regexp and optional kind wins; --model overrides
+  # models:
+  #   - {match: '^scan', kind: audit, model: claude-opus-5-5}
+  #   - {match: '^scan', model: claude-sonnet-5-5}
   autoResume: false         # the watch resumes a parked agent (agents park --on) with what settled its note or pull request; false: it says AGENT RESUMABLE, agents resume does it by hand
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
     globs: literal          # an unmatched glob stays as written; shell: the shell's own behaviour (zsh: no matches found)
     path: [~/.local/share/devctl/agent-bin]   # directories first on PATH, in this order: the agent's own programs (a gh link to devctl acts with the App's short-lived token); default: none
-capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY LOW / FULL)
-  floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start (0: never)
-  ceiling: 10               # CAPACITY FULL at this many; no start past it (0: no unforced start, suppresses CAPACITY LOW / FULL; unset: 5 and 10)
+capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY FULL)
+  reviewHeadroom: 2         # extra subscription sessions reserved for reviews; 0 disables
+  ceiling: 10               # CAPACITY FULL at this many; no start past it (0: no unforced start, suppresses CAPACITY FULL; unset: 10)
+  local:
+    ceiling: 5              # optional: the busy agents this machine runs (self-hosted ones included; execution hosts' count against their maxBusy); unset: no local cap, 0: no unforced local start
   availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
   swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
   swapPSIMax: 0             # the default; memory pressure (full avg60 of /proc/pressure/memory, %) up to which that growth is only a warning while MemAvailable is over availMinMiB
-  usage:                    # optional: derive floor and ceiling from subscription usage windows; unset command: off
+  usage:                    # optional: derive ceiling from subscription usage windows; unset command: off
     command: [~/.local/bin/read-usage]   # prints JSON {"fiveHour": {"usedPercent": 42.5, "resetsAt": "2026-10-27T23:00:00Z"}, "sevenDay": {"usedPercent": 61.0, "resetsAt": "2026-11-01T12:00:00Z"}}
     every: 5m               # how long a cached reading in usage.json stays fresh (re-read at once once resetsAt passes)
-    timeout: 15s            # bounds one run of command
+    timeout: 90s            # bounds one run of command
     reportEvery: 30m        # watch prints one USAGE line this often (negative: never, watch --once aside)
     highPercent: 95         # 5-hour usedPercent from which USAGE HIGH holds until fiveHour.resetsAt: starts, resumes and auto-resume wait, and busy workers are told once to finish their step and park
-    fiveHour:               # first band with usedPercent < upTo applies; at or past the last upTo yields floor 0, ceiling 0
-      - {upTo: 50, floor: 5, ceiling: 10}
-      - {upTo: 80, floor: 3, ceiling: 6}
-      - {upTo: 95, floor: 1, ceiling: 2}
-    sevenDay:               # when both windows have bands, the lower floor and the lower ceiling apply
-      - {upTo: 70, floor: 5, ceiling: 10}
-      - {upTo: 90, floor: 2, ceiling: 4}
-  providers:                # optional: per-provider usage readers, window thresholds and floor/ceiling targets (the machine guards and capacity.ceiling cap the subscription providers' total)
+    fiveHour:               # first band with usedPercent < upTo applies; at or past the last upTo yields ceiling 0
+      - {upTo: 50, ceiling: 10}
+      - {upTo: 80, ceiling: 6}
+      - {upTo: 95, ceiling: 2}
+    sevenDay:               # when both windows have bands, the lower ceiling applies
+      - {upTo: 70, ceiling: 10}
+      - {upTo: 90, ceiling: 4}
+  providers:                # optional: per-provider usage readers, window thresholds and ceiling targets (the machine guards and capacity.ceiling cap the subscription providers' total)
     claude:
-      floor: 1
       ceiling: 4
-      command: [~/.local/bin/read-usage]
-      staleAfter: 15m       # a reading older than staleAfter or a failed read yields ceiling 0, room 0 for this provider
+      command: [claude, -p, /usage, --output-format, json] # default for claude, even with claude: {}; no model turn, no status line or credential reader
+      staleAfter: 15m       # failed reads use the last good reading until this age; older or missing readings yield ceiling 0
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
-        - {upTo: 75, floor: 2, ceiling: 4}
-        - {upTo: 90, floor: 1, ceiling: 2}
+        - {upTo: 75, ceiling: 4}
+        - {upTo: 90, ceiling: 2}
       sevenDay:
-        - {upTo: 80, floor: 2, ceiling: 4}
-        - {upTo: 95, floor: 1, ceiling: 2}
+        - {upTo: 80, ceiling: 4}
+        - {upTo: 95, ceiling: 2}
     agy:
-      floor: 1
       ceiling: 2
-      command: [agy, -p, /usage]  # default for agy; parses "Gemini Models" and "Claude and GPT models" buckets by model
+      command: [agy, -p, /usage]  # default for agy, even with agy: {}; no model turn; each bucket's 5-hour and weekly windows ("Gemini Models", "Claude and GPT models")
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
-        - {upTo: 90, floor: 1, ceiling: 2}
+        - {upTo: 90, ceiling: 2}
       sevenDay:
-        - {upTo: 95, floor: 1, ceiling: 2}
+        - {upTo: 95, ceiling: 2}
     codex:
-      floor: 1
       ceiling: 2
       command: [codex, usage]     # default for codex; reads the freshest token_count rate_limits event across rollout transcripts
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
-        - {upTo: 90, floor: 1, ceiling: 2}
+        - {upTo: 90, ceiling: 2}
       sevenDay:
-        - {upTo: 95, floor: 1, ceiling: 2}
+        - {upTo: 95, ceiling: 2}
     local-model:            # a model served on this machine: no subscription, so no usage reader and no pace
       kind: self-hosted
       ceiling: 3            # its own ceiling of sessions at once; capacity.ceiling (even 0, holding a subscription on its weekly pace) bounds none of it; unset: 10
@@ -298,6 +308,13 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
       #   tiny: {nodes: [node-a], sessions: 1}           # the mode that runs while node-b stands claimed
       # serveModeSwitchCommand: [~/.local/bin/switch-serving-mode]  # switches into the mode named as its last argument; beekeeper relays, holds no control of its own
       # serveModeSwitchTimeout: 1m  # how long a switch may take before beekeeper ends it and leaves the mode as its reader reports it
+  taskPolicies: {}          # optional kind -> {minClass: N, maxCost: N}; class and cost are desk-maintained
+  # taskPolicies:
+  #   audit: {minClass: 3}
+  #   planning: {minClass: 2, maxCost: 5}
+  #   review: {differentFamily: true}  # the loop supplies the author's model; manual reviews need --author-model
+  # choices may add kinds: [worker, review], class: 3, cost: 5,
+  # family: claude and reviewReserve: 20 (percent of the weekly window).
   choices:                  # ordered (harness, model) candidates for agents start (no --harness, or --harness auto), beekeeper capacity pick and the supervisor loop; every start alike, none ahead of its provider's even 7-day pace
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}
@@ -343,6 +360,7 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepDepth: 5
 
 hooks:
+  transcriptGrants: {}      # supervisor-granted exact own-transcript files or fixture directories, by receiving session ID; no globs
   scope:                    # where the Claude Code hooks act; unset, in every session
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
   personFolders: [~, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
@@ -391,13 +409,22 @@ board:                      # the project board `beekeeper board next` picks wor
     - {name: In Progress, status: [in progress], subIssues: true}   # an epic offers its open sub-issues
     - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed, the Status set before the last close
     - {name: Up Next, status: [up next]}
-    - {name: bug, status: [backlog], kind: [bug], workScope: true}   # an item without a Kind by its label too (bug, kind/bug); workScope: only a priority epic's sub-issues, orders and their blockers
+    - {name: bug, status: [backlog], kind: [bug], workScope: true}   # an item without a Kind by its label too (bug, kind/bug); workScope is read and ignored: the priority list orders and gates nothing
     - {name: queue, search: "repo:example-org/tools label:team/platform"}   # open issues, oldest first
     - {name: Backlog, status: [backlog], createdWithin: 2160h, workScope: true}
   epics:                    # the epic gate, whatever the order says (these are the defaults)
     kind: [epic]            # an epic
     planning: [up next]     # in planning: neither it nor its sub-issues offered, board next shows its plan
+                            # an epic in a status ahead of planning (Inbox, Backlog) is not scheduled for planning: neither it nor its sub-issues offered
     go: in progress         # the go: its open sub-issues offered in their order; board move records the plan head
+  archiveAfter: 336h        # the default; board tidy archives a closed item after this long (its Status set to Done first); negative: never
+  tidyEvery: 1h             # the default; how often the supervisor loop runs board tidy; negative: never
+  escalateEvery: 168h       # the default; board escalate (after each tidy) asks the person about a blocked item with what holds it, looks again this long later and asks again only when that changed; skips teammates' items, answered threads and open notes; negative: never
+  claims:                   # the desk's session records as marker comments on their issues, for other desks on the same repositories (defaults but desk)
+    off: false              # true: publish no claim and read none
+    desk: platform-desk     # the neutral name the desk's claims carry, seen on (possibly public) issues; unset: no claim published, the other desks' still honoured
+    refresh: 6h             # how often a claim that still holds is refreshed
+    staleAfter: 24h         # another desk's claim unrefreshed for longer is shown, not honoured
 
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links

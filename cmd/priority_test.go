@@ -41,7 +41,7 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 		name, as, session, want string
 	}{
 		{"no --as outside a session", "", "", "a call without --as: only the person changes priorities; the guide relays the person's word with --as Timo"},
-		{"the supervisor without --as", "", supSession, "the supervisor without --as: only the person changes priorities"},
+		{"the guide without --as", "", supSession, "the guide without --as: only the person changes priorities"},
 		{"a worker without --as", "", "w1", "the worker without --as: only the person changes priorities"},
 		{"another name", supervisorName, supSession, `--as "supervisor" is no configured person (Timo): only the person changes priorities`},
 	} {
@@ -50,7 +50,7 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 			a, store := priorityApp(t, tc.as)
 			if err := store.Update(func(st *state.State) ([]state.Event, error) {
-				st.SetSupervisorRole(state.Role{Holder: &state.Supervisor{Party: sup}})
+				guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: sup}})
 				st.Agents = append(st.Agents, state.Agent{Party: worker, Task: refOne})
 				return nil, nil
 			}); err != nil {
@@ -89,5 +89,56 @@ func TestPriorityPersonTakesTheConfiguredPerson(t *testing.T) {
 	}
 	if got := strings.Join(a.persons(), ", "); got != "Timo, timo@example.com, Pat" {
 		t.Errorf("persons = %s", got)
+	}
+}
+
+// Position edits stay available to workers, but cannot mutate Priority numbers.
+func TestBoardRankSplitLogsCallerAndWritesOnlyPosition(t *testing.T) {
+	defer func(gh func(context.Context, ...string) ([]byte, error)) { boardGH = gh }(boardGH)
+	a, store := priorityApp(t, "worker-script")
+	writes := 0
+	boardGH = func(_ context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		switch {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog"}]}]}}}}}`), nil
+		case strings.Contains(q, "projectItems"):
+			return []byte(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"I1","project":{"id":"P"}}]}}}}}`), nil
+		case strings.Contains(q, "updateProjectV2ItemPosition"):
+			writes++
+			return []byte(`{"data":{"updateProjectV2ItemPosition":{"clientMutationId":null}}}`), nil
+		default:
+			t.Fatalf("unexpected GitHub call, including any Priority write: %s", q)
+			return nil, nil
+		}
+	}
+	c := a.boardRankCmd()
+	c.SilenceUsage, c.SilenceErrors = true, true
+	c.SetArgs([]string{refOne, "--top"})
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Events(0, func(e state.Event) bool { return e.Verb == "board.rank" })
+	if err != nil || writes != 1 || len(events) != 1 || events[0].By.Name != "worker-script" {
+		t.Fatalf("writes=%d events=%+v error=%v", writes, events, err)
+	}
+}
+
+func TestBoardRankSplitRefusesAnonymousWrites(t *testing.T) {
+	for _, key := range []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "BEEKEEPER_OMP_AGENT", "BEEKEEPER_AGY_AGENT", "BEEKEEPER_CODEX_AGENT"} {
+		t.Setenv(key, "")
+	}
+	defer func(gh func(context.Context, ...string) ([]byte, error)) { boardGH = gh }(boardGH)
+	boardGH = func(context.Context, ...string) ([]byte, error) {
+		t.Fatal("anonymous rank reached GitHub")
+		return nil, nil
+	}
+	a, _ := priorityApp(t, "")
+	c := a.boardRankCmd()
+	c.SilenceUsage, c.SilenceErrors = true, true
+	c.SetArgs([]string{refOne, "--top"})
+	err := c.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "identified caller") {
+		t.Fatalf("rank = exit %d, %v", Code(err), err)
 	}
 }

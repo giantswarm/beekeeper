@@ -71,6 +71,7 @@ func TestAgyModel(t *testing.T) {
 // carries another session's variables: agents idle --done --report,
 // agents park, log add and note add work without --as.
 func TestAgyAgentIsTheCaller(t *testing.T) {
+	stubIssuePark(t, "giantswarm/beekeeper#1")
 	const id = "8765dcba-0000-4000-8000-000000000000"
 	dir := t.TempDir()
 	store, err := state.Open(dir)
@@ -207,6 +208,9 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	}
 
 	var gotBrief string
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("Working directory: /wrong-project-directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	origLauncher, origMachine := plat.Launcher, plat.Machine
 	t.Cleanup(func() { plat.Launcher, plat.Machine = origLauncher, origMachine })
 	plat.Machine = tableMachine{plat.Machine}
@@ -253,6 +257,9 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	}
 	if !strings.Contains(gotBrief, "Read the issue and ship it.") {
 		t.Fatalf("FIFO brief = %q, want brief text", gotBrief)
+	}
+	if !strings.HasPrefix(gotBrief, "Working directory: "+dir+"\n") || !strings.Contains(gotBrief, "Working directory: /wrong-project-directory") {
+		t.Fatalf("actual working directory must precede project instructions: %q", gotBrief)
 	}
 	if len(l.started) != 1 {
 		t.Fatalf("started units = %d, want 1", len(l.started))

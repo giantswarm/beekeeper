@@ -406,7 +406,9 @@ type head struct {
 	created               time.Time
 }
 
-const headBytes = 64 << 10
+// Project instructions plus the brief can exceed 64 KiB in a single USER_INPUT
+// line. Match the inbox's message limit while reading only the first five steps.
+const headBytes = 4 << 20
 
 func readHead(path, convID string) (head, error) {
 	f, err := os.Open(filepath.Clean(path)) //nolint:gosec // transcript file under brainDir
@@ -415,8 +417,8 @@ func readHead(path, convID string) (head, error) {
 	}
 	defer func() { _ = f.Close() }()
 	h := head{id: convID}
-	sc := bufio.NewScanner(io.LimitReader(f, headBytes))
-	sc.Buffer(make([]byte, 0, headBytes), headBytes)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), headBytes)
 	for i := 0; i < 5 && sc.Scan(); i++ {
 		var e step
 		if json.Unmarshal(sc.Bytes(), &e) != nil {

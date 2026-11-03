@@ -299,6 +299,12 @@ type NoteSpec struct {
 	// ID is the note's number, unique on the installation.
 	// +kubebuilder:validation:Minimum=1
 	ID int `json:"id"`
+	// Filer and FiledAt survive a failed initial status write. Status remains
+	// authoritative once initialized; these fields travel with the create.
+	// +optional
+	Filer *Party `json:"filer,omitempty"`
+	// +optional
+	FiledAt *metav1.Time `json:"filedAt,omitempty"`
 	// For is the person or team the note asks.
 	// +optional
 	For  string `json:"for,omitempty"`
@@ -338,8 +344,20 @@ type NoteSpec struct {
 	Recommend int `json:"recommend,omitempty"`
 }
 
+// NoteClosure is the durable audit line written atomically with a note's close.
+type NoteClosure struct {
+	ID     string      `json:"id"`
+	Verb   string      `json:"verb"`
+	Detail string      `json:"detail"`
+	By     Party       `json:"by"`
+	At     metav1.Time `json:"at"`
+}
+
 // NoteStatus is who filed the note and where it stands.
 type NoteStatus struct {
+	// Closure survives Event expiry and records why this note is no longer open.
+	// +optional
+	Closure *NoteClosure `json:"closure,omitempty"`
 	// +optional
 	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
 	By                 Party       `json:"by"`

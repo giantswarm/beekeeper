@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,31 @@ const timerStuckAfter = 24 * time.Hour
 
 // timerRunTimeout bounds a timer's --run command.
 const timerRunTimeout = 30 * time.Minute
+
+// timerTick is how long a tick of the watch or the supervisor loop is by
+// default (watch.interval, supervisor.loopInterval): a timer firing more
+// than one tick past its time fired late.
+const timerTick = 30 * time.Second
+
+// timerHeldDown is why a timer fired late that nothing on record held: no
+// tick of the watch or the supervisor loop settled the state between its
+// time and its firing.
+const timerHeldDown = "no watch or supervisor loop tick settled it since its time (down, or the state locked)"
+
+// timerLate says how late a timer firing at now is, and what held it, when
+// it fires more than one tick past the tick that should have fired it:
+// "14m late: <what held it>". It is empty for a timer on time.
+func timerLate(t state.Timer, now time.Time, tick time.Duration) string {
+	late := now.Sub(t.Due)
+	if !lateBy(late, tick) {
+		return ""
+	}
+	return dur(late) + " late: " + cmp.Or(t.Held, timerHeldDown)
+}
+
+// lateBy says whether late is more than one tick past the tick that should
+// have acted at the due time: a tick's own slack is on time.
+func lateBy(late, tick time.Duration) bool { return late > 2*max(tick, timerTick) }
 
 // lastFound is what t's last check found, for a line: " (<reason>)", or
 // empty.
@@ -103,6 +129,9 @@ type timerFire struct {
 	timedOut bool
 	// reason is why it fired: "due 11:05", "<condition> holds", "timed out …".
 	reason string
+	// late is how late a timer fired past its time and why, or empty
+	// (timerLate); a command it runs reads it from BEEKEEPER_TIMER_LATE.
+	late string
 }
 
 // message is what a woken agent reads.
@@ -119,23 +148,33 @@ func (f timerFire) message() string {
 // has not held for timerStuckAfter is a line once. It returns the
 // lines, events and fires, and whether it changed st.
 func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]string, []state.Event, []timerFire, bool) {
-	return settleTimersMatching(st, found, now, nil)
+	return settleTimersMatching(st, found, now, timerTick, nil)
 }
 
 // timerActs distinguishes wakes and commands from watch-only reminders.
 func timerActs(t state.Timer) bool { return t.Wake != "" || t.Run != "" }
 
 // settleTimersMatching leaves timers rejected by accept untouched. A nil
-// predicate accepts every timer, as watch does.
-func settleTimersMatching(st *state.State, found map[int]checkResult, now time.Time, accept func(state.Timer) bool) ([]string, []state.Event, []timerFire, bool) {
+// predicate accepts every timer, as watch does. tick is the caller's own
+// interval: a timer at its time fires more than one tick late only when
+// something held it, which its firing says (timerLate).
+func settleTimersMatching(st *state.State, found map[int]checkResult, now time.Time, tick time.Duration, accept func(state.Timer) bool) ([]string, []state.Event, []timerFire, bool) {
 	var lines []string
 	var evs []state.Event
 	var fires []timerFire
 	changed := false
 	kept := st.Timers[:0]
 	for _, t := range st.Timers {
-		if (accept != nil && !accept(t)) || !t.Auto() || t.Due.After(now) || (st.Stop != nil && t.Wake != "") {
-			// A wake timer due while beekeeper is stopped fires after the resume.
+		if (accept != nil && !accept(t)) || !t.Auto() || t.Due.After(now) {
+			kept = append(kept, t)
+			continue
+		}
+		if st.Stop != nil && t.Wake != "" {
+			// A wake timer due while beekeeper is stopped fires after the
+			// resume, and says the stop held it.
+			if t.Held == "" {
+				t.Held, changed = "held by the beekeeper stop since "+clockZone(now, st.Stop.At), true
+			}
 			kept = append(kept, t)
 			continue
 		}
@@ -144,9 +183,17 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 		f := timerFire{t: t}
 		switch {
 		case !t.Conditional():
-			f.reason = "due " + clock(now, t.Due)
+			f.reason = "due " + clockZone(now, t.Due)
+			if f.late = timerLate(t, now, tick); f.late != "" {
+				f.reason += ", fired " + clockZone(now, now) + ", " + f.late
+			}
 		case r.holds:
+			// A condition that says how it settled (pr-checks: green or
+			// red) tells the woken agent.
 			f.reason = timerCond(t) + " holds"
+			if r.reason != "" {
+				f.reason += ": " + r.reason
+			}
 		case over && t.Expire:
 			changed = true
 			lines = append(lines, fmt.Sprintf("TIMER EXPIRED: #%d, %s did not hold by %s%s: %s", t.ID, timerCond(t), clock(now, t.Until), lastFound(t), truncate(t.What, 200)))
@@ -183,7 +230,7 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 			act = fmt.Sprintf("running `%s`: ", truncate(t.Run, 80))
 		}
 		if t.Repeat != "" {
-			t.Due, t.Checked = t.Next(now), time.Time{}
+			t.Due, t.Checked, t.Held = t.Next(now), time.Time{}, ""
 			act += "next " + clock(now, t.Due) + ": "
 			kept = append(kept, t)
 		}
@@ -249,6 +296,9 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	rctx, cancel := context.WithTimeout(ctx, timerRunTimeout)
 	defer cancel()
 	c := exec.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
+	// An agents start the command runs says which timer started it, its
+	// time and how late it fired (agentStartTimer).
+	c.Env = append(os.Environ(), envTimerID+"="+strconv.Itoa(f.t.ID), envTimerDue+"="+f.t.Due.UTC().Format(time.RFC3339), envTimerLate+"="+f.late)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
 		if out, err := os.Create(path); err == nil { //nolint:gosec // under the state directory, named by the timer id
 			defer func() { _ = out.Close() }()

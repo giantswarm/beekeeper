@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -194,6 +195,41 @@ func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	}
 }
 
+func TestWatchCancellationWaitsForBackgroundRuns(t *testing.T) {
+	w, _ := loopWatcher(t, "1h", "", nil)
+	clk := newFakeClock(t)
+	w.clock = clk
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	release, stopping := make(chan struct{}), make(chan struct{})
+	finish := sync.OnceFunc(func() { close(release) })
+	defer finish()
+	w.bg.Go(func() {
+		<-ctx.Done()
+		close(stopping)
+		<-release
+	})
+	done := make(chan error, 1)
+	go func() { done <- w.run(ctx, false) }()
+	clk.settle(loopTimers)
+	cancel()
+	<-stopping
+	select {
+	case err := <-done:
+		t.Fatalf("watch ended while a background run was still active: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	finish()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("completed background run held watch shutdown")
+	}
+}
+
 // The broker that runs the binary an update replaced restarts onto the new
 // one, its dropped vault session said; one serving calls (its children; the
 // op daemon is reparented) is left to them, the restart due named; one on
@@ -210,9 +246,9 @@ func TestRestartBrokerOn(t *testing.T) {
 		failing bool
 		want    string
 	}{
-		{name: "replaced and idle", bin: restartExe, start: before, want: "restart beekeeper-sandbox.service (pid 40): on " + restartExe + " now; its vault session goes with it"},
+		{name: "replaced and idle", bin: restartExe, start: before, want: "restart beekeeper-sandbox.service (pid 40): on " + restartExe + " now; install prepares the vault handover"},
 		{name: "serving a call", bin: restartExe, start: before, child: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary while it serves 1 call(s)"},
-		{name: "restart refused", bin: restartExe, start: before, failing: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary (refused): systemctl --user restart beekeeper-sandbox.service puts it on " + restartExe},
+		{name: "restart refused", bin: restartExe, start: before, failing: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary (refused): rerun beekeeper install to retry onto " + restartExe},
 		{name: "another binary", bin: "/opt/beekeeper", start: before},
 		{name: "started on the new binary", bin: restartExe, start: after},
 		{name: "no broker", bin: restartExe, start: before, down: true},
@@ -243,7 +279,7 @@ func TestRestartBrokerOn(t *testing.T) {
 				return nil
 			}
 			var out bytes.Buffer
-			restartBrokerOn(context.Background(), &out, restartExe, written, tab, false)
+			restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, false)
 			if c.want == "" {
 				if out.Len() != 0 || restarted {
 					t.Fatalf("restarted %v, said %q; want nothing", restarted, out.String())
@@ -266,8 +302,76 @@ func TestRestartBrokerOn(t *testing.T) {
 	restartBroker = func(context.Context) error { t.Fatal("a dry run restarted the broker"); return nil }
 	var out bytes.Buffer
 	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Comm: project.Name, Start: before}}}
-	restartBrokerOn(context.Background(), &out, restartExe, written, tab, true)
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, true, false)
 	if !strings.HasPrefix(out.String(), "restart beekeeper-sandbox.service (pid 40)") {
 		t.Fatalf("dry run said %q", out.String())
+	}
+}
+
+func TestRestartBrokerRefusesUnavailableHandover(t *testing.T) {
+	prevP, prevR, prevH := brokerProcess, restartBroker, prepareBrokerHandover
+	t.Cleanup(func() { brokerProcess, restartBroker, prepareBrokerHandover = prevP, prevR, prevH })
+	brokerProcess = func() (int, string, error) { return 40, restartExe, nil }
+	prepareBrokerHandover = func(context.Context) error { return errors.New("unsupported handover") }
+	restartBroker = func(context.Context) error { t.Fatal("restarted without the session handover"); return nil }
+	written := time.Now()
+	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Start: written.Add(-time.Hour)}}}
+	var out bytes.Buffer
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, true)
+	if !strings.Contains(out.String(), "restart refused") {
+		t.Fatal("missing warning before restart")
+	}
+	for _, want := range []string{"systemctl --user restart beekeeper-sandbox.service", "drops the vault session", "new sign-in"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatal("missing actionable legacy remedy", want)
+		}
+	}
+	if strings.Contains(out.String(), "rerun beekeeper install") {
+		t.Fatal("suggested retry cannot update the running legacy broker")
+	}
+}
+
+func TestRestartBrokerPreparesHandoverBeforeStopping(t *testing.T) {
+	prevP, prevR, prevH := brokerProcess, restartBroker, prepareBrokerHandover
+	t.Cleanup(func() { brokerProcess, restartBroker, prepareBrokerHandover = prevP, prevR, prevH })
+	brokerProcess = func() (int, string, error) { return 40, restartExe, nil }
+	prepared, restarted := false, false
+	prepareBrokerHandover = func(context.Context) error { prepared = true; return nil }
+	restartBroker = func(context.Context) error {
+		if !prepared {
+			t.Fatal("restart preceded handover")
+		}
+		restarted = true
+		return nil
+	}
+	written := time.Now()
+	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Start: written.Add(-time.Hour)}}}
+	var out bytes.Buffer
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, true, true)
+	if prepared || restarted {
+		t.Fatal("dry run changed broker state")
+	}
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, true)
+	if !prepared || !restarted {
+		t.Fatal("restart did not use the prepared handover")
+	}
+}
+
+func TestRestartBrokerFailureRevokesHandover(t *testing.T) {
+	prevP, prevR, prevH, prevV := brokerProcess, restartBroker, prepareBrokerHandover, revokeBrokerHandover
+	t.Cleanup(func() {
+		brokerProcess, restartBroker, prepareBrokerHandover, revokeBrokerHandover = prevP, prevR, prevH, prevV
+	})
+	brokerProcess = func() (int, string, error) { return 40, restartExe, nil }
+	prepared, revoked := false, false
+	prepareBrokerHandover = func(context.Context) error { prepared = true; return nil }
+	restartBroker = func(context.Context) error { return errors.New("restart failed") }
+	revokeBrokerHandover = func(context.Context) error { revoked = true; return nil }
+	written := time.Now()
+	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Start: written.Add(-time.Hour)}}}
+	var out bytes.Buffer
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, false, true)
+	if !prepared || !revoked {
+		t.Fatal("failed restart did not revoke its snapshot")
 	}
 }

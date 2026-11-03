@@ -28,7 +28,9 @@ the top, written and read per item by its id. Only the person sets it.
 priority prints the open epics of board.team that hold a rank: rank, epic
 URL, title, Status and hold, read from the board (--json the list). An epic
 is board.team's by its Team field or by its team label (board.teamLabel,
-default team/<team>): a label sync that moves the Team keeps it on the list.
+default team/<team>) only when its Team is unset. An explicit Team is
+authoritative: another team's epic is excluded, even with a stale label.
+Writes renumber only this team's epics and refuse another team's epic.
 A held epic, one with an open recorded blocker (board block --by), keeps its
 rank and shows "held: blocked by <owner/repo#n>; 1 of 1 blockers open":
 board next skips it and every issue under it. Each read is compared with the
@@ -38,10 +40,10 @@ beekeeper log and a line "changed outside beekeeper: …" naming the old and
 new value and the writer GitHub names (the field value's creator). An epic
 that left the list is read on its own item, never the board.
 
-board next applies it: its candidates are ordered by the rank of their epic
-first, an issue's own or its nearest ranked ancestor's through the native
-sub-issue relation, the unranked after the ranked, each rank in board.order's
-order, and the pick prints the rank it applied. Every consumer reads the list
+board next annotates candidates with the rank of their epic, an issue's own
+or its nearest ranked ancestor's through the native sub-issue relation.
+board.order's steps and board positions decide selection; the pick prints
+its priority annotation. Every consumer reads the list
 with the one function board.Client.Priorities and ranks an issue with
 Priorities.Ranks().Of(ref, parent): lease, lanes and capacity call the same.
 
@@ -80,10 +82,10 @@ rank past the list's end is its end. Only the items whose rank changes are
 written. The list is read again after the writes: an epic the board's search
 left out of the first read is moved as if it had been read, so a partial
 read never leaves two epics at one rank. An epic without an item on the board is added
-first, as board move adds one, with board.team as its Team. Refused (exit 3)
+first, as board move adds one, with board.team as its Team, whatever the
+owner of its repository (GitHub decides whether it may be added). Refused (exit 3)
 without --as <person> (` + onlyPerson + `), for an issue that does not exist,
-is closed or is no epic (board.epics' kinds), for an issue of a repository
-outside the board's owner without an item (never added), and on a board without the
+is closed or is no epic (board.epics' kinds), and on a board without the
 number field ` + board.PriorityField + `.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -209,7 +211,7 @@ func (a *app) callerRole() string {
 	return rosterRole(st, me)
 }
 
-// rosterRole is the roster role of the session me: the supervisor or the guide
+// rosterRole is the roster role of the session me: the guide
 // it holds, a worker for an agent on the roster; "" for none.
 func rosterRole(st *state.State, me state.Party) string {
 	for _, rl := range roles {

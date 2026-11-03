@@ -52,15 +52,18 @@ type meta struct {
 	Fields map[string]field
 }
 
-// stateOpen is the state of an open issue or pull request.
-const stateOpen = "OPEN"
+// States read from GitHub; an absent state confirms neither one.
+const (
+	stateOpen   = "OPEN"
+	stateClosed = "CLOSED"
+)
 
 // isOpen is a board query's filter of the open items.
 const isOpen = "is:open"
 
 // issueFields is what every read takes of an issue.
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
-labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}
+labels(first:20){nodes{name}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
 parent{number repository{nameWithOwner}}}`
 
 // boardFields is what every read takes of a board item, the Status with
@@ -68,15 +71,14 @@ parent{number repository{nameWithOwner}}}`
 const boardFields = `status:fieldValueByName(name:"` + StatusField + `"){...on ProjectV2ItemFieldSingleSelectValue{name updatedAt}}
 kind:fieldValueByName(name:"` + KindField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
-// blockerFields is what a read of the board's items takes of an issue's
-// recorded blockers: when each closed, the last close a blocked item's
-// Status is weighed against (Item.HeldByStatus). An issue with more
-// blockers has its last close unknown.
-const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt number state repository{nameWithOwner}}}}`
+// blockerFields reads the dependency list in the same request as the issue.
+// The page matches Block and Unblock; unknown blockers keep the item held.
+const blockerFields = `...on Issue{blockedBy(first:100){totalCount nodes{closedAt number state repository{nameWithOwner}}}}`
 
 // itemFields is what a move takes of an item: its id, its board and the
-// board fields with the Team.
-const itemFields = `id project{id} ` + boardFields + `
+// board fields with the Team. ProjectV2Owner declares no login: the
+// board's owner names it as the User or Organization it is.
+const itemFields = `id project{id number owner{...on User{login} ...on Organization{login}}} ` + boardFields + `
 team:fieldValueByName(name:"` + TeamField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
 type issueJSON struct {
@@ -95,10 +97,6 @@ type issueJSON struct {
 	Assignees struct {
 		Nodes []struct{ Login string } `json:"nodes"`
 	} `json:"assignees"`
-	Deps struct {
-		BlockedBy      int `json:"blockedBy"`
-		TotalBlockedBy int `json:"totalBlockedBy"`
-	} `json:"issueDependenciesSummary"`
 	Subs struct {
 		Total     int `json:"total"`
 		Completed int `json:"completed"`
@@ -109,13 +107,15 @@ type issueJSON struct {
 			NameWithOwner string `json:"nameWithOwner"`
 		} `json:"repository"`
 	} `json:"parent"`
-	// BlockedBy are the recorded blockers, read with blockerFields only.
+	// BlockedBy is current immediately after a dependency mutation; GitHub
+	// updates its dependency summary asynchronously.
 	BlockedBy struct {
-		Nodes []blockerNode `json:"nodes"`
+		TotalCount int           `json:"totalCount"`
+		Nodes      []blockerNode `json:"nodes"`
 	} `json:"blockedBy"`
 }
 
-// blockerNode is a recorded blocker as blockerFields reads it.
+// blockerNode is a recorded blocker as issueFields reads it.
 type blockerNode struct {
 	ClosedAt *time.Time `json:"closedAt"`
 	depRef
@@ -125,12 +125,12 @@ type blockerNode struct {
 // while one is open, for none, or when not every one was read.
 func (j issueJSON) blockersClosed() time.Time {
 	ns := j.BlockedBy.Nodes
-	if len(ns) == 0 || len(ns) != j.Deps.TotalBlockedBy {
+	if len(ns) == 0 || len(ns) != j.BlockedBy.TotalCount {
 		return time.Time{}
 	}
 	var last time.Time
 	for _, n := range ns {
-		if n.ClosedAt == nil {
+		if n.State != stateClosed || n.ClosedAt == nil {
 			return time.Time{}
 		}
 		if n.ClosedAt.After(last) {
@@ -147,7 +147,7 @@ func (j issueJSON) open() bool { return j.URL != "" && j.State == stateOpen }
 func (j issueJSON) item() Item {
 	it := Item{
 		Ref: fmt.Sprintf("%s#%d", j.Repository.NameWithOwner, j.Number), URL: j.URL, Title: j.Title,
-		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.Deps.TotalBlockedBy, OpenBlockers: j.Deps.BlockedBy, OpenSubIssues: j.Subs.Total - j.Subs.Completed,
+		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.BlockedBy.TotalCount, OpenBlockers: max(0, j.BlockedBy.TotalCount-len(j.BlockedBy.Nodes)), OpenSubIssues: j.Subs.Total - j.Subs.Completed,
 		subIssues: j.Subs.Total, BlockersClosed: j.blockersClosed(),
 	}
 	for _, l := range j.Labels.Nodes {
@@ -156,9 +156,13 @@ func (j issueJSON) item() Item {
 	for _, a := range j.Assignees.Nodes {
 		it.Assignees = append(it.Assignees, a.Login)
 	}
+	// An unread blocker cannot be assumed closed.
 	for _, b := range j.BlockedBy.Nodes {
-		if b.State == stateOpen {
-			it.OpenBlockedBy = append(it.OpenBlockedBy, fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number))
+		if b.State != stateClosed {
+			it.OpenBlockers++
+			if b.Number > 0 && b.Repository.NameWithOwner != "" {
+				it.OpenBlockedBy = append(it.OpenBlockedBy, fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number))
+			}
 		}
 	}
 	if p := j.Parent; p != nil {
@@ -450,13 +454,16 @@ func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
 				} `json:"projectV2"`
 			} `json:"repositoryOwner"`
 		}
+		// Three nested connections per issue make an 80-item page cost two
+		// GraphQL points; GitHub rounds a 100-item page up to three. Cursor
+		// traversal still reads every item.
 		vs := vars{"o": c.Board.Owner, "n": c.Board.Project, "q": q}
 		if cursor != "" {
 			vs["c"] = cursor
 		}
 		err := c.graphql(ctx, &r, `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
-items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+boardFields+`
-content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
+items(first:80,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+boardFields+`
+content{...I}}}}}}}`+issueFields, vs)
 		if err != nil {
 			return nil, err
 		}
@@ -479,7 +486,10 @@ content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
 // The sub-issues one request of extras reads: GitHub answers a request of
 // 304 sub-issues with their projectItems in full and one of 396 with
 // RESOURCE_LIMITS_EXCEEDED on every projectItems, so a request stays at
-// half the largest one measured whole.
+// half the largest one measured whole. An epic's page asks for its own
+// sub-issues, at most subIssuesRead: GitHub charges every connection under
+// it once per sub-issue the page could hold, whether the epic has them or
+// not.
 const (
 	extrasBudget  = 150
 	subIssuesRead = 50
@@ -534,9 +544,10 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				if err != nil {
 					return err
 				}
+				subs := min(it.subIssues, subIssuesRead)
 				parts = append(parts, extrasPart{
-					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subIssuesRead),
-					subs:  min(it.subIssues, subIssuesRead),
+					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subs),
+					subs:  subs,
 					repo:  owner + "/" + repo,
 				})
 			}
@@ -887,22 +898,96 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	return mv, nil
 }
 
+// workedStatus reports whether status on another board means the issue is
+// already being worked there, rather than sitting in an intake or finished
+// column.
+func workedStatus(status string) bool {
+	w := words(status)
+	if w == "" {
+		return false
+	}
+	switch w {
+	case "inbox", "backlog", "todo", "to do", "triage", "new", "icebox", "done", "closed", "completed", "archived":
+		return false
+	}
+	return true
+}
+
+// Intake puts the issue ref onto the configured board in the intake status in
+// stands for ( typically Backlog), with board.team as its Team when it has
+// none, unless the issue already sits on another board where it is being
+// worked (Moved.Board and Moved.Kept set) or already has a Status on the
+// configured board (left as it is, Moved.Kept set when it differs from in).
+func (c *Client) Intake(ctx context.Context, ref, in string) (*Moved, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return nil, err
+	}
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
+	m, err := c.meta(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
+	id, found, items, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	if err != nil {
+		return nil, err
+	}
+	sf := m.Fields[StatusField]
+	to, err := Resolve(StatusField, sf.names(), in)
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
+	team, err := c.team(m)
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
+	if found == nil {
+		for _, other := range items {
+			if other.Project.ID != m.ID && other.Status != nil && workedStatus(other.Status.Name) {
+				mv.From = other.Status.Name
+				mv.To = other.Status.Name
+				mv.Board = other.boardName()
+				mv.Kept = true
+				return mv, nil
+			}
+		}
+	}
+	item, err := c.ensure(ctx, m, mv, id, found)
+	if err != nil {
+		return nil, err
+	}
+	if item.Team == nil && team != nil {
+		if err := c.set(ctx, m.ID, item.ID, team.field, team.id); err != nil {
+			return nil, err
+		}
+		mv.Team = team.name
+	}
+	if item.Status != nil && item.Status.Name != "" {
+		mv.From = item.Status.Name
+		mv.To = item.Status.Name
+		mv.Kept = !strings.EqualFold(item.Status.Name, to)
+		return mv, nil
+	}
+	mv.To = to
+	if err := c.set(ctx, m.ID, item.ID, sf.ID, sf.option(to)); err != nil {
+		return nil, err
+	}
+	return mv, nil
+}
+
 // item is the issue's item on the board, read from the issue's
 // projectItems, else answered by addProjectV2ItemById: the issue's
 // existing item, or a new one, which marks mv added. An issue GitHub does
-// not resolve is refused as no issue; one of a repository outside the
-// board's owner without an item its projectItems name is refused (foreign)
-// before anything is written: nothing is ever added to the board for it.
+// not resolve is refused as no issue. Rank and priority add an issue of any
+// accessible repository as Move does, whatever its owner: GitHub decides
+// whether it may be added. An item added outside beekeeper that the issue's
+// projectItems do not list (GitHub lists an item of another owner's project
+// under none) is the one the add answers.
 func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo string, n int) (projectItem, error) {
 	id, found, _, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
 		return projectItem{}, err
-	}
-	// Rank and priority retain their existing policy for missing items.
-	if found == nil {
-		if r := c.foreign(mv.Ref); r != nil {
-			return projectItem{}, r
-		}
 	}
 	return c.ensure(ctx, m, mv, id, found)
 }
@@ -932,20 +1017,41 @@ func (c *Client) ensure(ctx context.Context, m *meta, mv *Moved, id string, foun
 	}
 	it := *a.Added.Item
 	// An item that existed carries its fields; a new one none.
-	mv.Added = it.Status == nil && it.Team == nil
+	mv.Added = it.Status == nil && it.Team == nil && it.Kind == nil
 	return it, nil
 }
 
-// foreign is the refusal to add the issue ref to the board when its
-// repository's owner is not the board's, for rank and priority only.
-// Move allows any accessible issue on the configured board.
-func (c *Client) foreign(ref string) *Refusal {
-	owner, _, _, err := Ref(ref)
-	if err != nil || strings.EqualFold(owner, c.Board.Owner) {
-		return nil
+// onBoard returns ref's existing item on m, or nil when ref is not on m.
+// For an issue outside the board's owner, whose projectItems omit m, it
+// probes addProjectV2ItemById and deletes a freshly added blank item.
+func (c *Client) onBoard(ctx context.Context, m *meta, ref string) (*projectItem, error) {
+	oo, or, on, err := Ref(ref)
+	if err != nil {
+		return nil, err
 	}
-	return &Refusal{fmt.Sprintf("%s is not on the board %s/%d and is never added to it: its repository is outside %s; an issue of %s goes on a project of %s's own",
-		ref, c.Board.Owner, c.Board.Project, c.Board.Owner, owner, owner)}
+	oref := fmt.Sprintf("%s/%s#%d", oo, or, on)
+	octx := github.ActingOn(ctx, oo+"/"+or)
+	oid, found, _, err := c.lookup(octx, m, oref, oo, or, on)
+	if err != nil || found != nil || strings.EqualFold(oo, c.Board.Owner) {
+		return found, err
+	}
+	var omv Moved
+	omv.Ref = oref
+	it, err := c.ensure(octx, m, &omv, oid, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !omv.Added {
+		return &it, nil
+	}
+	_ = c.deleteItem(octx, m.ID, it.ID)
+	return nil, nil
+}
+
+func (c *Client) deleteItem(ctx context.Context, project, item string) error {
+	var done json.RawMessage
+	return c.graphql(ctx, &done, `mutation($p:ID!,$i:ID!){deleteProjectV2Item(input:{projectId:$p,itemId:$i}){deletedItemId}}`,
+		vars{"p": project, "i": item})
 }
 
 // lookup reads the issue's node id and its item on the board from the
@@ -1045,7 +1151,7 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 		if strings.EqualFold(oref, rk.Ref) {
 			return nil, &Refusal{rk.Ref + " cannot be placed against itself"}
 		}
-		_, found, _, err := c.lookup(github.ActingOn(ctx, oo+"/"+or), m, oref, oo, or, on)
+		found, err := c.onBoard(ctx, m, oref)
 		if err != nil {
 			return nil, err
 		}
@@ -1164,14 +1270,27 @@ func (c *Client) set(ctx context.Context, project, item, f, o string) error {
 
 // projectItem is an issue's item on a board.
 type projectItem struct {
-	ID      string              `json:"id"`
-	Project struct{ ID string } `json:"project"`
-	Status  *struct {
+	ID      string `json:"id"`
+	Project struct {
+		ID     string `json:"id"`
+		Number int    `json:"number"`
+		Owner  *struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	} `json:"project"`
+	Status *struct {
 		Name      string
 		UpdatedAt time.Time `json:"updatedAt"`
 	} `json:"status"`
 	Kind *struct{ Name string } `json:"kind"`
 	Team *struct{ Name string } `json:"team"`
+}
+
+func (p projectItem) boardName() string {
+	if p.Project.Owner != nil && p.Project.Owner.Login != "" && p.Project.Number != 0 {
+		return fmt.Sprintf("%s/%d", p.Project.Owner.Login, p.Project.Number)
+	}
+	return p.Project.ID
 }
 
 // onto marks it a board item with the board fields of p.

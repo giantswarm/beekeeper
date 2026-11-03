@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -72,24 +73,26 @@ type usageBucket struct {
 // usageReading is the timestamped output of a usage command stored in
 // usageFile or usageProviderFile.
 type usageReading struct {
-	At           time.Time              `json:"at"`
-	SourceAt     time.Time              `json:"sourceAt,omitzero"`
-	AgeMinutes   *float64               `json:"ageMinutes,omitempty"`
-	Stale        bool                   `json:"stale,omitempty"`
-	SingleWindow bool                   `json:"singleWindow,omitempty"`
-	FiveHour     *usageWindow           `json:"fiveHour,omitempty"`
-	SevenDay     *usageWindow           `json:"sevenDay,omitempty"`
-	Buckets      map[string]usageBucket `json:"buckets,omitempty"`
-	BucketOrder  []string               `json:"bucketOrder,omitempty"`
+	At            time.Time              `json:"at"`
+	Fallback      string                 `json:"fallback,omitempty"`
+	SourceAt      time.Time              `json:"sourceAt,omitzero"`
+	AgeMinutes    *float64               `json:"ageMinutes,omitempty"`
+	Stale         bool                   `json:"stale,omitempty"`
+	NoPlanWindows bool                   `json:"noPlanWindows,omitempty"`
+	SingleWindow  bool                   `json:"singleWindow,omitempty"`
+	FiveHour      *usageWindow           `json:"fiveHour,omitempty"`
+	SevenDay      *usageWindow           `json:"sevenDay,omitempty"`
+	Buckets       map[string]usageBucket `json:"buckets,omitempty"`
+	BucketOrder   []string               `json:"bucketOrder,omitempty"`
 }
 
 // usageView is how capacity, watch and snapshot present subscription usage and
 // the target derived from it.
 type usageView struct {
+	Fallback    string       `json:"fallback,omitempty"`
 	At          time.Time    `json:"at,omitzero"`
 	FiveHour    *usageWindow `json:"fiveHour,omitempty"`
 	SevenDay    *usageWindow `json:"sevenDay,omitempty"`
-	Floor       int          `json:"floor"`
 	Ceiling     int          `json:"ceiling"`
 	High        bool         `json:"high,omitempty"`
 	HighPercent float64      `json:"highPercent,omitempty"`
@@ -104,9 +107,15 @@ type usageHighLedger struct {
 }
 
 func runUsageCommand(ctx context.Context, command []string, timeout time.Duration) (usageReading, error) {
+	return runUsageCommandInDir(ctx, command, timeout, "")
+}
+
+func runUsageCommandInDir(ctx context.Context, command []string, timeout time.Duration, dir string) (usageReading, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, command[0], command[1:]...) //nolint:gosec // the configured usage command
+	c.Dir = dir
+	c.Env = usageProbeEnv(command)
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {
@@ -118,7 +127,40 @@ func runUsageCommand(ctx context.Context, command []string, timeout time.Duratio
 		}
 		return usageReading{}, err
 	}
+	if slices.Equal(command, config.DefaultClaudeUsageCommand) {
+		return parseClaudeUsage(stdout.Bytes(), time.Now())
+	}
+	if slices.Equal(command, config.DefaultAgyUsageCommand) {
+		return parseAgyBuiltinUsage(stdout.Bytes())
+	}
 	return parseUsageOutput(stdout.Bytes())
+}
+
+// usageProbeEnv is the environment of a built-in usage command: a local
+// probe is not a turn of the worker that requested it, so it carries none of
+// the worker's session identity. A configured command (nil) inherits all.
+func usageProbeEnv(command []string) []string {
+	var drop func(key string) bool
+	switch {
+	case slices.Equal(command, config.DefaultClaudeUsageCommand):
+		drop = func(key string) bool {
+			return key == claudeCodeEnv || key == "CLAUDE_CODE_ENTRYPOINT" || key == "CLAUDE_CODE_PARENT_SESSION_ID" ||
+				strings.HasPrefix(key, "CLAUDE_CODE_SESSION_") || strings.HasPrefix(key, "CLAUDE_CODE_HOST_SESSION_")
+		}
+	case slices.Equal(command, config.DefaultAgyUsageCommand):
+		// Its PreInvocation hook must not take the worker's inbox.
+		drop = func(key string) bool { return key == agy.EnvAgent || key == agy.EnvName }
+	default:
+		return nil
+	}
+	env := make([]string, 0)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !drop(key) {
+			env = append(env, entry)
+		}
+	}
+	return env
 }
 
 func parseUsageOutput(raw []byte) (usageReading, error) {
@@ -345,6 +387,36 @@ func parseAgyUsage(raw []byte) (usageReading, error) {
 	return r, nil
 }
 
+// parseAgyBuiltinUsage reads the built-in `agy -p /usage` report. Each model
+// bucket maps to its 5-hour and 7-day windows; a bucket that prints only one
+// of them is left out, so a choice on it reads as not in the output and gets
+// no start, while the complete buckets still count.
+func parseAgyBuiltinUsage(raw []byte) (usageReading, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return usageReading{}, errors.New("agy /usage printed nothing")
+	}
+	r, err := parseAgyUsage(trimmed)
+	if err != nil {
+		return usageReading{}, fmt.Errorf("agy /usage: %w", err)
+	}
+	var partial []string
+	order := r.BucketOrder[:0]
+	for _, name := range r.BucketOrder {
+		if b := r.Buckets[name]; b.FiveHour == nil || b.SevenDay == nil {
+			partial = append(partial, name)
+			delete(r.Buckets, name)
+			continue
+		}
+		order = append(order, name)
+	}
+	r.BucketOrder = order
+	if len(r.Buckets) == 0 {
+		return usageReading{}, fmt.Errorf("agy /usage has no bucket with both a five-hour and a weekly window (%s)", strings.Join(partial, ", "))
+	}
+	return r, nil
+}
+
 func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 	maxAge := u.EffectiveStaleAfter()
 	if r.Stale {
@@ -352,6 +424,11 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 	}
 	if r.AgeMinutes != nil {
 		age := time.Duration(*r.AgeMinutes * float64(time.Minute))
+		// AgeMinutes describes the source at fetch time. Cached reads must
+		// include the time since that fetch, even without an absolute SourceAt.
+		if !r.At.IsZero() && !now.IsZero() {
+			age += max(0, now.Sub(r.At))
+		}
 		if age > maxAge {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(age), dur(maxAge))
 		}
@@ -372,7 +449,10 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.At)), dur(maxAge))
 		}
 	}
-	if len(r.Buckets) > 0 {
+	if r.NoPlanWindows {
+		return nil
+	}
+	if len(r.Buckets) > 0 && r.FiveHour == nil && r.SevenDay == nil {
 		for _, bName := range bucketNames(r) {
 			b := r.Buckets[bName]
 			switch {
@@ -509,9 +589,9 @@ func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.C
 	derived, high := k.DeriveWithPace(pctPtr(fh), pctPtr(sd), sdPace(sd))
 	return derived, &usageView{
 		At:          r.At,
+		Fallback:    r.Fallback,
 		FiveHour:    fh,
 		SevenDay:    sd,
-		Floor:       derived.Floor,
 		Ceiling:     derived.Ceiling,
 		High:        high,
 		HighPercent: k.Usage.EffectiveHighPercent(),
@@ -520,9 +600,8 @@ func deriveUsageView(r usageReading, k config.Capacity, now time.Time) (config.C
 
 func errorUsageView(k config.Capacity, err error) (config.Capacity, *usageView) {
 	derived := k
-	derived.Floor, derived.Ceiling = 0, 0
+	derived.Ceiling = 0
 	return derived, &usageView{
-		Floor:       0,
 		Ceiling:     0,
 		HighPercent: k.Usage.EffectiveHighPercent(),
 		Error:       err.Error(),
@@ -535,6 +614,18 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 	}
 	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
 		return a.readCodexUsage()
+	}
+	// A built-in local probe runs in a directory of its own under the state,
+	// never in a worktree whose project settings it could pick up.
+	for _, builtin := range [][]string{config.DefaultClaudeUsageCommand, config.DefaultAgyUsageCommand} {
+		if !slices.Equal(u.Command, builtin) {
+			continue
+		}
+		dir := filepath.Join(a.cfg.StateDir, "usage", builtin[0])
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return usageReading{}, err
+		}
+		return runUsageCommandInDir(ctx, u.Command, u.EffectiveTimeout(), dir)
 	}
 	return runUsageCommand(ctx, u.Command, u.EffectiveTimeout())
 }
@@ -681,8 +772,6 @@ func (a *app) cachedUsageCapacity(k config.Capacity) (config.Capacity, *usageVie
 
 func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, providerErrs map[string]string) (config.Capacity, *usageView) {
 	derived := k
-	sumFloor, sumCeiling := 0, 0
-	subFloor, subCeiling := 0, 0
 	// subDerivedCeiling is the subscription providers' own ceiling as the
 	// cached readings derive it; selfHostedCeiling the self-hosted providers'
 	// own, which capacity.ceiling never caps.
@@ -702,63 +791,47 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 					p = p.WithServeMode(r)
 				}
 			}
-			sumFloor += p.Floor
-			sumCeiling += p.Ceiling
 			selfHostedCeiling += p.Ceiling
 			continue
 		}
 		if !p.Enabled() {
-			sumFloor += p.Floor
-			sumCeiling += p.Ceiling
 			anySubscription = true
-			subFloor += p.Floor
-			subCeiling += p.Ceiling
 			subDerivedCeiling += p.Ceiling
 			continue
 		}
-		if uerr := providerErrs[name]; uerr != "" {
-			errs = append(errs, name+": "+uerr)
+		if providerErrs[name] != "" && slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
+			errs = append(errs, name+": "+providerErrs[name])
 			continue
 		}
 		if a.store == nil {
-			errs = append(errs, name+": usage not read")
+			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
 			continue
 		}
 		var r usageReading
 		found, err := a.store.ReadFile(usageProviderFile(name), &r)
 		if err != nil || !found {
-			errs = append(errs, name+": usage not read")
+			errs = append(errs, name+": "+cmp.Or(providerErrs[name], "usage not read"))
 			continue
 		}
 		if verr := validateReadingAt(r, p.Usage, now); verr != nil {
 			errs = append(errs, name+": "+verr.Error())
 			continue
 		}
-		if !usageFresh(r, p.Usage, now) {
-			errs = append(errs, name+": usage reading is stale")
-			continue
-		}
 		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
-		sumFloor += pv.Floor
-		sumCeiling += pv.Ceiling
 		anySubscription = true
-		subFloor += pv.Floor
-		subCeiling += pv.Ceiling
 		subDerivedCeiling += pv.Ceiling
 	}
 	derived.Ceiling = selfHostedCeiling + subDerivedCeiling
 	if anySubscription {
 		// capacity.ceiling caps the subscription providers, not the
 		// self-hosted ones: a desk that lowers it to 0 suppresses CAPACITY
-		// LOW and CAPACITY FULL (k.Ceiling stays 0 for the watch) and holds
-		// the subscription side to 0, while the self-hosted ceiling stands
-		// beside it.
+		// FULL (k.Ceiling stays 0 for the watch) and holds the subscription
+		// side to 0, while the self-hosted ceiling stands beside it.
 		derived.Ceiling = min(k.Ceiling, subDerivedCeiling) + selfHostedCeiling
 	}
-	derived.Floor = min(k.Floor, min(sumFloor, derived.Ceiling))
 	var u *usageView
 	if len(errs) > 0 {
-		u = &usageView{Floor: derived.Floor, Ceiling: derived.Ceiling, Error: strings.Join(errs, "; ")}
+		u = &usageView{Ceiling: derived.Ceiling, Error: strings.Join(errs, "; ")}
 	}
 	return derived, u
 }
@@ -780,6 +853,7 @@ func (a *app) resolveUsage(ctx context.Context, k config.Capacity) (config.Capac
 }
 
 func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (usageReading, error) {
+	started := time.Now()
 	now := a.now
 	if now.IsZero() {
 		now = time.Now()
@@ -787,7 +861,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	var cached usageReading
 	var haveCached bool
 	if a.store != nil {
-		if found, err := a.store.ReadFile(file, &cached); err == nil && found && validateReadingAt(cached, u, now) == nil {
+		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
 			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
 				return cached, nil
 			}
@@ -800,12 +874,12 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 		err = validateReadingAt(r, u, now)
 	}
 	if err != nil {
-		if haveCached && inSandbox() {
-			grace := u
-			grace.Every = config.Duration{Duration: 2 * u.EffectiveEvery()}
-			if usageFresh(cached, grace, now) {
-				return cached, nil
-			}
+		// The built-in Codex reader consumes authoritative local events, including
+		// explicit spend/rate-limit stops. Never mask those with an older event.
+		if haveCached && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) &&
+			validateReadingAt(cached, u, now.Add(time.Since(started))) == nil {
+			cached.Fallback = err.Error()
+			return cached, nil
 		}
 		return usageReading{}, err
 	}
@@ -913,7 +987,7 @@ func (a *app) singleProviderUsageHighBlock(ctx context.Context, prov, bucket str
 		return ""
 	}
 	pv := buildSingleProviderView(prov, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, a.now)
-	if len(pv.Buckets) > 0 && bucket != "" {
+	if len(pv.Buckets) > 0 && bucket != "" && !pv.supplementalBuckets {
 		if bv := pv.findBucket(bucket); bv != nil {
 			if bv.High {
 				return fmt.Sprintf("provider %s (%s): %s", prov, bv.Name, highBlockText(bv.FiveHour, pv.HighPercent, a.now))
@@ -953,7 +1027,11 @@ func windowsPairLine(fh, sd *usageWindow, now time.Time) string {
 }
 
 func (u *usageView) windowsLine(now time.Time) string {
-	return windowsPairLine(u.FiveHour, u.SevenDay, now)
+	s := windowsPairLine(u.FiveHour, u.SevenDay, now)
+	if u.Fallback != "" {
+		s += fmt.Sprintf("; last good read %s ago (%s)", dur(now.Sub(u.At)), truncate(u.Fallback, 120))
+	}
+	return s
 }
 
 func (u *usageView) capacitySuffix(now time.Time) string {
@@ -964,7 +1042,7 @@ func (u *usageView) capacitySuffix(now time.Time) string {
 }
 
 func (u *usageView) watchLine(now time.Time) string {
-	s := fmt.Sprintf("%s; target floor %d, ceiling %d", u.windowsLine(now), u.Floor, u.Ceiling)
+	s := fmt.Sprintf("%s; target ceiling %d", u.windowsLine(now), u.Ceiling)
 	if u.High {
 		s += " (USAGE HIGH)"
 	}
@@ -1043,6 +1121,17 @@ func (w *watcher) providerUsageNeedsRefresh(name string, u config.Usage, now tim
 	return last.IsZero() || now.Sub(last) >= retry
 }
 
+// Providers are read sequentially; allow each its configured command deadline.
+func usageRefreshTimeout(k config.Capacity) time.Duration {
+	var timeout time.Duration
+	for _, p := range k.Providers {
+		if p.Enabled() {
+			timeout += p.EffectiveTimeout()
+		}
+	}
+	return max(timeout, k.Usage.EffectiveTimeout())
+}
+
 func (w *watcher) refreshUsage(ctx context.Context, k config.Capacity, now time.Time) {
 	if now.IsZero() {
 		now = w.clk().Now()
@@ -1112,12 +1201,16 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 	w.mu.Lock()
 	uerr := w.usageErr
 	w.mu.Unlock()
-	if uerr != "" {
+	if uerr != "" && slices.Equal(k.Usage.Command, config.DefaultCodexUsageCommand) {
 		return errorUsageView(k, errors.New(uerr))
 	}
 	var r usageReading
 	if found, err := w.store.ReadFile(usageFile, &r); err == nil && found && validateReadingAt(r, k.Usage, now) == nil {
+		r.Fallback = uerr
 		return deriveUsageView(r, k, now)
+	}
+	if uerr != "" {
+		return errorUsageView(k, errors.New(uerr))
 	}
 	return k, nil
 }
@@ -1152,7 +1245,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 	}
 	now := w.now
 	if w.usageNeedsRefresh(k, now) {
-		w.inFlight(ctx, cmp.Or(w.cfg.Watch.Interval.Duration, k.Usage.EffectiveTimeout()), &w.usageBusy, func(ctx context.Context) {
+		w.inFlight(ctx, k.Usage.EffectiveTimeout(), &w.usageBusy, func(ctx context.Context) {
 			w.refreshUsage(ctx, k, now)
 		})
 	}
@@ -1212,7 +1305,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	} else {
 		now := w.now
 		if w.usageNeedsRefresh(k, now) {
-			w.inFlight(ctx, cmp.Or(w.cfg.Watch.Interval.Duration, config.DefaultUsageTimeout), &w.usageBusy, func(ctx context.Context) {
+			w.inFlight(ctx, usageRefreshTimeout(k), &w.usageBusy, func(ctx context.Context) {
 				w.refreshUsage(ctx, k, now)
 			})
 		}
@@ -1226,7 +1319,9 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.mu.Unlock()
 			if uerr != "" {
 				readings[name] = providerReadingResult{err: errors.New(uerr)}
-				continue
+				if slices.Equal(p.Command, config.DefaultCodexUsageCommand) {
+					continue
+				}
 			}
 			if w.store != nil {
 				var r usageReading
@@ -1234,6 +1329,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 					if verr := validateReadingAt(r, p.Usage, w.now); verr != nil {
 						readings[name] = providerReadingResult{err: verr}
 					} else {
+						r.Fallback = uerr
 						readings[name] = providerReadingResult{reading: r, ok: true}
 					}
 				}
@@ -1241,8 +1337,8 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 		}
 	}
 
-	c := countAgents(st, sessions, w.now)
-	pa := countProviderAgents(st, sessions, k, w.now)
+	c := countAgents(st, sessions, w.now, w.cfg)
+	pa := countProviderAgents(st, sessions, k, w.now, w.cfg)
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
 		if !p.SelfHosted() {
@@ -1293,7 +1389,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 			w.clear("usage-error-" + name)
 		}
 		parts = append(parts, name+": "+pv.watchSummary(w.now))
-		if len(pv.Buckets) > 0 {
+		if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 			for _, bName := range pv.bucketOrder {
 				bv := pv.Buckets[bName]
 				if bv == nil {
@@ -1351,7 +1447,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	if shouldEmit && len(parts) > 0 {
 		w.emitNow("usage", "USAGE: %s", strings.Join(parts, "; "))
 	}
-	return &usageView{Floor: v.Floor, Ceiling: v.Ceiling, High: allHigh}
+	return &usageView{Ceiling: v.Ceiling, High: allHigh}
 }
 
 func (w *watcher) clearUsageHighEpisode(file string) {
@@ -1421,10 +1517,10 @@ func (w *watcher) tellBusyWorkersUsageHigh(ctx context.Context, st *state.State,
 // stopped CLIs are skipped so USAGE HIGH never launches a headless turn.
 func liveBusyWorkers(st *state.State, sessions []*claude.Session, now time.Time) []state.Agent {
 	var out []state.Agent
-	sup, guide := st.SupervisorRole(), st.GuideRole()
+	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		p := ag.Party
-		if roleRun(st, p) || sup.Relay.Open(now) && sup.Relay.To.Is(p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
+		if roleRun(st, p) || guide.Relay.Open(now) && guide.Relay.To.Is(p) {
 			continue
 		}
 		if st.Report.Running() && ag.Is(st.Report.Party) {

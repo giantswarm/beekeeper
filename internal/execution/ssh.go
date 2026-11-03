@@ -34,24 +34,59 @@ func (e Endpoint) Validate() error {
 
 // Host is the coordinator's agents.hosts entry. Timeouts are seconds so the
 // execution contract has no dependency on the configuration package.
+// PolicyDigest is the digest every start on the host is pinned to: the one
+// beekeeper recorded when it last updated the host (agents hosts update),
+// or, for a host it never updated, the entry's own deprecated value.
 type Host struct {
-	Endpoint         `yaml:",inline"`
-	Identity         HostID            `yaml:"identity" json:"identity"`
-	WorkspaceRoot    string            `yaml:"workspaceRoot" json:"workspaceRoot"`
-	Repositories     map[string]string `yaml:"repositories" json:"repositories"`
-	Harnesses        []string          `yaml:"harnesses" json:"harnesses"`
-	PolicyDigest     string            `yaml:"policyDigest" json:"policyDigest"`
-	MaxBusy          int               `yaml:"maxBusy" json:"maxBusy"`
-	ConnectTimeout   string            `yaml:"connectTimeout,omitempty" json:"connectTimeout,omitempty"`
-	OperationTimeout string            `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
+	Endpoint      `yaml:",inline"`
+	Identity      HostID            `yaml:"identity" json:"identity"`
+	WorkspaceRoot string            `yaml:"workspaceRoot" json:"workspaceRoot"`
+	Repositories  map[string]string `yaml:"repositories" json:"repositories"`
+	// RepositoryOrgs admits coordinator-bundled repositories without a source mapping.
+	RepositoryOrgs   []string `yaml:"repositoryOrgs,omitempty" json:"repositoryOrgs,omitempty"`
+	Harnesses        []string `yaml:"harnesses" json:"harnesses"`
+	PolicyDigest     string   `yaml:"policyDigest" json:"policyDigest"`
+	MaxBusy          int      `yaml:"maxBusy" json:"maxBusy"`
+	ConnectTimeout   string   `yaml:"connectTimeout,omitempty" json:"connectTimeout,omitempty"`
+	OperationTimeout string   `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
+}
+
+// Supports reports whether the operator lists harness for this host.
+func (h Host) Supports(harness string) bool {
+	for _, name := range h.Harnesses {
+		if name == harness {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateCatalog validates the entry as agents.hosts names it: the policy
+// digest is beekeeper's own state, so the entry may leave it out, and one it
+// still names must be a digest.
+func (h Host) ValidateCatalog() error {
+	if h.PolicyDigest == "" {
+		h.PolicyDigest = "sha256:" + strings.Repeat("0", 64)
+	}
+	return h.Validate()
 }
 
 func (h Host) Validate() error {
 	if err := h.Endpoint.Validate(); err != nil {
 		return err
 	}
-	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) != 1 || h.Harnesses[0] != HarnessClaude {
-		return errors.New("host requires identity, policy digest, workspace root, repositories, maxBusy and harnesses [claude]")
+	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 && len(h.RepositoryOrgs) == 0 || len(h.Harnesses) == 0 {
+		return errors.New("host requires identity, policy digest (beekeeper agents hosts update records it), workspace root, repositories, maxBusy and harnesses (claude, codex, agy)")
+	}
+	seen := map[string]bool{}
+	for _, name := range h.Harnesses {
+		if !SupportedHarness(name) || seen[name] {
+			return errors.New("host harnesses must be distinct entries of claude, codex and agy")
+		}
+		seen[name] = true
+	}
+	if err := validateRepositoryOrgs(h.RepositoryOrgs); err != nil {
+		return err
 	}
 	for repo, p := range h.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
@@ -133,6 +168,9 @@ func SSHCommand(ctx context.Context, argv []string, stdin []byte) ([]byte, error
 	// into a protocol response or transcript.
 	c.Stdout, c.Stderr = out, io.Discard
 	if err := c.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("SSH command failed (%w): %w", context.DeadlineExceeded, err)
+		}
 		return nil, fmt.Errorf("SSH command failed: %w", err)
 	}
 	return out.Bytes(), nil
@@ -198,6 +236,9 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
+		if op == inspectOperation && reply.Code == "not-found" {
+			return ErrNotFound
+		}
 		if reply.Code == "unsupported" {
 			return ErrUnsupported
 		}
@@ -236,6 +277,9 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 	if x.Ref != r.Ref || x.ConversationID != r.ConversationID || x.Repository != r.Repository || x.Unit != UnitName(r.Ref) || x.Workspace != path.Join(h.WorkspaceRoot, string(r.Ref.Execution), "workspace") {
 		return errors.New("start handle identity or workspace mismatch")
 	}
+	if r.SourceDigest != "" && x.Commit != r.GitRef {
+		return errors.New("start handle does not match coordinator-pinned commit")
+	}
 	if len(x.Commit) != 40 && len(x.Commit) != 64 {
 		return errors.New("invalid pinned commit")
 	}
@@ -248,7 +292,7 @@ func ValidateHandle(h Host, r StartRequest, x Handle) error {
 }
 func (t SSHTransport) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	var x Observation
-	err := t.Call(ctx, "inspect", r, nil, &x)
+	err := t.Call(ctx, inspectOperation, r, nil, &x)
 	if err == nil && x.Handle.Ref != r {
 		err = errors.New("observation identity mismatch")
 	}
@@ -280,4 +324,56 @@ func (t SSHTransport) Logs(ctx context.Context, r Ref, q LogRequest) (LogPage, e
 	var x LogPage
 	err := t.Call(ctx, "logs", r, q, &x)
 	return x, err
+}
+
+// HostUpdate is the answer of an execution host's `agents hosts self-update`:
+// the release it runs and the digest of the policy it prepared for it. Busy
+// counts the executions that still run there, when it changed nothing for
+// them; Error is why the update failed, the host left on its old release.
+type HostUpdate struct {
+	Protocol     int    `json:"protocol"`
+	Identity     HostID `json:"identity,omitempty"`
+	Version      string `json:"version,omitempty"`
+	PolicyDigest string `json:"policyDigest,omitempty"`
+	Busy         int    `json:"busy,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// UpdateTimeout bounds a host update: the download, its verification, the
+// new release's prepare and a rollback.
+const UpdateTimeout = 5 * time.Minute
+
+// UpdateHost has host h install release version, verified, and prepare the
+// policy of it (agents hosts self-update over the host's SSH route). The
+// answer is checked against the host's identity: a busy host, or one that
+// answers the release and a digest, is an answer; anything else an error.
+func UpdateHost(ctx context.Context, h Host, version string, run CommandRunner) (HostUpdate, error) {
+	var x HostUpdate
+	if err := h.Endpoint.Validate(); err != nil {
+		return x, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, UpdateTimeout)
+	defer cancel()
+	if run == nil {
+		run = SSHCommand
+	}
+	connect, _ := time.ParseDuration(h.ConnectTimeout)
+	raw, err := run(ctx, SSHArgv(h.Endpoint, connect, endpointCommand(h.Endpoint, "hosts self-update", "--version", version)), nil)
+	if err != nil {
+		return x, &UnreachableError{Operation: "self-update", Cause: err}
+	}
+	if err := Decode(raw, &x); err != nil {
+		return x, errors.New("invalid self-update answer: the host may not run a release with agents hosts self-update yet")
+	}
+	switch {
+	case x.Protocol != Protocol || x.Identity != h.Identity:
+		return x, errors.New("self-update answer identity or protocol mismatch")
+	case x.Error != "":
+		return x, errors.New(x.Error)
+	case x.Busy > 0:
+		return x, nil
+	case x.Version != version || !ValidDigest(x.PolicyDigest):
+		return x, fmt.Errorf("host answered release %q and no policy digest of %s", x.Version, version)
+	}
+	return x, nil
 }
