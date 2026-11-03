@@ -242,10 +242,10 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		if i >= 0 {
 			self = st.Agents[i].Party
 			if on != "" {
-				if rp, ok := st.ReviewParkFor(on); ok {
+				if rp, ok := st.ReviewParkFor(on); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, st.Agents[i].Name) || rp.Party.Is(self)) {
 					inheritReviewParkOnAgent(st, &st.Agents[i], rp, a.now.UTC())
+					st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, on) })
 				}
-				st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, on) })
 			}
 			st.Agents[i].Park = park
 			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
@@ -688,7 +688,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		return out
 	}
 	var states map[github.PR]github.RefState
-	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
+	if len(refs) > 0 && !boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		// Back off issues and unresolved references even when GitHub fails. A failed batch leaves
 		// its agents parked; the others settle.
 		var s map[github.PR]github.RefState
@@ -716,12 +716,16 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			err = read()
 		}
 		if err != nil {
-			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
+			if !errors.Is(err, errLoopLater) {
+				w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
+			}
 		} else {
 			w.clear("park-refs")
 		}
-		states = s
-		w.cacheParkRefs(parked, s)
+		if len(s) > 0 {
+			states = s
+			w.cacheParkRefs(parked, s)
+		}
 	}
 	var closes map[int]string
 	if len(closed) > 0 {

@@ -261,7 +261,9 @@ evidence and owning repository, or --problem none. beekeeper delivers both
 itself: the supervisor's watch prints the report once (WORKER REPORT) and
 each finding as a line of its own (PROBLEM FOUND), for the supervisor to
 file; a finding filed already names its issue's URL. The log keeps them
-(agents.report, agents.problem).
+(agents.report, agents.problem). Use agents problem "<finding>" to report a
+finding mid-task. Repeated findings are logged and delivered once per
+worker assignment, including those repeated here.
 
 --as <name> reports for the registered agent of that name, whatever
 session registered it, as agents park does; an independent reviewer's
@@ -305,6 +307,7 @@ completion is refused under --as.`,
 				if err := a.captureExecutionReviewReport(cmd.Context(), st, me, report, a.now, finished); err != nil {
 					return nil, err
 				}
+				found = freshWorkerProblems(ag, found)
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
@@ -432,7 +435,7 @@ started is never archived nor stopped.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, a.agentProblemCmd(), remove, list)
 	c.AddCommand(a.executionHostCmds()...)
 	return c
 }
@@ -461,10 +464,16 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 	var reg registration
 	var holder, lastTask, harness, model string
 	var keep *state.Keep
+	var reportedProblems, ownProblems *state.WorkerProblems
+	var ownAssignedAt time.Time
 	for _, x := range st.Agents {
 		own := x.Is(me)
 		if !own && !strings.EqualFold(x.Name, me.Name) {
 			continue
+		}
+		if own {
+			ownProblems = x.ReportedProblems
+			ownAssignedAt = x.AssignedAt
 		}
 		if x.Execution != nil {
 			return registration{}, refused("name belongs to a managed SSH execution; inspect or stop it before replacement")
@@ -495,10 +504,16 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 				holder, x.Session, reg.task, x.Task)
 		}
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
+		reportedProblems = x.ReportedProblems
+	}
+	if reg.task == "" {
+		// Idle registration keeps the last assignment's finding receipts valid.
+		reg.assignedAt = ownAssignedAt
+		reportedProblems = ownProblems
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
 	st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
-	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep, Harness: harness, Model: model})
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep, Harness: harness, Model: model, ReportedProblems: reportedProblems})
 	return reg, nil
 }
 
@@ -559,7 +574,7 @@ func problemsFound(lines []string, finished bool) ([]string, error) {
 	var found []string
 	none := false
 	for _, l := range lines {
-		l = strings.Join(strings.Fields(l), " ")
+		l = oneLine(l)
 		switch {
 		case l == "":
 			return nil, refused("an empty --problem: one line per finding, or --problem none")

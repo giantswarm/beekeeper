@@ -28,7 +28,9 @@ the top, written and read per item by its id. Only the person sets it.
 priority prints the open epics of board.team that hold a rank: rank, epic
 URL, title, Status and hold, read from the board (--json the list). An epic
 is board.team's by its Team field or by its team label (board.teamLabel,
-default team/<team>): a label sync that moves the Team keeps it on the list.
+default team/<team>) only when its Team is unset. An explicit Team is
+authoritative: another team's epic is excluded, even with a stale label.
+Writes renumber only this team's epics and refuse another team's epic.
 A held epic, one with an open recorded blocker (board block --by), keeps its
 rank and shows "held: blocked by <owner/repo#n>; 1 of 1 blockers open":
 board next skips it and every issue under it. Each read is compared with the
@@ -38,10 +40,10 @@ beekeeper log and a line "changed outside beekeeper: …" naming the old and
 new value and the writer GitHub names (the field value's creator). An epic
 that left the list is read on its own item, never the board.
 
-board next applies it: its candidates are ordered by the rank of their epic
-first, an issue's own or its nearest ranked ancestor's through the native
-sub-issue relation, the unranked after the ranked, each rank in board.order's
-order, and the pick prints the rank it applied. Every consumer reads the list
+board next annotates candidates with the rank of their epic, an issue's own
+or its nearest ranked ancestor's through the native sub-issue relation.
+board.order's steps and board positions decide selection; the pick prints
+its priority annotation. Every consumer reads the list
 with the one function board.Client.Priorities and ranks an issue with
 Priorities.Ranks().Of(ref, parent): lease, lanes and capacity call the same.
 

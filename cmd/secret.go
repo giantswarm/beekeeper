@@ -98,7 +98,12 @@ creation rule's recipient and where its identity is, no value read.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if a.cfg == nil {
-				if err := a.load(); err != nil {
+				load := a.load
+				if githubAppDryCommand(cmd) {
+					// A dry check creates no state directory or audit files.
+					load = a.loadConfig
+				}
+				if err := load(); err != nil {
 					return err
 				}
 			}
@@ -167,7 +172,7 @@ anything is not equal.`,
 			if dash := cmd.ArgsLenAtDash(); cmd.Name() == "copy" && dash >= 0 {
 				beforeConsumer = args[:dash]
 			}
-			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
+			if inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -1393,6 +1398,9 @@ func (a *app) installationNames() []string {
 // provider whose key is there. The client and the broker decide on it
 // alike.
 func (a *app) secretNeedsVault(dir string, args []string) bool {
+	if a.githubAppDryRun(args) {
+		return false
+	}
 	return a.secretArgsNeedVault(args) || a.ageOps().AgeNeedsVault(dir, a.secretFileArgs(args))
 }
 
@@ -1423,6 +1431,9 @@ func (a *app) secretArgsNeedVault(args []string) bool {
 // age identity secret.ageIdentities names, a file's included, which the
 // broker alone reads.
 func (a *app) secretNeedsBroker(args []string) bool {
+	if a.githubAppDryRun(args) {
+		return false
+	}
 	return secret.NeedsStore(args) || secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", a.secretFileArgs(args)) || a.recipientsNeedVault(args)
 }
 

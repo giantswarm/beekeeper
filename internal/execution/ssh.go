@@ -38,15 +38,17 @@ func (e Endpoint) Validate() error {
 // beekeeper recorded when it last updated the host (agents hosts update),
 // or, for a host it never updated, the entry's own deprecated value.
 type Host struct {
-	Endpoint         `yaml:",inline"`
-	Identity         HostID            `yaml:"identity" json:"identity"`
-	WorkspaceRoot    string            `yaml:"workspaceRoot" json:"workspaceRoot"`
-	Repositories     map[string]string `yaml:"repositories" json:"repositories"`
-	Harnesses        []string          `yaml:"harnesses" json:"harnesses"`
-	PolicyDigest     string            `yaml:"policyDigest" json:"policyDigest"`
-	MaxBusy          int               `yaml:"maxBusy" json:"maxBusy"`
-	ConnectTimeout   string            `yaml:"connectTimeout,omitempty" json:"connectTimeout,omitempty"`
-	OperationTimeout string            `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
+	Endpoint      `yaml:",inline"`
+	Identity      HostID            `yaml:"identity" json:"identity"`
+	WorkspaceRoot string            `yaml:"workspaceRoot" json:"workspaceRoot"`
+	Repositories  map[string]string `yaml:"repositories" json:"repositories"`
+	// RepositoryOrgs admits coordinator-bundled repositories without a source mapping.
+	RepositoryOrgs   []string `yaml:"repositoryOrgs,omitempty" json:"repositoryOrgs,omitempty"`
+	Harnesses        []string `yaml:"harnesses" json:"harnesses"`
+	PolicyDigest     string   `yaml:"policyDigest" json:"policyDigest"`
+	MaxBusy          int      `yaml:"maxBusy" json:"maxBusy"`
+	ConnectTimeout   string   `yaml:"connectTimeout,omitempty" json:"connectTimeout,omitempty"`
+	OperationTimeout string   `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
 }
 
 // Supports reports whether the operator lists harness for this host.
@@ -73,15 +75,18 @@ func (h Host) Validate() error {
 	if err := h.Endpoint.Validate(); err != nil {
 		return err
 	}
-	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) == 0 {
-		return errors.New("host requires identity, policy digest (beekeeper agents hosts update records it), workspace root, repositories, maxBusy and harnesses (claude, codex)")
+	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 && len(h.RepositoryOrgs) == 0 || len(h.Harnesses) == 0 {
+		return errors.New("host requires identity, policy digest (beekeeper agents hosts update records it), workspace root, repositories, maxBusy and harnesses (claude, codex, agy)")
 	}
 	seen := map[string]bool{}
 	for _, name := range h.Harnesses {
 		if !SupportedHarness(name) || seen[name] {
-			return errors.New("host harnesses must be distinct entries of claude and codex")
+			return errors.New("host harnesses must be distinct entries of claude, codex and agy")
 		}
 		seen[name] = true
+	}
+	if err := validateRepositoryOrgs(h.RepositoryOrgs); err != nil {
+		return err
 	}
 	for repo, p := range h.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {

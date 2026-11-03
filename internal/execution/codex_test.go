@@ -82,7 +82,7 @@ func TestHostConfigHarnesses(t *testing.T) {
 		"codex only":            {map[string]HarnessConfig{HarnessCodex: codex}, true},
 		"claude and codex":      {map[string]HarnessConfig{HarnessClaude: f.s.Config.Harnesses[HarnessClaude], HarnessCodex: codex}, true},
 		"none":                  {map[string]HarnessConfig{}, false},
-		"agy has no adapter":    {map[string]HarnessConfig{"agy": codex}, false},
+		"omp has no adapter":    {map[string]HarnessConfig{"omp": codex}, false},
 		"codex without login":   {map[string]HarnessConfig{HarnessCodex: {Executable: codex.Executable, Version: codex.Version}}, false},
 		"codex below its range": {map[string]HarnessConfig{HarnessCodex: {Executable: codex.Executable, Version: "0.100.0", ConfigDir: codex.ConfigDir}}, false},
 		"codex relative binary": {map[string]HarnessConfig{HarnessCodex: {Executable: "codex", Version: codex.Version, ConfigDir: codex.ConfigDir}}, false},
@@ -117,7 +117,7 @@ func TestPrepareInstallsManagedCodexHome(t *testing.T) {
 		t.Fatalf("codex policy not installed: %v", err)
 	}
 	home := f.s.codexHomeDir()
-	hooks, err := os.ReadFile(filepath.Join(home, "hooks.json")) //nolint:gosec // test-owned managed home
+	hooks, err := os.ReadFile(filepath.Join(home, hooksJSONFile)) //nolint:gosec // test-owned managed home
 	if err != nil || !strings.Contains(string(hooks), "agents execution-guard --format codex") || !strings.Contains(string(hooks), "PreToolUse") {
 		t.Fatalf("codex hooks do not run the execution guard: %s %v", hooks, err)
 	}
@@ -131,7 +131,7 @@ func TestPrepareInstallsManagedCodexHome(t *testing.T) {
 	if target, err := os.Readlink(filepath.Join(home, "auth.json")); err != nil || target != filepath.Join(dir, "login", "auth.json") {
 		t.Fatalf("codex login is not linked from the host's own CODEX_HOME: %q %v", target, err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, hooksJSONFile), []byte(`{"hooks":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.InstalledPolicy(); err == nil {
