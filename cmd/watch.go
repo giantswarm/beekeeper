@@ -74,7 +74,10 @@ last one, grouped by whose limit they hit; a cap kill whose scope no
 run.start names says its cap is unknown. A kill in a test run's scope
 (memcap-test-…, MEMCAP_TEST=1) is one quiet "test kill" line, never a
 KERNEL OOM. Sessions that start, end or
-restart are reported, and so is a lease whose holder is gone. A run
+restart are reported, and so is a lease whose holder is gone. A lease held
+past the first duration in its purpose (or leaseRound, default 1h) is one
+LEASE HELD PAST ROUND line naming its holder, since when and its overrun.
+A run
 holding a build slot past memcap.holdBound (30m) is one SLOT HELD LONG
 line naming the slot, its holder and since when, and one ENDED line once
 the slot is free. A session
@@ -364,9 +367,13 @@ type watcher struct {
 	// first reading, which said none.
 	refusedSince time.Time
 	lastBudget   time.Time
-	scopeOOM     int64
-	sessions     map[string]*claude.Session
-	seenKills    map[string]bool
+	// lastKindSpend is when the day's spend per task kind was last summed,
+	// kindSumming set while a sum runs.
+	lastKindSpend time.Time
+	kindSumming   atomic.Bool
+	scopeOOM      int64
+	sessions      map[string]*claude.Session
+	seenKills     map[string]bool
 	// reported are the stale leases said once.
 	reported map[string]bool
 	// notifier sends the events that need a person (--notify); nil prints only.
@@ -456,6 +463,7 @@ type watcher struct {
 	providerLastUsage              map[string]time.Time
 	providerUsageErr               map[string]string
 	executionSyncFailures          map[string]int
+	executionInventorySynced       map[string]int
 	// sinkPending are the events of the sink's verbs within sink.Window,
 	// sinking is set while their dispatch runs, sinkLedger claims each one
 	// once across the machine's watches.
@@ -624,6 +632,8 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.sample(ctx)
 		w.lastSweep = time.Now() // swept here, not in the poll's background
 		w.exposures()
+		w.lastKindSpend = w.clk().Now() // summed here, not in the poll's background
+		w.kindSpending(w.lastKindSpend)
 		w.poll(ctx)
 		w.stand.inflight.Wait() // a successor's start outlives no watch
 		w.timerActs.Wait()      // nor a timer's wake or command
@@ -1478,6 +1488,11 @@ func (w *watcher) poll(ctx context.Context) {
 	if now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
 		w.lastBudget = now
 		w.inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
+	}
+	if now.Sub(w.lastKindSpend) >= w.readEvery(kindSpendEvery) {
+		w.lastKindSpend = now
+		// the day's transcripts are read whole: the poll does not wait
+		w.inFlight(ctx, 0, &w.kindSumming, func(context.Context) { w.kindSpending(now) })
 	}
 	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
 		w.lastTeleport = now
@@ -2502,9 +2517,14 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 	if err != nil {
 		return
 	}
+	found := map[string]bool{}
 	for _, h := range holders {
 		v := w.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
+		if overrun := w.leaseOverrun(h); overrun != "" {
+			found["lease-round:"+key] = true
+			w.emit("lease-round:"+key, "LEASE HELD PAST ROUND: %s held by %q since %s: %s%s", h.Env, v.Name, clock(w.now, h.SinceTime()), oneLine(h.Purpose), overrun)
+		}
 		if v.State == holderGone && !w.reported["lease "+key] {
 			w.reported["lease "+key], w.dirty = true, true
 			l := fmt.Sprintf("STALE LEASE: %s is held by %q, whose session no longer runs (%s)", h.Env, v.Name, truncate(h.Purpose, 60))
@@ -2512,4 +2532,5 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 			w.notify(ctx, notify.StaleLease, key, "beekeeper: stale lease "+h.Env, l+"\nbeekeeper lease status "+h.Env)
 		}
 	}
+	w.clearMissing("lease-round:", found)
 }

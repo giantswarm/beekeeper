@@ -28,16 +28,23 @@ esac`
 // mainBranch is a base branch Auto-release tags.
 const mainBranch = "main"
 
-// stubBaseRelease answers the base branch's release model and counts the
-// reads.
+// stubBaseRelease answers the base branch's release model, a release pull
+// request's for r's Version, and counts the pull request's reads.
 func stubBaseRelease(t *testing.T, r github.BaseRelease, err error) *int {
 	t.Helper()
 	asked := new(int)
-	was := baseRelease
-	t.Cleanup(func() { baseRelease = was })
-	baseRelease = func(context.Context, string, int) (github.BaseRelease, error) {
+	wasPull, wasBranch := pullBase, branchRelease
+	t.Cleanup(func() { pullBase, branchRelease = wasPull, wasBranch })
+	p := github.PullBase{Base: r.Base, Head: "fix", Title: "fix: a thing"}
+	if r.Version != "" {
+		p.Head, p.Title = r.Base+"#release#patch", "chore(release): "+r.Version
+	}
+	pullBase = func(context.Context, string, int) (github.PullBase, error) {
 		*asked++
-		return r, err
+		return p, err
+	}
+	branchRelease = func(context.Context, string, string) (github.BaseRelease, error) {
+		return r, nil
 	}
 	return asked
 }
@@ -61,8 +68,8 @@ func turnCame(t *testing.T, g *gateRun) (string, error) {
 		st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
 		return nil, nil
 	})
-	if err := g.readRelease(); err != nil {
-		return "", err
+	if why, err := g.readRelease(); err != nil || why != "" {
+		return why, err
 	}
 	return g.start("", nil)
 }
@@ -107,7 +114,7 @@ func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 		if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release none awaited (release-1.3 has no auto-release)") {
 			t.Errorf("merged event: %q", d)
 		}
-		if g.readRelease() != nil || *asked != 1 {
+		if _, err := g.readRelease(); err != nil || *asked != 1 {
 			t.Errorf("the base branch was read %d times, want once per merge", *asked)
 		}
 	})
@@ -133,14 +140,14 @@ func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 	asked := stubBaseRelease(t, github.BaseRelease{}, errors.New("connection reset"))
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo})
-	if err := g.readRelease(); Code(err) != ExitGateRefused {
+	if _, err := g.readRelease(); Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d, want %d", Code(err), ExitGateRefused)
 	}
 	if d := lastEvent(t, g, "merge.refused"); !strings.Contains(d, "connection reset") {
 		t.Errorf("merge.refused event: %q", d)
 	}
 	g = runningMerge(t, labRepo, config.Lane{Name: labRepo})
-	if err := g.readRelease(); err != nil || *asked != 1+len(readBackoff) {
+	if _, err := g.readRelease(); err != nil || *asked != 1+len(readBackoff) {
 		t.Errorf("the squash route: %v, %d reads", err, *asked)
 	}
 }

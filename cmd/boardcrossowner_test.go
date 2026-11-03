@@ -183,7 +183,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 		switch {
 		case args[0] == fillCapacityCommand && *busy > 0:
 			return fillNoRoomJSON, 0
-		case slices.Equal(args, []string{loopBoard, "move", filedRef, "backlog", "--intake"}):
+		case slices.Equal(args, []string{loopBoard, loopBoardMove, filedRef, "backlog", "--intake"}):
 			// GitHub adds a new item at the very bottom of the board in Backlog
 			// (after crossBacklog).
 			snap.Items = append(snap.Items, board.Item{
@@ -240,7 +240,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	}
 
 	r.pass(t)
-	if r.called(loopBoard, "move", filedRef, "backlog", "--intake") == nil {
+	if r.called(loopBoard, loopBoardMove, filedRef, "backlog", "--intake") == nil {
 		t.Fatalf("loop did not intake %s onto the board: calls %v\n%s", filedRef, r.calls, r.out)
 	}
 	if r.called(loopBoard, "rank", filedRef, "--after", crossHome) == nil {
@@ -298,7 +298,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	// 1. Move succeeds, then anchor lookup fails: intake is not settled.
 	anchorErr = errors.New("anchor query failed")
 	r.pass(t)
-	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") == nil {
+	if r.called(loopBoard, loopBoardMove, reportIssue, "backlog", "--intake") == nil {
 		t.Fatalf("move did not run on pass 1: %v", r.calls)
 	}
 	if len(r.logged(t, intakeVerb)) != 0 {
@@ -309,7 +309,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	// intake still remains unsettled.
 	anchorErr = nil
 	r.pass(t)
-	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") != nil {
+	if r.called(loopBoard, loopBoardMove, reportIssue, "backlog", "--intake") != nil {
 		t.Fatalf("move repeated on retry pass: %v", r.calls)
 	}
 	if r.called(loopBoard, "rank", reportIssue, "--after", crossHome) == nil {
@@ -322,7 +322,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	// 3. Rank succeeds: intake settles without repeating move.
 	rankCode = 0
 	r.pass(t)
-	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") != nil {
+	if r.called(loopBoard, loopBoardMove, reportIssue, "backlog", "--intake") != nil {
 		t.Fatalf("move repeated on final pass: %v", r.calls)
 	}
 	if r.called(loopBoard, "rank", reportIssue, "--after", crossHome) == nil {
@@ -345,7 +345,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 		return e.Verb == loopStageVerb && strings.Contains(e.Detail, restartRef)
 	}
 	r.pass(t)
-	if r.called(loopBoard, "move", restartRef, "backlog", "--intake") == nil ||
+	if r.called(loopBoard, loopBoardMove, restartRef, "backlog", "--intake") == nil ||
 		r.called(loopBoard, "rank", restartRef, "--after", crossHome) != nil {
 		t.Fatalf("interrupted pass did not stop between move and rank: %v", r.calls)
 	}
@@ -354,7 +354,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	}
 
 	r.pass(t)
-	if r.called(loopBoard, "move", restartRef, "backlog", "--intake") != nil {
+	if r.called(loopBoard, loopBoardMove, restartRef, "backlog", "--intake") != nil {
 		t.Fatalf("move repeated after restart between move and rank: %v", r.calls)
 	}
 	if r.called(loopBoard, "rank", restartRef, "--after", crossHome) == nil {

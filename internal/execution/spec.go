@@ -71,7 +71,7 @@ var refPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_./-]*$`)
 // SupportedHarness names the harnesses with a remote adapter. Every other
 // harness starts on the coordinating machine only.
 func SupportedHarness(h string) bool {
-	return h == HarnessClaude || h == HarnessCodex || h == HarnessAgy
+	return h == HarnessClaude || h == HarnessCodex || h == HarnessAgy || h == HarnessOmp
 }
 
 func ValidIdentity(s string) bool { return identityPattern.MatchString(s) && s != "." && s != ".." }
@@ -133,7 +133,7 @@ func (r StartRequest) Validate() error {
 		return errors.New("invalid pinned execution source")
 	}
 	if !SupportedHarness(r.Harness) || !refPattern.MatchString(r.Model) || len(r.Model) > 256 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 256 || strings.ContainsAny(r.Name, "\x00\r\n") {
-		return errors.New("remote starts require harness claude, codex or agy, an explicit model and a name")
+		return errors.New("remote starts require harness claude, codex, agy or omp, an explicit model and a name")
 	}
 	if strings.TrimSpace(r.Prompt) == "" || len(r.Prompt) > 256<<10 || len(r.Task) > 1024 || !ValidDigest(r.PolicyDigest) {
 		return errors.New("invalid prompt, task or policy digest")
@@ -192,6 +192,21 @@ type Observation struct {
 // the host's prepared policy. Hosts that predate the fields report neither.
 func (o Observation) PolicyAvailable() bool {
 	return o.PolicyDigest == "" || o.PolicyDigest == o.HostPolicyDigest
+}
+
+// BetweenTurns says the observed execution runs, accepted its first task and
+// waits for a wake: no turn runs, none is stored to begin and no delivery is
+// uncertain. A host update goes ahead under it (Quiesce).
+func (o Observation) BetweenTurns() bool {
+	if o.ProcessState != Running || !o.Ready || o.InTurn || o.StopRequested || o.StopAcknowledged {
+		return false
+	}
+	for _, d := range o.Messages {
+		if d.Stage == Stored || d.Stage == Uncertain {
+			return false
+		}
+	}
+	return true
 }
 
 // PolicyRebind moves a running execution from the policy it is bound to onto
