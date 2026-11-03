@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Promotion candidate read failures pass `--progress` to `devctl release promote --dry-run`, reject failed `--dry-run` documents, retain the child's stderr tail or document failure diagnostic, and name an expired deadline when the gate kills devctl, preserving network diagnostics ([https://github.com/giantswarm/beekeeper/issues/1235](https://github.com/giantswarm/beekeeper/issues/1235)).
 - Execution host updates replace the verified binary atomically without creating a rollback hard link, allowing updates in a writable installation directory even when the old binary has a different owner. An unwritable system installation uses noninteractive sudo only for the final replacement of the already verified download. A failed policy preparation holds the host for retry without restoring an older release (https://github.com/giantswarm/beekeeper/issues/2125).
 - A gated merge whose head got no workflow runs, as the base-merge commit of `--update-branch` can, no longer ends on a bare devctl exit 4 (`required_missing` or `no_checks`): with no GitHub Actions run among the head's checks, its reason says that another wait will not start them and that an empty commit or a close and reopen of the pull request retriggers them before the same merge runs again (https://github.com/giantswarm/beekeeper/issues/1562).
 
