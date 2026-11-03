@@ -196,40 +196,6 @@ func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	}
 }
 
-func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
-	r := newLoopRig(t)
-	// Refuse the mechanical merge to keep the pull request open as the
-	// worker publishes heads requiring the two allowed review rounds.
-	r.command = func([]string) (string, int) { return "branch behind base", 1 }
-	r.park(t, loopPR, time.Now())
-	r.pass(t)
-	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.pass(t)
-	r.pull.Head = loopFixed
-	r.park(t, loopPR, time.Now().Add(time.Minute))
-	r.pass(t)
-	r.verdict("R2", loopFixed, superloop.Approved, "")
-	r.pass(t)
-	const third = "3333333333333333333333333333333333333333"
-	r.pull.Head = third
-	r.park(t, loopPR, time.Now().Add(2*time.Minute))
-	r.pass(t)
-	if r.called("note", loopAdd) == nil {
-		t.Fatal("no escalation")
-	}
-	n := state.Note{ID: 9, By: loopParty, Text: superloop.EscalationQuestion(loopURL, third)}
-	recorder := state.Party{Session: dialogSession, Name: verifyGuide}
-	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, RelayedBy: verifyGuide, Answer: dialogMergeChoice, Note: 9}
-	if err := r.a.store.Record(answerEvent(recorder, &rec, &n)); err != nil {
-		t.Fatal(err)
-	}
-	r.pass(t)
-	call := r.called(gateCmdName)
-	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("session answer did not release its head without answer verify: %v\n%s", r.calls, r.out)
-	}
-}
-
 func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

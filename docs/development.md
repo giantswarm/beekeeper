@@ -602,7 +602,9 @@ not worker merge grants; when the pinned merge step fails on an open, green, app
 for a tooling or internal reason rather than branch repair or gate refusal, the loop falls
 back automatically to `beekeeper gate --limit 0 -- devctl pr merge <repo> <n>` and, if the
 pull request remains open at that green head, directs the worker session with an exact-head
-`supervisor.go` grant instead of asking a person. Merge goes never go through `answer verify`.
+`supervisor.go` grant instead of asking a person. No person is asked whether to merge: past
+`superloop.MaxReviews` the loop gives the go for the reviewed, green head itself, and `note add`
+refuses a decision that asks whether to merge.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
@@ -621,13 +623,6 @@ second wake when a review or merge arrives. Only rostered review parks carry thi
 plain waits and off-roster sessions keep the normal watcher lifecycle. A closed pull request,
 or a merged pull request whose served issue remains open or unreadable, wakes its worker to
 continue or verify the task rather than leaving it parked.
-
-The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
-The receipt binds its active local note, session, thread, displayed head, selected option and
-verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
-command-line flag alone cannot select the channel. The guide keeps the note's option labels
-and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
-relay still does not verify. The central instance retains its authenticated identity checks.
 
 The guide defaults to a 200k relay point. When a feed line arrives after an hour
 of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`

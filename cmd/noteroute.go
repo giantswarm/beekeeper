@@ -67,6 +67,23 @@ var opClasses = []opClass{
 	},
 }
 
+// mergeAsk marks a question whether to merge a pull request: approving,
+// confirming or authorising its merge, or a "merge it?".
+var mergeAsk = regexp.MustCompile(`(?i)^\s*merge\b|\b(may|can|shall|should|could|do|must)\s+(i|we|you|the\s+loop|the\s+supervisor|it|this|they)\s+(still\s+|now\s+|go\s+ahead\s+and\s+)?merge\b|\bmerg(e|ing)\s+(it|this|that|them|now|the\s+(pr|pull\s+request|change|fix)|prs?\b|pull\s+requests?|https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|[\w.-]+/[\w.-]+#\d+|#\d+)|\b(ok|okay|good|ready|fine|clear(ed)?|safe|go|green\s+light|approv(e|ed|al)|permission|authori[sz](e|ed|ation)|sign[\s-]?off)\b[^.?!]{0,30}\b(to|for)\s+merg(e|ing)\b|\b(approve|authori[sz]e|confirm|allow|release|sign\s+off\s+on)\b[^.?!]{0,30}\bmerg(e|ing)\b`)
+
+// mergeWhere is where a merge ask goes instead of a person.
+const mergeWhere = `the supervisor loop merges a pull request once its desk review and the fixes of its findings are in and its checks are green, at the head it gives the go for; park on it (beekeeper agents park --on <owner/repo#n> "desk review") and the loop merges it, asking nobody`
+
+// refuseMergeAsk refuses a decision, whoever files it, that asks a person
+// whether to merge, logging note.redirected. Nil: it asks no such thing.
+func (a *app) refuseMergeAsk(stderr io.Writer, me state.Party, d noteDraft) error {
+	if !mergeAsk.MatchString(d.Question) {
+		return nil
+	}
+	a.logRedirect(stderr, me, "merge", truncate(strings.TrimSpace(d.Question), 200), mergeWhere)
+	return refused("note refused: whether to merge is never a person's decision: %s. Do not file it again", mergeWhere)
+}
+
 // reserved marks a decision that needs the person's own authority, whatever
 // operation it concerns: spending or cost, a purchase, contract or licence,
 // consent, an account or credential, or something made public or touching

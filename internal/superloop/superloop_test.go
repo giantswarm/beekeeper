@@ -1,7 +1,6 @@
 package superloop
 
 import (
-	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -18,8 +17,6 @@ const (
 	release = "v1.2.0"
 	// guidePerson is the guide's person.
 	guidePerson = "pat"
-	// mergeAnswer is the label of an escalation's releasing option.
-	mergeAnswer = "Merge"
 )
 
 var (
@@ -394,49 +391,63 @@ func TestABaseMergeAfterAChangeRequestGetsNoGo(t *testing.T) {
 }
 
 // An approved head the worker moved past with more commits is reviewed
-// again, once: a change past MaxReviews is the person's decision (merge it
-// without a third review, or rework), asked once per head, whatever
-// supervisor.reviewRounds says.
-func TestAThirdReviewIsThePersonsDecision(t *testing.T) {
+// again, once: a change past MaxReviews gets the loop's go, whatever it
+// changes and whatever supervisor.reviewRounds says. No note asks the
+// person whether to merge it.
+func TestPastTheReviewsTheLoopMergesWithoutAQuestion(t *testing.T) {
 	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	r2 := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(2*time.Hour + time.Minute)}
 	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
 		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
 	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
 	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 5, Person: guidePerson, Taken: acts}
-	a := only(t, Plan(in), KindEscalate)
-	if a.Head != head3 || a.Question != EscalationQuestion(prURL, head3) || !strings.Contains(a.Message, "2 reviews are used") {
-		t.Errorf("escalation = %+v", a)
-	}
-	// The answer carries an option's label: Merge releases, Rework not.
-	opts := EscalationOptions(head3)
-	labels := make([]string, len(opts))
-	for i, o := range opts {
-		labels[i], _, _ = strings.Cut(o, ":")
-	}
-	if len(labels) != 2 || labels[0] != mergeAnswer || !Releases(labels[0]) || Releases(labels[1]) {
-		t.Errorf("options %q", opts)
-	}
-	// Asked once: the next pass, and one with the person's answer still
-	// out, ask nothing again.
-	in.Taken = append(in.Taken, taken(t, t0.Add(4*time.Hour), a)...)
-	if got := Plan(in); len(got) != 0 {
-		t.Errorf("a second pass took %+v", got)
-	}
-	// The person releases it: the go for that head.
-	in.Answers = []Answer{{Ref: pr, Note: 9, Question: a.Question, Text: mergeAnswer, By: guidePerson, At: t0.Add(5 * time.Hour)}}
-	if g := only(t, Plan(in), KindGo); g.Head != head3 || !strings.Contains(g.Message, "note #9") {
+	got := Plan(in)
+	g := only(t, got, KindGo)
+	if g.Head != head3 || g.Question != "" || !strings.Contains(g.Message, "2 reviews are used, the last approving head "+short(head2)) {
 		t.Errorf("go = %+v", g)
 	}
-	// A rework answer goes to the worker; its next head is asked about
-	// again, never reviewed a third time.
-	in.Answers[0].Text = "Rework — split it out"
-	an := only(t, Plan(in), KindAnswer)
-	in.Taken = append(in.Taken, taken(t, t0.Add(6*time.Hour), an)...)
-	in.Workers = parked(t0.Add(7 * time.Hour))
-	in.Pulls = pull("4444444444444444444444444444444444444444", true, r1, r2)
-	if e := only(t, Plan(in), KindEscalate); e.Head != "4444444444444444444444444444444444444444" {
-		t.Errorf("escalation of the reworked head = %+v", e)
+	noQuestion(t, got)
+	// Red checks: no go yet, and no note either.
+	in.Pulls = pull(head3, false, r1, r2)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a red head past the reviews got %+v", got)
+	}
+}
+
+// Past MaxReviews a last reviewer that finished without a verdict leaves
+// an earlier round's verdict standing: the go, no question. With no
+// verdict at all, no go comes and no person is asked: a leave line says
+// why.
+func TestPastTheReviewsWithoutAVerdictNoPersonIsAsked(t *testing.T) {
+	r1 := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
+	done := Event{At: t0.Add(3 * time.Hour), Verb: VerbDone, Agent: ReviewerName(pr, 2)}
+	in := Input{Workers: parked(t0.Add(4 * time.Hour)), Pulls: pull(head3, true, r1), Rounds: 1, Person: guidePerson, Taken: acts, Events: []Event{done}}
+	// The reviewer that reported done is retired besides.
+	plan := func() []Action {
+		return slices.DeleteFunc(Plan(in), func(a Action) bool { return a.Kind == KindDone })
+	}
+	got := plan()
+	if g := only(t, got, KindGo); g.Head != head3 || !strings.Contains(g.Message, "round 1 approved head "+short(head1)) {
+		t.Errorf("go = %+v", g)
+	}
+	noQuestion(t, got)
+	in.Pulls = pull(head3, true)
+	got = plan()
+	if l := only(t, got, KindLeave); l.Key != leaveKey(pr, leftNoVerdict(head3)) || !strings.Contains(l.Message, "none gave a verdict") {
+		t.Errorf("leave = %+v", l)
+	}
+	noQuestion(t, got)
+}
+
+// noQuestion fails when any of acts would put a question to a person.
+func noQuestion(t *testing.T, acts []Action) {
+	t.Helper()
+	for _, a := range acts {
+		if a.Question != "" || a.Kind == KindOwnership {
+			t.Errorf("a person was asked: %+v", a)
+		}
 	}
 }
 
@@ -843,118 +854,23 @@ func TestAParkOnATimerOrANoteIsNoDecision(t *testing.T) {
 	only(t, Plan(in), KindClassify)
 }
 
-// escalated is the pull request of TestOpenFindingsPastTheLastRoundGoBackToTheWorker
-// as an earlier loop handed it to the guide on head1, and the person's
-// answer an hour later.
-func escalated(t *testing.T, words string) Input {
-	t.Helper()
+// An escalation an earlier loop logged, and the person's answer to it,
+// are read as nothing: the loop's rounds go on, and its rework too.
+func TestAnEarlierLoopsEscalationIsReadAsNothing(t *testing.T) {
 	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	tk := taken(t, t0,
 		Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
 		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
-	tk = append(tk, taken(t, t0.Add(2*time.Hour), Action{Key: escalateKey(pr, head1), Kind: KindEscalate, Ref: pr, Agent: worker})...)
-	in := Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head1, true, rev), Rounds: 1, Taken: tk}
-	if words != "" {
-		in.Answers = []Answer{{Ref: pr, Note: 4, Question: EscalationQuestion(prURL, head1), Text: words, By: "person", At: t0.Add(3 * time.Hour)}}
+	if _, ok := ParseTaken(t0.Add(2*time.Hour), "supervisor.escalate", pr, "[escalate "+pr+"@"+head1+"] "+worker+": to the guide"); ok {
+		t.Fatal("an escalation line was read back")
 	}
-	return in
-}
-
-// The person's release of an escalation is the loop's merge go for the
-// head it named.
-func TestAnAnswerReleasingAnEscalationIsTheMergeGo(t *testing.T) {
-	// One nobody answered holds nothing: the loop's rework goes on.
-	unanswered := escalated(t, "")
-	only(t, Plan(unanswered), KindRework)
-	if got := Tracked(unanswered.Workers, unanswered.Taken, nil, Desk{}); !slices.Equal(got, []string{pr}) {
-		t.Errorf("an unanswered escalation is not tracked: %v", got)
-	}
-	for _, words := range []string{mergeAnswer, "Merge — the findings are cosmetic", "you can merge", "OK, merge it."} {
-		in := escalated(t, words)
-		if got := Tracked(in.Workers, in.Taken, in.Answers, Desk{}); len(got) != 1 || got[0] != pr {
-			t.Errorf("%q: an answered escalation is not tracked: %v", words, got)
-		}
-		a := only(t, Plan(in), KindGo)
-		if a.Head != head1 || !strings.Contains(a.Message, "--match-head-commit "+head1) || !strings.Contains(a.Message, "note #4") {
-			t.Errorf("%q: go = %+v", words, a)
-		}
-		// Red checks hold the go back.
-		in.Pulls = pull(head1, false, in.Pulls[pr].Reviews...)
-		if got := Plan(in); len(got) != 0 {
-			t.Errorf("%q: a red head got %+v", words, got)
-		}
-	}
-	// A head that only merges the base into the released one has the go.
-	in := escalated(t, mergeAnswer)
-	in.Pulls = pull(head2, true, in.Pulls[pr].Reviews...)
-	in.BaseMerged = func(Pull, string) bool { return true }
-	if a := only(t, Plan(in), KindGo); a.Head != head2 || !strings.Contains(a.Message, "only merges the base into the released head "+short(head1)) {
-		t.Errorf("a base merge of the released head: go = %+v", a)
-	}
-	// An answer to an older escalation, or to another note, counts not.
-	in = escalated(t, mergeAnswer)
-	in.Answers[0].At = t0.Add(time.Hour)
-	if got := only(t, Plan(in), KindRework); got.Head != head1 {
-		t.Errorf("an answer from before the escalation got %+v", got)
-	}
-	in = escalated(t, mergeAnswer)
-	in.Answers[0].Question = "Decide what worker one does next about its problem (blocker)?"
-	if got := only(t, Plan(in), KindRework); got.Head != head1 {
-		t.Errorf("an answer to another note got %+v", got)
-	}
-}
-
-// Any other answer goes to the worker, once, and the rounds go on.
-func TestAnAnswerKeepingAnEscalationGoesToTheWorker(t *testing.T) {
-	for _, words := range []string{"Rework", "Rework — fix the panic first", "do not merge yet", "why is x needed?"} {
-		in := escalated(t, words)
-		a := only(t, Plan(in), KindAnswer)
-		if a.Agent != worker || !strings.Contains(a.Message, words) || !strings.Contains(a.Message, "rework") {
-			t.Errorf("%q: answer = %+v", words, a)
-		}
-		in.Taken = append(in.Taken, taken(t, t0.Add(4*time.Hour), a)...)
-		if got := Plan(in); len(got) != 0 {
-			t.Errorf("%q: told twice or escalated again: %+v", words, got)
-		}
-		// The reworked head carries the fixes: the merge go.
-		in.Workers = parked(t0.Add(5 * time.Hour))
-		in.Pulls = pull(head2, true, in.Pulls[pr].Reviews...)
-		if g := only(t, Plan(in), KindGo); g.Head != head2 {
-			t.Errorf("%q: go = %+v", words, g)
-		}
-	}
-}
-
-func TestReleases(t *testing.T) {
-	for words, want := range map[string]bool{
-		"Merge": true, "merge — fine": true, "you can merge": true, "LGTM": true, "approved": true,
-		"Rework": false, "Rework — merge after the fix": false, "don't merge": false, "do not merge": false,
-		"not yet": false, "wait for x, then merge": false, "": false, "why?": false, "can't merge this": false,
-		"You can merge.": true, "ship it!": true, "Merge it": true,
-		"fix the findings first, then merge": false, "merge main into the branch and fix the findings": false,
-		"ship it after fixing finding 2": false, "yes": false, "merge after the fix": false,
-	} {
-		if got := Releases(words); got != want {
-			t.Errorf("Releases(%q) = %v, want %v", words, got, want)
-		}
-	}
-}
-
-// An escalation logged before its key named a head is on the last
-// round's head: its release is the go, and no second note follows.
-func TestAnEscalationWithoutAHeadIsOnTheLastRoundsHead(t *testing.T) {
-	in := escalated(t, mergeAnswer)
-	in.Taken[len(in.Taken)-1].Key = "escalate " + pr
-	if a := only(t, Plan(in), KindGo); a.Head != head1 {
-		t.Errorf("go = %+v", a)
-	}
-	in = escalated(t, "Rework")
-	in.Taken[len(in.Taken)-1].Key = "escalate " + pr
-	a := only(t, Plan(in), KindAnswer)
-	in.Taken = append(in.Taken, taken(t, t0.Add(4*time.Hour), a)...)
-	in.Workers = parked(t0.Add(5 * time.Hour))
-	if got := Plan(in); len(got) != 0 {
-		t.Errorf("the same head after the answer got %+v", got)
+	answers := []Answer{{Ref: pr, Note: 4, Question: "Merge " + prURL + " at head " + short(head1) + " without a third review, or have it reworked?", Text: "Merge", By: guidePerson, At: t0.Add(3 * time.Hour)}}
+	in := Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head1, true, rev), Rounds: 1, Taken: tk, Answers: answers}
+	only(t, Plan(in), KindRework)
+	in.Pulls = pull(head2, true, rev)
+	in.Workers = parked(t0.Add(4 * time.Hour))
+	if g := only(t, Plan(in), KindGo); g.Head != head2 || strings.Contains(g.Message, "note #4") {
+		t.Errorf("go = %+v", g)
 	}
 }
 
@@ -1003,15 +919,6 @@ func TestPlainWaiterDoesNotBlockAnUnparkedOwnersRound(t *testing.T) {
 			in := Input{Workers: workers, Pulls: pull(head1, true, Review{ID: "R1", Head: head1, Verdict: tc.verdict, At: t1}), Rounds: 1, Taken: taken(t, t0, started)}
 			if a := only(t, Plan(in), tc.kind); a.Agent != worker {
 				t.Fatalf("action routed to %+v, want the round's owner", a)
-			}
-		})
-	}
-	for _, tc := range []struct{ answer, kind string }{{"Rework — address the remaining findings", KindAnswer}, {"Merge — the answer releases this head", KindGo}} {
-		t.Run("answer/"+tc.answer, func(t *testing.T) {
-			in := escalated(t, tc.answer)
-			in.Workers = workers
-			if a := only(t, Plan(in), tc.kind); a.Agent != worker {
-				t.Fatalf("answer routed to %+v, want the round's owner", a)
 			}
 		})
 	}
@@ -1254,81 +1161,6 @@ func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
 	acts = Plan(in)
 	if len(acts) < 4 || acts[0].Kind != KindIntake || acts[1].Kind != KindIntake || acts[2].Kind != KindIntake || acts[3].Kind != KindNext {
 		t.Fatalf("order = %+v, want intake actions before next", acts)
-	}
-}
-
-// The desk's standing rule is one review, then the fixes and the merge:
-// past MaxReviews, a head whose change beyond the approved one stays in
-// the files the reviews' findings name and tests gets the go with no
-// note; one that changes another file goes to the person, the file named.
-func TestAHeadPastTheReviewsThatOnlyFixesFindingsMerges(t *testing.T) {
-	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "Review: changes requested\n- cmd/agentpark.go:12 drops the wait", At: t1}
-	r2 := Review{ID: "R2", Head: head2, Verdict: Approved, Body: "Review: approved\nnit: internal/state/state.go:40 could name the field", At: t0.Add(2*time.Hour + time.Minute)}
-	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
-		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
-	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
-	var asked []string
-	changed := []string{"cmd/agentpark.go", "cmd/agentpark_test.go", "internal/state/state.go", "internal/state/testdata/park.json"}
-	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 1, Person: guidePerson, Taken: acts,
-		ChangedPast: func(p Pull, reviewed string) ([]string, error) {
-			asked = append(asked, reviewed+".."+p.Head)
-			return changed, nil
-		}}
-	g := only(t, Plan(in), KindGo)
-	if g.Head != head3 || !strings.Contains(g.Message, "the files of the reviews' findings and tests") || !slices.Equal(asked, []string{head2 + ".." + head3}) {
-		t.Errorf("go = %+v, compared %v", g, asked)
-	}
-	// Red checks: no go yet, and no note either.
-	in.Pulls = pull(head3, false, r1, r2)
-	if got := Plan(in); len(got) != 0 {
-		t.Errorf("a red head past the reviews got %+v", got)
-	}
-	// A file no finding names: the person decides, told which file.
-	in.Pulls = pull(head3, true, r1, r2)
-	changed = append(changed, "cmd/board.go")
-	if e := only(t, Plan(in), KindEscalate); e.Head != head3 || !strings.Contains(e.Message, "it changes cmd/board.go, which no review finding names") {
-		t.Errorf("escalation = %+v", e)
-	}
-	// A comparison GitHub cuts short proves nothing: the person decides.
-	in.ChangedPast = func(Pull, string) ([]string, error) { return nil, errors.New("at the comparison's cap") }
-	if e := only(t, Plan(in), KindEscalate); !strings.Contains(e.Message, "cannot be read: at the comparison's cap") {
-		t.Errorf("escalation = %+v", e)
-	}
-}
-
-func TestFixesOnlyNamesFilesByPathOrBaseName(t *testing.T) {
-	for _, c := range []struct {
-		file string
-		want bool
-	}{
-		{"cmd/agentpark.go", true},
-		{"internal/x/agentpark.go", true},
-		{"cmd/park_test.go", true},
-		{"testdata/a.json", true},
-		{"cmd/board.go", false},
-		// A base name inside another file's name is no finding's file.
-		{"internal/loop/loop.go", false},
-		{"internal/config/config.go", false},
-		{"cmd/supervisorloop.go", true},
-		{"cmd/x/park.go", false},
-	} {
-		in := Input{ChangedPast: func(Pull, string) ([]string, error) { return []string{c.file}, nil }}
-		findings := []string{"- agentpark.go:12 drops the wait", "- cmd/supervisorloop.go:2345: the wake is lost", "see supervisorconfig.go and agentpark.golden."}
-		if got, why := in.fixesOnly(Pull{Head: head2}, head1, findings); got != c.want {
-			t.Errorf("%s: fixesOnly = %v (%s), want %v", c.file, got, why, c.want)
-		}
-	}
-}
-
-// A finding on cmd/supervisorloop.go names neither internal/loop/loop.go
-// nor internal/config/config.go.
-func TestFixesOnlyRefusesSuffixCollisions(t *testing.T) {
-	in := Input{ChangedPast: func(Pull, string) ([]string, error) {
-		return []string{"cmd/supervisorloop.go", "internal/loop/loop.go", "internal/config/config.go"}, nil
-	}}
-	ok, why := in.fixesOnly(Pull{Head: head2}, head1, []string{"- cmd/supervisorloop.go:2345: the wake is lost"})
-	if ok || !strings.Contains(why, "internal/loop/loop.go, internal/config/config.go") {
-		t.Errorf("fixesOnly = %v, %q", ok, why)
 	}
 }
 

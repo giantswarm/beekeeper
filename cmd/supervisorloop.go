@@ -154,18 +154,6 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	return parseLoopPull(ref, out)
 }
 
-// readChangedPast reads the files p's head changes past the change of
-// reviewed (github.ChangedPast).
-var readChangedPast = func(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
-	r, ok := parseRef(p.Ref)
-	if !ok || p.Base == "" {
-		return nil, fmt.Errorf("%s names no pull request with a base", p.Ref)
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	return github.ChangedPast(ctx, github.RunGH, r.Repo, p.Base, reviewed, p.Head)
-}
-
 // readBaseMerge reads whether the approval of approved covers p's head: it
 // only merges its base into approved, resolving the merge's conflicts or
 // not, or rebases approved onto it (github.ApprovalCovers).
@@ -396,7 +384,7 @@ its key first in the detail):
             GitHub budget is above its floor: board tidy, its lines printed
             as SUPERVISOR BOARD <line>; a dry run tidies nothing
   leave     a park the desk's ownership leaves alone (below), said once with
-            its reason: no reviewer, no go, no forward, no escalation, and
+            its reason: no reviewer, no go, no forward, and
             a reviewer the loop started on it earlier retires
   resume    a settled park whose non-Claude harness reports its session gone:
             restart under
@@ -473,23 +461,12 @@ its key first in the detail):
             round, or the merge go once none is left. Review and rework
             stay in the loop: no merge question goes to guide.person
   go        (past the reviews) a green head the worker parked on after
-            superloop.MaxReviews reviews, the last approving, whose change
-            differs from the approved head's (compare API, the base's own
-            changes left out) only in test files (_test.go, testdata/) and
-            files a review's findings name: the desk's rule is one review,
-            then the fixes and the merge, so the merge go, with no note
-  escalate  a head that would need a review past superloop.MaxReviews (an
-            approved second review, then a change past its findings and
-            tests, or a comparison GitHub cuts short): a decision for
-            guide.person (note add, options Merge and Rework) naming the
-            files past the findings, once per head; no third reviewer
-            starts
-  answer    the person answered an escalation (beekeeper answer --note):
-            an answer that releases it (the
-            Merge option, or words to merge that refuse nothing) is the
-            merge go for the head the escalation named, once its checks
-            are green; any other answer goes to the worker word for word,
-            and the rounds go on. One nobody answered holds nothing
+            superloop.MaxReviews reviews, the last approving or, when the
+            last reviewer finished without a verdict, an earlier round's
+            verdict standing: the desk's rule is the review, then the fixes
+            and the merge, so the merge go. No third reviewer starts, and
+            no note asks guide.person whether to merge; reviews that gave
+            no verdict at all get no go, said once as a leave line
   relay     another team's pull request: each review its owning team
             posted after the worker parked, told to it word for word
   ownership another team's pull request whose worker waited
@@ -509,7 +486,7 @@ its key first in the detail):
   done      agents.done: once its turn ends, the agent leaves the roster
             (agents remove); the loop retires a session beekeeper started
             the same way, once its turn ends: a reviewer once the loop
-            acted on its round's verdict (a go, forward, escalation, next
+            acted on its round's verdict (a go, forward, next
             round or end), and a worker given the merge go after its post-merge
             report or supervisor.postMergeWindow without activity
             (default 2h). A worker that still serves other open work, the
@@ -591,7 +568,7 @@ its key first in the detail):
             re-addressed to guide.person, into the guide's queue
 
 Ownership decides what the loop does with a parked pull request, before any
-review, go, forward or escalation:
+review, go or forward:
 
   - outside github.allowedOrgs: nothing at all, not even a read
   - in supervisor.ownership.never, or its title, head branch or a changed
@@ -693,9 +670,6 @@ type supervisorLoop struct {
 	// baseMerges are the answers of readBaseMerge, by pull request,
 	// approved head and head: two commits' relation does not change.
 	baseMerges map[string]bool
-	// changedPast are the answers of readChangedPast, by pull request,
-	// reviewed head and head.
-	changedPast map[string][]string
 	// opens are the answers of refStates, by issue or pull request,
 	// each kept for loopOpenEvery.
 	opens map[string]loopOpen
@@ -947,7 +921,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun, bin: loopBinary()}
+	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun, bin: loopBinary()}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -1092,9 +1066,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
 		DevctlOwners: a.cfg.Merge.DevctlOwners, Admin: a.cfg.Merge.Admin,
-		BaseMerged:  func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
-		ChangedPast: func(p superloop.Pull, reviewed string) ([]string, error) { return l.changed(ctx, p, reviewed) },
-		Open:        func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
+		BaseMerged: func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
+		Open:       func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
@@ -1189,8 +1162,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, e := range evs {
 		in.Events = append(in.Events, superloop.Event{At: e.At, Verb: e.Verb, Agent: loopEventAgent(st, e), Detail: e.Detail})
 	}
-	// The person's answers to the loop's own notes: an escalation's answer
-	// is the loop's to act on, no session's.
+	// The person's answers to the loop's own notes: an ownership answer is
+	// the loop's to act on, no session's.
 	answers, err := a.store.Follow("supervisor-loop-answers", func(e state.Event) bool { return e.Verb == answerRecorded })
 	if err != nil {
 		return err
@@ -1593,29 +1566,6 @@ func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, appro
 	return ok
 }
 
-// changed lists the files p's head changes past the change of reviewed,
-// read once per pair of heads; a read that fails is read again next pass.
-func (l *supervisorLoop) changed(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
-	key := p.Ref + " " + reviewed + " " + p.Head
-	l.mu.Lock()
-	if files, read := l.changedPast[key]; read {
-		l.mu.Unlock()
-		return files, nil
-	}
-	l.mu.Unlock()
-	files, err := readChangedPast(ctx, p, reviewed)
-	if err != nil {
-		return nil, err
-	}
-	l.mu.Lock()
-	if l.changedPast == nil {
-		l.changedPast = map[string][]string{}
-	}
-	l.changedPast[key] = files
-	l.mu.Unlock()
-	return files, nil
-}
-
 // ownership readies the desk's policy for a pass's reads: the logins the
 // desk opens its pull requests as and, once supervisor.ownership.team is
 // set, the team files, read again every teamsEvery. False, said once, while
@@ -1658,7 +1608,7 @@ func would(act superloop.Action) string {
 	switch act.Kind {
 	case superloop.KindReview:
 		return fmt.Sprintf("start reviewer %q for %s at %s, round %d", superloop.ReviewerName(act.Ref, act.Round), act.URL, act.Head, act.Round)
-	case superloop.KindEscalate, superloop.KindOwnership:
+	case superloop.KindOwnership:
 		return "ask the guide's person: " + act.Question
 	case superloop.KindDone:
 		return "take off the roster " + act.Message
@@ -1828,7 +1778,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		} else {
 			done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 		}
-	case superloop.KindEscalate, superloop.KindOwnership:
+	case superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	case superloop.KindIntake:
 		for _, e := range evs {
@@ -2109,13 +2059,6 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return fmt.Sprintf("the owning team's review of %s told", act.URL), nil
 	case superloop.KindOwner:
 		return l.ownOverlap(ctx, st, act)
-	case superloop.KindEscalate:
-		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
-			fmt.Sprintf("the loop starts at most %d reviews of a pull request, and head %s changes more than the base since the last one: only a person lets it merge without another review; the loop gives the merge go for that head on an answer that releases it", superloop.MaxReviews, shortSHA(act.Head)),
-			fmt.Sprintf("leave %s unmerged and its worker parked", act.URL), superloop.EscalationOptions(act.Head)...); err != nil {
-			return "", err
-		}
-		return "to the guide: " + act.Message, nil
 	case superloop.KindOwnership:
 		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
 			"its owning team's review blocks the desk's work, and only a person overrides the ownership of a pull request; the loop reviews it and gives the merge go as for the desk's own on an answer that overrides it",

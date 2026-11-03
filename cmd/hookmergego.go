@@ -34,7 +34,7 @@ func recordedMergeGo(events []state.Event, worker state.Party, ref, head string)
 			if strings.HasPrefix(key, "go "+ref+"@") {
 				allowed = false
 			}
-		case "supervisor.review", "supervisor.rework", "supervisor.escalate":
+		case "supervisor.review", "supervisor.rework":
 			kind := strings.TrimPrefix(e.Verb, "supervisor.")
 			if strings.HasPrefix(key, kind+" "+ref+"@") {
 				allowed = false

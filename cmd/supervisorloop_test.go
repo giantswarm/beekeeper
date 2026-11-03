@@ -245,14 +245,10 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.broker = func() (string, error) { return "no broker runs", nil }
 	r.inTurn = func(state.Party) bool { return false }
 	r.baseMerge = func(superloop.Pull, string) (bool, error) { return false, nil }
-	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge, changedPast := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge, readChangedPast
+	run, read, command, binary, broker, turn, sessions, login, teams, baseMerge := beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge
 	t.Cleanup(func() {
-		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge, readChangedPast = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge, changedPast
+		beekeeperRun, readLoopPull, loopCommand, loopBinary, loopBroker, loopInTurn, loopSessions, readDeskLogin, readTeams, readBaseMerge = run, read, command, binary, broker, turn, sessions, login, teams, baseMerge
 	})
-	// No comparison by default: a head past the reviews goes to the person.
-	readChangedPast = func(context.Context, superloop.Pull, string) ([]string, error) {
-		return nil, errors.New("no comparison in this rig")
-	}
 	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
 		r.mu.Lock()
 		r.baseReads = append(r.baseReads, approved+".."+p.Head)
@@ -503,8 +499,9 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 }
 
 // A new head after an approval with a change of its own gets the second
-// review, whatever supervisor.reviewRounds says; a third need is one
-// decision for the person.
+// review, whatever supervisor.reviewRounds says; past it the loop merges
+// the reviewed, green head itself, and no note asks the person whether to
+// merge (https://github.com/giantswarm/beekeeper/issues/2207).
 func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -529,24 +526,23 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 		t.Errorf("review logged as %+v", evs)
 	}
 	// The second review approves, and the worker pushes a change of its
-	// own once more: no third reviewer, one decision for the person.
+	// own once more: no third reviewer and no question, the loop merges.
 	r.verdict("R2", loopFixed, superloop.Approved, "")
 	r.pass(t)
 	const own = "3333333333333333333333333333333333333333"
 	r.pull.Head = own
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
+	r.calls = nil
 	r.pass(t)
 	if start := r.called(agentsName, agentStartName); start != nil {
 		t.Fatalf("a third review started: %v", start)
 	}
-	note := r.called("note", loopAdd)
-	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.EscalationQuestion(loopURL, own) ||
-		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
-		t.Fatalf("no decision for the person: %v\n%s", r.calls, r.out)
+	if merge := r.called(gateCmdName); merge == nil || !slices.Contains(merge, own) {
+		t.Fatalf("the loop did not merge the reviewed, green head %s: %v\n%s", own, r.calls, r.out)
 	}
 	r.pass(t)
-	if c := r.called("note", loopAdd); c != nil {
-		t.Errorf("asked twice: %v", c)
+	if note := r.called("note", loopAdd); note != nil {
+		t.Errorf("a note asked the person: %v", note)
 	}
 }
 
@@ -2176,7 +2172,7 @@ func TestLoopLeavesAnotherTeamsPullRequestToThatTeamUntilThePersonOverrides(t *t
 	}
 	// The person overrides it: the loop reviews it as the desk's own.
 	n := &state.Note{ID: 1, By: loopParty, Text: note[len(note)-1]}
-	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Channel: channelTerminal, Answer: "Override", Note: 1}, n)); err != nil {
+	if err := r.a.store.Record(answerEvent(state.Party{Name: loopPerson}, &recordedAnswer{About: loopPR, By: loopPerson, Via: viaCLI, Answer: "Override", Note: 1}, n)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
