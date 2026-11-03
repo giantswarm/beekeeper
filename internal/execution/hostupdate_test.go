@@ -32,20 +32,25 @@ func TestUpdateHostRunsSelfUpdateAndChecksTheAnswer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var argv []string
+			var sent []byte
 			run := func(_ context.Context, a []string, stdin []byte) ([]byte, error) {
-				argv = a
+				argv, sent = a, stdin
 				if tc.runErr != nil {
 					return nil, tc.runErr
 				}
 				return json.Marshal(tc.answer)
 			}
-			x, err := UpdateHost(context.Background(), f.host, updateRelease, run)
+			release := []byte(`{"tag":"` + updateRelease + `"}`)
+			x, err := UpdateHost(context.Background(), f.host, updateRelease, release, run)
 			if (err == nil) != tc.ok {
 				t.Fatalf("UpdateHost() = %+v, %v", x, err)
 			}
 			want := quote(f.host.Executable) + " --config " + quote(f.host.Config) + " agents hosts self-update --protocol 1 '--version' '" + updateRelease + "'"
 			if len(argv) == 0 || argv[len(argv)-1] != want || argv[len(argv)-2] != f.host.SSH {
 				t.Errorf("ran %q, want the host's self-update %q", argv, want)
+			}
+			if string(sent) != string(release) {
+				t.Errorf("sent %q on standard input, want the coordinator's release lookup", sent)
 			}
 			var down *UnreachableError
 			if tc.runErr != nil && !errors.As(err, &down) {

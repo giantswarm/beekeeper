@@ -71,17 +71,23 @@ func hostUpdateServer(t *testing.T, a *app, version string) *execution.Server {
 // hostInstall replaces the host's install and the installed
 // release's prepare: install records its calls, prepare answers answer.
 type hostInstall struct {
-	installs, restarts []string
-	prepareArgs        []string
-	answer             execution.HostUpdate
+	// installs is each release installed by the host's own lookup, given
+	// each release installed as the coordinator's lookup gave it.
+	installs, given, restarts []string
+	prepareArgs               []string
+	answer                    execution.HostUpdate
 }
 
 func stubHostInstall(t *testing.T, h *hostInstall) {
 	t.Helper()
-	install, prepare, restart := installVersion, runHostPrepare, restartOnInstalled
+	install, installGiven, prepare, restart := installVersion, installRelease, runHostPrepare, restartOnInstalled
 	t.Cleanup(func() {
-		installVersion, runHostPrepare, restartOnInstalled = install, prepare, restart
+		installVersion, installRelease, runHostPrepare, restartOnInstalled = install, installGiven, prepare, restart
 	})
+	installRelease = func(_ context.Context, _ io.Writer, rel update.Release) (update.Result, error) {
+		h.given = append(h.given, rel.Tag)
+		return update.Result{Latest: rel.Tag, Path: sshTestExecutable, Updated: true}, nil
+	}
 	restartOnInstalled = func(_ context.Context, _ *app, path string, _ time.Time) {
 		h.restarts = append(h.restarts, path)
 	}
@@ -100,7 +106,7 @@ func TestHostSelfUpdatePreparesTheRunningRelease(t *testing.T) {
 	s := hostUpdateServer(t, a, hostNewRelease)
 	h := &hostInstall{}
 	stubHostInstall(t, h)
-	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
+	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
 	if got.Error != "" || got.Version != hostNewRelease || got.Identity != sshTestSelector || got.PolicyDigest != s.Policy().Digest() {
 		t.Fatalf("self-update answered %+v, want the prepared policy %s", got, s.Policy().Digest())
 	}
@@ -118,7 +124,7 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	want := execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: execution.Digest([]byte("new release policy"))}
 	h := &hostInstall{answer: want}
 	stubHostInstall(t, h)
-	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
+	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
 	if got != want {
 		t.Fatalf("self-update answered %+v, want the installed release's %+v", got, want)
 	}
@@ -146,7 +152,7 @@ func TestHostSelfUpdateHoldsAReleaseThatDoesNotPrepare(t *testing.T) {
 			}
 			h := &hostInstall{answer: answer}
 			stubHostInstall(t, h)
-			got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
+			got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
 			if !strings.Contains(got.Error, "did not prepare its policy") || got.PolicyDigest != "" {
 				t.Fatalf("self-update answered %+v, want a prepare failure", got)
 			}
@@ -173,7 +179,7 @@ func TestHostSelfUpdateChangesNothingWhileExecutionsRun(t *testing.T) {
 	}
 	h := &hostInstall{}
 	stubHostInstall(t, h)
-	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
+	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
 	if got.Busy != 1 || got.Error != "" || got.PolicyDigest != "" || got.Version != hostOldRelease {
 		t.Fatalf("self-update answered %+v, want busy and unchanged", got)
 	}
@@ -189,14 +195,14 @@ func TestHostSelfUpdateRefusesAWorkerOrAnotherProtocol(t *testing.T) {
 	stubHostInstall(t, h)
 	for name, run := range map[string]func() execution.HostUpdate{
 		"another protocol": func() execution.HostUpdate {
-			return a.hostSelfUpdate(context.Background(), execution.Protocol+1, hostNewRelease)
+			return a.hostSelfUpdate(context.Background(), execution.Protocol+1, hostNewRelease, nil)
 		},
 		"no release": func() execution.HostUpdate {
-			return a.hostSelfUpdate(context.Background(), execution.Protocol, "latest")
+			return a.hostSelfUpdate(context.Background(), execution.Protocol, "latest", nil)
 		},
 		"a managed worker": func() execution.HostUpdate {
 			t.Setenv(execution.EnvID, string(r.Ref.Execution))
-			return a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
+			return a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
 		},
 	} {
 		if got := run(); got.Error == "" {
@@ -208,11 +214,22 @@ func TestHostSelfUpdateRefusesAWorkerOrAnotherProtocol(t *testing.T) {
 	}
 }
 
-// hostUpdates answers the coordinator's SSH update of each host.
-func stubHostUpdates(a *app, answers map[execution.HostID]func(string) (execution.HostUpdate, error)) *[]string {
+// stubHostUpdates answers the coordinator's release lookup and its SSH
+// update of each host, which must be handed the lookup.
+func stubHostUpdates(t *testing.T, a *app, answers map[execution.HostID]func(string) (execution.HostUpdate, error)) *[]string {
+	t.Helper()
+	lookup := lookupRelease
+	t.Cleanup(func() { lookupRelease = lookup })
+	lookupRelease = func(_ context.Context, version string) (update.Release, error) {
+		return update.Release{Tag: version, Assets: []update.Asset{{ID: 1, Name: "beekeeper-linux-amd64", URL: "https://github.com/" + update.Repository + "/releases/download/" + version + "/beekeeper-linux-amd64"}}}, nil
+	}
 	var calls []string
-	a.executionUpdate = func(_ context.Context, h execution.Host, version string) (execution.HostUpdate, error) {
+	a.executionUpdate = func(_ context.Context, h execution.Host, version string, given []byte) (execution.HostUpdate, error) {
 		calls = append(calls, string(h.Identity)+" "+version)
+		var rel update.Release
+		if err := execution.Decode(given, &rel); err != nil || rel.Tag != version || len(rel.Assets) != 1 {
+			t.Errorf("the host was handed %q (%v), want the coordinator's lookup of %s", given, err, version)
+		}
 		return answers[h.Identity](version)
 	}
 	return &calls
@@ -234,7 +251,7 @@ func TestHostsUpdatePinsTheDigestInStateWithoutAConfiguredOne(t *testing.T) {
 		t.Fatalf("an unpinned host without a configured digest: %v", err)
 	}
 	digest := execution.Digest([]byte("prepared on the host"))
-	stubHostUpdates(a, map[execution.HostID]func(string) (execution.HostUpdate, error){sshTestSelector: pinnedAnswer(sshTestSelector, digest)})
+	stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){sshTestSelector: pinnedAnswer(sshTestSelector, digest)})
 	var probed []string
 	probe := a.executionProbe
 	a.executionProbe = func(ctx context.Context, h execution.Host) (execution.Capabilities, error) {
@@ -275,7 +292,7 @@ func TestHostsUpdateHoldsAFailingHostWhileTheOthersRun(t *testing.T) {
 	withCoordinatorVersion(t, hostNewRelease)
 	digest := execution.Digest([]byte("prepared on host-b"))
 	failing := true
-	stubHostUpdates(a, map[execution.HostID]func(string) (execution.HostUpdate, error){
+	stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){
 		sshTestSelector: func(version string) (execution.HostUpdate, error) {
 			if failing {
 				return execution.HostUpdate{}, errors.New("no signed release for this platform")
@@ -329,7 +346,7 @@ func TestHostsUpdateHoldsAFailingHostWhileTheOthersRun(t *testing.T) {
 func TestHostsUpdateDrainsAHostWithExecutions(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, hostNewRelease)
-	calls := stubHostUpdates(a, map[execution.HostID]func(string) (execution.HostUpdate, error){
+	calls := stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){
 		sshTestSelector: func(string) (execution.HostUpdate, error) {
 			return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostOldRelease, Busy: 2}, nil
 		},
@@ -361,7 +378,7 @@ func TestHostsUpdateDrainsAHostWithExecutions(t *testing.T) {
 func TestHostsUpdateRefusesADevelopmentBuildWhichGatesNoStart(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, "dev")
-	calls := stubHostUpdates(a, nil)
+	calls := stubHostUpdates(t, a, nil)
 	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || len(*calls) != 0 {
 		t.Fatalf("a development build updated a host: %v, %v", err, *calls)
 	}
@@ -478,6 +495,82 @@ func TestReleaseVersionIsATagNotABuild(t *testing.T) {
 	} {
 		if got := releaseVersion(v); got != want {
 			t.Errorf("releaseVersion(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+func TestHostSelfUpdateInstallsTheCoordinatorsLookup(t *testing.T) {
+	a, _ := executionTestApp(t)
+	hostUpdateServer(t, a, hostOldRelease)
+	want := execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: execution.Digest([]byte("new release policy"))}
+	h := &hostInstall{answer: want}
+	stubHostInstall(t, h)
+	// A field a newer coordinator sends is no reason to refuse.
+	given := []byte(`{"tag":"` + hostNewRelease + `","later":true}`)
+	if got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, given); got != want {
+		t.Fatalf("self-update answered %+v, want %+v", got, want)
+	}
+	if !slices.Equal(h.given, []string{hostNewRelease}) || len(h.installs) != 0 {
+		t.Errorf("installed the coordinator's lookup %v and its own %v, want only the coordinator's", h.given, h.installs)
+	}
+}
+
+func TestHostSelfUpdateRefusesALookupOfAnotherRelease(t *testing.T) {
+	a, _ := executionTestApp(t)
+	hostUpdateServer(t, a, hostOldRelease)
+	h := &hostInstall{}
+	stubHostInstall(t, h)
+	for name, given := range map[string]string{
+		"another release": `{"tag":"` + hostOldRelease + `"}`,
+		"no release":      `{"tag":`,
+		"no tag":          `{"assets":[]}`,
+	} {
+		if got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, []byte(given)); got.Error == "" {
+			t.Errorf("%s: self-update answered %+v", name, got)
+		}
+	}
+	if len(h.given) != 0 || len(h.installs) != 0 {
+		t.Errorf("installed %v %v", h.given, h.installs)
+	}
+}
+
+func TestHostsUpdateHoldsAHostWhoseReleaseLookupFails(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	calls := stubHostUpdates(t, a, nil)
+	lookupRelease = func(context.Context, string) (update.Release, error) {
+		return update.Release{}, errors.New("GitHub rate limit exceeded; resets at 2026-11-03T15:00:00Z")
+	}
+	if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), "rate limit exceeded; resets at") {
+		t.Fatalf("a refused lookup: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("the host was asked to update without the coordinator's lookup: %v", *calls)
+	}
+	if st, _ := a.store.Read(); st.HostPin(sshTestSelector) == nil || st.HostPin(sshTestSelector).Held == "" {
+		t.Errorf("a refused lookup left the host unheld")
+	}
+}
+
+func TestHostReleaseInputReadsWhatTheCoordinatorSends(t *testing.T) {
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = null.Close() })
+	for name, tc := range map[string]struct {
+		in   io.Reader
+		want string
+		ok   bool
+	}{
+		"device":  {null, "", true},
+		"empty":   {strings.NewReader(""), "", true},
+		"release": {strings.NewReader(" {\"tag\":\"v0.6.0\"}\n"), `{"tag":"v0.6.0"}`, true},
+		"too big": {strings.NewReader(strings.Repeat(" ", execution.MaxWire+1)), "", false},
+	} {
+		got, err := hostReleaseInput(tc.in)
+		if (err == nil) != tc.ok || string(got) != tc.want {
+			t.Errorf("%s: %q, %v", name, got, err)
 		}
 	}
 }

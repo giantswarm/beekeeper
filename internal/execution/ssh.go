@@ -355,7 +355,10 @@ const UpdateTimeout = 5 * time.Minute
 // policy of it (agents hosts self-update over the host's SSH route). The
 // answer is checked against the host's identity: a busy host, or one that
 // answers the release and a digest, is an answer; anything else an error.
-func UpdateHost(ctx context.Context, h Host, version string, run CommandRunner) (HostUpdate, error) {
+// release is the coordinator's lookup of version, sent on the command's
+// standard input so that the host does not ask GitHub's API itself; a host
+// on a release that does not read it looks the release up on its own.
+func UpdateHost(ctx context.Context, h Host, version string, release []byte, run CommandRunner) (HostUpdate, error) {
 	var x HostUpdate
 	if err := h.Endpoint.Validate(); err != nil {
 		return x, err
@@ -366,7 +369,7 @@ func UpdateHost(ctx context.Context, h Host, version string, run CommandRunner) 
 		run = SSHCommand
 	}
 	connect, _ := time.ParseDuration(h.ConnectTimeout)
-	raw, err := run(ctx, SSHArgv(h.Endpoint, connect, endpointCommand(h.Endpoint, "hosts self-update", "--version", version)), nil)
+	raw, err := run(ctx, SSHArgv(h.Endpoint, connect, endpointCommand(h.Endpoint, "hosts self-update", "--version", version)), release)
 	if err != nil {
 		return x, &UnreachableError{Operation: "self-update", Cause: err}
 	}

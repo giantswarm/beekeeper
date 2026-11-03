@@ -105,7 +105,7 @@ type app struct {
 	executionTransport func(execution.Host) execution.Transport
 	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
 	executionRuntime   func() (*execution.Server, error)
-	executionUpdate    func(context.Context, execution.Host, string) (execution.HostUpdate, error)
+	executionUpdate    func(context.Context, execution.Host, string, []byte) (execution.HostUpdate, error)
 	executionRequestID string
 	cfgPath            string
 	// loadedCfg is the configuration file loadConfig read; liveCapacity
