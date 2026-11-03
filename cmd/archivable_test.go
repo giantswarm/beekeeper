@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,8 +167,9 @@ func (noCLIMachine) Processes() (*proc.Table, error) {
 }
 
 // The doctor asks no session about its own archive while it declined, for
-// a day. Its own CLI is warmed for a finished worker and for a relieved run
-// of the supervisor, whose standing rule covers it. A run that asked no steward
+// a day. Its own CLI is warmed for a finished worker; a relieved run of the
+// guide is never archived: its session stays the person's to close
+// (https://github.com/giantswarm/beekeeper/issues/2195). A run that asked no steward
 // counts no try and leaves the archive archiveAgain, so the doctor does not
 // ask again on every run.
 func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
@@ -179,8 +181,9 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 		declined bool
 		warmed   string // the host whose CLI the doctor would warm, "" for none
 	}{
-		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}, warmed: runHost},
-		{desc: "a relieved run alone", agents: []state.Party{run}, warmed: runHost},
+		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}, warmed: finishedHost},
+		{desc: "a relieved run alone", agents: []state.Party{run}},
+		{desc: "a finished worker", agents: []state.Party{worker}, warmed: finishedHost},
 		{desc: "a finished worker that declined", agents: []state.Party{worker}, declined: true},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
@@ -200,6 +203,15 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 				t.Fatal(err)
 			}
 			outcomes := a.archiveDesktops(context.Background(), st, c.agents, "test")
+			outcomes = slices.DeleteFunc(outcomes, func(o archiveOutcome) bool {
+				if !o.agent.Is(run) {
+					return false
+				}
+				if o.asked || o.host != "" || !strings.Contains(o.line, "the person closes it") {
+					t.Errorf("relieved run: outcome %+v", o)
+				}
+				return true
+			})
 			for _, o := range outcomes {
 				if o.asked || o.host == "" || !strings.Contains(o.line, errNoSteward.Error()) {
 					t.Fatalf("%s: outcome %+v", o.agent.Name, o)

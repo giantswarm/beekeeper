@@ -88,16 +88,11 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 		r.Relay.Taken = now.UTC()
 		r.Relieved = append(dropRelief(r.Relieved, prev.Party),
 			state.Relief{Party: prev.Party, By: me, At: r.Relay.At, Taken: r.Relay.Taken})
-		// The relieved run's desktop session would hold a desktop CLI slot.
-		archive := ""
-		if host := oweArchive(st, prev.Party, fmt.Sprintf("relieved by %q", me.Name), now); host != "" {
-			archive = fmt.Sprintf("; the doctor archives its desktop session %s once its CLI runs no turn", host)
-		}
 		// The relieved run's work ends with the relay: off the roster, nothing
 		// resumes it or shows it again (a background wait of its own dies with
-		// it).
+		// it). Its session stays the person's: they decide when it goes.
 		st.Agents = slices.DeleteFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(prev.Party) })
-		how = fmt.Sprintf(" (relieving %q, relayed at %s%s)", prev.Name, clock(now, r.Relay.At), archive)
+		how = fmt.Sprintf(" (relieving %q, relayed at %s; %s)", prev.Name, clock(now, r.Relay.At), keptSession(st, prev.Party))
 	case prevLive && !takeOver:
 		named := ""
 		switch rel := r.Relay; {
@@ -117,6 +112,11 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	r.Relieved = slices.DeleteFunc(dropRelief(r.Relieved, me), func(rf state.Relief) bool { return now.Sub(rf.Taken) > reliefTTL })
 	restart, last := prev != nil && prev.Is(me), rl.lastRun(r)
 	r.Holder = &state.Supervisor{Party: me, Since: now.UTC()}
+	// The start that took the role keeps its session the person's to close
+	// once relieved or taken over (keepsRole).
+	if i := st.StartIndex(me); i >= 0 {
+		st.Starts[i].Role = rl.name
+	}
 	// A run relayed to me, or named in my title, is mine; any other start
 	// of the role is the next run.
 	switch n := rl.runOf(me.Name); {
@@ -158,6 +158,20 @@ func (rl role) relay(st *state.State, me, to state.Party, now time.Time, ttl tim
 	msg := fmt.Sprintf("relayed to %q until %s%s: its `beekeeper %s start` takes the role; you %s until then (`beekeeper %s status` exits %d once you are relieved)",
 		to.Name, until, replacing, rl.name, rl.inf, rl.name, ExitRelieved)
 	return msg, []state.Event{event(me, rl.name+".relay", "to %s until %s%s", to.Name, until, replacing)}, nil
+}
+
+// keptSession says where the relieved run p's conversation stays and how
+// the person closes it: neither the watch nor the doctor stops or archives
+// it.
+func keptSession(st *state.State, p state.Party) string {
+	if i := st.StartIndex(p); i >= 0 && !st.Starts[i].Background && st.Starts[i].HostSession != "" {
+		return fmt.Sprintf("its desktop session %s stays in the person's session list until they archive it", st.Starts[i].HostSession)
+	}
+	if p.Session == "" {
+		return "its session stays until the person closes it"
+	}
+	short := p.Session[:min(8, len(p.Session))]
+	return fmt.Sprintf("its session %s stays until the person closes it (claude attach %s continues it, claude stop %s ends it)", p.Session, short, short)
 }
 
 // cancelRelay withdraws rl's open relay.
@@ -312,7 +326,7 @@ func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []
 		}
 		switch {
 		case !r.Taken.IsZero():
-			lines = append(lines, fmt.Sprintf("%sRELAY TAKEN: %q %s since %s, relieving %q", rl.tag, r.To.Name, rl.verb, clock(now, r.Taken), r.From.Name))
+			lines = append(lines, fmt.Sprintf("%sRELAY TAKEN: %q %s since %s, relieving %q; %s", rl.tag, r.To.Name, rl.verb, clock(now, r.Taken), r.From.Name, keptSession(st, r.From)))
 		case !now.Before(r.Expires):
 			lines = append(lines, fmt.Sprintf("%sRELAY EXPIRED: %q did not take the role from %q by %s (beekeeper %s relay starts another)",
 				rl.tag, r.To.Name, r.From.Name, clock(now, r.Expires), rl.name))

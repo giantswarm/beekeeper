@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	executionThread  = "019a0000-0000-7000-8000-000000000001"
-	codexExecCommand = "exec_command"
-	codexGitStatus   = "git status"
+	executionThread    = "019a0000-0000-7000-8000-000000000001"
+	codexExecCommand   = "exec_command"
+	codexGitStatus     = "git status"
+	cwdOutsideCaseName = "cwd outside"
 )
 
 func executionCodexEvent(tool string, input map[string]any, session, cwd string) []byte {
@@ -54,7 +55,7 @@ func TestExecutionCodexGuard(t *testing.T) {
 		"invalid JSON":             []byte("{"),
 		"another session":          executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus}, "019a-other", workspace),
 		"no recorded thread":       nil,
-		"cwd outside":              executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus}, executionThread, outside),
+		cwdOutsideCaseName:         executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus}, executionThread, outside),
 		"workdir outside":          executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: codexGitStatus, codexWorkdirKey: outside}, executionThread, workspace),
 		"merge":                    executionCodexEvent(codexExecCommand, map[string]any{codexCmdKey: "gh pr merge 7 --repo giantswarm/beekeeper"}, executionThread, workspace),
 		"push to main":             executionCodexEvent("shell", map[string]any{commandKey: "git push origin HEAD:refs/heads/main"}, executionThread, workspace),
