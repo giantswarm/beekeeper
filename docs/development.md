@@ -670,7 +670,8 @@ same start policy as manual starts.
 
 Each `capacity.choices` entry may carry a desk-maintained `class` (nonnegative
 capability rank), `cost` (positive relative cost), `family`, `kinds` (allowed
-kinds; empty allows all), and `reviewReserve` (0–100 percent of the weekly
+kinds; empty allows all, except that a choice on a self-hosted provider takes
+the `worker` kind, code changes, only when its `kinds` list it), and `reviewReserve` (0–100 percent of the weekly
 window kept for reviews). `capacity.taskPolicies.<kind>.minClass` and `maxCost`
 constrain the choices. A positive maximum rejects unknown costs. Class 0 means
 unclassified. No changing provider price or capability claim is shipped.

@@ -316,6 +316,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   #   review: {differentFamily: true}  # the loop supplies the author's model; manual reviews need --author-model
   # choices may add kinds: [worker, review], class: 3, cost: 5,
   # family: claude and reviewReserve: 20 (percent of the weekly window).
+  # A self-hosted choice writes code (kind worker) only when its kinds list it.
   choices:                  # ordered (harness, model) candidates for agents start (no --harness, or --harness auto), beekeeper capacity pick and the supervisor loop; every start alike, none ahead of its provider's even 7-day pace
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}
