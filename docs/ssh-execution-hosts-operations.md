@@ -263,11 +263,6 @@ leases, publication and exact-head merge authorization use the shared
 execution lifecycle. Provider usage readers and ceilings stay on the
 coordinator; the host contributes machine room only.
 
-Agy remains unavailable until its native hooks work and its remote adapter
-is implemented; the dependency is
-https://github.com/giantswarm/beekeeper/issues/1785. It is never advertised as
-an unguarded fallback.
-
 ## Codex on an execution host
 
 A host may run Codex workers next to or instead of Claude. Install a pinned
