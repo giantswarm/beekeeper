@@ -462,11 +462,16 @@ func handedOver(st *state.State, start state.Start) bool {
 		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return other(ag.Party) })
 }
 
-// keepsRole reports whether p holds or held the guide's
-// role: a relieved supervisor still follows its role's rules. A session
-// named as a role's run held it, also once its relief is forgotten.
+// keepsRole reports whether p holds or held the guide's role: a relieved
+// supervisor still follows its role's rules, and its session stays the
+// person's to close; neither the watch nor the doctor stops or archives it.
+// A session whose start took a role, or named as a role's run, held it,
+// also once its relief is forgotten or a take-over replaced it.
 func keepsRole(st *state.State, p state.Party) bool {
 	if holdsRole(st, p) {
+		return true
+	}
+	if i := st.StartIndex(p); i >= 0 && st.Starts[i].Role != "" {
 		return true
 	}
 	for _, rl := range roles {
@@ -501,11 +506,6 @@ func pastRun(st *state.State, p state.Party, now time.Time) bool {
 	}
 	return relieved(st, p)
 }
-
-// roleKeeps reports whether p's desktop session stays for its role: p holds
-// or held one and no taken relay relieved it. A relieved run's session is
-// archived like a finished worker's, which frees its desktop CLI slot.
-func roleKeeps(st *state.State, p state.Party) bool { return keepsRole(st, p) && !relieved(st, p) }
 
 // permissionPromptTool is the flag of every CLI the desktop runs: it answers
 // the CLI's permission prompts, and serves it the desktop's own tools.
@@ -588,9 +588,8 @@ const stewardDeclineFor = 24 * time.Hour
 // archiveDesktops archives the desktop sessions of agents taken off the
 // roster by the command by, through one steward's turn (archiveSteward: an
 // idle CLI of another session, else one of the sessions' own, warmed for
-// it, a relieved role run's own included): only sessions
-// beekeeper started, keeping no role (roleKeeps) and running no turn, and
-// only under the person's agreement (agents.archiveAgreement). An archive
+// it): only sessions beekeeper started, keeping no role (keepsRole) and
+// running no turn, and only under the person's agreement (agents.archiveAgreement). An archive
 // counts once the desktop records it; the line names the steward whose
 // call did it, and what each steward that did not answered. A steward that
 // declined is asked for no archive for stewardDeclineFor. It returns an
@@ -902,8 +901,8 @@ func (a *app) archivableRecord(st *state.State, ag state.Party) (host, why strin
 	if i < 0 {
 		return "", "its desktop session stays: beekeeper did not start it"
 	}
-	if roleKeeps(st, ag) {
-		return "", "its desktop session stays: it holds or held the guide's role, and no relay relieved it"
+	if keepsRole(st, ag) {
+		return "", "its desktop session stays: it holds or held the guide's role, and the person closes it"
 	}
 	host = st.Starts[i].HostSession
 	switch r, ok := claude.ReadRecord(a.cfg, host); {

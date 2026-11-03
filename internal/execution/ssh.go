@@ -81,7 +81,7 @@ func (h Host) Validate() error {
 	seen := map[string]bool{}
 	for _, name := range h.Harnesses {
 		if !SupportedHarness(name) || seen[name] {
-			return errors.New("host harnesses must be distinct entries of claude, codex and agy")
+			return errors.New("host harnesses must be distinct entries of claude, codex, agy and omp")
 		}
 		seen[name] = true
 	}
