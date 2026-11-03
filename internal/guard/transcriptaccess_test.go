@@ -371,6 +371,8 @@ func TestTranscriptRuntimeRoots(t *testing.T) {
 		`python3 -c 'import os; print(open(os.path.expanduser("~") + "/.cl" + "aude/history.jsonl").read())'`,
 		`node -e 'const os = require("os"); console.log(require("fs").readdirSync(os.homedir()))'`,
 		`node -e 'console.log(require("fs").readFileSync(process.env.HOME + "/.cl" + "aude/history.jsonl", "utf8"))'`,
+		`ruby -e 'puts File.read(ENV["HOME"] + "/.cl" + "aude/history.jsonl")'`,
+		`perl -e 'open(my $fh, "<", $ENV{HOME} . "/.cl" . "aude/history.jsonl"); print <$fh>;'`,
 		"python3 <<'PY'\nfrom pathlib import Path\nprint(list(Path.home().rglob('*.jsonl')))\nPY",
 		`python3 <<< 'from pathlib import Path; print(list(Path.home().rglob("*.jsonl")))'`,
 	} {

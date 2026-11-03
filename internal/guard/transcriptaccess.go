@@ -219,7 +219,7 @@ var transcriptPathOperation = regexp.MustCompile(`[/+]|\b(?:join|Join|joinpath|h
 // a harness component at all (for example by globbing, splitting a name, or
 // selecting a directory from an environment variable). The command-text guard
 // cannot establish the resulting target or apply a path grant to it.
-var transcriptRuntimeRoot = regexp.MustCompile(`\b(?:home|homedir|expanduser|getenv|Getenv|UserHomeDir)\s*\(|\b(?:environ|env)\s*[\[.]`)
+var transcriptRuntimeRoot = regexp.MustCompile(`\b(?:home|homedir|expanduser|getenv|Getenv|UserHomeDir)\s*\(|\b(?:environ|env)\s*[\[.]|\bENV\s*[\[{.]`)
 
 func unresolvedTranscriptPath(code string) bool {
 	operations := transcriptCodeString.ReplaceAllStringFunc(code, func(literal string) string {
