@@ -134,10 +134,19 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 	if err != nil {
 		return err
 	}
+	if err := a.awaitRoleStart(ctx, rl, me); err != nil {
+		return err
+	}
 	var msg string
 	var run int
 	var waiting []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if err := rl.mayTake(st, me); err != nil {
+			return nil, err
+		}
+		// The recorded holder's CLI is read as the watch reads it: gone
+		// since it was first seen gone, never since now.
+		_, before := rl.observeCLI(st, sessions, a.now)
 		// A holder restarting its CLI still holds the role.
 		sv := readHolder(rl.get(st), sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
 		var evs []state.Event
@@ -145,6 +154,7 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		if err != nil {
 			return nil, err
 		}
+		evs = append(before, evs...)
 		// The start titles me with the run's name: never one another live
 		// session carries.
 		if err := titleTaken(sessions, rl.runName(rl.get(st).Run), me); err != nil {
@@ -243,6 +253,17 @@ func (a *app) roleStatus(rl role) error {
 		return err
 	}
 	r := rl.get(st)
+	if goneUnrecorded(r, sessions) {
+		// The grace runs from the first read that saw the CLI gone: with no
+		// watch recording it, every read would start it anew.
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			_, evs := rl.observeCLI(st, sessions, a.now)
+			r = rl.get(st)
+			return evs, nil
+		}); err != nil {
+			return err
+		}
+	}
 	renameHolder(r.Holder, sessions)
 	sv := readHolder(r, sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
 	v := a.viewRole(rl, r, sessions, sv)
@@ -281,7 +302,7 @@ func (a *app) roleStatus(rl role) error {
 	}
 	restart := ""
 	if sv.restarting() {
-		restart = fmt.Sprintf("; its CLI is restarting (gone since %s, grace until %s)", stamp(sv.gone), stamp(sv.until))
+		restart = fmt.Sprintf("; its session runs no CLI since %s: it keeps the role if its CLI is back by %s, else it is gone", stamp(sv.gone), stamp(sv.until))
 	}
 	relay := ""
 	if r.Relay.Open(a.now) {

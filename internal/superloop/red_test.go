@@ -167,7 +167,7 @@ func TestARedKeyReadsBack(t *testing.T) {
 }
 
 func TestConflictingParkedHeadRequestsRepairBeforeReview(t *testing.T) {
-	for _, status := range []struct{ mergeable, mergeState string }{{mergeable: "CONFLICTING"}, {mergeState: "DIRTY"}} {
+	for _, status := range []struct{ mergeable, mergeState string }{{mergeable: mergeableConflicting}, {mergeState: mergeStateDirty}} {
 		t.Run(status.mergeable+status.mergeState, func(t *testing.T) {
 			in := Input{Workers: parkedOn(head1, t0), Pulls: pull(head1, true), Rounds: 1}
 			p := in.Pulls[pr]
@@ -204,7 +204,7 @@ func TestApprovedConflictingHeadUsesMergeRepair(t *testing.T) {
 		Taken: taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}),
 	}
 	p := in.Pulls[pr]
-	p.Mergeable, p.MergeState = "CONFLICTING", "DIRTY"
+	p.Mergeable, p.MergeState = mergeableConflicting, mergeStateDirty
 	in.Pulls[pr] = p
 	if a := only(t, Plan(in), KindGo); a.Head != head1 {
 		t.Fatalf("wrong reviewed repair head: %+v", a)

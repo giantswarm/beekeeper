@@ -296,7 +296,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 	if err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w", sp.name, err)
 	}
-	s := state.Start{Party: state.Party{Session: id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort, Background: true}
+	s := state.Start{Party: state.Party{Session: id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Effort: sp.effort, Background: true, Role: startRole(sp.role)}
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
