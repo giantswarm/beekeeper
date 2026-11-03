@@ -296,14 +296,14 @@ func TestRelievedRunStaysThePersons(t *testing.T) {
 		t.Error("keepsRole: relieved run whose relief was dropped")
 	}
 	// An archive owed by an earlier version is dropped, never asked for.
-	st.Archives = []state.Archive{{Party: supA, Host: "local_A", Why: "relieved"}}
+	st.Archives = []state.Archive{{Party: supA, Host: "local_A", Why: "owed on a relief"}}
 	idle := func(state.Party) bool { return false }
 	if p := planArchives(st, unarchived, idle, relayNow.Add(3*time.Minute)); !strings.Contains(p[0].drop, "the person closes it") {
 		t.Errorf("owed: %s", p[0])
 	}
 	st.Archives, st.FinishedSeeded, st.DoneSeeded = nil, false, false
 	seedArchives(st, unarchived, func(*state.State, state.Start) (time.Time, bool) { return time.Time{}, true }, relayNow)
-	if slices.ContainsFunc(st.Archives, func(ar state.Archive) bool { return ar.Party.Is(supA) }) {
+	if slices.ContainsFunc(st.Archives, func(ar state.Archive) bool { return ar.Is(supA) }) {
 		t.Errorf("seeded %+v", st.Archives)
 	}
 }
