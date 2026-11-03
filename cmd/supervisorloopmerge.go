@@ -34,7 +34,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if st.Stop != nil {
 		return "", refused("the desk is stopped")
 	}
-	if lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st) {
+	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st) {
 		return "", errLoopLater
 	}
 	p, err := readLoopPull(ctx, act.Ref)
@@ -86,9 +86,10 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", readErr
 	}
 	if p.State == superloop.Merged {
-		// The merge brings a behind branch up to date first: a merged head
-		// that only merges the base into the reviewed one is the reviewed
-		// change.
+		// Where the base requires up-to-date branches and the desk merges
+		// without --admin, the merge brings a behind branch up to date
+		// first: a merged head that only merges the base into the reviewed
+		// one is the reviewed change.
 		if p.Head != act.Head && !l.baseMerged(ctx, p, act.Head) {
 			return "", refused("merged head differs from the reviewed head; reconciliation required")
 		}
@@ -255,11 +256,14 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 const (
 	reasonDeskStopped = "the desk is stopped"
 	reasonMergeHeld   = "merge held by desk policy"
+	mergeMethodRebase = "rebase"
 )
 
 // reviewedMerge is the gate's mutation child. A branch behind its base it
-// updates once, as the gate's --update-branch would, and merges the updated
-// head only once its checks are green and the approval covers it
+// merges at the reviewed head, as it stands. Only where the base requires
+// up-to-date branches and the desk merges without --admin does it update the
+// branch once, as the gate's --update-branch would, and merge the updated
+// head once its checks are green and the approval covers it
 // (updateReviewedBranch); it never waits for a head anyone else pushed, or
 // retries a mutation. The gate retains its
 // ordinary holds, queue, readiness, review and release settlement policy.
@@ -269,7 +273,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if method == "" {
 		method = "squash"
 	}
-	if method != "squash" && method != "rebase" && method != superloop.KindMerge {
+	if method != "squash" && method != mergeMethodRebase && method != superloop.KindMerge {
 		doc.Reason = "invalid configured merge method"
 		return doc
 	}
@@ -292,20 +296,16 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "branch is draft or conflicts with its base"
 		return doc
 	}
-	behind := p.MergeState == mergeStateBehind
-	if !behind {
-		n, err := readReviewedBehind(ctx, p)
-		if err != nil {
-			doc.ExitCode = github.SquashTooling
-			doc.Reason = "base comparison unavailable: " + err.Error()
-			return doc
-		}
-		behind = n > 0
-	}
-	// A behind branch is brought up to date below, once the merge is
-	// authorized: by merging the base, which a rebase merge cannot take.
-	if behind && method == "rebase" {
-		doc.Reason = "branch is behind its base"
+	// A branch only behind its base merges as it stands: GitHub merges the
+	// reviewed head onto the current base, with no branch update and no
+	// second CI run. Only a base that requires up-to-date branches refuses
+	// that merge, which GitHub reports as the merge state BEHIND: the desk's
+	// admin merge (merge.admin) passes the requirement; without it the branch
+	// is brought up to date below, once the merge is authorized, by merging
+	// the base, which a rebase merge cannot take.
+	update := p.MergeState == mergeStateBehind && !a.cfg.Merge.AdminMerge(repo)
+	if update && method == mergeMethodRebase {
+		doc.Reason = "branch is behind a base that requires up-to-date branches"
 		return doc
 	}
 	st, err := a.store.Read()
@@ -383,7 +383,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	merging := head
-	if behind {
+	if update {
 		up, reason, code := updateReviewedBranch(ctx, p, head)
 		if code != github.SquashMerged {
 			doc.ExitCode, doc.Reason = code, reason
@@ -433,8 +433,10 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	return doc
 }
 
-// Compare against the current base even when branch protection does not
-// require an up-to-date branch. Admin permission never waives this check.
+// readReviewedBehind is how many commits of its base p's head lacks, read
+// from GitHub's comparison: the update of a branch whose base requires
+// up-to-date branches (updateReviewedBranch) reads it of the head it made,
+// whose merge state GitHub may not have computed yet.
 var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error) {
 	if p.Base == "" {
 		return 0, nil

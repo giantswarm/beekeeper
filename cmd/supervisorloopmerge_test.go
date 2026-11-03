@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -145,7 +144,7 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 
 func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: "rebase"}
+	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
@@ -178,13 +177,14 @@ func TestLoopMergeDoesNotGrantWorkerAuthority(t *testing.T) {
 
 func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: "rebase"}
+	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	was := readReviewedBehind
-	t.Cleanup(func() { readReviewedBehind = was })
-	readReviewedBehind = func(_ context.Context, _ superloop.Pull) (int, error) { return 1, nil }
+	// The base requires up-to-date branches and the desk merges without
+	// --admin: only a base merge would bring the branch up to date, which a
+	// rebase merge cannot take.
+	r.pull.MergeState = mergeStateBehind
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 	if doc.ExitCode != github.SquashNotApplicable || len(r.cmds) != 0 || !strings.Contains(doc.Reason, "behind") {
 		t.Fatalf("behind rebase merge: %+v %v", doc, r.cmds)

@@ -252,15 +252,53 @@ func (a *app) answerCentral(ctx context.Context, id, choice int, via, words stri
 		args[paramText] = w
 	}
 	var v struct {
-		Answer     string `json:"answer"`
-		AnsweredBy string `json:"answeredBy"`
+		Note       int           `json:"note"`
+		Answer     string        `json:"answer"`
+		AnsweredBy string        `json:"answeredBy"`
+		Delivery   *noteDelivery `json:"delivery,omitempty"`
 	}
-	if _, err := a.callCentral(ctx, me, "note_answer", args, &v); err != nil {
+	text, err := a.callCentral(ctx, me, "note_answer", args, &v)
+	if err != nil {
 		return err
 	}
+	v.Note = cmp.Or(v.Note, id)
 	_ = a.store.Log(event(me, noteCentralAnswer, "%s answered as %s: %s", ref, v.AnsweredBy, v.Answer))
-	_, err = fmt.Fprintf(a.out, "note %s answered as %s: %s\n", ref, cmp.Or(v.AnsweredBy, me.Person), v.Answer)
-	return err
+	if a.json {
+		return a.printJSON(v)
+	}
+	if _, err := fmt.Fprintf(a.out, "note %s answered as %s: %s\n", ref, cmp.Or(v.AnsweredBy, me.Person), v.Answer); err != nil {
+		return err
+	}
+	for _, line := range centralAnswerNotes(text, v.Delivery, id, ref) {
+		if _, err := fmt.Fprintln(a.out, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// centralAnswerNotes extracts notification status and follow-up lines from a
+// central note_answer tool call's text and delivery metadata.
+func centralAnswerNotes(text string, d *noteDelivery, id int, ref string) []string {
+	closedLine := fmt.Sprintf("note #%d answered and closed", id)
+	var out []string
+	for line := range strings.SplitSeq(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "answer recorded for ") || line == closedLine {
+			continue
+		}
+		out = append(out, line)
+	}
+	if d != nil && d.Status == noteDeliveryFailed && !slices.ContainsFunc(out, func(s string) bool {
+		return strings.Contains(s, "notification failed")
+	}) {
+		if d.Detail != "" {
+			out = append(out, fmt.Sprintf("note %s: notification failed (%s)", ref, d.Detail))
+		} else {
+			out = append(out, fmt.Sprintf("note %s: notification failed", ref))
+		}
+	}
+	return out
 }
 
 // doneCentral withdraws central notes ids (note_done through muster): each
