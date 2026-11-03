@@ -388,6 +388,23 @@ merge, stop and recovery follow the same contract as Claude and Codex. `agy`
 usage and pace stay on the coordinator: remote `agy` workers count against the
 `agy` provider ceiling, not the coordinator's local ceiling (`local.ceiling`).
 
+## Read each harness's readiness
+
+`beekeeper agents hosts check <host>` includes a `readiness` entry for each
+configured harness on a checked host. Each entry names its pinned `version`
+and reports `versionCheck`, `login` and `guard` as `passed`, `failed` or
+`not checked`. The version is the configured pin; `versionCheck: passed`
+confirms that the executable matched it. A failed version check leaves the
+login check `not checked`, rather than claiming a login failure.
+
+The guard result covers the installed policy and conformance check. For omp
+it also requires the actual harness to load the bound extension without a
+model prompt. If omp login fails, that extension check is `not checked`.
+Authentication output and credential values are never included. Only
+harnesses that pass every prerequisite appear in `harnesses`; `unavailable`
+retains the explanation for each refused harness. A host with no passing
+harness refuses the check and all starts.
+
 ## Start, inspect, and recover
 
 Run the coordinator's commands against its configuration:
@@ -411,11 +428,11 @@ host's physical guards. A host does not create another subscription budget.
 whose repository a host maps, and for which `capacity --host <selector>` has
 room, runs there pinned to the repository's default branch — while the
 coordinator is out of room, or always with `supervisor.hostsFirst`. A host's
-check weighs only the choices it can run (Claude Code, Codex, and Antigravity
-where configured and offered). `hostsFirst` prefers
+check weighs only the choices it can run (Claude Code, Codex, omp, and
+Antigravity where configured and offered). `hostsFirst` prefers
 hosts only for what a host can run: without room on any host a supported start
 waits, while a repository no host maps, or a choice of a harness no host has
-an adapter for (`omp`), starts on the coordinator within its local
+an adapter for, starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs. A desk
 without `capacity.choices` never places remotely. Reviewers stay on the
 coordinator even with `hostsFirst`: execution hosts have no relayed GitHub

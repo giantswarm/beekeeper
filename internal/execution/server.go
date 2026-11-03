@@ -147,6 +147,12 @@ func (s *Server) update(ctx context.Context, r Ref, f func(*Journal) error) erro
 	return atomicFile(p, mustJSON(j))
 }
 
+const (
+	probePassed     = "passed"
+	probeFailed     = "failed"
+	probeNotChecked = "not checked"
+)
+
 func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	var c Capabilities
 	p, err := s.InstalledPolicy()
@@ -166,8 +172,14 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 		return c, err
 	}
 	harnesses, unavailable := map[string]string{}, map[string]string{}
+	readiness := map[string]HarnessReadiness{}
 	for name, h := range s.Config.Harnesses {
-		if err := s.probe(ctx, name, h); err != nil {
+		// InstalledPolicy and GuardProbe above verified the bound guard. omp
+		// additionally needs its extension loaded by the actual harness.
+		result := HarnessReadiness{Version: h.Version, VersionCheck: probeNotChecked, Login: probeNotChecked, Guard: probePassed}
+		err := s.probe(ctx, name, h, &result)
+		readiness[name] = result
+		if err != nil {
 			unavailable[name] = err.Error()
 			continue
 		}
@@ -201,7 +213,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Tools: tools, Resources: resources}, nil
+	return Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
