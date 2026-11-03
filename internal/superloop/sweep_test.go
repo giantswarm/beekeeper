@@ -120,8 +120,8 @@ func TestTheSweepGivesAFixerToABrokenHead(t *testing.T) {
 		f    func(*Pull)
 		want string
 	}{
-		"conflicting": {func(p *Pull) { p.Mergeable = "CONFLICTING" }, "conflicts with"},
-		"dirty":       {func(p *Pull) { p.MergeState = "DIRTY"; p.Green = false }, "conflicts with"},
+		"conflicting": {func(p *Pull) { p.Mergeable = mergeableConflicting }, "conflicts with"},
+		"dirty":       {func(p *Pull) { p.MergeState = mergeStateDirty; p.Green = false }, "conflicts with"},
 		"red":         {func(p *Pull) { p.Green = false; p.Red = []Check{{Name: lintCheck, URL: lintURL}} }, lintCheck + " " + lintURL},
 		"behind":      {func(p *Pull) { p.MergeState = "BEHIND" }, "is behind"},
 	} {
@@ -184,7 +184,7 @@ func TestTheSweepRerunsAGoNeverCarriedOut(t *testing.T) {
 // Each stretch without an owner gets one action; a head the sweep gave
 // MaxSweeps owners goes to the guide, once.
 func TestTheSweepStartsOncePerStretchAndGivesUp(t *testing.T) {
-	conflicting := func(p *Pull) { p.Mergeable = "CONFLICTING" }
+	conflicting := func(p *Pull) { p.Mergeable = mergeableConflicting }
 	in := sweepInput(with(pull(head1, true), conflicting), OrphanWait)
 	first := only(t, Plan(in), KindRework)
 	in.Taken = taken(t, in.Now, first)
@@ -219,7 +219,7 @@ func TestTheSweepStartsOncePerStretchAndGivesUp(t *testing.T) {
 }
 
 // A review the sweep started that ended without a verdict gets one more
-// round while one is left; an open escalation is the person's.
+// round; an open legacy escalation is the person's.
 func TestTheSweepReviewsAgainAfterAVerdictlessRound(t *testing.T) {
 	rv := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: PullWorkerName(pr), Round: 1}
 	in := sweepInput(pull(head1, true), OrphanWait)
@@ -227,6 +227,13 @@ func TestTheSweepReviewsAgainAfterAVerdictlessRound(t *testing.T) {
 	a := only(t, Plan(in), KindReview)
 	if !IsSweep(a.Key) || a.Round != 2 || KeyHead(a.Key) != head1 {
 		t.Errorf("second review = %+v", a)
+	}
+	in.Taken = append(in.Taken, taken(t, t1, a)...)
+	in.Now = in.Now.Add(time.Hour)
+	in.Ownerless = map[string]time.Time{pr: in.Now.Add(-OrphanWait)}
+	a = only(t, Plan(in), KindReview)
+	if a.Round != 3 || KeyHead(a.Key) != head1 {
+		t.Errorf("third review = %+v", a)
 	}
 	esc := Action{Key: escalateKey(pr, head1), Kind: KindEscalate, Ref: pr, Agent: worker}
 	in.Taken = append(in.Taken, taken(t, t1, esc)...)

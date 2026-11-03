@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Only beekeeper starts a guide run: `guide start` refuses a session beekeeper did not start as a guide run, `guide start --new` starts the next run from a terminal (in `guide.dir`, with the configured skill, model and mode) when the guide's session is gone or none is recorded, and `beekeeper resume` starts one when the guide's session runs no CLI. The standby watch and `guide status` record when the guide's CLI was first seen gone, so its restart grace runs out after a reboot or crash instead of starting anew on every read (https://github.com/giantswarm/beekeeper/issues/2205).
 - Approved conflicting pull requests retain their durable merge-repair handoff instead of being intercepted as review rework.
 
 - A relay no longer stops or archives the relieved guide's session: its conversation stays in the person's session list until they close it. The relay's start message and the watch's `RELAY TAKEN` line say where it is (`claude attach <id>` continues a background session, `claude stop <id>` ends it). The revive guard lets a relieved run the person or the desktop brings back run on, and neither the watch nor the doctor stops, archives, seeds or reseeds an archive of it; an archive owed by an earlier version is dropped. A session whose start took the guide's role stays the person's also after a take-over (a crash or reboot without a relay) and once its relief is forgotten.
