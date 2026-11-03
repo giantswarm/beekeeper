@@ -894,13 +894,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	delete(l.said, "graphql budget")
 	if !l.dryRun {
-		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
-			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
-			return nil
-		}
-		delete(l.said, "graphql allowance")
-	}
-	if !l.dryRun {
 		l.tidy(ctx, st)
 		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
@@ -1045,12 +1038,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
 		if err != nil {
-			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			if errors.Is(err, errLoopLater) {
+				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
 				return nil
 			}
+			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
 		}
+		delete(l.said, "graphql allowance")
+		delete(l.said, "read "+ref)
 		if r, ok := parseRef(ref); ok {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
@@ -1520,7 +1516,9 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 	l.tidyAt = a.now
 	out, err := l.run(ctx, loopBoard, boardTidyName)
 	if err != nil {
-		l.sayOnce("board tidy", "SUPERVISOR BOARD TIDY FAILED: %v", err)
+		if !errors.Is(err, errLoopLater) {
+			l.sayOnce("board tidy", "SUPERVISOR BOARD TIDY FAILED: %v", err)
+		}
 		return
 	}
 	delete(l.said, "board tidy")
@@ -1531,7 +1529,9 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 		return
 	}
 	if out, err = l.run(ctx, loopBoard, boardEscalateName); err != nil {
-		l.sayOnce("board escalate", "SUPERVISOR BOARD ESCALATE FAILED: %v", err)
+		if !errors.Is(err, errLoopLater) {
+			l.sayOnce("board escalate", "SUPERVISOR BOARD ESCALATE FAILED: %v", err)
+		}
 		return
 	}
 	delete(l.said, "board escalate")
@@ -1584,6 +1584,10 @@ func (l *supervisorLoop) as(args ...string) []string {
 	return append(out, args...)
 }
 
+func isLoopGitHubHeldOutput(line string) bool {
+	return strings.Contains(line, "loop GitHub ") && strings.HasSuffix(line, ": "+errLoopLater.Error())
+}
+
 // run runs a beekeeper command as the loop; a non-zero exit is an error
 // with its output.
 func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error) {
@@ -1592,7 +1596,11 @@ func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error
 		return out, err
 	}
 	if code != 0 {
-		return out, &exitError{code: code, msg: fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, oneLine(out))}
+		line := oneLine(out)
+		if isLoopGitHubHeldOutput(line) {
+			return out, fmt.Errorf("beekeeper %s: %s: %w", strings.Join(args[:min(2, len(args))], " "), line, errLoopLater)
+		}
+		return out, &exitError{code: code, msg: fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, line)}
 	}
 	return out, nil
 }
@@ -2512,6 +2520,9 @@ func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, erro
 		return &exitError{code: code, msg: fmt.Sprintf("beekeeper %s next: exit %d: %s", loopBoard, code, oneLine(out))}
 	}
 	if code != 0 && code != ExitRefused {
+		if isLoopGitHubHeldOutput(oneLine(out)) {
+			return nil, errLoopLater
+		}
 		return nil, failed()
 	}
 	// The output is stdout and then stderr: the document is its first value.
@@ -2841,7 +2852,7 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 // the priority list right after the high-ranked epic or item it blocks or
 // follows from.
 func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if lowBudget(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
 		return "", errLoopLater
 	}
 	moveStage := act.Key + " move"
