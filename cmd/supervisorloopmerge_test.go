@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"github.com/giantswarm/beekeeper/internal/board"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/board"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -505,7 +506,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 			return "", 0
 		case len(args) > 0 && args[0] == fillCapacityCommand:
 			if slices.Contains(args, "--review") {
-				return `{"room":1}`, 0
+				return loopRoomJSON, 0
 			}
 			r.mu.Lock()
 			b := busy
@@ -571,7 +572,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 }
 
 func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
-	for _, slow := range []string{"review", "worker"} {
+	for _, slow := range []string{taskKindReview, workerRole} {
 		t.Run(slow, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, r.a.now)
@@ -603,7 +604,7 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 					merged <- struct{}{}
 				case len(args) > 0 && args[0] == fillCapacityCommand:
 					if slices.Contains(args, "--review") {
-						return `{"room":1}`, 0
+						return loopRoomJSON, 0
 					}
 					if busy.Load() > 0 {
 						return `{"ceiling":1,"room":0}`, 0
@@ -616,7 +617,7 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 					if !review {
 						busy.Add(1)
 					}
-					if review == (slow == "review") {
+					if review == (slow == taskKindReview) {
 						if starts.Add(1) == 1 {
 							close(entered)
 						}
@@ -671,6 +672,7 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 }
 
 func TestLoopPullPriorityRefreshExpiresDerivedCaches(t *testing.T) {
+	const thirdPriorityIssue = "o/r#3"
 	r := newLoopRig(t)
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
@@ -682,9 +684,9 @@ func TestLoopPullPriorityRefreshExpiresDerivedCaches(t *testing.T) {
 	readLoopPriorities = func(context.Context, *supervisorLoop) (board.Priorities, error) {
 		reads++
 		if reads == 1 {
-			return board.Priorities{{Ref: "o/r#1", Rank: 1}, {Ref: "o/r#2", Rank: 2}}, nil
+			return board.Priorities{{Ref: refOne, Rank: 1}, {Ref: idleRef, Rank: 2}}, nil
 		}
-		return board.Priorities{{Ref: "o/r#1", Rank: 2}, {Ref: "o/r#2", Rank: 1}, {Ref: "o/r#3", Rank: 3}}, nil
+		return board.Priorities{{Ref: refOne, Rank: 2}, {Ref: idleRef, Rank: 1}, {Ref: thirdPriorityIssue, Rank: 3}}, nil
 	}
 	check := func(ref string, want int) {
 		t.Helper()
@@ -693,20 +695,20 @@ func TestLoopPullPriorityRefreshExpiresDerivedCaches(t *testing.T) {
 			t.Fatalf("priority(%s) = %d, %v; want %d", ref, got, err, want)
 		}
 	}
-	check("o/r#1", 1)
-	check("o/r#2", 2)
+	check(refOne, 1)
+	check(idleRef, 2)
 	// Seed a resolved zero and stale relationship answers.
 	l.pullPriorities["o/r#103 o/r#3"] = 0
-	l.pullIssues = map[string]string{"o/r#1": "o/r#99"}
-	l.issueParents = map[string]string{"o/r#1": "o/r#99"}
-	check("o/r#3", 0)
+	l.pullIssues = map[string]string{refOne: "o/r#99"}
+	l.issueParents = map[string]string{refOne: "o/r#99"}
+	check(thirdPriorityIssue, 0)
 	if reads != 1 {
 		t.Fatalf("read priorities %d times within cache lifetime", reads)
 	}
 	r.a.now = r.a.now.Add(loopOpenEvery)
-	check("o/r#1", 2)
-	check("o/r#2", 1)
-	check("o/r#3", 3)
+	check(refOne, 2)
+	check(idleRef, 1)
+	check(thirdPriorityIssue, 3)
 	if reads != 2 {
 		t.Fatalf("read priorities %d times, want 2", reads)
 	}
