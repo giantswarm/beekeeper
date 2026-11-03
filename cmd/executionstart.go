@@ -41,7 +41,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if o.Harness != harnessAuto && (!execution.SupportedHarness(o.Harness) || !host.Supports(o.Harness)) {
 		return refused("execution host %s does not list harness %s; it lists %s", host.Identity, o.Harness, strings.Join(host.Harnesses, ", "))
 	}
-	if _, ok := host.Repositories[o.Repository]; !ok {
+	if !host.AdmitsRepository(o.Repository) {
 		return refused("repository is not mapped on the selected execution host")
 	}
 	if err := a.sandboxPaths([]string{briefPath}, nil); err != nil {

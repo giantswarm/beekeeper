@@ -74,6 +74,17 @@ older events without that audience show it as unknown rather than naming the
 answerer as the addressee. Other removed or expired
 records are reported as unavailable, never reconstructed from a truncated log.
 
+A note answer reaches its filing session by session or harness ID even when
+that session is absent from the agent roster or has no display name. Harness
+IDs select their own inbox rather than treating a UUID conversation ID as a
+Claude session. The answer remains recorded when notification fails: the
+answer command reports the failure and `note show` retains the last notification
+attempt as `notification: failed` with its reason (`delivery` in JSON).
+Successful attempts show `delivered`; a central mailbox shows `queued`, and a
+role awaiting its next holder shows `waiting`. This is the recorded attempt,
+not a claim that a queued message has since been consumed. Older notes without
+a retained delivery event show no invented notification status.
+
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
 successful filing followed by an empty listing can mean it was answered between those
 calls. Check the server's `note_add` and `note_answer` audit lines before diagnosing a lost
@@ -288,6 +299,15 @@ after. The second `claude --bg` through a running daemon lands in its spare; a w
 spare too, or in a fresh `claude --resume <transcript>` when a new daemon serves it, and a
 `--resume` with flags of its own starts a copy instead of waking the session. The daemon exits
 once its last worker stops.
+
+`alerts snapshot` groups text rows by severity, team, alert name, cluster and namespace;
+rows with a namespace label append `namespace=<value>`. `alerts snapshot --json` returns
+an object with `lines` (the text view, including PagerDuty) and `installations`. Each
+installation carries `installation`, `reachable`, optional `why` and `noContext`, and
+an `alerts` array with every visible alert's full `labels` map. Ignored, silenced,
+inhibited and below-floor alerts follow the same filtering as the text view. This
+replaces the previous JSON array of formatted strings; scripts reading that array
+should read `lines` instead.
 
 The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
 then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live

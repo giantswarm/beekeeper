@@ -143,3 +143,22 @@ func TestToolPathFollowsTheComponent(t *testing.T) {
 		t.Fatalf("toolPath without tools = %v", got)
 	}
 }
+
+func TestWorkspaceChecksActualGoRequirement(t *testing.T) {
+	f := testFixture(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example/third\n\ngo 1.26.0\n\ntoolchain go1.27.3\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.checkWorkspaceTools(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "go: not provisioned") {
+		t.Fatalf("workspace without Go: %v", err)
+	}
+	// A module file must never follow a link out of the source tree.
+	linkDir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "go.mod"), filepath.Join(linkDir, "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.checkWorkspaceTools(context.Background(), linkDir); err == nil {
+		t.Fatal("linked go.mod accepted")
+	}
+}
