@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -119,7 +120,7 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	h := &hostInstall{answer: want}
 	stubHostInstall(t, h)
 	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("self-update answered %+v, want the installed release's %+v", got, want)
 	}
 	if !slices.Equal(h.installs, []string{hostNewRelease}) || !slices.Equal(h.restarts, []string{sshTestExecutable}) {
@@ -163,18 +164,18 @@ func TestHostSelfUpdateHoldsAReleaseThatDoesNotPrepare(t *testing.T) {
 func TestHostSelfUpdateChangesNothingWhileExecutionsRun(t *testing.T) {
 	a, r := executionTestApp(t)
 	s := hostUpdateServer(t, a, hostOldRelease)
-	j := execution.Journal{Phase: execution.Running, Handle: execution.Handle{Ref: r.Ref}}
+	j := execution.Journal{Phase: execution.Running, Request: r, Digest: r.Digest(), Handle: execution.Handle{Ref: r.Ref, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}}
 	b, err := json.Marshal(j)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Root, uuid.NewString()+".json"), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Root, string(r.Ref.Execution)+".json"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h := &hostInstall{}
 	stubHostInstall(t, h)
 	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease)
-	if got.Busy != 1 || got.Error != "" || got.PolicyDigest != "" || got.Version != hostOldRelease {
+	if !slices.Equal(got.Executions, []execution.Ref{r.Ref}) || got.Busy != 1 || got.Error != "" || got.PolicyDigest != "" || got.Version != hostOldRelease {
 		t.Fatalf("self-update answered %+v, want busy and unchanged", got)
 	}
 	if len(h.installs) != 0 {
@@ -187,12 +188,12 @@ func TestHostSelfUpdateChangesNothingWhileExecutionsRun(t *testing.T) {
 func TestHostSelfUpdateGoesAheadUnderAnExecutionBetweenTurns(t *testing.T) {
 	a, r := executionTestApp(t)
 	s := hostUpdateServer(t, a, hostOldRelease)
-	j := execution.Journal{Phase: execution.Running, Ready: true, Handle: execution.Handle{Ref: r.Ref}}
+	j := execution.Journal{Phase: execution.Running, Ready: true, Request: r, Digest: r.Digest(), Handle: execution.Handle{Ref: r.Ref, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}}
 	b, err := json.Marshal(j)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Root, uuid.NewString()+".json"), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Root, string(r.Ref.Execution)+".json"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	digest := execution.Digest([]byte("prepared by the new release"))

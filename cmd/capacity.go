@@ -1492,7 +1492,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 				cv.TaskKind = taskKindReview
 			}
 		}
-		cv.Decision = "task " + cv.TaskKind + ": eligible provider furthest behind weekly pace, lower configured cost breaks equal pace"
+		cv.Decision = "task " + cv.TaskKind + ": " + choiceRule
 	}
 	var reasons []string
 	bestSubscription := false
@@ -2087,7 +2087,8 @@ or "none". The decision is the one agents start without --harness, the
 supervisor loop's reviewers and its next starts take: the eligible subscription
 with the most 7-day budget left per hour until its reset (remaining percent /
 hours to reset), with configured order breaking ties and self-hosted choices
-used when no subscription is eligible. Each eligible choice
+used when no subscription is eligible; a self-hosted choice takes the worker
+kind (code changes) only when its kinds list it. Each eligible choice
 has a configured provider and a free slot under its running-session ceiling,
 5-hour and 7-day windows under their stop percent, and 7-day use not ahead of
 the even pace of its window, with the

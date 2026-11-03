@@ -1200,7 +1200,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
   choices:
     - {harness: claude, model: claude-opus-4-7}
     - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}
-    - {harness: omp, model: provider/omp-model, provider: omp, skipPace: true}
+    - {harness: omp, model: provider/omp-model, provider: omp, skipPace: true, kinds: [worker]}
 `
 	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -1577,7 +1577,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		{Harness: claudeComm, Model: testModelOpus47},
 		{Harness: harnessAgy, Model: testModelOpus46, SkipPace: true},
 		{Harness: harnessAgy, Model: testModelGemini, SkipPace: true},
-		{Harness: omp.Harness, Model: "provider/omp-model", Provider: omp.Harness, SkipPace: true},
+		{Harness: omp.Harness, Model: "provider/omp-model", Provider: omp.Harness, SkipPace: true, Kinds: []string{workerRole}},
 	}
 	rawCfgWithOpus46 := strings.Replace(rawCfg,
 		"    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}\n",
@@ -2455,6 +2455,7 @@ const selfHostedRawCfg = `capacity:
       model: local-model/worker-model
       provider: local-model
       skipPace: true
+      kinds: [worker]
 omp:
   model: local-model/worker-model
 `
@@ -2703,6 +2704,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
       model: local-model/worker-model
       provider: local-model
       skipPace: true
+      kinds: [worker]
 omp:
   model: local-model/worker-model
 `
@@ -2812,7 +2814,7 @@ func TestSelfHostedProviderServeMode(t *testing.T) {
         full: 2
         tiny: 1
   choices:
-    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true}
+    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true, kinds: [worker]}
 omp:
   model: local-model/worker-model
 `
@@ -3303,7 +3305,7 @@ func loadOnlySelfHosted(t *testing.T, cfgPath string, ceiling int, choices bool)
 	raw := onlySelfHostedRaw
 	if choices {
 		raw += `  choices:
-    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true}
+    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true, kinds: [worker]}
 `
 	}
 	raw += `omp:

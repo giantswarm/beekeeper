@@ -191,10 +191,10 @@ func newLoopRig(t *testing.T) *loopRig {
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
 	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
-	prevCheck, prevQueue := reviewedMergeCheck, requireReviewedMergeQueue
-	t.Cleanup(func() { reviewedMergeCheck, requireReviewedMergeQueue = prevCheck, prevQueue })
+	prevCheck, prevQueue := reviewedMergeCheck, readReviewedMergeQueue
+	t.Cleanup(func() { reviewedMergeCheck, readReviewedMergeQueue = prevCheck, prevQueue })
 	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
-	requireReviewedMergeQueue = func(context.Context, superloop.Pull) error { return nil }
+	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	wasBehind := readReviewedBehind
 	t.Cleanup(func() { readReviewedBehind = wasBehind })
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
@@ -2711,6 +2711,45 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	}
 	if !slices.Contains(start, harnessAuto) {
 		t.Errorf("the local start loses capacity's pick: %v", start)
+	}
+}
+
+// A Claude choice a host runs and a self-hosted omp choice no host runs:
+// with no host room, leaving Claude to the hosts must not make the
+// self-hosted model the local pick while the subscription is eligible
+// (the local verdict picks Claude), so the start waits; only when no
+// subscription is eligible (the local verdict picks the self-hosted choice
+// itself) does the local start take it.
+func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
+	const selfHosted = "local"
+	choices := []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: config.OmpHarness, Model: "local/qwen-fixture", Provider: selfHosted, Kinds: []string{workerRole}}}
+	verdict := func(provider string) string { return `{"room": 1, "choice": {"provider": "` + provider + `"}}` }
+	for _, eligible := range []bool{true, false} {
+		r := hostsFirstRig(t, choices, func(host bool, exclude []string) string {
+			switch {
+			case host:
+				return loopNoRoomJSON
+			case len(exclude) > 0 || !eligible:
+				return verdict(selfHosted)
+			}
+			return verdict(claudeComm)
+		})
+		r.a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 2}, selfHosted: {Kind: config.KindSelfHosted, Ceiling: 2}}
+		r.pass(t)
+		r.pass(t)
+		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+		if eligible {
+			if start != nil {
+				t.Errorf("an eligible subscription: the loop started %v on the self-hosted choice", start)
+			}
+			continue
+		}
+		if start == nil {
+			t.Fatalf("no subscription eligible: the self-hosted start waited: %v\n%s", r.calls, r.out)
+		}
+		if slices.Contains(start, loopHostFlag) {
+			t.Errorf("a full host took the start: %v", start)
+		}
 	}
 }
 
