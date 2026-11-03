@@ -78,7 +78,7 @@ func ReadSpendTranscripts(dir string, from, to time.Time) ([]SpendTranscript, er
 			}
 			return nil //nolint:nilerr // an unreadable entry is passed over
 		}
-		if !d.Type().IsRegular() || filepath.Ext(p) != ".jsonl" {
+		if !d.Type().IsRegular() || filepath.Ext(p) != transcriptExt {
 			return nil
 		}
 		if fi, err := d.Info(); err == nil && !fi.ModTime().Before(from) {

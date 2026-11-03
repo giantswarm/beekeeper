@@ -145,7 +145,7 @@ func TestStartBackgroundIsOnTheRosterAtOnce(t *testing.T) {
 		t.Fatalf("calls %+v", *calls)
 	}
 	c := (*calls)[0]
-	if c.dir != dir || !slices.Equal(c.argv[1:], bgStartArgv("claude", bgName, bgModel, "the brief")[1:]) {
+	if c.dir != dir || !slices.Equal(c.argv[1:], bgStartArgv("claude", bgName, bgModel, "the brief", settingsFlag, `{"env":{"SECURITY_REVIEW_MODEL":"`+bgModel+`"}}`)[1:]) {
 		t.Errorf("call %+v", c)
 	}
 	if i := slices.IndexFunc(c.env, func(kv string) bool { return strings.HasPrefix(kv, "CLAUDE") }); i >= 0 {

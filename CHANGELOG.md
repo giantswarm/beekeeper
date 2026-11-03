@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A Claude worker's headless turns carry its model as `SECURITY_REVIEW_MODEL` in their `--settings`, so the security-guidance plugin's reviews run on the worker's model, and `agents` lists each worker's `sdk-py` review sessions with their count, cost and models (SDK-PY column, `sdkChildren` in `--json`) ([https://github.com/giantswarm/beekeeper/issues/994](https://github.com/giantswarm/beekeeper/issues/994)).
+
 - Issue repository-scoped, short-lived GitHub App credentials for SSH workers,
   with host-side GitHub clients and lifecycle revocation on the coordinator.
 
