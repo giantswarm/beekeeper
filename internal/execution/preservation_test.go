@@ -11,7 +11,7 @@ import (
 )
 
 func TestStoppedExecutionRetainsUnpublishedWork(t *testing.T) {
-	for _, mode := range []string{"stop", "repeated stop", "inspect expired unit"} {
+	for _, mode := range []string{"explicit stop", "repeated stop", "inspect expired unit"} {
 		t.Run(mode, func(t *testing.T) {
 			f := testFixture(t)
 			ctx := context.Background()
@@ -75,7 +75,7 @@ func TestStoppedExecutionRetainsUnpublishedWork(t *testing.T) {
 					t.Fatalf("termination not acknowledged: %+v, %v", o, err)
 				}
 			}
-			if mode != "stop" {
+			if mode != "explicit stop" {
 				if _, err := f.s.Stop(ctx, f.r.Ref, stop); err != nil {
 					t.Fatal(err)
 				}
@@ -91,7 +91,7 @@ func TestStoppedExecutionRetainsUnpublishedWork(t *testing.T) {
 				untracked: "untracked work\n",
 				source:    "retained source artifact\n",
 			} {
-				got, err := os.ReadFile(path)
+				got, err := os.ReadFile(path) //nolint:gosec // paths are created under this test's temporary execution directory
 				if err != nil || string(got) != want {
 					t.Fatalf("retained work lost at %s: %q, %v", path, got, err)
 				}
