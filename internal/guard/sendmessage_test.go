@@ -3,6 +3,8 @@ package guard
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -154,5 +156,60 @@ func TestSendMessageByASharedNameGoesToTheAgent(t *testing.T) {
 	h.Agent = func(string) (string, error) { return "", errors.New("no CLI of \"KG worker\" runs") }
 	if d := decideSend(t, h, worker); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "no CLI of") {
 		t.Fatalf("want a refusal, got %+v", d)
+	}
+}
+
+func TestSendMessageToAnInboxAgentIsDeliveredThere(t *testing.T) {
+	var gotSession, gotName, gotMsg string
+	h := Hook{
+		Inbox: func(session, name, msg string) (string, error) {
+			gotSession, gotName, gotMsg = session, name, msg
+			if name != "codex worker" {
+				return "", nil
+			}
+			return "written to the codex inbox of codex worker", nil
+		},
+		Absent: func(string) string { t.Error("a delivered send is not looked up as absent"); return "" },
+	}
+	raw, _ := json.Marshal(map[string]any{"session_id": "guide-session", "tool_name": SendMessageTool,
+		"tool_input": map[string]any{"to": "codex worker", "message": "go ahead", "summary": "s"}})
+	var ev map[string]any
+	_ = json.Unmarshal(raw, &ev)
+	d := decideEvent(t, h, ev)
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Delivered by beekeeper") || !strings.Contains(d.Reason, "codex inbox of codex worker") {
+		t.Fatalf("want the delivery said, got %+v", d)
+	}
+	if gotSession != "guide-session" || gotName != "codex worker" || gotMsg != "go ahead" {
+		t.Fatalf("Inbox(%q, %q, %q)", gotSession, gotName, gotMsg)
+	}
+	if d := decideSend(t, Hook{Inbox: h.Inbox}, "claude worker"); d != nil {
+		t.Fatalf("a name no inbox agent carries passes as written: %+v", d)
+	}
+	gone := Hook{Inbox: func(string, string, string) (string, error) {
+		return "", errors.New("codex worker: its codex agent no longer runs")
+	}}
+	if d := decideSend(t, gone, "codex worker"); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "no longer runs") {
+		t.Fatalf("want the inbox's refusal, got %+v", d)
+	}
+	if d := decideSend(t, Hook{Inbox: func(string, string, string) (string, error) {
+		t.Error("a role's or a desktop id's send is no inbox lookup")
+		return "", nil
+	}, Role: func(string) (string, error) { return "guide name", nil }}, "the guide"); d == nil || d.UpdatedInput["to"] != "guide name" {
+		t.Fatalf("a role still goes to its holder: %+v", d)
+	}
+}
+
+func TestSendMessageToAGoneSocketNamesTheRosterName(t *testing.T) {
+	gone := SocketPrefix + filepath.Join(t.TempDir(), "relay-turn.sock")
+	d := decideSend(t, Hook{}, gone)
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "is gone") || !strings.Contains(d.Reason, "roster name") {
+		t.Fatalf("want a refusal naming the roster name, got %+v", d)
+	}
+	live := filepath.Join(t.TempDir(), "cli.sock")
+	if err := os.WriteFile(live, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if d := decideSend(t, Hook{}, SocketPrefix+live); d != nil {
+		t.Fatalf("a socket that exists passes: %+v", d)
 	}
 }

@@ -121,6 +121,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err != nil {
 		return err
 	}
+	if !ag.Is(by) {
+		msg = fromLine(replyAddress(st, by), ag.Name, msg)
+	}
 	// Reserve the local entry before delivering a wake so retirement cannot
 	// race a turn's startup. A failed delivery restores the previous age.
 	if rostered && ag.Execution == nil {

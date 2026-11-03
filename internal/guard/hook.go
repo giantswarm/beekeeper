@@ -183,6 +183,11 @@ type Hook struct {
 	// socket; "" leaves the name as written, an error refuses the send.
 	// Nil reads every name as written.
 	Agent func(name string) (string, error)
+	// Inbox delivers a message by name to the roster agent of that name
+	// whose harness reads an inbox instead of SendMessage (omp, agy, codex):
+	// the line that says where it went; "" when the name is no such agent,
+	// an error refuses the send. Nil reads every name as written.
+	Inbox func(session, name, message string) (string, error)
 	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
 	// instructions Claude Code loads itself; "" takes the call's cwd.
 	Project string
