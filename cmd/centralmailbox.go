@@ -150,6 +150,14 @@ func (w *watcher) drainMailbox(ctx context.Context) bool {
 		key := mailboxKey + " " + name
 		body := mailBody(d, env)
 		to, holder, rl, inRole := mailAddressee(st, name)
+		if st != nil && d.Sender == serveParty.Name && strings.HasPrefix(env.Message.text(), "NOTE DEFAULTED #") && wakeTargetPark(st, to) != nil {
+			// A central default, like a local one, is delivered by the
+			// park's own settlement. Ack the notification, not a model
+			// turn; the default remains in the central note and feed.
+			acks = append(acks, d.Seq)
+			w.emitNow(mailboxKey, "MAILBOX DEFAULT KEPT IN FEED for %s: parked on its current wake condition", name)
+			continue
+		}
 		var err error
 		if to == "" {
 			err = fmt.Errorf("no session holds the %s's role", rl.name)

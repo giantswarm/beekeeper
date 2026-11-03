@@ -130,19 +130,19 @@ command refuses.`,
 	}
 	snapshot := &cobra.Command{
 		Use:   "snapshot",
-		Short: "The current alerts, grouped by severity, team, alertname and cluster",
+		Short: "The current alerts, grouped by severity, team, alertname, cluster and namespace",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			lines := a.alertSnapshot(ctx)
+			snapshot := a.readAlertSnapshot(ctx)
 			if ctx.Err() != nil {
 				return errInterrupted
 			}
 			if a.json {
-				return a.printJSON(lines)
+				return a.printJSON(snapshot)
 			}
-			_, _ = fmt.Fprintln(a.out, strings.Join(lines, "\n"))
+			_, _ = fmt.Fprintln(a.out, strings.Join(snapshot.Lines, "\n"))
 			return nil
 		},
 	}
@@ -670,15 +670,33 @@ func runsAgainst(s *claude.Session, t alerts.Target) bool {
 	return false
 }
 
-// alertSnapshot is every installation's current set, grouped, one line for
-// the installations without a kube context, and the team's open PagerDuty
-// incidents.
+// alertSnapshotResult carries the text view and each installation's visible alerts.
+type alertSnapshotResult struct {
+	Lines         []string                    `json:"lines"`
+	Installations []alertSnapshotInstallation `json:"installations"`
+}
+
+type alertSnapshotInstallation struct {
+	Installation string         `json:"installation"`
+	Reachable    bool           `json:"reachable"`
+	NoContext    bool           `json:"noContext,omitempty"`
+	Why          string         `json:"why,omitempty"`
+	Alerts       []alerts.Alert `json:"alerts"`
+}
+
+// alertSnapshot is the text view, including read failures and PagerDuty incidents.
 func (a *app) alertSnapshot(ctx context.Context) []string {
+	return a.readAlertSnapshot(ctx).Lines
+}
+
+func (a *app) readAlertSnapshot(ctx context.Context) alertSnapshotResult {
 	incidents := make(chan []string, 1)
 	go func() { incidents <- a.pagerDutySnapshot(ctx) }()
 	targets := a.alertTargets(ctx)
 	answers := a.alertReader().Read(ctx, targets)
-	return append(snapshotLines(a.alertRules(), targets, answers, time.Now()), <-incidents...)
+	result := makeAlertSnapshot(a.alertRules(), targets, answers, time.Now())
+	result.Lines = append(result.Lines, <-incidents...)
+	return result
 }
 
 // snapshotLines are each read installation's grouped set, an unreachable
@@ -823,4 +841,17 @@ func (w *watcher) watchDiscovery(ctx context.Context) {
 			w.emitNow("alerts", "%s", l)
 		}
 	})
+}
+
+func makeAlertSnapshot(rules alerts.Rules, targets []alerts.Target, answers []alerts.Answer, now time.Time) alertSnapshotResult {
+	result := alertSnapshotResult{Lines: snapshotLines(rules, targets, answers, now), Installations: make([]alertSnapshotInstallation, 0, len(targets))}
+	for i, t := range targets {
+		ans := answers[i]
+		shown := rules.SnapshotAlerts(t.Name, ans)
+		if shown == nil {
+			shown = []alerts.Alert{}
+		}
+		result.Installations = append(result.Installations, alertSnapshotInstallation{Installation: t.Name, Reachable: ans.OK, NoContext: ans.NoContext, Why: ans.Why, Alerts: shown})
+	}
+	return result
 }

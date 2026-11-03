@@ -90,20 +90,12 @@ func TestTeamLabelDefaultsToTheTeamsFirstWord(t *testing.T) {
 	}
 }
 
-// A ranked epic the label sync moved to another Team stays on the list by
-// its team label, at its rank and with its new Team and its writer; an epic
-// both queries find is listed once.
-func TestPrioritiesKeepARankedEpicWhoseTeamMoved(t *testing.T) {
+// A stale team label never includes another team's ranked epic.
+func TestPrioritiesExcludeAnEpicWhoseTeamMoved(t *testing.T) {
 	f := &priorityGH{t: t, ranked: map[int]int{1: 1, 3: 3}, labelled: map[int]int{1: 1, 2: 2}}
 	l, err := priorityClient(f).Priorities(context.Background())
-	if err != nil || listText(l) != listOf123 {
+	if err != nil || listText(l) != "1 o/r#1, 3 o/r#3" {
 		t.Fatalf("Priorities = %s, %v", listText(l), err)
-	}
-	if e := l[1]; e.Team != "Y" || e.TeamBy != "giantswarm-project-automation" || e.RankBy != "teemow" {
-		t.Errorf("moved epic = %+v", e)
-	}
-	if e := l[0]; e.Team != teamX {
-		t.Errorf("epic both queries find: Team %q", e.Team)
 	}
 }
 

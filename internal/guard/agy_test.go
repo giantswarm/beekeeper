@@ -28,6 +28,7 @@ const (
 	nbPathField      = "NotebookPath"
 	newSourceField   = "NewSource"
 	sendInputAction  = "send_input"
+	inputField       = "Input"
 )
 
 type agyDecision struct {
@@ -1013,7 +1014,7 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 		if d := decideAgyCall(t, h, dir, manageTaskTool, map[string]any{
 			actionField: sendInputAction,
 			taskIDField: "t1",
-			"Input":     badInput,
+			inputField:  badInput,
 		}); d.Decision != decisionDeny {
 			t.Errorf("manage_task send_input %q: got %+v, want deny", badInput, d)
 		}
@@ -1021,7 +1022,7 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 	if d := decideAgyCall(t, h, dir, manageTaskTool, map[string]any{
 		actionField: sendInputAction,
 		taskIDField: "t1",
-		"Input":     "go test ./internal/...",
+		inputField:  "go test ./internal/...",
 	}); d.Decision != decisionAsk || d.Overwrite != nil {
 		t.Errorf("manage_task send_input benign build: got %+v, want ask without Overwrite", d)
 	}
