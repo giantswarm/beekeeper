@@ -105,6 +105,9 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if code == ExitGateUnread || code == ExitGateRefused {
 		return "", refused("merge gate refused: %s", oneLine(out))
 	}
+	if code == 0 && mutationResult && reply.Verdict == "queued" {
+		return "", errLoopLater
+	}
 	if code == 0 {
 		return "", refused("merge command ended without a confirmed merge")
 	}
@@ -411,10 +414,12 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			return doc
 		}
 	}
-	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
-	if a.cfg.Merge.AdminMerge(repo) {
-		argv = append(argv, "--admin")
+	if err := requireReviewedMergeQueue(ctx, p); err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
 	}
+	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
+	// Never pass --admin: it bypasses the server-side merge queue.
 	out, stderr, code, runErr := loopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
 	doc.ExitCode = code
@@ -432,9 +437,12 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode = 0
 		doc.MergeCommitSha = p.MergeCommit
 		doc.Verdict = "merged"
+	} else if doc.ExitCode == 0 && p.State == superloop.Open && p.Head == merging {
+		doc.Reason = "merge queued; awaiting server-side merge-result checks"
+		doc.ExitCode = 0
+		doc.Verdict = "queued"
 	} else if doc.ExitCode == 0 {
-		doc.ExitCode = github.SquashNotApplicable
-		doc.Reason = "merge not confirmed"
+		doc.ExitCode, doc.Reason = github.SquashNotApplicable, "merge head moved or pull request closed"
 	}
 	return doc
 }
@@ -454,4 +462,31 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// A local validation cannot atomically pin GitHub's base branch. Require the
+// server queue to retest its merge group if any writer advances the base.
+var requireReviewedMergeQueue = func(ctx context.Context, p superloop.Pull) error {
+	ref, ok := parseRef(p.Ref)
+	if !ok || p.Base == "" {
+		return fmt.Errorf("merge queue: invalid base")
+	}
+	owner, name, _ := strings.Cut(ref.Repo, "/")
+	out, err := github.RunGH(ctx, "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){id}}}", "-f", "owner="+owner, "-f", "name="+name, "-f", "branch="+p.Base)
+	if err != nil {
+		return fmt.Errorf("merge queue unavailable: %w", err)
+	}
+	var result struct {
+		Data struct {
+			Repository struct{ MergeQueue *struct{ ID string } }
+		}
+		Errors []json.RawMessage
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return fmt.Errorf("reading merge queue: %w", err)
+	}
+	if len(result.Errors) != 0 || result.Data.Repository.MergeQueue == nil || result.Data.Repository.MergeQueue.ID == "" {
+		return fmt.Errorf("merge queue required for atomic merge-result validation; configure required merge-group CI before merging")
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ const (
 	testGuardBaseFile = "guard/base.go"
 	testGuardPR1File  = "guard/pr1.go"
 	testGuardPR2File  = "guard/pr2.go"
+	testGuardCostFile = "guard/cost.go"
 )
 
 // mergeCheckRepo is a real git repository in a scratch directory backing
@@ -37,6 +39,12 @@ type mergeCheckRepo struct {
 
 func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseFiles map[string]string) *mergeCheckRepo {
 	t.Helper()
+	// Model the configured lint command independently of the test runner image.
+	lintDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	tmp := t.TempDir()
 	originDir := filepath.Join(tmp, "origin.git")
 	dir := filepath.Join(tmp, "r")
@@ -161,7 +169,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 		},
 		"go test failure across two PRs": {
 			baseFiles: map[string]string{
-				"guard/cost.go":      "package guard\n\nvar costA, costB int\n\nfunc TotalCost() int { return costA + costB }\n",
+				testGuardCostFile:    "package guard\n\nvar costA, costB int\n\nfunc TotalCost() int { return costA + costB }\n",
 				"guard/cost_test.go": "package guard\n\nimport \"testing\"\n\nfunc TestBoardCostStayWithinBudget(t *testing.T) {\n\tif got := TotalCost(); got > 40 {\n\t\tt.Fatalf(\"cost %d exceeds budget 40\", got)\n\t}\n}\n",
 			},
 			pr1Files: map[string]string{
@@ -174,7 +182,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 		},
 		"compatible PRs both merge": {
 			baseFiles: map[string]string{
-				"guard/cost.go":      "package guard\n\nvar costA, costB int\n\nfunc TotalCost() int { return costA + costB }\n",
+				testGuardCostFile:    "package guard\n\nvar costA, costB int\n\nfunc TotalCost() int { return costA + costB }\n",
 				"guard/cost_test.go": "package guard\n\nimport \"testing\"\n\nfunc TestBoardCostStayWithinBudget(t *testing.T) {\n\tif got := TotalCost(); got > 40 {\n\t\tt.Fatalf(\"cost %d exceeds budget 40\", got)\n\t}\n}\n",
 			},
 			pr1Files: map[string]string{
@@ -219,6 +227,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 			}
 
 			r := newLoopRig(t)
+			reviewedMergeCheck = checkReviewedMerge
 			r.a.cfg.Disk.Checkouts = []string{repo.dir}
 			r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 
@@ -328,5 +337,129 @@ func TestCheckReviewedMergeResultStopsWhenDeskStoppedMeanwhile(t *testing.T) {
 	}
 	if finding := checkPackageGoConst("..", "./cmd"); finding != "" {
 		t.Fatalf("goconst in ./cmd: %s", finding)
+	}
+}
+
+func TestMergeResultChecksCoverUnchangedAndDependentTests(t *testing.T) {
+	for _, dependent := range []bool{false, true} {
+		t.Run(fmt.Sprint(dependent), func(t *testing.T) {
+			files := map[string]string{testGuardCostFile: "package guard\nvar A, B int\nfunc Cost() int { return A+B }\n"}
+			testDir, expression := "guard", "Cost()"
+			imports := "import \"testing\"\n"
+			if dependent {
+				testDir, expression = "consumer", "guard.Cost()"
+				imports = "import (\"testing\"; \"example.com/r/guard\")\n"
+			}
+			// Thirty-one test files must not switch to filename-based selection.
+			for i := 0; i < 31; i++ {
+				files[fmt.Sprintf("%s/padding%d_test.go", testDir, i)] = "package " + testDir + "\n"
+			}
+			files[testDir+"/cost_test.go"] = "package " + testDir + "\n" + imports + "func TestUnchangedBudget(t *testing.T) { if " + expression + ">40 { t.Fatal(\"budget exceeded\") } }\n"
+			repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: "package guard\nfunc init(){A=25}\n"}, map[string]string{testGuardPR2File: "package guard\nfunc init(){B=16}\n"}, files)
+			repo.advanceMain(t, repo.head1)
+			r := newLoopRig(t)
+			r.a.cfg.Disk.Checkouts = []string{repo.dir}
+			_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+			if code != github.SquashRed || !strings.Contains(reason, "TestUnchangedBudget") {
+				t.Fatalf("got %d: %s", code, reason)
+			}
+		})
+	}
+}
+
+func TestMergeResultRequiresFreshRefs(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: "package guard\nvar A=1\n"}, map[string]string{testGuardPR2File: "package guard\nvar B=2\n"}, nil)
+	r := newLoopRig(t)
+	r.a.cfg.Disk.Checkouts = []string{repo.dir}
+	// A cached origin/main still exists but origin is now unavailable.
+	c := exec.CommandContext(t.Context(), "git", "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	c.Dir = repo.dir
+	if err := c.Run(); err != nil {
+		t.Fatal(err)
+	}
+	_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+	if code != github.SquashTooling || !strings.Contains(reason, "fetching") {
+		t.Fatalf("got %d: %s", code, reason)
+	}
+	r.a.cfg.Disk.Checkouts = nil
+	_, _, code = checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+	if code != github.SquashTooling {
+		t.Fatalf("missing checkout: %d", code)
+	}
+}
+
+func TestMergeResultRequiresLintTool(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	reason, code := runReviewedMergeChecks(t.Context(), dir, "base", mainBranch, "head")
+	if code != github.SquashTooling || !strings.Contains(reason, "golangci-lint unavailable") {
+		t.Fatalf("got %d: %s", code, reason)
+	}
+}
+
+func TestReviewedMergeQueueIsRequired(t *testing.T) {
+	check := requireReviewedMergeQueue
+	prev := github.RunGH
+	t.Cleanup(func() { github.RunGH = prev })
+	for _, reply := range []struct {
+		body      string
+		wantError bool
+	}{
+		{`{"data":{"repository":{"mergeQueue":null}}}`, true},
+		{`{"data":{"repository":{"mergeQueue":{"id":"queue"}}}}`, false},
+		{`{"errors":[{"message":"unavailable"}]}`, true},
+		{`invalid`, true},
+	} {
+		github.RunGH = func(context.Context, ...string) ([]byte, error) { return []byte(reply.body), nil }
+		err := check(t.Context(), superloop.Pull{Ref: secondPR, Base: mainBranch})
+		if (err != nil) != reply.wantError {
+			t.Fatalf("%s: %v", reply.body, err)
+		}
+	}
+}
+
+func TestMergeResultChecksDependencyOnlyChanges(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{"go.mod": "module example.com/r\n\ngo 1.24.0\n"}, map[string]string{testGuardPR2File: "package guard\nvar B=2\n"}, map[string]string{"guard/budget_test.go": "package guard\nimport \"testing\"\nfunc TestDependencyCheck(t *testing.T){t.Fatal(\"dependency regression\")}\n"})
+	c := exec.CommandContext(t.Context(), "git", "checkout", "-q", repo.head1)
+	c.Dir = repo.dir
+	if err := c.Run(); err != nil {
+		t.Fatal(err)
+	}
+	reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head1)
+	if code != github.SquashRed || !strings.Contains(reason, "TestDependencyCheck") {
+		t.Fatalf("got %d: %s", code, reason)
+	}
+}
+
+func TestFetchReviewedMergeRefsDoesNotUseCachedBase(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: "package guard\nvar A=1\n"}, map[string]string{testGuardPR2File: "package guard\nvar B=2\n"}, nil)
+	want := repo.advanceMain(t, repo.head1)
+	c := exec.CommandContext(t.Context(), "git", "update-ref", "refs/remotes/origin/"+mainBranch, repo.base)
+	c.Dir = repo.dir
+	if err := c.Run(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := fetchReviewedMergeRefs(t.Context(), repo.dir, mainBranch, repo.head2, 8)
+	if err != nil || got != want {
+		t.Fatalf("got %s, %v; want %s", got, err, want)
+	}
+	if _, err := fetchReviewedMergeRefs(t.Context(), repo.dir, mainBranch, "0000000000000000000000000000000000000000", 8); err == nil {
+		t.Fatal("unavailable head accepted")
+	}
+}
+
+func TestMergeResultConfiguredLintFailure(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: "package guard\nvar A=1\n"}, map[string]string{testGuardPR2File: "package guard\nvar B=2\n"}, nil)
+	lintDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\necho 'configured gosec failure'\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
+	if code != github.SquashRed || !strings.Contains(reason, "configured gosec failure") {
+		t.Fatalf("got %d: %s", code, reason)
 	}
 }

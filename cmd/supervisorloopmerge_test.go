@@ -50,14 +50,14 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	}
 }
 
-func TestLoopMergeRepairAndAdmin(t *testing.T) {
+func TestLoopMergeRepairDoesNotBypassQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.command = func(argv []string) (string, int) {
-		if !slices.Contains(argv, "--admin") || !slices.Contains(argv, loopHead) {
+		if slices.Contains(argv, "--admin") || !slices.Contains(argv, loopHead) {
 			t.Fatalf("merge flags: %v", argv)
 		}
 		return "branch conflicts with base", 1
@@ -155,7 +155,7 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 		t.Fatalf("merge %+v", doc)
 	}
 	argv := r.cmds[0]
-	for _, flag := range []string{"--rebase", "--admin", "--match-head-commit", loopHead} {
+	for _, flag := range []string{"--rebase", "--match-head-commit", loopHead} {
 		if !slices.Contains(argv, flag) {
 			t.Fatalf("missing %s in %v", flag, argv)
 		}

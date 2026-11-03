@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -55,25 +54,29 @@ func (a *app) checkReviewedMergeResult(ctx context.Context, p superloop.Pull, he
 	return "", 0
 }
 
+const reasonMergeValidationUnavailable = "merge-result validation unavailable"
+
 // checkReviewedMerge builds p.Base + head in a detached worktree when p.Base
 // is not already an ancestor of head, and runs lint and tests on the affected
 // Go packages of the combined tree.
 func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head string) (bool, string, int) {
 	if p.Base == "" || head == "" {
-		return false, "", 0
+		return false, reasonMergeValidationUnavailable, github.SquashTooling
 	}
 	ref, ok := parseRef(p.Ref)
 	if !ok {
-		return false, "", 0
+		return false, reasonMergeValidationUnavailable, github.SquashTooling
 	}
 	repoDir := a.findReviewedRepoDir(ctx, ref.Repo)
 	if repoDir == "" {
-		return false, "", 0
+		return false, reasonMergeValidationUnavailable, github.SquashTooling
 	}
-	fetchReviewedMergeRefs(ctx, repoDir, p.Base, head, ref.N)
-	baseSHA := resolveReviewedBaseCommit(ctx, repoDir, p.Base)
+	baseSHA, err := fetchReviewedMergeRefs(ctx, repoDir, p.Base, head, ref.N)
+	if err != nil {
+		return false, "fetching merge-result refs: " + err.Error(), github.SquashTooling
+	}
 	if baseSHA == "" || !hasReviewedCommit(ctx, repoDir, head) {
-		return false, "", 0
+		return false, reasonMergeValidationUnavailable, github.SquashTooling
 	}
 	// When the current base is already an ancestor of head, the PR's own
 	// green checks already verified the merge result.
@@ -162,39 +165,37 @@ func matchesReviewedRepo(ctx context.Context, dir, repo string) bool {
 	return false
 }
 
-func fetchReviewedMergeRefs(ctx context.Context, repoDir, base, head string, prNumber int) {
+// Resolve the exact fetched ref, never a cached tracking or local branch.
+func fetchReviewedMergeRefs(ctx context.Context, repoDir, base, head string, prNumber int) (string, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	runFetchGit(fetchCtx, repoDir, "fetch", "--no-tags", "--quiet", "origin", base)
-	if hasReviewedCommit(ctx, repoDir, head) {
-		return
+	// A unique ref prevents another fetch in this shared repository from
+	// overwriting FETCH_HEAD while the lane resolves the validated base.
+	fetchedRef := fmt.Sprintf("refs/beekeeper/merge-check/%d", time.Now().UnixNano())
+	defer func() { _, _ = runGit(context.WithoutCancel(ctx), repoDir, "update-ref", "-d", fetchedRef) }()
+	if err := runFetchGit(fetchCtx, repoDir, "fetch", "--no-write-fetch-head", "--no-tags", "--quiet", "origin", "refs/heads/"+base+":"+fetchedRef); err != nil {
+		return "", err
 	}
-	runFetchGit(fetchCtx, repoDir, "fetch", "--no-tags", "--quiet", "origin", head)
-	if !hasReviewedCommit(ctx, repoDir, head) && prNumber > 0 {
-		runFetchGit(fetchCtx, repoDir, "fetch", "--no-tags", "--quiet", "origin", fmt.Sprintf("refs/pull/%d/head", prNumber))
+	out, err := runGit(ctx, repoDir, "rev-parse", "--verify", fetchedRef+"^{commit}")
+	if err != nil {
+		return "", err
 	}
-}
-
-func runFetchGit(ctx context.Context, dir string, args ...string) {
-	c := proc.Command(proc.Background(ctx), "git", append([]string{"-C", dir, "-c", "credential.interactive=never"}, args...)...)
-	c.Env = append(os.Environ(),
-		"GIT_OPTIONAL_LOCKS=0",
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_SSH_COMMAND=ssh -oBatchMode=yes -oConnectTimeout=5",
-	)
-	_ = c.Run()
-}
-
-func resolveReviewedBaseCommit(ctx context.Context, repoDir, base string) string {
-	for _, ref := range []string{"refs/remotes/origin/" + base, "refs/heads/" + base, base} {
-		out, err := runGit(ctx, repoDir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
-		if err == nil {
-			if sha := strings.TrimSpace(string(out)); sha != "" {
-				return sha
-			}
+	baseSHA := strings.TrimSpace(string(out))
+	if !hasReviewedCommit(ctx, repoDir, head) {
+		if err := runFetchGit(fetchCtx, repoDir, "fetch", "--no-tags", "--quiet", "origin", fmt.Sprintf("refs/pull/%d/head", prNumber)); err != nil {
+			return "", err
 		}
 	}
-	return ""
+	if !hasReviewedCommit(ctx, repoDir, head) {
+		return "", fmt.Errorf("reviewed head unavailable")
+	}
+	return baseSHA, nil
+}
+
+func runFetchGit(ctx context.Context, dir string, args ...string) error {
+	c := proc.Command(proc.Background(ctx), "git", append([]string{"-C", dir, "-c", "credential.interactive=never"}, args...)...)
+	c.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -oBatchMode=yes -oConnectTimeout=5")
+	return c.Run()
 }
 
 func hasReviewedCommit(ctx context.Context, repoDir, rev string) bool {
@@ -202,51 +203,47 @@ func hasReviewedCommit(ctx context.Context, repoDir, rev string) bool {
 	return err == nil
 }
 
-var testFuncPattern = regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\s*\(`)
-
 // runReviewedMergeChecks runs goconst/golangci-lint and go test on the Go
-// packages in worktreeDir touched between mergeBase and HEAD.
+// module in worktreeDir, including reverse dependents and unchanged tests.
 func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBranch, head string) (string, int) {
 	if _, err := os.Stat(filepath.Join(worktreeDir, "go.mod")); err != nil {
 		return "", 0
 	}
+	// Whole-module checks include unchanged tests, reverse dependents and
+	// dependency-only changes. Filename correspondence cannot prove coverage.
+	pkgs := []string{"./..."}
+	if _, err := exec.LookPath("golangci-lint"); err != nil {
+		return "merge-result golangci-lint unavailable: " + err.Error(), github.SquashTooling
+	}
+	// Keep the fast diagnostic, but it never substitutes for configured lint.
 	diffOut, err := runGit(ctx, worktreeDir, "diff", "--name-only", mergeBase+"..HEAD")
 	if err != nil {
 		return "reading merge diff: " + err.Error(), github.SquashTooling
 	}
 	changedFiles := strings.Fields(string(diffOut))
-	pkgs := changedGoPackages(worktreeDir, changedFiles)
-	if len(pkgs) == 0 {
-		return "", 0
-	}
-	for _, pkg := range pkgs {
+	for _, pkg := range changedGoPackages(worktreeDir, changedFiles) {
 		if finding := checkPackageGoConst(worktreeDir, pkg); finding != "" {
 			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), finding), github.SquashRed
 		}
 	}
-	if _, err := exec.LookPath("golangci-lint"); err == nil {
-		lintArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
-		if !hasGolangCILintConfig(worktreeDir) {
-			lintArgs = append(lintArgs, "-E", "goconst,govet,gosec")
-		}
-		lintArgs = append(lintArgs, pkgs...)
-		if out, err := runMergeCheckCmd(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
-			return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
-		}
+	lintArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
+	if !hasGolangCILintConfig(worktreeDir) {
+		lintArgs = append(lintArgs, "--enable", "goconst,govet,gosec")
 	}
-	for _, pkg := range pkgs {
-		testArgs := goTestArgsForPackage(worktreeDir, pkg, changedFiles)
-		if out, err := runMergeCheckCmd(ctx, worktreeDir, "go", testArgs...); err != nil {
-			return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
-		}
+	lintArgs = append(lintArgs, pkgs...)
+	if out, err := runMergeCheckCmd(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
+		return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
+	if out, err := runMergeCheckCmd(ctx, worktreeDir, "go", goTestSubcmd, "./..."); err != nil {
+		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
+	}
+
 	return "", 0
 }
 
 // checkPackageGoConst checks a Go package directory for repeated string
 // literals (>=3 occurrences of length >=3, or matching an existing constant)
-// so goconst regressions across merged PRs are caught even when golangci-lint
-// is not installed in the runner image.
+// as an early diagnostic; the configured golangci-lint remains required.
 func checkPackageGoConst(worktreeDir, pkg string) string {
 	relDir := strings.TrimPrefix(pkg, "./")
 	if pkg == "." {
@@ -435,76 +432,6 @@ func hasGoFiles(dir string) bool {
 }
 
 const goTestSubcmd = "test"
-
-// goTestArgsForPackage builds the `go test` invocation for pkg. Small packages
-// run their full test suite; huge packages (>30 *_test.go files, such as ./cmd)
-// compile all tests and run the tests in the changed files and their matching
-// *_test.go counterparts.
-func goTestArgsForPackage(worktreeDir, pkg string, changedFiles []string) []string {
-	relDir := strings.TrimPrefix(pkg, "./")
-	if pkg == "." {
-		relDir = "."
-	}
-	absDir := filepath.Join(worktreeDir, filepath.FromSlash(relDir))
-	entries, err := os.ReadDir(absDir)
-	if err != nil {
-		return []string{goTestSubcmd, pkg}
-	}
-	var testFiles []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), "_test.go") {
-			testFiles = append(testFiles, e.Name())
-		}
-	}
-	if len(testFiles) <= 30 {
-		return []string{goTestSubcmd, pkg}
-	}
-	names := matchingTestFuncs(absDir, relDir, testFiles, changedFiles)
-	if len(names) == 0 {
-		return []string{goTestSubcmd, "-run", "^$", pkg}
-	}
-	return []string{goTestSubcmd, "-run", "^(" + strings.Join(names, "|") + ")$", pkg}
-}
-
-func matchingTestFuncs(absDir, relDir string, testFiles, changedFiles []string) []string {
-	var stems []string
-	var selected []string
-	for _, f := range changedFiles {
-		d := filepath.ToSlash(filepath.Dir(filepath.FromSlash(f)))
-		if d != relDir {
-			continue
-		}
-		base := filepath.Base(f)
-		if strings.HasSuffix(base, "_test.go") {
-			selected = append(selected, base)
-			continue
-		}
-		if stem, ok := strings.CutSuffix(base, ".go"); ok {
-			stems = append(stems, stem)
-		}
-	}
-	for _, tf := range testFiles {
-		for _, stem := range stems {
-			if tf == stem+"_test.go" || strings.HasPrefix(tf, stem+"_") {
-				selected = append(selected, tf)
-			}
-		}
-	}
-	slices.Sort(selected)
-	selected = slices.Compact(selected)
-	var funcs []string
-	for _, tf := range selected {
-		raw, err := os.ReadFile(filepath.Join(absDir, tf)) //nolint:gosec // reading *_test.go file from owned worktree
-		if err != nil {
-			continue
-		}
-		for _, m := range testFuncPattern.FindAllSubmatch(raw, -1) {
-			funcs = append(funcs, string(m[1]))
-		}
-	}
-	slices.Sort(funcs)
-	return slices.Compact(funcs)
-}
 
 func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (string, error) {
 	var buf bytes.Buffer
