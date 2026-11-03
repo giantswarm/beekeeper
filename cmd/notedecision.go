@@ -270,6 +270,17 @@ func (a *app) keepRoleLine(rl role, line string) error {
 func (a *app) quietWake(ctx context.Context, by state.Party, q, line string) error {
 	quiet := *a
 	quiet.out = io.Discard
+	if by.Name == watchParty.Name {
+		st, err := a.store.Read()
+		if err != nil {
+			return err
+		}
+		if wakeTargetPark(st, q) != nil {
+			// The park's own settlement delivers its answer once. An
+			// unrelated default or released hold must not start a turn.
+			return nil
+		}
+	}
 	return wakeOwner(&quiet, ctx, by, q, line, "")
 }
 

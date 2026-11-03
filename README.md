@@ -2268,6 +2268,29 @@ tab-separated fields, always present, in this order.
 | 5 | the number of notes and timers whose time has come |
 | 6 | the busy agents against `capacity.ceiling`, `<n>/<ceiling>` |
 
+### Turns while parked
+
+A park on a person or note stays asleep until the answer or note closure,
+including when old timers or commands finish in the meantime. Explicit
+messages and `agents resume` remain available to the person.
+
+| Source | When it can deliver a turn |
+|---|---|
+| Park settlement (`watch`, `agents.autoResume`) | Only after the named note, issue, PR, hold or lease settles. |
+| Timers and probes | A failed probe stays in the watch; no model checks it. At delivery, the current park is read again. A person/note park gets `TIMER WAKE SKIPPED`; another named park accepts only a typed GitHub condition on its own reference. A plain external wait accepts its timer, including its explicit timeout. Skipped fires keep their watch/log record and normal close/repeat behavior. |
+| Command outcomes (`devctl.unheard`) | A person park keeps the outcome owed until the park ends, within the existing 24-hour outcome retention window. A plain PR wait still receives its own command result, including red CI. |
+| Automatic note/default and hold-release notifications | A parked session gets its own park settlement instead, for local and central defaults. Other note outcomes stay in the log. A person's explicit answer/message still reaches it. |
+| Supervisor loop | Verified review findings, red CI, merge go, completed release proof and matching alerts settle their corresponding waits; a note park gets no idle wake. |
+| Idle, stopped-agent and high-usage notices | Parked workers are skipped; notices do not start a model turn. |
+| Headless turn recovery (`resumeOnWait`) | Parked/kept workers and serve records waiting on a person are skipped. |
+| Person's messages (UI, Slack feedback, central mailbox, explicit wake/resume/broadcast) | An explicit message may interrupt the park; there is no periodic model turn to check for it. |
+| Hooks and harness inboxes | Hooks only run during an existing tool call; inboxes deliver explicit queued messages and do not poll a model while idle. |
+
+`TestPersonParkEightHoursWithoutTurns` replays eight hours of watch ticks,
+probes, reminders, command outcomes and idle/usage notices using a delivery
+counter: zero turns until the answer, then exactly one answer turn. It uses
+an advanced clock and no paid model calls.
+
 ### Agents started without a click
 
 `beekeeper agents start <name> <brief file>` starts an agent the way a person would start a
