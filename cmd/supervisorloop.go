@@ -773,7 +773,7 @@ func loopTaskServes(ag state.Agent, parkedOn string) string {
 	return ""
 }
 
-// loopOutput serializes loop transitions with asynchronous timer output.
+// loopOutput serializes parallel loop actions and asynchronous timer output.
 type loopOutput struct {
 	mu  sync.Mutex
 	out io.Writer
@@ -804,7 +804,6 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 	}
 	defer func() { _ = a.store.WriteFile(loopPIDFile, 0) }()
 	out := a.out
-	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
 	l, err := a.newSupervisorLoop(false)
 	if err != nil {
@@ -863,6 +862,11 @@ func (a *app) dryRunSupervisorLoop(ctx context.Context) error {
 // newSupervisorLoop logs the loop's start, unless it is a dry run, and
 // bounds its events by its first.
 func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
+	// Every loop can run actions concurrently, including a directly constructed
+	// loop. Give all its output paths the same synchronized writer.
+	if _, ok := a.out.(*loopOutput); !ok {
+		a.out = &loopOutput{out: a.out}
+	}
 	starts, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == loopStartVerb })
 	if err != nil {
 		return nil, err
