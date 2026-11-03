@@ -94,10 +94,12 @@ func HasRollouts(stateDir, sessionsDir string, extraDirs ...string) bool {
 // event is recorded at its timestamp (or the later of the previous line's
 // timestamp and the file's mtime) and fails closed when it is the freshest
 // event.
+var ErrNoUsage = errors.New("no codex usage event")
+
 func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading, error) {
 	files := rolloutFiles(sessionDirs(stateDir, sessionsDir, extraDirs...))
 	if len(files) == 0 {
-		return UsageReading{}, errors.New("no codex rollout files found")
+		return UsageReading{}, fmt.Errorf("no codex rollout files found: %w", ErrNoUsage)
 	}
 	var best *usageCandidate
 	for _, rf := range files {
@@ -111,10 +113,10 @@ func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading,
 		}
 	}
 	if best == nil {
-		return UsageReading{}, errors.New("no codex token_count usage event found")
+		return UsageReading{}, fmt.Errorf("no codex token_count usage event found: %w", ErrNoUsage)
 	}
 	if best.err != nil {
-		return UsageReading{}, best.err
+		return UsageReading{At: best.at}, best.err
 	}
 	return best.reading, nil
 }
@@ -423,15 +425,11 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 	var rl struct {
 		Primary              json.RawMessage `json:"primary"`
 		Secondary            json.RawMessage `json:"secondary"`
-		PlanType             string          `json:"plan_type"`
+		PlanType             json.RawMessage `json:"plan_type"`
 		RateLimitReachedType *string         `json:"rate_limit_reached_type"`
 		RateLimitReached     bool            `json:"rate_limit_reached"`
 		SpendControlReached  bool            `json:"spend_control_reached"`
-		Credits              *struct {
-			HasCredits bool     `json:"has_credits"`
-			Unlimited  bool     `json:"unlimited"`
-			Balance    *float64 `json:"balance"`
-		} `json:"credits"`
+		Credits              json.RawMessage `json:"credits"`
 	}
 	if err := json.Unmarshal(trimmed, &rl); err != nil {
 		return UsageReading{}, fmt.Errorf("invalid codex rate_limits JSON: %w", err)
@@ -463,18 +461,8 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 
 	out := UsageReading{
 		At:       at,
-		PlanType: strings.TrimSpace(rl.PlanType),
-	}
-	if rl.Credits != nil {
-		c := &UsageCredits{
-			HasCredits: rl.Credits.HasCredits,
-			Unlimited:  rl.Credits.Unlimited,
-		}
-		if rl.Credits.Balance != nil && !math.IsNaN(*rl.Credits.Balance) && !math.IsInf(*rl.Credits.Balance, 0) {
-			b := *rl.Credits.Balance
-			c.Balance = &b
-		}
-		out.Credits = c
+		PlanType: parsePlanType(rl.PlanType),
+		Credits:  parseCredits(rl.Credits),
 	}
 
 	for _, entry := range []struct {
@@ -508,6 +496,59 @@ func ParseRateLimits(raw json.RawMessage, at time.Time) (UsageReading, error) {
 		return UsageReading{}, errors.New("codex rate_limits omits 7-day window")
 	}
 	return out, nil
+}
+
+// parsePlanType reads `plan_type` for display only: anything but a JSON
+// string is dropped rather than failing the reading.
+func parsePlanType(raw json.RawMessage) string {
+	var plan string
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(plan)
+}
+
+// parseCredits reads the informational `credits` section. Codex sends
+// `balance` as a number or as a numeric string; no capacity decision reads
+// the section, so a field of an unexpected shape is dropped rather than
+// failing the whole reading.
+func parseCredits(raw json.RawMessage) *UsageCredits {
+	trimmed := bytes.TrimSpace(raw)
+	if isNullOrEmptyJSON(trimmed) {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return nil
+	}
+	c := &UsageCredits{}
+	_ = json.Unmarshal(fields["has_credits"], &c.HasCredits)
+	_ = json.Unmarshal(fields["unlimited"], &c.Unlimited)
+	c.Balance = parseCreditBalance(fields["balance"])
+	return c
+}
+
+func parseCreditBalance(raw json.RawMessage) *float64 {
+	trimmed := bytes.TrimSpace(raw)
+	if isNullOrEmptyJSON(trimmed) {
+		return nil
+	}
+	var b float64
+	if err := json.Unmarshal(trimmed, &b); err != nil {
+		var str string
+		if json.Unmarshal(trimmed, &str) != nil {
+			return nil
+		}
+		parsed, perr := strconv.ParseFloat(strings.TrimSpace(str), 64)
+		if perr != nil {
+			return nil
+		}
+		b = parsed
+	}
+	if math.IsNaN(b) || math.IsInf(b, 0) {
+		return nil
+	}
+	return &b
 }
 
 func parseRateLimitWindow(slot string, raw json.RawMessage, ref time.Time) (*UsageWindow, error) {

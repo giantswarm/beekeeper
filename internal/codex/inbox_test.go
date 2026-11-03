@@ -192,14 +192,18 @@ fi
 		t.Fatal(err)
 	}
 
-	// Wait for Turn 2 (resume) to complete.
+	// Wait for Turn 2 to accept and durably confirm the wake before
+	// cancellation: merely starting the subprocess leaves it unconfirmed.
 	var calls string
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		b, _ := os.ReadFile(callsFile) //nolint:gosec // test file
 		calls = string(b)
 		if strings.Count(calls, "ARGS:") >= 2 {
-			break
+			q, err := readQueue(inbox)
+			if err == nil && q.Inflight == "" && len(q.Messages) == 0 {
+				break
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

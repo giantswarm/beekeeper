@@ -35,6 +35,13 @@ func (a *app) agentWakeCmd() *cobra.Command {
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
 
+A session off the roster is reached the same way: a role's holder by its
+name or ids, or any session by its own id (a
+CLI session id, a desktop local_ id, an omp_/agy_/codex_ id). This is how
+the outcome of a gated wait or a settled park reaches a waiter that never
+registered. A session that no longer exists (no transcript to resume, no
+harness process reading its inbox) is refused as gone.
+
 An SSH execution receives a durable ordered envelope. Success requires a
 harness acceptance event containing its message ID. A pending or uncertain
 delivery exits nonzero; agents messages shows its receipt and agents hosts
@@ -56,6 +63,8 @@ the caller's CLAUDE* variables, and keeps its Remote Control, mode, name
 and model; no desktop route, no claude:// link and no reopen unit.
 A session whose import is pending (agents shows it importing) is refused: a
 headless turn would run beside the CLI the import warms.
+While a "starts" hold stands (beekeeper hold), a done agent's wake, which
+would hand it new work, is refused (exit 3); an agent on its task gets it.
 A session with no running CLI (after a reboot, a crash, the desktop's idle
 drop) and a row in the running desktop gets the message as a desktop turn:
 a steward's send through the desktop's session messaging starts its desktop
@@ -110,37 +119,45 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err := a.refuseStopped(st, "waking "+q); err != nil {
 		return err
 	}
-	i, err := findAgent(st, q)
+	ag, rostered, err := a.wakeParty(st, q)
 	if err != nil {
 		return err
 	}
-	ag := st.Agents[i]
-	if ag.Execution != nil {
-		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
+	// A done agent's wake hands it new work, which a "starts" hold stops;
+	// an agent on its task keeps getting its own wakes.
+	if h := startsHold(st, a.now); h != nil && rostered && ag.Done {
+		return refused("waking %s refused: it is done and %s", ag.Name, a.startsHeldText(h))
 	}
-	if st.Supervisor != nil && st.Supervisor.Is(by) {
-		// The supervisor's `yours <resource>` is the grant, as in a
-		// SendMessage; the record follows the word.
-		if named := guard.Yours(msg, a.cfg.Leasable()); len(named) > 0 {
-			sessions, _, err := a.sessions()
-			if err != nil {
-				return err
+	// Reserve the local entry before delivering a wake so retirement cannot
+	// race a turn's startup. A failed delivery restores the previous age.
+	if rostered && ag.Execution == nil {
+		err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			for i := range st.Agents {
+				if st.Agents[i].Is(ag.Party) {
+					st.Agents[i].ActivityAt = a.now.UTC()
+					return nil, nil
+				}
 			}
-			if _, err := fmt.Fprintln(a.out, "wake: "+a.yoursGrants(sessions, st.Supervisor.Party, ag.Name, named)); err != nil {
-				return err
-			}
-		}
-		// A wake carrying the next task to an agent that reported its
-		// last idle restores its task record, as a SendMessage does.
-		line, err := a.retaskAgent(by, rosterIndex(ag.Party), msg)
+			return nil, refused("%s left the roster before its wake", ag.Name)
+		})
 		if err != nil {
 			return err
 		}
-		if line != "" {
-			if _, err := fmt.Fprintln(a.out, "wake: "+line); err != nil {
-				return err
+		defer func() {
+			if err != nil {
+				_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+					for i := range st.Agents {
+						if st.Agents[i].Is(ag.Party) && st.Agents[i].ActivityAt.Equal(a.now) {
+							st.Agents[i].ActivityAt = ag.ActivityAt
+						}
+					}
+					return nil, nil
+				})
 			}
-		}
+		}()
+	}
+	if ag.Execution != nil {
+		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
 	}
 	if ag.Undelivered != "" {
 		// A delivered turn is the task's start agents start did not make.
@@ -153,6 +170,13 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if h, id, ok := harnessForHost(ag.HostSession); ok {
 		return h.Wake(a, by, ag, id, msg)
 	}
+	// A stop of the parked background session in flight ends before the
+	// wake looks whether its CLI runs (stopParkedSession).
+	release, err := a.lockForWake(ctx, st, ag.Party)
+	if err != nil {
+		return err
+	}
+	defer release()
 	sessions, _, err := a.sessions()
 	if err != nil {
 		return err
@@ -397,7 +421,7 @@ func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
 func (a *app) sendOmp(name, id, msg string) error {
 	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, omp.ErrNotRunning) {
-		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
+		return goneRefusal("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
@@ -420,7 +444,7 @@ func (a *app) wakeAgy(by state.Party, ag state.Agent, id, msg string) error {
 func (a *app) sendAgy(name, id, msg string) error {
 	err := agy.Send(agy.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, agy.ErrNotRunning) {
-		return refused("%s: its agy agent no longer runs (%s ended): start it again with agents start --harness agy", name, agyUnit(id))
+		return goneRefusal("%s: its agy agent no longer runs (%s ended): start it again with agents start --harness agy", name, agyUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
@@ -434,7 +458,7 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 		return err
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
-	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): written to its inbox, it runs the message as its next turn\n", ag.Name)
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): queued for its next PreToolUse hook during the current turn, or its next turn when idle; if no further tool call occurs, delivery waits until the current turn ends (remaining duration unknown)\n", ag.Name)
 	return err
 }
 
@@ -443,7 +467,7 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 func (a *app) sendCodex(name, id, msg string) error {
 	err := codex.Send(codex.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, codex.ErrNotRunning) {
-		return refused("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
+		return goneRefusal("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
@@ -488,11 +512,11 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 		}
 	}
 	if w.id == "" {
-		return wakeTarget{}, refused("%s has no session id to resume", ag.Name)
+		return wakeTarget{}, goneRefusal("%s has no session id to resume", ag.Name)
 	}
 	transcript := transcriptOf(cfg, w.id)
 	if transcript == "" {
-		return wakeTarget{}, refused("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
+		return wakeTarget{}, goneRefusal("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
 	}
 	if w.dir == "" {
 		w.dir, _ = claude.TranscriptCwd(transcript)
@@ -565,12 +589,16 @@ func wakeRunning(ctx context.Context, id string) string {
 }
 
 // profiledWakeArgv is wakeArgv under w's profile, whose flag settings it
-// writes first.
+// writes first, with its security review on w's model (withReviewModel).
 func (a *app) profiledWakeArgv(ctx context.Context, bin string, w wakeTarget, msg string) ([]string, error) {
-	if w.profile == "" {
-		return wakeArgv(bin, w, msg), nil
+	var flags []string
+	if w.profile != "" {
+		var err error
+		if flags, err = a.profileFlags(ctx, w.profile); err != nil {
+			return nil, err
+		}
 	}
-	flags, err := a.profileFlags(ctx, w.profile)
+	flags, err := withReviewModel(w.model, flags)
 	if err != nil {
 		return nil, err
 	}
@@ -660,17 +688,23 @@ func printsTurn(p *proc.Process) bool {
 	return p.Comm == claudeComm && (slices.Contains(p.Args, "-p") || slices.Contains(p.Args, "--print"))
 }
 
-// roleTarget is the PreToolUse hook's lookup for a message to a role (the
-// supervisor, the guide): relayAddress of its record now. A relay moves the
-// role, so a brief names the role, never the holder.
+// errSupervisorMessage refuses a message to "the supervisor": the
+// supervisor is the supervisor loop, which no session holds and no message
+// reaches.
+var errSupervisorMessage = errors.New("the supervisor is the supervisor loop, a service no session holds, so no message reaches it: report with `beekeeper agents idle --done --report`, wait with `beekeeper agents park --on`, ask with `beekeeper note add`")
+
+// roleTarget is the PreToolUse hook's lookup for a message to a role: the
+// guide's relayAddress of its record now (a relay moves the role, so a
+// brief names the role, never the holder), and a refusal for the
+// supervisor (errSupervisorMessage).
 func (a *app) roleTarget(name string) (string, error) {
+	if name != guard.RoleGuide {
+		return "", errSupervisorMessage
+	}
 	if err := a.loadConfig(); err != nil {
 		return "", fmt.Errorf("beekeeper's configuration does not load, so the %s is unknown: %w", name, err)
 	}
-	rl := supervisorRole
-	if name == guard.RoleGuide {
-		rl = guideRole
-	}
+	rl := guideRole
 	store, err := state.Open(a.cfg.StateDir)
 	if err != nil {
 		return "", err
@@ -714,8 +748,7 @@ func (a *app) heldRole(name string) string {
 
 // holderRole names the role whose holder name addresses: the holder's
 // recorded name or session id, or the name of its roster entry, which keeps
-// the run name ("Supervisor run 82") after the holder takes its desktop
-// title; "" when name addresses no holder.
+// the run name ("Guide run 82") after the holder takes its desktop title; "" when name addresses no holder.
 func holderRole(st *state.State, name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -859,6 +892,9 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 	}
 	return socketAddress + path, nil
 }
+
+// socketAddress starts a SendMessage target that is a CLI's peer socket.
+const socketAddress = "uds:"
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
 // says that the roster agent of that name (or session id) runs no CLI and

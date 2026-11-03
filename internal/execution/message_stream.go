@@ -23,6 +23,7 @@ type messageStream struct {
 	done      chan struct{}
 	listening chan struct{}
 	started   bool
+	encode    func(Envelope, string) []byte
 }
 
 func (s *Server) openMessageStream(ctx context.Context, ref Ref) (*messageStream, error) {
@@ -49,6 +50,9 @@ func (m *messageStream) signal() {
 }
 
 func (m *messageStream) Start(r StartRequest) {
+	if m.encode == nil {
+		m.encode = userMessage
+	}
 	m.started = true
 	go func() {
 		defer close(m.listening)
@@ -65,7 +69,7 @@ func (m *messageStream) Start(r StartRequest) {
 		defer close(m.done)
 		defer func() { _ = m.writer.Close() }()
 		initial := Envelope{ID: r.RequestID, Text: r.Prompt}
-		if _, err := m.writer.Write(userMessage(initial, r.ConversationID)); err != nil {
+		if _, err := m.writer.Write(m.encode(initial, r.ConversationID)); err != nil {
 			return
 		}
 		m.signal()
@@ -120,7 +124,7 @@ func (m *messageStream) sendNext() error {
 	}
 	var next Envelope
 	var session string
-	err = m.s.update(m.ctx, m.ref, func(j *Journal) error {
+	begun, err := m.s.beginTurn(m.ctx, m.ref, func(j *Journal) error {
 		if j.Completed {
 			_ = m.writer.Close()
 			return nil
@@ -137,12 +141,22 @@ func (m *messageStream) sendNext() error {
 			return nil
 		}
 		session = j.Handle.ConversationID
-		return j.Messages.Attempt(next)
+		if err := j.Messages.Attempt(next); err != nil {
+			return err
+		}
+		j.InTurn, j.LastActive = true, m.s.now()
+		return nil
 	})
+	if err == nil && !begun {
+		// A host update holds the admission: the message stays stored
+		// and is sent once the update released it.
+		time.AfterFunc(turnRetry, m.signal)
+		return nil
+	}
 	if err != nil || next.ID == "" {
 		return err
 	}
-	_, err = m.writer.Write(userMessage(next, session))
+	_, err = m.writer.Write(m.encode(next, session))
 	return err
 }
 
@@ -169,7 +183,10 @@ func (s *Server) authorizeMessage(ctx context.Context, j Journal) error {
 
 func (m *messageStream) Accept(line []byte, original Journal) error {
 	if acceptedMessage(line, original.Handle.ConversationID, original.Request.RequestID) {
-		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error { j.Ready = true; return nil }); err != nil {
+		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error {
+			j.Ready, j.InTurn, j.LastActive = true, true, m.s.now()
+			return nil
+		}); err != nil {
 			return err
 		}
 		m.signal()
@@ -190,7 +207,13 @@ func (m *messageStream) Accept(line []byte, original Journal) error {
 		if err := atomicFile(p, mustJSON(evidence)); err != nil {
 			return err
 		}
-		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error { return j.Messages.Accept(d.Envelope.ID) }); err != nil {
+		if err := m.s.update(m.ctx, m.ref, func(j *Journal) error {
+			if err := j.Messages.Accept(d.Envelope.ID); err != nil {
+				return err
+			}
+			j.InTurn, j.LastActive = true, m.s.now()
+			return nil
+		}); err != nil {
 			return err
 		}
 		m.signal()

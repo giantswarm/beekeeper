@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -30,7 +31,17 @@ var boardGH github.GH = github.RunGH
 
 // boardClient is the client of the configured board and plans repositories.
 func (a *app) boardClient() *board.Client {
-	return &board.Client{GH: boardGH, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+	gh := boardGH
+	if a.as == loopParty.Name {
+		gh = func(ctx context.Context, args ...string) (out []byte, err error) {
+			err = a.loopGitHub(ctx, "board", func() error {
+				out, err = boardGH(ctx, args...)
+				return err
+			})
+			return out, err
+		}
+	}
+	return &board.Client{GH: gh, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
 }
 
 func (a *app) boardCmd() *cobra.Command {
@@ -40,19 +51,21 @@ func (a *app) boardCmd() *cobra.Command {
 		Long: `The project board of board.owner and board.project, the items of board.team.
 next applies the configured order (board.order) to the board's open items
 and the roster and prints the first free item with why it is picked; move
-sets an item's Status by the board's canonical names; rank sets an item's
-position on the board, which is the order next reads the items of each step
-in, under the person's priority list (beekeeper priority); block and
-unblock record and remove a hold on an item, a GitHub blocked-by
-dependency on another issue, which next reads.`,
+sets an item's Status by the board's canonical names; rank (or order) sets
+an item's position on the board, which is the order next reads the items of
+each step in; block and unblock record and remove a hold on an item, a GitHub
+blocked-by dependency on another issue, which next reads; tidy moves closed
+items to Done and archives them after board.archiveAfter, which the supervisor
+loop runs every board.tidyEvery.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false))
+	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
 	return c
 }
 
 func (a *app) boardNextCmd() *cobra.Command {
 	var claim, replace bool
 	var waits string
+	var skip []string
 	var view nextView
 	c := &cobra.Command{
 		Use:   "next",
@@ -73,18 +86,16 @@ with its plan ("epic in planning (Up Next), plan <url> (draft): its
 sub-issues wait for the go") or without one (its planning session's), and
 never offered through its sub-issues; an issue whose nearest epic among its
 parents on the board is in planning is skipped as "sub-issue of epic
-<owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
-the go: from then its open sub-issues are offered, in their order. The
-person's priority list (beekeeper priority, the board's Priority field) comes
-first: the candidates are ordered by the rank of their epic, an issue's own
-or that of its nearest ranked ancestor through the sub-issue relation, the
-unranked after the ranked, each rank in the order above; the pick prints the
-rank it applied ("priority 2 of epic <owner/repo#n>", --json priority and
-priorityOf). A step with workScope offers only the work scope: an issue
-under an epic of the priority list, an order (an item a step without
-workScope offers) and an open recorded blocker of either; an item under an
-unranked epic or under none is skipped as "not in a priority epic", not
-ordered last. A plan is
+<owner/repo#n>, in planning (Up Next)". An epic not yet scheduled for
+planning (in a status ahead of Up Next, Inbox or Backlog, or without a
+Status) has no plan and no go: it is skipped as "epic Backlog, not
+scheduled for planning: …", never offered through its sub-issues, and an
+issue whose nearest epic is one is skipped as "sub-issue of epic
+<owner/repo#n>, not scheduled for planning (Backlog)". Moving the epic to In
+Progress is the go: from then its open sub-issues are offered, in their
+order. Priority is determined by issue Status and order on the board only:
+board.order lists In Progress, then Up Next, then Backlog, and within a step
+the board's own position order of its items. A step's workScope is read and ignored. A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
@@ -94,7 +105,9 @@ its title or a busy agent's task, "BS 3057 …" or "FIX backstage 3067 …":
 a tag its repository's name abbreviates, letter by letter from the first,
 or the repository itself, then the number; a busy agent's however
 quiet: a role holder's and an idle agent's are left out; one naming a pull request serves the issues it
-closes too, In Progress or not) nor by an agent on the roster, its CLI running or not, while it is
+closes too, In Progress or not; a record or saved review park of a role run
+a later run relieved, or of a session beekeeper started that has left the
+roster, serves nothing, its window open or not) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
 wakes it by name), not assigned to anybody outside board.people, without an open recorded
 blocker, active within board.staleAfter, and with every lease its labels
@@ -105,15 +118,12 @@ an epic passes the same checks, and a serve record or task naming
 the epic covers it too ("…, on epic owner/repo#n"). A hold is a
 blocked-by (board block) or the Status Blocked / Waiting a decision sets on
 each of its --ref while it is open (note add --holds), skipped as "held:
-decision #<n> for <person> until it closes"; a priority is a board rank. A held item,
+decision #<n> for <person> until it closes"; a priority is a board move or a
+board reorder (board rank / board order). A held item,
 one with an open recorded blocker, is skipped as "held: blocked by
 <owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
 its sub-issues, and every issue under it is skipped as "held: sub-issue of
-<epic>, blocked by …". The epics of the priority list are read whatever their
-Team field says when they carry the team label (board.teamLabel), and a
-change of a ranked epic's rank or Team beekeeper did not write is a line
-"changed outside beekeeper: …" first (--json changed) and a board.changed
-event (see priority). A task names
+<epic>, blocked by …". A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of
 board.owner, as a repository before a list ("beekeeper: #524, #525") or as
 a bare #n after the last repository it named ("beekeeper#173, #176"); a
@@ -125,7 +135,7 @@ free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
 agent's task, a running session's work), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
-(the epic gate holds it), unknown (GitHub answered its board fields or an
+(the epic gate holds it: in planning or not scheduled for it), unknown (GitHub answered its board fields or an
 epic's sub-issues with an error), scope (outside the work scope) and order (a rule of board.order turns it
 away: an old Backlog item, one in Inbox, one without recorded blockers), and
 each epic in planning or past its go with its plan's URL, state and head,
@@ -139,15 +149,6 @@ read as absent: an item's missing fields as its missing ("<field>:
 <message>"), anything else on a line "unknown, GitHub answered with an
 error: …" and in --json's missing.
 
-An epic of the priority list that is not held, has a free item under it and
-has no session serving it or anything under it (a record, a busy or parked
-agent's task, a running session's work, as above) gets a line first, right
-after the changes: "EPIC UNSTAFFED priority <n> <epic URL> <title>: <k>
-free items under it and no session serves it, next <owner/repo#n>", in
---json as unstaffed. The supervisor owes such an epic a worker within the
-capacity verdict before it fills the remaining slots in the order. A claim
-prints none.
-
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
 two concurrent claims never get the same item. It changes nothing on the
@@ -158,6 +159,22 @@ second claim while the session still serves an open item is refused with
 its record, which stays as it was; --replace takes the next item and
 replaces the record. Exit 3 when no item is free or the claim is refused.
 
+Claims of other desks: every session record is the desk's claim of its
+issue on GitHub as well (board.claims), one marker comment per issue and
+desk signed with board.claims.desk, refreshed every board.claims.refresh
+and released when the record ends (agents idle --done, sessions unserve,
+the session's end); the supervisor loop and the watch keep them in line.
+next reads the claims of each pick in turn and skips an item another desk
+claims ("claimed by desk <name> (session <id>) since <time>"), up to the
+first item no other desk claims; a claim unrefreshed for
+board.claims.staleAfter is shown on the pick and not honoured, and a read
+GitHub fails is a warning, the pick standing as if unclaimed. --claim
+publishes its claim at once (waiting for a sync that runs) and, should
+another desk's claim on the item be older (a new claim is a new comment,
+the lower id the older), gives it back and exits 3 naming it. A pull
+request carries no claim. Without board.claims.desk
+the desk publishes none and still honours the other desks'.
+
 --limit <n> lists at most n items of each list: the skipped lines above the
 pick and the free items behind it, and --json's skipped and after_pick,
 each followed by how many it left out ("… 12 more skipped above the pick",
@@ -165,7 +182,16 @@ each followed by how many it left out ("… 12 more skipped above the pick",
 pick are whole. --fields ref,title,url (implies --json) keeps only the
 named fields of each item in pick, skipped and after_pick, a name it does
 not know refused with the names it knows. Without either the output is
-the whole walk.`,
+the whole walk.
+
+--skip <owner/repo#n|URL> (repeated or comma-separated) passes over the
+items it names, each skipped as "skipped by --skip" (kind asked) unless
+something else holds it already, so the next free item behind them is the
+pick; a name no candidate carries changes nothing. Without --claim the
+pick is followed by the call that offers the candidate after it, "next
+candidate: board next --skip <the skips and the pick>" (--json
+next_skip): a scan walks every free candidate by repeating that call
+alone, until exit 3 says none is left.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if view.limit < 0 {
@@ -174,9 +200,12 @@ the whole walk.`,
 			if err := checkFields(view.fields); err != nil {
 				return usageErr("%v", err)
 			}
+			var err error
+			if skip, err = skipRefs(skip); err != nil {
+				return usageErr("%v", err)
+			}
 			var me state.Party
 			if claim {
-				var err error
 				if me, err = a.caller(); err != nil {
 					return err
 				}
@@ -193,10 +222,7 @@ the whole walk.`,
 			if err != nil {
 				return err
 			}
-			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			board.ByPriority(cands, snap.Priorities.Ranks(), snap.Parent)
-			snap.Scope(cands)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -210,6 +236,7 @@ the whole walk.`,
 				return err
 			}
 			skipHeldLeases(cands, holders, me)
+			skipAsked(cands, skip)
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -219,6 +246,7 @@ the whole walk.`,
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
+			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }
@@ -228,24 +256,24 @@ the whole walk.`,
 					}
 				}
 				res, err = claimNext(a.store, cands, sc, waits, open)
+				if err == nil && res.Claimed {
+					err = a.publishClaimed(cmd.Context(), cmd.ErrOrStderr(), me, res.Pick.Ref)
+				}
 			} else {
 				res = nextFree(st, cands, sc)
-				ranks := snap.Priorities.Ranks()
-				res.Unstaffed = unstaffedEpics(snap.Priorities, res, func(ref string) string {
-					_, epic := ranks.Of(ref, snap.Parent)
-					return epic
-				})
+				res.NextSkip = nextSkip(skip, res.Pick)
 			}
 			if err != nil {
 				return err
 			}
-			res.Epics, res.Missing, res.Changed = snap.Epics(), snap.Missing, changed
+			res.Epics, res.Missing = snap.Epics(), snap.Missing
 			return a.printNext(res, len(cands), view)
 		},
 	}
 	c.Flags().BoolVar(&claim, "claim", false, "record the item as the calling session's (sessions serve), atomically")
 	c.Flags().BoolVar(&replace, "replace", false, "with --claim: replace the session's record even while the item it serves is open")
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on, for the record")
+	c.Flags().StringSliceVar(&skip, "skip", nil, "pass over these items (owner/repo#n or URL, repeated or comma-separated): the next free one behind them is the pick")
 	c.Flags().IntVar(&view.limit, "limit", 0, "list at most this many items of each list, saying how many it left out (0: all)")
 	c.Flags().StringSliceVar(&view.fields, "fields", nil, "with --json (implied): keep only these fields of each item, comma-separated: "+strings.Join(candidateFields(), ","))
 	return c
@@ -412,6 +440,44 @@ func skipHeldLeases(cands []board.Candidate, holders []lease.Holder, me state.Pa
 	}
 }
 
+// skipAskedReason is the skip reason of an item board next --skip names.
+const skipAskedReason = "skipped by --skip"
+
+// skipRefs is each of refs as owner/repo#n, a ref that names no issue
+// refused.
+func skipRefs(refs []string) ([]string, error) {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		owner, repo, n, err := board.Ref(strings.TrimSpace(r))
+		if err != nil {
+			return nil, fmt.Errorf("--skip: %w", err)
+		}
+		out = append(out, fmt.Sprintf("%s/%s#%d", owner, repo, n))
+	}
+	return out, nil
+}
+
+// skipAsked marks every free candidate skipped that skip names (board next
+// --skip), so a scan walks the candidates by repeated calls; one skipped
+// for another reason keeps it, and nextFree puts a decision's or a
+// session's hold over the skip.
+func skipAsked(cands []board.Candidate, skip []string) {
+	for i := range cands {
+		if cands[i].Skip == "" && slices.ContainsFunc(skip, func(r string) bool { return strings.EqualFold(r, cands[i].Ref) }) {
+			cands[i].Skip = skipAskedReason
+		}
+	}
+}
+
+// nextSkip is the --skip of the board next that offers the candidate
+// after pick: skip and pick, none without a pick.
+func nextSkip(skip []string, pick *board.Candidate) []string {
+	if pick == nil {
+		return nil
+	}
+	return append(slices.Clone(skip), pick.Ref)
+}
+
 // pickScope is what a pick reads beside the state: who asks, which sessions
 // run and when they were listed, which issues the pull requests close
 // (closes, from Client.Closes) and the board's owner, which a repo#n a
@@ -445,7 +511,7 @@ func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work
 		p := s.Party()
 		holder := slices.ContainsFunc(roles, func(rl role) bool { h := rl.get(st).Holder; return h != nil && h.Is(p) })
 		registered := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && s.LastActive.Before(since) {
+		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && (s.LastActive.Before(since) || endedOwner(st, p)) {
 			continue
 		}
 		refs := work[i].Refs
@@ -491,89 +557,9 @@ type nextResult struct {
 	// Missing names what GitHub answered with an error and no candidate's
 	// missing holds, a search step's issues for one.
 	Missing []string `json:"missing,omitempty"`
-	// Changed are the changes of a ranked epic's Team or Priority that
-	// beekeeper did not write, since the last read of the priority list.
-	Changed []string `json:"changed,omitempty"`
-	// Unstaffed are the epics of the priority list with free work under
-	// them that no session serves (unstaffedEpics); none after a claim.
-	Unstaffed []unstaffedEpic `json:"unstaffed,omitempty"`
-	// owners is who serves each item a session serves (nextFree's owners),
-	// by its lower-cased ref.
-	owners map[string]string
-}
-
-// unstaffedEpic is an epic of the priority list, not held, with free work
-// under it and no session serving it or anything under it: the supervisor
-// owes it a worker within the capacity verdict.
-type unstaffedEpic struct {
-	Rank  int    `json:"rank"`
-	Ref   string `json:"ref"`
-	URL   string `json:"url"`
-	Title string `json:"title"`
-	// Free is how many items under it are free, Next the first of them in
-	// the order.
-	Free int    `json:"free"`
-	Next string `json:"next"`
-}
-
-// line says the epic in one line, EPIC UNSTAFFED first.
-func (u unstaffedEpic) line() string {
-	plural := "s"
-	if u.Free == 1 {
-		plural = ""
-	}
-	return fmt.Sprintf("EPIC UNSTAFFED priority %d %s %s: %d free item%s under it and no session serves it, next %s",
-		u.Rank, u.URL, u.Title, u.Free, plural, u.Next)
-}
-
-// unstaffedEpics are the epics of list, held ones left out, that have a
-// free item of res under them (by the candidates' PriorityOf) while no
-// session serves the epic or anything under it: no candidate under it
-// skipped as served, and no owner's item ranked under it (epicOf, the
-// epic an item's rank is of, "" for none). A parked agent's item serves
-// its epic too: the epic has its worker, who waits.
-func unstaffedEpics(list board.Priorities, res nextResult, epicOf func(ref string) string) []unstaffedEpic {
-	all := res.walk()
-	served := map[string]bool{}
-	for ref := range res.owners {
-		if e := epicOf(ref); e != "" {
-			served[strings.ToLower(e)] = true
-		}
-	}
-	for _, c := range all {
-		if c.Skip != "" && c.PriorityOf != "" && skipKind(c.Skip) == kindServed {
-			served[strings.ToLower(c.PriorityOf)] = true
-		}
-	}
-	var out []unstaffedEpic
-	for _, e := range list {
-		if e.Held != "" || served[strings.ToLower(e.Ref)] {
-			continue
-		}
-		u := unstaffedEpic{Rank: e.Rank, Ref: e.Ref, URL: e.URL, Title: e.Title}
-		for _, c := range all {
-			if c.Skip == "" && strings.EqualFold(c.PriorityOf, e.Ref) {
-				if u.Free == 0 {
-					u.Next = c.Ref
-				}
-				u.Free++
-			}
-		}
-		if u.Free > 0 {
-			out = append(out, u)
-		}
-	}
-	return out
-}
-
-// walk is every candidate in the walk's order: the skipped above the pick,
-// the pick, every candidate behind it.
-func (res nextResult) walk() []board.Candidate {
-	out := slices.Clone(res.Skipped)
-	if res.Pick != nil {
-		out = append(out, *res.Pick)
-	}
-	return append(out, res.AfterPick...)
+	// NextSkip is the --skip of the call that offers the candidate after
+	// the pick: the skips asked for and the pick; none after a claim.
+	NextSkip []string `json:"next_skip,omitempty"`
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
@@ -583,10 +569,11 @@ const (
 	kindBlocked  = "blocked"
 	kindStale    = "stale"
 	kindLease    = "lease"
+	kindClaimed  = "claimed"
 	kindPlanning = "planning"
 	kindUnknown  = "unknown"
 	kindOrder    = "order"
-	kindScope    = "scope"
+	kindAsked    = "asked"
 )
 
 // skipKind names the kind of a skip reason: who holds the item, or what
@@ -603,12 +590,14 @@ func skipKind(reason string) string {
 		return kindStale
 	case strings.HasPrefix(reason, "needs lease "):
 		return kindLease
-	case strings.Contains(reason, "in planning ("):
+	case strings.HasPrefix(reason, claimedPrefix):
+		return kindClaimed
+	case reason == skipAskedReason:
+		return kindAsked
+	case strings.Contains(reason, "in planning ("), strings.Contains(reason, board.NotScheduled):
 		return kindPlanning
 	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
 		return kindUnknown
-	case reason == board.OutOfScope:
-		return kindScope
 	}
 	return kindOrder
 }
@@ -653,7 +642,7 @@ func heldByDecision(notes []state.Note, it board.Item) string {
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
 	owners := coverTitled(coverClosed(boardOwners(st, sc), sc.closes), titleOwners(st, sc), cands)
-	res := nextResult{SkippedBy: map[string]int{}, owners: owners}
+	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
 		if ok {
@@ -662,6 +651,12 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 		return o
 	}
 	for _, c := range cands {
+		// A decision or a session holding an item --skip names says so,
+		// not the skip.
+		asked := c.Skip == skipAskedReason
+		if asked {
+			c.Skip = ""
+		}
 		c.Skip = cmp.Or(heldByDecision(st.Notes, c.Item), c.Skip)
 		if c.Skip == "" {
 			c.Skip = owned(c.Ref)
@@ -670,6 +665,9 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 			if o := owned(c.Epic); o != "" {
 				c.Skip = o + ", on epic " + c.Epic
 			}
+		}
+		if c.Skip == "" && asked {
+			c.Skip = skipAskedReason
 		}
 		if c.Skip != "" {
 			res.SkippedBy[skipKind(c.Skip)]++
@@ -878,6 +876,9 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 	}
 	out := map[string]string{}
 	for _, r := range st.Records {
+		if endedOwner(st, r.Session) {
+			continue
+		}
 		live := r.Ended.IsZero() && (alive(r.Session) || r.At.After(listed))
 		switch k := kept(r.Session); {
 		case k != "":
@@ -886,6 +887,23 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 			out[strings.ToLower(r.Issue)] = name(r.Session)
 		case busy(r.Session):
 			out[strings.ToLower(r.Issue)] = fmt.Sprintf("%s (busy, no CLI)", name(r.Session))
+		}
+	}
+	for _, rp := range st.ReviewParks {
+		// Saved review metadata survives removal of its worker. It is
+		// enough to resume the review flow, but is no live ownership claim.
+		if !busy(rp.Party) && !alive(rp.Party) {
+			continue
+		}
+		who := fmt.Sprintf("%s (reviewing %s)", name(rp.Party), rp.On)
+		if endedOwner(st, rp.Party) {
+			continue
+		}
+		if rp.Serves != "" && out[strings.ToLower(rp.Serves)] == "" {
+			out[strings.ToLower(rp.Serves)] = who
+		}
+		if rp.On != "" && out[strings.ToLower(rp.On)] == "" {
+			out[strings.ToLower(rp.On)] = who
 		}
 	}
 	named := func(text, who string) {
@@ -909,6 +927,40 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		}
 	}
 	return out
+}
+
+// endedOwner reports whether p's serve records and saved review parks no
+// longer make it an item's owner, whatever its CLI still shows: a role run
+// relieved by a later one, or a session beekeeper started that has left
+// the roster (removed after a review park, retired, gone). A desktop window
+// that lingers after either serves nothing: board next offers its items.
+func endedOwner(st *state.State, p state.Party) bool {
+	switch {
+	case holdsRole(st, p):
+		return false
+	case relievedRun(st, p):
+		return true
+	case roleRun(st, p):
+		// A role's successor beekeeper started is no agent: it is on
+		// its way to the role.
+		return false
+	}
+	return st.StartIndex(p) >= 0 && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+}
+
+// relievedRun reports whether p is a role's run that no longer holds it: one
+// the role's relief list names, or a run numbered below the holder's.
+func relievedRun(st *state.State, p state.Party) bool {
+	for _, rl := range roles {
+		r := rl.get(st)
+		if slices.ContainsFunc(r.Relieved, func(rf state.Relief) bool { return rf.Party.Is(p) }) {
+			return true
+		}
+		if n := rl.runOf(p.Name); n > 0 && r.Holder != nil && n < rl.runOf(r.Holder.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // offBoard are the refs of owners that are no candidate, sorted: a board
@@ -947,12 +999,6 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 			return err
 		}
 	} else {
-		for _, l := range res.Changed {
-			_, _ = fmt.Fprintln(a.out, l)
-		}
-		for _, u := range res.Unstaffed {
-			_, _ = fmt.Fprintln(a.out, u.line())
-		}
 		if h := res.Held; h != nil {
 			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)
 		}
@@ -974,6 +1020,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 			if res.Claimed {
 				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now, its Status unchanged (board move %s %q once you take it on; sessions unserve %s releases it)\n", p.Ref, p.Ref, "in progress", p.Ref)
 			}
+			if len(res.NextSkip) > 0 {
+				_, _ = fmt.Fprintf(a.out, "  next candidate: board next --skip %s\n", strings.Join(res.NextSkip, ","))
+			}
 		}
 		if n := len(res.AfterPick); n > 0 {
 			free := slices.DeleteFunc(slices.Clone(res.AfterPick), func(c board.Candidate) bool { return c.Skip != "" })
@@ -985,11 +1034,7 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 				w := a.table()
 				shown, more := firstN(free, view.limit)
 				for _, c := range shown {
-					line := fmt.Sprintf("  %s\t%s\t%s", c.Ref, truncate(c.Title, 50), c.Step)
-					if p := c.PriorityText(); p != "" {
-						line += "\t" + p
-					}
-					_, _ = fmt.Fprintln(w, line)
+					_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\n", c.Ref, truncate(c.Title, 50), c.Step)
 				}
 				_ = w.Flush()
 				if more > 0 {
@@ -1018,14 +1063,19 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 }
 
 func (a *app) boardMoveCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "move <owner/repo#n|URL> <status>",
+	var intake bool
+	var by string
+	c := &cobra.Command{
+		Use:   "move <owner/repo#n|URL> <status> [--by <owner/repo#n|URL>]",
 		Short: "Set a board item's Status by its canonical name, adding the issue to the board when it is missing",
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
 board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
 Status. Issues from any accessible repository are added to the configured
 board, regardless of the repository's owner, subject to GitHub permissions.
+With --intake, the issue is put in the given status only when it has no
+Status on the configured board yet and does not sit on another board where
+it is already being worked.
 Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
@@ -1035,22 +1085,50 @@ ignored ("up next", "progress"); anything else is refused with the board's
 values, before anything is written, as is an issue that does not exist.
 
 Moving an epic to In Progress (board.epics' go) is the go: when a plan
-pull request names it, the go is recorded as an agent-written comment on
-the epic's private thread naming the plan and its head commit, the plan
-implemented at that head: the epic itself in a private repository, else
-the plan pull request in a private one. An epic of a public repository
+pull request names it, the open one, else a merged one, the go is recorded
+as an agent-written comment on the epic's private thread naming the plan
+and its head commit, a merged plan's merge commit, the plan implemented at
+that head. The private thread is the epic itself in a private repository,
+else the plan pull request in a private one. With neither an open nor a
+merged plan naming the epic, the move records no go and says so. An epic of a public repository
 whose plan is public too has no private thread: the move is refused before
-anything is written. Exit 3 when refused.`,
+anything is written.
+
+A move to the blocked Status (Blocked / Waiting) says what holds the item:
+--by names the open issue that does, recorded first as board block records
+it, and without --by the move is refused unless the item has an open
+recorded blocker already. A wait on a pull request, a review, a hold or the
+GitHub gate is no blocked item: the worker parks on it (agents park) and
+leaves the item in its Status; a person's decision that holds it is note add
+--holds. Exit 3 when refused.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, _, _, err := board.Ref(args[0]); err != nil {
 				return usageErr("%v", err)
 			}
+			if by != "" {
+				if intake {
+					return usageErr("--by records what holds a move to the blocked Status; --intake puts an issue on the board")
+				}
+				if _, _, _, err := board.Ref(by); err != nil {
+					return usageErr("--by: %v", err)
+				}
+			}
 			me, _ := a.caller()
 			cl := a.boardClient()
-			mv, err := cl.Move(cmd.Context(), args[0], args[1])
+			var mv *board.Moved
+			var held *board.Held
+			var err error
+			if intake {
+				mv, err = cl.Intake(cmd.Context(), args[0], args[1])
+			} else {
+				mv, held, err = cl.MoveHeld(cmd.Context(), args[0], args[1], by)
+			}
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
+			}
+			if held != nil && held.Changed {
+				_ = a.store.Log(event(me, "board.block", "%s: by %s (%s), %s", held.Ref, held.By, openWord(held.ByOpen), holdState(held)))
 			}
 			if err != nil {
 				return err
@@ -1070,6 +1148,7 @@ anything is written. Exit 3 when refused.`,
 				team = " on the board " + mv.Board
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
 			case mv.Added:
 				_ = a.store.Log(event(me, "board.move", "%s: added to the board%s, → %s", mv.Ref, team, mv.To))
 			case mv.From != mv.To:
@@ -1079,6 +1158,8 @@ anything is written. Exit 3 when refused.`,
 				return a.printJSON(mv)
 			}
 			switch {
+			case mv.Board != "" && mv.Kept:
+				_, err = fmt.Fprintf(a.out, "left %s in %s%s\n", mv.Ref, mv.From, team)
 			case mv.Added:
 				_, err = fmt.Fprintf(a.out, "added %s to the board %s/%d%s: → %s\n", mv.Ref, a.cfg.Board.Owner, a.cfg.Board.Project, team, mv.To)
 			case mv.From == mv.To:
@@ -1086,9 +1167,12 @@ anything is written. Exit 3 when refused.`,
 			default:
 				_, err = fmt.Fprintf(a.out, "moved %s: %s → %s%s\n", mv.Ref, from, mv.To, team)
 			}
+			if err == nil && held != nil && held.Changed {
+				_, err = fmt.Fprintln(a.out, holdText(held, true))
+			}
 			if g := mv.Go; err == nil && g != nil {
 				if g.Plan == nil {
-					_, err = fmt.Fprintf(a.out, "the go of %s: no plan pull request names it, no plan head recorded\n", mv.Ref)
+					_, err = fmt.Fprintf(a.out, "the go of %s: neither an open nor a merged plan pull request names it, no go recorded\n", mv.Ref)
 				} else {
 					_, err = fmt.Fprintf(a.out, "the go of %s: plan %s (%s) at %s, recorded on %s: %s\n", mv.Ref, g.Plan.URL, g.Plan.State, g.Plan.Head, g.Thread, g.Comment)
 				}
@@ -1096,27 +1180,35 @@ anything is written. Exit 3 when refused.`,
 			return err
 		},
 	}
+	c.Flags().BoolVar(&intake, "intake", false, "put the issue in this intake status only when it has no Status yet and is not being worked on another board")
+	c.Flags().StringVar(&by, "by", "", "a move to the blocked Status: the open issue that holds the item, owner/repo#n or its URL, recorded as board block records it")
+	return c
 }
 
 func (a *app) boardRankCmd() *cobra.Command {
 	var at board.Place
 	c := &cobra.Command{
-		Use:   "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
-		Short: "Set a board item's priority: move it to the top, or before or after another item",
-		Long: `An item's position on the board orders it within its rank of the person's
-priority list (beekeeper priority): board next walks the items of each
-board.order step in the board's position order, the order a view
+		Use:     "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
+		Aliases: []string{"order"},
+		Short:   "Change a board item's position: move it to the top, or before or after another item",
+		Long: `An item's position on the board orders work within each board.order step:
+priority is determined by issue Status and order on the board only.
+board next walks the items in the board's position order, the order a view
 without a sort shows and a drag in it changes (the roadmap board's Epics and
-Backlogs views). rank moves the issue's item to the top of the board, right
-before or right after the item of another issue (updateProjectV2ItemPosition),
-and prints the neighbours the move names. An issue without an item on the
-board is added first, as move adds it, with board.team as its Team and no
-Status; an issue of a repository outside the board's owner is never added.
+Backlogs views). rank (or order) moves the issue's item to the top of the
+board, right before or right after the item of another issue
+(updateProjectV2ItemPosition), and prints the neighbours the move names. An
+issue without an item on the board is added first, as move adds it, with
+board.team as its Team and no Status, whatever the owner of its repository
+(GitHub decides whether it may be added).
 The other issue must be on the board already. Only the items named are read,
-never the board's items. Every GitHub call acts on the repository of the
-issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
-exist, an issue outside the board's owner without an item, another issue
-that has no item on the board, an item placed against itself.`,
+except an archived after anchor: board order is read to find its nearest
+unarchived predecessor, or the board's end if none precedes it. Every GitHub
+call acts on the repository of the issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
+exist, another issue that has no item on the board, an item placed against itself.
+Any session (including the guide on the person's word) may change positions;
+every move logs board.rank naming the caller. Outside a session, --as <name>
+identifies the caller; an anonymous call is refused.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, r := range []string{args[0], at.Before, at.After} {
@@ -1127,7 +1219,11 @@ that has no item on the board, an item placed against itself.`,
 					return usageErr("%v", err)
 				}
 			}
-			me, _ := a.caller()
+			me, err := a.caller()
+			if err != nil || (me.Name == "" && me.Session == "" && me.HostSession == "") {
+				return refused("board rank requires an identified caller: use a session or --as <name>")
+			}
+			me.Name = cmp.Or(me.Name, me.Session, me.HostSession)
 			cl := a.boardClient()
 			rk, err := cl.Rank(cmd.Context(), args[0], at)
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
@@ -1277,4 +1373,80 @@ func rankPlace(rk *board.Ranked) string {
 	default:
 		return "before " + rk.Below
 	}
+}
+
+func (a *app) boardTidyCmd() *cobra.Command {
+	var dry bool
+	c := &cobra.Command{
+		Use:   "tidy [--dry-run]",
+		Short: "Move the board's closed items to Done and archive those closed for board.archiveAfter",
+		Long: `Keeps the board free of finished work, so no person has to set up its
+housekeeping by hand: every closed issue or pull request among the team's
+items (board.team; every item without one) whose Status is not Done is
+moved to Done, so the board never shows a closed issue as In Progress, and
+one closed for board.archiveAfter (default 336h, two weeks) or longer is
+archived (archiveProjectV2Item) after that move. A negative archiveAfter
+archives nothing; the moves to Done still happen. A board without a Done
+status has its closed items archived as they are.
+
+An archived item is not deleted: it stays searchable on the board
+(is:archived) and is restored with gh project item-archive <number> --owner
+<owner> --id <item> --undo, the item's id printed here. board next reads
+only open issues, so what it picks is unchanged.
+
+At most 100 writes per run; what is left is counted and tidied by the next
+run. The supervisor loop runs tidy every board.tidyEvery (default 1h;
+negative: never). Silent when nothing is to be done; --dry-run prints what
+would be done and writes nothing.
+
+GitHub's own project workflows cannot be enabled through its API, so this
+needs none of them. A person may still enable, in the board's Workflows
+settings, "Item closed" (Status to Done at once) and "Auto-archive items"
+(GitHub's own archiving, by its own filter); tidy then finds less to do.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			me, _ := a.caller()
+			t, err := a.boardClient().Tidy(cmd.Context(), a.now, dry)
+			if t != nil && !dry {
+				for _, it := range t.Items {
+					_ = a.store.Log(event(me, "board.tidy", "%s", tidyLine(t, it, a.cfg.Board)))
+				}
+			}
+			if err != nil {
+				return err
+			}
+			if a.json {
+				return a.printJSON(t)
+			}
+			for _, it := range t.Items {
+				line := tidyLine(t, it, a.cfg.Board)
+				if dry {
+					line = "would: " + line
+				}
+				if _, err := fmt.Fprintln(a.out, line); err != nil {
+					return err
+				}
+			}
+			if t.Left > 0 {
+				if _, err := fmt.Fprintf(a.out, "%d more closed items wait for the next tidy\n", t.Left); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&dry, "dry-run", false, "print what would be done, write nothing")
+	return c
+}
+
+// tidyLine says what tidy did to one item.
+func tidyLine(t *board.Tidy, it board.Tidied, b config.Board) string {
+	var did []string
+	if it.Done {
+		did = append(did, fmt.Sprintf("%s → %s", cmp.Or(it.From, "no Status"), t.Done))
+	}
+	if it.Archived {
+		did = append(did, fmt.Sprintf("archived (restore: gh project item-archive %d --owner %s --id %s --undo)", b.Project, b.Owner, it.Item))
+	}
+	return fmt.Sprintf("%s closed %s: %s", it.URL, it.Closed.UTC().Format(time.DateOnly), strings.Join(did, ", "))
 }

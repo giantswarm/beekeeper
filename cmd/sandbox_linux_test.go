@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -311,5 +312,48 @@ func TestScratchStartInTheSandboxAsksTheHostBroker(t *testing.T) {
 		if len(got) != 1 || strings.Join(got[0].Args, " ") != want {
 			t.Errorf("%+v: broker got %+v, want %q", tc, got, want)
 		}
+	}
+}
+
+// Store sources use the broker in the sandbox or with a vault session.
+func TestStoreSourceUsesBrokerWhenRequired(t *testing.T) {
+	const brokerStoreResponse = "brokered store\n"
+	for _, tc := range []struct{ session, sandbox bool }{{true, false}, {false, true}, {true, true}} {
+		t.Run(fmt.Sprint(tc), func(t *testing.T) {
+			a, _, _ := secretApp(t)
+			a.cfg.Secret.Session = tc.session
+			a.cfg.Secret.Vault = ""
+			t.Setenv(sandbox.Env, "")
+			if tc.sandbox {
+				t.Setenv(sandbox.Env, "1")
+			}
+			t.Setenv(sandbox.Brokered, "")
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = sandbox.Serve(ctx, sandbox.SpoolDir(a.cfg.StateDir), "/proc", 5*time.Millisecond, func(_ context.Context, _ int, req sandbox.Request) (sandbox.Reply, error) {
+					if req.Op == sandbox.OpPing {
+						return sandbox.Reply{}, nil
+					}
+					if req.Op != sandbox.OpSecret {
+						return sandbox.Reply{}, fmt.Errorf("unexpected broker operation %s", req.Op)
+					}
+					return sandbox.Reply{Out: brokerStoreResponse}, nil
+				})
+			}()
+			t.Cleanup(func() { cancel(); <-done })
+			out, err := runSecret(a, fingerprintOp, noBrokerStoreRef)
+			if err != nil || out != brokerStoreResponse {
+				t.Fatalf("store did not reach broker: %q, %v", out, err)
+			}
+			if tc.session && !tc.sandbox {
+				a.out = &bytes.Buffer{}
+				out, err = runSecret(a, fingerprintOp, "--", noBrokerStoreRef)
+				if err != nil || out != brokerStoreResponse {
+					t.Fatalf("flag separator lost store routing: %q, %v", out, err)
+				}
+			}
+		})
 	}
 }

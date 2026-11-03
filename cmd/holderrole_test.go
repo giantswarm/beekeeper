@@ -25,14 +25,14 @@ func TestMessageByRunNameReachesTheRenamedSupervisor(t *testing.T) {
 	holder := run
 	holder.Name = runTitle
 	st := &state.State{Agents: []state.Agent{{Party: run, Registered: now}, {Party: state.Party{Session: "w1", Name: "w1 worker"}}}}
-	supervisorRole.set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: now}})
+	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: now}})
 	sessions := []*claude.Session{{ID: runID, Name: runTitle, PID: 4242}}
 
 	if r := absentAgent(st, sessions, runName, now); !strings.Contains(r, "no CLI") {
 		t.Fatalf("the run name alone reads as an agent with no CLI: %q", r)
 	}
 	for _, name := range []string{runName, "supervisor RUN 82", runTitle, runID, "local_sup82"} {
-		if got := holderRole(st, name); got != supervisorRole.name {
+		if got := holderRole(st, name); got != guideRole.name {
 			t.Errorf("%q: role %q, want the supervisor", name, got)
 		}
 	}
@@ -41,7 +41,7 @@ func TestMessageByRunNameReachesTheRenamedSupervisor(t *testing.T) {
 			t.Errorf("%q addresses no holder, got %q", name, got)
 		}
 	}
-	to, err := roleAddress(supervisorRole.get(st).Holder, supervisorRole, sessions, noSocket)
+	to, err := roleAddress(guideRole.get(st).Holder, guideRole, sessions, noSocket)
 	if err != nil || to != runTitle {
 		t.Fatalf("address %q, %v; want the running CLI's title", to, err)
 	}

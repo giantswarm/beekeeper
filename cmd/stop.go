@@ -83,8 +83,8 @@ stopped until beekeeper resume:
   headless turn, its CLI and what it left running, a background session
   through claude stop so its daemon does not resume it.
 
-It never touches a session the person started, the guide's or the
-supervisor's session, or the session that runs it.
+It never touches a session the person started, the guide's session, or the
+session that runs it.
 
 While the stop stands, agents start (--force included), agents handover,
 agents wake, agents desktop, a timer's wake, a note answer's wake, a
@@ -121,12 +121,15 @@ it was (unless its time passed meanwhile), and starts, wakes, revives,
 reopens and imports run again. A unit that does not start again is named
 on a FAILED line and makes it exit 1: beekeeper stays stopped, with that
 unit still to start, and resume runs again once it is fixed. The capacity is what it was: the stop never
-changes capacity.floor or capacity.ceiling. A wake timer that fell due
+changes capacity.ceiling. A wake timer that fell due
 during the stop fires at the watch's next poll.
 
-It starts no session: it names the sessions the stop ended, which wait for
+It starts no worker: it names the sessions the stop ended, which wait for
 a wake (beekeeper agents wake), and touches no session the person started.
-It prints what it lifted and restarted.`,
+It starts the guide when its session runs no CLI (a reboot, a crash): the
+next "Guide run N", as ` + "`beekeeper guide start --new`" + ` does, unless a run is
+starting already or no guide is recorded (guide stop). It prints what it
+lifted, restarted and started.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return a.resume(cmd.Context()) },
 	}
@@ -198,7 +201,7 @@ func (a *app) stop(ctx context.Context, reason string) error {
 	ended, el, f := a.endWorkers(ctx, st, spare)
 	lines, failed = append(lines, el...), append(failed, f...)
 	for _, s := range st.Starts {
-		if s.Execution == nil || s.Execution.Observation.StopAcknowledged {
+		if s.Execution == nil || s.Execution.Observation.StopAcknowledged || s.Execution.Released() {
 			continue
 		}
 		if err := a.stopExecution(ctx, s.Execution.Handle.Ref, reason); err != nil {
@@ -279,14 +282,11 @@ func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string
 	return said, failed
 }
 
-// spared are the sessions a stop leaves running: the supervisor's, the
-// guide's and the caller's own. A session the person started is spared
+// spared are the sessions a stop leaves running: the guide's and the
+// caller's own. A session the person started is spared
 // by not being one of beekeeper's starts.
 func spared(st *state.State, me state.Party) []state.Party {
 	out := []state.Party{me}
-	if st.Supervisor != nil {
-		out = append(out, st.Supervisor.Party)
-	}
 	if st.Guide != nil && st.Guide.Holder != nil {
 		out = append(out, st.Guide.Holder.Party)
 	}
@@ -320,6 +320,7 @@ func sparedUnit(unit, own string, spare []state.Party) bool {
 // stopped, which resume starts again, a line for each unit stopped and one
 // for each that did not stop.
 func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, lines, failed []string) {
+	defer a.recordStoppedGates(ctx)
 	if !plat.Launcher.Available() {
 		return nil, []string{"no unit stopped: this machine has no unit launcher (systemd --user); the standby watch honours the stop"}, nil
 	}
@@ -354,6 +355,7 @@ func (a *app) stopUnits(ctx context.Context, spare []state.Party) (installed, li
 // ones, in parallel, and returns the names it ended, a line for each and
 // one for each it could not end.
 func (a *app) endWorkers(ctx context.Context, st *state.State, spare []state.Party) (ended, lines, failed []string) {
+	defer a.recordStoppedGates(ctx)
 	sessions, _, err := a.sessions()
 	if err != nil {
 		return nil, nil, []string{fmt.Sprintf("no session ended: reading the sessions failed: %v", err)}
@@ -483,9 +485,19 @@ func (a *app) resume(ctx context.Context) error {
 	for _, t := range lapsed {
 		p("resume: the hold on %s ended during the stop, not put back", t)
 	}
-	p("resume: capacity as configured: floor %d, ceiling %d", a.cfg.Capacity.Floor, a.cfg.Capacity.Ceiling)
+	p("resume: capacity as configured: ceiling %d", a.cfg.Capacity.Ceiling)
 	if len(rec.Sessions) > 0 {
 		p("resume: the sessions the stop ended wait for a wake (beekeeper agents wake): %s", strings.Join(rec.Sessions, ", "))
+	}
+	for _, rl := range roles {
+		line, err := a.resumeRole(ctx, rl, me)
+		if err != nil {
+			p("resume: FAILED %v", err)
+			return fmt.Errorf("the stop is lifted, but the %s did not start (above): beekeeper %s start --new starts it", rl.name, rl.name)
+		}
+		if line != "" {
+			p("resume: %s", line)
+		}
 	}
 	return nil
 }

@@ -9,6 +9,23 @@ A plain build reports the version Go derives from the checkout's tag (`v0.2.0+di
 binary `dev`, which `self-update` refuses. To try `self-update` against the latest release, stamp
 an older version: `go build -ldflags "-X github.com/giantswarm/beekeeper/pkg/project.version=0.0.1" .`
 
+Before a reviewed supervisor merge, the lane builds the pull request merged into the
+freshly fetched base in a temporary worktree of the repository's local checkout (found
+in `disk.checkouts`, `agents.dir` or `agents.roots`, `~/` expanded, as `<root>`,
+`<root>/<name>` or `<root>/<owner>/<name>`) whenever the base has moved past the head.
+For Go modules it runs configured lint and `go test ./...`, including unchanged tests and
+reverse dependents even for dependency-only changes; `golangci-lint` must be on PATH. A
+failing combination goes back to its owner. A failed fetch, a reviewed commit that cannot
+be read or a missing lint tool refuses the merge with
+`merge-result validation unavailable: <the condition that failed>`. A repository with no
+local checkout is not validated: the merge's reason says so and the pull request's own
+checks stand, as for a head that already contains its base.
+
+Where the base branch has a GitHub merge queue (required CI on `merge_group` events), the
+merge is submitted to the queue, which retests the combination if the base advances, and
+never with `--admin`. Without a queue the lane's own check is the validation and the
+desk's admin merge (`merge.admin`) applies; an unreadable queue answer refuses the merge.
+
 A merge to `main` cuts a release candidate, `vX.Y.Z-rc.N` (a GitHub pre-release with signed assets);
 `devctl release promote giantswarm/beekeeper` makes the stable release, and `self-update` installs
 stable releases only. To run a candidate before its promotion, build it from its tag:
@@ -35,6 +52,12 @@ files together, so a change that adds or removes a string in `cmd/snapshot.go` c
 in an untouched `cmd/*_test.go`: that finding is the change's, and CI reports it too. A lint of a
 worktree of `origin/main` tells main's findings from a change's.
 
+Run `gitleaks detect --redact --log-opts=--all` from the repository root to scan the full
+history, or `gitleaks detect --redact --no-git` to scan the working tree. Both load
+`.gitleaks.toml`, which extends all default detection rules. Its signing-test exception
+requires the exact fake GPG key ID and `cmd/sandboxsign_test.go` together, and applies
+only to `generic-api-key`; other values and files remain scanned.
+
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
@@ -49,13 +72,81 @@ BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmod
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
 
+A Note stores its filer and filing time in its initial spec as well as status. Kubernetes
+creates the object and writes its status separately; if the latter fails, the note still
+lists as open and can be answered, withdrawn or closed by its default. Older objects
+without either status or spec provenance remain visible with their namespace's team and
+creation time, without an invented filer identity. Listing does not repair status during
+another object's update. Apply the generated Note CRD before running the new server so
+Kubernetes preserves these optional spec fields.
+
+`note show <id>` reads one note in full, with its status, audience and retained answer;
+`--json` returns the note fields plus `status`, `answer` and `closure`. Open central
+notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
+while `#<n>` selects the local record. The central instance's own CLI can also
+read retained closed Note resources. File-backed stores can recover answered
+notes while their full `answer.recorded` event remains, without a record-size cap.
+New answer events retain the original audience separately from the answerer;
+older events without that audience show it as unknown rather than naming the
+answerer as the addressee. Other removed or expired
+records are reported as unavailable, never reconstructed from a truncated log.
+
+A note answer reaches its filing session by session or harness ID even when
+that session is absent from the agent roster or has no display name. Harness
+IDs select their own inbox rather than treating a UUID conversation ID as a
+Claude session. The answer remains recorded when notification fails: the
+answer command reports the failure and `note show` retains the last notification
+attempt as `notification: failed` with its reason (`delivery` in JSON).
+Successful attempts show `delivered`; a central mailbox shows `queued`, and a
+role awaiting its next holder shows `waiting`. This is the recorded attempt,
+not a claim that a queued message has since been consumed. Older notes without
+a retained delivery event show no invented notification status.
+
+`note list` and `guide queue` show open notes. An answer removes a note from both; a
+successful filing followed by an empty listing can mean it was answered between those
+calls. Check the server's `note_add` and `note_answer` audit lines before diagnosing a lost
+note. A failed central read emits a warning on stderr and preserves the local listing;
+`note list` also returns the central read's error, while `guide queue` serves the local queue.
+
 The `run` tests (`cmd/guard_test.go`) need zsh and a user systemd: they skip in CI and run on a
 desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the hook's rewrite runs
 the build under test, and each test starts its command in a scope of its own: on a guarded machine
 `go test` itself runs in a capped scope, where `run` takes no slot.
 
+`TestWatchStopsSandboxOrphan` additionally needs bubblewrap. It starts a real PID namespace,
+enters a scratch scope through the broker, and leaves a background child adopted by the sandbox
+init. Sandboxed `Capper.Reap` leaves cleanup to the host watch: the test proves a reporting-only
+watch preserves the child and an active watch stops its scope after the orphan grace period.
+Its scope and sandbox are stopped at test cleanup; no installed configuration is changed.
+
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
+
+The doctor releases a local lease when its session is no longer running,
+preserving any lab configuration drift for the next claimant. Person-held
+leases and remote holders are left alone. Each release is logged once as
+`lease.release-gone`. Configured kind labs with no lease are stopped after
+15 minutes (`lab.stop`); containers and their data stay intact. The idle
+observation is persisted across watch restarts and reset by a claim.
+Unmapped clusters are never stopped. A failed Docker read or stop is reported
+and retried on the next doctor tick; `doctor --dry-run` changes nothing.
+
+A handover successor's recorded start protects inherited leases throughout
+the five-minute first-reply startup window, including when the doctor's
+process snapshot predates the handover or launch. The original claim time
+stays intact; after the startup window an absent successor's lease is
+eligible for normal cleanup.
+
+A successful lab claim starts existing stopped kind nodes (`lab.start`)
+before returning the kubeconfig. It does not create a missing cluster. A
+failed restart fails the command while retaining ownership for a claim retry.
+Sandboxed claims run the restart through the host broker, which rechecks
+ownership. Docker stop and start operations share the state lock with claims.
+For a live lifecycle proof, use isolated state and disposable Docker containers
+with a unique `io.x-k8s.kind.cluster` label: seed an idle timestamp 15 minutes
+ago, run the doctor, then claim the lease and check that the same containers
+restart with a marker file intact. Never point scratch state at another
+worker's lab.
 
 ```bash
 cat >| /tmp/bk.yaml <<EOF
@@ -160,21 +251,11 @@ beekeeper takes that session as its parent and ignores the host id. A copy of `s
 `CLAUDE_CODE_SESSION_ID` (`env -u CLAUDE_CODE_SESSION_ID`, since every tool shell has it),
 stands in for a session that ends when the sleep does, so `sessions serve` and the `SESSION ENDED` line can be tried against
 scratch state. The live supervisor's watch sees it too: give it a name that reads as a test and a
-short life. Two such stand-ins play a supervisor hand-over: each runs `supervisor start`,
-`supervisor relay` or `supervisor status` with its own `CLAUDE_CODE_SESSION_ID`,
-`CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME` in the environment; a short
-a small `supervisor.relayAt` and a short `supervisor.relayTTL` in the scratch configuration,
-a supervisor stand-in started with `--session-id <id>` whose transcript (a real one with its
-content stripped, as `<claude.projectsDir>/<project>/<id>.jsonl`) reports a context above it,
-and a settling merge written into the scratch `state.json` show `RELAY DUE` held back and then
-said once by `watch --once`. A supervisor stand-in killed by its PID and started again with the same
-`--resume <id>` within `supervisor.restartGrace` is a CLI restart: a claim loop from a third
-identity stays refused throughout and `watch --once` says `SUPERVISOR RESTARTED`; one not started
-again keeps the claim loop refused past the grace, until a successor's `supervisor start`. A
-scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`, with
-`dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, says `SUPERVISOR
-GONE` once past the grace and `SUPERVISOR BACK` once a successor stand-in starts; a stand-in
-that ran `supervisor stop` before its kill gives neither and leaves claims ungated. The spare's keep-awake and the crash hand-over need desktop sessions, never the live ones:
+short life. A scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`,
+with `dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, restarts the
+scratch configuration's supervisor loop service once it stopped and says `SUPERVISOR LOOP DOWN`
+once it stayed down past two minutes, then `SUPERVISOR LOOP BACK` once `supervisor loop` runs again;
+no session is ever started for the supervisor. The spare's keep-awake and the crash hand-over need desktop sessions, never the live ones:
 throwaway sessions titled `test: …` on the smallest model, made with `claude -p --session-id <id>`
 in a scratch folder and imported with `claude://resume?session=<id>` (then
 `claude://code/continue?session=<previous>` puts the window back). A `.claude/settings.local.json`
@@ -183,11 +264,9 @@ so their commands never touch the live state. `BEEKEEPER_PEER_TEST=<title> go te
 ./internal/peer/` sends one message to such a session from the command line and checks that an
 absent name is unreachable. A scratch `watch --standby` with the spare in the scratch state keeps
 one session awake past 35 idle minutes while an untouched one is dropped at 30; a stand-in
-supervisor killed by its CLI's PID shows `SUPERVISOR GONE` naming the spare, the `HANDOVER` line
-and the spare's `supervisor start`, with claims refused until then. `supervisor reopen` against a
-scratch state whose supervisor is a stopped throwaway session starts its CLI through the deep
-link. Archive the sessions afterwards. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
-directories into the scratch configuration) shows what a successor would get.
+guide killed by its CLI's PID shows `GUIDE GONE` naming the spare and the spare's `guide start`.
+Archive the sessions afterwards. `guide handover --prompt` on a copy of the live state (`cp -r` of
+the state and lease directories into the scratch configuration) shows what a successor would get.
 
 The roster is tried with real `claude --bg` workers against scratch state: started through
 `systemd-run --user` with the session variables cleared and `BEEKEEPER_CONFIG` naming the
@@ -237,6 +316,15 @@ after. The second `claude --bg` through a running daemon lands in its spare; a w
 spare too, or in a fresh `claude --resume <transcript>` when a new daemon serves it, and a
 `--resume` with flags of its own starts a copy instead of waking the session. The daemon exits
 once its last worker stops.
+
+`alerts snapshot` groups text rows by severity, team, alert name, cluster and namespace;
+rows with a namespace label append `namespace=<value>`. `alerts snapshot --json` returns
+an object with `lines` (the text view, including PagerDuty) and `installations`. Each
+installation carries `installation`, `reachable`, optional `why` and `noContext`, and
+an `alerts` array with every visible alert's full `labels` map. Ignored, silenced,
+inhibited and below-floor alerts follow the same filtering as the text view. This
+replaces the previous JSON array of formatted strings; scripts reading that array
+should read `lines` instead.
 
 The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
 then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live
@@ -299,11 +387,81 @@ timer from the running watches.
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, kept from tick to tick by the watch, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, the PreToolUse hook's rewrite and refusals (a third lab, the person's folders, default-branch and force pushes, …) in both Claude Code (`--format claude`) and `agy` (`--format agy`) formats, and the PermissionRequest hook's decision. |
+| `internal/runrecord` | The shape of a run's event-log records (`run.start` / `run.end` / `run.fallback`), written by `internal/guard` for a local run and `internal/remotebuild` for a builder pod's, and read by `run stats`: where the run ran, what it built, its duration, exit and failure tail. A leaf so both writers share it. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |
 | `cmd` | The command line. The supervisor and the guide are one `role` type (`cmd/relay.go`): start, relay, relief, restart grace and relay due are written once and parameterised by the role's name, record and configuration; only the supervisor's start moves the grants. The guide's queue (`guideQueue`) holds the notes for `guide.person` (`noteFor`: a note's `For`, or an older note's `[for <person>]` text prefix, compared without case) and the waiting sessions, running ones from their desktop record and stopped ones from `claude.StoppedWaiting` (a record not parsed unless it holds `"blocked"`), without the guide's own session, an archived one or a test (`Session.Aside`, `Record.Aside`); its feed drops a note it said before that is still open but no longer in the queue without a line. |
 
 ## Automatic disk reclamation
+
+### Cache policies
+
+`disk.caches` lists the caches the disk step trims. Beekeeper's own caches are
+its default entries: `go-build` (mode `go`, cap `doctor.goCacheMaxGiB`),
+`sccache` (mode `sccache`, cap `disk.sccacheMaxGiB`) and `beekeeper-tmp`
+(`stateDir/tmp`, mode `entries`, `olderThan: 1h`). An entry with a built-in's
+name changes the fields it sets (`maxGiB`, `olderThan`, `path`); `mode: off`
+drops it. Any other entry needs a `path` and a rule:
+
+```yaml
+disk:
+  caches:
+    - path: ~/.cache/some-app       # each direct child is removed whole
+      olderThan: 7d                 # when nothing in it was written for a week
+      regenerable: true             # under disk pressure: everything older than 1h
+    - path: ~/.cache/pkg-manager
+      mode: files                   # single files, least recently written first
+      maxGiB: 2                     # until the cache fits two GiB
+    - path: ~/.cache/*-dev          # a glob: each match is a cache root
+      maxGiB: 1
+    - path: ~/.cache/tool
+      mode: command                 # the tool's own cleaner, which keeps its metadata
+      command: tool cache prune     # words, no shell; runs in the cache root
+      maxGiB: 4                     # over the budget, and under disk pressure
+```
+
+`path` is absolute or `~/…` and may be a glob; each match is a cache root. In
+`entries` mode (the default) a root's direct children are the units, each
+removed whole; in `files` mode its regular files, and directories a trim
+empties go with them. A unit untouched for `olderThan` (a Go duration or whole
+days, `7d`) goes; past `maxGiB` the least recently written go until the root
+fits; a `regenerable` cache drops everything older than an hour under disk
+pressure. In `command` mode beekeeper removes nothing itself: it runs the
+tool's cleaner (at most ten minutes) once the root holds more than `maxGiB`,
+and on every pressure run (without `maxGiB`, only those); the bytes it freed
+are measured after it, and a dry run says `cleaner would run`. A root inside another policy's root is governed by its own policy
+alone: the outer one neither counts nor removes the entry holding it. Whatever
+a policy says, the step keeps:
+
+- anything written within the last hour;
+- a unit any process of the user references (cwd, open file, mapping); in
+  `files` mode one reference anywhere in the root keeps the whole root;
+- a unit holding a `.git` (a checkout, so possibly uncommitted or unpushed
+  work); in `files` mode such a root is kept whole, and a root that is itself
+  a checkout is never trimmed;
+- a root that is a symbolic link, or that holds the home, the state directory,
+  a configured checkout or a worktree root;
+- everything while some process's references are unreadable.
+
+The scan of a large cache takes a while, so before removing anything the
+step reads the processes' references again, and right before it removes an
+entry it inspects that entry again: one a process opened meanwhile, one
+written since the scan, or one that now holds a checkout stays. A file is
+removed only if unchanged since the scan. The tools' own locks are only
+known to their cleaners: a cache whose tool locks it belongs in `command`
+mode.
+
+`beekeeper disk prune` (or `--dry-run`) lists each cache root with what it
+holds and would free; `--report` adds the largest entries of the user cache
+directory no policy covers, with their last write, so the list can be
+extended. A pressure run's `DISK PRUNE` line names the caches still holding
+the most, and when the disk is still under the free-disk floor after it, the
+largest directories (100 MiB or more) of the user cache directory no policy
+covers, with their last write. The supervisor's "Disk remains low after
+pruning" finding carries the same; it goes to the guide to file, never to
+the person as a decision.
+
+### The disk step
 
 `disk.prune: auto` is the default. A long-running watch runs the disk step
 hourly (`disk.every`) and within five minutes of `LOW DISK` or `DISK FILLING`.
@@ -315,9 +473,14 @@ and the reasons for keeping it. `beekeeper disk prune` previews the step;
 
 On healthy scheduled runs, the step trims only caches over their caps:
 `doctor.goCacheMaxGiB` (20 GiB) trims Go entries least recently used first
-to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) clears sccache
-when exceeded. A negative cap disables its scheduled cleanup. Under
-`LOW DISK` or `DISK FILLING`, both unused caches are reclaimed immediately.
+to three quarters of the cap; `disk.sccacheMaxGiB` (10 GiB) trims sccache's
+local cache (`SCCACHE_DIR`, else `sccache` in the user's cache directory) the
+same way, least recently used entries first. A negative cap disables its
+scheduled cleanup. Under `LOW DISK` or `DISK FILLING`, both unused caches are
+reclaimed immediately. An idle sccache server is stopped first, through its
+own executable and server address (`sccache --stop-server`), so it counts
+the trimmed cache afresh when a build starts it again; a server that does not
+stop keeps the cache, and one that starts during the trim ends it.
 No cache is reclaimed while builds use it. New
 `beekeeper run` commands share a build-cache lock, including Rust builds and
 runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
@@ -376,11 +539,23 @@ inspected. `disk.trashDirs` adds other trash places; its default also
 includes the XDG state root's `trash` directory.
 Recent descendants, open files, working directories, executable mappings
 and build/temp environment references keep entries alive. Symbolic links
-and directories containing checkout metadata are kept. Unreadable
-dumpable user-process references, unknown process ownership or an unreadable
-process root stop the disk step. Expected kernel permission denials on
+and directories containing checkout metadata are kept. An unreadable
+process root stops the disk step. A process with unreadable dumpable
+references or unknown ownership does not: the step it gates (caches, tmp,
+one worktree, trash) keeps its candidates as `process references unknown`,
+the `DISK PRUNE` line names the process, and the next step reads the
+processes again. An exited zombie holds no references and is skipped; a
+zombie thread-group leader is read through its live threads
+(`/proc/<pid>/task/<tid>`). Expected kernel permission denials on
 non-dumpable helpers or helpers with different credentials or capabilities
-do not stop pruning; their readable references still protect data. Ownership
+do not stop pruning; their readable references still protect data. A
+process of the person's uid the kernel refuses (EACCES) in another pid
+namespace (`NSpid` lists more than one id) or user namespace (its `uid_map`
+differs) is a container's, a kind pod's pause container with the pod's
+`fsGroup` for one: its paths name the container's filesystem, so it is
+skipped and the `DISK PRUNE` line counts it (`skipped N unreadable processes
+of other namespaces`); refused in the person's own namespaces it stays
+unknown. Ownership
 of ptrace-gated child entries detects changes in dumpability even when the
 process directory still has its original owner.
 
@@ -389,3 +564,208 @@ process directory still has its original owner.
 on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
 freeing (`doctor.freeEvery`) and Docker reclamation remain independent
 in both modes.
+
+## Central note closure audit
+
+A central Note closes only with a recognised close event (`answer.recorded`,
+`note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
+line atomically with the outcome. Closed Notes remain as history, outside the
+open notes and the 24-hour default-answer window, for 30 days after closure.
+Note-only updates, including the periodic default tick, collect older closed
+records; unrelated object updates leave collection to that tick. Cleanup first
+preserves the note counter, so expired numbers are never issued again.
+`beekeeper log` includes the retained line even after Kubernetes Events expire
+or an Event write fails. An answer after the default-answer window explicitly
+reports that the note was closed by its default. Folding a new question into an
+open note leaves the existing note open and logs `note.folded`.
+
+The original trigger of an already missing note cannot be recovered once its
+old logs and Events have expired. Retaining the close record makes subsequent
+closures attributable without relying on that retention window.
+
+
+The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed-head <sha>`.
+The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
+uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
+names to `squash` (the default), `rebase`, or `merge`. The coordinator never passes
+`--admin`, which bypasses the required server-side merge queue.
+A refusal that names the base branch policy and suggests `--admin` is a configuration
+refusal, including when the merge state is `BEHIND`. The loop reports it once per
+reviewed head, naming `merge.admin`, and retries on the next round without a worker
+wake, branch repair or another review. This never authorizes bypassing the server-side
+merge queue: the corrected policy must still admit its required checks. A loop that finds
+a branch repair an older loop requested for such a refusal closes it on start
+(`supervisor.unstage` for the repair stage, `supervisor.unclaim` for the go it completed),
+so the unchanged approved head rejoins the merge lane; any other repair stage stands.
+
+After approval only the merge moves the head. A branch that is only behind its base merges
+at the reviewed head as it stands: GitHub merges it onto the current base, with no branch
+update and no second CI run. Only a base that requires up-to-date branches refuses that
+merge (GitHub's merge state `BEHIND`). Unless the repository is in `merge.admin`, the
+mutation child updates the branch itself, once its authority, stop and hold checks pass:
+GitHub's update-branch
+merges the base into it, pinned to the reviewed head, and the child waits up to the squash
+timeout for the new head's checks (every check the reviewed head had, all green), confirms
+that the approval covers the new head (`github.ApprovalCovers`: it only merges the base),
+checks the stop and holds again and merges that head. The loop accepts a merged head the
+approval covers; its planner gives the go for such a head without a fresh park. A rebase
+merge method cannot take a base merge, so its branch behind such a base, a conflicting or
+draft branch,
+red checks on the updated head or an updated head the approval does not cover go back to the
+worker for repair and another green published head. A restart reads GitHub before repeating
+a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
+not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
+the configuration refusal above retries each round. Neither grants a direct worker merge
+around queue validation. Merge goes never go through `answer verify`.
+An already queued or running gate is observed without submitting
+another merge. Gate queue and policy refusals never become branch repair requests from
+words in their messages; only the pinned mutation child's structured result can request repair.
+
+On auto-release branches, the pinned child follows its merge with `devctl release wait --pr`
+and saves the release verdict in its durable result. Lane settlement retains the confirmed
+release and roll target, a no-release merge frees its lane, and a candidate or no-release
+merge lifts the devctl tool-release hold. An unreadable release result remains explicitly
+unconfirmed. The wait never repeats the merge.
+
+A review park declares remaining work with `--post-merge "<release, rollout or proof>"`.
+Omitting it on a new park declares that the task ends at merge: the loop records the final
+report and closes the task without waking its worker. Older parks retain their existing
+release-containment behavior. The standby leaves new review parks to the loop, avoiding a
+second wake when a review or merge arrives. Only rostered review parks carry this declaration;
+plain waits and off-roster sessions keep the normal watcher lifecycle. A closed pull request,
+or a merged pull request whose served issue remains open or unreadable, wakes its worker to
+continue or verify the task rather than leaving it parked.
+
+An ended worker's saved review park still lets the loop request a fixer when that
+parked head conflicts with its base or fails CI. The saved park alone does not
+keep the worker's board item served after the worker ends. This recovery requires
+a tracked pull and saved review ownership; it does not discover every open pull
+or recover every ownerless In Progress item. The broader 15-minute orphan sweep
+remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
+pulls without saved review metadata and stale serve records from relieved or
+off-roster sessions.
+
+The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
+The receipt binds its active local note, session, thread, displayed head, selected option and
+verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
+command-line flag alone cannot select the channel. The guide keeps the note's option labels
+and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
+relay still does not verify. The central instance retains its authenticated identity checks.
+
+The guide defaults to a 200k relay point. When a feed line arrives after an hour
+of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`
+before the expired cache is warmed again. Unknown activity times and active
+subagents do not count as idle. The supervisor loop is a service with no model
+context; retired supervisor-session relay settings remain ignored.
+
+The guide successor prompt references its skill or configured instruction file
+and the desk's standing file once. Queue rows are shortened; `guide queue --full`
+reads them in full, and `handover --full` retains live details and recent history.
+`TestGuidePromptBudget` exercises a typical desk with 40 verbose decisions and
+a large standing file, using a conservative 25,000-byte prompt budget (no more
+than 25,000 byte-level tokens). The role skill and project instructions loaded
+by the harness remain outside the generated prompt's budget.
+
+## Task kinds
+
+`agents.kinds` is a list of `{name, match, maxBusy, minInterval, dailySpend}`:
+`match` is a regexp over the agent's name, and every kind whose regexp matches
+holds a start, so a filer kind and a meta kind over filers and scans cap both.
+
+- `maxBusy` (0: none) counts the kind's busy agents as capacity counts them
+  (parked, waiting and idle agents hold no slot).
+- `minInterval` (0: none) is measured from the kind's last recorded start
+  (`state.starts`, kept 30 days), done or not.
+- `dailySpend` (USD, 0: none) is the day's figure at which the watch prints
+  `SPEND <kind>` once; the mark is kept in the watch's seen file, so a restarted
+  watch does not repeat it. The watch sums the day every 10 minutes off the poll.
+
+`beekeeper capacity` prints `no start <kind>: <reason>` after the verdict (and
+`kindBlocks` in `--json`). `agents start` checks the kinds before the start gate
+and again under `kinds.lock` in the state directory, which it holds until the
+start is recorded: concurrent starts of a kind are admitted one at a time, for
+every harness and for `--host` starts. A refusal is exit 3; `--force` does not
+pass a kind's cap. Hand-overs and role successors replace an agent and are not
+held.
+
+`beekeeper sessions --by kind [--day 2006-01-02] [--tz <zone>]` prints the day's
+starts, sessions, hours (each session's first to last request of the day) and
+spend per kind, priced from the whole transcripts as `beekeeper spend` prices
+them. Spend is attributed by the session id a Claude Code transcript's path
+names; transcripts of no recorded start of a kind's agent, or of harnesses whose
+files name no session beekeeper recorded (omp, agy, codex), are summed as "of no
+kind".
+
+## Task model policy
+
+`agents.models` is an ordered list of `{match: <name regexp>, model: <selector>}`,
+optionally restricted by `kind`. A start's `--kind` defaults to `worker`, or
+`review` with `--review`. The first matching rule with a nonempty model selects it before
+provider capacity is evaluated. `--model` overrides the rules. Without a match,
+Claude uses `agents.model`, Codex uses `codex.model`, and omp uses `omp.model`;
+with capacity choices and no explicit model, the capacity pick supplies both
+harness and model. `agents.requireModel: true` refuses an unresolved model with
+exit 3, including dry runs, rather than allowing a harness default.
+Rules without a model are skipped for model selection, allowing independent
+settings to match without masking a later model rule or the fallback.
+
+`guide.model` selects the model for both relayed and standby-started successors,
+ahead of the previous holder's model. Without it the holder's model is retained,
+then name rules and `agents.model` supply a fallback. The supervisor is a service
+loop and starts no supervisor model session; its workers and reviewers use the
+same start policy as manual starts.
+
+Each `capacity.choices` entry may carry a desk-maintained `class` (nonnegative
+capability rank), `cost` (positive relative cost), `family`, `kinds` (allowed
+kinds; empty allows all, except that a choice on a self-hosted provider takes
+the `worker` kind, code changes, only when its `kinds` list it), and `reviewReserve` (0–100 percent of the weekly
+window kept for reviews). `capacity.taskPolicies.<kind>.minClass` and `maxCost`
+constrain the choices. A positive maximum rejects unknown costs. Class 0 means
+unclassified. No changing provider price or capability claim is shipped.
+
+`capacity --kind audit` and `capacity pick --kind audit --json` use the same
+policy as `agents start --kind audit`. Both capacity commands and starts accept
+`--author-model <configured selector>` with a review to exclude that model's
+family; unknown author or candidate families refuse selection.
+`capacity.taskPolicies.review.differentFamily: true` requires this for every
+review. The supervisor loop supplies the author's recorded model automatically;
+manual reviews must supply `--author-model`. Unclassified explicit targets
+cannot bypass a configured capability, cost or family requirement.
+
+Review reserve uses the choice's usage bucket, or its provider's weekly window. It adds a stop
+for non-review tasks; reviews still obey provider window and pace limits.
+Provider room and weekly pace are decided first, with lower positive configured
+cost breaking equal pace between subscription choices. Configured order breaks
+remaining ties and keeps self-hosted choices as fallbacks.
+
+Capacity JSON includes `taskKind`, `decision`, and every rejected candidate's
+reason. Successful starts log the kind, harness, model and choice under
+`agents.start`; the roster retains the model for comparing outcomes. Explicit
+models select a target but cannot make an automatic pick ignore a model-policy
+rejection, even with `--force`.
+
+## Worktree orphan cleanup
+
+The doctor stops reparented process trees left in linked worktrees by known local
+workers that have left the roster. It sends SIGTERM, then SIGKILL after
+two seconds, checking the process start time, user and worktree before each
+signal. Each targeted PID and masked command is recorded as `agents.archive`.
+`doctor --dry-run` reports candidates without signalling; `ps` marks the same
+candidates `[orphan: <worktree>]` (JSON: `orphan`, `worktree`), beside their age.
+A roster entry, including a done worker awaiting removal, or a live CLI protects
+its worktree. Main checkouts, arbitrary directories, unknown starts and remote
+executions are excluded. Inherited worker IDs also identify servers whose tool
+shell changed into a different worktree after the session started. Cleanup is
+retried by later doctor runs if a live CLI still protects a finished worktree.
+
+`TestStopWorktreeOrphansLive` starts an adopted, TERM-ignoring server in a scratch
+worktree and proves dry-run preservation, escalation and archive logging.
+`TestWorktreeOrphans` covers shared worktrees, rostered/done sessions, live CLIs,
+remote starts, older processes and changed working directories.
+
+Removed manually registered workers retain their identity and registration time
+in `endedWorkers`, so their inherited session ID also identifies leftovers.
+This cleanup history grants no permissions to the start or permission hooks.
+Ownership and roster protection both use Claude session IDs or normalized
+Codex, omp and agy host-session IDs; a hosted harness takes precedence over
+a launching Claude session inherited in the same environment.

@@ -17,12 +17,9 @@ import (
 // shows or reopens it. Such a revived CLI carries the name its successor
 // now holds: a message by that name reaches neither for sure, the watch says
 // SAME TITLE, and agents resume refuses the ambiguous name. The watch stops
-// it, so only the successor answers to the name.
-
-// reliefGrace is how long a relieved run's CLI runs on after its successor
-// took the relay before the watch stops it: the run ends the turn it relayed
-// in.
-const reliefGrace = 2 * time.Minute
+// it, so only the successor answers to the name. A relay's relieved run
+// carries a name of its own and stays the person's (keepsRole): its CLI,
+// brought back by them or the desktop, runs on.
 
 // superseded says who carries p's name or role in its place now that its
 // session's work ended: the follow-up of a hand-over (a later start, or
@@ -74,9 +71,9 @@ type revivedRun struct {
 }
 
 // revivedRuns are the running CLIs of superseded sessions to stop at now: a
-// hand-over's predecessor at once, a relieved run once reliefGrace has
-// passed since its relief and its CLI runs no tool command. warmed are those
-// left running as the doctor warmed them to archive themselves.
+// hand-over's predecessor, never a relay's relieved run, which the person
+// closes. warmed are those left running as the doctor warmed them to
+// archive themselves.
 func revivedRuns(st *state.State, sessions []*claude.Session, now time.Time) (out []revivedRun, warmed []*claude.Session) {
 	for _, s := range sessions {
 		if s.ID == "" || s.Harness != "" {
@@ -86,8 +83,8 @@ func revivedRuns(st *state.State, sessions []*claude.Session, now time.Time) (ou
 		switch {
 		case by == "":
 			continue
-		case !since.IsZero() && (now.Sub(since) < reliefGrace || len(s.Commands) > 0):
-			continue
+		case !since.IsZero():
+			continue // a relieved run: the person decides when it goes
 		case archiveWarmed(st, s, now):
 			warmed = append(warmed, s)
 			continue
@@ -139,6 +136,7 @@ func (w *watcher) stopRevived(ctx context.Context, sessions []*claude.Session) [
 		}
 		drop[s] = true
 		lines := stopUnits(ctx, s.ID)
+		w.recordStoppedGates(ctx)
 		if s.HostID != "" && desktopArchived(w.cfg, s.HostID) {
 			_ = w.store.Record(event(watchParty, "agents.archive", "%s: session %s's CLI %d stopped: its desktop session %s is archived and %s carries its name",
 				s.Name, s.ID, s.PID, s.HostID, r.by))

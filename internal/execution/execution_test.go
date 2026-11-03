@@ -20,6 +20,8 @@ import (
 
 const (
 	fixtureClaudeExecutable = "/usr/local/bin/claude"
+	fixtureGitHubExecutable = "/srv/tools/bin/gh"
+	fixtureGitHubVersion    = "2.83.0"
 	fixtureWorker           = "worker"
 	fixtureHost             = "host-a"
 	fixtureCoordinator      = "coordinator"
@@ -100,15 +102,24 @@ func testFixture(t *testing.T) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callback := Endpoint{SSH: "coordinator.example", Executable: "/usr/local/bin/beekeeper", Config: "/etc/beekeeper/config.yaml"}
-	cfg := HostConfig{Identity: fixtureHost, WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{"giantswarm/beekeeper": source}, Harnesses: map[string]HarnessConfig{HarnessClaude: {Executable: fixtureClaudeExecutable, Version: "2.1.290", ConfigDir: "/srv/beekeeper/auth"}}, Coordinators: map[string]Coordinator{fixtureCoordinator: {PublicKey: PublicKey(key), Callback: callback}}, MaxBusy: 2}
+	// Readiness refuses a host where the embedded worker contract cannot
+	// execute its component, so the fixture installs the pinned executable.
+	hostExecutable := filepath.Join(root, "usr", "local", "bin", "beekeeper")
+	if err := os.MkdirAll(filepath.Dir(hostExecutable), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // fixture executable in the test's own temporary directory
+		t.Fatal(err)
+	}
+	callback := Endpoint{SSH: "coordinator.example", Executable: hostExecutable, Config: "/etc/beekeeper/config.yaml"}
+	cfg := HostConfig{Identity: fixtureHost, WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{"giantswarm/beekeeper": source}, Harnesses: map[string]HarnessConfig{HarnessClaude: {Executable: fixtureClaudeExecutable, Version: "2.1.290", ConfigDir: "/srv/beekeeper/auth"}}, Coordinators: map[string]Coordinator{fixtureCoordinator: {PublicKey: PublicKey(key), Callback: callback}}, MaxBusy: 2, Tools: map[string]ToolConfig{ToolGitHub: {Executable: fixtureGitHubExecutable, Version: fixtureGitHubVersion}}}
 	launcher := &fakeLauncher{states: map[string]string{"personal.service": unitActive}}
 	cfg.RulesFile = filepath.Join(root, "host-rules.md")
 	if err := os.WriteFile(cfg.RulesFile, []byte("fixture host rules"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	s := &Server{Config: cfg, Root: filepath.Join(root, "execution"), Executable: "/usr/local/bin/beekeeper", ConfigPath: "/etc/beekeeper/worker.yaml", Version: "test", SecurityDigest: Digest([]byte("host guards")), Rules: []byte("embedded worker rules"), Launcher: launcher, Now: func() time.Time { return now }, GuardProbe: func() error { return nil }, Authorize: func(context.Context, StartRequest) error { return nil }, Resources: func(context.Context) (Resources, error) {
+	s := &Server{Config: cfg, Root: filepath.Join(root, "execution"), Executable: hostExecutable, ConfigPath: "/etc/beekeeper/worker.yaml", Version: "test", SecurityDigest: Digest([]byte("host guards")), Rules: []byte("embedded worker rules"), Launcher: launcher, Now: func() time.Time { return now }, GuardProbe: func() error { return nil }, Authorize: func(context.Context, StartRequest) error { return nil }, Resources: func(context.Context) (Resources, error) {
 		return Resources{AvailableMiB: 8192, DiskFreeGiB: 100, ObservedAt: now}, nil
 	}}
 	s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
@@ -117,6 +128,9 @@ func testFixture(t *testing.T) fixture {
 				return []byte(`{"loggedIn":true,"configDirectory":"/srv/beekeeper/auth","authMethod":"claude.ai"}`), nil
 			}
 			return []byte("2.1.290 (Claude Code)"), nil
+		}
+		if bin == fixtureGitHubExecutable {
+			return []byte("gh version " + fixtureGitHubVersion + " (2026-10-01)\nhttps://github.com/cli/cli/releases/tag/v" + fixtureGitHubVersion + "\n"), nil
 		}
 		return hostCommand(ctx, dir, env, bin, args...)
 	}
@@ -332,6 +346,18 @@ func TestPolicyAndTransportFailuresAreExplicit(t *testing.T) {
 	if _, err := tr.Check(ctx); err == nil {
 		t.Fatal("SSH option injection accepted")
 	}
+	tr = f.transport(t, nil)
+	deadCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	_, cmdErr := SSHCommand(deadCtx, []string{"/bin/sh", "-c", "sleep 1"}, nil)
+	if !errors.Is(cmdErr, context.DeadlineExceeded) {
+		t.Fatalf("SSHCommand killed by deadline did not preserve DeadlineExceeded: %v", cmdErr)
+	}
+	tr.Run = func(context.Context, []string, []byte) ([]byte, error) { return nil, cmdErr }
+	_, err = tr.Inspect(ctx, f.r.Ref)
+	if err == nil || !strings.Contains(err.Error(), "deadline exceeded during inspect") || strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("deadline error reported as unreachable: %v", err)
+	}
 }
 
 func TestLogsUseOwnedBoundedCursors(t *testing.T) {
@@ -379,5 +405,54 @@ func TestCallerUsesServiceIdentityAndCallbackProof(t *testing.T) {
 	r.Ref.Generation++
 	if VerifyCallback(r, f.r.ControlKey) {
 		t.Fatal("callback proof was not generation-bound")
+	}
+}
+
+func TestStopCleansWorkspaceAndReviewParkCompletesExecution(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	h, err := f.s.Start(ctx, f.r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(h.Workspace); err != nil {
+		t.Fatalf("workspace missing after start: %v", err)
+	}
+	sourceDir := filepath.Join(f.s.Root, "sources", string(f.r.Ref.Execution))
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.s.OwnUnit = func() string { return UnitName(f.r.Ref) }
+	j, err := f.s.Caller(string(f.r.Ref.Execution))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.s.SendControl(ctx, j, ControlPark, map[string]string{"on": "giantswarm/beekeeper#7", "waits": "desk review"}, "", func(_ context.Context, _ []string, raw []byte) ([]byte, error) {
+		var cb CallbackRequest
+		if Decode(raw, &cb) != nil {
+			t.Fatal("invalid callback request")
+		}
+		var ctl ControlRequest
+		if Decode(cb.Payload, &ctl) != nil {
+			t.Fatal("invalid control payload")
+		}
+		payload, _ := json.Marshal(ControlResult{ID: ctl.ID, Sequence: ctl.Sequence, Digest: ctl.ContentDigest(), Output: "park recorded on coordinator; review request recorded for pushed HEAD " + h.Commit + "; end your turn now"})
+		return json.Marshal(WireResponse{Protocol: Protocol, RequestID: cb.RequestID, Ref: cb.Ref, Payload: payload})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := f.s.Read(f.r.Ref)
+	if err != nil || !saved.Completed {
+		t.Fatalf("desk review park did not complete execution: %+v, %v", saved, err)
+	}
+	ack, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: "desk review"})
+	if err != nil || ack.Stage != Applied {
+		t.Fatalf("stop failed: %+v, %v", ack, err)
+	}
+	for _, p := range []string{h.Workspace, filepath.Dir(h.Workspace), sourceDir} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stop left path %s behind: %v", p, err)
+		}
 	}
 }

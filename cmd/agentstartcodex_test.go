@@ -27,6 +27,7 @@ import (
 
 func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	const id = "1234abcd-0000-4000-8000-000000000000"
+	t.Setenv(codex.EnvAgent, id)
 	dir := t.TempDir()
 	store, err := state.Open(dir)
 	if err != nil {
@@ -56,12 +57,8 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	if err := a.wakeCodex(by, ag, id, "next-turn wake message"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "written to its inbox, it runs the message as its next turn") {
-		t.Fatalf("output %q", out.String())
-	}
 
-	// Verify `beekeeper hook pretooluse --format codex` does not steal or
-	// duplicate the queued wake message mid-turn, leaving it queued for Drain.
+	// The running turn receives the wake through its next tool hook exactly once.
 	cfgFile := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgFile, []byte("stateDir: "+dir+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -75,9 +72,16 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 		t.Fatalf("hook pretooluse: %v", err)
 	}
 
+	if !strings.Contains(hookOut.String(), "next-turn wake message") {
+		t.Fatalf("hook did not deliver wake mid-turn: %s", hookOut.String())
+	}
+	if !strings.Contains(out.String(), "queued for its next PreToolUse hook") {
+		t.Fatalf("output %q", out.String())
+	}
+
 	msgs, err := codex.Drain(inbox)
-	if err != nil || len(msgs) != 1 || msgs[0] != "next-turn wake message" {
-		t.Fatalf("Drain(inbox) = (%v, %v), want [next-turn wake message]", msgs, err)
+	if err != nil || len(msgs) != 0 {
+		t.Fatalf("Drain(inbox) = (%v, %v), want empty after hook delivery", msgs, err)
 	}
 }
 
@@ -88,6 +92,7 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 		testWorkerName = "codex-worker"
 		startID        = "abcdef12-3456-4000-8000-000000000000"
 	)
+	stubIssuePark(t, testIssueRef)
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	leaseDir := filepath.Join(root, "leases")
@@ -161,6 +166,14 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 		as:    supervisorName,
 	}
 
+	projectRules := filepath.Join(root, ".claude", "rules")
+	if err := os.MkdirAll(projectRules, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRules, "merge.md"), []byte("project-specific squash rule"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	sp := agentStart{
 		id:     startID,
 		name:   "beekeeper#1708: codex",
@@ -173,6 +186,10 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	}
 	if err := a.startCodexAgent(context.Background(), sp); err != nil {
 		t.Fatalf("startCodexAgent: %v", err)
+	}
+
+	if !strings.Contains(deliveredMsg, "project-specific squash rule") || !strings.HasSuffix(deliveredMsg, sp.brief) {
+		t.Fatalf("first inbox message lacks project rules before task: %q", deliveredMsg)
 	}
 
 	if len(hl.started) != 1 {
@@ -509,7 +526,10 @@ wait "$child"
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- runner.Wait() }()
 	select {
-	case <-waitDone:
+	case err := <-waitDone:
+		// SIGTERM may produce an exit error; child cleanup below is the
+		// behavior this test proves.
+		_ = err
 	case <-time.After(3 * time.Second):
 		t.Fatal("runner did not exit within 3s after SIGTERM")
 	}

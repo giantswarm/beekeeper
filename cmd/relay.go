@@ -9,27 +9,25 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
-	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// A relayed role (the supervisor, the guide) moves in two steps: the
-// relay opens to a fresh session beekeeper starts as the next run, whose
-// own start takes the role. Both are one state update under the lock each, so the
-// supervisor's grant rule is in force throughout: the outgoing supervisor's
-// until the start, the successor's from it. A session holds one role at a
-// time.
+// A relayed role (the guide) moves in two steps: the relay opens to a
+// fresh session beekeeper starts as the next run, whose own start takes the
+// role. Both are one state update under the lock each. A session holds one
+// role at a time. The supervisor is no such role: it is the supervisor
+// loop, a service no session holds.
 
 // role is one relayed role: how it reads and says itself, and where its
 // record and configuration live.
 type role struct {
-	name string // supervisor, guide
+	name string // guide
 	// title names its runs: "<title> run <n>".
 	title string
-	inf   string // supervise, guide
-	verb  string // supervises, guides
-	ing   string // supervising, guiding
-	// tag opens the role's watch lines ("" for the supervisor's).
+	inf   string // guide
+	verb  string // guides
+	ing   string // guiding
+	// tag opens the role's watch lines.
 	tag string
 	// duty is what a successor takes over.
 	duty string
@@ -37,27 +35,19 @@ type role struct {
 	handover string
 	// gone says what follows once the holder's CLI stayed gone.
 	gone string
-	// grants: the role's start takes the grant queue.
-	grants bool
-	get    func(*state.State) state.Role
-	set    func(*state.State, state.Role)
-	cfg    func(*config.Config) config.Role
+	get  func(*state.State) state.Role
+	set  func(*state.State, state.Role)
+	cfg  func(*config.Config) config.Role
 }
 
 var (
-	supervisorRole = role{
-		name: "supervisor", title: "Supervisor", inf: "supervise", verb: "supervises", ing: "supervising", duty: "the supervisor's watch", handover: "beekeeper handover --prompt", grants: true,
-		gone: "claims wait for a successor's `beekeeper supervisor start`",
-		get:  (*state.State).SupervisorRole, set: (*state.State).SetSupervisorRole,
-		cfg: func(c *config.Config) config.Role { return c.Supervisor.Role },
-	}
 	guideRole = role{
 		name: guideName, title: "Guide", inf: guideName, verb: "guides", ing: "guiding", tag: "GUIDE ", duty: "the guide's role", handover: "beekeeper guide handover --prompt",
-		gone: "a successor's `beekeeper guide start` takes the role (beekeeper guide handover --prompt)",
+		gone: "the standby watch starts its successor, or `beekeeper guide start --new` does now; the successor's `beekeeper guide start` takes the role",
 		get:  (*state.State).GuideRole, set: (*state.State).SetGuideRole,
 		cfg: func(c *config.Config) config.Role { return c.Guide.Role },
 	}
-	roles = []role{supervisorRole, guideRole}
+	roles = []role{guideRole}
 )
 
 // update applies f to rl's record in st.
@@ -75,13 +65,6 @@ func (rl role) otherRole(st *state.State, p state.Party) (role, bool) {
 		}
 	}
 	return role{}, false
-}
-
-// startRole makes me the supervisor in st: through a relay that names me,
-// over a recorded supervisor whose session is gone, or with takeOver.
-// prevLive says whether the recorded supervisor's session runs.
-func startRole(st *state.State, me state.Party, prevLive, takeOver bool, now time.Time) (string, []state.Event, error) {
-	return supervisorRole.start(st, me, prevLive, takeOver, now)
 }
 
 // start makes me rl's holder in st: through a relay that names me, over a
@@ -105,23 +88,11 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 		r.Relay.Taken = now.UTC()
 		r.Relieved = append(dropRelief(r.Relieved, prev.Party),
 			state.Relief{Party: prev.Party, By: me, At: r.Relay.At, Taken: r.Relay.Taken})
-		grants := ""
-		if rl.grants {
-			for i := range st.Grants {
-				st.Grants[i].By = me
-			}
-			grants = fmt.Sprintf("; %d grant(s) move over", len(st.Grants))
-		}
-		// The relieved run's desktop session would hold a desktop CLI slot.
-		archive := ""
-		if host := oweArchive(st, prev.Party, fmt.Sprintf("relieved by %q", me.Name), now); host != "" {
-			archive = fmt.Sprintf("; the doctor archives its desktop session %s once its CLI runs no turn", host)
-		}
 		// The relieved run's work ends with the relay: off the roster, nothing
 		// resumes it or shows it again (a background wait of its own dies with
-		// it).
+		// it). Its session stays the person's: they decide when it goes.
 		st.Agents = slices.DeleteFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(prev.Party) })
-		how = fmt.Sprintf(" (relieving %q, relayed at %s%s%s)", prev.Name, clock(now, r.Relay.At), grants, archive)
+		how = fmt.Sprintf(" (relieving %q, relayed at %s; %s)", prev.Name, clock(now, r.Relay.At), keptSession(st, prev.Party))
 	case prevLive && !takeOver:
 		named := ""
 		switch rel := r.Relay; {
@@ -141,6 +112,11 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	r.Relieved = slices.DeleteFunc(dropRelief(r.Relieved, me), func(rf state.Relief) bool { return now.Sub(rf.Taken) > reliefTTL })
 	restart, last := prev != nil && prev.Is(me), rl.lastRun(r)
 	r.Holder = &state.Supervisor{Party: me, Since: now.UTC()}
+	// The start that took the role keeps its session the person's to close
+	// once relieved or taken over (keepsRole).
+	if i := st.StartIndex(me); i >= 0 {
+		st.Starts[i].Role = rl.name
+	}
 	// A run relayed to me, or named in my title, is mine; any other start
 	// of the role is the next run.
 	switch n := rl.runOf(me.Name); {
@@ -156,12 +132,6 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	}
 	msg := fmt.Sprintf("%q %s now%s%s", me.Name, rl.verb, as, how)
 	return msg, []state.Event{event(me, rl.name+".start", "%s", msg)}, nil
-}
-
-// relayRole records the supervisor me naming its successor to; the relay
-// stays open for ttl.
-func relayRole(st *state.State, me, to state.Party, now time.Time, ttl time.Duration) (string, []state.Event, error) {
-	return supervisorRole.relay(st, me, to, now, ttl)
 }
 
 // relay records rl's holder me naming its successor to; the relay stays
@@ -185,18 +155,23 @@ func (rl role) relay(st *state.State, me, to state.Party, now time.Time, ttl tim
 	r.Run = max(rl.lastRun(r), rl.runOf(to.Name))
 	rl.set(st, r)
 	until := clock(now, r.Relay.Expires)
-	grants := ""
-	if rl.grants {
-		grants = " and the grants"
-	}
-	msg := fmt.Sprintf("relayed to %q until %s%s: its `beekeeper %s start` takes the role%s; you %s until then (`beekeeper %s status` exits %d once you are relieved)",
-		to.Name, until, replacing, rl.name, grants, rl.inf, rl.name, ExitRelieved)
+	msg := fmt.Sprintf("relayed to %q until %s%s: its `beekeeper %s start` takes the role; you %s until then (`beekeeper %s status` exits %d once you are relieved)",
+		to.Name, until, replacing, rl.name, rl.inf, rl.name, ExitRelieved)
 	return msg, []state.Event{event(me, rl.name+".relay", "to %s until %s%s", to.Name, until, replacing)}, nil
 }
 
-// cancelRelay withdraws the supervisor's open relay.
-func cancelRelay(st *state.State, me state.Party, now time.Time) (string, []state.Event, error) {
-	return supervisorRole.cancelRelay(st, me, now)
+// keptSession says where the relieved run p's conversation stays and how
+// the person closes it: neither the watch nor the doctor stops or archives
+// it.
+func keptSession(st *state.State, p state.Party) string {
+	if i := st.StartIndex(p); i >= 0 && !st.Starts[i].Background && st.Starts[i].HostSession != "" {
+		return fmt.Sprintf("its desktop session %s stays in the person's session list until they archive it", st.Starts[i].HostSession)
+	}
+	if p.Session == "" {
+		return "its session stays until the person closes it"
+	}
+	short := p.Session[:min(8, len(p.Session))]
+	return fmt.Sprintf("its session %s stays until the person closes it (claude attach %s continues it, claude stop %s ends it)", p.Session, short, short)
 }
 
 // cancelRelay withdraws rl's open relay.
@@ -232,11 +207,6 @@ func dropRelief(rs []state.Relief, p state.Party) []state.Relief {
 	return slices.DeleteFunc(rs, func(r state.Relief) bool { return r.Party.Is(p) })
 }
 
-// relievedBy returns the relief of a supervisor relay that relieved me.
-func relievedBy(st *state.State, me state.Party) *state.Relief {
-	return relievedIn(st.SupervisorRole(), me)
-}
-
 // relievedIn returns the relief of a relay of r that relieved me, nil when
 // none did or I hold the role again. It survives the successor's own relays.
 func relievedIn(r state.Role, me state.Party) *state.Relief {
@@ -252,8 +222,7 @@ func relievedIn(r state.Role, me state.Party) *state.Relief {
 }
 
 // supervision is a role's recorded holder read against the running
-// sessions and the grace a CLI restart has. The supervisor's grant rule is
-// in force in every state: live, restarting and gone.
+// sessions and the grace a CLI restart has.
 type supervision struct {
 	sup  *state.Supervisor
 	live bool
@@ -261,13 +230,6 @@ type supervision struct {
 	// says so yet), zero while it runs; until is the end of the grace a
 	// restart has, zero while it runs and once the grace has passed.
 	gone, until time.Time
-}
-
-// readSupervision reads st's supervisor: live while its CLI runs,
-// restarting for grace after beekeeper first saw its CLI gone, and gone
-// after that.
-func readSupervision(st *state.State, sessions []*claude.Session, now time.Time, grace time.Duration) supervision {
-	return readHolder(st.SupervisorRole(), sessions, now, grace)
 }
 
 // readHolder reads r's holder the same way.
@@ -295,12 +257,6 @@ func (v supervision) restarting() bool { return !v.until.IsZero() }
 // down reports whether the recorded holder's CLI stayed gone past the
 // grace: its successor is due.
 func (v supervision) down() bool { return v.sup != nil && !v.live && !v.restarting() }
-
-// observeCLI records what the running sessions say of the supervisor's
-// CLI in this term (observeRoleCLI).
-func observeCLI(st *state.State, sessions []*claude.Session, now time.Time) (bool, []state.Event) {
-	return supervisorRole.observeCLI(st, sessions, now)
-}
 
 // observeCLI records what the running sessions say of rl's holder's CLI in
 // this term: the PID it runs as, and since when it is gone. The same
@@ -361,11 +317,6 @@ func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 	return true
 }
 
-// fireRelay reports the supervisor's relay taken or expired, once.
-func fireRelay(st *state.State, now time.Time) ([]string, []state.Event) {
-	return supervisorRole.fireRelay(st, now)
-}
-
 // fireRelay reports rl's relay taken or expired, once.
 func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []state.Event) {
 	rl.update(st, func(ro *state.Role) {
@@ -375,7 +326,7 @@ func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []
 		}
 		switch {
 		case !r.Taken.IsZero():
-			lines = append(lines, fmt.Sprintf("%sRELAY TAKEN: %q %s since %s, relieving %q", rl.tag, r.To.Name, rl.verb, clock(now, r.Taken), r.From.Name))
+			lines = append(lines, fmt.Sprintf("%sRELAY TAKEN: %q %s since %s, relieving %q; %s", rl.tag, r.To.Name, rl.verb, clock(now, r.Taken), r.From.Name, keptSession(st, r.From)))
 		case !now.Before(r.Expires):
 			lines = append(lines, fmt.Sprintf("%sRELAY EXPIRED: %q did not take the role from %q by %s (beekeeper %s relay starts another)",
 				rl.tag, r.To.Name, r.From.Name, clock(now, r.Expires), rl.name))
@@ -387,14 +338,6 @@ func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []
 		r.Reported = now.UTC()
 	})
 	return lines, evs
-}
-
-// relayContext is the running supervisor's context in tokens once it has
-// reached relayAt, with no relay open and the relay due not said yet to its
-// term at relayAt (relayDues.said); 0 otherwise. Only then does the watch ask
-// whether the machine is quiet.
-func relayContext(st *state.State, sessions []*claude.Session, now time.Time, relayAt config.Tokens, said relayDues) int64 {
-	return roleContext(st.SupervisorRole(), sessions, now, relayAt, said)
 }
 
 // roleContext is the same for r's holder.
@@ -465,91 +408,60 @@ func sessionContext(sessions []*claude.Session, p state.Party) int64 {
 // transcript's last request; 0 without a transcript.
 func transcriptContext(s *claude.Session) int64 { return claude.Context(s.Transcript) }
 
-// quietness is the watch's reading of the machine for a relay: checked once
-// the holder's context reached relayAt (context), busy saying what keeps it
-// from a quiet moment ("" when quiet).
+// quietness is the watch's reading of a holder's context for a relay:
+// checked once it reached relayAt, or half of it after an idle hour.
 type quietness struct {
 	checked bool
-	busy    string
 	context int64
+	idle    bool
 	relayAt config.Tokens
 }
 
-// fireRelayDue reports the supervisor's relay due (role.fireRelayDue).
-func fireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) ([]string, []state.Event) {
-	return supervisorRole.fireRelayDue(st, q, said, now)
-}
-
-// fireRelayDue reports rl's relay due at the first quiet moment after its
-// holder's context reached q.relayAt: once per term and relayAt in the
+// fireRelayDue reports rl's relay due once its holder's context reached
+// q.relayAt, or a new line arrives after an idle hour above half of it:
+// once per term and relayAt in the
 // state, and once more in a watch process that did not say it yet. The
 // record keeps when it was first reported at that relayAt.
 func (rl role) fireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) (lines []string, evs []state.Event) {
 	rl.update(st, func(r *state.Role) {
 		sup := r.Holder
-		if !q.checked || q.busy != "" || sup == nil || r.Relay.Open(now) || said.said(*r, q.relayAt, now) {
+		if !q.checked || sup == nil || r.Relay.Open(now) || said.said(*r, q.relayAt, now) {
 			return
 		}
 		if !r.RelayDue.At(sup, int64(q.relayAt)) {
 			r.RelayDue = &state.RelayDue{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Context: q.context, RelayAt: int64(q.relayAt)}
 		}
 		said.say(sup, q.relayAt, now)
-		lines = append(lines, fmt.Sprintf("%sRELAY DUE: %q is at %s tokens of context: %s", rl.tag, sup.Name, tokensText(q.context), rl.handover))
+		reason := ""
+		if q.idle {
+			reason = " after an idle hour (cache expired)"
+		}
+		lines = append(lines, fmt.Sprintf("%sRELAY DUE: %q is at %s tokens of context%s: %s", rl.tag, sup.Name, tokensText(q.context), reason, rl.handover))
 		evs = append(evs, event(watchParty, rl.name+".relay-due", "%s at %s tokens", sup.Name, tokensText(q.context)))
 	})
 	return lines, evs
 }
 
-// busyWith says what keeps the machine from a quiet moment for a relay: a
-// gated merge running or settling, a grant not claimed yet or a claim
-// queued; "" when it is quiet. alive says whether a gated merge's process
-// runs, rolled whether a settling merge's release rolled on its lane's
-// installation.
-func busyWith(st *state.State, cfg *config.Config, held map[string]bool, now time.Time,
-	alive func(pid int) bool, rolled func(state.Merge, config.Lane) bool,
-) string {
-	for _, m := range st.Merges {
-		switch {
-		case m.Phase == state.Running && alive(m.PID):
-			return m.Key() + " merges"
-		case m.Phase == state.Settling && settles(m, cfg, now, rolled):
-			return m.Key() + " settles"
-		}
+// idleRoleReading recommends a fresh run before a new feed line rewarms an
+// hour-old context. An unknown activity time is no evidence of an idle hour.
+func idleRoleReading(r state.Role, sessions []*claude.Session, now time.Time, relayAt config.Tokens, said relayDues) quietness {
+	q := quietness{relayAt: relayAt}
+	if r.Holder == nil || r.Relay.Open(now) || said.said(r, relayAt, now) {
+		return q
 	}
-	seen := map[string]bool{}
-	for _, g := range st.Grants {
-		if seen[g.Resource] {
-			continue
-		}
-		seen[g.Resource] = true
-		q := lease.Pending(st, g.Resource, held[g.Resource], now, cfg.GrantTTL.Duration)
-		switch {
-		case len(q) == 0:
-		case held[g.Resource]:
-			return fmt.Sprintf("a claim of %s by %q is queued", g.Resource, q[0].To.Name)
-		default:
-			return fmt.Sprintf("%s is granted to %q and not claimed yet", g.Resource, q[0].To.Name)
-		}
+	s, live := claude.Live(sessions, r.Holder.Party)
+	if !live {
+		return q
 	}
-	return ""
-}
-
-// settles reports whether a settling merge still holds its lane by the
-// gate's rule: a lane without an installation waits for none; one whose
-// merge settled longer than merge.settleTimeout ago is stuck, not settling;
-// a failed release has settled at once, an unknown one settles for
-// merge.settle, a known one until it rolled.
-func settles(m state.Merge, cfg *config.Config, now time.Time, rolled func(state.Merge, config.Lane) bool) bool {
-	lane, ok := cfg.LaneNamed(m.Lane)
-	if !ok || lane.Installation == "" {
-		return false
+	last := s.LastActive
+	if s.LastSubagent.After(last) {
+		last = s.LastSubagent
 	}
-	since := now.Sub(m.Finished)
-	switch {
-	case since > cfg.Merge.SettleTimeout.Duration, m.ReleaseFailed:
-		return false
-	case m.Release == "":
-		return since < cfg.Merge.Settle.Duration
+	if last.IsZero() || now.Sub(last) < time.Hour {
+		return q
 	}
-	return !rolled(m, lane)
+	q.context = transcriptContext(s)
+	q.checked = q.context > int64(relayAt)/2
+	q.idle = q.checked
+	return q
 }

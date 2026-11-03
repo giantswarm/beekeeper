@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,10 @@ const sshTestTask = "implement the fixture task"
 
 func executionTestApp(t *testing.T) (*app, execution.StartRequest) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := state.Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +43,7 @@ func executionTestApp(t *testing.T) (*app, execution.StartRequest) {
 	}
 	r := execution.StartRequest{Ref: execution.Ref{Host: sshTestSelector, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}, Coordinator: sshTestCoordinator, RequestID: uuid.NewString(), Name: "remote-worker", Task: sshTestTask, Repository: sshTestRepository, GitRef: mainBranch, Harness: execution.HarnessClaude, Model: "opus", Prompt: "complete the fixture task", PolicyDigest: execution.Digest([]byte("fixture policy")), ConversationID: uuid.NewString(), ControlKey: key}
 	h := execution.Host{Endpoint: execution.Endpoint{SSH: "host-a.example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: r.Ref.Host, WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{r.Repository: filepath.Join(root, "source")}, Harnesses: []string{execution.HarnessClaude}, PolicyDigest: r.PolicyDigest, MaxBusy: 2}
-	a := &app{store: store, out: io.Discard, now: time.Now().UTC(), cfg: &config.Config{StateDir: root, Agents: config.Agents{Hosts: map[string]config.ExecutionHost{sshTestSelector: h}}, Guide: config.Guide{Person: "reviewer"}}}
+	a := &app{store: store, out: io.Discard, now: time.Now().UTC(), cfg: &config.Config{StateDir: root, Identity: config.Identity{Host: r.Coordinator}, Agents: config.Agents{Hosts: map[string]config.ExecutionHost{sshTestSelector: h}}, Guide: config.Guide{Person: "reviewer"}}}
 	party := state.Party{Session: r.ConversationID, Name: r.Name, Host: string(r.Ref.Host)}
 	err = store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: party, Task: r.Task, Execution: &r.Ref}}
@@ -173,5 +177,126 @@ func TestExecutionCoordinatorRefusesWrongIdentityAndLiveStop(t *testing.T) {
 	}
 	if strings.Contains(string(status), r.ControlKey) || strings.Contains(string(status), "controlKey") {
 		t.Fatal("status exposed a component credential")
+	}
+}
+
+// deskReviewWait is the wait a worker parks with for its desk review.
+const deskReviewWait = "desk review"
+
+func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
+	a, r := executionTestApp(t)
+	const pushed = "2222222222222222222222222222222222222222"
+	pr := sshTestRepository + "#7"
+	branch, repo, prHead := executionBranch(r.Ref), sshTestRepository, loopHead
+	was := executionReviewGH
+	t.Cleanup(func() { executionReviewGH = was })
+	reads := 0
+	executionReviewGH = func(_ context.Context, args ...string) ([]byte, error) {
+		reads++
+		if strings.Join(args, " ") != "api repos/"+sshTestRepository+"/pulls/7" {
+			t.Fatalf("read %v", args)
+		}
+		return fmt.Appendf(nil, `{"head":{"ref":%q,"sha":%q,"repo":{"full_name":%q}}}`, branch, prHead, repo), nil
+	}
+	park := func(p executionPark) string {
+		t.Helper()
+		var line string
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			var evs []state.Event
+			var err error
+			line, evs, err = a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{Operation: execution.ControlPark, Data: mustExecutionJSON(t, p)})
+			if len(evs) != 1 || evs[0].Verb != parkEvent {
+				t.Fatalf("park events %+v", evs)
+			}
+			return evs, err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := st.Agents[0].Park.ReviewHead
+		if !strings.Contains(line, parkReviewMode(got)) {
+			t.Fatalf("park %+v: %s", st.Agents[0].Park, line)
+		}
+		return got
+	}
+	// The workspace's HEAD is the published head of the execution's own
+	// branch: a review request, whatever the host's branch is called.
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != loopHead {
+		t.Fatalf("remote park at the published head recorded %q", got)
+	}
+	// An older host proves nothing itself: the owned branch's head stands.
+	if got := park(executionPark{On: pr, Waits: deskReviewWait}); got != loopHead {
+		t.Fatalf("older host's park recorded %q", got)
+	}
+	// Unpublished commits on the workspace: a plain wait.
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+		t.Fatalf("park ahead of the published head recorded %q", got)
+	}
+	// A new push, then a re-park at it: the new head's review request.
+	prHead = pushed
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != pushed {
+		t.Fatalf("re-park after a push recorded %q", got)
+	}
+	// A host's own claim is no proof: another branch's pull request, a fork's
+	// or one in another repository is a plain wait.
+	branch = "feature"
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed, ReviewHead: pushed}); got != "" {
+		t.Fatalf("another branch's pull request recorded %q", got)
+	}
+	branch, repo = executionBranch(r.Ref), "fork/beekeeper"
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+		t.Fatalf("a fork's pull request recorded %q", got)
+	}
+	repo = sshTestRepository
+	n := reads
+	if got := park(executionPark{On: "o/other#7", Waits: deskReviewWait, Head: pushed}); got != "" || reads != n {
+		t.Fatalf("another repository's pull request recorded %q after %d reads", got, reads-n)
+	}
+	if got := park(executionPark{Waits: "no target"}); got != "" || reads != n {
+		t.Fatalf("a park without a target recorded %q", got)
+	}
+	executionReviewGH = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("unreachable") }
+	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: pushed}); got != "" {
+		t.Fatalf("an unread pull request recorded %q", got)
+	}
+}
+
+// A managed SSH worker leaves its own park on the coordinator: resume ends
+// it, wakes nobody and says what settled the wait; a second is refused.
+func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
+	a, _ := executionTestApp(t)
+	apply := func(op string, data any) (string, error) {
+		t.Helper()
+		var line string
+		err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			var evs []state.Event
+			var err error
+			line, evs, err = a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{Operation: op, Data: mustExecutionJSON(t, data)})
+			return evs, err
+		})
+		return line, err
+	}
+	if _, err := apply(execution.ControlResume, struct{}{}); err == nil || !strings.Contains(err.Error(), "is not parked") {
+		t.Fatalf("resume unparked: %v", err)
+	}
+	if _, err := apply(execution.ControlPark, executionPark{Waits: "the supervisor's word"}); err != nil {
+		t.Fatal(err)
+	}
+	line, err := apply(execution.ControlResume, struct{}{})
+	if err != nil || !strings.Contains(line, "remote-worker: your park ended, nobody is woken. Your park on the supervisor's word is over") {
+		t.Fatalf("resume: %q %v", line, err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Park != nil {
+		t.Fatalf("park after resume %+v", st.Agents[0].Park)
+	}
+	if _, err := apply(execution.ControlResume, struct{}{}); err == nil || !strings.Contains(err.Error(), "is not parked") {
+		t.Fatalf("second resume: %v", err)
 	}
 }

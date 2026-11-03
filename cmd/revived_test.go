@@ -153,19 +153,19 @@ func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
 	}
 }
 
-// A relieved supervisor run whose CLI the desktop keeps or revives is
-// stopped once reliefGrace has passed since its successor took the relay
-// and it runs no tool command; the holder never is.
-func TestTheWatchStopsARelievedRunPastItsGrace(t *testing.T) {
+// A relieved run whose CLI the desktop or the person brings back runs on,
+// right after the relay and long after it: the person decides when its
+// session goes (https://github.com/giantswarm/beekeeper/issues/2195).
+func TestTheWatchLeavesARelievedRunRunning(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	useLauncher(t, &stopLauncher{})
 	ended := useEndRevived(t)
 	taken := time.Now()
-	out := state.Party{Session: "sup-81", HostSession: "local_sup-81", Name: "Supervisor run 81"}
-	succ := state.Party{Session: "sup-82", HostSession: "local_sup-82", Name: "Supervisor run 82"}
+	out := state.Party{Session: "sup-81", HostSession: "local_sup-81", Name: "Guide run 81"}
+	succ := state.Party{Session: "sup-82", HostSession: "local_sup-82", Name: "Guide run 82"}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = []state.Start{{Party: out, At: taken.Add(-time.Hour)}, {Party: succ, At: taken.Add(-time.Minute)}}
-		supervisorRole.set(st, state.Role{
+		st.Starts = []state.Start{{Party: out, At: taken.Add(-time.Hour), Role: guideName}, {Party: succ, At: taken.Add(-time.Minute), Role: guideName}}
+		guideRole.set(st, state.Role{
 			Holder:   &state.Supervisor{Party: succ, Since: taken},
 			Relay:    &state.Relay{From: out, To: succ, At: taken.Add(-time.Minute), Expires: taken.Add(time.Hour), Taken: taken},
 			Relieved: []state.Relief{{Party: out, By: succ, At: taken.Add(-time.Minute), Taken: taken}},
@@ -176,22 +176,19 @@ func TestTheWatchStopsARelievedRunPastItsGrace(t *testing.T) {
 	}
 	outCLI := &claude.Session{PID: 81, ID: out.Session, HostID: out.HostSession, Name: out.Name}
 	succCLI := &claude.Session{PID: 82, ID: succ.Session, HostID: succ.HostSession, Name: succ.Name}
-
-	w.now = taken.Add(reliefGrace / 2)
-	w.stopRevived(t.Context(), []*claude.Session{outCLI, succCLI})
-	if len(*ended) != 0 {
-		t.Fatalf("stopped %v within the relief's grace", *ended)
+	for _, at := range []time.Duration{4 * time.Second, 2 * time.Minute, 48 * time.Hour} {
+		w.now = taken.Add(at)
+		left := w.stopRevived(t.Context(), []*claude.Session{outCLI, succCLI})
+		if len(*ended) != 0 || len(left) != 2 {
+			t.Fatalf("%s after the relay: stopped %v, left %d CLIs", at, *ended, len(left))
+		}
 	}
-	w.now = taken.Add(reliefGrace + time.Second)
-	busy := *outCLI
-	busy.Commands = []claude.Command{{PID: 811}}
-	w.stopRevived(t.Context(), []*claude.Session{&busy, succCLI})
-	if len(*ended) != 0 {
-		t.Fatalf("stopped %v while it runs a tool command", *ended)
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
 	}
-	w.stopRevived(t.Context(), []*claude.Session{outCLI, succCLI})
-	if len(*ended) != 1 || (*ended)[0] != outCLI.PID {
-		t.Errorf("stopped %v, want only the relieved run %d", *ended, outCLI.PID)
+	if len(st.Archives) != 0 {
+		t.Errorf("owes archives %+v, want none", st.Archives)
 	}
 }
 

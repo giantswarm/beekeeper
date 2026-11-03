@@ -36,7 +36,7 @@ const (
 func TestHandoversDue(t *testing.T) {
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	agents := []state.Agent{}
-	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", "gone", "parked", "parked-small"}
+	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", holderGone, "parked", "parked-small"}
 	for _, id := range ids {
 		agents = append(agents, state.Agent{Party: party(id), LastTask: countTask})
 	}
@@ -44,10 +44,9 @@ func TestHandoversDue(t *testing.T) {
 	// run.
 	agents[8].Task, agents[9].Task = countTask, countTask
 	st := &state.State{
-		Agents:     agents,
-		Supervisor: &state.Supervisor{Party: party("sup")},
-		Relieved:   []state.Relief{{Party: party("relieved")}},
-		Merges:     []state.Merge{{Repo: scratchRepo, PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
+		Agents: agents,
+		Guide:  &state.Role{Holder: &state.Supervisor{Party: party("sup")}, Relieved: []state.Relief{{Party: party("relieved")}}},
+		Merges: []state.Merge{{Repo: scratchRepo, PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
 	}
 	var sessions []*claude.Session
 	for _, id := range ids[:7] { // "gone" and the parked ones do not run

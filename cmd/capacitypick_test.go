@@ -18,9 +18,10 @@ import (
 
 // The pick tests' models: one per subscription and the self-hosted one.
 const (
-	pickOpus = "opus-x"
-	pickGPT  = "gpt-x"
-	pickQwen = "local/qwen-x"
+	pickOpus   = "opus-x"
+	pickGemini = "gemini-x"
+	pickGPT    = "gpt-x"
+	pickQwen   = "local/qwen-x"
 	// noPick is capacity pick's line when no start fits.
 	noPick = "none"
 	// ofSelfHostedArg asks for the reviewer of a self-hosted model's work.
@@ -40,7 +41,9 @@ type pickRig struct {
 	reset5h, reset7d time.Time
 	choices          string
 	// claudeExtra is more of the claude provider's configuration.
-	claudeExtra string
+	claudeExtra    string
+	providersExtra string
+	read           func(cmd []string) usageReading
 }
 
 func newPickRig(t *testing.T, choices string) *pickRig {
@@ -71,7 +74,7 @@ func (r *pickRig) configure(extra string) {
       command: ["read-codex"]
       fiveHourMax: 90
       sevenDayMax: 95
-    local:
+` + r.providersExtra + `    local:
       kind: self-hosted
       ceiling: 1
   choices:
@@ -91,10 +94,13 @@ func (r *pickRig) configure(extra string) {
 
 func (r *pickRig) app(jsonOut bool) (*app, *bytes.Buffer) {
 	var out bytes.Buffer
-	for _, name := range []string{claudeComm, codex.Harness} {
+	for _, name := range []string{claudeComm, harnessAgy, codex.Harness} {
 		_ = os.Remove(filepath.Join(r.cfg.StateDir, usageProviderFile(name)))
 	}
 	read := func(_ context.Context, cmd []string, _ time.Duration) (usageReading, error) {
+		if r.read != nil {
+			return r.read(cmd), nil
+		}
 		w := r.codex
 		if cmd[0] == testReadClaude {
 			w = r.claude
@@ -229,9 +235,10 @@ func TestCapacityReviewIsDecidedLikeAWorkersStart(t *testing.T) {
 }
 
 // The one restriction: the review of a self-hosted model's work takes a
-// provider that is not self-hosted, while a worker may start on it.
+// provider that is not self-hosted, while a worker may start on it where its
+// kinds list worker.
 func TestCapacityPickReviewOfSelfHostedWorkTakesNoSelfHostedProvider(t *testing.T) {
-	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
+	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local, kinds: [worker, review]}
 `+subscriptionChoices)
 	r.want("claude " + pickOpus)
 	r.claude[1], r.codex[1] = 60, 60
@@ -246,6 +253,35 @@ func TestCapacityPickReviewOfSelfHostedWorkTakesNoSelfHostedProvider(t *testing.
 	}
 	if !strings.Contains(p.Reason, "a reviewer on a provider that is not self-hosted") {
 		t.Errorf("capacity pick --review-of-self-hosted --json reason = %q", p.Reason)
+	}
+}
+
+// A self-hosted choice ranked first never wins a worker's start while a
+// subscription is eligible, and without kinds it takes no worker start at
+// all: with both subscriptions ahead of their pace a worker has no pick, while
+// a kind the desk does not bar takes it. The decision names the rule.
+func TestCapacityPickKeepsWorkersOffASelfHostedChoiceWithoutKinds(t *testing.T) {
+	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
+`+subscriptionChoices)
+	r.want("claude " + pickOpus)
+	r.claude[1], r.codex[1] = 60, 60
+	r.want(noPick)
+	var p struct{ Reason string }
+	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Reason, selfHostedWorker) {
+		t.Errorf("capacity pick --json reason = %q, want %q", p.Reason, selfHostedWorker)
+	}
+	r.want("omp "+pickQwen, "--kind", "triage")
+	var v capacityView
+	if err := json.Unmarshal([]byte(r.pick(true, "--kind", "triage")), &struct {
+		Capacity *capacityView `json:"capacity"`
+	}{&v}); err != nil {
+		t.Fatal(err)
+	}
+	if v.Choice == nil || v.Choice.Decision != "task triage: "+choiceRule {
+		t.Errorf("capacity pick --kind triage decision = %+v", v.Choice)
 	}
 }
 
@@ -389,4 +425,72 @@ func TestCapacityPickUsesChoicesBucketPace(t *testing.T) {
 	if got.Provider != codex.Harness {
 		t.Fatalf("bucket pick = %+v; candidates = %+v", got, got.Candidates)
 	}
+}
+
+func TestCapacityPickRanksByRemainingBudgetPerHour(t *testing.T) {
+	r := newPickRig(t, subscriptionChoices)
+	r.providersExtra = `    agy:
+      ceiling: 2
+      command: ["read-agy"]
+      fiveHourMax: 90
+      sevenDayMax: 95
+`
+	r.choices = `    - {harness: claude, model: opus-x}
+    - {harness: agy, model: gemini-x}
+    - {harness: codex, model: gpt-x}
+`
+	r.configure("")
+	agy5h := 10.0
+	r.read = func(cmd []string) usageReading {
+		switch cmd[0] {
+		case testReadClaude:
+			return usageReading{
+				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
+				SevenDay: &usageWindow{UsedPercent: 10, ResetsAt: r.t0.Add(134 * time.Hour)},
+			}
+		case "read-agy":
+			return usageReading{
+				Buckets: map[string]usageBucket{
+					config.DefaultAgyGeminiBucket: {
+						FiveHour: &usageWindow{UsedPercent: agy5h, ResetsAt: r.reset5h},
+						SevenDay: &usageWindow{UsedPercent: 68, ResetsAt: r.t0.Add(15 * time.Hour)},
+					},
+				},
+				BucketOrder: []string{config.DefaultAgyGeminiBucket},
+			}
+		default:
+			return usageReading{
+				FiveHour: &usageWindow{UsedPercent: 10, ResetsAt: r.reset5h},
+				SevenDay: &usageWindow{UsedPercent: 32, ResetsAt: r.t0.Add(37 * time.Hour)},
+			}
+		}
+	}
+	r.want(harnessAgy + " " + pickGemini)
+	var p struct {
+		Capacity struct {
+			Choice struct {
+				Candidates []struct {
+					BehindPace *float64
+					Rate       *float64
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
+		t.Fatal(err)
+	}
+	wantBehind := []float64{10.2, 23.1, 46}
+	wantRate := []float64{0.7, 2.1, 1.8}
+	for i := range wantRate {
+		gotB := p.Capacity.Choice.Candidates[i].BehindPace
+		if gotB == nil || *gotB != wantBehind[i] {
+			t.Errorf("candidate %d behindPace = %v, want %v", i, gotB, wantBehind[i])
+		}
+		gotR := p.Capacity.Choice.Candidates[i].Rate
+		if gotR == nil || *gotR != wantRate[i] {
+			t.Errorf("candidate %d rate = %v, want %v", i, gotR, wantRate[i])
+		}
+	}
+	agy5h = 90
+	r.want(codex.Harness + " " + pickGPT)
 }

@@ -36,3 +36,28 @@ func TestReadLabConfig(t *testing.T) {
 		t.Errorf("ReadLabConfig: %+v %v, %+v %v", a, err, b, err2)
 	}
 }
+
+// Resolving a broken link must fail without replacing it or making a
+// released copy: the canonical configuration is unavailable.
+func TestRestoreLabConfigBrokenSymlink(t *testing.T) {
+	dir := Dir(t.TempDir())
+	if _, err := dir.Claim("lab", Holder{Env: "lab"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.KeepLabConfig("lab", []byte("clusterName: lab\n")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "agentlab.yaml")
+	if err := os.Symlink("missing.yaml", path); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := dir.RestoreLabConfig("lab", path); err == nil {
+		t.Fatal("restored over a broken link")
+	}
+	if link, err := os.Readlink(path); err != nil || link != "missing.yaml" {
+		t.Fatalf("link = %q, %v", link, err)
+	}
+	if _, err := os.Lstat(path + ".released"); !os.IsNotExist(err) {
+		t.Fatalf("released copy exists: %v", err)
+	}
+}

@@ -36,13 +36,16 @@ func ompUnit(id string) string { return "beekeeper-omp-" + id[:8] }
 // agent, starts it in a transient user unit with its stdin on its inbox,
 // hands it the key through the inbox and sends it the brief.
 func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
-	dir, err := filepath.Abs(sp.dir)
+	// the directory every harness starts in: --dir, else agents.dir, within
+	// agents.dir or a worktree under agents.roots
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return usageErr("--dir %s: not a directory", dir)
 	}
+	sp.brief = projectPrompt(dir, sp.brief)
 	bin, err := exec.LookPath(omp.Comm)
 	if err != nil {
 		return err
@@ -92,7 +95,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, "agents.start", "%s: omp agent %s on %s in %s, yolo%s, busy with %q", sp.name, id, model, dir, credentialsText(creds), reg.task)}, nil
+		return []state.Event{event(by, verbStart, "%s: omp agent %s on %s in %s, yolo%s, busy with %q", sp.name, id, model, dir, credentialsText(creds), reg.task)}, nil
 	})
 	if err != nil {
 		return err
@@ -187,6 +190,22 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 		return false
 	}
 	f := parseStartArgsForVault(args)
+	// Remote harnesses authenticate on their execution host. The coordinator
+	// still reads provider usage, but never hands its vault credential over.
+	if f.host != "" && f.host != executionLocal {
+		return false
+	}
+	if strings.TrimSpace(f.model) == "" && f.name != "" {
+		kind := strings.TrimSpace(f.taskKind)
+		if kind == "" {
+			if f.review || f.ofSelfHosted {
+				kind = taskKindReview
+			} else {
+				kind = workerRole
+			}
+		}
+		f.model = a.ruleModel(f.name, kind)
+	}
 	switch f.harness {
 	case omp.Harness:
 		return a.ompNeedsVault(f.model)
@@ -197,6 +216,10 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 }
 
 type startVaultFlags struct {
+	host         string
+	name         string
+	taskKind     string
+	authorModel  string
 	harness      string
 	model        string
 	excludes     []string
@@ -209,12 +232,35 @@ type startVaultFlags struct {
 
 func parseStartArgsForVault(args []string) startVaultFlags {
 	var f startVaultFlags
+	var nameFlag string
+	var pos []string
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
+			pos = append(pos, args[i+1:]...)
 			break
 		}
 		switch {
+		case strings.HasPrefix(arg, "--host="):
+			f.host = strings.TrimPrefix(arg, "--host=")
+		case arg == loopHostFlag && i+1 < len(args):
+			i++
+			f.host = args[i]
+		case strings.HasPrefix(arg, "--name="):
+			nameFlag = strings.TrimPrefix(arg, "--name=")
+		case arg == "--name" && i+1 < len(args):
+			i++
+			nameFlag = args[i]
+		case strings.HasPrefix(arg, "--kind="):
+			f.taskKind = strings.TrimPrefix(arg, "--kind=")
+		case arg == taskKindArg && i+1 < len(args):
+			i++
+			f.taskKind = args[i]
+		case strings.HasPrefix(arg, "--"+authorModelFlag+"="):
+			f.authorModel = strings.TrimPrefix(arg, "--"+authorModelFlag+"=")
+		case arg == "--"+authorModelFlag && i+1 < len(args):
+			i++
+			f.authorModel = args[i]
 		case strings.HasPrefix(arg, "--harness="):
 			f.harness = strings.TrimPrefix(arg, "--harness=")
 		case arg == "--harness" && i+1 < len(args):
@@ -243,7 +289,16 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		case arg == "--config" && i+1 < len(args):
 			i++
 			f.scratchCfg = args[i]
+		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == loopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
+			i++
+		case !strings.HasPrefix(arg, "-"):
+			pos = append(pos, arg)
 		}
+	}
+	if strings.TrimSpace(nameFlag) != "" {
+		f.name = strings.TrimSpace(nameFlag)
+	} else if len(pos) >= 2 {
+		f.name = strings.TrimSpace(pos[0])
 	}
 	return f
 }
@@ -282,6 +337,10 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 		}
 	}
 	k := target.liveCapacity()
+	k.TaskKind, k.AuthorModel = f.taskKind, f.authorModel
+	if f.taskKind == taskKindReview {
+		f.review = true
+	}
 	if len(k.Choices) == 0 {
 		return false
 	}
@@ -298,8 +357,8 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			}
 		}
 		sessions, _, _ := target.sessions()
-		c := countAgents(st, sessions, target.now)
-		pa := countProviderAgents(st, sessions, k, target.now)
+		c := countAgents(st, sessions, target.now, target.cfg)
+		pa := countProviderAgents(st, sessions, k, target.now, target.cfg)
 		readings := make(map[string]providerReadingResult, len(k.Providers))
 		for _, name := range k.ProviderNames() {
 			p := k.Providers[name]
@@ -327,18 +386,31 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			SlotsFree:        1,
 			MaxLabs:          1,
 		}
-		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, startKind(f.review, f.ofSelfHosted), target.now).stopped(&target, st.Stop)
+		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, startKind(f.review, f.ofSelfHosted), target.now).stopped(&target, st)
 		ch, err := pickAutoChoice(v, f.force)
 		if err != nil || ch == nil {
 			return false
 		}
-		return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
+		return ch.Harness == omp.Harness && target.ompChoiceNeedsVault(ch.Model, ch.Provider, wantModel)
 	}
 	normEx := normalizeExcludes(f.excludes)
 	for _, ch := range choicesCap.Choices {
 		if !choiceExcluded(ch, normEx, nil) {
-			return ch.Harness == omp.Harness && target.ompNeedsVault(ch.Model)
+			return ch.Harness == omp.Harness && target.ompChoiceNeedsVault(ch.Model, ch.EffectiveProvider(), wantModel)
 		}
+	}
+	return false
+}
+
+func (a *app) ompChoiceNeedsVault(chModel, chProvider, wantModel string) bool {
+	if a.ompNeedsVault(chModel) {
+		return true
+	}
+	if strings.Contains(wantModel, "/") && a.ompNeedsVault(wantModel) {
+		return true
+	}
+	if !strings.Contains(chModel, "/") && chProvider != "" {
+		return a.ompNeedsVault(chProvider + "/" + chModel)
 	}
 	return false
 }

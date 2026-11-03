@@ -39,6 +39,7 @@ func (w *watcher) staleWatches(ctx context.Context, t *proc.Table) {
 		found[key] = true
 		if !w.isActive(key) {
 			w.emit(key, "%s", w.staleLine(ctx, p, path, owner(t, p.PID, owners)))
+			w.checkInstalledGate(ctx, path)
 		}
 	}
 	w.clearMissing(staleKey, found)
@@ -77,24 +78,47 @@ func isWatch(p *proc.Process) bool {
 	return p.Comm == project.Name && slices.Contains(p.Args, "watch") && !slices.Contains(p.Args, "--once")
 }
 
+// staleBinary is a beekeeper process running a binary an install replaced,
+// and that install.
+type staleBinary struct {
+	*proc.Process
+	by platform.Install
+}
+
 // staleBinaries are the beekeeper processes of t, self apart, whose binary
-// another file was renamed over since they started (replaced says so for a
-// pid): an install's leftovers, which run the old code and whose saves of
-// the state the new release refuses. By pid.
-func staleBinaries(t *proc.Table, self int, replaced func(pid int) bool) []*proc.Process {
-	var out []*proc.Process
+// another file was renamed over since they started (replacement says which
+// for a pid): an install's leftovers, which run the old code and whose saves
+// of the state the new release refuses. An install that arrived before a
+// process started never replaced the binary it runs, whatever file it runs:
+// a copy elsewhere on the PATH, a file another mount namespace holds at the
+// path. The recorded start can be up to a second early because /proc/stat
+// rounds boot time down. A replacement inside that uncertain second still
+// counts: only an install at or before the recorded start is proven earlier.
+// By pid.
+func staleBinaries(t *proc.Table, self int, replacement func(pid int) (platform.Install, bool)) []staleBinary {
+	var out []staleBinary
 	for _, p := range t.ByPID {
-		if p.PID != self && p.Comm == project.Name && replaced(p.PID) {
-			out = append(out, p)
+		if p.PID == self || p.Comm != project.Name {
+			continue
 		}
+		in, ok := replacement(p.PID)
+		if !ok || !in.At.IsZero() && !p.Start.IsZero() && !in.At.After(p.Start) {
+			continue
+		}
+		out = append(out, staleBinary{Process: p, by: in})
 	}
-	slices.SortFunc(out, func(a, b *proc.Process) int { return a.PID - b.PID })
+	slices.SortFunc(out, func(a, b staleBinary) int { return a.PID - b.PID })
 	return out
 }
 
-// replacedBinary says whether another file was renamed over the executable
-// of the live process pid since it started.
-func replacedBinary(pid int) bool { return platform.ProcessBinary(pid).Replaced() }
+// isStaleWatch is isWatch for a stale binary.
+func isStaleWatch(s staleBinary) bool { return isWatch(s.Process) }
+
+// replacedBinary is the install renamed over the executable of the live
+// process pid since it started, false for none.
+func replacedBinary(pid int) (platform.Install, bool) {
+	return platform.ProcessBinary(pid).Replacement()
+}
 
 // replacedBinary is the path of process pid's executable and whether
 // another file was renamed over it since the process started.
@@ -129,4 +153,45 @@ func binaryVersion(ctx context.Context, file string) string {
 		return f[1]
 	}
 	return "an unknown version"
+}
+
+// checkInstalledGate confirms the binary installed at file passes budget --gate
+// with the live configuration, once per path, and reports at once when it fails.
+func (w *watcher) checkInstalledGate(ctx context.Context, file string) {
+	if file == "" {
+		return
+	}
+	w.mu.Lock()
+	if w.gateChecked == nil {
+		w.gateChecked = map[string]bool{}
+	}
+	if w.gateChecked[file] {
+		w.mu.Unlock()
+		return
+	}
+	w.gateChecked[file] = true
+	w.mu.Unlock()
+
+	var err error
+	if w.gateOf != nil {
+		err = w.gateOf(ctx, file)
+	} else if _, statErr := os.Stat(file); statErr == nil {
+		gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		args := budgetGateArgs
+		if w.cfgPath != "" {
+			args = append([]string{"--" + configFlag, w.cfgPath}, args...)
+		}
+		out, runErr := proc.Command(gctx, file, args...).CombinedOutput()
+		if runErr != nil {
+			detail := oneLine(string(out))
+			if detail == "" {
+				detail = oneLine(runErr.Error())
+			}
+			err = fmt.Errorf("%s", detail)
+		}
+	}
+	if err != nil {
+		w.fail("installed-gate "+file, "WATCH GATE FAILED %s: budget --gate failed after install: %s", file, oneLine(err.Error()))
+	}
 }

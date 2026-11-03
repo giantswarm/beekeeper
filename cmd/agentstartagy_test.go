@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -71,6 +72,7 @@ func TestAgyModel(t *testing.T) {
 // carries another session's variables: agents idle --done --report,
 // agents park, log add and note add work without --as.
 func TestAgyAgentIsTheCaller(t *testing.T) {
+	stubIssuePark(t, "giantswarm/beekeeper#1")
 	const id = "8765dcba-0000-4000-8000-000000000000"
 	dir := t.TempDir()
 	store, err := state.Open(dir)
@@ -207,6 +209,9 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	}
 
 	var gotBrief string
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("Working directory: /wrong-project-directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	origLauncher, origMachine := plat.Launcher, plat.Machine
 	t.Cleanup(func() { plat.Launcher, plat.Machine = origLauncher, origMachine })
 	plat.Machine = tableMachine{plat.Machine}
@@ -254,6 +259,9 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	if !strings.Contains(gotBrief, "Read the issue and ship it.") {
 		t.Fatalf("FIFO brief = %q, want brief text", gotBrief)
 	}
+	if !strings.HasPrefix(gotBrief, "Working directory: "+dir+"\n") || !strings.Contains(gotBrief, "Working directory: /wrong-project-directory") {
+		t.Fatalf("actual working directory must precede project instructions: %q", gotBrief)
+	}
 	if len(l.started) != 1 {
 		t.Fatalf("started units = %d, want 1", len(l.started))
 	}
@@ -274,6 +282,11 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 // startAgyAgent stops the unit, marks the roster entry undelivered, and
 // returns an error.
 func TestStartAgyAgentMarksUndeliveredWhenUnitEndsBeforeBrief(t *testing.T) {
+	// This fixture starts a local unit, even when an SSH worker runs it.
+	t.Setenv(execution.EnvID, "")
+	t.Setenv(execution.EnvCoordinator, "")
+	t.Setenv(execution.EnvHome, "")
+
 	const model = "claude-opus-4-6-thinking"
 	writeFakeAgy(t, "Available models:\n  "+model+"\n")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sup-1")

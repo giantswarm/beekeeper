@@ -40,7 +40,7 @@ func TestRunReleasesOrphanedScope(t *testing.T) {
 			scopePoll, scopeStartWait = time.Millisecond, 10*time.Millisecond
 			t.Cleanup(func() { scopePoll, scopeStartWait = oldPoll, oldStart })
 			var log bytes.Buffer
-			o := Options{Max: "1M", SlotDir: t.TempDir(), Slots: 1, Stderr: &log}
+			o := Options{Max: "1M", SlotDir: t.TempDir(), Slots: 1, Stderr: &log, Tail: NewTail(1024), TailDir: t.TempDir()}
 			start := time.Now()
 			rc := Run(o, []string{"ignored"})
 			if rc != 1 || time.Since(start) > time.Second {
@@ -73,7 +73,9 @@ func TestScopeWatchdogPreservesLiveAndUnreadableCommands(t *testing.T) {
 			oldPoll, oldStart := scopePoll, scopeStartWait
 			scopePoll, scopeStartWait = time.Millisecond, time.Second
 			t.Cleanup(func() { scopePoll, scopeStartWait = oldPoll, oldStart })
-			if rc := scope(f, "test", Options{Stderr: io.Discard}, 1, nil, nil, func(string, ...any) {}); rc != 23 {
+			rc, drain := scope(f, "test", Options{Stderr: io.Discard}, 1, nil, nil, func(string, ...any) {})
+			drain()
+			if rc != 23 {
 				t.Fatalf("exit %d, want 23", rc)
 			}
 		})

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,22 +17,43 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 type Journal struct {
+	Lease               *LeaseGrant   `json:"lease,omitempty"`
+	LeasePending        *LeaseRequest `json:"leasePending,omitempty"`
 	Completed           bool          `json:"completed,omitempty"`
 	Messages            MessageLedger `json:"messages,omitempty"`
 	ActivationAttempted bool          `json:"activationAttempted"`
 	RunnerPID           int           `json:"runnerPID,omitempty"`
 	RunnerStarted       time.Time     `json:"runnerStarted,omitempty"`
+	LastActive          time.Time     `json:"lastActive,omitzero"`
 	Request             StartRequest  `json:"request"`
 	Digest              string        `json:"digest"`
 	Handle              Handle        `json:"handle"`
 	Phase               string        `json:"phase"`
 	Ready               bool          `json:"ready"`
+	InTurn              bool          `json:"inTurn,omitempty"`
 	StopRequest         *StopRequest  `json:"stopRequest,omitempty"`
 	StopAcknowledged    bool          `json:"stopAcknowledged"`
 	LastError           string        `json:"lastError,omitempty"`
+	// Thread is the codex thread the first turn created; every later turn
+	// resumes it and the codex guard binds tool calls to it. Claude's
+	// conversation is the request's own identity and leaves it empty.
+	Thread string `json:"thread,omitempty"`
+	// Policy is the host policy a coordinator-approved rebind moved this
+	// execution onto; empty, it is the signed request's own policy.
+	Policy string `json:"policy,omitempty"`
+}
+
+// BoundPolicy is the policy digest the execution's host-side commands require
+// the host's prepared policy to match.
+func (j Journal) BoundPolicy() string {
+	if j.Policy != "" {
+		return j.Policy
+	}
+	return j.Request.PolicyDigest
 }
 
 // Server operates only on journals it created. It never discovers or adopts
@@ -42,6 +64,7 @@ type Server struct {
 	Rules                                                 []byte
 	Launcher                                              platform.Launcher
 	Command                                               HostCommand
+	Combined                                              HostCommand
 	Resources                                             func(context.Context) (Resources, error)
 	GuardProbe                                            func() error
 	Authorize                                             func(context.Context, StartRequest) error
@@ -139,9 +162,34 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := s.GuardProbe(); err != nil {
 		return c, err
 	}
-	h := s.Config.Harnesses[HarnessClaude]
-	if err := s.probe(ctx, h); err != nil {
+	if err := s.workerExecutable(); err != nil {
 		return c, err
+	}
+	harnesses, unavailable := map[string]string{}, map[string]string{}
+	for name, h := range s.Config.Harnesses {
+		if err := s.probe(ctx, name, h); err != nil {
+			unavailable[name] = err.Error()
+			continue
+		}
+		harnesses[name] = h.Version
+	}
+	if len(harnesses) == 0 {
+		var reasons []string
+		for name, reason := range unavailable {
+			reasons = append(reasons, name+": "+reason)
+		}
+		slices.Sort(reasons)
+		return c, errors.New(strings.Join(reasons, "; "))
+	}
+	if len(unavailable) == 0 {
+		unavailable = nil
+	}
+	tools, missing, err := s.probeTools(ctx)
+	if err != nil {
+		return c, err
+	}
+	if len(missing) > 0 {
+		return c, toolsError(missing)
 	}
 	if s.Resources == nil {
 		return c, errors.New("execution host resource observation is unavailable")
@@ -153,7 +201,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: map[string]string{HarnessClaude: h.Version}, Resources: resources}, nil
+	return Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -193,7 +241,7 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 		}
 	}
 	// Serialize admission across executions as well as retries of one start.
-	admission := flock.New(filepath.Join(s.Root, "admission.lock"))
+	admission := flock.New(filepath.Join(s.Root, admissionLock))
 	ok, err = admission.TryLockContext(ctx, 20*time.Millisecond)
 	if err != nil || !ok {
 		return Handle{}, errors.New("host admission is busy")
@@ -205,6 +253,9 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 	}
 	if caps.PolicyDigest != r.PolicyDigest {
 		return Handle{}, errors.New("execution policy digest mismatch")
+	}
+	if caps.Harnesses[r.Harness] == "" {
+		return Handle{}, errors.New("execution host does not offer harness " + r.Harness + ": " + caps.Unavailable[r.Harness])
 	}
 	blocks := caps.Resources.Blocks
 	if r.Builds {
@@ -273,32 +324,9 @@ func (s *Server) authorize(ctx context.Context, r StartRequest) error {
 }
 
 func (s *Server) room(ctx context.Context, own Ref) error {
-	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	busy, err := s.busy(ctx, own)
 	if err != nil {
 		return err
-	}
-	busy := 0
-	for _, p := range paths {
-		if _, err := uuid.Parse(strings.TrimSuffix(filepath.Base(p), ".json")); err != nil {
-			continue
-		}
-		var j Journal
-		if err := readJSON(p, &j); err != nil {
-			return errors.New("cannot establish execution host capacity")
-		}
-		if j.Handle.Ref == own || j.StopAcknowledged {
-			continue
-		}
-		if j.Phase == Exited || j.Phase == Failed {
-			o, err := s.Inspect(ctx, j.Handle.Ref)
-			if err != nil {
-				return errors.New("cannot establish owned unit state")
-			}
-			if o.ProcessState == Exited || o.ProcessState == Failed {
-				continue
-			}
-		}
-		busy++
 	}
 	if busy >= s.Config.MaxBusy {
 		return errors.New("execution host maxBusy reached")
@@ -306,13 +334,145 @@ func (s *Server) room(ctx context.Context, own Ref) error {
 	return nil
 }
 
+// Quiesce holds the host's admission, so that no execution starts and no
+// turn begins until release, and counts the executions that are in a turn or
+// may begin one on their own. An update replaces the binary and the policy
+// every running execution is pinned to: it goes ahead only at zero, before
+// release. An execution between turns (a parked worker waiting for its wake)
+// does not hold it back: its next turn begins only after release, on the
+// updated host, once the coordinator rebinds it to the prepared policy.
+func (s *Server) Quiesce(ctx context.Context) (busy int, release func(), err error) {
+	if err := ownedDirectory(s.Root); err != nil {
+		return 0, nil, err
+	}
+	admission := flock.New(filepath.Join(s.Root, admissionLock))
+	wait, cancel := context.WithTimeout(ctx, quiesceWait)
+	defer cancel()
+	ok, err := admission.TryLockContext(wait, 20*time.Millisecond)
+	if err != nil || !ok {
+		return 0, nil, errors.New("host admission is busy")
+	}
+	release = func() { _ = admission.Unlock() }
+	if busy, err = s.count(ctx, Ref{}, false); err != nil {
+		release()
+		return 0, nil, err
+	}
+	return busy, release, nil
+}
+
+// admissionLock is the host's admission: a start, a turn's beginning and an
+// update take it in turn.
+const admissionLock = "admission.lock"
+
+// quiesceWait bounds Quiesce's wait for a start that holds the admission.
+var quiesceWait = 30 * time.Second
+
+// turnAdmissionWait bounds a turn's wait for the admission; turnRetry is when
+// a turn that did not get it tries again.
+var (
+	turnAdmissionWait = 2 * time.Second
+	turnRetry         = 5 * time.Second
+)
+
+// beginTurn records the next turn's beginning (f, on the journal) under the
+// host's admission, so that an update's Quiesce sees the turn or the turn
+// sees the updated host, never a turn that begins halfway through an
+// install. begun is false while the admission is held: the message stays
+// stored and the caller tries again after turnRetry.
+func (s *Server) beginTurn(ctx context.Context, r Ref, f func(*Journal) error) (begun bool, err error) {
+	admission := flock.New(filepath.Join(s.Root, admissionLock))
+	wait, cancel := context.WithTimeout(ctx, turnAdmissionWait)
+	defer cancel()
+	if ok, err := admission.TryLockContext(wait, 20*time.Millisecond); err != nil || !ok {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, nil
+	}
+	defer func() { _ = admission.Unlock() }()
+	return true, s.update(ctx, r, f)
+}
+
+// betweenTurns says the execution runs, accepted its first task and waits
+// for a wake: no turn runs, none is stored to begin and no delivery is
+// uncertain.
+func (j Journal) betweenTurns() bool {
+	if j.Phase != Running || !j.Ready || j.InTurn || j.StopRequest != nil || j.StopAcknowledged || j.Completed {
+		return false
+	}
+	for _, d := range j.Messages.Entries {
+		if d.Stage == Stored || d.Stage == Uncertain {
+			return false
+		}
+	}
+	return true
+}
+
+// busy counts the executions other than own that run or may run.
+func (s *Server) busy(ctx context.Context, own Ref) (int, error) {
+	return s.count(ctx, own, true)
+}
+
+func (s *Server) count(ctx context.Context, own Ref, idle bool) (int, error) {
+	refs, err := s.busyExecutions(ctx, own, idle)
+	return len(refs), err
+}
+
+// BusyExecutions names every journal-backed execution that blocks an update.
+func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
+	return s.busyExecutions(ctx, own, false)
+}
+
+func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref, error) {
+	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	busy := []Ref{}
+	for _, p := range paths {
+		if _, err := uuid.Parse(strings.TrimSuffix(filepath.Base(p), ".json")); err != nil {
+			continue
+		}
+		var j Journal
+		if err := readJSON(p, &j); err != nil {
+			return nil, errors.New("cannot establish execution host capacity")
+		}
+		j, err = s.Read(j.Handle.Ref)
+		if err != nil {
+			return nil, err
+		}
+		if j.Handle.Ref == own || j.StopAcknowledged || !idle && j.betweenTurns() {
+			continue
+		}
+		if j.Phase == Exited || j.Phase == Failed {
+			o, err := s.Inspect(ctx, j.Handle.Ref)
+			if err != nil {
+				return nil, errors.New("cannot establish owned unit state")
+			}
+			if o.ProcessState == Exited || o.ProcessState == Failed {
+				continue
+			}
+		}
+		busy = append(busy, j.Handle.Ref)
+	}
+	return busy, nil
+}
+
 func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	j, err := s.Read(r)
 	if err != nil {
 		return Observation{}, err
 	}
-	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	o := Observation{Handle: j.Handle, ProcessState: j.Phase, Reachability: Reachable, ObservedAt: s.now(), ReachabilityAt: s.now(), LastActive: j.LastActive, Ready: j.Ready, StopRequested: j.StopRequest != nil, StopAcknowledged: j.StopAcknowledged, LastError: j.LastError}
+	if fi, err := os.Lstat(filepath.Join(s.Root, string(r.Execution)+".log")); err == nil && fi.Mode().IsRegular() && fi.ModTime().UTC().After(o.LastActive) {
+		o.LastActive = fi.ModTime().UTC()
+	}
+	o.Lease = j.Lease
 	o.Messages, o.MessageSequence = j.Messages.Status(), j.Messages.Sequence
+	o.PolicyDigest = j.BoundPolicy()
+	if p, err := s.InstalledPolicy(); err == nil {
+		o.HostPolicyDigest = p.Digest()
+	}
 	if j.StopAcknowledged {
 		o.ProcessState = Exited
 		return o, nil
@@ -327,7 +487,19 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	switch s.Launcher.State(ctx, j.Handle.Unit) {
 	case unitActive, Activating, "reloading", "deactivating":
 		o.ProcessState = Running
+		o.InTurn = j.InTurn
 	case unitInactive, Failed:
+		if j.StopRequest != nil {
+			if err := s.update(ctx, r, func(current *Journal) error {
+				current.StopAcknowledged, current.Phase, current.InTurn = true, Exited, false
+				return nil
+			}); err != nil {
+				return Observation{}, err
+			}
+			s.cleanWorkspace(r)
+			o.StopAcknowledged, o.ProcessState = true, Exited
+			return o, nil
+		}
 		if j.Phase == Failed {
 			o.ProcessState = Failed
 		} else if j.Ready {
@@ -359,6 +531,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
+		s.cleanWorkspace(r)
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -380,11 +553,75 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 			return Ack{}, errors.New("stop requested; termination is not confirmed")
 		}
 	}
-	j.StopAcknowledged, j.Phase = true, Exited
+	j.StopAcknowledged, j.Phase, j.InTurn = true, Exited, false
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
+	s.cleanWorkspace(r)
 	return Ack{ID: q.ID, Stage: Applied}, nil
+}
+
+// RebindPolicy binds a running execution to the host's prepared policy. The
+// coordinator sends it only for the policy pinned in its host catalog; the
+// host still requires a launched execution whose owned unit is active, that
+// exact prepared policy and the bound one it replaces, so a stale request, an
+// exited execution or an unprepared host fails closed.
+func (s *Server) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Observation, error) {
+	if !ValidDigest(q.From) || !ValidDigest(q.To) {
+		return Observation{}, errors.New("policy rebind needs the bound and the prepared policy digests")
+	}
+	if s.Launcher == nil {
+		return Observation{}, errors.New("policy rebind needs the host's service manager")
+	}
+	if err := s.update(ctx, r, func(j *Journal) error {
+		if j.StopRequest != nil || j.StopAcknowledged || j.Completed || j.Phase != Running && j.Phase != Activating {
+			return errors.New("only a running execution is rebound; this one is not launched, or it stopped, completed, exited or failed")
+		}
+		switch s.Launcher.State(ctx, j.Handle.Unit) {
+		case unitActive, Activating, "reloading":
+		default:
+			return errors.New("only a running execution is rebound; its owned unit is not active")
+		}
+		p, err := s.InstalledPolicy()
+		if err != nil {
+			return err
+		}
+		if p.Digest() != q.To {
+			return errors.New("policy rebind target is not the host's prepared policy")
+		}
+		if j.BoundPolicy() == q.To {
+			return nil
+		}
+		if j.BoundPolicy() != q.From {
+			return errors.New("policy rebind source is not the execution's bound policy")
+		}
+		j.Policy = q.To
+		return nil
+	}); err != nil {
+		return Observation{}, err
+	}
+	return s.Inspect(ctx, r)
+}
+
+func (s *Server) cleanWorkspace(r Ref) {
+	if s.Config.WorkspaceRoot != "" {
+		if root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot); err == nil && root == filepath.Clean(s.Config.WorkspaceRoot) {
+			parent := filepath.Join(root, string(r.Execution))
+			if within(root, parent) {
+				_ = worktrees.RemoveAll(parent)
+			}
+		}
+	}
+	if s.Root != "" {
+		srcDir := filepath.Dir(s.sourcePath(r))
+		if within(s.Root, srcDir) {
+			_ = worktrees.RemoveAll(srcDir)
+		}
+		mcpHome := s.agyMCPHomeDir(r)
+		if within(s.Root, mcpHome) {
+			_ = worktrees.RemoveAll(mcpHome)
+		}
+	}
 }
 
 func (s *Server) Logs(_ context.Context, r Ref, q LogRequest) (LogPage, error) {
@@ -446,8 +683,23 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		} else {
 			var value any
 			switch req.Operation {
+			case inventoryOperation:
+				var coordinator string
+				err = Decode(req.Payload, &coordinator)
+				if err == nil {
+					value, err = s.Inventory(ctx, coordinator)
+				}
+			case missingOperation:
+				value, err = s.Missing(ctx, req.Ref)
 			case "check":
 				value, err = s.Check(ctx)
+			case "source-chunk":
+				var chunk SourceChunk
+				err = Decode(req.Payload, &chunk)
+				if err == nil {
+					err = s.ReceiveSource(ctx, req.Ref, chunk)
+				}
+				value = struct{}{}
 			case "start":
 				var r StartRequest
 				err = Decode(req.Payload, &r)
@@ -457,15 +709,21 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err == nil {
 					value, err = s.Start(ctx, r)
 				}
-			case "inspect":
+			case inspectOperation:
 				value, err = s.Inspect(ctx, req.Ref)
-			case "sync-control":
+			case syncControlOperation:
 				value, err = s.SyncControl(ctx, req.Ref, nil)
-			case "stop":
+			case stopOperation:
 				var q StopRequest
 				err = Decode(req.Payload, &q)
 				if err == nil {
 					value, err = s.Stop(ctx, req.Ref, q)
+				}
+			case rebindOperation:
+				var q PolicyRebind
+				err = Decode(req.Payload, &q)
+				if err == nil {
+					value, err = s.RebindPolicy(ctx, req.Ref, q)
 				}
 			case "logs":
 				var q LogRequest
@@ -489,6 +747,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
+				if (req.Operation == inspectOperation || req.Operation == syncControlOperation || req.Operation == stopOperation) && errors.Is(err, os.ErrNotExist) {
+					reply.Code = "not-found"
+				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
 				}

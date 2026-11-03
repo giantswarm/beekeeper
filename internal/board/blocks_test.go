@@ -28,7 +28,9 @@ type fakeDeps struct {
 }
 
 func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
+	checkedQuery(f.t, q)
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
 	for i := 4; i+1 < len(args); i += 2 {
@@ -45,7 +47,7 @@ func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
 		return n
 	}
 	// summary is the issue's blockers, as their list and as the summary
-	// board next reads.
+	// older readers used.
 	summary := func(key string) string {
 		var bs []string
 		for _, b := range f.blockers[key] {
@@ -92,17 +94,34 @@ func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
 // openIssue and closedIssue are an issue's state as fakeDeps keeps it,
 // pr7 a pull request.
 const (
-	openIssue   = `{"state":"OPEN"}`
-	closedIssue = `{"state":"CLOSED"}`
-	pr7         = "o/r#7"
-	repoR       = "o/r"
+	openIssue      = `{"state":"OPEN"}`
+	closedIssue    = `{"state":"CLOSED"}`
+	pr7            = "o/r#7"
+	repoR          = "o/r"
+	issueQ3        = "o/q#3"
+	addBlockedR5Q3 = "addBlockedBy r#5 q#3"
 )
 
 func newFakeDeps(t *testing.T) *fakeDeps {
 	return &fakeDeps{t: t, blockers: map[string][]string{}, nodes: map[string]string{
-		"r#5": openIssue, "r#9": openIssue, "q#3": openIssue,
-		"r#7": `{"__typename":"PullRequest"}`,
+		"r#5":  openIssue,
+		"r#9":  openIssue,
+		"q#3":  openIssue,
+		"r#7":  `{"__typename":"PullRequest"}`,
+		"r#15": `{"__typename":"PullRequest","closingIssuesReferences":{"nodes":[{"__typename":"Issue","id":"ID:r#5","state":"OPEN","number":5,"repository":{"nameWithOwner":"o/r"},"blockedBy":{"totalCount":0,"nodes":[]}}]}}`,
+		"q#13": `{"__typename":"PullRequest","closingIssuesReferences":{"nodes":[{"__typename":"Issue","id":"ID:q#3","state":"OPEN","number":3,"repository":{"nameWithOwner":"o/q"},"blockedBy":{"totalCount":0,"nodes":[]}}]}}`,
 	}}
+}
+
+func TestBlockResolvesPullRequestsToClosingIssues(t *testing.T) {
+	f := newFakeDeps(t)
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7}}
+	ctx := context.Background()
+	h, err := c.Block(ctx, "o/r#15", "o/q#13")
+	if err != nil || *h != (Held{Ref: issue5, By: issueQ3, ByOpen: true, Changed: true, Blockers: 1, OpenBlockers: 1}) ||
+		!slices.Equal(f.mutations, []string{addBlockedR5Q3}) {
+		t.Fatalf("Block(PR, PR) = %+v, %v; mutations %v", h, err, f.mutations)
+	}
 }
 
 func TestBlockAndUnblockRecordTheDependency(t *testing.T) {
@@ -172,15 +191,16 @@ func TestABlockedItemIsSkippedThenOfferedOnceItsBlockerCloses(t *testing.T) {
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7}}
 	ctx := context.Background()
 	b := deskBoard()
-	// board next ranks the item as Read builds it: its blockers' summary
-	// from the issue, as GitHub answers it.
+	// Keep GitHub's summary stale while the dependency list changes.
+	f.lag = true
+	// Rank the same issue fragment the board, sub-issues and searches read.
 	rank := func() Candidate {
 		var r struct {
 			Repository struct {
 				Item issueJSON `json:"issueOrPullRequest"`
 			} `json:"repository"`
 		}
-		if err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...on Issue{issueDependenciesSummary{blockedBy totalBlockedBy}}}}}`,
+		if err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...I}}}`+issueFields,
 			vars{"o": "o", "r": "r", "n": 5}); err != nil {
 			t.Fatal(err)
 		}
@@ -215,5 +235,63 @@ func TestABlockedItemIsSkippedThenOfferedOnceItsBlockerCloses(t *testing.T) {
 	}
 	if got := rank(); got.Skip != "" {
 		t.Errorf("unblocked item: skip %q, want offered", got.Skip)
+	}
+}
+
+// blockedMeta is metaJSON with a blocked Status, s4.
+var blockedMeta = strings.Replace(metaJSON, `{"id":"s3","name":"In Progress ⛏️"}`, `{"id":"s3","name":"In Progress ⛏️"},{"id":"s4","name":"Blocked / Waiting ⛔️"}`, 1)
+
+// A move to the blocked Status says what holds the item: --by records an
+// open issue as its blocker first, an item with an open recorded blocker
+// moves as it is, and anything else is refused before anything is written,
+// as is --by with a move to another Status or a closed blocker. A move to
+// another Status without --by is Move.
+func TestMoveHeldRecordsWhatHoldsABlockedItem(t *testing.T) {
+	deps := newFakeDeps(t)
+	gh := &fakeGH{t: t, item: onBoard}
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		switch q := args[3]; {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(blockedMeta), nil
+		case strings.Contains(q, "issueOrPullRequest") || strings.Contains(q, "BlockedBy("):
+			return deps.run(ctx, args...)
+		}
+		return gh.run(ctx, args...)
+	}
+	c := &Client{GH: run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	ctx := context.Background()
+	refusedWith := func(err error, want string) bool {
+		var r *Refusal
+		return errors.As(err, &r) && strings.Contains(r.Reason, want)
+	}
+	// No blocker recorded, none named: refused, nothing written.
+	if _, _, err := c.MoveHeld(ctx, issue5, "blocked", ""); !refusedWith(err, "o/r#5 has no open recorded blocker: a move to Blocked / Waiting ⛔️ names what holds it, --by") ||
+		len(gh.mutations)+len(deps.mutations) != 0 {
+		t.Fatalf("unexplained block = %v; mutations %v %v", err, gh.mutations, deps.mutations)
+	}
+	// A pull request, or a closed issue, holds no item.
+	deps.nodes["r#6"] = closedIssue
+	for by, want := range map[string]string{pr7: pr7 + " is a pull request", "o/r#6": "o/r#6 is closed: it holds nothing"} {
+		if _, _, err := c.MoveHeld(ctx, issue5, "waiting", by); !refusedWith(err, want) || len(gh.mutations)+len(deps.mutations) != 0 {
+			t.Errorf("--by %s = %v; mutations %v %v", by, err, gh.mutations, deps.mutations)
+		}
+	}
+	// --by names what holds a blocked item only.
+	if _, _, err := c.MoveHeld(ctx, issue5, "progress", issue9); !refusedWith(err, "In Progress ⛏️ is none") || len(gh.mutations)+len(deps.mutations) != 0 {
+		t.Errorf("--by with In Progress = %v", err)
+	}
+	// --by an open issue: recorded, then moved.
+	mv, h, err := c.MoveHeld(ctx, issue5, "blocked", issue9)
+	if err != nil || mv.To != "Blocked / Waiting ⛔️" || h == nil || !h.Changed || h.OpenBlockers != 1 ||
+		!slices.Equal(deps.mutations, []string{"addBlockedBy r#5 r#9"}) || !slices.Equal(gh.mutations, []string{"I1=s4"}) {
+		t.Fatalf("MoveHeld --by = %+v, %+v, %v; mutations %v %v", mv, h, err, deps.mutations, gh.mutations)
+	}
+	// Its blocker recorded, the item moves without --by.
+	if _, h, err := c.MoveHeld(ctx, issue5, "blocked", ""); err != nil || h == nil || h.Changed || h.OpenBlockers != 1 || len(gh.mutations) != 2 {
+		t.Errorf("MoveHeld with a recorded blocker = %+v, %v; mutations %v", h, err, gh.mutations)
+	}
+	// Any other move is Move.
+	if mv, h, err := c.MoveHeld(ctx, issue5, "up next", ""); err != nil || h != nil || mv.To != upNext {
+		t.Errorf("MoveHeld to Up Next = %+v, %+v, %v", mv, h, err)
 	}
 }

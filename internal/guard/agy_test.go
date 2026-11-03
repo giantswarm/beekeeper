@@ -28,7 +28,7 @@ const (
 	nbPathField      = "NotebookPath"
 	newSourceField   = "NewSource"
 	sendInputAction  = "send_input"
-	yoursLabAMsg     = "yours " + labA
+	inputField       = "Input"
 )
 
 type agyDecision struct {
@@ -457,7 +457,11 @@ func TestAgyPushAndMergeDirectoryResolution(t *testing.T) {
 		"if true; then cd " + featRepo + "; fi; gh pr create -R giantswarm/beekeeper --title t --body b",
 		"cd " + featRepo + " && gh pr merge 42 --squash",
 	} {
-		if d := decideAgyCmd(t, h, featRepo, cmd); d.Decision != decisionAsk {
+		want := decisionAsk
+		if strings.Contains(cmd, "pr merge") {
+			want = decisionDeny
+		}
+		if d := decideAgyCmd(t, h, featRepo, cmd); d.Decision != want {
 			t.Errorf("gh write with known repo %q: got %+v, want ask", cmd, d)
 		}
 	}
@@ -691,7 +695,7 @@ func TestAgyBareCommandWordAndEscapedBackticks(t *testing.T) {
 
 	// Create `./agy/` in the repository root holding a guarded tool, a script
 	// that invokes it, and a secret file.
-	agyDir := filepath.Join(dir, "agy")
+	agyDir := filepath.Join(dir, agyHarness)
 	if err := os.MkdirAll(agyDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -709,7 +713,7 @@ func TestAgyBareCommandWordAndEscapedBackticks(t *testing.T) {
 	// `agy` that invokes the guarded helper, to verify a bare command word
 	// `agy` without a `/` is never resolved against cwd.
 	fileDir := initGitRepo(t, "feat-branch", "https://github.com/giantswarm/beekeeper.git")
-	if err := os.WriteFile(filepath.Join(fileDir, "agy"), []byte("#!/bin/sh\n"+helper+"\n"), 0o755); err != nil { //nolint:gosec // test fixture
+	if err := os.WriteFile(filepath.Join(fileDir, agyHarness), []byte("#!/bin/sh\n"+helper+"\n"), 0o755); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
 	}
 
@@ -970,7 +974,6 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 		t.Errorf("TranscriptPath = %q, want /tmp/transcript.jsonl", ev.TranscriptPath)
 	}
 
-	var yoursSession, yoursTo, yoursMsg string
 	var stoppedSession, stoppedTask string
 	personDir := t.TempDir()
 	h := Hook{
@@ -987,10 +990,6 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 			}
 			return "", nil
 		},
-		Yours: func(session, to, message string) string {
-			yoursSession, yoursTo, yoursMsg = session, to, message
-			return "granted to " + to
-		},
 		StopTask: func(session, task string) string {
 			stoppedSession, stoppedTask = session, task
 			return "stopped " + task
@@ -1005,15 +1004,6 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 		t.Errorf("send_message to the guide: got %+v, want allow with Recipient=Guide-1", d)
 	}
 
-	// Because AgySession(input) == ev.Session == "conv-test", a send_message
-	// saying "yours lab-a" passes the exact conversationId to Yours.
-	if d := decideAgyCall(t, h, dir, "send_message", map[string]any{
-		"Recipient":  "worker-1",
-		messageField: yoursLabAMsg,
-	}); d.Decision != decisionAsk || yoursSession != testConvID || yoursTo != "worker-1" || yoursMsg != yoursLabAMsg {
-		t.Errorf("supervisor grant via send_message: decision=%+v, yours=%s/%s/%s", d, yoursSession, yoursTo, yoursMsg)
-	}
-
 	// manage_task send_input runs command refusal checks without rewriting CommandLine.
 	for _, badInput := range []string{
 		"git push origin main",
@@ -1024,7 +1014,7 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 		if d := decideAgyCall(t, h, dir, manageTaskTool, map[string]any{
 			actionField: sendInputAction,
 			taskIDField: "t1",
-			"Input":     badInput,
+			inputField:  badInput,
 		}); d.Decision != decisionDeny {
 			t.Errorf("manage_task send_input %q: got %+v, want deny", badInput, d)
 		}
@@ -1032,7 +1022,7 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 	if d := decideAgyCall(t, h, dir, manageTaskTool, map[string]any{
 		actionField: sendInputAction,
 		taskIDField: "t1",
-		"Input":     "go test ./internal/...",
+		inputField:  "go test ./internal/...",
 	}); d.Decision != decisionAsk || d.Overwrite != nil {
 		t.Errorf("manage_task send_input benign build: got %+v, want ask without Overwrite", d)
 	}

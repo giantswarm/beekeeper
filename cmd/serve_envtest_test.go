@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/identity/identitytest"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/mailbox/mailboxtest"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
@@ -205,6 +207,9 @@ func (e *serveEnv) expect(t *testing.T, m *mcpCaller, name string, args map[stri
 	if !strings.Contains(text, want) {
 		t.Errorf("%s %v: %q does not say %q", name, args, text, want)
 	}
+	if strings.Contains(text, "retaining notification status failed") {
+		t.Errorf("%s %v: unexpected notification status error in %q", name, args, text)
+	}
 	if structured == nil {
 		t.Errorf("%s: no structured content", name)
 	}
@@ -223,7 +228,7 @@ func (e *serveEnv) expect(t *testing.T, m *mcpCaller, name string, args map[stri
 
 func (e *serveEnv) events(t *testing.T) int {
 	t.Helper()
-	evs, err := e.store.Events(0, nil)
+	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb != noteDeliveryEvent })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,8 +276,13 @@ func TestEnvtestServeBoundsTheBody(t *testing.T) {
 	}
 	raw, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if !strings.Contains(string(raw), "request body too large") {
+	// The bound is mcpMaxBody's: the MCP library answers 413 naming it, an
+	// older one the MaxBytesReader's "request body too large".
+	if res.StatusCode != http.StatusRequestEntityTooLarge && !strings.Contains(string(raw), "request body too large") {
 		t.Errorf("an oversized body: HTTP %d %s", res.StatusCode, raw)
+	}
+	if res.StatusCode == http.StatusRequestEntityTooLarge && !strings.Contains(string(raw), strconv.Itoa(mcpMaxBody)) && !strings.Contains(string(raw), "request body too large") {
+		t.Errorf("an oversized body: HTTP 413 not naming the bound %d: %s", mcpMaxBody, raw)
 	}
 }
 

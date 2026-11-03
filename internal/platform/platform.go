@@ -236,8 +236,6 @@ type SetupSpec struct {
 	TeleportEvery time.Duration
 	// Notify runs the standby watch with --notify (watch.notify).
 	Notify bool
-	// SupervisorLoop installs the opt-in supervisor loop service.
-	SupervisorLoop bool
 	// ConfigPath is the explicit configuration the loop service reads.
 	ConfigPath string
 	// ToolPath is the installing process's PATH, retained for the loop's

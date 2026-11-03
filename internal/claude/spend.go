@@ -63,7 +63,19 @@ type SpendRequest struct {
 // transcript is no session.
 type SpendTranscript struct {
 	Subagent bool
+	// Session is the id of the session the transcript belongs to (a
+	// subagent's: its parent's) where the file names it; empty: unknown.
+	Session  string
 	Requests []SpendRequest
+}
+
+// transcriptSession is the session id a Claude Code transcript's path
+// names: <id>.jsonl, or <id>/subagents/<agent>.jsonl for a subagent.
+func transcriptSession(p string, subagent bool) string {
+	if subagent {
+		return filepath.Base(filepath.Dir(filepath.Dir(p)))
+	}
+	return strings.TrimSuffix(filepath.Base(p), ".jsonl")
 }
 
 // ReadSpendTranscripts reads the requests from from up to to of every Claude
@@ -78,7 +90,7 @@ func ReadSpendTranscripts(dir string, from, to time.Time) ([]SpendTranscript, er
 			}
 			return nil //nolint:nilerr // an unreadable entry is passed over
 		}
-		if !d.Type().IsRegular() || filepath.Ext(p) != ".jsonl" {
+		if !d.Type().IsRegular() || filepath.Ext(p) != transcriptExt {
 			return nil
 		}
 		if fi, err := d.Info(); err == nil && !fi.ModTime().Before(from) {
@@ -96,7 +108,8 @@ func ReadSpendTranscripts(dir string, from, to time.Time) ([]SpendTranscript, er
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			ts[i] = SpendTranscript{Subagent: filepath.Base(filepath.Dir(p)) == "subagents", Requests: transcriptRequests(p, from, to)}
+			sub := filepath.Base(filepath.Dir(p)) == "subagents"
+			ts[i] = SpendTranscript{Subagent: sub, Session: transcriptSession(p, sub), Requests: transcriptRequests(p, from, to)}
 		})
 	}
 	wg.Wait()

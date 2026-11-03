@@ -153,14 +153,13 @@ func TestSkillsSuggestNoLongLeaseWait(t *testing.T) {
 // one-commit PR's commit message otherwise.
 func TestMergeSkillNamesTheSquashSubject(t *testing.T) {
 	merge := strings.Join(strings.Fields(Skill("merge")), " ")
-	if !strings.Contains(merge, `--squash --subject "<PR title> (#<n>)"`) {
+	if !strings.Contains(merge, `--squash --match-head-commit <reviewed-head-sha> --subject "<PR title> (#<n>)"`) {
 		t.Error("the merge skill does not name --subject for a personal account's merge")
 	}
 }
 
-// A code scan's finding is raised on main and names where it was raised,
-// and the supervisor dispatches one only once that is the head: a scan of
-// a stale clone reports what main fixed long ago.
+// A code scan's finding is raised on main and names where it was raised: a
+// scan of a stale clone reports what main fixed long ago.
 func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	gh := words(Skill("github"))
@@ -168,13 +167,6 @@ func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 		if !strings.Contains(gh, want) {
 			t.Errorf("the github skill does not say %q", want)
 		}
-	}
-	raw, err := Skills.ReadFile(SkillsDir + "/supervise/references/scheduling.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(words(string(raw)), "a code scan's finding only once the commit it names is the default branch's head") {
-		t.Error("the supervisor's scheduling does not check a scan finding's commit against the head")
 	}
 }
 
@@ -214,11 +206,11 @@ func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	}
 }
 
-// The role skills load only from a prompt that opens with their bare slash
-// command (handover --prompt, a successor's first prompt, the person), so a
-// worker's skill listing never carries them.
+// The role skill loads only from a prompt that opens with its bare slash
+// command (guide handover --prompt, a successor's first prompt, the
+// person), so a worker's skill listing never carries it.
 func TestRoleSkillsAreHiddenFromTheModel(t *testing.T) {
-	for _, name := range []string{"supervise", "guide"} {
+	for _, name := range []string{"guide"} {
 		front, _, _ := strings.Cut(strings.TrimPrefix(string(SkillFile(name)), "---\n"), "\n---\n")
 		if !slices.Contains(strings.Split(front, "\n"), "disable-model-invocation: true") {
 			t.Errorf("%s/SKILL.md lacks disable-model-invocation: true:\n%s", name, front)
@@ -271,5 +263,31 @@ func TestWorkerRulesStateFullURLRuleOnce(t *testing.T) {
 	const want = "Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`."
 	if n := strings.Count(rules, want); n != 1 {
 		t.Errorf("the worker rules state %q %d times, want 1", want, n)
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1795: the guide asks each
+// waiting decision in the conversation the person reads; no skill assumes
+// a phone or a push notification reaches them.
+func TestTheGuideAsksWaitingDecisionsInItsConversation(t *testing.T) {
+	err := fs.WalkDir(Skills, SkillsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(Skills, path)
+		if err != nil {
+			return err
+		}
+		if lower := strings.ToLower(string(b)); strings.Contains(lower, "pushnotification") || strings.Contains(lower, "phone") {
+			t.Errorf("%s assumes a phone or a push notification reaches the person", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := strings.Join(strings.Fields(Skill("guide")), " ")
+	if !strings.Contains(guide, "in the question dialog of this conversation") || !strings.Contains(guide, "without waiting for them to ask") {
+		t.Error("the guide skill does not ask waiting decisions in its conversation")
 	}
 }

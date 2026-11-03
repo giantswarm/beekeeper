@@ -47,27 +47,63 @@ func (s *Server) git(ctx context.Context, dir string, args ...string) ([]byte, e
 	// checkout hooks must not execute before registration or inherit the
 	// operator's unrelated Git settings.
 	args = append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false"}, args...)
-	return s.command(ctx, dir, append(cleanEnvironment(""), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), "git", args...)
+	return s.command(ctx, dir, append(cleanEnvironment("", ""), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), "git", args...)
+}
+
+func (s *Server) unshallowWorkspaceRepository(ctx context.Context, repository, commit string) {
+	shallow := filepath.Join(repository, "shallow")
+	raw, err := os.ReadFile(filepath.Clean(shallow))
+	if err != nil {
+		return
+	}
+	if err := os.Remove(shallow); err != nil {
+		return
+	}
+	if _, err := s.git(ctx, repository, "rev-list", "--objects", commit); err != nil {
+		_ = atomicFile(shallow, raw)
+		return
+	}
+	refs, err := s.git(ctx, repository, "for-each-ref", "--format=%(refname)", "refs/heads")
+	if err != nil {
+		return
+	}
+	for ref := range strings.SplitSeq(strings.TrimSpace(string(refs)), "\n") {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || strings.HasPrefix(ref, "refs/heads/beekeeper-worker/") {
+			continue
+		}
+		if _, err := s.git(ctx, repository, "rev-list", "--objects", ref); err != nil {
+			_, _ = s.git(ctx, repository, "update-ref", ref, commit)
+		} else if _, err := s.git(ctx, repository, "merge-base", "--is-ancestor", ref, commit); err == nil {
+			_, _ = s.git(ctx, repository, "update-ref", ref, commit)
+		}
+	}
 }
 
 func (s *Server) workspace(ctx context.Context, j *Journal) error {
-	source, ok := s.Config.Repositories[j.Request.Repository]
-	if !ok {
-		return errors.New("repository is not mapped on the execution host")
+	source, mapped := s.Config.Repositories[j.Request.Repository]
+	if !repositoryAllowed(s.Config.Repositories, s.Config.RepositoryOrgs, j.Request.Repository) {
+		return errors.New("repository is not admitted by execution host policy")
 	}
-	source, err := filepath.EvalSymlinks(source)
-	if err != nil {
-		return errors.New("execution host checkout is unavailable")
-	}
-	origin, err := s.git(ctx, source, "remote", "get-url", "origin")
-	if err != nil || RepositoryIdentity(string(origin)) != strings.ToLower(j.Request.Repository) {
-		return errors.New("execution host checkout origin does not match the repository allowlist")
+	origin := []byte("https://github.com/" + j.Request.Repository + ".git")
+	if mapped {
+		resolved, err := filepath.EvalSymlinks(source)
+		if err != nil {
+			return errors.New("execution host checkout is unavailable")
+		}
+		source = resolved
+		origin, err = s.git(ctx, source, "remote", "get-url", "origin")
+		if err != nil || RepositoryIdentity(string(origin)) != strings.ToLower(j.Request.Repository) {
+			return errors.New("execution host checkout origin does not match the repository allowlist")
+		}
+	} else if j.Request.SourceDigest == "" {
+		return errors.New("unmapped repository requires a coordinator-pinned source bundle")
 	}
 	root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot)
 	if err != nil || root != filepath.Clean(s.Config.WorkspaceRoot) {
 		return errors.New("workspace root is missing or resolves through a symlink")
 	}
-	if within(root, source) || within(source, root) {
+	if mapped && (within(root, source) || within(source, root)) {
 		return errors.New("resolved source checkout and workspace root must be disjoint")
 	}
 	parent := filepath.Join(root, string(j.Request.Ref.Execution))
@@ -79,6 +115,8 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		return errors.New("workspace escapes its execution root")
 	}
 	workspace := filepath.Join(parent, "workspace")
+	repository := filepath.Join(parent, "repository.git")
+	branch := "beekeeper-worker/" + string(j.Request.Ref.Execution)
 	if j.Handle.Workspace != "" && j.Handle.Workspace != workspace {
 		return errors.New("workspace identity mismatch")
 	}
@@ -90,20 +128,42 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	} else {
-		if _, err := s.git(ctx, "", "clone", "--no-local", "--no-hardlinks", "--", source, workspace); err != nil {
+		fetchSource, fetchRef := source, j.Request.GitRef
+		if j.Request.SourceDigest != "" {
+			fetchSource = s.sourcePath(j.Request.Ref)
+			data, err := readRegular(fetchSource, MaxSourceBundle)
+			if err != nil || Digest(data) != j.Request.SourceDigest {
+				return errors.New("pinned source bundle is missing or corrupt")
+			}
+			fetchRef = "refs/heads/execution-source"
+		}
+		cloneSource := source
+		if !mapped {
+			cloneSource = fetchSource
+		}
+		if _, err := s.git(ctx, "", "clone", "--bare", "--no-local", "--no-hardlinks", "--", cloneSource, repository); err != nil {
 			return errors.New("isolated workspace clone failed; partial work is preserved")
 		}
-		if _, err := s.git(ctx, workspace, "remote", "set-url", "origin", strings.TrimSpace(string(origin))); err != nil {
+		if _, err := s.git(ctx, repository, "remote", "set-url", "origin", strings.TrimSpace(string(origin))); err != nil {
 			return errors.New("cannot establish workspace repository identity")
 		}
-		if _, err := s.git(ctx, workspace, "fetch", "--no-tags", "--", source, j.Request.GitRef); err != nil {
+		if _, err := s.git(ctx, repository, "fetch", "--no-tags", "--", fetchSource, fetchRef); err != nil {
 			return errors.New("cannot resolve the requested ref on the execution host")
 		}
-		commit, err := s.git(ctx, workspace, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+		commit, err := s.git(ctx, repository, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
 		if err != nil {
 			return errors.New("requested ref is not a commit")
 		}
 		j.Handle.Commit = strings.TrimSpace(string(commit))
+		if j.Request.SourceDigest != "" && j.Handle.Commit != j.Request.GitRef {
+			return errors.New("source bundle does not match pinned commit")
+		}
+		s.unshallowWorkspaceRepository(ctx, repository, j.Handle.Commit)
+		// Keep writable Git metadata execution-owned, while giving the worker
+		// a real linked worktree and an execution-specific branch.
+		if _, err := s.git(ctx, repository, "worktree", "add", "-b", branch, "--", workspace, j.Handle.Commit); err != nil {
+			return errors.New("cannot create execution worktree; partial work is preserved")
+		}
 		p, err := s.journalPath(j.Handle.Ref)
 		if err != nil {
 			return err
@@ -117,23 +177,27 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		return errors.New("workspace is not an isolated directory")
 	}
 	common, err := s.git(ctx, workspace, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil || strings.TrimSpace(string(common)) != filepath.Join(workspace, ".git") {
+	if err != nil || strings.TrimSpace(string(common)) != repository {
 		return errors.New("workspace shares writable Git metadata")
 	}
-	if _, err := os.Lstat(filepath.Join(workspace, ".git", "objects", "info", "alternates")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(repository, "objects", "info", "alternates")); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("workspace borrows another repository's object store")
 	}
 	status, err := s.git(ctx, workspace, "status", "--porcelain", "--untracked-files=all")
 	if err != nil || len(status) != 0 {
 		return errors.New("workspace has uncommitted work; it is preserved")
 	}
-	if _, err := s.git(ctx, workspace, "checkout", "--detach", j.Handle.Commit, "--"); err != nil {
+	head, err := s.git(ctx, workspace, "rev-parse", "--verify", "refs/heads/"+branch)
+	if err != nil || strings.TrimSpace(string(head)) != j.Handle.Commit {
+		return errors.New("workspace branch changed; existing work is preserved")
+	}
+	if _, err := s.git(ctx, workspace, "checkout", branch, "--"); err != nil {
 		return errors.New("cannot check out the pinned commit without changing existing work")
 	}
 	if err := os.MkdirAll(filepath.Join(workspace, ".beekeeper-scratch"), 0o700); err != nil {
 		return err
 	}
-	exclude := filepath.Join(workspace, ".git", "info", "exclude")
+	exclude := filepath.Join(repository, "info", "exclude")
 	contents, err := readRegular(exclude, MaxWire)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -142,6 +206,11 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		if err := atomicFile(exclude, append(contents, []byte("\n/.beekeeper-scratch/\n")...)); err != nil {
 			return err
 		}
+	}
+	// Validate the actual pinned source, including Go requirements absent from
+	// a stale host checkout or from an organization-admitted repository.
+	if err := s.checkWorkspaceTools(ctx, workspace); err != nil {
+		return err
 	}
 	// The harness loads the same embedded rules independently of project
 	// instructions, including repositories that supply no CLAUDE.md.

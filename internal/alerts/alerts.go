@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -50,9 +51,10 @@ type Raw struct {
 }
 
 // Status is an alert's state; InhibitedBy are the fingerprints of the alerts
-// that inhibit it.
+// that inhibit it, SilencedBy the ids of the silences that mute it.
 type Status struct {
 	InhibitedBy []string `json:"inhibitedBy,omitempty"`
+	SilencedBy  []string `json:"silencedBy,omitempty"`
 }
 
 // WorkingHours is the alert that inhibits the alerts labelled
@@ -66,12 +68,13 @@ const UnseenRepeat = 15 * time.Minute
 
 // Alert is what a line prints of one alert.
 type Alert struct {
-	Severity  string `json:"severity"`
-	Team      string `json:"team"`
-	Alertname string `json:"alertname"`
-	Cluster   string `json:"cluster"`
-	Where     string `json:"where"`
-	Since     string `json:"since"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Severity  string            `json:"severity"`
+	Team      string            `json:"team"`
+	Alertname string            `json:"alertname"`
+	Cluster   string            `json:"cluster"`
+	Where     string            `json:"where"`
+	Since     string            `json:"since"`
 	// fp is the fingerprint of a changed alert (missing), for the quiet
 	// rules' repeat check.
 	fp string
@@ -207,6 +210,7 @@ func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 			order = append(order, key)
 		}
 		out[key] = Alert{
+			Labels:   maps.Clone(l),
 			Severity: first(l["severity"], "-"), Team: first(l["team"], "-"),
 			Alertname: first(l["alertname"], "-"), Cluster: cluster, Where: where, Since: a.StartsAt,
 		}
@@ -214,10 +218,17 @@ func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 	return out, order
 }
 
-// visible reports whether an alert is read: an uninhibited one, and the
-// team's alerts that only the working hours inhibit (an inhibitor missing
-// from the answer is not the working hours).
+// visible reports whether an alert is read: an unsilenced one that is
+// uninhibited, or the team's that only the working hours inhibit (an
+// inhibitor missing from the answer is not the working hours). A silenced
+// alert is never read, the team's included: beekeeper creates no silence, so
+// every silence is another person's or team's decision that the alert needs
+// nobody here. The query already asks for unsilenced alerts; this holds for
+// an Alertmanager that answers with silenced ones all the same.
 func (r Rules) visible(a Raw, names map[string]string) bool {
+	if len(a.Status.SilencedBy) > 0 {
+		return false
+	}
 	by := a.Status.InhibitedBy
 	if len(by) == 0 {
 		return true
@@ -641,8 +652,17 @@ func (r Rules) Count(installation string, ans Answer) (active, paging int) {
 	return len(shown), paging
 }
 
-// SnapshotLines is the current set grouped by severity, team, alertname and
-// cluster, pages and the team's alerts first.
+// SnapshotAlerts returns the visible alerts with their complete original labels.
+func (r Rules) SnapshotAlerts(installation string, ans Answer) []Alert {
+	if !ans.OK {
+		return nil
+	}
+	_, shown := r.shownAlerts(installation, ans)
+	return shown
+}
+
+// SnapshotLines is the current set grouped by severity, team, alertname,
+// cluster and namespace, pages and the team's alerts first.
 func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []string {
 	if !ans.OK {
 		return []string{fmt.Sprintf("%s unreachable: %s", installation, ans.Why)}
@@ -653,9 +673,9 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 		n int
 	}
 	var groups []*group
-	byKey := map[[4]string]*group{}
+	byKey := map[[5]string]*group{}
 	for _, a := range shown {
-		k := [4]string{a.Severity, a.Team, a.Alertname, a.Cluster}
+		k := [5]string{a.Severity, a.Team, a.Alertname, a.Cluster, a.Labels["namespace"]}
 		if g, ok := byKey[k]; ok {
 			g.n++
 			continue
@@ -673,7 +693,11 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 	lines := []string{fmt.Sprintf("%s at %s: %d active%s", installation, now.UTC().Format("15:04Z"), len(shown), r.hidden(installation, current))}
 	for _, g := range groups {
 		s, t := r.mark(g.Alert)
-		lines = append(lines, fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n))
+		line := fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n)
+		if ns := g.Labels["namespace"]; ns != "" {
+			line += " namespace=" + ns
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }

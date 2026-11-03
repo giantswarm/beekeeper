@@ -4,8 +4,9 @@
 //
 // The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
 // $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
-// defaults. The defaults are neutral: memory thresholds are fractions of the
-// machine's RAM, swap or filesystem, and every organisation or desk choice
+// defaults unless explicitly named by $BEEKEEPER_CONFIG. The defaults are
+// neutral: memory thresholds are fractions of the machine's RAM, swap or
+// filesystem, and every organisation or desk choice
 // (the production installation, the installations, the lanes, the role
 // names) is unset until configured. docs/examples/config.yaml is a complete
 // desk's configuration.
@@ -32,6 +33,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/notify"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
 // Browser is the resource every machine has: the one Chrome the Claude in
@@ -48,6 +50,8 @@ type Config struct {
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
 	LeaseDir string `yaml:"leaseDir"`
+	// LeaseRound is the default round when a lease purpose names no duration (1h).
+	LeaseRound Duration `yaml:"leaseRound"`
 	// Identity is whose agents run here: every party this machine's
 	// commands record carries it.
 	Identity Identity `yaml:"identity"`
@@ -74,18 +78,19 @@ type Config struct {
 	// through, and its keeper.
 	Teleport Teleport `yaml:"teleport"`
 
-	GitHub   GitHub   `yaml:"github"`
-	Watch    Watch    `yaml:"watch"`
-	Disk     Disk     `yaml:"disk"`
-	Overlaps Overlaps `yaml:"overlaps"`
-	Claude   Claude   `yaml:"claude"`
-	Omp      Omp      `yaml:"omp"`
-	Agy      Agy      `yaml:"agy"`
-	Codex    Codex    `yaml:"codex"`
-	Desktop  Desktop  `yaml:"desktop"`
-	Memcap   Memcap   `yaml:"memcap"`
-	Lanes    []Lane   `yaml:"lanes"`
-	Merge    Merge    `yaml:"merge"`
+	GitHub   GitHub    `yaml:"github"`
+	Watch    Watch     `yaml:"watch"`
+	Disk     Disk      `yaml:"disk"`
+	Overlaps Overlaps  `yaml:"overlaps"`
+	Claude   Claude    `yaml:"claude"`
+	Omp      Omp       `yaml:"omp"`
+	Agy      Agy       `yaml:"agy"`
+	Codex    Codex     `yaml:"codex"`
+	Desktop  Desktop   `yaml:"desktop"`
+	Memcap   Memcap    `yaml:"memcap"`
+	Run      RunConfig `yaml:"run"`
+	Lanes    []Lane    `yaml:"lanes"`
+	Merge    Merge     `yaml:"merge"`
 	// Units configures the transient user services beekeeper starts.
 	Units  Units  `yaml:"units"`
 	Alerts Alerts `yaml:"alerts"`
@@ -98,11 +103,10 @@ type Config struct {
 	// Lemonade is the host's Lemonade Server, a second model server under
 	// the same model-server lease and ollama's budgets.
 	Lemonade Lemonade `yaml:"lemonade"`
-	// Supervisor is what `handover --prompt` tells a successor supervisor,
-	// how long a relay to it stays open and at what context it is due.
+	// Supervisor configures the supervisor loop.
 	Supervisor Supervisor `yaml:"supervisor"`
 	// Guide is the role that walks the person through the decisions
-	// waiting on them, never in the supervisor's session.
+	// waiting on them.
 	Guide Guide `yaml:"guide"`
 	// Agents configures how a registered agent near its context limit is
 	// handed over to a fresh session.
@@ -199,25 +203,22 @@ func (s *Sink) defaults() {
 	}
 }
 
-func (s Sink) validate() error {
+func (s Sink) validateEach(report func(error)) {
 	if !s.Enabled() {
 		if s.Workflow != "" || s.Ref != "" || len(s.Verbs) > 0 {
-			return fmt.Errorf("sink: no repo: set sink.repo, the workflow's owner/repo, or nothing of sink")
+			report(fmt.Errorf("sink: no repo: set sink.repo, the workflow's owner/repo, or nothing of sink"))
 		}
-		return nil
+		return
 	}
-	if err := ownerRepos("sink.repo", []string{s.Repo}); err != nil {
-		return err
-	}
+	ownerReposEach("sink.repo", []string{s.Repo}, report)
 	if strings.TrimSpace(s.Workflow) == "" {
-		return fmt.Errorf("sink.workflow: the workflow of %s to dispatch, its file name or id", s.Repo)
+		report(fmt.Errorf("sink.workflow: the workflow of %s to dispatch, its file name or id", s.Repo))
 	}
 	for _, v := range s.Verbs {
 		if !slices.Contains(SinkVerbs, v) {
-			return fmt.Errorf("sink.verbs: %q is none of %s", v, strings.Join(SinkVerbs, ", "))
+			report(fmt.Errorf("sink.verbs: %q is none of %s", v, strings.Join(SinkVerbs, ", ")))
 		}
 	}
-	return nil
 }
 
 // Feedback configures the Slack feedback watch of the standby watch. It
@@ -371,10 +372,7 @@ type Board struct {
 	// Team is the value of the board's Team field whose items are the
 	// desk's; empty, every item is.
 	Team string `yaml:"team"`
-	// TeamLabel is the issue label of the team's epics (default team/ and
-	// Team's first word, lower-cased: team/bumblebee): the priority list
-	// keeps a ranked epic that carries it whatever its Team field says, so
-	// a label sync that moves the Team never drops a rank.
+	// TeamLabel is read and ignored so an existing configuration loads.
 	TeamLabel string `yaml:"teamLabel"`
 	// People are the logins whose assigned items are free; an item
 	// assigned to anybody else is skipped.
@@ -387,7 +385,44 @@ type Board struct {
 	Order []BoardStep `yaml:"order"`
 	// Epics is the epic gate, whatever the order says.
 	Epics EpicGate `yaml:"epics"`
+	// ArchiveAfter is how long a closed item stays on the board before
+	// board tidy archives it (default 336h, two weeks; negative: never,
+	// closed items are still moved to Done). TidyEvery is how often the
+	// supervisor loop runs board tidy (default 1h; negative: never).
+	ArchiveAfter Duration `yaml:"archiveAfter"`
+	TidyEvery    Duration `yaml:"tidyEvery"`
+	// EscalateEvery is how long board escalate waits before it looks at a
+	// blocked item again; it asks the person once more only when what holds
+	// the item changed since its note (default 168h, a week; negative: never
+	// escalate).
+	EscalateEvery Duration `yaml:"escalateEvery"`
+	// Claims publishes the desk's session records on their issues, for
+	// the other desks working the same repositories.
+	Claims BoardClaims `yaml:"claims"`
 }
+
+// BoardClaims is a desk's claims on GitHub: each issue a session record
+// serves carries one marker comment of the desk (Desk), which board
+// next and agents start on every other desk honour, and which the desk
+// releases when the record ends.
+type BoardClaims struct {
+	// Off publishes no claim and reads none.
+	Off bool `yaml:"off"`
+	// Desk is the name the desk signs its claims with, which other desks
+	// see on the issues: a neutral name, never a machine's (the issues may
+	// be public). Unset, the desk publishes no claim and still honours the
+	// other desks'.
+	Desk string `yaml:"desk"`
+	// Refresh is how often the desk refreshes a claim that still holds
+	// (default 6h).
+	Refresh Duration `yaml:"refresh"`
+	// StaleAfter is how long another desk's claim holds unrefreshed
+	// (default 24h): older, it is shown and not honoured.
+	StaleAfter Duration `yaml:"staleAfter"`
+}
+
+// DefaultBoardArchiveAfter is board.archiveAfter when unset: two weeks.
+const DefaultBoardArchiveAfter = 14 * 24 * time.Hour
 
 // EpicGate is the epic gate: an epic in a Planning status is in planning,
 // neither it nor any issue under it offered; moving it to Go is the go,
@@ -428,10 +463,7 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
-	// WorkScope offers only the work scope: an issue under an epic of the
-	// priority list, an order (an item of a step without WorkScope) and an
-	// open recorded blocker of either; anything else is skipped as "not in
-	// a priority epic".
+	// WorkScope is read and ignored so an existing configuration loads.
 	WorkScope bool `yaml:"workScope"`
 }
 
@@ -440,6 +472,9 @@ type Hooks struct {
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
+	// TranscriptGrants authorize exact transcript files or fixture directories per session ID.
+	// Set by the supervisor, never inferred from a hook event.
+	TranscriptGrants map[string][]string `yaml:"transcriptGrants"`
 	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
 	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
 	// session would create directly in one, and one git neither tracks nor
@@ -666,7 +701,8 @@ const (
 type Disk struct {
 	Prune string   `yaml:"prune"`
 	Every Duration `yaml:"every"`
-	// SccacheMaxGiB caps scheduled sccache cleanup; negative disables the cap.
+	// SccacheMaxGiB caps sccache's local cache: a scheduled run trims it least
+	// recently used first to three quarters of the cap; negative disables the cap.
 	SccacheMaxGiB int `yaml:"sccacheMaxGiB"`
 	// Checkouts locates main checkouts whose harness worktrees are inspected.
 	Checkouts []string `yaml:"checkouts"`
@@ -675,6 +711,59 @@ type Disk struct {
 	BuildDirs []string `yaml:"buildDirs"`
 	// BuildOutputs associates external build output with its owning worktree.
 	BuildOutputs []BuildOutput `yaml:"buildOutputs"`
+	// Caches are the disk step's cache policies. Beekeeper's own caches are
+	// its default entries (DiskCacheGo, DiskCacheSccache, DiskCacheTmp): an
+	// entry of the same name changes them, mode off drops them.
+	Caches []DiskCache `yaml:"caches"`
+}
+
+// Cache modes of the disk step. Entries removes a root's direct children
+// whole, files its single files, command runs the tool's own cleaner; go and sccache are the built-in Go build
+// cache and sccache trims; off drops an entry.
+const (
+	DiskCacheEntries = "entries"
+	DiskCacheFiles   = "files"
+	DiskCacheCommand = "command"
+	DiskCacheModeGo  = "go"
+	DiskCacheModeSc  = "sccache"
+	DiskCacheOff     = "off"
+)
+
+// Names of the built-in cache entries.
+const (
+	DiskCacheGo      = "go-build"
+	DiskCacheSccache = "sccache"
+	DiskCacheTmp     = "beekeeper-tmp"
+)
+
+// DiskCache is one cache policy of the disk step. Path is absolute (or
+// ~/...) and may be a glob: each match is a cache root. In entries mode a
+// root's direct children are the units, in files mode its files. A unit
+// untouched for OlderThan goes; past MaxGiB the least recently written go
+// until the root fits; under disk pressure a Regenerable cache keeps only
+// what was written within the hour. Nothing written within the hour, nothing
+// a process uses and nothing holding a git checkout is ever removed.
+type DiskCache struct {
+	// Name names the entry in reports (default its path).
+	Name        string   `yaml:"name"`
+	Path        string   `yaml:"path"`
+	Mode        string   `yaml:"mode"`
+	OlderThan   Duration `yaml:"olderThan"`
+	MaxGiB      float64  `yaml:"maxGiB"`
+	Regenerable bool     `yaml:"regenerable"`
+	// Command is mode command's cleaner, the tool's own ("uv cache prune"):
+	// split into words and run without a shell in the cache root, once the
+	// root holds more than MaxGiB and under disk pressure (no MaxGiB: under
+	// pressure only), never while a process references the root.
+	Command string `yaml:"command"`
+}
+
+// MaxBytes is the size budget in bytes; 0 is none.
+func (d DiskCache) MaxBytes() int64 { return int64(d.MaxGiB * (1 << 30)) }
+
+// Builtin reports whether name is one of beekeeper's own cache entries.
+func (DiskCache) Builtin(name string) bool {
+	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp
 }
 
 // BuildOutput is explicitly disposable output of the task in Worktree.
@@ -772,13 +861,15 @@ type Stop struct {
 
 // Agents configures the hand-over of registered agents.
 type Agents struct {
+	// RemoteMCP exposes only explicitly named coordinator tools to SSH workers.
+	RemoteMCP map[string]execution.MCPServer `yaml:"remoteMCP,omitempty"`
 	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
 	// the existing local launch path. Execution configures this machine only
 	// when it is itself an execution host; authentication is provisioned there.
 	Hosts     map[string]ExecutionHost `yaml:"hosts,omitempty"`
 	Execution *execution.HostConfig    `yaml:"execution,omitempty"`
 	// RelayAt is an agent's session context, in tokens, at which the watch
-	// says its hand-over due (default: supervisor.relayAt).
+	// says its hand-over due (default 400k).
 	RelayAt Tokens `yaml:"relayAt"`
 	// LastStepGrace is how long the watch holds the hand-over of an agent
 	// over RelayAt whose task is in its last step (its sessions serve record
@@ -792,8 +883,9 @@ type Agents struct {
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
-	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
-	// the roster before the doctor takes it off (24h).
+	// StaleAfter bounds inactivity without a running CLI (24h). An idle or
+	// unkept task holder is retired after this age; gone task holders free
+	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
 	// ArchiveAgreement says where the person agreed that the desktop
 	// sessions of finished workers beekeeper started are archived without
@@ -835,6 +927,68 @@ type Agents struct {
 	// Model is the model of a session beekeeper starts when the start names
 	// none (--model, a successor's holder's); empty: Claude Code's default.
 	Model string `yaml:"model"`
+	// Models is ordered: the first matching nonempty model wins.
+	Models []AgentModelRule `yaml:"models"`
+	// RequireModel refuses omission rather than using a harness default.
+	RequireModel bool `yaml:"requireModel"`
+	// Kinds are the desk's task kinds by name regexp, each with its own caps
+	// on starts; a name may match several (a filer kind and a meta kind
+	// over all meta workers), and every matching kind's caps hold.
+	Kinds []AgentKind `yaml:"kinds"`
+}
+
+// AgentKind is a task kind: the agents whose name Match matches, at most
+// MaxBusy of them busy at once, a start at most every MinInterval, and the
+// daily spend at which the watch says SPEND <kind>. A zero cap is none.
+type AgentKind struct {
+	Name        string   `yaml:"name"`
+	Match       string   `yaml:"match"`
+	MaxBusy     int      `yaml:"maxBusy"`
+	MinInterval Duration `yaml:"minInterval"`
+	// DailySpend is in USD for a day of the desk's time zone.
+	DailySpend float64 `yaml:"dailySpend"`
+}
+
+// Matches reports whether name is one of k's agents; an invalid regexp,
+// which validation refuses, matches none.
+func (k AgentKind) Matches(name string) bool {
+	re, err := regexp.Compile(k.Match)
+	return err == nil && re.MatchString(name)
+}
+
+// KindsOf returns the kinds whose regexp matches name, in their order.
+func (a Agents) KindsOf(name string) []AgentKind {
+	var out []AgentKind
+	for _, k := range a.Kinds {
+		if k.Matches(name) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// AgentModelRule selects a model for a named task before provider selection.
+type AgentModelRule struct {
+	Match string `yaml:"match"`
+	Kind  string `yaml:"kind"`
+	Model string `yaml:"model"`
+}
+
+// ModelFor returns the first matching nonempty model, then the desk-wide
+// fallback. A rule may leave the model unset for independent settings.
+func (a Agents) ModelFor(name, kind string) string {
+	for _, r := range a.Models {
+		if strings.TrimSpace(r.Model) == "" {
+			continue
+		}
+		if r.Kind != "" && r.Kind != kind {
+			continue
+		}
+		if re, err := regexp.Compile(r.Match); err == nil && re.MatchString(name) {
+			return strings.TrimSpace(r.Model)
+		}
+	}
+	return strings.TrimSpace(a.Model)
 }
 
 type ExecutionHost = execution.Host
@@ -903,28 +1057,29 @@ func (a Agents) ProfileFor(name string) (Profile, bool) {
 	return Profile{}, false
 }
 
-// DefaultFloor and DefaultCeiling are capacity.floor and capacity.ceiling
-// when unset; an explicit 0 stays 0.
-const (
-	DefaultFloor   = 5
-	DefaultCeiling = 10
-)
+// DefaultCeiling is capacity.ceiling when unset; an explicit 0 stays 0.
+const DefaultCeiling = 10
 
 // Defaults of capacity.usage and capacity.providers.<name> when a usage
 // command is set.
 const (
 	DefaultUsageEvery       = 5 * time.Minute
 	DefaultUsageReportEvery = 30 * time.Minute
-	DefaultUsageTimeout     = 15 * time.Second
+	DefaultUsageTimeout     = 90 * time.Second
 	DefaultUsageStaleAfter  = 15 * time.Minute
 	DefaultUsageHighPercent = 95.0
 )
 
-// DefaultAgyUsageCommand is capacity.providers.agy.command when unset.
+// DefaultClaudeUsageCommand reads plan windows without a model turn.
+var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--output-format", "json"}
+
+// DefaultAgyUsageCommand is capacity.providers.agy.command when unset, even
+// with agy: {}: agy's local usage report, read without a model turn.
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
 // DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
-// beekeeper reads the freshest token_count rate_limits event across Codex
+// beekeeper probes account usage when local events age out and otherwise reads
+// the freshest token_count rate_limits event across Codex
 // rollout transcripts in-process.
 var DefaultCodexUsageCommand = []string{CodexHarness, "usage"}
 
@@ -981,16 +1136,28 @@ const (
 	DefaultAgyClaudeBucket = "Claude and GPT models"
 )
 
-// Capacity is the supervisor's target of busy agents and the memory guards
-// that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
+// TaskPolicy constrains model choices for a kind of task. Classes and costs
+// are desk-maintained relative values; no provider price is assumed.
+type TaskPolicy struct {
+	MinClass        int     `yaml:"minClass"`
+	MaxCost         float64 `yaml:"maxCost"`
+	DifferentFamily bool    `yaml:"differentFamily"`
+}
+
+// Capacity is the supervisor's ceiling and model selection policy.
+// Any legacy floor key in YAML is ignored.
 type Capacity struct {
-	// Floor is the fewest busy agents the supervisor keeps (5); Ceiling
-	// the most it starts (10). Zero is honoured: ceiling 0 refuses every
-	// unforced start.
-	Floor      int `yaml:"floor"`
+	TaskPolicies map[string]TaskPolicy `yaml:"taskPolicies"`
+	TaskKind     string                `yaml:"-"`
+	AuthorModel  string                `yaml:"-"`
+	AuthorFamily string                `yaml:"-"`
+	// Ceiling is the most busy agents the supervisor starts (10). Zero is
+	// honoured: ceiling 0 refuses every unforced start.
 	Ceiling    int `yaml:"ceiling"`
-	floorSet   bool
 	ceilingSet bool
+	// ReviewHeadroom reserves extra subscription sessions for reviews. Zero disables it.
+	ReviewHeadroom    int `yaml:"reviewHeadroom"`
+	reviewHeadroomSet bool
 	// AvailMinMiB is the MemAvailable a start needs (20 GiB), and the floor
 	// under which disk swap's growth refuses a start.
 	AvailMinMiB int `yaml:"availMinMiB"`
@@ -1003,41 +1170,64 @@ type Capacity struct {
 	// /proc/pressure/memory, in percent) up to which disk swap's growth is
 	// a warning rather than a refusal (0: any pressure refuses).
 	SwapPSIMax float64 `yaml:"swapPSIMax"`
-	// Usage derives Floor and Ceiling from the subscription's 5-hour and
-	// 7-day usage windows read by a configured command; unset, Floor and
-	// Ceiling stand as configured.
+	// Usage derives Ceiling from the subscription's 5-hour and 7-day usage
+	// windows read by a configured command; unset, Ceiling stands as
+	// configured.
 	Usage Usage `yaml:"usage"`
 	// Providers configures per-provider (e.g. claude, agy, codex) usage
-	// readers, window thresholds and floor/ceiling targets. Busy agents count
+	// readers, window thresholds and ceiling targets. Busy agents count
 	// against the provider they run on, while the machine guards and
 	// Capacity.Ceiling cap the total.
 	Providers     map[string]Provider `yaml:"providers"`
 	providerOrder []string
 	// Choices is the ordered list of (harness, model) pairs that
 	// `agents start --harness auto` and `beekeeper capacity` evaluate:
-	// a start takes the eligible subscription furthest behind weekly pace,
-	// with order breaking ties and self-hosted choices as fallbacks. Each
-	// provider must have room,
+	// a start takes the eligible subscription with the most 7-day budget
+	// left per hour until its reset, with order breaking ties and
+	// self-hosted choices as fallbacks. Each provider must have room,
 	// its 5-hour window below its threshold and its 7-day use within the
 	// weekly cap and not ahead of the even pace.
 	Choices []Choice `yaml:"choices"`
 	// ReviewSkipPace is read and ignored: a review is decided exactly like
 	// a worker's start, with no pace exception.
 	ReviewSkipPace bool `yaml:"reviewSkipPace"`
+	// Local bounds the busy agents the coordinator's own machine runs,
+	// apart from Ceiling, which bounds the subscriptions across the desk
+	// and its execution hosts.
+	Local LocalCapacity `yaml:"local"`
+}
+
+// LocalCapacity is capacity.local: the coordinator machine's own cap.
+type LocalCapacity struct {
+	// Ceiling is the most busy agents this machine runs (capacity.local.
+	// ceiling): every local start, the loop's and one by hand, worker,
+	// reviewer and resume alike, is refused at it. Every busy agent whose
+	// session runs here counts, a self-hosted provider's included; an
+	// agent on an execution host counts against that host's maxBusy and
+	// never against it. Unset: no local cap, capacity.ceiling and the
+	// machine guards alone bound a local start. 0 refuses every unforced
+	// local start.
+	Ceiling *int `yaml:"ceiling"`
+}
+
+// Limit is capacity.local.ceiling and whether it is set.
+func (l LocalCapacity) Limit() (int, bool) {
+	if l.Ceiling == nil {
+		return 0, false
+	}
+	return *l.Ceiling, true
 }
 
 // Provider configures one provider (such as claude, agy or codex): its own
-// floor and ceiling of busy agents and its usage reader and thresholds. A
-// provider of Kind self-hosted (a model served on the desk's own machines)
-// sets no usage reader: its ceiling alone bounds its busy sessions, and
-// capacity.ceiling bounds only the subscription providers' total.
+// ceiling of busy agents and its usage reader and thresholds. A provider of
+// Kind self-hosted (a model served on the desk's own machines) sets no usage
+// reader: its ceiling alone bounds its busy sessions, and capacity.ceiling
+// bounds only the subscription providers' total.
 type Provider struct {
 	// Kind is KindSubscription (the default: a usage reader and a pace) or
 	// KindSelfHosted (no usage reader; a ceiling of sessions at once).
 	Kind             string `yaml:"kind"`
-	Floor            int    `yaml:"floor"`
 	Ceiling          int    `yaml:"ceiling"`
-	floorSet         bool
 	ceilingSet       bool
 	ServeModeCommand []string `yaml:"serveModeCommand"`
 	// ServeModeCeilings maps a serving mode read by ServeModeCommand to the
@@ -1148,13 +1338,11 @@ type ServeModeReading struct {
 }
 
 // WithServeMode returns the provider with r applied: the ceiling the mode it
-// names, falling back to Ceiling while the mode names none or the read failed,
-// and its floor clamped under that ceiling.
+// names, falling back to Ceiling while the mode names none or the read failed.
 func (p Provider) WithServeMode(r ServeModeReading) Provider {
 	if r.Mode != "" && r.Err == "" {
 		if c, ok := p.ServeModeCeiling(r.Mode); ok {
 			p.Ceiling = c
-			p.Floor = min(p.Floor, c)
 		}
 	}
 	return p
@@ -1163,6 +1351,15 @@ func (p Provider) WithServeMode(r ServeModeReading) Provider {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
+	// Kinds limits this choice to task kinds; empty permits all kinds, but
+	// a choice on a self-hosted provider takes task kind worker (code
+	// changes) only when Kinds lists it.
+	Kinds  []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
+	Class  int      `yaml:"class,omitempty" json:"class,omitempty"`
+	Cost   float64  `yaml:"cost,omitempty" json:"cost,omitempty"`
+	Family string   `yaml:"family,omitempty" json:"family,omitempty"`
+	// ReviewReserve keeps this percent of the weekly window for reviews.
+	ReviewReserve float64 `yaml:"reviewReserve,omitempty" json:"reviewReserve,omitempty"`
 	// Harness is the agent harness to start ("claude", "agy", "codex", "omp").
 	Harness string `yaml:"harness" json:"harness"`
 	// Model is the model selector passed to the harness.
@@ -1270,7 +1467,7 @@ type Usage struct {
 	// runs Command again (default 5m; a window past its resetsAt re-reads
 	// at once).
 	Every Duration `yaml:"every"`
-	// Timeout bounds one run of Command (default 15s).
+	// Timeout bounds one run of Command (default 90s).
 	Timeout Duration `yaml:"timeout"`
 	// StaleAfter is how old a usage reading may grow before it counts as
 	// stale, yielding ceiling 0 and room 0 for that provider (default 15m).
@@ -1286,7 +1483,7 @@ type Usage struct {
 	HighPercent    float64 `yaml:"highPercent"`
 	highPercentSet bool
 	// FiveHourMax and SevenDayMax are hard usedPercent stops for a window:
-	// at or past the threshold the window yields (floor 0, ceiling 0).
+	// at or past the threshold the window yields ceiling 0.
 	FiveHourMax    float64 `yaml:"fiveHourMax"`
 	fiveHourMaxSet bool
 	SevenDayMax    float64 `yaml:"sevenDayMax"`
@@ -1296,14 +1493,14 @@ type Usage struct {
 	// (default 0); a positive margin counts as 0.
 	PaceMargin    float64 `yaml:"paceMargin"`
 	paceMarginSet bool
-	// FiveHour and SevenDay map a window's usedPercent to a (floor, ceiling)
-	// pair: the first band with usedPercent < upTo applies, and at or past
-	// the last band's upTo the window yields (0, 0). When both windows have
-	// bands, the lower floor and the lower ceiling apply.
+	// FiveHour and SevenDay map a window's usedPercent to a ceiling: the
+	// first band with usedPercent < upTo applies, and at or past the last
+	// band's upTo the window yields 0. When both windows have bands, the
+	// lower ceiling applies.
 	FiveHour []UsageBand `yaml:"fiveHour"`
 	SevenDay []UsageBand `yaml:"sevenDay"`
-	// PaceCaps lower Floor and Ceiling when the 7-day window's usedPercent
-	// exceeds the even weekly pace by at least OverBy percentage points.
+	// PaceCaps lower Ceiling when the 7-day window's usedPercent exceeds the
+	// even weekly pace by at least OverBy percentage points.
 	PaceCaps []PaceCap `yaml:"paceCaps"`
 	// Buckets maps a model name or prefix to a bucket name in multi-bucket
 	// usage output (such as `agy -p /usage`).
@@ -1311,22 +1508,18 @@ type Usage struct {
 }
 
 // UsageBand is one usage band of a subscription window: while the window's
-// usedPercent is below UpTo, its target is Floor and Ceiling.
+// usedPercent is below UpTo, its target is Ceiling.
 type UsageBand struct {
 	UpTo       float64 `yaml:"upTo"`
-	Floor      int     `yaml:"floor"`
 	Ceiling    int     `yaml:"ceiling"`
-	floorSet   bool
 	ceilingSet bool
 }
 
-// PaceCap caps Floor and Ceiling when the 7-day window's usedPercent exceeds
-// the even weekly pace by at least OverBy percentage points.
+// PaceCap caps Ceiling when the 7-day window's usedPercent exceeds the even
+// weekly pace by at least OverBy percentage points.
 type PaceCap struct {
 	OverBy     float64 `yaml:"overBy"`
-	Floor      int     `yaml:"floor"`
 	Ceiling    int     `yaml:"ceiling"`
-	floorSet   bool
 	ceilingSet bool
 }
 
@@ -1426,46 +1619,43 @@ func (u *Usage) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// UnmarshalYAML records whether floor and ceiling were explicitly set on the band.
+// UnmarshalYAML records whether ceiling was explicitly set on the band.
 func (b *UsageBand) UnmarshalYAML(n *yaml.Node) error {
 	type plain UsageBand
 	if err := n.Decode((*plain)(b)); err != nil {
 		return err
 	}
 	var set struct {
-		Floor   *int `yaml:"floor"`
 		Ceiling *int `yaml:"ceiling"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
-	b.floorSet, b.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	b.ceilingSet = set.Ceiling != nil
 	return nil
 }
 
-// UnmarshalYAML records whether floor and ceiling were explicitly set on the pace cap.
+// UnmarshalYAML records whether ceiling was explicitly set on the pace cap.
 func (p *PaceCap) UnmarshalYAML(n *yaml.Node) error {
 	type plain PaceCap
 	if err := n.Decode((*plain)(p)); err != nil {
 		return err
 	}
 	var set struct {
-		Floor   *int `yaml:"floor"`
 		Ceiling *int `yaml:"ceiling"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
-	p.floorSet, p.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	p.ceilingSet = set.Ceiling != nil
 	return nil
 }
 
-// UnmarshalYAML decodes kind, floor, ceiling and either inline or nested usage
+// UnmarshalYAML decodes kind, ceiling and either inline or nested usage
 // fields on a provider.
 func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	var fc struct {
 		Kind             *string              `yaml:"kind"`
-		Floor            *int                 `yaml:"floor"`
 		Ceiling          *int                 `yaml:"ceiling"`
 		Usage            *Usage               `yaml:"usage"`
 		ServeModeStale   *Duration            `yaml:"serveModeStaleAfter"`
@@ -1505,16 +1695,13 @@ func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
 	if fc.ServeModeSwitchT != nil {
 		p.ServeModeSwitchTimeout = *fc.ServeModeSwitchT
 	}
-	if fc.Floor != nil {
-		p.Floor, p.floorSet = *fc.Floor, true
-	}
 	if fc.Ceiling != nil {
 		p.Ceiling, p.ceilingSet = *fc.Ceiling, true
 	}
 	return nil
 }
 
-func (u *Usage) defaults(home string, baseFloor int) {
+func (u *Usage) defaults(home string) {
 	if !u.Enabled() {
 		return
 	}
@@ -1528,54 +1715,38 @@ func (u *Usage) defaults(home string, baseFloor int) {
 	if !u.highPercentSet {
 		u.HighPercent = DefaultUsageHighPercent
 	}
-	for _, bs := range [][]UsageBand{u.FiveHour, u.SevenDay} {
-		for i := range bs {
-			if !bs[i].floorSet {
-				bs[i].Floor = max(0, min(baseFloor, bs[i].Ceiling))
-			}
-		}
-	}
-	for i := range u.PaceCaps {
-		if !u.PaceCaps[i].floorSet {
-			u.PaceCaps[i].Floor = max(0, min(baseFloor, u.PaceCaps[i].Ceiling))
-		}
-	}
 }
 
-func (u Usage) validate() error {
-	return u.validateNamed("capacity.usage")
-}
-
-func (u Usage) validateNamed(prefix string) error {
+func (u Usage) validateNamedEach(prefix string, report func(error)) {
 	if !u.Enabled() {
 		if u.hasFields() {
-			return fmt.Errorf("%s: no command: set %s.command, or nothing of %s", prefix, prefix, prefix)
+			report(fmt.Errorf("%s: no command: set %s.command, or nothing of %s", prefix, prefix, prefix))
 		}
-		return nil
+		return
 	}
 	if strings.TrimSpace(u.Command[0]) == "" {
-		return fmt.Errorf("%s.command[0]: empty executable", prefix)
+		report(fmt.Errorf("%s.command[0]: empty executable", prefix))
 	}
 	if u.Every.Duration <= 0 {
-		return fmt.Errorf("%s.every: %s is not positive", prefix, u.Every.Duration)
+		report(fmt.Errorf("%s.every: %s is not positive", prefix, u.Every.Duration))
 	}
 	if u.Timeout.Duration <= 0 {
-		return fmt.Errorf("%s.timeout: %s is not positive", prefix, u.Timeout.Duration)
+		report(fmt.Errorf("%s.timeout: %s is not positive", prefix, u.Timeout.Duration))
 	}
 	if u.StaleAfter.Duration < 0 {
-		return fmt.Errorf("%s.staleAfter: %s is negative", prefix, u.StaleAfter.Duration)
+		report(fmt.Errorf("%s.staleAfter: %s is negative", prefix, u.StaleAfter.Duration))
 	}
 	if !(u.HighPercent > 0 && u.HighPercent <= 100) {
-		return fmt.Errorf("%s.highPercent: %g is not in (0, 100]", prefix, u.HighPercent)
+		report(fmt.Errorf("%s.highPercent: %g is not in (0, 100]", prefix, u.HighPercent))
 	}
 	if u.fiveHourMaxSet && !(u.FiveHourMax > 0 && u.FiveHourMax <= 100) {
-		return fmt.Errorf("%s.fiveHourMax: %g is not in (0, 100]", prefix, u.FiveHourMax)
+		report(fmt.Errorf("%s.fiveHourMax: %g is not in (0, 100]", prefix, u.FiveHourMax))
 	}
 	if u.sevenDayMaxSet && !(u.SevenDayMax > 0 && u.SevenDayMax <= 100) {
-		return fmt.Errorf("%s.sevenDayMax: %g is not in (0, 100]", prefix, u.SevenDayMax)
+		report(fmt.Errorf("%s.sevenDayMax: %g is not in (0, 100]", prefix, u.SevenDayMax))
 	}
 	if u.paceMarginSet && (u.PaceMargin < -100 || u.PaceMargin > 100) {
-		return fmt.Errorf("%s.paceMargin: %g is not in [-100, 100]", prefix, u.PaceMargin)
+		report(fmt.Errorf("%s.paceMargin: %g is not in [-100, 100]", prefix, u.PaceMargin))
 	}
 	for _, w := range []struct {
 		name  string
@@ -1588,13 +1759,13 @@ func (u Usage) validateNamed(prefix string) error {
 		for i, b := range w.bands {
 			switch {
 			case !(b.UpTo > 0 && b.UpTo <= 100):
-				return fmt.Errorf("%s[%d]: upTo %g is not in (0, 100]", w.name, i, b.UpTo)
+				report(fmt.Errorf("%s[%d]: upTo %g is not in (0, 100]", w.name, i, b.UpTo))
 			case b.UpTo <= prev:
-				return fmt.Errorf("%s[%d]: upTo %g is not above %g: list bands in ascending order", w.name, i, b.UpTo, prev)
+				report(fmt.Errorf("%s[%d]: upTo %g is not above %g: list bands in ascending order", w.name, i, b.UpTo, prev))
 			case !b.ceilingSet:
-				return fmt.Errorf("%s[%d]: ceiling is required", w.name, i)
-			case b.Floor < 0 || b.Ceiling < b.Floor:
-				return fmt.Errorf("%s[%d]: floor %d and ceiling %d; the ceiling is at least the floor", w.name, i, b.Floor, b.Ceiling)
+				report(fmt.Errorf("%s[%d]: ceiling is required", w.name, i))
+			case b.Ceiling < 0:
+				report(fmt.Errorf("%s[%d]: ceiling %d is negative", w.name, i, b.Ceiling))
 			}
 			prev = b.UpTo
 		}
@@ -1604,111 +1775,102 @@ func (u Usage) validateNamed(prefix string) error {
 		name := prefix + ".paceCaps"
 		switch {
 		case !(pc.OverBy > 0 && pc.OverBy <= 100):
-			return fmt.Errorf("%s[%d]: overBy %g is not in (0, 100]", name, i, pc.OverBy)
+			report(fmt.Errorf("%s[%d]: overBy %g is not in (0, 100]", name, i, pc.OverBy))
 		case pc.OverBy <= prevOver:
-			return fmt.Errorf("%s[%d]: overBy %g is not above %g: list paceCaps in ascending order", name, i, pc.OverBy, prevOver)
+			report(fmt.Errorf("%s[%d]: overBy %g is not above %g: list paceCaps in ascending order", name, i, pc.OverBy, prevOver))
 		case !pc.ceilingSet:
-			return fmt.Errorf("%s[%d]: ceiling is required", name, i)
-		case pc.Floor < 0 || pc.Ceiling < pc.Floor:
-			return fmt.Errorf("%s[%d]: floor %d and ceiling %d; the ceiling is at least the floor", name, i, pc.Floor, pc.Ceiling)
+			report(fmt.Errorf("%s[%d]: ceiling is required", name, i))
+		case pc.Ceiling < 0:
+			report(fmt.Errorf("%s[%d]: ceiling %d is negative", name, i, pc.Ceiling))
 		}
 		prevOver = pc.OverBy
 	}
-	return nil
 }
 
-// Derive returns Capacity with Floor and Ceiling derived from the subscription
-// usage windows' effective usedPercent values (nil when a window was not
-// reported) and reports whether USAGE HIGH holds on the 5-hour window.
+// Derive returns Capacity with Ceiling derived from the subscription usage
+// windows' effective usedPercent values (nil when a window was not reported)
+// and reports whether USAGE HIGH holds on the 5-hour window.
 func (k Capacity) Derive(fiveHour, sevenDay *float64) (derived Capacity, high bool) {
 	return k.DeriveWithPace(fiveHour, sevenDay, nil)
 }
 
-// DeriveWithPace returns Capacity with Floor and Ceiling derived from the
-// 5-hour and 7-day windows and the 7-day even pace.
+// DeriveWithPace returns Capacity with Ceiling derived from the 5-hour and
+// 7-day windows and the 7-day even pace.
 func (k Capacity) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Capacity, high bool) {
 	derived = k
 	if !k.Usage.Enabled() {
 		return derived, false
 	}
 	p := Provider{
-		Floor:      k.Floor,
 		Ceiling:    k.Ceiling,
-		floorSet:   k.floorSet,
 		ceilingSet: k.ceilingSet,
 		Usage:      k.Usage,
 	}
 	dp, high := p.DeriveWithPace(fiveHour, sevenDay, pace)
-	derived.Floor, derived.Ceiling = dp.Floor, dp.Ceiling
+	derived.Ceiling = dp.Ceiling
 	return derived, high
 }
 
-// Derive returns Provider with Floor and Ceiling derived from the subscription
-// usage windows' effective usedPercent values and reports whether USAGE HIGH
-// holds on the 5-hour window.
+// Derive returns Provider with Ceiling derived from the subscription usage
+// windows' effective usedPercent values and reports whether USAGE HIGH holds on
+// the 5-hour window.
 func (p Provider) Derive(fiveHour, sevenDay *float64) (derived Provider, high bool) {
 	return p.DeriveWithPace(fiveHour, sevenDay, nil)
 }
 
-// DeriveWithPace returns Provider with Floor and Ceiling derived from the
-// 5-hour and 7-day windows and the 7-day even pace.
+// DeriveWithPace returns Provider with Ceiling derived from the 5-hour and
+// 7-day windows and the 7-day even pace.
 func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Provider, high bool) {
 	derived = p
 	if !p.Enabled() {
 		return derived, false
 	}
-	floor, ceiling, banded := p.Floor, p.Ceiling, false
+	ceiling, banded := p.Ceiling, false
 	apply := func(pct *float64, bands []UsageBand) {
 		if pct == nil || len(bands) == 0 {
 			return
 		}
-		bf, bc := matchBand(*pct, bands)
+		bc := matchBand(*pct, bands)
 		if !banded {
-			floor, ceiling, banded = bf, bc, true
+			ceiling, banded = bc, true
 			return
 		}
-		floor, ceiling = min(floor, bf), min(ceiling, bc)
+		ceiling = min(ceiling, bc)
 	}
 	apply(fiveHour, p.FiveHour)
 	apply(sevenDay, p.SevenDay)
-	if banded {
-		if p.ceilingSet {
-			ceiling = min(ceiling, p.Ceiling)
-		}
-		if p.floorSet {
-			floor = min(floor, p.Floor)
-		}
+	if banded && p.ceilingSet {
+		ceiling = min(ceiling, p.Ceiling)
 	}
 	if sevenDay != nil && pace != nil && len(p.PaceCaps) > 0 {
 		over := *sevenDay - *pace
 		for _, pc := range p.PaceCaps {
 			if over >= pc.OverBy-1e-9 {
-				floor, ceiling = min(floor, pc.Floor), min(ceiling, pc.Ceiling)
+				ceiling = min(ceiling, pc.Ceiling)
 			}
 		}
 	}
 	if (p.fiveHourMaxSet || p.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.FiveHourMax {
-		floor, ceiling = 0, 0
+		ceiling = 0
 	}
 	if (p.sevenDayMaxSet || p.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.SevenDayMax {
-		floor, ceiling = 0, 0
+		ceiling = 0
 	}
-	floor = min(floor, ceiling)
 	if fiveHour != nil && *fiveHour >= p.EffectiveHighPercent() {
-		derived.Floor, derived.Ceiling = 0, 0
+		derived.Ceiling = 0
 		return derived, true
 	}
-	derived.Floor, derived.Ceiling = floor, ceiling
+	derived.Ceiling = ceiling
 	return derived, false
 }
 
-func matchBand(used float64, bands []UsageBand) (floor, ceiling int) {
+func matchBand(used float64, bands []UsageBand) (ceiling int) {
 	for _, b := range bands {
 		if used < b.UpTo {
-			return b.Floor, b.Ceiling
+			return b.Ceiling
 		}
 	}
-	return 0, 0
+	return 0
 }
 
 // ProviderNames returns the configured providers in their YAML declaration
@@ -1738,7 +1900,7 @@ func (k Capacity) ProviderNames() []string {
 	return out
 }
 
-// UnmarshalYAML records whether floor, ceiling and reviewSkipPace were set, and
+// UnmarshalYAML records whether ceiling and reviewHeadroom were set, and
 // preserves the YAML key order of providers.
 func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 	type plain Capacity
@@ -1746,13 +1908,14 @@ func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	var set struct {
-		Floor   *int `yaml:"floor"`
-		Ceiling *int `yaml:"ceiling"`
+		Ceiling        *int `yaml:"ceiling"`
+		ReviewHeadroom *int `yaml:"reviewHeadroom"`
 	}
 	if err := n.Decode(&set); err != nil {
 		return err
 	}
-	k.floorSet, k.ceilingSet = set.Floor != nil, set.Ceiling != nil
+	k.ceilingSet = set.Ceiling != nil
+	k.reviewHeadroomSet = set.ReviewHeadroom != nil
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		if n.Content[i].Value == "providers" && n.Content[i+1].Kind == yaml.MappingNode {
 			pn := n.Content[i+1]
@@ -2011,20 +2174,14 @@ type Guide struct {
 	WaitingTTL Duration `yaml:"waitingTTL"`
 }
 
-// Supervisor configures the supervisor: its role and the scope it
-// supervises.
+// Supervisor configures the supervisor, which is the supervisor loop: the
+// user service beekeeper install always installs. No session holds a
+// supervisor role.
 type Supervisor struct {
-	// Loop installs the persistent supervisor loop user service (opt-in).
-	Loop bool `yaml:"loop"`
-	Role `yaml:",inline"`
-	// Scope says what the supervisor watches, in a sentence or two; empty,
-	// the prompt names the resources, lanes and installations configured.
-	Scope string `yaml:"scope"`
-	// ReviewRounds is how many review rounds asking for changes `supervisor
-	// loop` runs for a pull request (default 1): after the last one's
-	// request for changes the worker fixes them and merges on the loop's go
-	// without another review. An approved round is none of them: every new
-	// head after an approval gets its own review.
+	// ReviewRounds is retained for configuration compatibility and reporting
+	// (default 1). It never releases a head without an approving review.
+	// Every new head gets one independent review, except a proven base-only
+	// update of an approved head, which remains covered by that approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -2032,6 +2189,21 @@ type Supervisor struct {
 	// a built-in review brief, and no worker start.
 	ReviewBrief string `yaml:"reviewBrief"`
 	WorkerBrief string `yaml:"workerBrief"`
+	// Hosts are execution host selectors (agents.hosts) the loop's worker
+	// starts may be placed on, in order of preference: when
+	// the local machine leaves no room for the start, or always with
+	// HostsFirst. A host must map the item's repository and pass its own
+	// check (capacity --host); the start is pinned to the repository's
+	// default branch. Reviewers, releases and the loop stay on the coordinator.
+	Hosts []string `yaml:"hosts"`
+	// HostsFirst places a start on the first host of Hosts with room,
+	// whatever the local machine's room is, for what a host can run: a
+	// start a mapped host could run waits without room on any host, as it
+	// does on a full machine; a repository no host maps, or a choice of a
+	// harness no host has an adapter for (every harness but Claude Code),
+	// starts locally within the local room (capacity.local.ceiling among
+	// its guards).
+	HostsFirst bool `yaml:"hostsFirst"`
 	// PostInstall is the command the loop runs after it installed a
 	// release; empty: none.
 	PostInstall []string `yaml:"postInstall"`
@@ -2046,7 +2218,13 @@ type Supervisor struct {
 	// files for the guide's person (24h).
 	LoopInterval Duration `yaml:"loopInterval"`
 	ReleaseEvery Duration `yaml:"releaseEvery"`
-	NoteDue      Duration `yaml:"noteDue"`
+	// PostMergeWindow bounds inactivity while awaiting a post-merge report (2h).
+	PostMergeWindow Duration `yaml:"postMergeWindow"`
+	NoteDue         Duration `yaml:"noteDue"`
+	// FillRetryEvery bounds repeated empty or failed board reads while
+	// capacity's ceiling stays unchanged and no agent is done or removed
+	// (5m), doubled for each further one in a row up to four times.
+	FillRetryEvery Duration `yaml:"fillRetryEvery"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
 	Ownership Ownership `yaml:"ownership"`
@@ -2092,36 +2270,36 @@ func (o Ownership) TeamFilesRepo() (repo, dir string) {
 	return owner + "/" + name, dir
 }
 
-// validate refuses a team-files place without a directory and a pattern
+// validateEach reports a team-files place without a directory and a pattern
 // path.Match cannot read.
-func (o Ownership) validate() error {
+func (o Ownership) validateEach(report func(error)) {
 	if o.TeamFiles != "" {
 		if repo, dir := o.TeamFilesRepo(); dir == "" || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
-			return fmt.Errorf("teamFiles: %q is not <owner>/<repo>/<dir>", o.TeamFiles)
+			report(fmt.Errorf("teamFiles: %q is not <owner>/<repo>/<dir>", o.TeamFiles))
 		}
 	}
 	for field, patterns := range map[string][]string{"review": o.Review, "never": o.Never} {
 		for _, p := range patterns {
 			if _, err := path.Match(p, ""); err != nil || !strings.Contains(p, "/") || strings.HasSuffix(p, "/") {
-				return fmt.Errorf("%s: %q is no owner/name pattern", field, p)
+				report(fmt.Errorf("%s: %q is no owner/name pattern", field, p))
 			}
 		}
 	}
-	return nil
 }
 
-// Role configures a relayed role, the supervisor's or the guide's: the
+// Role configures a relayed role, the guide's: the
 // successor's session prompt (the instructions it follows, a skill or a
 // file, not both) and the relay.
 type Role struct {
-	// Skill is the name of the skill the successor runs (supervise, guide).
+	// Model overrides the previous holder's model for every successor.
+	Model string `yaml:"model"`
+	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
 	// instead.
 	Instructions string `yaml:"instructions"`
 	// RelayAt is the role's session context, in tokens, at which the watch
-	// reports the relay due ("400k"; the guide's default is 150k, the
-	// supervisor's 400k).
+	// reports the relay due ("200k" for the guide).
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
@@ -2130,8 +2308,8 @@ type Role struct {
 	RelayGrace Duration `yaml:"relayGrace"`
 	// RestartGrace is how long beekeeper waits after it first saw the
 	// role's CLI gone: a CLI back under the same session within it is a
-	// restart and keeps the role; past it, the watch says the supervisor
-	// is gone and notifies. The grant rule holds throughout.
+	// restart and keeps the role; past it, the watch says the holder is
+	// gone and starts its successor.
 	RestartGrace Duration `yaml:"restartGrace"`
 	// Dir is the folder a successor starts in (~/ allowed; default: the
 	// folder its predecessor's desktop session started from, not the
@@ -2164,6 +2342,8 @@ const DefaultQueueTTL = 15 * time.Minute
 
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
+	// Methods selects squash, rebase or merge for each repository. Empty: squash.
+	Methods map[string]string `yaml:"methods"`
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
 	Cap int `yaml:"cap"`
@@ -2217,12 +2397,22 @@ type Merge struct {
 	// repository of any other owner, and every repository while it is
 	// empty, takes the plain squash merge as the gh login instead.
 	DevctlOwners []string `yaml:"devctlOwners"`
+	// Admin are the repositories (owner/repo) the desk merges with --admin
+	// past their branch ruleset after the approved desk review; only their
+	// merge go names --admin.
+	Admin []string `yaml:"admin"`
 }
 
 // DevctlServes says whether devctl pr merge serves repo's owner.
 func (m Merge) DevctlServes(repo string) bool {
 	owner, _, _ := strings.Cut(repo, "/")
 	return slices.ContainsFunc(m.DevctlOwners, func(o string) bool { return strings.EqualFold(o, owner) })
+}
+
+// AdminMerge says whether the desk merges repo (owner/repo) with --admin
+// after the approved desk review.
+func (m Merge) AdminMerge(repo string) bool {
+	return slices.ContainsFunc(m.Admin, func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
 // Notify configures what `watch --notify` sends to the desktop.
@@ -2423,7 +2613,32 @@ var DefaultQuietSessions = []string{"test: *"}
 var DefaultIgnore = []string{"Watchdog"}
 
 // GitHub configures the budget reading.
+// WorkerGitHub is coordinator-only App authority. The private key is a vault
+// reference, never a value or a file copied to an execution host.
+type WorkerGitHub struct {
+	AppID         int64            `yaml:"appID"`
+	PrivateKey    string           `yaml:"privateKey"`
+	Installations map[string]int64 `yaml:"installations"`
+}
+
+func (w *WorkerGitHub) Validate() error {
+	if w == nil {
+		return nil
+	}
+	if w.AppID <= 0 || !strings.Contains(w.PrivateKey, "://") || strings.ContainsAny(w.PrivateKey, "\r\n") || len(w.Installations) == 0 {
+		return errors.New("github.workerApp requires appID, privateKey reference and owner installations")
+	}
+	for owner, id := range w.Installations {
+		if !execution.ValidIdentity(owner) || owner != strings.ToLower(owner) || id <= 0 {
+			return errors.New("github.workerApp.installations requires lowercase owners and positive installation IDs")
+		}
+	}
+	return nil
+}
+
 type GitHub struct {
+	WorkerApp *WorkerGitHub `yaml:"workerApp,omitempty"`
+
 	// Floor is the remaining core budget under which GitHub work stops.
 	Floor int `yaml:"floor"`
 	// UrgentBound is the budget an urgent merge keeps for itself under the
@@ -2485,7 +2700,10 @@ type Lemonade struct {
 // (the Default* fractions): its absolute value is read with the method of
 // the same name.
 type Watch struct {
-	Interval Duration `yaml:"interval"`
+	// BatchInterval paces routine stdout notices. Negative disables batching;
+	// --once always prints immediately. Action lines never wait for a batch.
+	BatchInterval Duration `yaml:"batchInterval"`
+	Interval      Duration `yaml:"interval"`
 	// Repeat paces how often a lasting condition is handed to the
 	// notifier (which sends it again after notify.repeat); the watch
 	// prints it once when it starts and once when it ends.
@@ -2849,6 +3067,23 @@ type Desktop struct {
 	TypingQuiet Duration `yaml:"typingQuiet"`
 }
 
+// RunConfig chooses where build commands execute.
+type RunConfig struct {
+	Remote remotebuild.Config `yaml:"remote"`
+	// Tail sizes the tail of a failed run's output beekeeper keeps in its
+	// record and prints once, so the failing test's name survives the
+	// truncation: a systemd size ("256K", "1M"; default
+	// DefaultRunTail, capped at one MiB), or "off" to keep nothing.
+	Tail string `yaml:"tail"`
+}
+
+// DefaultRunTail is how much of a failed run's output beekeeper keeps
+// by default: enough for a test suite's failure block and its panic.
+const DefaultRunTail = "256K"
+
+// runTailRe is a run.tail size: a number with an optional systemd suffix.
+var runTailRe = regexp.MustCompile(`^(\d+)([KkMmGgTt]?)$`)
+
 // Memcap locates the build slots of the memcap wrapper and caps the
 // commands `beekeeper run` runs.
 type Memcap struct {
@@ -2875,11 +3110,17 @@ type Memcap struct {
 // Duration is a time.Duration written as "30s", "10m" in YAML.
 type Duration struct{ time.Duration }
 
-// UnmarshalYAML parses a Go duration string.
+// UnmarshalYAML parses a Go duration string, or whole days as "7d".
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err != nil {
 		return err
+	}
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n >= 0 {
+			d.Duration = time.Duration(n) * 24 * time.Hour
+			return nil
+		}
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
@@ -2928,6 +3169,9 @@ func Path(flag string) (string, error) {
 		return flag, nil
 	}
 	if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" {
+		if _, err := os.Stat(filepath.Clean(env)); err != nil { //nolint:gosec // the configuration file explicitly selected by the caller
+			return "", err
+		}
 		return env, nil
 	}
 	dir, err := os.UserConfigDir()
@@ -2938,11 +3182,15 @@ func Path(flag string) (string, error) {
 }
 
 // Load reads the file at path and applies the defaults. A configuration
-// that is only incomplete loads: Incomplete names what is missing.
+// that is only incomplete loads: Incomplete names what is missing. A missing
+// file explicitly named by BEEKEEPER_CONFIG is an error, never defaults.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Clean(path))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" && filepath.Clean(env) == filepath.Clean(path) {
+			return nil, err
+		}
 		raw = nil
 	case err != nil:
 		return nil, err
@@ -2980,8 +3228,15 @@ func (c *Config) Incomplete() []string {
 	return out
 }
 
+func userHomeDir() (string, error) {
+	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+		return filepath.Clean(h), nil
+	}
+	return os.UserHomeDir()
+}
+
 func (c *Config) defaults() error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return err
 	}
@@ -3002,20 +3257,25 @@ func (c *Config) defaults() error {
 	for i, p := range c.Disk.Checkouts {
 		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
 	}
+	for i, e := range c.Disk.Caches {
+		if e.Path != "" {
+			c.Disk.Caches[i].Path = filepath.Clean(homePath(home, e.Path))
+		}
+		if e.Name == "" {
+			c.Disk.Caches[i].Name = c.Disk.Caches[i].Path
+		}
+	}
 	for i, o := range c.Disk.BuildOutputs {
 		c.Disk.BuildOutputs[i] = BuildOutput{Path: filepath.Clean(homePath(home, o.Path)), Worktree: filepath.Clean(homePath(home, o.Worktree))}
 	}
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
+	setDur(&c.LeaseRound, time.Hour)
 	if c.Identity.Host == "" {
 		if h, err := os.Hostname(); err == nil {
 			c.Identity.Host, _, _ = strings.Cut(h, ".")
 		}
 	}
-	// The desktop app never restarts a crashed CLI by itself: the grace only
-	// debounces a supervisor someone woke.
-	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
-	c.Supervisor.defaults(home)
 	if c.Supervisor.ReviewRounds == 0 {
 		c.Supervisor.ReviewRounds = 1
 	}
@@ -3024,6 +3284,8 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.PostMergeWindow, 2*time.Hour)
+	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
 	if c.Supervisor.Ownership.Team != "" {
 		setStr(&c.Supervisor.Ownership.TeamFiles, DefaultTeamFiles)
@@ -3042,12 +3304,12 @@ func (c *Config) defaults() error {
 	setDur(&c.Feedback.Window, 24*time.Hour)
 	// The guide's context is the person's conversation: it relays early.
 	if c.Guide.RelayAt == 0 {
-		c.Guide.RelayAt = 150_000
+		c.Guide.RelayAt = 200_000
 	}
 	c.Guide.defaults(home)
 	setDur(&c.Guide.WaitingTTL, 2*time.Hour)
 	if c.Agents.RelayAt == 0 {
-		c.Agents.RelayAt = c.Supervisor.RelayAt
+		c.Agents.RelayAt = defaultRelayAt
 	}
 	setDur(&c.Agents.LastStepGrace, 30*time.Minute)
 	if c.Agents.LastStepCeiling == 0 {
@@ -3101,6 +3363,11 @@ func (c *Config) defaults() error {
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
+	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
+	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.EscalateEvery, 7*24*time.Hour)
+	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
+	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)
@@ -3111,6 +3378,7 @@ func (c *Config) defaults() error {
 
 	w := &c.Watch
 	setDur(&w.Interval, 30*time.Second)
+	setDur(&w.BatchInterval, 5*time.Minute)
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
 	setDur(&w.SwapWindow, 10*time.Minute)
@@ -3212,14 +3480,15 @@ func (c *Config) defaults() error {
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
 	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
+	setStr(&c.Run.Tail, DefaultRunTail)
 	setDur(&c.Memcap.HoldBound, 30*time.Minute)
+	if !c.Capacity.reviewHeadroomSet {
+		c.Capacity.ReviewHeadroom = 2
+	}
 	if !c.Capacity.ceilingSet && c.Capacity.Ceiling == 0 {
 		c.Capacity.Ceiling = DefaultCeiling
 	}
-	if !c.Capacity.floorSet && c.Capacity.Floor == 0 {
-		c.Capacity.Floor = max(0, min(DefaultFloor, c.Capacity.Ceiling))
-	}
-	c.Capacity.Usage.defaults(home, c.Capacity.Floor)
+	c.Capacity.Usage.defaults(home)
 	for _, name := range slices.Sorted(maps.Keys(c.Capacity.Providers)) {
 		p := c.Capacity.Providers[name]
 		if p.SelfHosted() {
@@ -3227,36 +3496,26 @@ func (c *Config) defaults() error {
 			// capacity.ceiling, which a desk lowers to hold one on its week,
 			// does not set its target. Without a ceiling of its own it runs
 			// DefaultSelfHostedCeiling sessions at once, bounded by the
-			// machine guards. Its floor is 0: nothing here needs a minimum
-			// number of busy sessions; only its ceiling bounds it.
+			// machine guards.
 			if !p.ceilingSet {
 				p.Ceiling = DefaultSelfHostedCeiling
-			}
-			if !p.floorSet {
-				p.Floor = 0
 			}
 			for i := range p.ServeModeCommand {
 				p.ServeModeCommand[i] = homePath(home, p.ServeModeCommand[i])
 			}
-		} else {
-			if !p.ceilingSet && p.Ceiling == 0 {
-				p.Ceiling = c.Capacity.Ceiling
-			}
-			if !p.floorSet && p.Floor == 0 && !p.ceilingSet {
-				p.Floor = max(0, min(c.Capacity.Floor, p.Ceiling))
-			}
+		} else if !p.ceilingSet && p.Ceiling == 0 {
+			p.Ceiling = c.Capacity.Ceiling
 		}
-		if name == AgyHarness && len(p.Command) == 0 && p.hasFields() {
+		if name == ClaudeHarness && len(p.Command) == 0 {
+			p.Command = slices.Clone(DefaultClaudeUsageCommand)
+		}
+		if name == AgyHarness && len(p.Command) == 0 && !p.SelfHosted() {
 			p.Command = slices.Clone(DefaultAgyUsageCommand)
 		}
-		if name == CodexHarness && len(p.Command) == 0 && p.hasFields() {
+		if name == CodexHarness && len(p.Command) == 0 {
 			p.Command = slices.Clone(DefaultCodexUsageCommand)
 		}
-		baseFloor := c.Capacity.Floor
-		if p.floorSet {
-			baseFloor = p.Floor
-		}
-		p.defaults(home, baseFloor)
+		p.defaults(home)
 		c.Capacity.Providers[name] = p
 	}
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
@@ -3293,12 +3552,16 @@ func (c *Config) defaults() error {
 	return nil
 }
 
+// defaultRelayAt is the context, in tokens, at which a role's holder or an
+// agent is relayed unless configured.
+const defaultRelayAt = 400_000
+
 func (r *Role) defaults(home string) {
 	setDur(&r.RelayTTL, 15*time.Minute)
 	setDur(&r.RelayGrace, 30*time.Minute)
 	setDur(&r.RestartGrace, time.Minute)
 	if r.RelayAt == 0 {
-		r.RelayAt = 400_000
+		r.RelayAt = defaultRelayAt
 	}
 	r.Instructions = homePath(home, r.Instructions)
 	r.Dir = homePath(home, r.Dir)
@@ -3307,26 +3570,25 @@ func (r *Role) defaults(home string) {
 // GitHubHosts are the hosts the GitHub token goes to.
 var GitHubHosts = []string{"github.com", "api.github.com", "uploads.github.com"}
 
-func (s *Sandbox) validate() error {
+func (s *Sandbox) validateEach(report func(error)) {
 	for key, ps := range map[string][]string{"sandbox.allowRead": s.AllowRead, "sandbox.allowWrite": s.AllowWrite} {
 		for _, p := range ps {
 			if !filepath.IsAbs(p) {
-				return fmt.Errorf("%s: %q is neither absolute nor under ~/", key, p)
+				report(fmt.Errorf("%s: %q is neither absolute nor under ~/", key, p))
 			}
 		}
 	}
 	if s.ProxyPort < 0 || s.ProxyPort > 65535 {
-		return fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort)
+		report(fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort))
 	}
 	for _, d := range s.Domains {
 		if openLoopback(d) {
-			return fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d)
+			report(fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d))
 		}
 		if host, port, err := net.SplitHostPort(d); err == nil && Loopback(host) && port == strconv.Itoa(s.ProxyPort) {
-			return fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d)
+			report(fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d))
 		}
 	}
-	return nil
 }
 
 // openLoopback reports whether the egress entry d opens loopback beyond one
@@ -3368,6 +3630,53 @@ func (s *Sandbox) defaults(home string) {
 }
 
 // homePath is p with a leading ~/ resolved against home.
+// validateDiskCaches refuses a cache policy that could reach beyond a cache:
+// a relative path or filesystem root, a bad glob, a rule-less custom entry.
+func validateDiskCachesEach(caches []DiskCache, report func(error)) {
+	names := map[string]bool{}
+	for _, e := range caches {
+		if e.Name == "" || names[e.Name] {
+			report(fmt.Errorf("disk.caches: each entry needs a path or a unique name (%q)", e.Name))
+		}
+		names[e.Name] = true
+		builtin := e.Builtin(e.Name)
+		switch e.Mode {
+		case "", DiskCacheEntries, DiskCacheFiles, DiskCacheOff:
+		case DiskCacheCommand:
+			if strings.TrimSpace(e.Command) == "" {
+				report(fmt.Errorf("disk.caches %s: mode command needs a command", e.Name))
+			}
+		case DiskCacheModeGo, DiskCacheModeSc:
+			if (e.Mode == DiskCacheModeGo) != (e.Name == DiskCacheGo) || (e.Mode == DiskCacheModeSc) != (e.Name == DiskCacheSccache) {
+				report(fmt.Errorf("disk.caches %s: mode %s belongs to the built-in entry of that cache alone", e.Name, e.Mode))
+			}
+		default:
+			report(fmt.Errorf("disk.caches %s: mode %q is none of entries, files, command, off", e.Name, e.Mode))
+		}
+		if e.Command != "" && e.Mode != DiskCacheCommand {
+			report(fmt.Errorf("disk.caches %s: command needs mode command", e.Name))
+		}
+		if e.OlderThan.Duration < 0 || e.MaxGiB < 0 {
+			report(fmt.Errorf("disk.caches %s: olderThan and maxGiB take no negative value", e.Name))
+		}
+		if e.Path == "" {
+			if !builtin {
+				report(fmt.Errorf("disk.caches %s: path is required", e.Name))
+			}
+			continue
+		}
+		if !filepath.IsAbs(e.Path) || filepath.Dir(e.Path) == e.Path {
+			report(fmt.Errorf("disk.caches %s: path must be absolute and not a filesystem root", e.Name))
+		}
+		if _, err := filepath.Match(e.Path, ""); err != nil {
+			report(fmt.Errorf("disk.caches %s: path: %w", e.Name, err))
+		}
+		if !builtin && e.Mode != DiskCacheOff && e.Mode != DiskCacheCommand && e.OlderThan.Duration == 0 && e.MaxGiB == 0 && !e.Regenerable {
+			report(fmt.Errorf("disk.caches %s: set olderThan, maxGiB or regenerable", e.Name))
+		}
+	}
+}
+
 func homePath(home, p string) string {
 	if rest, ok := strings.CutPrefix(p, "~/"); ok {
 		return filepath.Join(home, rest)
@@ -3395,86 +3704,146 @@ func (r *Reporter) defaults(home, person string) {
 	r.Brief, r.Dir = homePath(home, r.Brief), homePath(home, r.Dir)
 }
 
-func (c *Config) validate() error {
+// validate keeps the loader's first-finding contract. The checker uses
+// validateEach to collect independent rules without repeated edit/check rounds.
+func (c *Config) validate() error { return firstFinding(c.validateEach) }
+
+func firstFinding(visit func(func(error))) error {
+	var first error
+	visit(func(err error) {
+		if first == nil {
+			first = err
+		}
+	})
+	return first
+}
+
+func (c *Config) validateEach(report func(error)) {
+	if c.LeaseRound.Duration < 0 {
+		report(errors.New("leaseRound: want a positive duration"))
+	}
+	for i, r := range c.Agents.Models {
+		if _, err := regexp.Compile(r.Match); err != nil {
+			report(fmt.Errorf("agents.models[%d].match: %w", i, err))
+		}
+		if strings.TrimSpace(r.Match) == "" {
+			report(fmt.Errorf("agents.models[%d]: match is required", i))
+		}
+	}
+	seenKinds := map[string]bool{}
+	for i, k := range c.Agents.Kinds {
+		if !profileNamePattern.MatchString(k.Name) {
+			report(fmt.Errorf("agents.kinds[%d].name: want letters, digits, - or _", i))
+		} else if seenKinds[k.Name] {
+			report(fmt.Errorf("agents.kinds[%d].name: %s is named twice", i, k.Name))
+		}
+		seenKinds[k.Name] = true
+		if strings.TrimSpace(k.Match) == "" {
+			report(fmt.Errorf("agents.kinds[%d]: match is required", i))
+		} else if _, err := regexp.Compile(k.Match); err != nil {
+			report(fmt.Errorf("agents.kinds[%d].match: %w", i, err))
+		}
+		if k.MaxBusy < 0 || k.MinInterval.Duration < 0 || k.DailySpend < 0 {
+			report(fmt.Errorf("agents.kinds[%d]: maxBusy, minInterval and dailySpend must not be negative", i))
+		}
+	}
+	for kind, p := range c.Capacity.TaskPolicies {
+		if strings.TrimSpace(kind) == "" || p.MinClass < 0 || p.MaxCost < 0 {
+			report(fmt.Errorf("capacity.taskPolicies.%s: nonempty kind and nonnegative class and cost required", kind))
+		}
+	}
+	if err := c.Run.Remote.Validate(); err != nil {
+		report(err)
+	}
+	if c.Run.Tail != "" && c.Run.Tail != "off" && !runTailRe.MatchString(c.Run.Tail) {
+		report(fmt.Errorf("run.tail: want a size with an optional K, M, G or T suffix (256K) or off"))
+	}
 	if c.Disk.Prune != "" && c.Disk.Prune != DiskPruneAuto && c.Disk.Prune != DiskPruneAsk {
-		return fmt.Errorf("disk.prune: want auto or ask")
+		report(fmt.Errorf("disk.prune: want auto or ask"))
 	}
 	for _, p := range c.Disk.TrashDirs {
 		if !filepath.IsAbs(p) || filepath.Clean(p) == string(filepath.Separator) {
-			return fmt.Errorf("disk.trashDirs: each entry must be an absolute trash directory, not a filesystem root")
+			report(fmt.Errorf("disk.trashDirs: each entry must be an absolute trash directory, not a filesystem root"))
 		}
 	}
 	for _, n := range c.Disk.BuildDirs {
 		if n == "" || n == "." || filepath.IsAbs(n) || strings.Contains(n, "..") || strings.Contains(n, ".git") {
-			return fmt.Errorf("disk.buildDirs: invalid directory %q", n)
+			report(fmt.Errorf("disk.buildDirs: invalid directory %q", n))
 		}
 	}
+	validateDiskCachesEach(c.Disk.Caches, report)
 	for _, o := range c.Disk.BuildOutputs {
 		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
-			return fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths")
+			report(fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths"))
 		}
+	}
+	if err := c.GitHub.WorkerApp.Validate(); err != nil {
+		report(err)
+	}
+	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
+		report(fmt.Errorf("agents.remoteMCP: %w", err))
 	}
 	identities := map[execution.HostID]bool{}
 	for selector, host := range c.Agents.Hosts {
 		if selector == "local" || !execution.ValidIdentity(selector) || identities[host.Identity] {
-			return errors.New("agents.hosts requires unique identities and selectors; local is reserved")
+			report(errors.New("agents.hosts requires unique identities and selectors; local is reserved"))
 		}
-		if err := host.Validate(); err != nil {
-			return fmt.Errorf("agents.hosts.%s: %w", selector, err)
+		if err := host.ValidateCatalog(); err != nil {
+			report(fmt.Errorf("agents.hosts.%s: %w", selector, err))
 		}
 		identities[host.Identity] = true
 	}
 	if c.Agents.Execution != nil {
 		if err := c.Agents.Execution.Validate(); err != nil {
-			return fmt.Errorf("agents.execution: %w", err)
+			report(fmt.Errorf("agents.execution: %w", err))
 		}
 	}
 	for name := range c.Agents.Profiles {
 		if !profileNamePattern.MatchString(name) {
-			return fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name)
+			report(fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name))
 		}
 	}
-	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "supervisor.profile": c.Supervisor.Profile, "guide.profile": c.Guide.Profile} {
+	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "guide.profile": c.Guide.Profile} {
 		if _, ok := c.Agents.ProfileFor(name); name != "" && !ok {
-			return fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile)
+			report(fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile))
 		}
 	}
 	if m := c.Agents.Mode; m != "" && m != ModeDesktop && m != ModeBackground {
-		return fmt.Errorf("agents.mode: %q: want %s or %s", m, ModeDesktop, ModeBackground)
+		report(fmt.Errorf("agents.mode: %q: want %s or %s", m, ModeDesktop, ModeBackground))
 	}
 	if g := c.Agents.Shell.Globs; g != "" && g != GlobsLiteral && g != GlobsShell {
-		return fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell)
+		report(fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell))
 	}
 	for _, n := range c.Agents.Shell.Unalias {
 		if !commandName.MatchString(n) {
-			return fmt.Errorf("agents.shell.unalias: %q is no command name", n)
+			report(fmt.Errorf("agents.shell.unalias: %q is no command name", n))
 		}
 	}
 	for _, n := range c.Secret.UnlockCommands {
 		if !commandName.MatchString(n) {
-			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
+			report(fmt.Errorf("secret.unlockCommands: %q is no command name", n))
 		}
 	}
 	for _, f := range c.Secret.Files {
 		if _, err := filepath.Match(f, ""); err != nil || !filepath.IsAbs(f) {
-			return fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f)
+			report(fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f))
 		}
 	}
 	for i, id := range c.Secret.AgeIdentities {
 		switch {
 		case id.Recipient == "" && id.PathRegex == "":
-			return fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i)
+			report(fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i))
 		case id.Recipient != "" && !strings.HasPrefix(id.Recipient, "age1"):
-			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
+			report(fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient))
 		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///") && !strings.HasPrefix(id.Ref, "store://"):
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref)
+			report(fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref))
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
-			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
+			report(fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err))
 		}
 		if rest, ok := strings.CutPrefix(id.Ref, "op://"); ok {
 			if vault, _, _ := strings.Cut(rest, "/"); vault != c.Secret.Vault && !slices.Contains(c.Secret.AgeVaults, vault) {
-				return fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault)
+				report(fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault))
 			}
 		}
 	}
@@ -3482,158 +3851,163 @@ func (c *Config) validate() error {
 		s := c.Apps.Secrets[in]
 		switch {
 		case !filepath.IsAbs(s.File):
-			return fmt.Errorf("apps.secrets.%s.file: %q is no absolute path (~/ allowed)", in, s.File)
+			report(fmt.Errorf("apps.secrets.%s.file: %q is no absolute path (~/ allowed)", in, s.File))
 		case (s.Name == "") != (s.Namespace == ""):
-			return fmt.Errorf("apps.secrets.%s: name and namespace start an absent file's Secret together", in)
+			report(fmt.Errorf("apps.secrets.%s: name and namespace start an absent file's Secret together", in))
 		}
 	}
 	for i, v := range c.Secret.AgeVaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
-			return fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+			report(fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v))
 		}
 	}
 	for i, r := range c.Secret.FileRoots {
 		if !filepath.IsAbs(r) || r == "/" {
-			return fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r)
+			report(fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r))
 		}
 	}
 	for i, v := range c.Secret.Vaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
-			return fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+			report(fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v))
 		}
 	}
 	for name, p := range c.Omp.Providers {
 		// the message never carries the value someone put there
 		if !opRef(p.APIKey) {
-			return fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name)
+			report(fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name))
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {
 		for _, g := range []string{r.Vault, r.Item} {
 			if _, err := filepath.Match(g, ""); err != nil {
-				return fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err)
+				report(fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err))
 			}
 		}
 	}
 	for _, g := range c.Hooks.PersonFolders {
 		if _, err := filepath.Match(g, ""); err != nil {
-			return fmt.Errorf("hooks.personFolders: %q: %w", g, err)
+			report(fmt.Errorf("hooks.personFolders: %q: %w", g, err))
 		}
 	}
 	for _, g := range c.Outbound.Paths {
 		if _, err := filepath.Match(g, ""); err != nil {
-			return fmt.Errorf("outbound.paths: %q: %w", g, err)
+			report(fmt.Errorf("outbound.paths: %q: %w", g, err))
 		}
 	}
-	if err := c.Sandbox.validate(); err != nil {
-		return err
-	}
+	c.Sandbox.validateEach(report)
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
-		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
+		report(fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration))
 	}
 	if c.Feedback.Enabled() && !c.Reporter.Enabled() {
-		return fmt.Errorf("feedback.context: the feedback watch reads the reporter's posts: set reporter.every and reporter.brief")
+		report(fmt.Errorf("feedback.context: the feedback watch reads the reporter's posts: set reporter.every and reporter.brief"))
 	}
 	if tz := c.Reporter.TZ; tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {
-			return fmt.Errorf("reporter.tz: %w", err)
+			report(fmt.Errorf("reporter.tz: %w", err))
 		}
 	}
-	if err := ownerRepos("reporter.reviews", c.Reporter.Reviews); err != nil {
-		return err
+	ownerReposEach("reporter.reviews", c.Reporter.Reviews, report)
+	ownerReposEach("plans.repositories", c.Plans.Repositories, report)
+	for repo, method := range c.Merge.Methods {
+		ownerReposEach("merge.methods", []string{repo}, report)
+		if method != "squash" && method != "rebase" && method != "merge" {
+			report(fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo))
+		}
 	}
-	if err := ownerRepos("plans.repositories", c.Plans.Repositories); err != nil {
-		return err
-	}
-	if err := c.Sink.validate(); err != nil {
-		return err
-	}
+	ownerReposEach("merge.admin", c.Merge.Admin, report)
+	c.Sink.validateEach(report)
 	for i, st := range c.Board.Order {
 		if st.Name == "" {
-			return fmt.Errorf("board.order[%d]: no name", i)
+			report(fmt.Errorf("board.order[%d]: no name", i))
 		}
 		if st.Search != "" && (len(st.Status)+len(st.Kind)+len(st.Labels) > 0 || st.SubIssues || st.Unblocked) {
-			return fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name)
+			report(fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name))
 		}
 	}
 	if t := c.Teleport; t.WarnBefore.Duration > t.RenewBefore.Duration {
-		return fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration)
+		report(fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration))
 	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
-		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)
+		report(fmt.Errorf("kube.contextTemplate: %q has no {installation}", t))
 	}
 	if c.Supervisor.ReviewRounds < 0 {
-		return fmt.Errorf("supervisor.reviewRounds: %d is fewer than one review round (0 is the default, 1)", c.Supervisor.ReviewRounds)
+		report(fmt.Errorf("supervisor.reviewRounds: %d is fewer than one review round (0 is the default, 1)", c.Supervisor.ReviewRounds))
 	}
 	if k := c.Supervisor.ClassifierConfidence; k < 0 || k > 1 {
-		return fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k)
+		report(fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k))
 	}
-	if err := c.Supervisor.Ownership.validate(); err != nil {
-		return fmt.Errorf("supervisor.ownership.%w", err)
-	}
-	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
-		if r.Skill != "" && r.Instructions != "" {
-			return fmt.Errorf("%s: set skill or instructions, not both", name)
+	c.Supervisor.Ownership.validateEach(func(err error) { report(fmt.Errorf("supervisor.ownership.%w", err)) })
+	for _, selector := range c.Supervisor.Hosts {
+		if selector == "" || selector == "local" {
+			report(fmt.Errorf("supervisor.hosts: %q names no SSH execution host", selector))
+		}
+		if _, ok := c.Agents.Hosts[selector]; !ok {
+			report(fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector))
 		}
 	}
+	if r := c.Guide.Role; r.Skill != "" && r.Instructions != "" {
+		report(errors.New("guide: set skill or instructions, not both"))
+	}
 	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
-		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)
+		report(fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context))
 	}
 	if d := c.Alerts.Discover; d.Enabled() && c.Alerts.Team == "" {
-		return errors.New("alerts.discover: discovering the installations that carry the team's HelmReleases needs alerts.team")
+		report(errors.New("alerts.discover: discovering the installations that carry the team's HelmReleases needs alerts.team"))
 	}
 	for _, p := range c.Alerts.Discover.Exclude {
 		if _, err := path.Match(p, ""); err != nil {
-			return fmt.Errorf("alerts.discover.exclude: %q: %w", p, err)
+			report(fmt.Errorf("alerts.discover.exclude: %q: %w", p, err))
 		}
 	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {
-			return fmt.Errorf("alerts.installations[%d]: an installation needs a name", i)
+			report(fmt.Errorf("alerts.installations[%d]: an installation needs a name", i))
 		}
 		if in.Floor != "" && !slices.Contains(alerts.Severities, in.Floor) {
-			return fmt.Errorf("alerts.installations[%d]: floor %q is none of %s", i, in.Floor, strings.Join(alerts.Severities, ", "))
+			report(fmt.Errorf("alerts.installations[%d]: floor %q is none of %s", i, in.Floor, strings.Join(alerts.Severities, ", ")))
 		}
 	}
 	if n := c.Alerts.Flap.Changes; n < 0 || n == 1 {
-		return fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n)
+		report(fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n))
 	}
 	if p := c.Alerts.PageSeverity; p != "" && !slices.Contains(alerts.Severities, p) {
-		return fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", "))
+		report(fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", ")))
 	}
 	if g := c.Alerts.OwnerGrace.Duration; g != 0 && g < time.Minute {
-		return fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g)
+		report(fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g))
 	}
 	if e := c.Upgrades.Every.Duration; e < 0 {
-		return fmt.Errorf("upgrades.every: %s; an installation is read at most this long apart", e)
+		report(fmt.Errorf("upgrades.every: %s; an installation is read at most this long apart", e))
 	}
-	if err := c.Notify.validate(); err != nil {
-		return err
-	}
+	c.Notify.validateEach(report)
 	for _, r := range c.Resources {
 		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
-			return fmt.Errorf("resources: %q is not a valid resource name", r)
+			report(fmt.Errorf("resources: %q is not a valid resource name", r))
 		}
 	}
-	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
-		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
+	if k := c.Capacity; k.Ceiling < 0 {
+		report(fmt.Errorf("capacity.ceiling: %d is negative", k.Ceiling))
+	}
+	if c.Capacity.ReviewHeadroom < 0 {
+		report(fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom))
+	}
+	if n, ok := c.Capacity.Local.Limit(); ok && n < 0 {
+		report(fmt.Errorf("capacity.local.ceiling: %d is negative", n))
 	}
 	if c.Capacity.SwapPSIMax < 0 {
-		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
+		report(fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax))
 	}
-	if err := c.Capacity.Usage.validate(); err != nil {
-		return err
-	}
+	c.Capacity.Usage.validateNamedEach("capacity.usage", report)
 	for _, name := range c.Capacity.ProviderNames() {
 		if strings.TrimSpace(name) == "" {
-			return errors.New("capacity.providers: empty provider name")
+			report(errors.New("capacity.providers: empty provider name"))
 		}
 		p := c.Capacity.Providers[name]
 		if k := strings.TrimSpace(p.Kind); k != "" && k != KindSubscription && k != KindSelfHosted {
-			return fmt.Errorf("capacity.providers.%s.kind: %q is not %s or %s", name, p.Kind, KindSubscription, KindSelfHosted)
+			report(fmt.Errorf("capacity.providers.%s.kind: %q is not %s or %s", name, p.Kind, KindSubscription, KindSelfHosted))
 		}
-		if p.Floor < 0 || p.Ceiling < p.Floor {
-			return fmt.Errorf("capacity.providers.%s: floor %d and ceiling %d; the ceiling is at least the floor", name, p.Floor, p.Ceiling)
+		if p.Ceiling < 0 {
+			report(fmt.Errorf("capacity.providers.%s.ceiling: %d is negative", name, p.Ceiling))
 		}
 		if p.SelfHosted() {
 			// claude, agy and codex are the subscription harnesses' names: a
@@ -3641,67 +4015,67 @@ func (c *Config) validate() error {
 			// subscription start's fallback and hand it its room.
 			switch strings.ToLower(strings.TrimSpace(name)) {
 			case ClaudeHarness, AgyHarness, CodexHarness:
-				return fmt.Errorf("capacity.providers.%s: %s names the %s subscription; a %s provider has another name", name, name, name, KindSelfHosted)
+				report(fmt.Errorf("capacity.providers.%s: %s names the %s subscription; a %s provider has another name", name, name, name, KindSelfHosted))
 			}
 			if p.Enabled() {
-				return fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted)
+				report(fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted))
 			}
 			if p.hasFields() {
-				return fmt.Errorf("capacity.providers.%s: a %s provider has no usage windows: remove its usage fields", name, KindSelfHosted)
+				report(fmt.Errorf("capacity.providers.%s: a %s provider has no usage windows: remove its usage fields", name, KindSelfHosted))
 			}
 			if p.ServeModeStale.Duration < 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeStaleAfter: %s is negative", name, p.ServeModeStale.Duration)
+				report(fmt.Errorf("capacity.providers.%s.serveModeStaleAfter: %s is negative", name, p.ServeModeStale.Duration))
 			}
 			if p.ServeModeSwitchTimeout.Duration < 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchTimeout: %s is negative", name, p.ServeModeSwitchTimeout.Duration)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchTimeout: %s is negative", name, p.ServeModeSwitchTimeout.Duration))
 			}
 			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeCeilings)) {
 				if strings.TrimSpace(mode) == "" {
-					return fmt.Errorf("capacity.providers.%s.serveModeCeilings: empty mode name", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings: empty mode name", name))
 				}
 				if p.ServeModeCeilings[mode] < 0 {
-					return fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d is negative", name, mode, p.ServeModeCeilings[mode])
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d is negative", name, mode, p.ServeModeCeilings[mode]))
 				}
 			}
 			if len(p.ServeModeCommand) > 0 {
 				if strings.TrimSpace(p.ServeModeCommand[0]) == "" {
-					return fmt.Errorf("capacity.providers.%s.serveModeCommand[0]: empty executable", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCommand[0]: empty executable", name))
 				}
 				if len(p.ServeModeCeilings) == 0 && len(p.ServeModeModes) == 0 {
-					return fmt.Errorf("capacity.providers.%s.serveModeCommand: no serveModeCeilings: the command's modes name no ceiling", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCommand: no serveModeCeilings: the command's modes name no ceiling", name))
 				}
 			} else if len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeCeilings: no serveModeCommand: the ceilings name no mode reader", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeCeilings: no serveModeCommand: the ceilings name no mode reader", name))
 			}
 			if len(p.ServeModeModes) > 0 && len(p.ServeModeCommand) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeCommand: the modes name no mode reader", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeCommand: the modes name no mode reader", name))
 			}
 			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeCommand) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeCommand: the switch has no mode reader", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeCommand: the switch has no mode reader", name))
 			}
 			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeModes) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeModes: the switch knows no mode to switch into", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeModes: the switch knows no mode to switch into", name))
 			}
 			if len(p.ServeModeSwitch) > 0 && strings.TrimSpace(p.ServeModeSwitch[0]) == "" {
-				return fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand[0]: empty executable", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand[0]: empty executable", name))
 			}
 			if len(p.ServeModeModes) > 0 && len(p.ServeModeSwitch) == 0 {
-				return fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeSwitchCommand: the modes name no switch", name)
+				report(fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeSwitchCommand: the modes name no switch", name))
 			}
 			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeModes)) {
 				m := p.ServeModeModes[mode]
 				if strings.TrimSpace(mode) == "" {
-					return fmt.Errorf("capacity.providers.%s.serveModeModes: empty mode name", name)
+					report(fmt.Errorf("capacity.providers.%s.serveModeModes: empty mode name", name))
 				}
 				if m.Sessions < 0 {
-					return fmt.Errorf("capacity.providers.%s.serveModeModes.%s: sessions %d is negative", name, mode, m.Sessions)
+					report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: sessions %d is negative", name, mode, m.Sessions))
 				}
 				if c, ok := p.ServeModeCeilings[mode]; ok && c != m.Sessions {
-					return fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions)
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions))
 				}
 				for _, n := range m.Nodes {
 					if strings.TrimSpace(n) == "" {
-						return fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode)
+						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode))
 					}
 				}
 			}
@@ -3709,69 +4083,67 @@ func (c *Config) validate() error {
 		}
 		if len(p.ServeModeCommand) > 0 || len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 ||
 			len(p.ServeModeSwitch) > 0 || p.ServeModeSwitchTimeout.Duration != 0 {
-			return fmt.Errorf("capacity.providers.%s: serveModeCommand, serveModeCeilings, serveModeModes and serveModeSwitchCommand belong to a %s provider", name, KindSelfHosted)
+			report(fmt.Errorf("capacity.providers.%s: serveModeCommand, serveModeCeilings, serveModeModes and serveModeSwitchCommand belong to a %s provider", name, KindSelfHosted))
 		}
-		if err := p.validateNamed("capacity.providers." + name); err != nil {
-			return err
-		}
+		p.validateNamedEach("capacity.providers."+name, report)
 	}
 	for i, ch := range c.Capacity.Choices {
+		if ch.Class < 0 || ch.Cost < 0 || ch.ReviewReserve < 0 || ch.ReviewReserve > 100 {
+			report(fmt.Errorf("capacity.choices[%d]: class and cost must be nonnegative, reviewReserve in [0, 100]", i))
+		}
 		switch {
 		case strings.TrimSpace(ch.Harness) == "":
-			return fmt.Errorf("capacity.choices[%d]: harness is required", i)
+			report(fmt.Errorf("capacity.choices[%d]: harness is required", i))
 		case strings.TrimSpace(ch.Model) == "":
-			return fmt.Errorf("capacity.choices[%d]: model is required", i)
+			report(fmt.Errorf("capacity.choices[%d]: model is required", i))
 		case ch.fiveHourMaxSet && !(ch.FiveHourMax > 0 && ch.FiveHourMax <= 100):
-			return fmt.Errorf("capacity.choices[%d]: fiveHourMax %g is not in (0, 100]", i, ch.FiveHourMax)
+			report(fmt.Errorf("capacity.choices[%d]: fiveHourMax %g is not in (0, 100]", i, ch.FiveHourMax))
 		case ch.sevenDayMaxSet && !(ch.SevenDayMax > 0 && ch.SevenDayMax <= 100):
-			return fmt.Errorf("capacity.choices[%d]: sevenDayMax %g is not in (0, 100]", i, ch.SevenDayMax)
+			report(fmt.Errorf("capacity.choices[%d]: sevenDayMax %g is not in (0, 100]", i, ch.SevenDayMax))
 		case ch.paceMarginSet && (ch.PaceMargin < -100 || ch.PaceMargin > 100):
-			return fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin)
+			report(fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin))
 		}
 		prov := ch.EffectiveProvider()
 		if p, ok := c.Capacity.Providers[prov]; ok && p.SelfHosted() && !strings.EqualFold(strings.TrimSpace(ch.Harness), OmpHarness) {
-			return fmt.Errorf("capacity.choices[%d]: harness %q is a subscription; %s is a %s provider", i, ch.Harness, prov, KindSelfHosted)
+			report(fmt.Errorf("capacity.choices[%d]: harness %q is a subscription; %s is a %s provider", i, ch.Harness, prov, KindSelfHosted))
 		}
 		if _, ok := c.Capacity.Providers[prov]; !ok {
-			return fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov)
+			report(fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov))
 		}
 	}
 	if w := c.Watch.SwapWindow.Duration; w != 0 && w < MinSwapSpan {
-		return fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan)
+		report(fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan))
 	}
 	if a := c.Agents; a.LastStepCeiling != 0 && a.LastStepCeiling <= a.RelayAt {
-		return fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt)
+		report(fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt))
 	}
-	if err := c.validateLabs(); err != nil {
-		return err
-	}
+	c.validateLabsEach(report)
 	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
-		return fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB)
+		report(fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB))
 	}
 	faults := map[string]bool{}
 	for i, f := range c.Doctor.Faults {
 		if f.Name == "" || f.Probe == "" || f.Remedy == "" || faults[f.Name] {
-			return fmt.Errorf("doctor.faults[%d]: a fault needs a name of its own, a probe and a remedy", i)
+			report(fmt.Errorf("doctor.faults[%d]: a fault needs a name of its own, a probe and a remedy", i))
 		}
 		faults[f.Name] = true
 	}
 	names, repos := map[string]bool{}, map[string]string{}
 	for i, l := range c.Lanes {
 		if l.Name == "" || len(l.Repositories) == 0 || strings.Contains(l.Name, "/") {
-			return fmt.Errorf("lanes[%d]: a lane needs a name without a slash and repositories", i)
+			report(fmt.Errorf("lanes[%d]: a lane needs a name without a slash and repositories", i))
 		}
 		if names[l.Name] {
-			return fmt.Errorf("lanes: %q is named twice", l.Name)
+			report(fmt.Errorf("lanes: %q is named twice", l.Name))
 		}
 		names[l.Name] = true
 		for _, r := range l.Repositories {
 			if prev, ok := repos[r]; ok {
-				return fmt.Errorf("lanes: %s is in both %q and %q", r, prev, l.Name)
+				report(fmt.Errorf("lanes: %s is in both %q and %q", r, prev, l.Name))
 			}
 			repos[r] = l.Name
 		}
 	}
-	return nil
 }
 
 // machineKinds are the kinds that notified before the machine's lines went
@@ -3788,24 +4160,23 @@ func notifyKind(field, k string) error {
 	return nil
 }
 
-func (n Notify) validate() error {
+func (n Notify) validateEach(report func(error)) {
 	for _, k := range n.Kinds {
 		if err := notifyKind("notify.kinds", k); err != nil {
-			return err
+			report(err)
 		}
 	}
 	for k, u := range n.Urgency {
 		if err := notifyKind("notify.urgency", k); err != nil {
-			return err
+			report(err)
 		}
 		if !slices.Contains(notify.Urgencies, u) {
-			return fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", "))
+			report(fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", ")))
 		}
 	}
 	if _, err := notify.ParseQuietHours(n.QuietHours); err != nil {
-		return fmt.Errorf("notify.quietHours: %w", err)
+		report(fmt.Errorf("notify.quietHours: %w", err))
 	}
-	return nil
 }
 
 // LaneOf is the lane a repository's merges queue in: the configured lane
@@ -3867,24 +4238,23 @@ func (c *Config) Leasable() []string {
 	return append(out, Browser)
 }
 
-// validateLabs checks that every lab lease is a configured resource and
+// validateLabsEach checks that every lab lease is a configured resource and
 // that no two lab leases map one kind cluster.
-func (c *Config) validateLabs() error {
+func (c *Config) validateLabsEach(report func(error)) {
 	by := map[string]string{}
 	for _, res := range slices.Sorted(maps.Keys(c.Labs)) {
 		cl := c.Labs[res]
 		if !slices.Contains(c.Resources, res) {
-			return fmt.Errorf("labs: %q is not one of the resources %s", res, strings.Join(c.Resources, ", "))
+			report(fmt.Errorf("labs: %q is not one of the resources %s", res, strings.Join(c.Resources, ", ")))
 		}
 		if cl == "" {
-			return fmt.Errorf("labs: %q names no kind cluster", res)
+			report(fmt.Errorf("labs: %q names no kind cluster", res))
 		}
 		if other, ok := by[cl]; ok {
-			return fmt.Errorf("labs: %q and %q both map the kind cluster %q", other, res, cl)
+			report(fmt.Errorf("labs: %q and %q both map the kind cluster %q", other, res, cl))
 		}
 		by[cl] = res
 	}
-	return nil
 }
 
 // LabCluster is the kind cluster the lab lease res stands for, "" when res
@@ -3907,14 +4277,13 @@ func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
 }
 
-// ownerRepos refuses an entry of field that is not owner/repo.
-func ownerRepos(field string, repos []string) error {
+// ownerReposEach reports entries of field that are not owner/repo.
+func ownerReposEach(field string, repos []string, report func(error)) {
 	for _, r := range repos {
 		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {
-			return fmt.Errorf("%s: %q is not owner/repo", field, r)
+			report(fmt.Errorf("%s: %q is not owner/repo", field, r))
 		}
 	}
-	return nil
 }
 
 func setStr(p *string, v string) {

@@ -336,7 +336,7 @@ const newerSchema = `{
   "timers": [{"id": 1, "due": "2026-10-02T15:00:00Z", "what": "w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "jitter": "1m"}],
   "records": [{"session": {"name": "a"}, "issue": "o/r#1", "by": {"name": "a"}, "at": "2026-10-02T14:00:00Z", "phase": "ci"}],
   "starts": [{"session": "s1", "name": "Agent one", "mode": "bypassPermissions", "dir": "/w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "model": "m"}],
-  "merges": [{"repo": "o/r", "pr": 1, "lane": "l", "by": {"name": "a"}, "pid": 1, "phase": "waiting", "joined": "2026-10-02T14:00:00Z", "seen": "2026-10-02T14:00:00Z", "priority": 2}],
+  "merges": [{"repo": "o/r", "pr": 1, "lane": "l", "by": {"name": "a"}, "pid": 1, "phase": "waiting", "joined": "2026-10-02T14:00:00Z", "seen": "2026-10-02T14:00:00Z", "slot": 2}],
   "budget": {"remaining": 1, "limit": 2, "reset": "2026-10-02T15:00:00Z", "at": "2026-10-02T14:00:00Z", "search": 3},
   "rota": {"next": "Supervisor run 13"}
 }`
@@ -397,7 +397,6 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	}{
 		{[]any{"writer", "version"}, "v9.0.0"},
 		{[]any{"writer", "build"}, "b1"},
-		{[]any{keySupervisor, "term"}, 9.0},
 		{[]any{"guide", "mood"}, "calm"},
 		{[]any{"grants", 0, "ttl"}, "2h"},
 		{[]any{"holds", 0, "scope"}, "merge"},
@@ -409,7 +408,7 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 		{[]any{"timers", 0, "jitter"}, "1m"},
 		{[]any{"records", 0, "phase"}, "ci"},
 		{[]any{"starts", 0, "model"}, "m"},
-		{[]any{"merges", 0, "priority"}, 2.0},
+		{[]any{"merges", 0, "slot"}, 2.0},
 		{[]any{"budget", "search"}, 3.0},
 		{[]any{"rota", "next"}, "Supervisor run 13"},
 	}
@@ -421,6 +420,50 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	if n := len(at(keyAgents, 2).(map[string]any)); n != 3 {
 		t.Errorf("a new entry carries members of another: %v", at(keyAgents, 2))
 	}
+	if v, ok := got[keySupervisor]; ok {
+		t.Errorf("the retired supervisor session's record is written back: %v", v)
+	}
+}
+
+// The supervisor session's role is gone: an older binary's record of it
+// (its holder, relay, reliefs, CLI, run and relay due) is dropped at the
+// read, and the next save leaves it out, while every other member it does
+// not know is kept.
+func TestRetiredSupervisorKeysAreDropped(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"supervisor":{"session":"s0","name":"Supervisor run 28","since":"2026-11-01T10:00:00Z"},` +
+		`"relay":{"from":{"session":"s0"},"to":{"session":"s1","name":"Supervisor run 29"},"at":"2026-11-01T10:00:00Z","expires":"2026-11-01T10:15:00Z"},` +
+		`"relieved":[{"session":"s9"}],"supervisorCLI":{"pid":7},"supervisorRun":28,"relayDue":{"contextTokens":1},` +
+		`"nextNote":4,"rota":{"next":"x"}}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(st *State) ([]Event, error) {
+		st.NextNote++
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{keySupervisor, "relay", "relieved", "supervisorCLI", "supervisorRun", "relayDue"} {
+		if v, ok := got[k]; ok {
+			t.Errorf("%s is written back: %v", k, v)
+		}
+	}
+	if got["nextNote"] != 5.0 || got["rota"] == nil {
+		t.Errorf("the rest of the state is not kept: %s", raw)
+	}
 }
 
 // An older release's save after a newer one wrote the state is refused: the
@@ -429,7 +472,7 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 func TestAnOlderReleasesSaveIsRefused(t *testing.T) {
 	const newest = "v0.73.0"
 	dir := t.TempDir()
-	before := `{"writer":{"version":"v0.72.0"},"nextNote":1,"merges":[{"repo":"o/r","pr":7,"lane":"l","phase":"waiting","priority":2}]}`
+	before := `{"writer":{"version":"v0.72.0"},"nextNote":1,"merges":[{"repo":"o/r","pr":7,"lane":"l","phase":"waiting","slot":2}]}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
