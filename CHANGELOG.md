@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Repository merge-outage holds (`hold set owner/repo --incident --except owner/repo#n`) pause the supervisor's workers, reviewers and fixers except the named repair; board selection skips other work in that repository until the repair release is proven and the hold lifted (https://github.com/giantswarm/beekeeper/issues/2236).
+
 - A Claude worker's headless turns carry its model as `SECURITY_REVIEW_MODEL` in their `--settings`, so the security-guidance plugin's reviews run on the worker's model, and `agents` lists each worker's `sdk-py` review sessions with their count, cost and models (SDK-PY column, `sdkChildren` in `--json`) ([https://github.com/giantswarm/beekeeper/issues/994](https://github.com/giantswarm/beekeeper/issues/994)).
 - SSH execution hosts can run guarded omp workers with host-local authentication, durable RPC wake receipts and the shared coordinator-owned capacity, publication and merge contracts (https://github.com/giantswarm/beekeeper/issues/1943).
 - `beekeeper hold set starts --reason …` pauses new starts only: every start of a worker or reviewer (`--force` included, locally, on an SSH host and the supervisor loop's fill) and a done agent's wake are refused, and `capacity` and `capacity pick` say no start, while running and parked workers, the loop's merges, the guide and role successors go on; `beekeeper status` starts with STARTS HELD and who set it; `beekeeper hold lift starts` ends it (https://github.com/giantswarm/beekeeper/issues/2208).

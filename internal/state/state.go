@@ -235,11 +235,14 @@ type Grant struct {
 // Hold stops work on a target (a repository's merges, "github" for every
 // GitHub call) until it is lifted or Until passes.
 type Hold struct {
-	Target string    `json:"target"`
-	Reason string    `json:"reason"`
-	By     Party     `json:"by"`
-	At     time.Time `json:"at"`
-	Until  time.Time `json:"until,omitzero"`
+	// Incident pauses supervisor starts in Target except the named repair.
+	// It stays set through the repair release and proof, until lifted.
+	Incident bool      `json:"incident,omitempty"`
+	Target   string    `json:"target"`
+	Reason   string    `json:"reason"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	Until    time.Time `json:"until,omitzero"`
 	// Except is what a merge hold lets through: a repository (the tool's own
 	// during a tool-release window) or one pull request, owner/repo#n.
 	Except string `json:"except,omitempty"`
@@ -306,6 +309,9 @@ func (h Hold) Admits(session string) bool {
 // probe waits on that repository's release or tag: only the repository's
 // own promote cuts it, so the hold lets that promote through.
 func (h Hold) AwaitsOwnRelease() bool {
+	if h.Incident && strings.Contains(h.Target, "/") {
+		return true
+	}
 	probe := strings.ToLower(h.LiftWhen)
 	if !strings.Contains(h.Target, "/") || !strings.Contains(probe, strings.ToLower(h.Target)) {
 		return false

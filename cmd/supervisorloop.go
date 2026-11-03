@@ -2628,6 +2628,9 @@ Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekee
 `
 
 func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if err := l.incidentStart(act.Ref); err != nil {
+		return err
+	}
 	if l.holdingStarts() {
 		return errLoopLater
 	}
@@ -2776,6 +2779,9 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if err := l.incidentStart(act.Ref); err != nil {
+		return "", err
+	}
 	if l.holdingStarts() {
 		return "", errLoopLater
 	}
@@ -3323,6 +3329,9 @@ type loopBoardItem struct {
 }
 
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	if err := l.incidentStart(next.Ref); err != nil {
+		return "", err
+	}
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
 	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
