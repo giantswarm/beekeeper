@@ -126,7 +126,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	if execRef != nil {
 		use := execution.MergeUse{Ref: *execRef, Repository: ref.Repo, PR: ref.N, Head: act.Head}
-		if err := a.executionMergeLive(ctx, st, use); err != nil {
+		if err := a.executionMergeDecisionLive(ctx, st, use, true); err != nil {
 			return "", err
 		}
 	}
@@ -519,6 +519,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			claimed = false
 		}
 	}
+	if !claimed {
+		doc.ExitCode = github.SquashTooling
+		doc.Reason = "no pending exact-head supervisor merge claim"
+		return doc
+	}
 	var execRef *execution.Ref
 	for _, worker := range st.Agents {
 		if worker.Name == claimAgent && worker.Execution != nil {
@@ -547,16 +552,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			doc.Reason = "execution stopped"
 			return doc
 		}
-		if err := a.authenticateExecutionReview(ctx, st, use, p); err != nil {
+		if err := a.authenticateReviewResult(ctx, st, use, p, true); err != nil {
 			doc.ExitCode = github.SquashRefused
 			doc.Reason = err.Error()
 			return doc
 		}
-	}
-	if !claimed {
-		doc.ExitCode = github.SquashTooling
-		doc.Reason = "no pending exact-head supervisor merge claim"
-		return doc
 	}
 	if st.Stop != nil {
 		doc.ExitCode = github.SquashRefused

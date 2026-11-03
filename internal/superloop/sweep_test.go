@@ -219,7 +219,7 @@ func TestTheSweepStartsOncePerStretchAndGivesUp(t *testing.T) {
 }
 
 // A review the sweep started that ended without a verdict gets one more
-// round; an open legacy escalation is the person's.
+// round; legacy escalation records no longer hold the sweep.
 func TestTheSweepReviewsAgainAfterAVerdictlessRound(t *testing.T) {
 	rv := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: PullWorkerName(pr), Round: 1}
 	in := sweepInput(pull(head1, true), OrphanWait)
@@ -235,9 +235,7 @@ func TestTheSweepReviewsAgainAfterAVerdictlessRound(t *testing.T) {
 	if a.Round != 3 || KeyHead(a.Key) != head1 {
 		t.Errorf("third review = %+v", a)
 	}
-	esc := Action{Key: escalateKey(pr, head1), Kind: KindEscalate, Ref: pr, Agent: worker}
-	in.Taken = append(in.Taken, taken(t, t1, esc)...)
-	if acts := Plan(in); len(acts) != 0 {
-		t.Errorf("an open escalation: took %+v", acts)
+	if _, ok := ParseTaken(t1, "supervisor.escalate", pr, "[escalate "+pr+"@"+head1+"] worker: old question"); ok {
+		t.Fatal("legacy escalation was read back")
 	}
 }

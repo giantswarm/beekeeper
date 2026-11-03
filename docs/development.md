@@ -616,7 +616,12 @@ worker for repair and another green published head. A restart reads GitHub befor
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
 not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
 the configuration refusal above retries each round. Neither grants a direct worker merge
-around queue validation. No person is asked whether to merge: the loop merges after its reviews and their fixes, and `note add` refuses a decision that asks whether to merge.
+around queue validation. No person is asked whether to merge: the loop merges after its
+reviews and their fixes, and `note add` refuses a decision that asks whether to merge.
+For an SSH worker's fixes, the loop retains the authenticated independent review result
+and its original head, author, verdict and body digest. A pending exact-head loop claim
+admits the new green head without another approval round. Worker merge grants continue
+to require approval of their head; an empty grant ID alone confers no loop authority.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.

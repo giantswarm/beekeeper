@@ -146,7 +146,7 @@ func reviews(ref, name string, rounds int) bool {
 // green head awaiting its review; a worker to take it over and park once
 // its reviews are used. A head with checks still running waits. Each
 // stretch without an owner gets one action, a head at most MaxSweeps; an
-// escalation or ownership question still open is the person's.
+// ownership question still open is the person's.
 func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave func(string, string, string, string, string), add func(Action)) {
 	since, ok := in.Ownerless[ref]
 	if !ok || since.IsZero() {
@@ -168,10 +168,7 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 	if !orphanable(in, l, ref, p) || liveOwner(in, l, ref, p) != "" {
 		return
 	}
-	if e, ok := l.escalated[ref]; ok && e.open() {
-		return
-	}
-	if e, ok := l.asked[ref]; ok && e.open() {
+	if e, ok := l.asked[ref]; ok && e.answer == nil {
 		return
 	}
 	agent := cmp.Or(l.reviewer[ref], PullWorkerName(ref))

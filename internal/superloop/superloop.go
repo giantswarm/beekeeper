@@ -1113,6 +1113,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	planRed(l, p, w, isParked, add)
+	if head := l.goHead[ref]; p.Green && head != "" && !sameHead(head, p.Head) && in.baseMerged(p, head) {
+		add(goAction(in, base, fmt.Sprintf("head %s had the merge go; head %s only brings %s into it", short(head), short(p.Head), baseName(p))))
+		return
+	}
 	review := func() {
 		a := base
 		a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, len(rs)+1, w.SelfHosted
@@ -1162,6 +1166,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		leave(ref, p.URL, agent, leftNoVerdict(p.Head), fmt.Sprintf("its %d reviews are used and none gave a verdict: no merge go comes without a desk review's verdict", len(rs)))
 		return
 	}
+	left := cycles < rounds && len(rs) < MaxReviews
 	// reviewed is the head the verdict is on: the round's, or a newer
 	// one the worker pushed while the round ran.
 	reviewed, moved := v.Head, ""
@@ -1215,7 +1220,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !l.has(fk) {
 			a := base
 			a.Key, a.Kind = fk, KindForward
-			a.Message = forwardMessage(p, *v)
+			a.Message = forwardMessage(p, *v, left)
 			add(a)
 			return
 		}
@@ -1233,7 +1238,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			if !left || merged {
 				a := base
 				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-				a.Message = reworkMessage(p, reviewed, cycles, rounds)
+				a.Message = reworkMessage(p, reviewed, cycles, rounds, left)
 				add(a)
 			}
 			return
@@ -1241,7 +1246,11 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !p.Green {
 			return
 		}
-		review()
+		if left {
+			review()
+			return
+		}
+		add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used, %d of %d review(s); head %s carries the fixes of the last round's findings on %s", cycles, rounds, len(rs), MaxReviews, short(p.Head), short(reviewed))))
 	}
 }
 
@@ -1618,12 +1627,15 @@ func baseName(p Pull) string {
 // reworkMessage tells the worker of p, parked again on reviewed, the head
 // its last review asked changes on, or on a head that only merges the base
 // into it, to fix them.
-func reworkMessage(p Pull, reviewed string, cycles, rounds int) string {
+func reworkMessage(p Pull, reviewed string, cycles, rounds int, left bool) string {
 	at := fmt.Sprintf("at head %s, the head its last review asked for changes on", short(p.Head))
 	if !sameHead(p.Head, reviewed) {
 		at = fmt.Sprintf("at head %s, which only brings %s into head %s, the head its last review asked for changes on", short(p.Head), baseName(p), short(reviewed))
 	}
-	next := "the next review round starts then"
+	next := "the merge go for the new head follows"
+	if left {
+		next = "the next review round starts then"
+	}
 	return fmt.Sprintf("You parked on %s again %s: those findings stand unfixed, %d of %d change-request round(s) are used, and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: %s.",
 		p.URL, at, cycles, rounds, next)
 }
@@ -1632,9 +1644,11 @@ func reworkMessage(p Pull, reviewed string, cycles, rounds int) string {
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // forwardMessage forwards review r of p word for word.
-func forwardMessage(p Pull, r Review) string {
+func forwardMessage(p Pull, r Review, again bool) string {
 	next := "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: the next review round starts then."
-
+	if !again {
+		next = "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: no further review runs, the merge go for the new head follows."
+	}
 	return fmt.Sprintf("The review of %s asks for changes on head %s. %s The review, word for word:\n\n%s", p.URL, r.Head, next, r.Body)
 }
 

@@ -478,12 +478,13 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	if evs := r.logged(t, "supervisor.rework"); len(evs) != 1 {
 		t.Errorf("reworked twice for one park: %+v", evs)
 	}
-	// The fixed head needs its own independent review.
+	// The fixes pushed and parked on: the merge go for the new head.
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
-		t.Fatalf("no review for the fixed head: %v", r.calls)
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
+		t.Fatalf("no merge go for the fixed head: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -646,9 +647,9 @@ func TestLoopReviewsAHeadItCannotCompare(t *testing.T) {
 	}
 }
 
-// The planner must start the round the execution merge gate requires,
-// including after an approval, a second round's findings and a new fix.
-func TestLoopReviewsFixesAfterExhaustedRounds(t *testing.T) {
+// After an approval and a second round's findings, the green fixes receive
+// the loop's merge go without a third round or a question to the person.
+func TestLoopMergesFixesAfterExhaustedRounds(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -663,24 +664,18 @@ func TestLoopReviewsFixesAfterExhaustedRounds(t *testing.T) {
 	r.pull.Head = fixedAgain
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c == nil || c[2] != superloop.ReviewerName(loopPR, 3) {
-		t.Fatalf("no independent round for fixed head: %v", r.calls)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Fatalf("unexpected third review: %v", r.calls)
 	}
-	if r.called(gateCmdName) != nil {
-		t.Fatal("unreviewed fixed head got merge go")
-	}
-	r.pass(t)
-	if r.called(agentsName, agentStartName) != nil || r.called(gateCmdName) != nil {
-		t.Fatal("repeated review or premature go")
-	}
-	r.verdict("R3", fixedAgain, superloop.Approved, "")
-	r.pass(t)
 	if c := r.called(gateCmdName); c == nil || !slices.Contains(c, fixedAgain) {
-		t.Fatalf("approved head got no go: %v", r.calls)
+		t.Fatalf("fixed head got no go: %v", r.calls)
+	}
+	if c := r.called("note", loopAdd); c != nil {
+		t.Fatalf("merge question reached the person: %v", c)
 	}
 }
 
-func TestLoopReviewsTheFixedHead(t *testing.T) {
+func TestLoopGivesTheFixedHeadTheGoWithoutASecondReview(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -689,12 +684,12 @@ func TestLoopReviewsTheFixedHead(t *testing.T) {
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c == nil {
-		t.Errorf("no second review started: %v", c)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("a second review started: %v", c)
 	}
 	wake := r.called(gateCmdName)
-	if wake != nil {
-		t.Errorf("unapproved head got a go: %v", r.calls)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
+		t.Errorf("no go for the fixed head: %v", r.calls)
 	}
 }
 
