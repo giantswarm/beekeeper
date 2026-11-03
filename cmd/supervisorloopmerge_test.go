@@ -148,7 +148,7 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 
 func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: "rebase"}
+	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
@@ -181,20 +181,21 @@ func TestLoopMergeDoesNotGrantWorkerAuthority(t *testing.T) {
 
 func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: "rebase"}
+	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	was := readReviewedBehind
-	t.Cleanup(func() { readReviewedBehind = was })
-	readReviewedBehind = func(_ context.Context, _ superloop.Pull) (int, error) { return 1, nil }
+	// The base requires up-to-date branches and the desk merges without
+	// --admin: only a base merge would bring the branch up to date, which a
+	// rebase merge cannot take.
+	r.pull.MergeState = mergeStateBehind
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 	if doc.ExitCode != github.SquashNotApplicable || len(r.cmds) != 0 || !strings.Contains(doc.Reason, "behind") {
 		t.Fatalf("behind rebase merge: %+v %v", doc, r.cmds)
 	}
 }
 
-func TestLoopEscalationRequiresVerifiedAnswerAndAcceptsGuideDialog(t *testing.T) {
+func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
 	r := newLoopRig(t)
 	// Refuse the mechanical merge to keep the pull request open as the
 	// worker publishes heads requiring the two allowed review rounds.
@@ -217,23 +218,76 @@ func TestLoopEscalationRequiresVerifiedAnswerAndAcceptsGuideDialog(t *testing.T)
 	}
 	n := state.Note{ID: 9, By: loopParty, Text: superloop.EscalationQuestion(loopURL, third)}
 	recorder := state.Party{Session: dialogSession, Name: verifyGuide}
-	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, Answer: dialogMergeChoice, Note: 9}
-	if err := r.a.store.Record(answerEvent(recorder, &rec, &n)); err != nil {
-		t.Fatal(err)
-	}
-	r.pass(t)
-	if r.called(gateCmdName) != nil {
-		t.Fatal("an unverified agent relay released the merge")
-	}
-	rec.Channel = channelGuideDialog
+	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, RelayedBy: verifyGuide, Answer: dialogMergeChoice, Note: 9}
 	if err := r.a.store.Record(answerEvent(recorder, &rec, &n)); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(t)
 	call := r.called(gateCmdName)
 	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("guide answer did not release its head: %v\n%s", r.calls, r.out)
+		t.Fatalf("session answer did not release its head without answer verify: %v\n%s", r.calls, r.out)
 	}
+}
+
+func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T) {
+	t.Run("gh pr merge tooling failure triggers session merge go", func(t *testing.T) {
+		r := newLoopRig(t)
+		r.a.cfg.Merge.DevctlOwners = []string{"o"}
+		r.park(t, loopPR, time.Now())
+		r.pass(t)
+		r.verdict("R1", loopHead, superloop.Approved, "")
+		r.command = func(argv []string) (string, int) {
+			if slices.Contains(argv, superloop.KindMerge) {
+				return "GraphQL: Resource not accessible by integration", 1
+			}
+			return "", 0
+		}
+		var grantedBeforeWake bool
+		r.answer = func(args []string) (string, int) {
+			if len(args) > 0 && args[0] == gateCmdName && !slices.Contains(args, "--reviewed-head") {
+				t.Fatalf("unpinned gate call: %v", args)
+			}
+			if len(args) >= 3 && args[0] == agentsName && args[1] == agentWakeName && args[2] == loopWorker {
+				evs := r.logged(t, "supervisor.go")
+				grantedBeforeWake = recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead)
+			}
+			return "", 0
+		}
+		r.pass(t)
+		if !grantedBeforeWake {
+			t.Fatal("supervisor.go was not recorded before waking the worker")
+		}
+		if r.called("note", loopAdd) != nil {
+			t.Fatalf("broken merge step asked the person: %v", r.calls)
+		}
+		wake := r.called(agentsName, agentWakeName, loopWorker)
+		if wake == nil || strings.Contains(wake[3], "Repair the branch") || !strings.Contains(wake[3], "devctl pr merge o/r 7") || !strings.Contains(wake[3], loopHead) {
+			t.Fatalf("worker was not directed to merge approved head: %v\n%s", r.calls, r.out)
+		}
+		evs := r.logged(t, "supervisor.go")
+		if len(evs) != 1 || !recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead) {
+			t.Fatalf("worker merge go not granted: %+v", evs)
+		}
+	})
+
+	t.Run("interrupted worker merge go reconciles as supervisor.go", func(t *testing.T) {
+		r := newLoopRig(t)
+		r.a.cfg.Merge.DevctlOwners = []string{"o"}
+		r.park(t, loopPR, time.Now())
+		r.pass(t)
+		r.verdict("R1", loopHead, superloop.Approved, "")
+		if err := r.a.store.Record(
+			about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR),
+			event(loopParty, "agents.wake", "%s: sent by name", loopWorker),
+		); err != nil {
+			t.Fatal(err)
+		}
+		r.pass(t)
+		evs := r.logged(t, "supervisor.go")
+		if len(evs) != 1 || !recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead) {
+			t.Fatalf("interrupted worker merge go did not reconcile as supervisor.go: go=%+v merge=%+v\n%s", evs, r.logged(t, "supervisor.merge"), r.out)
+		}
+	})
 }
 
 func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {

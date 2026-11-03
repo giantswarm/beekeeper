@@ -496,3 +496,14 @@ func TestExecutionParkedWorkerCountsParkedNotBusy(t *testing.T) {
 		t.Fatalf("after park countProviderAgents = %+v, want Busy=0", got)
 	}
 }
+
+func TestSSHStartAdmitsOrganizationRepositoryWithoutMapping(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	h := a.cfg.Agents.Hosts[sshTestSelector]
+	h.RepositoryOrgs = []string{"example"}
+	a.cfg.Agents.Hosts[sshTestSelector] = h
+	out, err := runAgents(a, agentStartName, "--name", "third-repo-worker", brief, "--host", sshTestSelector, "--repo", "example/third", "--ref", mainBranch, "--model", bgModel, "--dry-run")
+	if err != nil || !strings.Contains(out, "example/third") {
+		t.Fatalf("organization repository dry run: %s %v", out, err)
+	}
+}

@@ -516,3 +516,42 @@ func TestPrioritiesKeepLabelFallbackWithoutATeam(t *testing.T) {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
 }
+
+func TestRankOfResolvesEpicSubIssueAndClosingPullRequest(t *testing.T) {
+	ctx := context.Background()
+	c := &Client{Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	c.GH = func(_ context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		switch {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(priorityMetaJSON), nil
+		case strings.Contains(q, boardItemsQuery):
+			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[
+				{"id":"I1","priority":{"number":1},"status":{"name":"In Progress ⛏️"},"team":{"name":"X 🐝"},"content":{"number":1,"url":"https://github.com/o/r/issues/1","title":"epic 1","state":"OPEN","repository":{"nameWithOwner":"o/r"}}},
+				{"id":"I2","priority":{"number":2},"status":{"name":"Up Next ➡️"},"team":{"name":"X 🐝"},"content":{"number":2,"url":"https://github.com/o/r/issues/2","title":"epic 2","state":"OPEN","repository":{"nameWithOwner":"o/r"}}}]}}}}}`), nil
+		case strings.Contains(q, "closingIssuesReferences"):
+			return []byte(`{"data":{"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":12,"repository":{"nameWithOwner":"o/r"}}]}}}}} `), nil
+		case strings.Contains(q, "projectItems"):
+			if slices.Contains(args, "n=12") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB12","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[{"id":"IS12","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			if slices.Contains(args, "n=90") {
+				return []byte(`{"data":{"repository":{"issue":null}}}`), nil
+			}
+			return []byte(`{"data":{"repository":{"issue":{"id":"UNRANKED","body":"","projectItems":{"nodes":[]}}}}}`), nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", q)
+	}
+	if got, err := c.RankOf(ctx, "o/r#2"); err != nil || got != 2 {
+		t.Fatalf("RankOf(o/r#2) = %d, %v; want 2", got, err)
+	}
+	if got, err := c.RankOf(ctx, "o/r#12"); err != nil || got != 1 {
+		t.Fatalf("RankOf(o/r#12) = %d, %v; want 1", got, err)
+	}
+	if got, err := c.RankOf(ctx, "o/r#90"); err != nil || got != 1 {
+		t.Fatalf("RankOf(PR o/r#90 closing o/r#12) = %d, %v; want 1", got, err)
+	}
+	if got, err := c.RankOf(ctx, "o/r#55"); err != nil || got != 0 {
+		t.Fatalf("RankOf(unranked o/r#55) = %d, %v; want 0", got, err)
+	}
+}
