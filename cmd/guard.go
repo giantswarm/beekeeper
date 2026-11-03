@@ -473,7 +473,10 @@ release promote, a gh pr merge or review, a GitHub connector tool that
 merges, reviews or pushes, and a browser (claude-in-chrome) action other
 than opening, reading or looking at a page are refused with the hint to
 file the work in that turn as an issue on the board and tell the person
-in one line, never to hand it back to them. Its AskUserQuestion is checked
+in one line, never to hand it back to them; stuck operational state (a
+hold, a pinned release, a parked session) it sets, narrows or lifts itself
+with beekeeper to carry out what the person decided, then reports. Its
+AskUserQuestion is checked
 as note add checks a note for the person: every question asks, carries a
 "Status quo: …" and a "Why: …" part, a "Checked: …" part for a claim that
 something is merged, green, released, rolled or closed, the full URL of

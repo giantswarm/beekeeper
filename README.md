@@ -1493,8 +1493,10 @@ pushes, and a browser action (`claude-in-chrome`) other than opening, reading or
 issue in its owning repository, put on the board (`beekeeper board move`), since the supervisor loop
 is no session a `SendMessage` reaches, and to tell the person in one line, never to hand the work
 back to them. What the person asks that the guide's own tools allow, it carries out at once and
-reports. Questions, notes, `SendMessage`, reads and `beekeeper` pass; other sessions are not
-affected.
+reports. It is the escalation point for operational state that is stuck (a hold, a pinned release,
+a parked session): it sets, narrows or lifts that state itself to carry out what the person decided,
+then reports, and the refusal says so too. Questions, notes, `SendMessage`, reads and `beekeeper`
+pass; other sessions are not affected.
 
 The guide's own `AskUserQuestion` gets the checks of `note add --for <person>`: each question asks,
 carries a `Status quo: …` and a `Why: …` part in its text, a `Checked: …` part for a claim that
