@@ -2156,10 +2156,11 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 				return err
 			}
 		}
+		flags = append(flags, effortFlags(sp.effort)...)
 		if flags, err = withReviewModel(sp.model, flags); err != nil {
 			return err
 		}
-		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", append(flags, effortFlags(sp.effort)...)...)
+		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", flags...)
 		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s as a background session with Remote Control under %s, none of the caller's CLAUDE* variables, no desktop import\nstart: %s\n",
 			sp.name, dir, cmp.Or(profile, "no profile"), strings.Join(argv, " "))
 		return err
