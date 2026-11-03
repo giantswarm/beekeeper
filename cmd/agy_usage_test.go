@@ -213,18 +213,18 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 		return parseAgyBuiltinUsage([]byte(laggingTSV))
 	}
 	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
-	if v.Choice == nil || v.Choice.Model != "claude-opus-4-6-thinking" {
-		t.Fatalf("choice before 429 = %+v, want claude-opus-4-6-thinking", v.Choice)
+	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
+		t.Fatalf("choice before 429 = %+v, want %s", v.Choice, testModelOpus46)
 	}
 
 	resetDur := 4*time.Hour + 46*time.Minute + 32*time.Second
-	a.recordAgyQuotaExhausted("claude-opus-4-6-thinking", &agy.QuotaError{
+	a.recordAgyQuotaExhausted(testModelOpus46, &agy.QuotaError{
 		ShortError: "Individual quota reached for this model, resets in 4h46m32s",
 		ErrorCode:  429,
 		Status:     "RESOURCE_EXHAUSTED",
 		ResetsIn:   resetDur,
 		At:         t0,
-		Model:      "claude-opus-4-6-thinking",
+		Model:      testModelOpus46,
 	}, t0)
 
 	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
@@ -239,8 +239,8 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 	_ = dir
 	a.now = t0.Add(resetDur + time.Minute)
 	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
-	if v.Choice == nil || v.Choice.Model != "claude-opus-4-6-thinking" {
-		t.Fatalf("choice after reset = %+v, want claude-opus-4-6-thinking", v.Choice)
+	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
+		t.Fatalf("choice after reset = %+v, want %s", v.Choice, testModelOpus46)
 	}
 }
 
@@ -284,13 +284,13 @@ supervisor:
 		st.Starts = append(st.Starts, state.Start{
 			Party:   workerParty,
 			Harness: agy.Harness,
-			Model:   "claude-opus-4-6-thinking",
+			Model:   testModelOpus46,
 			At:      t0,
 		})
 		st.Agents = append(st.Agents, state.Agent{
 			Party:      workerParty,
 			Harness:    agy.Harness,
-			Model:      "claude-opus-4-6-thinking",
+			Model:      testModelOpus46,
 			Task:       "Work https://github.com/giantswarm/beekeeper/issues/2150",
 			Registered: t0,
 			AssignedAt: t0,
@@ -314,7 +314,7 @@ supervisor:
 		Status:     "RESOURCE_EXHAUSTED",
 		ResetsIn:   4*time.Hour + 46*time.Minute + 32*time.Second,
 		At:         t0,
-		Model:      "claude-opus-4-6-thinking",
+		Model:      testModelOpus46,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ supervisor:
 		alive:  func(state.Party) bool { return false },
 		gone:   func(ag state.Agent) bool { return agyQuotaError(cfg, ag) != nil },
 		listed: t0.Add(time.Minute),
-		owner:  "giantswarm",
+		owner:  defaultOrg,
 	}
 	if owners := boardOwners(st, sc); len(owners) != 0 {
 		t.Fatalf("boardOwners = %v, want empty for quota-stopped worker", owners)

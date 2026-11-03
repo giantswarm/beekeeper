@@ -610,7 +610,7 @@ func TestRunDetectsAndEndsMidTurnQuota429(t *testing.T) {
 	var stderr bytes.Buffer
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- Run(ctx, inbox, logPath, []string{os.Args[0], "-test.run=TestHelperMockAgy", "--", "--model", "claude-opus-4-6-thinking"}, &stderr)
+		errCh <- Run(ctx, inbox, logPath, []string{os.Args[0], "-test.run=TestHelperMockAgy", "--", flagModel, testOpusModel}, &stderr)
 	}()
 
 	for range 200 {
@@ -626,11 +626,11 @@ func TestRunDetectsAndEndsMidTurnQuota429(t *testing.T) {
 		t.Fatalf("Run error = %v, want *QuotaError", err)
 	}
 	wantReset := 4*time.Hour + 46*time.Minute + 32*time.Second
-	if qerr.ErrorCode != 429 || qerr.Status != "RESOURCE_EXHAUSTED" || qerr.ResetsIn != wantReset || qerr.Model != "claude-opus-4-6-thinking" {
+	if qerr.ErrorCode != 429 || qerr.Status != "RESOURCE_EXHAUSTED" || qerr.ResetsIn != wantReset || qerr.Model != testOpusModel {
 		t.Fatalf("QuotaError = %+v", qerr)
 	}
 	saved := ReadQuotaError(stateDir, agentID)
-	if saved == nil || saved.ErrorCode != 429 || saved.ResetsIn != wantReset || saved.Model != "claude-opus-4-6-thinking" {
+	if saved == nil || saved.ErrorCode != 429 || saved.ResetsIn != wantReset || saved.Model != testOpusModel {
 		t.Fatalf("ReadQuotaError = %+v", saved)
 	}
 	if _, err := RemoveInbox(inbox); err != nil {

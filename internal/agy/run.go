@@ -144,10 +144,10 @@ func mergeQuotaError(dst, src *QuotaError) *QuotaError {
 
 func argvModel(argv []string) string {
 	for i := 0; i < len(argv); i++ {
-		if argv[i] == "--model" && i+1 < len(argv) {
+		if argv[i] == flagModel && i+1 < len(argv) {
 			return strings.TrimSpace(argv[i+1])
 		}
-		if v, ok := strings.CutPrefix(argv[i], "--model="); ok {
+		if v, ok := strings.CutPrefix(argv[i], flagModel+"="); ok {
 			return strings.TrimSpace(v)
 		}
 	}
