@@ -319,6 +319,11 @@ func TestChangedPast(t *testing.T) {
 }
 
 func TestResolvedPreservesEdits(t *testing.T) {
+	const (
+		originalGuard   = "return enabled && checked"
+		authorizedGuard = "return enabled && authorized"
+		auditedGuard    = "return enabled && audited"
+	)
 	patch := func(before, after string) compareFile {
 		return compareFile{Name: aGo, Patch: "@@ -1 +1 @@\n-" + before + "\n+" + after}
 	}
@@ -327,28 +332,28 @@ func TestResolvedPreservesEdits(t *testing.T) {
 		want                           bool
 	}{
 		"dropped guards": {
-			"return enabled && checked", "return enabled && authorized",
-			"return enabled && audited", "return enabled", false,
+			originalGuard, authorizedGuard,
+			auditedGuard, "return enabled", false,
 		},
 		"invented guard combination": {
-			"return enabled && checked", "return enabled && authorized",
-			"return enabled && audited", "return enabled && authorized && audited", false,
+			originalGuard, authorizedGuard,
+			auditedGuard, "return enabled && authorized && audited", false,
 		},
 		"disjoint edits retained": {
-			"return enabled && checked", "return active && checked",
-			"return enabled && audited", "return active && audited", true,
+			originalGuard, "return active && checked",
+			auditedGuard, "return active && audited", true,
 		},
 		"disjoint edit partially dropped": {
-			"return enabled && checked", "return active && checked",
-			"return enabled && audited", "return active && audit", false,
+			originalGuard, "return active && checked",
+			auditedGuard, "return active && audit", false,
 		},
 		"literal whitespace changed": {
 			`return "a b" + old`, `return "a b" + approved`,
 			`return "a b" + audited`, `return "ab" + approved`, false,
 		},
 		"approved side retained": {
-			"return enabled && checked", "return enabled && authorized",
-			"return enabled && audited", "return enabled && authorized", true,
+			originalGuard, authorizedGuard,
+			auditedGuard, authorizedGuard, true,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
