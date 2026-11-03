@@ -205,7 +205,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 			// Classified before any fold: a fold puts the ask before the
 			// open note's person as surely as a note of its own.
 			if n.Kind == noteDecision {
-				if err := a.refuseMergeAsk(cmd.ErrOrStderr(), me, draft); err != nil {
+				if err := a.refuseMergeAsk(cmd.ErrOrStderr(), me, draft, refs); err != nil {
 					return err
 				}
 				worker, err := a.isWorker(me)
