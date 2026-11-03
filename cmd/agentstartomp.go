@@ -190,6 +190,11 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 		return false
 	}
 	f := parseStartArgsForVault(args)
+	// Remote harnesses authenticate on their execution host. The coordinator
+	// still reads provider usage, but never hands its vault credential over.
+	if f.host != "" && f.host != executionLocal {
+		return false
+	}
 	if strings.TrimSpace(f.model) == "" && f.name != "" {
 		kind := strings.TrimSpace(f.taskKind)
 		if kind == "" {
@@ -211,6 +216,7 @@ func (a *app) ompStartNeedsVault(args []string) bool {
 }
 
 type startVaultFlags struct {
+	host         string
 	name         string
 	taskKind     string
 	authorModel  string
@@ -235,6 +241,11 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 			break
 		}
 		switch {
+		case strings.HasPrefix(arg, "--host="):
+			f.host = strings.TrimPrefix(arg, "--host=")
+		case arg == loopHostFlag && i+1 < len(args):
+			i++
+			f.host = args[i]
 		case strings.HasPrefix(arg, "--name="):
 			nameFlag = strings.TrimPrefix(arg, "--name=")
 		case arg == "--name" && i+1 < len(args):
@@ -278,7 +289,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		case arg == "--config" && i+1 < len(args):
 			i++
 			f.scratchCfg = args[i]
-		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == "--host" || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
+		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == loopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
 			i++
 		case !strings.HasPrefix(arg, "-"):
 			pos = append(pos, arg)
