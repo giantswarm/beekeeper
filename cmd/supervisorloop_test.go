@@ -193,10 +193,10 @@ func newLoopRig(t *testing.T) *loopRig {
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
 	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
-	prevCheck, prevQueue := reviewedMergeCheck, requireReviewedMergeQueue
-	t.Cleanup(func() { reviewedMergeCheck, requireReviewedMergeQueue = prevCheck, prevQueue })
+	prevCheck, prevQueue := reviewedMergeCheck, readReviewedMergeQueue
+	t.Cleanup(func() { reviewedMergeCheck, readReviewedMergeQueue = prevCheck, prevQueue })
 	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
-	requireReviewedMergeQueue = func(context.Context, superloop.Pull) error { return nil }
+	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	wasBehind := readReviewedBehind
 	t.Cleanup(func() { readReviewedBehind = wasBehind })
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }

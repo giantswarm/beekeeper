@@ -1513,7 +1513,7 @@ func TestOverlapWaitEscalatesAfter30MinutesOfNoProgress(t *testing.T) {
 	}
 }
 
-func TestOverlappingPullsOrderedByBoardRankGivesFirstALiveOwner(t *testing.T) {
+func TestMutualOverlappingPullsGivesFirstALiveOwner(t *testing.T) {
 	workers := []Worker{
 		{
 			Name:     overlapWaiter,
@@ -1535,32 +1535,20 @@ func TestOverlappingPullsOrderedByBoardRankGivesFirstALiveOwner(t *testing.T) {
 	in := Input{
 		Workers: workers,
 		Now:     t0.Add(time.Minute),
-		Rank: func(ref string) int {
-			switch ref {
-			case overlapPRA:
-				return 1
-			case overlapPRB:
-				return 2
-			}
-			return 0
-		},
 		Pulls: map[string]Pull{
 			overlapPRA: {Ref: overlapPRA, URL: "https://github.com/o/r/pull/5", State: Open, Head: head1, Green: true},
 			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, State: Open, Head: head2, Green: true},
 		},
 	}
-	// overlapPRA ranks ahead of overlapPRB (rank 1 vs 2): worker A is woken to own
-	// overlapPRA first, and overlapPRB is recorded blocked by overlapPRA.
 	act := only(t, Plan(in), KindOwner)
 	if act.Ref != overlapPRA || act.Block != overlapPRB || act.Agent != overlapWaiter {
-		t.Fatalf("ranked overlap action = %+v, want Ref=%s Block=%s Agent=%s", act, overlapPRA, overlapPRB, overlapWaiter)
+		t.Fatalf("overlap action = %+v, want Ref=%s Block=%s Agent=%s", act, overlapPRA, overlapPRB, overlapWaiter)
 	}
 }
 
-func TestOverlapClosingIssuesMutualSameRank(t *testing.T) {
+func TestOverlapClosingIssuesMutual(t *testing.T) {
 	in := Input{
-		Now:  t0.Add(time.Minute),
-		Rank: func(string) int { return 1 },
+		Now: t0.Add(time.Minute),
 		Workers: []Worker{
 			{Name: "issue worker A", Serves: "o/r#101", ParkedOn: overlapPRB, ParkedAt: t0, Started: true},
 			{Name: "issue worker B", Serves: "o/r#102", ParkedOn: overlapPRA, ParkedAt: t0, Started: true},
@@ -1584,47 +1572,5 @@ func TestOverlapClosingIssuesMutualSameRank(t *testing.T) {
 	act = only(t, Plan(in), KindOwner)
 	if act.Ref != overlapPRA || act.Agent != PullWorkerName(overlapPRA) {
 		t.Fatalf("missing owner: %+v", act)
-	}
-}
-
-func TestPlanOrdersPullActionsByBoardPriority(t *testing.T) {
-	const (
-		prLow  = "o/r#7"
-		prHigh = "o/r#8"
-		prNone = "o/r#6"
-	)
-	in := Input{
-		Workers: []Worker{
-			{Name: "w-none", ParkedOn: prNone, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
-			{Name: "w-low", ParkedOn: prLow, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
-			{Name: "w-high", ParkedOn: prHigh, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
-		},
-		Pulls: map[string]Pull{
-			prNone: {Ref: prNone, URL: "https://github.com/o/r/pull/6", State: Open, Head: head1, Green: true, Priority: 0,
-				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
-			prLow: {Ref: prLow, URL: "https://github.com/o/r/pull/7", State: Open, Head: head1, Green: true, Priority: 2,
-				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
-			prHigh: {Ref: prHigh, URL: "https://github.com/o/r/pull/8", State: Open, Head: head1, Green: true, Priority: 1,
-				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
-		},
-		Taken: []Taken{
-			{Key: reviewKey(prNone, head1), Kind: KindReview, Ref: prNone, Agent: "w-none", At: t0},
-			{Key: reviewKey(prLow, head1), Kind: KindReview, Ref: prLow, Agent: "w-low", At: t0},
-			{Key: reviewKey(prHigh, head1), Kind: KindReview, Ref: prHigh, Agent: "w-high", At: t0},
-		},
-	}
-	var refs []string
-	var prios []int
-	for _, a := range Plan(in) {
-		if a.Kind == KindGo {
-			refs = append(refs, a.Ref)
-			prios = append(prios, a.Priority)
-		}
-	}
-	if want := []string{prHigh, prLow, prNone}; !slices.Equal(refs, want) {
-		t.Fatalf("go order = %v, want %v", refs, want)
-	}
-	if want := []int{1, 2, 0}; !slices.Equal(prios, want) {
-		t.Fatalf("go priorities = %v, want %v", prios, want)
 	}
 }

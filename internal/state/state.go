@@ -1404,10 +1404,9 @@ type Merge struct {
 	Output string `json:"output,omitempty"`
 	Phase  string `json:"phase"`
 	// Joined orders the queue; a rerun within the queue TTL keeps it.
-	Joined   time.Time `json:"joined"`
-	Priority int       `json:"priority,omitempty"`
-	Seen     time.Time `json:"seen"`
-	Started  time.Time `json:"started,omitzero"`
+	Joined  time.Time `json:"joined"`
+	Seen    time.Time `json:"seen"`
+	Started time.Time `json:"started,omitzero"`
 	// Finished and Exit are when and how the merge's run ended.
 	Finished time.Time `json:"finished,omitzero"`
 	Exit     int       `json:"exit,omitempty"`

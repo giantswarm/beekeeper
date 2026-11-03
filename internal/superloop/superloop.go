@@ -67,14 +67,12 @@ const (
 	KindRed = "red"
 	// KindIntake puts an issue the desk filed (a problem report's issue URL,
 	// a follow-up named in a report, an issue a session created with gh
-	// issue create) onto the configured board in Backlog and ranks it from
-	// the priority list, unless it already sits on another board where it
-	// is being worked.
+	// issue create) onto the configured board in Backlog and places it on the
+	// board, unless it already sits on another board where it is being worked.
 	KindIntake = "intake"
-	// KindOwner gives an overlapping pull request (or the higher-ranked item
-	// it overlaps with) a live owner when a worker parks on it and its owner
-	// is gone, it has made no progress for OverlapWait, or board rank orders
-	// the waiting worker's item first.
+	// KindOwner gives an overlapping pull request a live owner when a worker
+	// parks on it and its owner is gone or it has made no progress for
+	// OverlapWait.
 	KindOwner = "owner"
 )
 
@@ -143,8 +141,6 @@ type Pull struct {
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
-	// Priority is the board priority rank (1 is highest, 0 is unranked).
-	Priority int
 }
 
 // Check is one check on a pull request's head: its name and the URL of its
@@ -325,15 +321,11 @@ type Input struct {
 	// timer (0: a day).
 	StaleAfter time.Duration
 	// Board reports whether a project board is configured: when true,
-	// issues the desk files land on it in Backlog and get ranked from the
-	// priority list (KindIntake).
+	// issues the desk files land on it in Backlog (KindIntake).
 	Board bool
 	// Filed are the issues sessions on the desk created (gh issue create,
 	// create_issue, issue_write), read from their transcripts.
 	Filed []FiledIssue
-	// Rank returns the board priority rank of ref (1 the top, 0 when
-	// unranked) so overlapping pull requests are ordered by board rank.
-	Rank func(ref string) int
 }
 
 // FiledIssue is an issue a session on the desk created, with the issue or
@@ -483,8 +475,6 @@ type Action struct {
 	Note int
 	// Version is the release to install.
 	Version string
-	// Priority is the board priority rank (1 is highest, 0 is unranked).
-	Priority int
 }
 
 // Line is the action's log detail: its key first, then what it did.
@@ -878,21 +868,7 @@ func Plan(in Input) []Action {
 	for ref := range in.Pulls {
 		refs = append(refs, ref)
 	}
-	slices.SortFunc(refs, func(a, b string) int {
-		pa, pb := in.Pulls[a].Priority, in.Pulls[b].Priority
-		switch {
-		case pa == pb || pa <= 0 && pb <= 0:
-			return strings.Compare(a, b)
-		case pa <= 0:
-			return 1
-		case pb <= 0:
-			return -1
-		case pa < pb:
-			return -1
-		default:
-			return 1
-		}
-	})
+	slices.Sort(refs)
 	for _, ref := range refs {
 		p := in.Pulls[ref]
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
@@ -1177,7 +1153,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	if agent == "" || p.Head == "" {
 		return
 	}
-	base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head, Priority: p.Priority}
+	base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
 	switch o, reason, why := in.Desk.owner(p, l.overridden[ref]); o {
 	case nobodys:
 		leave(ref, p.URL, agent, reason, why)
@@ -1432,18 +1408,12 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 			serves = ""
 		}
 		if serves != "" {
-			rankA, rankB := 0, 0
-			if in.Rank != nil {
-				rankA, rankB = in.Rank(serves), in.Rank(ref)
-			}
 			mutual := slices.ContainsFunc(in.Workers, func(other Worker) bool {
 				return !strings.EqualFold(other.Name, waiter.Name) &&
 					strings.EqualFold(pullRef(other.ParkedOn), serves) && !other.ReviewRequested &&
 					(strings.EqualFold(pullRef(other.Serves), ref) || strings.EqualFold(other.Name, l.reviewer[ref]) || strings.EqualFold(other.Name, PullWorkerName(ref)))
 			})
-			aFirst := (rankA > 0 && (rankB == 0 || rankA < rankB)) ||
-				(mutual && rankA == rankB && strings.ToLower(serves) < strings.ToLower(ref))
-			if aFirst {
+			if mutual && strings.ToLower(serves) < strings.ToLower(ref) {
 				if hasPlanned(serves) {
 					continue
 				}
@@ -1459,7 +1429,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 					URL:     sURL,
 					Agent:   waiter.Name,
 					Head:    sHead,
-					Message: fmt.Sprintf("%s ranks ahead of %s on the board: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
+					Message: fmt.Sprintf("%s goes ahead of %s: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
 				})
 				continue
 			}
