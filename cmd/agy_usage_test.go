@@ -401,7 +401,7 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 		code int
 	}{
 		{name: "held", held: true},
-		{name: "refused", code: ExitRefused},
+		{name: "refused by the gate", code: ExitRefused},
 		{name: "start failed", code: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -476,7 +476,7 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 		runCalls = append(runCalls, args)
 		return `{"room":1}` + "\n", 0, nil
 	})
-	brief, err := l.brief("", "Review {{.URL}} at {{.Head}}\n", key, briefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "abc"})
+	brief, err := l.brief("", "Review {{.URL}} at {{.Head}}\n", key, briefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
 	if err != nil {
 		t.Fatal(err)
 	}
