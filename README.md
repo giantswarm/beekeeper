@@ -1590,7 +1590,9 @@ merge.py`), read relative to the call's working directory and followed into the 
 turn, a script the call writes before it runs it judged by the call's own text; one in an
 interpreter's code (`python3 -c`, `node -e`, `perl -e`, …); and one in the program a shell or an
 interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < merge.sh`, `python3 -
-<<'EOF'`).
+<<'EOF'`). Shell `-c` strings also follow the script files they execute, source or pass to
+an interpreter (`zsh -c 'bash merge.sh'`, `sh -c '. merge.sh'`, `bash -c './merge.sh'`).
+Nested `-c` strings share the script recursion bound; a refusal names the script and its line.
 
 A merge a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec devctl pr
 merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …) or a backquote substitution runs (`` x=`devctl
