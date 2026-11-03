@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path"
@@ -153,7 +154,10 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		}
 		ref := r.Ref
 		current.Agents[len(current.Agents)-1].Execution = &ref
-		events := []state.Event{event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider)}
+		events := []state.Event{
+			event(by, "execution.reserved", "%s: host %s, repository %s, provider %s", name, host.Identity, r.Repository, provider),
+			event(by, verbStart, "%s: kind %s, host %s, harness %s, model %s; %s", name, a.selectionKind, host.Identity, r.Harness, r.Model, cmp.Or(startDecision(verdict), "explicit selection or configured default")),
+		}
 		if over != "" {
 			events = append(events, event(by, verbStart, "%s: started over %s (--force)", name, over))
 		}
@@ -202,7 +206,16 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	counts := countAgents(st, sessions, a.now, a.cfg)
 	var v *capacityView
 	if len(k.Providers) > 0 || len(k.Choices) > 0 {
-		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), k, readings, h, false, exclude, kind, a.now)
+		choicesCap := k
+		if harness == harnessAuto {
+			choicesCap = filterChoiceModel(k, model)
+		}
+		v = buildProvidersCapacity(counts, countProviderAgents(st, sessions, k, a.now, a.cfg), choicesCap, readings, h, false, exclude, kind, a.now)
+		if len(k.Choices) > 0 && len(choicesCap.Choices) == 0 {
+			reason := fmt.Sprintf("model %q is not in capacity.choices", strings.TrimSpace(model))
+			v.Choice = &choiceView{Review: kind != forWorker, ReviewOfSelfHosted: kind == forReviewOfSelfHosted, Reason: reason}
+			v.Room, v.Blocks = 0, []string{"no choice has room: " + reason}
+		}
 	} else {
 		v = newStartCapacity(counts, k, h, false, kind).withUsage(legacy, a.now)
 	}

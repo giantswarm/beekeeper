@@ -927,7 +927,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		in.Filed = l.filedIssues(st)
 	}
 	for _, ag := range st.Agents {
-		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
+		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
 			if !shouldEndReviewWorker(st, ag) || l.dryRun {
@@ -1989,7 +1989,8 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 			postMerge = strings.TrimSpace(*rp.PostMerge)
 		}
 	}
-	place, err := l.startPlacement(ctx, r.Repo, false, false)
+	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
+	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet on any host", act.URL)
@@ -2033,7 +2034,6 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if err != nil {
 		return err
 	}
-	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
 	args := []string{agentsName, agentStartName, name, brief}
 	if len(l.a.cfg.Capacity.Choices) > 0 {
 		args = append(args, "--harness", harnessAuto)
@@ -2123,7 +2123,20 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err != nil {
 		return "", err
 	}
-	place, err := l.startPlacement(ctx, r.Repo, true, act.SelfHosted)
+	var authorFlags []string
+	if l.a.cfg.Capacity.TaskPolicies[taskKindReview].DifferentFamily {
+		st, err := l.a.store.Read()
+		if err != nil {
+			return "", err
+		}
+		if m := reviewAuthorModel(st, act); m != "" {
+			authorFlags = []string{"--" + authorModelFlag, m}
+		} else {
+			return "", refused("model policy: review requires the author's recorded model")
+		}
+	}
+	name := superloop.ReviewerName(act.Ref, act.Round)
+	place, err := l.startPlacement(ctx, name, r.Repo, true, act.SelfHosted, authorFlags...)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
@@ -2131,8 +2144,8 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		}
 		return "", err
 	}
-	name := superloop.ReviewerName(act.Ref, act.Round)
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
+	args = append(args, authorFlags...)
 	if len(l.a.cfg.Capacity.Choices) > 0 {
 		// The reviewer takes capacity's pick, decided as a worker's start
 		// is; a self-hosted model's work gets one on no self-hosted provider.
@@ -2175,6 +2188,45 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 func repoName(repo string) string {
 	_, name, _ := strings.Cut(repo, "/")
 	return name
+}
+
+func agentRecordedModel(st *state.State, ag state.Agent) string {
+	if ag.Model != "" {
+		return ag.Model
+	}
+	if k := st.StartIndex(ag.Party); k >= 0 {
+		return st.Starts[k].Model
+	}
+	return ""
+}
+
+func reviewAuthorModel(st *state.State, act superloop.Action) string {
+	for _, ag := range st.Agents {
+		if ag.Name == act.Agent {
+			if m := agentRecordedModel(st, ag); m != "" {
+				return m
+			}
+		}
+	}
+	if rp, ok := st.ReviewParkFor(act.Ref); ok {
+		if rp.Model != "" {
+			return rp.Model
+		}
+		if k := st.StartIndex(rp.Party); k >= 0 && st.Starts[k].Model != "" {
+			return st.Starts[k].Model
+		}
+	}
+	for _, rp := range st.ReviewParks {
+		if rp.Agent == act.Agent {
+			if rp.Model != "" {
+				return rp.Model
+			}
+			if k := st.StartIndex(rp.Party); k >= 0 && st.Starts[k].Model != "" {
+				return st.Starts[k].Model
+			}
+		}
+	}
+	return ""
 }
 
 // selfHostedModel reports whether model is a choice of a self-hosted
@@ -2299,11 +2351,21 @@ func (l *supervisorLoop) placesRemotely() bool {
 // choices no host has an adapter for, the host-run choices excluded (see
 // hostsFirstLocal). Without the preference the local machine attempts it,
 // whose own start gate makes it wait when it has none either.
-func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
+func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, review, selfHosted bool, extra ...string) (startHost, error) {
+	kind := workerRole
+	if review {
+		kind = taskKindReview
+	}
+	model := l.a.ruleModel(name, kind)
+	flags := startFlags(review, selfHosted)
+	if model != "" {
+		flags = append(flags, modelFlag, model)
+	}
+	flags = append(flags, extra...)
 	// Execution hosts have no relayed GitHub read-and-review path. Keep
 	// reviewers on the coordinator, without reserving any choices for hosts.
 	if review {
-		if !l.capacityRoom(ctx, startFlags(review, selfHosted)...) {
+		if !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
 		return startHost{}, nil
@@ -2312,10 +2374,13 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 	if !l.placesRemotely() {
 		// Nothing to place remotely: the local machine does what it did
 		// before, and the start's own gate makes it wait when it has no
-		// room.
+		// room. When agents.models selects a model, check its room before
+		// claiming the action.
+		if model != "" && !l.capacityRoom(ctx, flags...) {
+			return startHost{}, errLoopLater
+		}
 		return startHost{}, nil
 	}
-	flags := startFlags(review, selfHosted)
 	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
 	if err != nil || code != 0 {
 		return startHost{}, errLoopLater
@@ -2346,7 +2411,10 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
 	}
 	if k.HostsFirst {
-		return l.hostsFirstLocal(ctx, flags, roomOpen(out), mapped)
+		return l.hostsFirstLocal(ctx, flags, model, roomOpen(out), mapped)
+	}
+	if model != "" && !roomOpen(out) {
+		return startHost{}, errLoopLater
 	}
 	return startHost{}, nil
 }
@@ -2358,14 +2426,14 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 // the choices a host can run wait for one; the others start locally, the
 // host-run choices excluded from the start, while the local verdict
 // without them has room. Everything else waits.
-func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, localRoom, mapped bool) (startHost, error) {
+func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, model string, localRoom, mapped bool) (startHost, error) {
 	var hosts []execution.Host
 	for _, selector := range l.a.cfg.Supervisor.Hosts {
 		if h, err := l.a.executionHost(selector); err == nil {
 			hosts = append(hosts, h)
 		}
 	}
-	hosted, mixed := hostChoices(l.a.cfg.Capacity, hosts)
+	hosted, mixed := hostChoices(filterChoiceModel(l.a.cfg.Capacity, model), hosts)
 	if !mapped || len(hosted) == 0 {
 		if !localRoom {
 			return startHost{}, errLoopLater
@@ -2564,7 +2632,8 @@ type loopBoardItem struct {
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
-	place, err := l.startPlacement(ctx, r.Repo, false, false)
+	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
+	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet on any host", next.URL)
@@ -2576,7 +2645,6 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
 	args := []string{agentsName, agentStartName, name, brief}
 	if len(l.a.cfg.Capacity.Choices) > 0 {
 		// The start takes capacity's choice of harness and model, as a

@@ -627,6 +627,55 @@ a large standing file, using a conservative 25,000-byte prompt budget (no more
 than 25,000 byte-level tokens). The role skill and project instructions loaded
 by the harness remain outside the generated prompt's budget.
 
+## Task model policy
+
+`agents.models` is an ordered list of `{match: <name regexp>, model: <selector>}`,
+optionally restricted by `kind`. A start's `--kind` defaults to `worker`, or
+`review` with `--review`. The first matching rule with a nonempty model selects it before
+provider capacity is evaluated. `--model` overrides the rules. Without a match,
+Claude uses `agents.model`, Codex uses `codex.model`, and omp uses `omp.model`;
+with capacity choices and no explicit model, the capacity pick supplies both
+harness and model. `agents.requireModel: true` refuses an unresolved model with
+exit 3, including dry runs, rather than allowing a harness default.
+Rules without a model are skipped for model selection, allowing independent
+settings to match without masking a later model rule or the fallback.
+
+`guide.model` selects the model for both relayed and standby-started successors,
+ahead of the previous holder's model. Without it the holder's model is retained,
+then name rules and `agents.model` supply a fallback. The supervisor is a service
+loop and starts no supervisor model session; its workers and reviewers use the
+same start policy as manual starts.
+
+Each `capacity.choices` entry may carry a desk-maintained `class` (nonnegative
+capability rank), `cost` (positive relative cost), `family`, `kinds` (allowed
+kinds; empty allows all), and `reviewReserve` (0–100 percent of the weekly
+window kept for reviews). `capacity.taskPolicies.<kind>.minClass` and `maxCost`
+constrain the choices. A positive maximum rejects unknown costs. Class 0 means
+unclassified. No changing provider price or capability claim is shipped.
+
+`capacity --kind audit` and `capacity pick --kind audit --json` use the same
+policy as `agents start --kind audit`. Both capacity commands and starts accept
+`--author-model <configured selector>` with a review to exclude that model's
+family; unknown author or candidate families refuse selection.
+`capacity.taskPolicies.review.differentFamily: true` requires this for every
+review. The supervisor loop supplies the author's recorded model automatically;
+manual reviews must supply `--author-model`. Unclassified explicit targets
+cannot bypass a configured capability, cost or family requirement.
+
+Review reserve uses the choice's usage bucket, or its provider's weekly window. It adds a stop
+for non-review tasks; reviews still obey provider window and pace limits.
+Provider room and weekly pace are decided first, with lower positive configured
+cost breaking equal pace between subscription choices. Configured order breaks
+remaining ties and keeps self-hosted choices as fallbacks.
+
+Capacity JSON includes `taskKind`, `decision`, and every rejected candidate's
+reason. Successful starts log the kind, harness, model and choice under
+`agents.start`; the roster retains the model for comparing outcomes. Explicit
+models select a target but cannot make an automatic pick ignore a model-policy
+rejection, even with `--force`.
+
+## Worktree orphan cleanup
+
 The doctor stops reparented process trees left in linked worktrees by known local
 workers that have left the roster. It sends SIGTERM, then SIGKILL after
 two seconds, checking the process start time, user and worktree before each
