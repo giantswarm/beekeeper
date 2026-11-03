@@ -105,7 +105,9 @@ its title or a busy agent's task, "BS 3057 …" or "FIX backstage 3067 …":
 a tag its repository's name abbreviates, letter by letter from the first,
 or the repository itself, then the number; a busy agent's however
 quiet: a role holder's and an idle agent's are left out; one naming a pull request serves the issues it
-closes too, In Progress or not) nor by an agent on the roster, its CLI running or not, while it is
+closes too, In Progress or not; a record or saved review park of a role run
+a later run relieved, or of a session beekeeper started that has left the
+roster, serves nothing, its window open or not) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
 wakes it by name), not assigned to anybody outside board.people, without an open recorded
 blocker, active within board.staleAfter, and with every lease its labels
@@ -509,7 +511,7 @@ func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work
 		p := s.Party()
 		holder := slices.ContainsFunc(roles, func(rl role) bool { h := rl.get(st).Holder; return h != nil && h.Is(p) })
 		registered := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && s.LastActive.Before(since) {
+		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && (s.LastActive.Before(since) || endedOwner(st, p)) {
 			continue
 		}
 		refs := work[i].Refs
@@ -874,6 +876,9 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 	}
 	out := map[string]string{}
 	for _, r := range st.Records {
+		if endedOwner(st, r.Session) {
+			continue
+		}
 		live := r.Ended.IsZero() && (alive(r.Session) || r.At.After(listed))
 		switch k := kept(r.Session); {
 		case k != "":
@@ -891,6 +896,9 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 			continue
 		}
 		who := fmt.Sprintf("%s (reviewing %s)", name(rp.Party), rp.On)
+		if endedOwner(st, rp.Party) {
+			continue
+		}
 		if rp.Serves != "" && out[strings.ToLower(rp.Serves)] == "" {
 			out[strings.ToLower(rp.Serves)] = who
 		}
@@ -919,6 +927,40 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		}
 	}
 	return out
+}
+
+// endedOwner reports whether p's serve records and saved review parks no
+// longer make it an item's owner, whatever its CLI still shows: a role run
+// relieved by a later one, or a session beekeeper started that has left
+// the roster (removed after a review park, retired, gone). A desktop window
+// that lingers after either serves nothing: board next offers its items.
+func endedOwner(st *state.State, p state.Party) bool {
+	switch {
+	case holdsRole(st, p):
+		return false
+	case relievedRun(st, p):
+		return true
+	case roleRun(st, p):
+		// A role's successor beekeeper started is no agent: it is on
+		// its way to the role.
+		return false
+	}
+	return st.StartIndex(p) >= 0 && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+}
+
+// relievedRun reports whether p is a role's run that no longer holds it: one
+// the role's relief list names, or a run numbered below the holder's.
+func relievedRun(st *state.State, p state.Party) bool {
+	for _, rl := range roles {
+		r := rl.get(st)
+		if slices.ContainsFunc(r.Relieved, func(rf state.Relief) bool { return rf.Party.Is(p) }) {
+			return true
+		}
+		if n := rl.runOf(p.Name); n > 0 && r.Holder != nil && n < rl.runOf(r.Holder.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // offBoard are the refs of owners that are no candidate, sorted: a board
