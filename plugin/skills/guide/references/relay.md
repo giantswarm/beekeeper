@@ -19,7 +19,9 @@ The guide reads this at `GUIDE RELAY DUE`, in a headless turn, and as a first gu
   arms a Monitor never ends, so the desktop never gets the session's CLI. The one exception is the standby
   watch's headless resume, whose message says the desktop runs no CLI of the session: that turn
   keeps the watch.
-- **A first guide** started from the person's message runs `beekeeper guide start` (`--take-over`
-  only for a predecessor whose session still runs without a relay), arms `beekeeper guide watch`,
-  and reads `beekeeper guide queue --full`; beekeeper records it as the next "Guide run N" and titles
-  its desktop session with it.
+- **Only beekeeper starts a guide run**: the relay, the standby watch after a crash, `beekeeper
+  guide start --new` (the person's "start the guide", from a terminal) and `beekeeper resume` after
+  a stop and a reboot. Its first turn runs `beekeeper guide start` (`--take-over` only for a
+  predecessor whose session still runs without a relay), arms `beekeeper guide watch`, and reads
+  `beekeeper guide queue --full`. A session started any other way (`claude` by hand) is refused
+  the role: never start one by hand; `beekeeper guide start --new` is the way.
