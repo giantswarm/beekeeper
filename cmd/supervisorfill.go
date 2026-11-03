@@ -95,7 +95,7 @@ func (l *supervisorLoop) pauseFill(capacity string, live []string) {
 	defer l.mu.Unlock()
 	every := l.a.cfg.Supervisor.FillRetryEvery.Duration << min(l.fillEmpty, fillBackoff)
 	l.fillEmpty++
-	l.fillPause = fillPause{capacity: capacity, live: live, until: l.a.now.Add(every)}
+	l.fillPause = fillPause{capacity: capacity, live: live, until: l.a.timeNow().Add(every)}
 }
 
 func (l *supervisorLoop) fillCapacity(ctx context.Context) *capacityView {
@@ -186,7 +186,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		capacity, alive := fillCapacityKey(cap), fillLive(live)
 		l.mu.Lock()
-		if !l.fillPause.holds(l.a.now, capacity, alive) {
+		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {
 			if !l.fillPause.until.IsZero() && l.fillPause.changed(capacity, alive) {
 				l.fillEmpty = 0 // a change may make room: the backoff starts over
 			}

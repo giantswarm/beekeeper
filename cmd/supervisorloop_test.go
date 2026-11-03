@@ -1321,6 +1321,7 @@ func TestLoopAndGuidePrintAProblemOnOneLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	act := superloop.Action{Key: "file test", Kind: superloop.KindFile, Agent: loopWorker}
 	text := "worker reported at now" + fileReportSeparator + report
 	if err := l.record(act, text); err != nil {

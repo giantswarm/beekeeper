@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"context"
+	"github.com/giantswarm/beekeeper/internal/board"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -565,5 +567,181 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 	}
 	if len(r.logged(t, "supervisor.next")) != 1 {
 		t.Fatalf("expected 1 supervisor.next event, got %d", len(r.logged(t, "supervisor.next")))
+	}
+}
+
+func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
+	for _, slow := range []string{"review", "worker"} {
+		t.Run(slow, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, r.a.now)
+			r.pass(t) // The first PR's reviewer is already running.
+			brief := filepath.Join(t.TempDir(), "worker.md")
+			if err := os.WriteFile(brief, []byte("Work {{.URL}}."), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.a.cfg.Supervisor.WorkerBrief = brief
+			r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "parallel-test-model"}}
+			r.a.cfg.Board = config.Board{Owner: "o", Project: 1, TidyEvery: config.Duration{Duration: time.Minute}, EscalateEvery: config.Duration{Duration: -1}}
+			const second = "o/s#8"
+			r.pulls[second] = superloop.Pull{Ref: second, URL: "https://github.com/o/s/pull/8", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{
+					Party: state.Party{Name: loopSecondWorker, Session: "s-two"},
+					Task:  "work https://github.com/o/s/pull/8",
+					Park:  &state.Park{On: second, At: r.a.now, Waits: deskReviewWait, ReviewHead: loopHead},
+				})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			entered, release, merged := make(chan struct{}), make(chan struct{}), make(chan struct{}, 4)
+			var starts, busy atomic.Int32
+			r.answer = func(args []string) (string, int) {
+				switch {
+				case len(args) > 0 && args[0] == gateCmdName:
+					merged <- struct{}{}
+				case len(args) > 0 && args[0] == fillCapacityCommand:
+					if slices.Contains(args, "--review") {
+						return `{"room":1}`, 0
+					}
+					if busy.Load() > 0 {
+						return `{"ceiling":1,"room":0}`, 0
+					}
+					return `{"ceiling":1,"room":1}`, 0
+				case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:
+					return `{"pick":{"ref":"o/s#10","url":"https://github.com/o/s/issues/10"}}`, 0
+				case len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName:
+					review := slices.Contains(args, "--review")
+					if !review {
+						busy.Add(1)
+					}
+					if review == (slow == "review") {
+						if starts.Add(1) == 1 {
+							close(entered)
+						}
+						<-release
+					}
+				}
+				return "", 0
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { close(release); l.passActions.Wait(); l.mergeActions.Wait() }()
+			pass := func() {
+				t.Helper()
+				done := make(chan error, 1)
+				go func() { done <- l.pass(context.Background()) }()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("slow start blocked observation")
+				}
+			}
+			pass()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("start did not enter")
+			}
+			// This approval was absent from the first snapshot. The next pass
+			// must observe and submit it while the unrelated start remains stuck.
+			now := r.a.now.Add(time.Second)
+			r.a.loopNow.Store(&now)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			if err := r.a.store.Record(event(state.Party{Name: superloop.ReviewerName(loopPR, 1)}, superloop.VerbDone, "%s done: review complete", superloop.ReviewerName(loopPR, 1))); err != nil {
+				t.Fatal(err)
+			}
+			pass()
+			select {
+			case <-merged:
+			case <-time.After(5 * time.Second):
+				t.Fatal("newly approved merge blocked by slow start")
+			}
+			if got := starts.Load(); got != 1 {
+				t.Fatalf("slow start launched %d times, want 1", got)
+			}
+		})
+	}
+}
+
+func TestLoopPullPriorityRefreshExpiresDerivedCaches(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := readLoopPriorities
+	t.Cleanup(func() { readLoopPriorities = was })
+	reads := 0
+	readLoopPriorities = func(context.Context, *supervisorLoop) (board.Priorities, error) {
+		reads++
+		if reads == 1 {
+			return board.Priorities{{Ref: "o/r#1", Rank: 1}, {Ref: "o/r#2", Rank: 2}}, nil
+		}
+		return board.Priorities{{Ref: "o/r#1", Rank: 2}, {Ref: "o/r#2", Rank: 1}, {Ref: "o/r#3", Rank: 3}}, nil
+	}
+	check := func(ref string, want int) {
+		t.Helper()
+		got, err := l.pullPriority(context.Background(), "o/r#10"+ref[len(ref)-1:], ref)
+		if err != nil || got != want {
+			t.Fatalf("priority(%s) = %d, %v; want %d", ref, got, err, want)
+		}
+	}
+	check("o/r#1", 1)
+	check("o/r#2", 2)
+	// Seed a resolved zero and stale relationship answers.
+	l.pullPriorities["o/r#103 o/r#3"] = 0
+	l.pullIssues = map[string]string{"o/r#1": "o/r#99"}
+	l.issueParents = map[string]string{"o/r#1": "o/r#99"}
+	check("o/r#3", 0)
+	if reads != 1 {
+		t.Fatalf("read priorities %d times within cache lifetime", reads)
+	}
+	r.a.now = r.a.now.Add(loopOpenEvery)
+	check("o/r#1", 2)
+	check("o/r#2", 1)
+	check("o/r#3", 3)
+	if reads != 2 {
+		t.Fatalf("read priorities %d times, want 2", reads)
+	}
+	if len(l.pullIssues) != 0 || len(l.issueParents) != 0 {
+		t.Fatalf("stale relationships survived refresh: closes=%v parents=%v", l.pullIssues, l.issueParents)
+	}
+}
+
+// A pass may have read its action list just before a previous pass records
+// completion. Reusing that stale list must not start a second reviewer.
+func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			starts++
+		}
+		return "", 0
+	}
+	acts := []superloop.Action{{Kind: superloop.KindReview, Key: "review stale snapshot", Ref: loopPR, URL: loopURL, Head: loopHead, Round: 1}}
+	for range 2 {
+		if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("started %d reviewers from the same snapshot, want 1", starts)
 	}
 }

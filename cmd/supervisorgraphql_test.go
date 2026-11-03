@@ -192,6 +192,7 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	if err := l.pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -352,6 +353,7 @@ func TestLoopReusesPullReadsAndRefreshesOnLocalChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	reads := 0
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		reads++

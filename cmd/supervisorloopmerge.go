@@ -48,7 +48,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if st.Stop != nil {
 		return "", refused("the desk is stopped")
 	}
-	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st) {
+	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) || a.resetFirst(st) {
 		return "", errLoopLater
 	}
 	p, err := readLoopPull(ctx, act.Ref)
@@ -248,11 +248,11 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
-			endNotes(current, rp.Party, l.a.now)
+			endNotes(current, rp.Party, l.a.timeNow())
 			clearRecords(current, rp.Party)
 			report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
 			task := cmp.Or(rp.Serves, act.Ref)
-			current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: rp.Party, At: l.a.now, Task: task, Text: report})
+			current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: rp.Party, At: l.a.timeNow(), Task: task, Text: report})
 			return []state.Event{event(rp.Party, superloop.VerbDone, "%s done: %s", rp.Agent, task), event(rp.Party, superloop.VerbReport, "%s: %s", rp.Agent, report)}, nil
 		})
 		return "merged; task closed without waking worker", err
@@ -307,9 +307,9 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
 		reportIdle(worker, time.Now())
 		worker.Done = true
-		endNotes(current, worker.Party, l.a.now)
+		endNotes(current, worker.Party, l.a.timeNow())
 		clearRecords(current, worker.Party)
-		current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: worker.Party, At: l.a.now, Task: worker.LastTask, Text: report})
+		current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: worker.Party, At: l.a.timeNow(), Task: worker.LastTask, Text: report})
 		return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask), event(worker.Party, superloop.VerbReport, "%s: %s", worker.Name, report)}, nil
 	})
 	return "merged; task closed without waking worker", err

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"text/template"
 	"time"
@@ -670,10 +671,13 @@ type supervisorLoop struct {
 	boardNone *loopBoardNone
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
-	// inFlight tracks merge actions currently running in background
-	// goroutines across passes; mergeActions awaits them on exit or re-exec.
+	// inFlight tracks actions and ordered streams across passes.
+	// Both wait groups are drained on exit and before re-exec.
 	inFlight     map[string]bool
 	mergeActions sync.WaitGroup
+	passActions  sync.WaitGroup
+	actionErr    error
+	completed    map[string]bool
 	// login is the login gh acts as, once read; teams the team files'
 	// owners, read at teamsAt.
 	login   string
@@ -719,7 +723,7 @@ const loopOpenEvery = 10 * time.Minute
 // worker is retired on a failed read.
 func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
 	l.mu.Lock()
-	if o, ok := l.opens[ref]; ok && l.a.now.Sub(o.at) < loopOpenEvery {
+	if o, ok := l.opens[ref]; ok && l.a.timeNow().Sub(o.at) < loopOpenEvery {
 		l.mu.Unlock()
 		return o.open
 	}
@@ -739,7 +743,7 @@ func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
 	if l.opens == nil {
 		l.opens = map[string]loopOpen{}
 	}
-	l.opens[ref] = loopOpen{open: open, at: l.a.now}
+	l.opens[ref] = loopOpen{open: open, at: l.a.timeNow()}
 	l.mu.Unlock()
 	return open
 }
@@ -805,13 +809,21 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 	defer func() { _ = a.store.WriteFile(loopPIDFile, 0) }()
 	out := a.out
 	defer func() { a.out = out }()
+	if a.loopNow == nil {
+		a.loopNow = &atomic.Pointer[time.Time]{}
+	}
+	defer a.loopNow.Store(nil)
 	l, err := a.newSupervisorLoop(false)
 	if err != nil {
 		return err
 	}
 	l.once = once
-	defer l.mergeActions.Wait()
-	defer l.timerActs.Wait()
+	defer func() {
+		cancel()
+		l.passActions.Wait()
+		l.mergeActions.Wait()
+		l.timerActs.Wait()
+	}()
 	if !once {
 		l.stopWatch = a.startLoopWatch(ctx)
 		defer func() {
@@ -821,7 +833,11 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		}()
 	}
 	for {
-		a.now = time.Now()
+		now := time.Now()
+		if once {
+			a.now = now
+		}
+		a.loopNow.Store(&now)
 		if err := l.pass(ctx); err != nil {
 			return err
 		}
@@ -871,7 +887,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -886,7 +902,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
-	a := l.a
+	a := l.a.snapshotAtNow()
 	l.mu.Lock()
 	l.boardNone = nil
 	l.mu.Unlock()
@@ -900,6 +916,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
 		}
 		l.mergeActions.Wait()
+		l.passActions.Wait()
 		l.timerActs.Wait()
 		if l.stopWatch != nil {
 			l.stopWatch()
@@ -912,7 +929,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	if !l.dryRun {
 		if err := l.watchConditions(ctx); err != nil {
-			l.startsHeld = true
+			l.holdStarts(true)
 			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
 		} else {
 			l.clearSaid("watch-conditions")
@@ -938,7 +955,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
-	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
+	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
 		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
 		return nil
 	}
@@ -972,7 +989,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	own := a.cfg.Supervisor.Ownership
-	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.now, PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
+	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
 		DevctlOwners: a.cfg.Merge.DevctlOwners, Admin: a.cfg.Merge.Admin,
@@ -1121,8 +1138,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
 		}
-		delete(l.said, "graphql allowance")
-		delete(l.said, "read "+ref)
+		l.clearSaid("graphql allowance")
+		l.clearSaid("read " + ref)
 		if r, ok := parseRef(ref); ok {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
@@ -1155,24 +1172,27 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			if err := l.record(act, "merged before an interruption; confirmed at "+head); err != nil {
 				return err
 			}
-			in.Taken = append(in.Taken, superloop.Taken{Key: key, Kind: superloop.KindGo, Ref: ref, Agent: c.target, At: a.now})
+			in.Taken = append(in.Taken, superloop.Taken{Key: key, Kind: superloop.KindGo, Ref: ref, Agent: c.target, At: a.timeNow()})
 			delete(claims, key)
 		}
 	}
-	l.postMerge = superloop.ReleaseWorkers(in)
-	if len(l.postMerge) > 0 || superloop.HasOverlapWait(in.Workers, in.Taken, in.Answers) {
+	postMerge := superloop.ReleaseWorkers(in)
+	l.mu.Lock()
+	l.postMerge = postMerge
+	l.mu.Unlock()
+	if len(postMerge) > 0 || superloop.HasOverlapWait(in.Workers, in.Taken, in.Answers) {
 		sessions, _, sessionErr := loopSessions(a)
 		for i, ag := range st.Agents {
 			if ag.Execution != nil {
-				in.Workers[i].LastActive = executionLastActive(st, ag, a.now)
+				in.Workers[i].LastActive = executionLastActive(st, ag, a.timeNow())
 			} else if sessionErr != nil && !platform.Missing(sessionErr) {
-				in.Workers[i].LastActive = a.now // never retire on a failed observation
+				in.Workers[i].LastActive = a.timeNow() // never retire on a failed observation
 			} else if s, ok := claude.Live(sessions, ag.Party); ok {
 				in.Workers[i].LastActive = s.LastActive
 			}
 		}
 	}
-	if !l.dryRun && len(l.postMerge) > 0 {
+	if !l.dryRun && len(postMerge) > 0 {
 		for i := len(in.Taken) - 1; i >= 0; i-- {
 			if t := in.Taken[i]; t.Kind == superloop.KindRelease {
 				version := strings.TrimPrefix(t.Key, "release ")
@@ -1190,8 +1210,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Release = v
 		}
 	}
-	if in.Release == "" && !l.dryRun && a.now.Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
-		l.releaseAt = a.now
+	if in.Release == "" && !l.dryRun && a.timeNow().Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
+		l.releaseAt = a.timeNow()
 		in.Release = l.newerRelease(ctx)
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
@@ -1233,25 +1253,34 @@ func (l *supervisorLoop) resolvePullPriorities(ctx context.Context, in *superloo
 	}
 }
 
+// readLoopPriorities reads the current board order for the resolution cache.
+var readLoopPriorities = func(ctx context.Context, l *supervisorLoop) (board.Priorities, error) {
+	return l.a.boardClient().Priorities(ctx)
+}
+
 func (l *supervisorLoop) pullPriority(ctx context.Context, ref, serves string) (int, error) {
 	key := ref + " " + serves
+	l.mu.Lock()
+	needPriorities := l.priorities == nil && l.prioritiesAt.IsZero() || l.a.timeNow().Sub(l.prioritiesAt) >= loopOpenEvery
+	l.mu.Unlock()
+	if needPriorities {
+		prios, err := readLoopPriorities(ctx, l)
+		l.mu.Lock()
+		l.prioritiesAt = l.a.timeNow()
+		if err == nil {
+			l.priorities = prios
+			// Relationships and zero ranks can change along with board order.
+			l.pullPriorities = nil
+			l.pullIssues = nil
+			l.issueParents = nil
+		}
+		l.mu.Unlock()
+	}
 	l.mu.Lock()
 	if prio, ok := l.pullPriorities[key]; ok {
 		l.mu.Unlock()
 		return prio, nil
 	}
-	needPriorities := l.priorities == nil && l.prioritiesAt.IsZero() || l.a.now.Sub(l.prioritiesAt) >= loopOpenEvery
-	l.mu.Unlock()
-	if needPriorities {
-		prios, err := l.a.boardClient().Priorities(ctx)
-		l.mu.Lock()
-		l.prioritiesAt = l.a.now
-		if err == nil {
-			l.priorities = prios
-		}
-		l.mu.Unlock()
-	}
-	l.mu.Lock()
 	prios := l.priorities
 	l.mu.Unlock()
 	if len(prios) == 0 {
@@ -1334,7 +1363,15 @@ func (l *supervisorLoop) endInFlight(key string) {
 }
 
 func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action) error {
-	if l.a.now.Before(failures[act.Key].RetryAt) {
+	// An earlier pass can finish after this pass took its snapshot.
+	l.mu.Lock()
+	done := l.completed[act.Key]
+	l.mu.Unlock()
+	if done {
+		return nil
+	}
+
+	if l.a.timeNow().Before(failures[act.Key].RetryAt) {
 		return nil
 	}
 	if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
@@ -1345,7 +1382,7 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 			return err
 		}
 		if done {
-			return l.record(act, what)
+			return l.completeAction(act, what)
 		}
 	}
 	if act.Kind == superloop.KindQuestion {
@@ -1362,9 +1399,10 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 		return l.failed(act, failures[act.Key], err)
 	}
 	if act.Kind == superloop.KindGo && what == loopWorkerMergeGo {
+		l.rememberAction(act)
 		return nil
 	}
-	return l.record(act, what)
+	return l.completeAction(act, what)
 }
 
 // runPassActions runs merges, review starts, intake, worker starts and PR/worker
@@ -1411,17 +1449,23 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		}
 	}
 
-	var errMu sync.Mutex
-	var firstErr error
 	setErr := func(err error) {
-		if err == nil {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if err != nil && l.actionErr == nil {
+			l.actionErr = err
+		}
+	}
+	// Reserve an ordered stream before launching it. Later passes skip only
+	// that stream, while still observing and scheduling unrelated work.
+	launch := func(key string, run func() error) {
+		if !l.beginInFlight(key) {
 			return
 		}
-		errMu.Lock()
-		if firstErr == nil {
-			firstErr = err
-		}
-		errMu.Unlock()
+		l.passActions.Go(func() {
+			defer l.endInFlight(key)
+			setErr(run())
+		})
 	}
 
 	var passMerges sync.WaitGroup
@@ -1430,9 +1474,13 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		passMerges.Add(1)
 		l.mergeActions.Go(func() {
 			defer passMerges.Done()
+			defer func() {
+				for _, act := range acts {
+					l.endInFlight(act.Key)
+				}
+			}()
 			for _, act := range acts {
 				err := l.execAction(ctx, st, claims, failures, act)
-				l.endInFlight(act.Key)
 				if err != nil {
 					setErr(err)
 					return
@@ -1441,15 +1489,9 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		})
 	}
 
-	var passWG sync.WaitGroup
-	if len(reviewActs) > 0 {
-		passWG.Go(func() {
-			for _, act := range reviewActs {
-				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-					setErr(err)
-					return
-				}
-			}
+	for _, act := range reviewActs {
+		launch(act.Key, func() error {
+			return l.execAction(ctx, st, claims, failures, act)
 		})
 	}
 
@@ -1458,56 +1500,75 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	// otherwise run intake concurrently in its own stream.
 	intakeBeforeFill := len(doneActs) > 0 && len(intakeActs) > 0
 	if len(intakeActs) > 0 && !intakeBeforeFill {
-		passWG.Go(func() {
+		launch("stream:intake", func() error {
 			for _, act := range intakeActs {
 				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-					setErr(err)
-					return
+					return err
 				}
 			}
+			return nil
 		})
 	}
 
-	passWG.Go(func() {
+	launch("stream:workers", func() error {
 		if intakeBeforeFill {
-			for _, act := range intakeActs {
-				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-					setErr(err)
-					return
+			if !l.beginInFlight("stream:intake") {
+				return nil // Retry from a fresh snapshot after outstanding intake.
+			}
+			err := func() error {
+				defer l.endInFlight("stream:intake")
+				for _, act := range intakeActs {
+					if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+						return err
+					}
 				}
+				return nil
+			}()
+			if err != nil {
+				return err
 			}
 		}
 		for _, act := range doneActs {
 			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-				setErr(err)
-				return
+				return err
 			}
 		}
 		for _, act := range nextActs {
 			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-				setErr(err)
-				return
+				return err
 			}
 		}
-		if err := l.fill(ctx, st, claims, taken); err != nil {
-			setErr(err)
-		}
+		return l.fill(ctx, st, claims, taken)
 	})
 
-	passWG.Go(func() {
-		for _, act := range otherActs {
-			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
-				setErr(err)
-				return
+	// Keep transitions for one worker ordered, without making a stalled
+	// transition hold housekeeping or transitions for another worker.
+	transitionOrder := []string{}
+	transitions := map[string][]superloop.Action{}
+	for _, act := range otherActs {
+		key := "transition:" + cmp.Or(act.Agent, act.Key)
+		if _, ok := transitions[key]; !ok {
+			transitionOrder = append(transitionOrder, key)
+		}
+		transitions[key] = append(transitions[key], act)
+	}
+	for _, key := range transitionOrder {
+		acts := transitions[key]
+		launch(key, func() error {
+			for _, act := range acts {
+				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+					return err
+				}
 			}
-		}
-		if err := l.roster(ctx, planned); err != nil {
-			setErr(err)
-		}
+			return nil
+		})
+	}
+	launch("stream:roster", func() error {
+		return l.roster(ctx, planned)
 	})
 
-	passWG.Wait()
 	if l.once {
+		l.passActions.Wait()
 		passMerges.Wait()
 	} else if len(laneOrder) > 0 {
 		done := make(chan struct{})
@@ -1520,9 +1581,11 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	errMu.Lock()
-	defer errMu.Unlock()
-	return firstErr
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	err := l.actionErr
+	l.actionErr = nil
+	return err
 }
 
 // baseMerged reports whether p's head only merges its base into approved,
@@ -1593,13 +1656,13 @@ func (l *supervisorLoop) ownership(ctx context.Context, d *superloop.Desk) bool 
 		d.Authors = []string{l.login}
 	}
 	own := l.a.cfg.Supervisor.Ownership
-	if own.Team == "" || l.teams != nil && l.a.now.Sub(l.teamsAt) < teamsEvery {
+	if own.Team == "" || l.teams != nil && l.a.timeNow().Sub(l.teamsAt) < teamsEvery {
 		return true
 	}
 	teams, err := readTeams(ctx, own)
 	switch {
 	case err == nil:
-		l.teams, l.teamsAt = teams, l.a.now
+		l.teams, l.teamsAt = teams, l.a.timeNow()
 	case l.teams == nil:
 		l.sayOnce("teams", "SUPERVISOR LOOP cannot read the team files %s (%v): until it can, it acts only on supervisor.ownership.review and overridden pull requests", own.TeamFiles, err)
 		d.TeamsUnknown = true
@@ -1649,6 +1712,25 @@ func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	}
 	_, err := fmt.Fprintf(l.a.out, "SUPERVISOR %s %s\n", strings.ToUpper(kind), escapedLine(detail))
 	return err
+}
+
+// completeAction remembers only the final successful outcome, after any
+// intermediate records and follow-up side effects have finished.
+func (l *supervisorLoop) completeAction(act superloop.Action, what string) error {
+	if err := l.record(act, what); err != nil {
+		return err
+	}
+	l.rememberAction(act)
+	return nil
+}
+
+func (l *supervisorLoop) rememberAction(act superloop.Action) {
+	l.mu.Lock()
+	if l.completed == nil {
+		l.completed = map[string]bool{}
+	}
+	l.completed[act.Key] = true
+	l.mu.Unlock()
 }
 
 // loopClaim is a claim read back: when, and what its side effect names
@@ -1838,7 +1920,7 @@ func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, caus
 		f.Count = previous.Count + 1
 	}
 	if f.Count >= 2 {
-		f.RetryAt = l.a.now.Add(loopFailureDelay(f.Count))
+		f.RetryAt = l.a.timeNow().Add(loopFailureDelay(f.Count))
 	}
 	b, err := json.Marshal(f)
 	if err != nil {
@@ -1896,11 +1978,11 @@ func (l *supervisorLoop) newerRelease(ctx context.Context) string {
 func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 	a := l.a
 	b := a.cfg.Board
-	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.now.Sub(l.tidyAt) < b.TidyEvery.Duration ||
-		boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
+	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.timeNow().Sub(l.tidyAt) < b.TidyEvery.Duration ||
+		boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
 		return
 	}
-	l.tidyAt = a.now
+	l.tidyAt = a.timeNow()
 	out, err := l.run(ctx, loopBoard, boardTidyName)
 	if err != nil {
 		if !errors.Is(err, errLoopLater) {
@@ -2099,6 +2181,7 @@ func redChecks(key string) string {
 
 // loopInTurn reports whether p's session runs a turn.
 var loopInTurn = func(a *app, p state.Party) bool {
+	a = a.snapshotAtNow()
 	if a.executionInTurn(p) {
 		return true
 	}
@@ -2138,7 +2221,7 @@ func (a *app) executionInTurn(p state.Party) bool {
 	if err != nil {
 		return false
 	}
-	return executionInTurn(st, p, a.now)
+	return executionInTurn(st, p, a.timeNow())
 }
 
 // executionInTurn reports whether p's managed SSH execution is in a turn:
@@ -2186,7 +2269,7 @@ var loopSessions = func(a *app) ([]*claude.Session, *proc.Table, error) {
 // stale with no CLI) that superloop.Plan is not still handling in planned, and
 // archives or stops owed desktop and background sessions once their turns end.
 func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) error {
-	a := l.a
+	a := l.a.snapshotAtNow()
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -2197,7 +2280,7 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 	}
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
 	inFlight := func(p state.Party) bool { return mergeInFlight(st, p, proc.Alive) }
-	waits := sleepingWaits(st, sessions, t, inFlight, a.now)
+	waits := sleepingWaits(st, sessions, t, inFlight, a.timeNow())
 	for _, w := range waits {
 		stopProcesses(w.pids())
 		line := "stopped " + w.String()
@@ -2209,10 +2292,10 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 		if slices.ContainsFunc(waits, func(w leftWait) bool { return w.agent.Is(p) }) {
 			return false
 		}
-		_, turn := turnRunning(sessions, t, p, a.now)
+		_, turn := turnRunning(sessions, t, p, a.timeNow())
 		return turn || loopInTurn(a, p) || inFlight(p)
 	}
-	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg), func(c chore) bool {
+	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.timeNow(), a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
 	_, _, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
@@ -2361,7 +2444,7 @@ Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekee
 `
 
 func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
-	if l.startsHeld {
+	if l.holdingStarts() {
 		return errLoopLater
 	}
 	r, ok := parseRef(act.Ref)
@@ -2452,7 +2535,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if hasRP && rp.Serves != "" {
 		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			if i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }); i >= 0 {
-				inheritReviewParkOnAgent(current, &current.Agents[i], rp, l.a.now.UTC())
+				inheritReviewParkOnAgent(current, &current.Agents[i], rp, l.a.timeNow().UTC())
 			}
 			return nil, nil
 		}); err != nil {
@@ -2506,7 +2589,7 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
-	if l.startsHeld {
+	if l.holdingStarts() {
 		return "", errLoopLater
 	}
 	r, _ := parseRef(act.Ref)
@@ -2890,7 +2973,7 @@ func (l *supervisorLoop) remoteStartRefused(ctx context.Context, name string) (s
 // with room (and the board item's repository is mapped there), else on the
 // coordinator's own machine.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
-	if l.startsHeld {
+	if l.holdingStarts() {
 		return "", errLoopLater
 	}
 	k := l.a.cfg.Supervisor
@@ -2934,7 +3017,7 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.timeNow()) {
 		l.mu.Lock()
 		l.boardNone = &loopBoardNone{err: errLoopLater}
 		l.mu.Unlock()
@@ -3307,7 +3390,7 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 		if !s.LastActive.IsZero() && s.LastActive.Before(l.since) {
 			continue
 		}
-		w, _ := harnessForSession(s).ReadTranscript(l.a, s, l.a.now)
+		w, _ := harnessForSession(s).ReadTranscript(l.a, s, l.a.timeNow())
 		if len(w.Created) == 0 {
 			continue
 		}
@@ -3351,7 +3434,7 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 // the priority list right after the high-ranked epic or item it blocks or
 // follows from.
 func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.timeNow()) {
 		return "", errLoopLater
 	}
 	moveStage := act.Key + " move"
@@ -3493,11 +3576,11 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 			acting = append(acting, t)
 		}
 	}
-	githubHeld := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
-		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now)
-	found := a.loopTimerChecks(ctx, acting, a.now, githubHeld || a.resetFirst(st))
+	githubHeld := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) ||
+		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow())
+	found := a.loopTimerChecks(ctx, acting, a.timeNow(), githubHeld || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
-	_, _, _, changed := settleTimersMatching(st, found, a.now, a.cfg.Supervisor.LoopInterval.Duration, timerActs)
+	_, _, _, changed := settleTimersMatching(st, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)
 	if !changed {
 		return nil
 	}
@@ -3505,15 +3588,13 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 	var fires []timerFire
 	if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 		var evs []state.Event
-		lines, evs, fires, _ = settleTimersMatching(current, found, a.now, a.cfg.Supervisor.LoopInterval.Duration, timerActs)
+		lines, evs, fires, _ = settleTimersMatching(current, found, a.timeNow(), a.cfg.Supervisor.LoopInterval.Duration, timerActs)
 		return evs, nil
 	}); err != nil {
 		return err
 	}
-	// Each batch keeps its own time: later passes update a.now while these
-	// wakes and commands can still be running.
-	snapshot := *a
-	w := &watcher{app: &snapshot}
+	// Each batch keeps its own time while later passes advance the clock.
+	w := &watcher{app: a.snapshotAtNow()}
 	for _, line := range lines {
 		w.emitNow("timer", "%s", line)
 	}
@@ -3542,7 +3623,10 @@ var loopReleaseContains = func(ctx context.Context, ref, commit, version string)
 }
 
 func (l *supervisorLoop) wakeReleased(ctx context.Context, release superloop.Action) error {
-	for _, w := range l.postMerge {
+	l.mu.Lock()
+	workers := slices.Clone(l.postMerge)
+	l.mu.Unlock()
+	for _, w := range workers {
 		stage := "post-merge wake " + w.Ref + "@" + w.Head + " " + w.Agent
 		checked := release.Key + " excludes " + w.Ref + "@" + w.Head
 		l.mu.Lock()
@@ -3577,4 +3661,16 @@ func (l *supervisorLoop) wakeReleased(ctx context.Context, release superloop.Act
 		l.mu.Unlock()
 	}
 	return nil
+}
+
+func (l *supervisorLoop) holdingStarts() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.startsHeld
+}
+
+func (l *supervisorLoop) holdStarts(held bool) {
+	l.mu.Lock()
+	l.startsHeld = held
+	l.mu.Unlock()
 }
