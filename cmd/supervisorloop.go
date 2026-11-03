@@ -548,7 +548,9 @@ its key first in the detail):
             (restarted, or waited for while it serves calls),
             supervisor.postInstall once, then self-update --check must
             find it the latest. A loop whose binary was replaced
-            re-executes the installed one at its next pass
+            re-executes the installed one at its next pass. A --check
+            that fails says SUPERVISOR RELEASE LOOKUP FAILED, once until
+            a look succeeds again
   hosts     every pass, each execution host (agents.hosts) whose pin is
             not this coordinator's release: agents hosts update installs
             the release there, verified, and pins the policy digest it
@@ -1661,10 +1663,20 @@ func (l *supervisorLoop) sayOnce(key, format string, args ...any) {
 }
 
 // newerRelease is a newer release's version, "" when this is the latest or
-// the look failed.
+// the look failed; a failed look is said, once until it succeeds again, so
+// the desk does not stay on an old release unnoticed.
 func (l *supervisorLoop) newerRelease(ctx context.Context) string {
 	out, code, err := beekeeperRun(ctx, selfUpdateCheck...)
-	if err != nil || code != ExitOutdated {
+	switch {
+	case err != nil:
+		l.sayOnce(releaseLookupKey, "SUPERVISOR RELEASE LOOKUP FAILED: %v", err)
+		return ""
+	case code != 0 && code != ExitOutdated:
+		l.sayOnce(releaseLookupKey, "SUPERVISOR RELEASE LOOKUP FAILED: self-update --check exits %d: %s", code, oneLine(out))
+		return ""
+	}
+	delete(l.said, releaseLookupKey)
+	if code != ExitOutdated {
 		return ""
 	}
 	if m := newerLine.FindStringSubmatch(out); m != nil {
@@ -1718,6 +1730,9 @@ func sayBoard(a *app, out string) {
 
 // boardTidyName is the board tidy subcommand.
 const boardTidyName = "tidy"
+
+// releaseLookupKey is the said key of a failed look for a newer release.
+const releaseLookupKey = "release lookup"
 
 // selfUpdateCheck is the look for a newer release.
 var selfUpdateCheck = []string{selfUpdateCmdName, "--check"}
