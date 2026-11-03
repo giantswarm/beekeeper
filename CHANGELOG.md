@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SSH hosts can admit repositories by owner with `repositoryOrgs` and provision an isolated workspace from the coordinator's pinned source bundle without preseeded checkouts. Idle hosts provision missing pinned Go and GitHub CLI installations from checksum-verified official releases; host checks flag a coordinator release mismatch, and preparation checks the actual workspace's Go requirement (https://github.com/giantswarm/beekeeper/issues/2111).
+
 - SSH execution hosts pin the worker toolchain under `agents.execution.tools` (`go` and `gh`, each an absolute executable and its version). `agents hosts check`, and every start, refuses a host whose `gh` or, for a served repository whose source checkout has a `go.mod`, whose Go is missing, differs from its pin or is older than that `go.mod`'s `toolchain` (or `go`) line, and reports the provisioned versions under `tools`. The runner puts the pinned tools' directories on the worker's PATH right after the component's ([https://github.com/giantswarm/beekeeper/issues/2077](https://github.com/giantswarm/beekeeper/issues/2077)).
 
 - `note show <id>` prints one note in full with its audience, status and retained answer; `--json` returns one complete object.
@@ -27,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `board move <epic> "In Progress"` records the go when the epic's plan pull request is already merged: with no open plan found, it searches the plans repositories' merged pull requests for the epic's number, takes the latest whose Epic line names it (its URL or `owner/repo#n`), and records the go at its merge commit. A merged plan's head is its merge commit wherever an epic's plan is shown; a go recorded earlier at the merged branch's head counts as unmoved. With neither an open nor a merged plan, the move says so and records no go (https://github.com/giantswarm/beekeeper/issues/1540).
 - Secret-file checks track `pushd`/`popd`, refuse directory copies and `find` moves that expose guarded files, and recognize helper paths split across arguments. Codex also checks split protected-home paths (https://github.com/giantswarm/beekeeper/issues/1902).
+- Note answers reach unregistered sessions with no display name and select the session's own harness inbox when its conversation ID is also a UUID. Notification failures are reported by the answer command and retained with their reason in `note show` and its JSON `delivery` status.
 - Isolate priority reads and renumbering by the configured Team even when stale team labels remain, reject ranking another team's epic, and document the enforced split between person-only epic priorities and session-editable board positions (logged with the caller), refusing anonymous position edits.
 
 - Priority-list reads omit candidate-only label and assignee connections, keeping the large-board regression at 37 GraphQL points without changing ranks or blocker holds.

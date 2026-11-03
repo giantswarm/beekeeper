@@ -74,6 +74,17 @@ older events without that audience show it as unknown rather than naming the
 answerer as the addressee. Other removed or expired
 records are reported as unavailable, never reconstructed from a truncated log.
 
+A note answer reaches its filing session by session or harness ID even when
+that session is absent from the agent roster or has no display name. Harness
+IDs select their own inbox rather than treating a UUID conversation ID as a
+Claude session. The answer remains recorded when notification fails: the
+answer command reports the failure and `note show` retains the last notification
+attempt as `notification: failed` with its reason (`delivery` in JSON).
+Successful attempts show `delivered`; a central mailbox shows `queued`, and a
+role awaiting its next holder shows `waiting`. This is the recorded attempt,
+not a claim that a queued message has since been consumed. Older notes without
+a retained delivery event show no invented notification status.
+
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
 successful filing followed by an empty listing can mean it was answered between those
 calls. Check the server's `note_add` and `note_answer` audit lines before diagnosing a lost

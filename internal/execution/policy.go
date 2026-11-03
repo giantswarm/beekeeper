@@ -28,13 +28,15 @@ type Coordinator struct {
 // HostConfig is operator-owned configuration on the execution host. It is
 // never replaced by a request, a brief or the coordinator's filesystem paths.
 type HostConfig struct {
-	RulesFile     string                   `yaml:"rulesFile" json:"rulesFile"`
-	Identity      HostID                   `yaml:"identity" json:"identity"`
-	WorkspaceRoot string                   `yaml:"workspaceRoot" json:"workspaceRoot"`
-	Repositories  map[string]string        `yaml:"repositories" json:"repositories"`
-	Harnesses     map[string]HarnessConfig `yaml:"harnesses" json:"harnesses"`
-	Coordinators  map[string]Coordinator   `yaml:"coordinators" json:"coordinators"`
-	MaxBusy       int                      `yaml:"maxBusy" json:"maxBusy"`
+	RulesFile     string            `yaml:"rulesFile" json:"rulesFile"`
+	Identity      HostID            `yaml:"identity" json:"identity"`
+	WorkspaceRoot string            `yaml:"workspaceRoot" json:"workspaceRoot"`
+	Repositories  map[string]string `yaml:"repositories" json:"repositories"`
+	// RepositoryOrgs admits coordinator-bundled repositories without a source mapping.
+	RepositoryOrgs []string                 `yaml:"repositoryOrgs,omitempty" json:"repositoryOrgs,omitempty"`
+	Harnesses      map[string]HarnessConfig `yaml:"harnesses" json:"harnesses"`
+	Coordinators   map[string]Coordinator   `yaml:"coordinators" json:"coordinators"`
+	MaxBusy        int                      `yaml:"maxBusy" json:"maxBusy"`
 	// Tools pins the worker toolchain (go, gh) a worker calls by bare name.
 	// Omitted, it leaves the configuration digest of a host without it as is.
 	Tools map[string]ToolConfig `yaml:"tools,omitempty" json:"tools,omitempty"`
@@ -54,8 +56,11 @@ const CodexVersions = ">= 0.165.0, < 1.0.0"
 const AgyVersions = ">= 1.4.7, < 2.0.0"
 
 func (c HostConfig) Validate() error {
-	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
+	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 && len(c.RepositoryOrgs) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
 		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex or agy")
+	}
+	if err := validateRepositoryOrgs(c.RepositoryOrgs); err != nil {
+		return err
 	}
 	for repo, p := range c.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {

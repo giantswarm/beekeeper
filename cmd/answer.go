@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -153,7 +152,7 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 	line := rec.line(n)
 	var notes []string
 	if n != nil {
-		rec.Told = []string{n.By.Name}
+		rec.Told = []string{cmp.Or(n.By.Name, wakeID(n.By))}
 		if s := a.tellFiler(ctx, me, n, line); s != "" {
 			notes = append(notes, s)
 		}
@@ -299,19 +298,25 @@ func (a *app) tellServing(ctx context.Context, by state.Party, about, line strin
 	if err != nil {
 		return nil, []string{fmt.Sprintf("the sessions serving %s are not told (%v)", about, err)}
 	}
-	var told []string
+	var told, failed []string
 	for _, r := range st.Records {
 		if ref, ok := parseRef(r.Issue); !ok || !strings.EqualFold(refName(ref), about) || !r.Ended.IsZero() {
 			continue
 		}
-		if err := a.quietWake(ctx, by, cmp.Or(r.Session.Session, r.Session.Name), line); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "telling %q failed (%v): %s\n", r.Session.Name, err, line)
+		target := cmp.Or(r.Session.Name, wakeID(r.Session))
+		if err := a.quietWake(ctx, by, cmp.Or(wakeID(r.Session), r.Session.Name), line); err != nil {
+			failed = append(failed, fmt.Sprintf("telling %q failed (%v): %s", target, err, line))
 			continue
 		}
-		told = append(told, r.Session.Name)
+		told = append(told, target)
 	}
-	if len(told) == 0 {
+	if len(told) == 0 && len(failed) == 0 {
 		return nil, []string{fmt.Sprintf("no session serves %s: the answer is in the log", about)}
 	}
-	return told, []string{"told " + strings.Join(told, ", ")}
+	var notes []string
+	if len(told) > 0 {
+		notes = append(notes, "told "+strings.Join(told, ", "))
+	}
+	notes = append(notes, failed...)
+	return told, notes
 }
