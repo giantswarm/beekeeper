@@ -2322,6 +2322,11 @@ func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
 	if ag.Execution != nil {
 		return st.Starts[k].Execution != nil
 	}
+	// The watch stops parked background sessions to free memory. Their
+	// roster entry and park remain the durable owner of the review and wake.
+	if st.Starts[k].Background {
+		return false
+	}
 	return ag.Park.PostMerge != nil || st.Starts[k].Dir != ""
 }
 

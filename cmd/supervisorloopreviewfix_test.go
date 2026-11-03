@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -456,5 +457,42 @@ func TestEndReviewWorkersPersistsReviewParkBeforeRosterRemoval(t *testing.T) {
 	}
 	if r.called(agentsName, agentStartName, loopReviewer) == nil {
 		t.Fatalf("reviewer did not start from persisted ReviewPark after interruption: %v\n%s", r.calls, r.out)
+	}
+}
+
+// A watch memory stop ends the process, not the parked worker's ownership.
+func TestLoopKeepsBackgroundReviewWorkerAfterMemoryStop(t *testing.T) {
+	for _, postMerge := range []bool{false, true} {
+		t.Run(strconv.FormatBool(postMerge), func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, time.Now())
+			r.started(t, loopWorker, "memory-stopped-worker")
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Starts[0].Background = true
+				st.Starts[0].Dir = t.TempDir()
+				if postMerge {
+					work := "prove rollout"
+					st.Agents[0].Park.PostMerge = &work
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == loopWorker })
+			if i < 0 || st.Agents[i].Park == nil || st.Agents[i].Park.ReviewHead != loopHead {
+				t.Fatalf("memory-stopped worker lost its park: %+v", st.Agents)
+			}
+			if r.called(agentsName, loopRemove, loopWorker) != nil {
+				t.Fatal("parked worker removed")
+			}
+			if r.called(agentsName, agentStartName, loopReviewer) == nil {
+				t.Fatalf("review not served: %v\n%s", r.calls, r.out)
+			}
+		})
 	}
 }
