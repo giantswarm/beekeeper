@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The supervisor loop's sweep no longer refers to the removed review cap: main builds again, and a green head without a review gets a reviewer however many rounds it had (https://github.com/giantswarm/beekeeper/pull/2234, https://github.com/giantswarm/beekeeper/pull/2263).
+
 - Approved conflicting pull requests retain their durable merge-repair handoff instead of being intercepted as review rework.
 
 - A relay no longer stops or archives the relieved guide's session: its conversation stays in the person's session list until they close it. The relay's start message and the watch's `RELAY TAKEN` line say where it is (`claude attach <id>` continues a background session, `claude stop <id>` ends it). The revive guard lets a relieved run the person or the desktop brings back run on, and neither the watch nor the doctor stops, archives, seeds or reseeds an archive of it; an archive owed by an earlier version is dropped. A session whose start took the guide's role stays the person's also after a take-over (a crash or reboot without a relay) and once its relief is forgotten.

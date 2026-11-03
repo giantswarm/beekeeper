@@ -504,9 +504,8 @@ its key first in the detail):
             behind a base its merge does not update (no devctl
             --update-branch, no merge.admin); the merge go again for a green
             head whose go was given and never carried out; a reviewer for
-            a green head awaiting its review (a worker to take it over once
-            its reviews are used). Running checks wait; an open escalation
-            or ownership question is the person's. One action per stretch,
+            a green head awaiting its review. Running checks wait; an open
+            escalation or ownership question is the person's. One action per stretch,
             at most superloop.MaxSweeps (2) per head, then a leave for the
             guide
   override  the person's answer Override (the option, or a bare override):
