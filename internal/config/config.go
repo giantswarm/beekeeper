@@ -1042,7 +1042,8 @@ var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--outpu
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
 // DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
-// beekeeper reads the freshest token_count rate_limits event across Codex
+// beekeeper probes account usage when local events age out and otherwise reads
+// the freshest token_count rate_limits event across Codex
 // rollout transcripts in-process.
 var DefaultCodexUsageCommand = []string{CodexHarness, "usage"}
 

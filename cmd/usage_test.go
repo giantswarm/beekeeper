@@ -2266,7 +2266,7 @@ capacity:
 	if err := capCmd.Execute(); err != nil {
 		t.Fatalf("capacity with no codex rollouts: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 0; usage unknown (no codex rollout files found); no start: subscription usage unknown (no codex rollout files found)") {
+	if !strings.Contains(capOut.String(), "provider codex: 0 busy of ceiling 0; usage unknown (") {
 		t.Fatalf("expected codex fail-closed when no rollouts exist, got:\n%s", capOut.String())
 	}
 
@@ -2395,7 +2395,7 @@ capacity:
 	}
 
 	// 5. Explicit stopped or invalid reading in the newest rollout event fails closed (room 0),
-	//    and a reading older than staleAfter (15m) also fails closed as stale.
+	//    while an old valid reading remains usable when the account probe fails.
 	writeCodexRollout(codex.HomeSessionsDir(cfg.StateDir), "2026/10/28/rollout-d-stopped.jsonl", t0.Add(time.Minute),
 		fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":50,"window_minutes":10080,"resets_at":%d},"spend_control_reached":true}}}`,
 			t0.Add(time.Minute).Format(time.RFC3339), reset7d.Unix()),
@@ -2415,8 +2415,8 @@ capacity:
 	if err := aStale.capacityCmd().Execute(); err != nil {
 		t.Fatalf("capacity on stale codex reading: %v", err)
 	}
-	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 0: AutoCodexWorker; usage unknown (usage reading is stale") {
-		t.Fatalf("expected stale codex reading to fail closed, got:\n%s", capOut.String())
+	if !strings.Contains(capOut.String(), "provider codex: 1 busy of ceiling 2: AutoCodexWorker; usage") {
+		t.Fatalf("expected stale codex reading fallback to allow starts, got:\n%s", capOut.String())
 	}
 
 	// 6. Future SourceAt timestamp (> now + 1m) is rejected by validateReadingAt and fails closed.
@@ -3736,5 +3736,78 @@ func TestUsageFallbackReportedAgeExpires(t *testing.T) {
 	derived, view = w.currentUsage(k, a.now)
 	if derived.Ceiling != 0 || view == nil || !strings.Contains(view.Error, "20m old") {
 		t.Fatalf("watch cache: %+v %+v", derived, view)
+	}
+}
+
+// A quiet desk refreshes from the account even with no model runs; a failed
+// probe retains a valid old reading, and a successful probe is cached.
+func TestCodexIndependentUsageRefresh(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte("capacity:\n  ceiling: 2\n  providers:\n    codex:\n      ceiling: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
+	script := fmt.Sprintf(`#!/bin/sh
+read -r init
+echo '{"id":1,"result":{}}'
+read -r ready
+read -r request
+echo '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":20,"windowDurationMins":10080,"resetsAt":%d}}}}'
+read -r keepalive
+`, now.Add(24*time.Hour).Unix())
+	executable := filepath.Join(dir, "codex")
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{cfg: cfg, store: store, now: now}
+	u := cfg.Capacity.Providers[codex.Harness].Usage
+	r, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.SevenDay.UsedPercent != 20 || !r.SourceAt.Equal(now) {
+		t.Fatalf("account reading: %+v", r)
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a.now = now.Add(time.Minute)
+	r, err = a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u)
+	if err != nil || !r.SourceAt.Equal(now) {
+		t.Fatalf("cached account reading: %+v, %v", r, err)
+	}
+	a.now = now.Add(time.Hour)
+	r, err = a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u)
+	if err != nil || !r.SourceAt.Equal(now) || r.Fallback == "" {
+		t.Fatalf("old account fallback: %+v, %v", r, err)
+	}
+
+}
+
+func TestCodexStaleSourceValidation(t *testing.T) {
+	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
+	r := usageReading{At: now, SourceAt: now.Add(-8 * time.Hour), SingleWindow: true, SevenDay: &usageWindow{UsedPercent: 20, ResetsAt: now.Add(24 * time.Hour)}}
+	builtin := config.Usage{Command: config.DefaultCodexUsageCommand}
+	if err := validateReadingAt(r, builtin, now); err != nil {
+		t.Fatalf("old valid Codex source blocks recovery: %v", err)
+	}
+	if err := validateReadingAt(r, config.Usage{Command: []string{"custom"}}, now); err == nil {
+		t.Fatal("custom reader must still enforce source freshness")
+	}
+	r.SourceAt = now.Add(30 * time.Second)
+	if err := validateReadingAt(r, builtin, now); err != nil {
+		t.Fatalf("clock skew: %v", err)
+	}
+	r.SourceAt = now.Add(2 * time.Minute)
+	if err := validateReadingAt(r, builtin, now); err == nil {
+		t.Fatal("large future timestamp must fail")
 	}
 }

@@ -288,7 +288,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
         - {upTo: 95, ceiling: 2}
     codex:
       ceiling: 2
-      command: [codex, usage]     # default for codex; reads the freshest token_count rate_limits event across rollout transcripts
+      command: [codex, usage]     # default for codex; reads rollout usage and refreshes via app-server without a model turn; falls back to the last reading if the probe fails
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
