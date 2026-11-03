@@ -241,7 +241,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		switch {
 		case strings.HasPrefix(arg, "--host="):
 			f.host = strings.TrimPrefix(arg, "--host=")
-		case arg == "--host" && i+1 < len(args):
+		case arg == loopHostFlag && i+1 < len(args):
 			i++
 			f.host = args[i]
 		case strings.HasPrefix(arg, "--name="):
@@ -287,7 +287,7 @@ func parseStartArgsForVault(args []string) startVaultFlags {
 		case arg == "--config" && i+1 < len(args):
 			i++
 			f.scratchCfg = args[i]
-		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == "--host" || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
+		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == loopHostFlag || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
 			i++
 		case !strings.HasPrefix(arg, "-"):
 			pos = append(pos, arg)

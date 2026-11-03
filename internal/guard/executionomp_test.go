@@ -33,7 +33,7 @@ func TestExecutionOmpGuard(t *testing.T) {
 		{"omp status", bashCmd, map[string]any{commandKey: codexGitStatus}, false},
 		{"omp merge", bashCmd, map[string]any{commandKey: ompDeniedMerge}, true},
 		{"default branch", bashCmd, map[string]any{commandKey: ompDeniedPush}, true},
-		{"cwd outside", bashCmd, map[string]any{commandKey: codexGitStatus, ompWorkingDir: outside}, true},
+		{cwdOutsideCaseName, bashCmd, map[string]any{commandKey: codexGitStatus, ompWorkingDir: outside}, true},
 		{"cwd symlink", bashCmd, map[string]any{commandKey: codexGitStatus, ompWorkingDir: "escape"}, true},
 		{"background", bashCmd, map[string]any{commandKey: codexGitStatus, "async": true}, true},
 		{"service", bashCmd, map[string]any{commandKey: codexGitStatus, nameKey: executionFixture}, true},
