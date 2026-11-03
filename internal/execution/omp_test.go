@@ -39,6 +39,7 @@ test -z "${OPENAI_API_KEY+x}"
 case " $* " in *' --no-extensions '*) ;; *) exit 2;; esac
 case " $* " in *' --extension '*) ;; *) exit 2;; esac
 case " $* " in *' --tools bash,read,write '*) ;; *) exit 2;; esac
+if test -e "$root/github-path"; then first=${PATH%%:*}; test -x "$first/gh" && test -x "$first/git" || exit 3; fi
 if test -e "$root/extension-error"; then echo '{"type":"extension_error"}'; exit 1; fi
 echo '{"type":"ready"}'
 echo '{"type":"beekeeper_guard_ready","session_id":"fixture-omp-thread"}'
@@ -113,6 +114,32 @@ func TestExecutionOmpRunnerSingleTurn(t *testing.T) {
 	j, err := f.s.Read(f.r.Ref)
 	if err != nil || j.Phase != Exited || !j.Ready || j.InTurn || j.Thread != "fixture-omp-thread" {
 		t.Fatalf("journal %+v: %v", j, err)
+	}
+}
+
+func TestExecutionOmpRunnerCarriesScopedGitHubDispatch(t *testing.T) {
+	f, dir := ompFixture(t)
+	f.r.GitHub = true
+	f.s.Callback = func(_ context.Context, _ []string, raw []byte) ([]byte, error) {
+		var request CallbackRequest
+		if err := Decode(raw, &request); err != nil {
+			return nil, err
+		}
+		return json.Marshal(WireResponse{Protocol: Protocol, RequestID: request.RequestID, Ref: request.Ref, Payload: json.RawMessage(`{}`)})
+	}
+	ctx := startOmpFixture(t, f)
+	if err := os.WriteFile(filepath.Join(dir, "github-path"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Run(ctx, f.r.Ref); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gh", GitHubGitTool} {
+		p := filepath.Join(f.s.Root, workerGitHubBinDir, string(f.r.Ref.Execution), name)
+		info, err := os.Stat(p) //nolint:gosec // generated dispatch script in the test-owned temporary directory
+		if err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("scoped %s dispatch: %v", name, err)
+		}
 	}
 }
 
