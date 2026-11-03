@@ -3246,7 +3246,13 @@ func (c *Config) defaults() error {
 	setDur(&c.Disk.Every, time.Hour)
 	setInt(&c.Disk.SccacheMaxGiB, 10)
 	h := &c.Disk.Holders
-	setStr(&h.Root, filepath.Dir(c.StateDir))
+	// The state home is stateDir's parent; a stateDir right under the
+	// filesystem root is its own home, never the root itself.
+	root := filepath.Dir(c.StateDir)
+	if filepath.Clean(root) == string(filepath.Separator) {
+		root = c.StateDir
+	}
+	setStr(&h.Root, root)
 	h.Root = filepath.Clean(homePath(home, h.Root))
 	setDur(&h.StaleAfter, 72*time.Hour)
 	setDur(&h.AsideRetention, 7*24*time.Hour)
