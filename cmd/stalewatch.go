@@ -39,6 +39,7 @@ func (w *watcher) staleWatches(ctx context.Context, t *proc.Table) {
 		found[key] = true
 		if !w.isActive(key) {
 			w.emit(key, "%s", w.staleLine(ctx, p, path, owner(t, p.PID, owners)))
+			w.checkInstalledGate(ctx, path)
 		}
 	}
 	w.clearMissing(staleKey, found)
@@ -129,4 +130,45 @@ func binaryVersion(ctx context.Context, file string) string {
 		return f[1]
 	}
 	return "an unknown version"
+}
+
+// checkInstalledGate confirms the binary installed at file passes budget --gate
+// with the live configuration, once per path, and reports at once when it fails.
+func (w *watcher) checkInstalledGate(ctx context.Context, file string) {
+	if file == "" {
+		return
+	}
+	w.mu.Lock()
+	if w.gateChecked == nil {
+		w.gateChecked = map[string]bool{}
+	}
+	if w.gateChecked[file] {
+		w.mu.Unlock()
+		return
+	}
+	w.gateChecked[file] = true
+	w.mu.Unlock()
+
+	var err error
+	if w.gateOf != nil {
+		err = w.gateOf(ctx, file)
+	} else if _, statErr := os.Stat(file); statErr == nil {
+		gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		args := budgetGateArgs
+		if w.cfgPath != "" {
+			args = append([]string{"--" + configFlag, w.cfgPath}, args...)
+		}
+		out, runErr := proc.Command(gctx, file, args...).CombinedOutput()
+		if runErr != nil {
+			detail := oneLine(string(out))
+			if detail == "" {
+				detail = oneLine(runErr.Error())
+			}
+			err = fmt.Errorf("%s", detail)
+		}
+	}
+	if err != nil {
+		w.fail("installed-gate "+file, "WATCH GATE FAILED %s: budget --gate failed after install: %s", file, oneLine(err.Error()))
+	}
 }
