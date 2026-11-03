@@ -587,7 +587,10 @@ A refusal that names the base branch policy and suggests `--admin` is a configur
 refusal, including when the merge state is `BEHIND`. The loop reports it once per
 reviewed head, naming `merge.admin`, and retries on the next round without a worker
 wake, branch repair or another review. This never authorizes bypassing the server-side
-merge queue: the corrected policy must still admit its required checks.
+merge queue: the corrected policy must still admit its required checks. A loop that finds
+a branch repair an older loop requested for such a refusal closes it on start
+(`supervisor.unstage` for the repair stage, `supervisor.unclaim` for the go it completed),
+so the unchanged approved head rejoins the merge lane; any other repair stage stands.
 
 After approval only the merge moves the head. A branch that is only behind its base merges
 at the reviewed head as it stands: GitHub merges it onto the current base, with no branch

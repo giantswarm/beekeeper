@@ -220,6 +220,39 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
 }
 
+// dropAdminRepairs undoes a branch repair an older loop requested for a
+// merge refused by base branch policy with an admin suggestion: no branch
+// change repairs that refusal. Its repair stage and the go it completed are
+// closed durably, so the unchanged approved head is merged again on this
+// pass without a new review or the worker's action. A repair stage for any
+// other reason stands.
+func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
+	for stage, detail := range stageDetail {
+		key, ok := strings.CutSuffix(stage, " repair")
+		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") || !ghMergeNeedsAdmin(detail) {
+			continue
+		}
+		ref := strings.TrimPrefix(key, superloop.KindGo+" ")
+		if i := strings.LastIndex(ref, "@"); i >= 0 {
+			ref = ref[:i]
+		}
+		why := "base branch policy refusal is merge configuration, not branch repair"
+		if err := l.a.store.Record(about(event(loopParty, loopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
+			return taken, err
+		}
+		delete(stages, stage)
+		delete(stageDetail, stage)
+		if slices.ContainsFunc(taken, func(t superloop.Taken) bool { return t.Key == key }) {
+			if err := l.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
+				return taken, err
+			}
+			taken = slices.DeleteFunc(taken, func(t superloop.Taken) bool { return t.Key == key })
+		}
+		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; check merge.admin for its repository\n", key, why)
+	}
+	return taken, nil
+}
+
 // repairPull hands an open pull request whose merge was not applicable or red
 // to its worker once, recording the repair stage before waking or starting a
 // fixer so capacity waits never retry the merge command each pass.

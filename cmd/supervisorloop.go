@@ -44,12 +44,14 @@ var loopParty = state.Party{Name: "supervisor loop"}
 const loopStartVerb = "supervisor.loop"
 
 // loopClaimVerb logs an action the loop is about to take, before its side
-// effect; loopStageVerb a finished stage of a release.
+// effect; loopStageVerb a finished stage of a release; loopUnstageVerb a
+// stage found obsolete, which no later pass resumes.
 const (
 	loopClaimVerb    = "supervisor.claim"
 	loopFileVerb     = "supervisor." + superloop.KindFile
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
+	loopUnstageVerb  = "supervisor.unstage"
 	loopFailureVerb  = "supervisor.failure"
 )
 
@@ -1185,6 +1187,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case e.Verb == loopStageVerb:
 			stages[key] = true
 			stageDetail[key] = rest
+		case e.Verb == loopUnstageVerb:
+			delete(stages, key)
+			delete(stageDetail, key)
 		case e.Verb == loopFailureVerb:
 			var f loopFailure
 			if json.Unmarshal([]byte(rest), &f) == nil {
@@ -1194,6 +1199,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
+	}
+	if in.Taken, err = l.dropAdminRepairs(in.Taken, stages, stageDetail); err != nil {
+		return err
 	}
 	l.mu.Lock()
 	l.stages, l.stageDetail = stages, stageDetail

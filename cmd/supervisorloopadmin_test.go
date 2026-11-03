@@ -105,3 +105,78 @@ func TestLoopMergeRetriesSavedAdminPolicyFailure(t *testing.T) {
 		t.Fatalf("saved configuration refusal requested repair: %v", wake)
 	}
 }
+
+// seedOlderRepair records what a loop before the configuration-refusal fix
+// logged for an admin policy refusal: a branch repair stage for the go and
+// the go itself completed as "branch repair requested".
+func seedOlderRepair(t *testing.T, r *loopRig, reason string) {
+	t.Helper()
+	key := "go " + loopPR + "@" + loopHead
+	for _, e := range []state.Event{
+		about(event(loopParty, loopStageVerb, "[%s repair] (exit %d): %s", key, github.SquashNotApplicable, reason), loopPR),
+		about(event(loopParty, "supervisor."+superloop.KindMerge, "[%s] %s: merge failed; branch repair requested", key, loopWorker), loopPR),
+	} {
+		if err := r.a.store.Record(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestLoopRestartRecoversOlderAdminPolicyRepair(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	seedOlderRepair(t, r, adminPolicyTestReason)
+	attempts := 0
+	r.command = func(argv []string) (string, int) {
+		attempts++
+		if slices.Contains(argv, "--admin") {
+			t.Fatalf("retry bypassed the server-side queue: %v", argv)
+		}
+		if len(r.a.cfg.Merge.Admin) == 0 {
+			return adminPolicyTestReason, 1
+		}
+		r.pull.State = superloop.Merged
+		r.pull.MergeCommit = loopFixed
+		return "", 0
+	}
+	r.pass(t)
+	if attempts != 1 {
+		t.Fatalf("older policy repair stage kept the approved head out of the lane: attempts=%d output=%s", attempts, r.out)
+	}
+	if len(r.logged(t, loopUnstageVerb)) != 1 || len(r.logged(t, loopClaimEndVerb)) != 1 {
+		t.Fatalf("obsolete repair stage and go not closed durably: %s", r.out)
+	}
+	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
+	r.pass(t)
+	if attempts != 2 || r.pull.State != superloop.Merged {
+		t.Fatalf("approved head not merged after the configuration change: attempts=%d state=%s output=%s", attempts, r.pull.State, r.out)
+	}
+	if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
+		t.Fatalf("recovery woke the worker: %v", wake)
+	}
+	if review := r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 2)); review != nil {
+		t.Fatalf("recovery required another review: %v", review)
+	}
+	if n := len(r.logged(t, loopUnstageVerb)); n != 1 {
+		t.Fatalf("obsolete repair closed %d times", n)
+	}
+}
+
+func TestLoopRestartKeepsGenuineBranchRepair(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	seedOlderRepair(t, r, "branch is behind its base")
+	attempts := 0
+	r.command = func([]string) (string, int) {
+		attempts++
+		return "", 0
+	}
+	r.pass(t)
+	if attempts != 0 || len(r.logged(t, loopUnstageVerb)) != 0 || len(r.logged(t, loopClaimEndVerb)) != 0 {
+		t.Fatalf("genuine branch repair was undone: attempts=%d output=%s", attempts, r.out)
+	}
+}
