@@ -123,6 +123,14 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("execution hook conformance probe failed")
 			}
+			if _, ok := cfg.Harnesses[execution.HarnessOmp]; ok {
+				ompRaw, _ := json.Marshal(map[string]any{executionOmpSession: executionHookProbe, executionOmpCwd: cfg.WorkspaceRoot, executionHookTool: executionOmpBash, executionHookInput: map[string]any{hookTypeCommand: command}})
+				out.Hook.Decision = ""
+				b = h.DecideExecutionOmp(ompRaw, executionHookProbe, cfg.WorkspaceRoot, a.executionProtected(s))
+				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
+					return errors.New("omp execution hook conformance probe failed")
+				}
+			}
 			if _, ok := cfg.Harnesses[execution.HarnessCodex]; ok {
 				raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": probeSession, "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
 				out.Hook.Decision = ""
@@ -170,6 +178,27 @@ func (a *app) executionHook() guard.Hook {
 // or agy hook binds its calls to the thread the runner recorded.
 func executionGuardDecision(h guard.Hook, format string, j execution.Journal, protected []string) func([]byte) []byte {
 	h.ExecutionMCP = j.Request.MCP
+	if format == execution.HarnessOmp {
+		return func(raw []byte) []byte {
+			if j.Request.Harness != execution.HarnessOmp {
+				return []byte(`{"allow":false,"reason":"hook format does not match the execution harness"}`)
+			}
+			b := h.DecideExecutionOmp(raw, j.Thread, j.Handle.Workspace, protected)
+			var answer struct {
+				Output struct {
+					Decision string         `json:"permissionDecision"`
+					Reason   string         `json:"permissionDecisionReason"`
+					Updated  map[string]any `json:"updatedInput"`
+				} `json:"hookSpecificOutput"`
+			}
+			if len(b) > 0 && json.Unmarshal(b, &answer) != nil {
+				return []byte(`{"allow":false,"reason":"invalid guard answer"}`)
+			}
+			// A guard rewrite must never be silently dropped by the extension.
+			out, _ := json.Marshal(map[string]any{"allow": answer.Output.Decision != guardDeny && answer.Output.Updated == nil, "reason": answer.Output.Reason})
+			return out
+		}
+	}
 	deny := guard.ExecutionDeny
 	switch format {
 	case execution.HarnessCodex:
@@ -183,6 +212,8 @@ func executionGuardDecision(h guard.Hook, format string, j execution.Journal, pr
 		wantFormat = execution.HarnessCodex
 	case execution.HarnessAgy:
 		wantFormat = execution.HarnessAgy
+	case execution.HarnessOmp:
+		wantFormat = execution.HarnessOmp
 	}
 	if format != wantFormat {
 		return func([]byte) []byte { return deny("hook format does not match the execution's harness") }
@@ -198,6 +229,15 @@ func executionGuardDecision(h guard.Hook, format string, j execution.Journal, pr
 		}
 	}
 }
+
+const (
+	executionHookProbe  = "probe"
+	executionHookInput  = "tool_input"
+	executionHookTool   = "tool_name"
+	executionOmpBash    = "bash"
+	executionOmpCwd     = "cwd"
+	executionOmpSession = "session_id"
+)
 
 // guardDeny is a hook's deny decision, in both harnesses' formats.
 const guardDeny = "deny"
@@ -332,6 +372,9 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		case execution.HarnessAgy:
 			denial = guard.ExecutionDenyAgy
 		}
+		if guardFormat == execution.HarnessOmp {
+			denial = guard.ExecutionDenyOmp
+		}
 		defer func() {
 			if recover() != nil {
 				_, _ = cmd.OutOrStdout().Write(denial("execution guard failed; denied"))
@@ -341,7 +384,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 			_, err := cmd.OutOrStdout().Write(denial("execution identity, policy or coordinating authority could not be verified"))
 			return err
 		}
-		if guardFormat != "" && guardFormat != execution.HarnessCodex && guardFormat != execution.HarnessAgy {
+		if guardFormat != "" && guardFormat != execution.HarnessCodex && guardFormat != execution.HarnessAgy && guardFormat != execution.HarnessOmp {
 			return deny()
 		}
 		if err := a.load(); err != nil {
@@ -373,7 +416,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		}
 		return err
 	}}
-	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex or agy")
+	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex, agy or omp")
 	run := &cobra.Command{Use: "execution-run <execution>", Hidden: true, Args: cobra.ExactArgs(1), PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return a.load() }, RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := a.hostRuntime()
 		if err != nil {

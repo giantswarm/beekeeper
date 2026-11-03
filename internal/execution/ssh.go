@@ -81,7 +81,7 @@ func (h Host) Validate() error {
 	seen := map[string]bool{}
 	for _, name := range h.Harnesses {
 		if !SupportedHarness(name) || seen[name] {
-			return errors.New("host harnesses must be distinct entries of claude, codex and agy")
+			return errors.New("host harnesses must be distinct entries of claude, codex, agy and omp")
 		}
 		seen[name] = true
 	}
@@ -196,7 +196,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 	if err := t.Host.Validate(); err != nil {
 		return err
 	}
-	if op != "check" {
+	if op != "check" && op != inventoryOperation {
 		if err := ref.Validate(); err != nil {
 			return err
 		}
@@ -236,15 +236,19 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
-		if op == inspectOperation && reply.Code == "not-found" {
+		if (op == inspectOperation || op == syncControlOperation || op == stopOperation) && (reply.Code == "not-found" || (reply.Code == "" && missingJournalError(ref, reply.Error))) {
 			return ErrNotFound
 		}
-		if reply.Code == "unsupported" {
+		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation) && reply.Error == "unknown execution operation") {
 			return ErrUnsupported
 		}
 		return errors.New(reply.Error)
 	}
 	return Decode(reply.Payload, result)
+}
+
+func missingJournalError(ref Ref, msg string) bool {
+	return ref.Execution != "" && strings.Contains(msg, string(ref.Execution)+".json:") && strings.Contains(msg, "no such file or directory")
 }
 
 func (t SSHTransport) Check(ctx context.Context) (Capabilities, error) {
@@ -258,7 +262,7 @@ func (t SSHTransport) Check(ctx context.Context) (Capabilities, error) {
 
 func (t SSHTransport) SyncControl(ctx context.Context, r Ref) (ControlResult, error) {
 	var result ControlResult
-	err := t.Call(ctx, "sync-control", r, nil, &result)
+	err := t.Call(ctx, syncControlOperation, r, nil, &result)
 	return result, err
 }
 func (t SSHTransport) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -322,7 +326,7 @@ func (t SSHTransport) ResolveMessage(ctx context.Context, r Ref, q MessageResolu
 }
 func (t SSHTransport) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	var x Ack
-	err := t.Call(ctx, "stop", r, q, &x)
+	err := t.Call(ctx, stopOperation, r, q, &x)
 	if err == nil && (x.ID != q.ID || x.Stage != Applied) {
 		err = errors.New("remote termination is not acknowledged")
 	}
@@ -344,6 +348,7 @@ type HostUpdate struct {
 	Version      string `json:"version,omitempty"`
 	PolicyDigest string `json:"policyDigest,omitempty"`
 	Busy         int    `json:"busy,omitempty"`
+	Executions   []Ref  `json:"executions,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
 

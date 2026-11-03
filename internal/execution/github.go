@@ -46,6 +46,8 @@ func (s *Server) GitHubEnvironment(j Journal, env []string) ([]string, error) {
 		if name == GitHubGitTool {
 			verb = "github-git"
 		}
+		// These commands disable Cobra flag parsing to preserve client flags.
+		// A preceding --config would therefore leak into their client argv.
 		body := []byte("#!/bin/sh\nBEEKEEPER_CONFIG=" + quote(s.ConfigPath) + " exec " + quote(s.Executable) + " agents " + verb + " -- \"$@\"\n")
 		path := filepath.Join(dir, name)
 		if err := atomicFile(path, body); err != nil {

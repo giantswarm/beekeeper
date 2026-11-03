@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/board"
-
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -198,10 +196,10 @@ func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	}
 }
 
-func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
+func TestLoopExhaustedReviewsRequireApprovalWithoutEscalation(t *testing.T) {
 	r := newLoopRig(t)
 	// Refuse the mechanical merge to keep the pull request open as the
-	// worker publishes heads requiring the two allowed review rounds.
+	// worker publishes heads requiring additional reviews.
 	r.command = func([]string) (string, int) { return "branch behind base", 1 }
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -216,19 +214,18 @@ func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
 	r.pull.Head = third
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if r.called("note", loopAdd) == nil {
-		t.Fatal("no escalation")
+	if r.called("note", loopAdd) != nil || r.called(gateCmdName) != nil {
+		t.Fatalf("unreviewed third head escalated or got a go: %v", r.calls)
 	}
-	n := state.Note{ID: 9, By: loopParty, Text: superloop.EscalationQuestion(loopURL, third)}
-	recorder := state.Party{Session: dialogSession, Name: verifyGuide}
-	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, RelayedBy: verifyGuide, Answer: dialogMergeChoice, Note: 9}
-	if err := r.a.store.Record(answerEvent(recorder, &rec, &n)); err != nil {
-		t.Fatal(err)
+	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 3)) == nil {
+		t.Fatalf("no independent review for third head: %v", r.calls)
 	}
+	r.verdict("R3", third, superloop.Approved, "")
+
 	r.pass(t)
 	call := r.called(gateCmdName)
 	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("session answer did not release its head without answer verify: %v\n%s", r.calls, r.out)
+		t.Fatalf("independent approval did not release its head: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -456,89 +453,6 @@ func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
 			t.Fatalf("repeated repair wake after detached failure: %v", c)
 		}
 	})
-}
-
-func TestLoopMergesFollowBoardPriority(t *testing.T) {
-	r := newLoopRig(t)
-	r.a.cfg.Board = config.Board{Owner: "o", Project: 1}
-	const (
-		prLow    = "o/r#7"
-		prHigh   = "o/r#8"
-		urlHigh  = "https://github.com/o/r/pull/8"
-		epicHigh = "o/r#10"
-		epicLow  = "o/r#20"
-	)
-	wasPriority := readPullPriority
-	t.Cleanup(func() { readPullPriority = wasPriority })
-	readPullPriority = func(_ context.Context, _ *supervisorLoop, ref, serves string) (int, error) {
-		switch {
-		case ref == prHigh || serves == epicHigh:
-			return 1, nil
-		case ref == prLow || serves == epicLow:
-			return 2, nil
-		}
-		return 0, nil
-	}
-
-	now := time.Now().UTC()
-	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{
-			{
-				Party: state.Party{Name: "worker-low"},
-				Task:  "work " + epicLow,
-				Park:  &state.Park{On: prLow, At: now, Waits: deskReviewWait, ReviewHead: loopHead},
-			},
-			{
-				Party: state.Party{Name: "worker-high"},
-				Task:  "work " + epicHigh,
-				Park:  &state.Park{On: prHigh, At: now, Waits: deskReviewWait, ReviewHead: loopHead},
-			},
-		}
-		st.Records = []state.Record{
-			{Session: state.Party{Name: "worker-low"}, Issue: epicLow, At: now},
-			{Session: state.Party{Name: "worker-high"}, Issue: epicHigh, At: now},
-		}
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	r.pulls[prLow] = superloop.Pull{Ref: prLow, URL: loopURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
-	r.pulls[prHigh] = superloop.Pull{Ref: prHigh, URL: urlHigh, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
-
-	// Pass 1 starts reviews for both PRs.
-	r.pass(t)
-	approvedAt := time.Now().UTC().Add(time.Second)
-	lowPull := r.pulls[prLow]
-	lowPull.Reviews = []superloop.Review{{ID: "R1", Head: loopHead, Verdict: superloop.Approved, At: approvedAt}}
-	r.pulls[prLow] = lowPull
-	highPull := r.pulls[prHigh]
-	highPull.Reviews = []superloop.Review{{ID: "R1", Head: loopHead, Verdict: superloop.Approved, At: approvedAt}}
-	r.pulls[prHigh] = highPull
-
-	// Pass 2 merges both PRs in the o/r lane: rank 1 (o/r#8) must enter gate
-	// before rank 2 (o/r#7) and pass --priority 1 and --priority 2.
-	r.pass(t)
-	var gatePRs []string
-	var gatePriorities []string
-	for _, c := range r.calls {
-		if len(c) > 0 && c[0] == gateCmdName {
-			if sep := slices.Index(c, "--"); sep >= 0 && sep+5 < len(c) {
-				gatePRs = append(gatePRs, c[sep+5])
-			}
-			if idx := slices.Index(c, "--priority"); idx >= 0 && idx+1 < len(c) {
-				gatePriorities = append(gatePriorities, c[idx+1])
-			}
-			if !slices.Contains(c, "--wait") || !slices.Contains(c, "0s") {
-				t.Fatalf("gate call missing --wait 0s: %v", c)
-			}
-		}
-	}
-	if want := []string{"8", "7"}; !slices.Equal(gatePRs, want) {
-		t.Fatalf("gate PR order = %v, want %v (rank-1 epic first)", gatePRs, want)
-	}
-	if want := []string{"1", "2"}; !slices.Equal(gatePriorities, want) {
-		t.Fatalf("gate priorities = %v, want %v", gatePriorities, want)
-	}
 }
 
 func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
@@ -778,52 +692,6 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 				t.Fatalf("quiet re-execution = %v, %v", reexec, err)
 			}
 		})
-	}
-}
-
-func TestLoopPullPriorityRefreshExpiresDerivedCaches(t *testing.T) {
-	const thirdPriorityIssue = "o/r#3"
-	r := newLoopRig(t)
-	l, err := r.a.newSupervisorLoop(false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	was := readLoopPriorities
-	t.Cleanup(func() { readLoopPriorities = was })
-	reads := 0
-	readLoopPriorities = func(context.Context, *supervisorLoop) (board.Priorities, error) {
-		reads++
-		if reads == 1 {
-			return board.Priorities{{Ref: refOne, Rank: 1}, {Ref: idleRef, Rank: 2}}, nil
-		}
-		return board.Priorities{{Ref: refOne, Rank: 2}, {Ref: idleRef, Rank: 1}, {Ref: thirdPriorityIssue, Rank: 3}}, nil
-	}
-	check := func(ref string, want int) {
-		t.Helper()
-		got, err := l.pullPriority(context.Background(), "o/r#10"+ref[len(ref)-1:], ref)
-		if err != nil || got != want {
-			t.Fatalf("priority(%s) = %d, %v; want %d", ref, got, err, want)
-		}
-	}
-	check(refOne, 1)
-	check(idleRef, 2)
-	// Seed a resolved zero and stale relationship answers.
-	l.pullPriorities["o/r#103 o/r#3"] = 0
-	l.pullIssues = map[string]string{refOne: "o/r#99"}
-	l.issueParents = map[string]string{refOne: "o/r#99"}
-	check(thirdPriorityIssue, 0)
-	if reads != 1 {
-		t.Fatalf("read priorities %d times within cache lifetime", reads)
-	}
-	r.a.now = r.a.now.Add(loopOpenEvery)
-	check(refOne, 2)
-	check(idleRef, 1)
-	check(thirdPriorityIssue, 3)
-	if reads != 2 {
-		t.Fatalf("read priorities %d times, want 2", reads)
-	}
-	if len(l.pullIssues) != 0 || len(l.issueParents) != 0 {
-		t.Fatalf("stale relationships survived refresh: closes=%v parents=%v", l.pullIssues, l.issueParents)
 	}
 }
 

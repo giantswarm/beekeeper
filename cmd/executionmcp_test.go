@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -129,5 +132,54 @@ func TestExecutionMCPAuthority(t *testing.T) {
 				t.Fatal("revoked or forged execution accepted")
 			}
 		})
+	}
+}
+
+// A rebound execution keeps its coordinator MCP on a resumed turn: the
+// proxy checks the host's policy against the bound policy, not the signed
+// request's original digest.
+func TestExecutionMCPProxyFollowsRebindPolicy(t *testing.T) {
+	const policyRefusal = "execution policy changed before MCP proxy startup"
+	rig := newPublicationRig(t)
+	rig.request.MCP = true
+	rig.a.cfg.Identity.Host = rig.request.Coordinator
+	s, j, _, _ := ownedPublicationHost(t, rig)
+	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Request = j.Request
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	proxy := func() error {
+		command := rig.a.executionMCPCmd()
+		command.SetIn(strings.NewReader(""))
+		command.SetOut(&bytes.Buffer{})
+		command.SetArgs(nil)
+		return command.Execute()
+	}
+	// The rebind needs a launched execution whose owned unit is active.
+	j.Phase = execution.Running
+	raw, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Root, string(j.Handle.Ref.Execution)+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Launcher = &agyTestLauncher{states: map[string]string{j.Handle.Unit: unitActive}}
+	original := j.Request.PolicyDigest
+	s.Version = "mcp-proxy-test-upgraded"
+	prepared, err := s.Prepare(s.Policy())
+	if err != nil || prepared == original {
+		t.Fatal("fixture upgrade did not change the prepared policy", err)
+	}
+	if err := proxy(); err == nil || !strings.Contains(err.Error(), policyRefusal) {
+		t.Fatal("MCP proxy started under a policy the execution is not bound to", err)
+	}
+	if _, err := s.RebindPolicy(context.Background(), j.Handle.Ref, execution.PolicyRebind{From: original, To: prepared}); err != nil {
+		t.Fatal(err)
+	}
+	if err := proxy(); err != nil {
+		t.Fatal("rebound execution's MCP proxy was refused against the request's original digest", err)
 	}
 }

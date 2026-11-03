@@ -163,6 +163,7 @@ func roleOf(st *state.State, s *claude.Session) string {
 
 func (a *app) sessionsCmd() *cobra.Command {
 	var all, full bool
+	var by, day, tz string
 	c := &cobra.Command{
 		Use:   "sessions",
 		Short: "List the running sessions: what each is on, what it runs, what it holds",
@@ -213,9 +214,28 @@ by, at); board next skips the same ones.
 A caller that has read the list before gets only what changed since: a
 session that started, ended or changed what it is on, runs or holds, a
 record or an overlap that came or went (an age, a memory size or a context
-moving is no change), or one "no change" line. --full prints everything.`,
+moving is no change), or one "no change" line. --full prints everything.
+
+--by kind prints, instead of the list, the day's figures per task kind of
+agents.kinds (agents by name regexp; a name several kinds match counts in
+each): its starts recorded that day, its sessions with a request that day,
+their hours (each from its first to its last request of the day) and their
+spend, priced as beekeeper spend prices it from the whole transcripts,
+subagents included. --day names the day (2006-01-02, default today) in
+--tz. A Claude Code transcript names its session; one of no recorded start
+of a kind's agent, or of a harness whose files name no session beekeeper
+recorded (omp, agy, codex), counts in "of no kind".`,
+		Example: `  beekeeper sessions --by kind                 # today, per task kind
+  beekeeper sessions --by kind --day 2026-11-02 --json`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			switch by {
+			case "":
+			case paramKind:
+				return a.sessionsByKind(day, tz)
+			default:
+				return usageErr("--by %q: want kind", by)
+			}
 			v, err := a.collect(true)
 			if err != nil {
 				return err
@@ -270,6 +290,9 @@ moving is no change), or one "no change" line. --full prints everything.`,
 		},
 	}
 	c.Flags().BoolVar(&all, "all", false, "also list the sessions of the last 24 hours that run no CLI")
+	c.Flags().StringVar(&by, "by", "", "kind: the day's starts, hours and spend per task kind (agents.kinds) instead of the list")
+	c.Flags().StringVar(&day, "day", "", "with --by kind: the day (2006-01-02); default today")
+	c.Flags().StringVar(&tz, "tz", "", "with --by kind: the time zone of --day and of the output (IANA); default the machine's")
 	fullFlag(c, &full)
 	c.AddCommand(a.serveCmd(), a.unserveCmd())
 	return c
@@ -598,6 +621,18 @@ func servedBy(st *state.State, p state.Party) state.Party {
 		p.Name = st.Agents[i].Name
 	}
 	return p
+}
+
+// rosterRole is the role st says me holds ("the guide", "the worker"), ""
+// when it says none.
+func rosterRole(st *state.State, me state.Party) string {
+	switch {
+	case guideRole.get(st).Holder != nil && guideRole.get(st).Holder.Is(me):
+		return "the guide"
+	case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }):
+		return workerRole
+	}
+	return ""
 }
 
 // recordText says what a record's session serves.

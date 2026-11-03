@@ -41,6 +41,7 @@ identity:
 # leaseDir: /home/ada/.local/state/beekeeper/leases   # default: <stateDir>/leases, one directory per held lease
 resources: [kind-1, kind-2, staging, production, homelab]   # leasable besides the browser (and the model server)
 labs: {kind-1: kind, kind-2: kind-2}   # a lab lease and the kind cluster it stands for
+leaseRound: 1h             # default round when the lease purpose names no duration
 grantTTL: 30m               # a grant expires this long after its resource is free
 shell: zsh                  # the shell the hook runs a rewritten build in; default: $SHELL, else sh
 maxKindClusters: 2          # kind clusters the machine runs at most; default: one per 40 GiB of RAM, at least one
@@ -235,6 +236,10 @@ agents:                     # the hand-over of registered agents
   model: ""                 # the model of a session beekeeper starts when the start names none; empty: Claude Code's default
   requireModel: false       # true refuses a start with no resolved model (exit 3)
   models: []                # first matching name regexp and optional kind wins; --model overrides
+  kinds: []                 # task kinds by name regexp; every matching kind's caps hold a start (exit 3), capacity says "no start <kind>: <reason>"
+  # kinds:
+  #   - {name: filer, match: '^filer', maxBusy: 1, minInterval: 1h, dailySpend: 20}   # one filer at a time, one an hour; SPEND filer past $20 a day
+  #   - {name: meta, match: '^(filer|scan|closer|brief)', maxBusy: 2}                  # meta workers together
   # models:
   #   - {match: '^scan', kind: audit, model: claude-opus-5-5}
   #   - {match: '^scan', model: claude-sonnet-5-5}
@@ -288,7 +293,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
         - {upTo: 95, ceiling: 2}
     codex:
       ceiling: 2
-      command: [codex, usage]     # default for codex; reads the freshest token_count rate_limits event across rollout transcripts
+      command: [codex, usage]     # default for codex; reads rollout usage and refreshes via app-server without a model turn; falls back to the last reading if the probe fails
       fiveHourMax: 90
       sevenDayMax: 95
       fiveHour:
@@ -315,6 +320,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   #   review: {differentFamily: true}  # the loop supplies the author's model; manual reviews need --author-model
   # choices may add kinds: [worker, review], class: 3, cost: 5,
   # family: claude and reviewReserve: 20 (percent of the weekly window).
+  # A self-hosted choice writes code (kind worker) only when its kinds list it.
   choices:                  # ordered (harness, model) candidates for agents start (no --harness, or --harness auto), beekeeper capacity pick and the supervisor loop; every start alike, none ahead of its provider's even 7-day pace
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}
@@ -409,7 +415,7 @@ board:                      # the project board `beekeeper board next` picks wor
     - {name: In Progress, status: [in progress], subIssues: true}   # an epic offers its open sub-issues
     - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed, the Status set before the last close
     - {name: Up Next, status: [up next]}
-    - {name: bug, status: [backlog], kind: [bug], workScope: true}   # an item without a Kind by its label too (bug, kind/bug); workScope is read and ignored: the priority list orders and gates nothing
+    - {name: bug, status: [backlog], kind: [bug], workScope: true}   # an item without a Kind by its label too (bug, kind/bug); workScope is read and ignored: Status and board order alone decide
     - {name: queue, search: "repo:example-org/tools label:team/platform"}   # open issues, oldest first
     - {name: Backlog, status: [backlog], createdWithin: 2160h, workScope: true}
   epics:                    # the epic gate, whatever the order says (these are the defaults)

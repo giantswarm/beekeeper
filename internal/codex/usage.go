@@ -94,10 +94,12 @@ func HasRollouts(stateDir, sessionsDir string, extraDirs ...string) bool {
 // event is recorded at its timestamp (or the later of the previous line's
 // timestamp and the file's mtime) and fails closed when it is the freshest
 // event.
+var ErrNoUsage = errors.New("no codex usage event")
+
 func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading, error) {
 	files := rolloutFiles(sessionDirs(stateDir, sessionsDir, extraDirs...))
 	if len(files) == 0 {
-		return UsageReading{}, errors.New("no codex rollout files found")
+		return UsageReading{}, fmt.Errorf("no codex rollout files found: %w", ErrNoUsage)
 	}
 	var best *usageCandidate
 	for _, rf := range files {
@@ -111,10 +113,10 @@ func ReadUsage(stateDir, sessionsDir string, extraDirs ...string) (UsageReading,
 		}
 	}
 	if best == nil {
-		return UsageReading{}, errors.New("no codex token_count usage event found")
+		return UsageReading{}, fmt.Errorf("no codex token_count usage event found: %w", ErrNoUsage)
 	}
 	if best.err != nil {
-		return UsageReading{}, best.err
+		return UsageReading{At: best.at}, best.err
 	}
 	return best.reading, nil
 }

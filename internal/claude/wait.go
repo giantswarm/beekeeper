@@ -105,7 +105,7 @@ func LastSubagentWrite(transcript string) time.Time {
 		return last
 	}
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".jsonl" {
+		if filepath.Ext(e.Name()) != transcriptExt {
 			continue
 		}
 		if fi, err := e.Info(); err == nil && fi.ModTime().After(last) {
