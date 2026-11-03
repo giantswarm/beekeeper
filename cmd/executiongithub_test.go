@@ -59,7 +59,7 @@ func writeTestOAuthToken(w http.ResponseWriter, access, refresh string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // synthetic OAuth response in unit test server
 		"access_token":                access,
 		"token_type":                  "bearer",
-		"expires_in":                  28800,
+		testExpiresIn:                 28800,
 		workerGitHubRefreshTokenField: refresh,
 	})
 }
@@ -163,7 +163,7 @@ func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 				"device_code":      "dev-code-1",
 				"user_code":        "ABCD-1234",
 				"verification_uri": "https://github.com/login/device",
-				"expires_in":       900,
+				testExpiresIn:      900,
 				"interval":         1,
 			})
 		case workerGitHubOAuthTokenPath:

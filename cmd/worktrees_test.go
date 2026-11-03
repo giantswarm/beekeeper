@@ -259,7 +259,7 @@ func TestTrimWorktreesWithoutThePullRequestsRemovesNothing(t *testing.T) {
 // gitfile dangling, and returns its path relative to root.
 func orphanT(t *testing.T, root string) string {
 	t.Helper()
-	clone, rel := filepath.Join(t.TempDir(), "gone"), filepath.Join("gone", "fix", "x")
+	clone, rel := filepath.Join(t.TempDir(), "gone"), filepath.Join("gone", testFixWord, "x")
 	gitT(t, filepath.Dir(clone), "init", "-q", "-b", "main", clone)
 	gitT(t, clone, "commit", "-q", "--allow-empty", "-m", "init")
 	gitT(t, clone, "worktree", "add", "-q", "-b", "fix/x", filepath.Join(root, rel), "main")

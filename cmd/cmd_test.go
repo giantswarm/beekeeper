@@ -149,7 +149,7 @@ func TestOOMOwnerSaysCapUnknownWithoutARun(t *testing.T) {
 	if got := oomOwner(kills[0], nil, nil, gone, runs); got != "memcap scope, cap unknown, owner unknown (no run.start)" {
 		t.Errorf("gone: %q", got)
 	}
-	alive := &proc.Table{ByPID: map[int]*proc.Process{287208: {PID: 287208, Args: []string{task, "run", "--", task, "__alloc"}}}}
+	alive := &proc.Table{ByPID: map[int]*proc.Process{287208: {PID: 287208, Args: []string{task, testRunWord, "--", task, "__alloc"}}}}
 	if got := oomOwner(kills[0], nil, nil, alive, runs); got != "memcap scope of `cmd.test run -- cmd.test __alloc`, cap unknown (no run.start)" {
 		t.Errorf("alive: %q", got)
 	}

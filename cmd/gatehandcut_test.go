@@ -35,7 +35,7 @@ func stubBaseRelease(t *testing.T, r github.BaseRelease, err error) *int {
 	asked := new(int)
 	wasPull, wasBranch := pullBase, branchRelease
 	t.Cleanup(func() { pullBase, branchRelease = wasPull, wasBranch })
-	p := github.PullBase{Base: r.Base, Head: "fix", Title: "fix: a thing"}
+	p := github.PullBase{Base: r.Base, Head: testFixWord, Title: "fix: a thing"}
 	if r.Version != "" {
 		p.Head, p.Title = r.Base+"#release#patch", "chore(release): "+r.Version
 	}

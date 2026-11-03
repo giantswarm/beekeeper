@@ -107,7 +107,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 
 	// Only a PR takes the execution branch: gh issue create has no --head.
 	wantWrite = true
-	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, "--title", remoteMCPFixture}, {"pr", workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, "--title", remoteMCPFixture}, {workerGitHubIssueGroup, workerGitHubClose, "1", loopRepoFlag, workerGitHubPrivateRepo}} {
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {"pr", workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {workerGitHubIssueGroup, workerGitHubClose, "1", loopRepoFlag, workerGitHubPrivateRepo}} {
 		c := a.executionGitHubCommands()[0]
 		c.SetOut(&output)
 		c.SetErr(&output)
@@ -151,7 +151,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		{workerGitHubIssueGroup, workerGitHubDelete, workerGitHubIssueNumber, loopRepoFlag, wantRepo},
 		{"pr", workerGitHubClose, workerGitHubIssueNumber, loopRepoFlag, wantRepo},
 		{workerGitHubReleaseGroup, workerGitHubDelete, "v1.0.0", loopRepoFlag, wantRepo},
-		{workerGitHubWorkflowGroup, "run", remoteMCPFixture, loopRepoFlag, wantRepo},
+		{workerGitHubWorkflowGroup, testRunWord, remoteMCPFixture, loopRepoFlag, wantRepo},
 		{workerGitHubRunGroup, "rerun", workerGitHubIssueNumber, loopRepoFlag, wantRepo},
 		{workerGitHubRepoGroup, workerGitHubDelete, wantRepo, "--yes"},
 		{workerGitHubIssueGroup, workerGitHubClose, workerGitHubIssueNumber, "-Routside/project"},
@@ -182,7 +182,6 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRepo, wantWrite = workerGitHubPrivateRepo, false
-	calls = 3
 
 	// The same dispatch path invokes git on the host, with the owned branch
 	// and token in its environment, while local commands never ask for one.

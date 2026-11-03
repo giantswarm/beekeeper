@@ -112,7 +112,7 @@ func TestWorkerGitHubWriteRepositoryResolvesEveryTarget(t *testing.T) {
 }
 
 func TestWorkerGitHubWriteClassification(t *testing.T) {
-	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate}, {workerGitHubIssueGroup, workerGitHubClose, "1"}, {workerGitHubIssueGroup, "reopen", "1"}, {workerGitHubIssueGroup, workerGitHubEdit, "1"}, {workerGitHubPRGroup, workerGitHubComment, "1"}} {
+	for _, args := range [][]string{{workerGitHubPRGroup, "review", "1"}, {workerGitHubIssueGroup, workerGitHubCreate}, {workerGitHubIssueGroup, workerGitHubClose, "1"}, {workerGitHubIssueGroup, "reopen", "1"}, {workerGitHubIssueGroup, workerGitHubEdit, "1"}, {workerGitHubPRGroup, workerGitHubComment, "1"}} {
 		if write, err := GitHubWrite(args); err != nil || !write {
 			t.Errorf("%v: write %v err %v", args, write, err)
 		}
@@ -125,7 +125,7 @@ func TestWorkerGitHubWriteClassification(t *testing.T) {
 	for _, args := range [][]string{
 		{workerGitHubIssueGroup}, {workerGitHubIssueGroup, workerGitHubRepoFlag, workerGitHubOutsideRepo, workerGitHubClose, "1"},
 		{workerGitHubIssueGroup, workerGitHubDelete, "1"}, {workerGitHubIssueGroup, "transfer", "1", workerGitHubOutsideRepo}, {workerGitHubIssueGroup, "new"},
-		{workerGitHubPRGroup, workerGitHubClose, "1"}, {workerGitHubPRGroup, "review", "1"}, {workerGitHubPRGroup, "update-branch", "1"},
+		{workerGitHubPRGroup, workerGitHubClose, "1"}, {workerGitHubPRGroup, "update-branch", "1"},
 		{workerGitHubRepoGroup, workerGitHubDelete, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, workerGitHubEdit, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, "deploy-key", "add"},
 		{workerGitHubRunGroup, "cancel", "1"}, {workerGitHubRunGroup, "rerun", "1"}, {workerGitHubRunGroup, workerGitHubDelete, "1"},
 		{workerGitHubWorkflowGroup, workerGitHubRunGroup, mcpFixtureName}, {workerGitHubWorkflowGroup, "enable", mcpFixtureName}, {workerGitHubWorkflowGroup, "disable", mcpFixtureName},

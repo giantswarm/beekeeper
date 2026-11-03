@@ -178,7 +178,7 @@ func TestCheckFaults(t *testing.T) {
 	var ran []string
 	run := func(_ context.Context, command string, _ time.Duration) error {
 		name, verb, _ := strings.Cut(command, " ")
-		if verb == "fix" {
+		if verb == testFixWord {
 			ran = append(ran, name)
 			if name != stuck {
 				broken[name] = false

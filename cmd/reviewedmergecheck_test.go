@@ -585,3 +585,11 @@ func TestMergeResultGitEnvironmentFailureIsNotAConflict(t *testing.T) {
 		t.Fatalf("checker hook failure blamed on branch: %d: %s", code, reason)
 	}
 }
+
+// Literals the package's tests share.
+const (
+	testFixWord    = "fix"
+	testRunWord    = "run"
+	testAgyVersion = "1.4.7"
+	testExpiresIn  = "expires_in"
+)
