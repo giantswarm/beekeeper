@@ -1460,7 +1460,8 @@ In the guide's session the hook refuses the calls that do work: `Edit`, `Write`,
 (at a command position or inside a `-c` string), a GitHub connector tool that merges, reviews or
 pushes, and a browser action (`claude-in-chrome`) other than opening, reading or looking at a page
 (navigate, read, find, a screenshot or scroll). The refusal says to hand the work to the supervisor
-in one line. Questions, notes, `SendMessage`, reads and `beekeeper` pass; other sessions are not
+in one line: the supervisor loop is no session a `SendMessage` reaches, so the line is an issue in
+the work's owning repository, put on the board (`beekeeper board move`). Questions, notes, `SendMessage`, reads and `beekeeper` pass; other sessions are not
 affected.
 
 The guide's own `AskUserQuestion` gets the checks of `note add --for <person>`: each question asks,

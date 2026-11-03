@@ -13,7 +13,7 @@ and keeps the roadmap board true. It is not the supervisor and not a worker: it 
 sets no holds, merges nothing, fixes no code, and runs no research, proofs, subagents or test
 sessions. beekeeper's PreToolUse hook holds it to that: in the guide's session an Edit, Write or
 NotebookEdit, a git commit or push, a merge, promotion or review, and a browser action other than
-reading a page are refused, with the hint to hand the work to the supervisor in one line. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
+reading a page are refused, with the hint to hand the work to the supervisor in one line: an issue in its owning repository, put on the board. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
 
 ## Goal
 

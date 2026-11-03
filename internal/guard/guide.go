@@ -68,8 +68,9 @@ func (h Hook) guideRefusal(ev event) string {
 		return ""
 	}
 	return "Refused: the guide asks and relays, it never works itself, and " + what + " is work. " +
-		"Hand it to the supervisor in one line (SendMessage to the session `beekeeper supervisor status` names): " +
-		"what to do, on which issue or PR (its full URL), and the person's words that asked for it. Then carry on guiding."
+		"Hand it to the supervisor in one line: the supervisor is the supervisor loop, no session a message reaches, " +
+		"so file it as an issue in its owning repository and put it on the board (`beekeeper board move <owner/repo#n> <status>`), " +
+		"saying what to do, on which issue or PR (its full URL), and the person's words that asked for it. Then carry on guiding."
 }
 
 // work names the work ev does, "" for a call that asks, relays or reads.
