@@ -91,3 +91,54 @@ func TestPriorityPersonTakesTheConfiguredPerson(t *testing.T) {
 		t.Errorf("persons = %s", got)
 	}
 }
+
+// Position edits stay available to workers, but cannot mutate Priority numbers.
+func TestBoardRankSplitLogsCallerAndWritesOnlyPosition(t *testing.T) {
+	defer func(gh func(context.Context, ...string) ([]byte, error)) { boardGH = gh }(boardGH)
+	a, store := priorityApp(t, "worker-script")
+	writes := 0
+	boardGH = func(_ context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		switch {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog"}]}]}}}}}`), nil
+		case strings.Contains(q, "projectItems"):
+			return []byte(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"I1","project":{"id":"P"}}]}}}}}`), nil
+		case strings.Contains(q, "updateProjectV2ItemPosition"):
+			writes++
+			return []byte(`{"data":{"updateProjectV2ItemPosition":{"clientMutationId":null}}}`), nil
+		default:
+			t.Fatalf("unexpected GitHub call, including any Priority write: %s", q)
+			return nil, nil
+		}
+	}
+	c := a.boardRankCmd()
+	c.SilenceUsage, c.SilenceErrors = true, true
+	c.SetArgs([]string{refOne, "--top"})
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Events(0, func(e state.Event) bool { return e.Verb == "board.rank" })
+	if err != nil || writes != 1 || len(events) != 1 || events[0].By.Name != "worker-script" {
+		t.Fatalf("writes=%d events=%+v error=%v", writes, events, err)
+	}
+}
+
+func TestBoardRankSplitRefusesAnonymousWrites(t *testing.T) {
+	for _, key := range []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "BEEKEEPER_OMP_AGENT", "BEEKEEPER_AGY_AGENT", "BEEKEEPER_CODEX_AGENT"} {
+		t.Setenv(key, "")
+	}
+	defer func(gh func(context.Context, ...string) ([]byte, error)) { boardGH = gh }(boardGH)
+	boardGH = func(context.Context, ...string) ([]byte, error) {
+		t.Fatal("anonymous rank reached GitHub")
+		return nil, nil
+	}
+	a, _ := priorityApp(t, "")
+	c := a.boardRankCmd()
+	c.SilenceUsage, c.SilenceErrors = true, true
+	c.SetArgs([]string{refOne, "--top"})
+	err := c.Execute()
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "identified caller") {
+		t.Fatalf("rank = exit %d, %v", Code(err), err)
+	}
+}
