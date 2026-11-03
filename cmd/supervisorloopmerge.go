@@ -119,11 +119,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
-	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head}
-	if act.Priority > 0 {
-		gateArgs = append(gateArgs, "--priority", strconv.Itoa(act.Priority))
-	}
-	gateArgs = append(gateArgs, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))
+	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.

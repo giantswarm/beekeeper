@@ -31,7 +31,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   makes this session the guide or takes a relayed role; `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
   the person (`GUIDE WAITING`), each unfiled finding (`GUIDE PROBLEM`, the full report
-  to file in its owning repository, put on the board in `Backlog` with `beekeeper board move <issue> backlog --intake` and rank from `beekeeper priority` with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
+  to file in its owning repository, put on the board in `Backlog` with `beekeeper board move <issue> backlog --intake` and place on the board with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
   each answered or closed note, and the guide's own relay (`GUIDE
   RELAY DUE` at `guide.relayAt`); `GUIDE WATCH STALE` or `GUIDE SAVE REFUSED` means re-arm the
   `Monitor` with the command the line names. `beekeeper guide next` serves the one decision to ask now, due
@@ -84,11 +84,13 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
   with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
-- **Priorities and goes are the board's.** A priority the person states is `beekeeper priority set
-  <epic> <rank> --as <person>` (`board rank` orders items within a step), their go on an epic is
-  `beekeeper board move` to In Progress; no note carries either. An item held on the person's
-  answer is held by the decision itself (`note add --holds`): the answer, or its default, releases
-  it. A question names its
+- **Priorities and goes are the board's.** Priority is determined by issue Status and order on the
+  board only, never a separate number. A priority the person states is a board move
+  (`beekeeper board move <item> <status>`) or a board reorder
+  (`beekeeper board rank <item> --top | --before <item> | --after <item>`, or `beekeeper board order`);
+  their go on an epic is `beekeeper board move` to In Progress; no note carries either. An item held
+  on the person's answer is held by the decision itself (`note add --holds`): the answer, or its
+  default, releases it. A question names its
   thread (`note add --ref <owner/repo#n>`), and the state the guide leaves the next guide is the
   hand-over.
 - **New ideas and input go where they get worked.** Input on running work goes to its session in the

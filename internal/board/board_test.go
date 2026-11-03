@@ -809,7 +809,95 @@ const (
 	engineIssue7   = "org/engine#7"
 	addIssue7      = "add I7 to P"
 	issue7OffBoard = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`
+	teamX          = "X 🐝"
+	ref1           = "o/r#1"
+	ref2           = "o/r#2"
+	ref3           = "o/r#3"
+	ref4           = "o/r#4"
 )
+
+func TestStatusThenBoardOrderDecide(t *testing.T) {
+	// Every step has workScope: it is read and ignored, Status and board
+	// order alone decide.
+	o, err := ResolveOrder([]config.BoardStep{
+		{Name: inProgress, Status: []string{inProgress}, WorkScope: true},
+		{Name: upNext, Status: []string{upNext}, WorkScope: true},
+		{Name: backlogStep, Status: []string{backlog}, WorkScope: true},
+	}, statuses, []string{epic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := func(n int, status string) Item {
+		return Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: status, Created: days(5), Updated: days(1), Parent: "o/r#99"}
+	}
+	// The board's items in its position order, the statuses mixed.
+	snap := &Snapshot{Order: o, Statuses: statuses, Items: []Item{
+		it(30, backlog), it(20, upNext), it(11, inProgress), it(31, backlog), it(21, upNext), it(10, inProgress),
+	}}
+	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", "o/r#30", "o/r#31"}
+	cands := Rank(snap, config.Board{People: []string{"me"}}, now)
+	var got []string
+	for _, c := range cands {
+		if c.Skip != "" {
+			t.Errorf("%s skipped: %s", c.Ref, c.Skip)
+		}
+		got = append(got, c.Ref)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("order %v, want %v (Status, then the board's order)", got, want)
+	}
+}
+
+func TestSnapshotParentReadsItemsAndSubIssues(t *testing.T) {
+	snap := &Snapshot{Items: []Item{
+		{Ref: ref1, Parent: issue9, SubIssues: []Item{{Ref: ref2}, {Ref: ref3, Parent: ref1}}},
+	}}
+	for ref, want := range map[string]string{ref1: issue9, "O/R#2": ref1, ref3: ref1, ref4: ""} {
+		if got := snap.Parent(ref); got != want {
+			t.Errorf("Parent(%s) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+func TestRankAnchorPlacesFollowUpIssueAfterOriginOnBoard(t *testing.T) {
+	ctx := context.Background()
+	c := &Client{Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	c.GH = func(_ context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		switch {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(metaJSON), nil
+		case strings.Contains(q, "projectItems"):
+			if slices.Contains(args, "n=1") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"EPIC1","projectItems":{"nodes":[{"id":"I1","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			if slices.Contains(args, "n=12") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB12","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[{"id":"IS12","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			if slices.Contains(args, "n=13") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB13","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[]}}}}}`), nil
+			}
+			return []byte(`{"data":{"repository":{"issue":{"id":"NEW","body":"","projectItems":{"nodes":[]}}}}}`), nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", q)
+	}
+
+	// 1. An issue filed from o/r#12 (on the board) anchors right after o/r#12.
+	if got, err := c.RankAnchor(ctx, "org/engine#51", "o/r#12"); err != nil || got != "o/r#12" {
+		t.Fatalf("RankAnchor(filed from o/r#12) = %q, %v; want o/r#12", got, err)
+	}
+
+	// 2. An issue filed from o/r#13 (a sub-issue not on the board under epic o/r#1)
+	// anchors right after its parent epic o/r#1 on the board.
+	if got, err := c.RankAnchor(ctx, "org/engine#51", "o/r#13"); err != nil || got != ref1 {
+		t.Fatalf("RankAnchor(filed from sub-issue o/r#13) = %q, %v; want %s", got, err, ref1)
+	}
+
+	// 3. A general issue with no origin on the board returns "".
+	if got, err := c.RankAnchor(ctx, "org/engine#52", ""); err != nil || got != "" {
+		t.Fatalf("RankAnchor(general issue) = %q, %v; want empty", got, err)
+	}
+}
 
 func TestIntakeAddsMissingIssueUnlessWorkedOnAnotherBoard(t *testing.T) {
 	ctx := context.Background()

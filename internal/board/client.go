@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,7 +27,7 @@ type Client struct {
 }
 
 // field is a field of the board: a single-select one with its options, or
-// a plain one with its data type (NUMBER for the Priority).
+// a plain one with its data type.
 type field struct {
 	ID       string
 	DataType string
@@ -360,45 +361,9 @@ func filterOf(who string, order []config.BoardStep, extra ...string) string {
 	return strings.Join(parts, " ")
 }
 
-// rankedOffTeam adds to snap.Items the epics of the priority list its read
-// of the team's items missed: ranked epics that carry the team label while
-// their Team field says another team, read by the label (one request per
-// 100 items) and kept only when ranked.
-func (c *Client) rankedOffTeam(ctx context.Context, snap *Snapshot, order []config.BoardStep, gate Gate) error {
-	l := c.TeamLabel()
-	if c.Board.Team == "" || l == "" {
-		return nil
-	}
-	have := map[string]bool{}
-	for _, it := range snap.Items {
-		have[strings.ToLower(it.Ref)] = true
-	}
-	missing := map[string]bool{}
-	for _, e := range snap.Priorities {
-		if !have[strings.ToLower(e.Ref)] {
-			missing[strings.ToLower(e.Ref)] = true
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	items, err := c.items(ctx, filterOf(fmt.Sprintf("label:%q", l), order, gate.statuses()...))
-	if err != nil {
-		return err
-	}
-	for _, it := range items {
-		if missing[strings.ToLower(it.Ref)] {
-			snap.Items = append(snap.Items, it)
-		}
-	}
-	return nil
-}
-
 // Read reads the board items the order can offer and the epic gate holds,
 // the open sub-issues of the items a SubIssues step matches, the search
-// steps' issues, the priority list (Priorities, kept as snap.Priorities)
-// with the ranked epics a Team field moved off the team but its label keeps
-// (rankedOffTeam), and the plans of the epics the gate watches: one request
+// steps' issues, and the plans of the epics the gate watches: one request
 // for the fields, one per 100 items, one per extrasBudget sub-issues for the
 // sub-issues and searches, one per plansBatch epics.
 func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
@@ -419,12 +384,6 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	}
 	snap := &Snapshot{Order: order, Statuses: m.Fields[StatusField].names(), Search: map[int][]Item{}, Gate: gate}
 	if snap.Items, err = c.items(ctx, filter(c.Board, order, gate.statuses()...)); err != nil {
-		return nil, err
-	}
-	if snap.Priorities, err = c.priorities(ctx, m); err != nil {
-		return nil, err
-	}
-	if err := c.rankedOffTeam(ctx, snap, order, gate); err != nil {
 		return nil, err
 	}
 	if err := c.extras(ctx, snap, m.ID, now); err != nil {
@@ -1313,4 +1272,135 @@ func (r *Refusal) Error() string { return r.Reason }
 func quote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+var issueRefInText = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/([0-9]+)|([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)`)
+
+func refsInText(text string) []string {
+	var out []string
+	for _, m := range issueRefInText.FindAllStringSubmatch(text, -1) {
+		repo, num := m[1], m[2]
+		if repo == "" {
+			repo, num = m[3], m[4]
+		}
+		ref := repo + "#" + num
+		if !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, ref) }) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func (c *Client) lookupOrigin(ctx context.Context, m *meta, ref string, probeCrossOwner bool) (onBoard bool, parent, body string, err error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return false, "", "", err
+	}
+	norm := fmt.Sprintf("%s/%s#%d", owner, repo, n)
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
+	var r struct {
+		Repository struct {
+			Issue *struct {
+				ID     string `json:"id"`
+				Body   string `json:"body"`
+				Parent *struct {
+					Number     int `json:"number"`
+					Repository struct {
+						NameWithOwner string `json:"nameWithOwner"`
+					} `json:"repository"`
+				} `json:"parent"`
+				ProjectItems struct {
+					Nodes []projectItem `json:"nodes"`
+				} `json:"projectItems"`
+			} `json:"issue"`
+		} `json:"repository"`
+	}
+	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id body parent{number repository{nameWithOwner}} projectItems(first:50){nodes{
+`+itemFields+`}}}}}`,
+		vars{"o": owner, "r": repo, "n": n})
+	p, ok := partialOf(err)
+	if !ok {
+		return false, "", "", err
+	}
+	is := r.Repository.Issue
+	if is == nil {
+		return false, "", "", &Refusal{norm + " is no issue" + p.reason()}
+	}
+	if is.Parent != nil && is.Parent.Number != 0 && is.Parent.Repository.NameWithOwner != "" {
+		parent = fmt.Sprintf("%s#%d", is.Parent.Repository.NameWithOwner, is.Parent.Number)
+	}
+	onBoard = slices.ContainsFunc(is.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID })
+	if !onBoard && probeCrossOwner && !strings.EqualFold(owner, c.Board.Owner) && is.ID != "" {
+		var omv Moved
+		omv.Ref = norm
+		if it, cerr := c.ensure(ctx, m, &omv, is.ID, nil); cerr == nil {
+			if !omv.Added {
+				onBoard = true
+			} else {
+				_ = c.deleteItem(ctx, m.ID, it.ID)
+			}
+		}
+	}
+	return onBoard, parent, is.Body, nil
+}
+
+// RankAnchor returns the issue on the board that ref should be placed right
+// after (Rank with Place{After: anchor}), from ref's origin (its parent,
+// from, the item or pull request it was filed from, or an issue ref's body
+// cites); "" when none is on the board.
+func (c *Client) RankAnchor(ctx context.Context, ref, from string) (string, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return "", err
+	}
+	normRef := fmt.Sprintf("%s/%s#%d", owner, repo, n)
+	m, err := c.meta(github.ActingOn(ctx, owner+"/"+repo))
+	if err != nil {
+		return "", err
+	}
+	_, parent, body, _ := c.lookupOrigin(ctx, m, normRef, false)
+	var origins []string
+	addOrigin := func(r string) {
+		oo, or, on, err := Ref(r)
+		if err != nil {
+			return
+		}
+		cand := fmt.Sprintf("%s/%s#%d", oo, or, on)
+		if !strings.EqualFold(cand, normRef) && !slices.ContainsFunc(origins, func(s string) bool { return strings.EqualFold(s, cand) }) {
+			origins = append(origins, cand)
+		}
+	}
+	addOrigin(parent)
+	normFrom := ""
+	if rs := refsInText(from); len(rs) > 0 {
+		from = rs[0]
+	}
+	if oo, or, on, err := Ref(from); err == nil {
+		normFrom = fmt.Sprintf("%s/%s#%d", oo, or, on)
+		addOrigin(normFrom)
+	}
+	for _, r := range refsInText(body) {
+		addOrigin(r)
+	}
+	for i := 0; i < len(origins); i++ {
+		orig := origins[i]
+		onBoard, origParent, _, err := c.lookupOrigin(ctx, m, orig, true)
+		if err != nil {
+			if normFrom != "" && strings.EqualFold(orig, normFrom) {
+				if closes, cerr := c.Closes(ctx, []string{normFrom}); cerr == nil {
+					for _, cl := range closes[strings.ToLower(normFrom)] {
+						addOrigin(cl)
+					}
+				}
+			}
+			continue
+		}
+		if onBoard {
+			return orig, nil
+		}
+		if len(origins) < maxDepth {
+			addOrigin(origParent)
+		}
+	}
+	return "", nil
 }

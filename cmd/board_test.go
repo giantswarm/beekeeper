@@ -964,3 +964,71 @@ func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
 		t.Error("--skip o/r names no issue, accepted")
 	}
 }
+
+func TestBoardRankLogsCallerAndWritesPosition(t *testing.T) {
+	for _, subcmd := range []string{"rank", "order"} {
+		t.Run(subcmd, func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.cfg.Board.Owner, a.cfg.Board.Project = "o", 1
+			a.as = "Agent one"
+
+			var sawPosition bool
+			was := boardGH
+			boardGH = func(_ context.Context, args ...string) ([]byte, error) {
+				q := args[len(args)-1]
+				for _, a := range args {
+					if strings.HasPrefix(a, "query=") {
+						q = a
+					}
+				}
+				switch {
+				case strings.Contains(q, "fields(first:50)"):
+					return []byte(`{"data":{"repositoryOwner":{"projectV2":{"id":"P1","fields":{"nodes":[{"id":"FS","name":"Status","options":[{"id":"O1","name":"In Progress"}]}]}}}}}`), nil
+				case strings.Contains(q, "projectItems"):
+					return []byte(`{"data":{"repository":{"issue":{"id":"I1","title":"One","state":"OPEN","projectItems":{"nodes":[{"id":"IT1","project":{"id":"P1"}}]}}}}} `), nil
+				case strings.Contains(q, "updateProjectV2ItemPosition"):
+					sawPosition = true
+					return []byte(`{"data":{"updateProjectV2ItemPosition":{"items":{"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"o/r"}}}]}}}}`), nil
+				}
+				t.Fatalf("unexpected gh call: %v", args)
+				return nil, nil
+			}
+			t.Cleanup(func() { boardGH = was })
+
+			var out strings.Builder
+			a.out = &out
+			c := a.boardCmd()
+			c.SetOut(&out)
+			c.SetErr(&out)
+			c.SetArgs([]string{subcmd, refOne, "--top"})
+			if err := c.Execute(); err != nil {
+				t.Fatalf("board %s failed: %v", subcmd, err)
+			}
+			if !sawPosition {
+				t.Fatal("expected updateProjectV2ItemPosition mutation")
+			}
+			evs, err := a.store.Events(5, nil)
+			if err != nil || len(evs) != 1 || evs[0].Verb != "board.rank" || evs[0].By.Name != "Agent one" {
+				t.Fatalf("expected board.rank event by Agent one, got %+v (err=%v)", evs, err)
+			}
+		})
+	}
+}
+
+func TestBoardRankRefusesAnonymousWrites(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.Board.Owner, a.cfg.Board.Project = "o", 1
+	a.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+
+	var out strings.Builder
+	a.out = &out
+	c := a.boardCmd()
+	c.SetOut(&out)
+	c.SetErr(&out)
+	c.SetArgs([]string{"rank", refOne, "--top"})
+	err := c.Execute()
+	if err == nil || Code(err) != ExitRefused {
+		t.Fatalf("expected exit 3 (refused), got %v", err)
+	}
+}
