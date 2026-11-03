@@ -19,7 +19,7 @@ const (
 
 func TestExecutionOmpCoordinatorAdmission(t *testing.T) {
 	a, brief, requests := sshCodexTestApp(t, map[string]string{omp.Harness: "18.14.2"})
-	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{executionOmpFixture: {Kind: config.KindSelfHosted, Ceiling: 1}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "fixture/model", Provider: executionOmpFixture}}}
+	a.cfg.Capacity = config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{executionOmpFixture: {Kind: config.KindSelfHosted, Ceiling: 1}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "fixture/model", Provider: executionOmpFixture, Kinds: []string{workerRole}}}}
 	h := a.cfg.Agents.Hosts[sshTestSelector]
 	h.Harnesses = []string{omp.Harness}
 	a.cfg.Agents.Hosts[sshTestSelector] = h
