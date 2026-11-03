@@ -263,3 +263,40 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		t.Fatalf("an unread pull request recorded %q", got)
 	}
 }
+
+// A managed SSH worker leaves its own park on the coordinator: resume ends
+// it, wakes nobody and says what settled the wait; a second is refused.
+func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
+	a, _ := executionTestApp(t)
+	apply := func(op string, data any) (string, error) {
+		t.Helper()
+		var line string
+		err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			var evs []state.Event
+			var err error
+			line, evs, err = a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{Operation: op, Data: mustExecutionJSON(t, data)})
+			return evs, err
+		})
+		return line, err
+	}
+	if _, err := apply(execution.ControlResume, struct{}{}); err == nil || !strings.Contains(err.Error(), "is not parked") {
+		t.Fatalf("resume unparked: %v", err)
+	}
+	if _, err := apply(execution.ControlPark, executionPark{Waits: "the supervisor's word"}); err != nil {
+		t.Fatal(err)
+	}
+	line, err := apply(execution.ControlResume, struct{}{})
+	if err != nil || !strings.Contains(line, "remote-worker: your park ended, nobody is woken. Your park on the supervisor's word is over") {
+		t.Fatalf("resume: %q %v", line, err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Park != nil {
+		t.Fatalf("park after resume %+v", st.Agents[0].Park)
+	}
+	if _, err := apply(execution.ControlResume, struct{}{}); err == nil || !strings.Contains(err.Error(), "is not parked") {
+		t.Fatalf("second resume: %v", err)
+	}
+}

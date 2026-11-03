@@ -141,8 +141,8 @@ func TestTranscriptHarnessFormats(t *testing.T) {
 		{secretLinkCodex, map[string]any{hookEventKey: PreToolUseEvent, sessionKey: transcriptWorker, toolNameKey: "exec_command", toolInputKey: map[string]any{"cmd": "jq 'keys' " + p}}},
 		{secretLinkCodex, map[string]any{hookEventKey: PreToolUseEvent, sessionKey: transcriptWorker, toolNameKey: "write_stdin", toolInputKey: map[string]any{"chars": "cat " + p + "\n"}}},
 		{secretLinkCodex, map[string]any{hookEventKey: PreToolUseEvent, sessionKey: transcriptWorker, toolNameKey: "view_image", toolInputKey: map[string]any{pathKey: p}}},
-		{agyHarnessName, map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": "cat " + p}}}},
-		{agyHarnessName, map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "view_file", "args": map[string]any{transcriptAbsolutePath: p}}}},
+		{agyHarness, map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": "cat " + p}}}},
+		{agyHarness, map[string]any{transcriptConversationKey: transcriptWorker, "toolCall": map[string]any{"name": "view_file", "args": map[string]any{transcriptAbsolutePath: p}}}},
 	}
 	for _, tc := range cases {
 		raw, err := json.Marshal(tc.payload)

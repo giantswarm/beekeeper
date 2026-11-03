@@ -74,6 +74,8 @@ func TestWorkerOperationalAskIsRefusedNamingWhereItWent(t *testing.T) {
 		{opDefect, "Please track the guard panic as a defect?"},
 		{opDefect, "Who should fix the red main of " + prURL + "?"},
 		{opDefect, "File an issue for the crash in the wake hook?"},
+		{"publication", "Can the coordinator fix SSH publication for " + prURL + " so the lint fix can be pushed?"},
+		{"publication", "How should commit 937e7b9 reach " + prURL + " while the coordinator refuses its publication?"},
 	} {
 		t.Run(c.question, func(t *testing.T) {
 			a := workerNoteApp(t, openThread, nil)

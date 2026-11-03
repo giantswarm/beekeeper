@@ -70,13 +70,18 @@ var opClasses = []opClass{
 		match: regexp.MustCompile(`(?i)\b(start|stop|restart|wake|kill|archive|spawn|end|resume|relay)\b[^.?!]{0,40}\b(sessions?|workers?|agents?|supervisor|guide)\b`),
 		where: "the supervisor loop starts, wakes, relays and stops sessions; the worker parks or reports through beekeeper agents park and agents idle",
 	},
+	{
+		name:  "publication",
+		match: regexp.MustCompile(`(?i)\bagents publish\b|--sync-base\b|\bbundle verify\b|\b(ssh|coordinator|remote|execution|workspace)\b[^.?!]{0,50}\b(publish(es|ed|ing)?|publication|push(es|ed|ing)?|bundles?)\b|\b(publish(es|ed|ing)?|publication|push(es|ed|ing)?)\b[^.?!]{0,50}\b(coordinator|ssh|execution|workspace|branch|commits?|pull requests?|prs?)\b`),
+		where: "SSH execution publication and base synchronization run through the coordinator (beekeeper agents publish); a publication failure is a problem for the supervisor (beekeeper agents problem), never a person's decision",
+	},
 }
 
 // reserved marks a decision that needs the person's own authority, whatever
 // operation it concerns: spending or cost, a purchase, contract or licence,
 // consent, an account or credential, or something made public or touching
 // production. Such a question is never an operational ask.
-var reserved = regexp.MustCompile(`(?i)\b(spend(s|ing)?|spent|costs?|costly|pay(s|ing)?|paid|prices?|pricing|budgets?|purchase[sd]?|buy(ing)?|invoices?|billing|eur|usd|euros?|dollars?|per (month|year)|monthly|yearly|annual|licen[cs]es?|contracts?|consent(s|ing)?|legal|accounts?|credentials?|secrets?|publish(es|ing)?|public(ly)?|production|customers?)\b|[$€£]\s?\d`)
+var reserved = regexp.MustCompile(`(?i)\b(spend(s|ing)?|spent|costs?|costly|pay(s|ing)?|paid|prices?|pricing|budgets?|purchase[sd]?|buy(ing)?|invoices?|billing|eur|usd|euros?|dollars?|per (month|year)|monthly|yearly|annual|licen[cs]es?|contracts?|consent(s|ing)?|legal|accounts?|credentials?|secrets?|publish(es|ing)?\s+(the\s+)?(release|packages?|charts?|images?|artifacts?)|public(ly)?|production|customers?)\b|[$€£]\s?\d`)
 
 // operational is the class of d's question when it is an operational ask
 // (opClasses), and whether it is one: its question, or for a class of
