@@ -8,8 +8,10 @@ import (
 )
 
 // The guide asks its person and relays the answers, and carries out at once
-// a direct request from the person its own tools allow; work outside its
-// role it files as an issue on the board, never hands back. For the guide
+// a direct request from the person its own tools allow, stuck operational
+// state included (a hold, a pinned release, a parked session), which it
+// sets, narrows or lifts itself; work outside its role it files as an issue
+// on the board, never hands back. For the guide
 // role's holder the hook refuses the tool calls that do work (an edit, a
 // commit or push, a merge, a review, a click in the browser) and checks its
 // questions as `note add` checks a note for the person.
@@ -74,7 +76,8 @@ func (h Hook) guideRefusal(ev event) string {
 		"saying what to do, on which issue or PR (its full URL), and the person's words that asked for it; " +
 		"the supervisor loop schedules it from the board, no session a message reaches. " +
 		"Tell the person in one line that it is filed, with its URL; never ask them to do it themselves. " +
-		"Whatever else they asked that the guide's own tools allow (a command, a board move, an issue), run at once, then carry on guiding."
+		"Whatever else they asked that the guide's own tools allow (a command, a board move, an issue), run at once, then carry on guiding. " +
+		"Stuck operational state (a hold, a pinned release, a parked session) is not such work: the guide is its escalation point and sets, narrows or lifts it itself with `beekeeper` to carry out what the person decided, then reports."
 }
 
 // work names the work ev does, "" for a call that asks, relays or reads.
