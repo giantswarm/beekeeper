@@ -49,7 +49,8 @@ Exit codes: 0 valid, 1 invalid or unreadable, 2 usage.`,
 			return err
 		},
 	})
-	c.AddCommand(&cobra.Command{
+	var spec overrideSpec
+	set := &cobra.Command{
 		Use:   "set <key> <value> [<key> <value>]…",
 		Short: "Set keys of the configuration file together, validated before the write",
 		Long: `set writes every key with its value into the configuration file in one
@@ -71,6 +72,22 @@ A reference whose source is still missing (a store:// age identity without
 secret.store) is written with a warning; the commands that follow it fail
 until the source is set, every other command works.
 
+--until makes the change a temporary override with an end: a time (18:00,
+2h) or an issue or pull request (owner/repo#n or its URL) whose closing
+ends it, and --reason says why. The state records each key's value before
+(or that the file had none); config overrides and beekeeper handover list
+the overrides in effect. Once the end arrives, the watch (or the supervisor
+loop) says so and restores the values before, each step in the event log
+(config.override.end, config.restored). A key that changed since the
+override set it is not restored: the watch asks guide.person in a note,
+answered with config restore <id> --force or config keep <id>. A key
+another override in effect set is taken over, with that one's value before.
+
+  beekeeper config set --until owner/repo#42 \
+    --reason "budget floor off for the merge batch" -- github.floor -1
+
+A value that starts with "-" follows "--", the flags before it.
+
 Exit codes: 0 written, 2 usage, 3 refused (the file is unchanged).`,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args)%2 != 0 {
@@ -89,6 +106,12 @@ Exit codes: 0 written, 2 usage, 3 refused (the file is unchanged).`,
 				settings = append(settings, config.Setting{Key: args[i], Value: args[i+1]})
 				keys = append(keys, args[i])
 			}
+			if spec.until != "" || spec.reason != "" {
+				if spec.until == "" {
+					return usageErr("--reason needs --until: a change without an end is a plain set")
+				}
+				return a.setOverride(path, settings, spec)
+			}
 			c, err := config.Set(path, settings)
 			switch {
 			case errors.Is(err, config.ErrInvalid):
@@ -100,7 +123,11 @@ Exit codes: 0 written, 2 usage, 3 refused (the file is unchanged).`,
 			_, err = fmt.Fprintf(a.out, "set %s in %s\n", strings.Join(keys, ", "), path)
 			return err
 		},
-	})
+	}
+	set.Flags().StringVar(&spec.until, "until", "", "make it an override that ends at a time or duration, or once an issue or pull request (owner/repo#n) closes")
+	set.Flags().StringVar(&spec.reason, "reason", "", "why the override is in effect (with --until)")
+	c.AddCommand(set)
+	c.AddCommand(a.overridesCmds()...)
 	return c
 }
 

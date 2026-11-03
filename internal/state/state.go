@@ -623,6 +623,50 @@ func (t Timer) Auto() bool {
 // Conditional reports whether the timer waits on a condition.
 func (t Timer) Conditional() bool { return t.When != "" || t.Probe != "" }
 
+// Override is a temporary change of the configuration file (config set
+// --until): the keys it set, each one's value before, why and its end, a
+// time or an issue or pull request whose closing ends it. The watch and the
+// supervisor loop restore the values before once its end arrives, or ask the
+// person when a restore needs a decision.
+type Override struct {
+	ID int `json:"id"`
+	// Path is the configuration file the override changed.
+	Path   string        `json:"path"`
+	Keys   []OverrideKey `json:"keys"`
+	Reason string        `json:"reason"`
+	// Until is the time the override ends; Ref (owner/repo#n) the issue or
+	// pull request whose closing ends it. One of the two is set.
+	Until time.Time `json:"until,omitzero"`
+	Ref   string    `json:"ref,omitempty"`
+	By    Party     `json:"by"`
+	At    time.Time `json:"at"`
+	// Checked is when Ref was last found open or unreadable, Found what
+	// that check found.
+	Checked time.Time `json:"checked,omitzero"`
+	Found   string    `json:"found,omitempty"`
+	// Ended is when its end arrived and a restore took it, Ending why (the
+	// time came, Ref closed): another tick leaves it to that restore.
+	Ended  time.Time `json:"ended,omitzero"`
+	Ending string    `json:"ending,omitempty"`
+	// Decision is why the restore waits on the person (a key changed since
+	// the override), Note the decision note asking them.
+	Decision string `json:"decision,omitempty"`
+	Note     int    `json:"note,omitempty"`
+
+	rest rest
+}
+
+// OverrideKey is one key an override set: the value it set and the value
+// before, YAML, or Absent when the file had no such key.
+type OverrideKey struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Previous string `json:"previous,omitempty"`
+	Absent   bool   `json:"absent,omitempty"`
+
+	rest rest
+}
+
 // Looked reports whether someone has to look at the timer by now: a plain
 // timer whose time has come. An auto timer is the watch's to act on.
 func (t Timer) Looked(now time.Time) bool { return !t.Auto() && !t.Due.After(now) }
@@ -1053,6 +1097,10 @@ type State struct {
 	NextNote  int     `json:"nextNote,omitempty"`
 	Timers    []Timer `json:"timers,omitempty"`
 	NextTimer int     `json:"nextTimer,omitempty"`
+	// Overrides are the temporary configuration changes in effect (config
+	// set --until).
+	Overrides    []Override `json:"overrides,omitempty"`
+	NextOverride int        `json:"nextOverride,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
 	// Claims are the records this desk published on GitHub as claims

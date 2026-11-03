@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `config set --until <time|owner/repo#n> --reason "<why>"` makes a change a temporary override: the state records each key's value before, `config overrides` and `handover` list the overrides in effect with their reasons and ends, and once the time comes or the issue or pull request closes the watch (or the supervisor loop) restores the values before, logging `config.override.end` and `config.restored`. A key changed since the override is not restored: guide.person gets a decision note, answered by `config restore <id> --force` or `config keep <id>` ([https://github.com/giantswarm/beekeeper/issues/2141](https://github.com/giantswarm/beekeeper/issues/2141)).
+
 - SSH execution hosts pin the worker toolchain under `agents.execution.tools` (`go` and `gh`, each an absolute executable and its version). `agents hosts check`, and every start, refuses a host whose `gh` or, for a served repository whose source checkout has a `go.mod`, whose Go is missing, differs from its pin or is older than that `go.mod`'s `toolchain` (or `go`) line, and reports the provisioned versions under `tools`. The runner puts the pinned tools' directories on the worker's PATH right after the component's ([https://github.com/giantswarm/beekeeper/issues/2077](https://github.com/giantswarm/beekeeper/issues/2077)).
 
 - `note show <id>` prints one note in full with its audience, status and retained answer; `--json` returns one complete object.
