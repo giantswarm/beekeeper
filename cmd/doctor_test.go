@@ -492,7 +492,11 @@ func TestCheckAgyHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := root.WriteFile(filepath.Join(".gemini", "config", "hooks.json"), []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
