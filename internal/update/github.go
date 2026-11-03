@@ -31,6 +31,7 @@ type githubSource struct {
 	prereleases       bool
 	current           string
 	commit            string
+	skipped           bool
 }
 
 type releaseCandidate struct {
@@ -89,6 +90,43 @@ func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
 	}, nil
 }
 
+// tagSource lists exactly one release, the tag's, signed binary or not: the
+// validator refuses one without its bundle.
+type tagSource struct {
+	selfupdate.Source // retain the upstream asset downloader
+	api               *github.Client
+	tag               string
+}
+
+// newGitHubTagSource is the source of release tag alone, authenticated as
+// newGitHubSource is.
+func newGitHubTagSource(tag string) (selfupdate.Source, error) {
+	s, err := newGitHubSource(true)
+	if err != nil {
+		return nil, err
+	}
+	g := s.(*githubSource)
+	return &tagSource{Source: g.Source, api: g.api, tag: tag}, nil
+}
+
+func (s *tagSource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	owner, repo, err := repository.GetSlug()
+	if err != nil {
+		return nil, err
+	}
+	release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, s.tag)
+	if response != nil && response.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if release.GetDraft() || release.GetTagName() != s.tag {
+		return nil, nil
+	}
+	return []selfupdate.SourceRelease{selfupdate.NewGitHubRelease(release)}, nil
+}
+
 func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
 	owner, repo, err := repository.GetSlug()
 	if err != nil {
@@ -116,10 +154,17 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 	set := s.collectCandidates(refs)
 	runningSHA := s.runningSHA(set.tagSHA)
 	staleSHAs := make(map[string]bool)
-	for i, candidate := range set.candidates {
-		if i == maxReleaseCandidates {
+	skip := optionsFrom(ctx).Skip
+	checked := 0
+	for _, candidate := range set.candidates {
+		if skip != nil && (skip(candidate.tag) || skip("v"+strings.TrimPrefix(candidate.tag, "v"))) {
+			s.skipped = true
+			continue
+		}
+		if checked == maxReleaseCandidates {
 			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags; refusing an incomplete lookup", maxReleaseCandidates)
 		}
+		checked++
 		stale, err := s.isStaleCandidate(ctx, owner, repo, candidate, set, runningSHA, staleSHAs)
 		if err != nil {
 			return nil, err

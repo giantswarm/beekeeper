@@ -38,8 +38,8 @@ func TestLoopOwnsWatchUntilShutdown(t *testing.T) {
 	}
 	stop := r.a.startLoopWatch(context.Background())
 	w := <-started
-	if w.standby || !w.loopOwned || w.cfg.Watch.BudgetEvery != w.cfg.Watch.Interval {
-		t.Error("watch does not own alert and per-poll budget observations")
+	if w.standby || !w.loopOwned || w.cfg.Watch.BudgetEvery.Duration != max(30*time.Second, w.cfg.Watch.Interval.Duration) {
+		t.Error("watch does not own alert and bounded budget observations")
 	}
 	stop()
 	select {

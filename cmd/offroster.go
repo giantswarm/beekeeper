@@ -55,8 +55,13 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 		}
 	}
 	for _, p := range st.Parks {
-		if p.By.Session == q || p.By.HostSession == q {
+		if strings.EqualFold(p.By.Name, q) || p.By.Session == q || p.By.HostSession == q {
 			return p.By, true
+		}
+	}
+	for _, r := range st.Records {
+		if r.Ended.IsZero() && (strings.EqualFold(r.Session.Name, q) || r.Session.Session == q || r.Session.HostSession == q) {
+			return r.Session, true
 		}
 	}
 	if strings.HasPrefix(q, claudeHarness{}.HostPrefix()) {
@@ -73,9 +78,32 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 
 // wakeID is the id a wake of p resolves p by: its CLI session id, else its
 // desktop or harness id.
-func wakeID(p state.Party) string { return cmp.Or(p.Session, p.HostSession) }
+func wakeID(p state.Party) string {
+	// A harness's conversation id can also be a UUID. Off the roster that
+	// UUID would be mistaken for a Claude session; its host id names the
+	// channel that actually owns the conversation.
+	if _, _, ok := harnessForHost(p.HostSession); ok {
+		return p.HostSession
+	}
+	return cmp.Or(p.Session, p.HostSession)
+}
 
 // onRoster says whether p is a roster agent.
 func onRoster(st *state.State, p state.Party) bool {
 	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+}
+
+// callerAgent is the index of the roster agent the caller me is, -1 when
+// none: the entry of its session, else, under --as, the entry registered by
+// that name, whatever session registered it. That is how a session of
+// another harness or a wrapper script acts as its registered agent without
+// a harness's session variables. A managed SSH execution's entry is never
+// reached by name: its worker reports through its coordinator.
+func (a *app) callerAgent(st *state.State, me state.Party) int {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }); i >= 0 || a.as == "" {
+		return i
+	}
+	return slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Execution == nil && strings.EqualFold(ag.Name, me.Name) && state.Party{Name: me.Name, Person: ag.Person, Host: ag.Host}.Is(me)
+	})
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -40,6 +41,7 @@ var ErrOutdated = errors.New("a newer beekeeper release is available")
 // running version.
 var (
 	newSource      = newGitHubSource
+	newTagSource   = newGitHubTagSource
 	newValidator   = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
@@ -56,6 +58,60 @@ type Result struct {
 	// Path is the file the update replaced, symbolic links not resolved.
 	Path    string `json:"path,omitempty"`
 	Updated bool   `json:"updated"`
+}
+
+// Canary checks a verified candidate binary at path for version before it
+// replaces the installed executable. Returning an error keeps the current
+// executable in place.
+type Canary func(ctx context.Context, path, version string) error
+
+// Options configures a Run call through its context.
+type Options struct {
+	Canary Canary
+	Skip   func(tag string) bool
+}
+
+type optionsKey struct{}
+
+// WithOptions attaches opts to ctx for Run.
+func WithOptions(ctx context.Context, opts Options) context.Context {
+	return context.WithValue(ctx, optionsKey{}, opts)
+}
+
+// OptionsFrom returns the Options attached to ctx.
+func OptionsFrom(ctx context.Context) Options {
+	opts, _ := ctx.Value(optionsKey{}).(Options)
+	return opts
+}
+
+func optionsFrom(ctx context.Context) Options {
+	return OptionsFrom(ctx)
+}
+
+type skipSource struct {
+	selfupdate.Source
+	skip    func(string) bool
+	skipped bool
+}
+
+func (s *skipSource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	releases, err := s.Source.ListReleases(ctx, repository)
+	if g, ok := s.Source.(*githubSource); ok && g.skipped {
+		s.skipped = true
+	}
+	if err != nil || s.skip == nil {
+		return releases, err
+	}
+	kept := make([]selfupdate.SourceRelease, 0, len(releases))
+	for _, r := range releases {
+		tag := r.GetTagName()
+		if s.skip(tag) || s.skip("v"+strings.TrimPrefix(tag, "v")) {
+			s.skipped = true
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept, nil
 }
 
 // Run looks up the latest release and, unless checkOnly, installs its binary
@@ -80,7 +136,9 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 	if err != nil {
 		return res, fmt.Errorf("creating release source: %w", err)
 	}
-	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: source, Validator: newValidator(), Prerelease: prerelease(res.Current)})
+	opts := optionsFrom(ctx)
+	filtered := &skipSource{Source: source, skip: opts.Skip}
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: filtered, Validator: newValidator(), Prerelease: prerelease(res.Current)})
 	if err != nil {
 		return res, err
 	}
@@ -97,6 +155,10 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 			return res, fmt.Errorf("GitHub release lookup rate limit exceeded; resets at %s: %w", limited.Rate.Reset.UTC().Format(time.RFC3339), err)
 		}
 		return res, fmt.Errorf("looking up the latest release of %s (is this machine online?): %w", Repository, err)
+	case !found && filtered.skipped:
+		res.Latest = res.Current
+		_, _ = fmt.Fprintf(w, "beekeeper %s is the latest release.\n", res.Current)
+		return res, nil
 	case !found:
 		return res, fmt.Errorf("GitHub answered no release of %s that carries a binary for %s/%s", Repository, runtime.GOOS, runtime.GOARCH)
 	}
@@ -114,7 +176,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
-	if err := selfupdatecosign.Install(ctx, up, rel, res.Path); err != nil {
+	if err := installRelease(ctx, up, rel, res.Path); err != nil {
 		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
 	}
 	res.Updated = true
@@ -152,4 +214,52 @@ func prerelease(current string) bool {
 	}
 	v, err := semver.NewVersion(current)
 	return err == nil && v.Prerelease() != ""
+}
+
+// InstallVersion installs exactly the release version (a tag, "v0.3.0")
+// over the running executable once its bundle verifies, as Run installs the
+// latest: an execution host follows its coordinator's release, never a newer
+// one. The verified download is staged beside the destination and renamed
+// over it atomically, with no backup or ownership-dependent hard link.
+func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, error) {
+	res := Result{Current: currentVersion(), Latest: version}
+	want, err := semver.StrictNewVersion(strings.TrimPrefix(version, "v"))
+	if err != nil || !strings.HasPrefix(version, "v") {
+		return res, fmt.Errorf("%q is no release version (v<major>.<minor>.<patch>)", version)
+	}
+	if _, err := semver.NewVersion(res.Current); err != nil {
+		return res, fmt.Errorf("cannot update a development build (version %s) to a release: install %s by hand", res.Current, version)
+	}
+	if version == res.Current {
+		return res, nil
+	}
+	source, err := newTagSource(version)
+	if err != nil {
+		return res, fmt.Errorf("creating release source: %w", err)
+	}
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: source, Validator: newValidator(), Prerelease: want.Prerelease() != ""})
+	if err != nil {
+		return res, err
+	}
+	lookup, cancel := context.WithTimeout(ctx, lookupTimeout)
+	rel, found, err := up.DetectVersion(lookup, selfupdate.ParseSlug(Repository), version)
+	cancel()
+	switch {
+	case errors.Is(err, selfupdate.ErrValidationAssetNotFound):
+		return res, fmt.Errorf("release %s of %s has no signature bundle for this platform's binary; refusing to install it: %w", version, Repository, err)
+	case err != nil:
+		return res, fmt.Errorf("looking up release %s of %s: %w", version, Repository, err)
+	case !found || "v"+rel.Version() != version:
+		return res, fmt.Errorf("GitHub answered no release %s of %s that carries a binary for %s/%s", version, Repository, runtime.GOOS, runtime.GOARCH)
+	}
+	res.Published, res.URL, res.Newer = rel.PublishedAt, rel.URL, newer(version, res.Current)
+	if res.Path, err = executable(); err != nil {
+		return res, fmt.Errorf("locating the running executable: %w", err)
+	}
+	if err := installRelease(ctx, up, rel, res.Path); err != nil {
+		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
+	}
+	res.Updated = true
+	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s from %s to %s.\n", res.Path, res.Current, version)
+	return res, nil
 }

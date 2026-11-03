@@ -23,7 +23,7 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
 - **Builds**, tests, lints: `beekeeper run` (the hook does it). Exit 75: no slot, rerun in
   background, never a loop. Exit 137: cap, bound parallelism. No heavy work under
   `beekeeper watch` load or memory pressure.
-- **Browser:** headless uses CLI Claude in Chrome tools; desktop uses `beekeeper browse "<steps>"`.
-  Never wait on site approval. Record own App grants first (`beekeeper app allow`); refusals
-  are barriers, never the person's.
+- **Browser:** headless: CLI Claude in Chrome tools; desktop: `beekeeper browse "<steps>"`.
+  Never wait on site approval. Own App grants: `beekeeper app allow` first; refusals are
+  barriers. Sign-in: `muster auth login --no-browser`, the printed URL in a browse step.
 - **Subagents:** only if the brief allows, each told force-push and secret rules.

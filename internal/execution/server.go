@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 type Journal struct {
@@ -171,6 +172,13 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if len(unavailable) == 0 {
 		unavailable = nil
 	}
+	tools, missing, err := s.probeTools(ctx)
+	if err != nil {
+		return c, err
+	}
+	if len(missing) > 0 {
+		return c, toolsError(missing)
+	}
 	if s.Resources == nil {
 		return c, errors.New("execution host resource observation is unavailable")
 	}
@@ -181,7 +189,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Resources: resources}, nil
+	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -304,9 +312,47 @@ func (s *Server) authorize(ctx context.Context, r StartRequest) error {
 }
 
 func (s *Server) room(ctx context.Context, own Ref) error {
-	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	busy, err := s.busy(ctx, own)
 	if err != nil {
 		return err
+	}
+	if busy >= s.Config.MaxBusy {
+		return errors.New("execution host maxBusy reached")
+	}
+	return nil
+}
+
+// Quiesce holds the host's admission, so that no execution starts until
+// release, and counts the executions that still run. An update replaces the
+// binary and the policy every running execution is pinned to: it goes ahead
+// only at zero, before release.
+func (s *Server) Quiesce(ctx context.Context) (busy int, release func(), err error) {
+	if err := ownedDirectory(s.Root); err != nil {
+		return 0, nil, err
+	}
+	admission := flock.New(filepath.Join(s.Root, "admission.lock"))
+	wait, cancel := context.WithTimeout(ctx, quiesceWait)
+	defer cancel()
+	ok, err := admission.TryLockContext(wait, 20*time.Millisecond)
+	if err != nil || !ok {
+		return 0, nil, errors.New("host admission is busy")
+	}
+	release = func() { _ = admission.Unlock() }
+	if busy, err = s.busy(ctx, Ref{}); err != nil {
+		release()
+		return 0, nil, err
+	}
+	return busy, release, nil
+}
+
+// quiesceWait bounds Quiesce's wait for a start that holds the admission.
+var quiesceWait = 30 * time.Second
+
+// busy counts the executions other than own that run or may run.
+func (s *Server) busy(ctx context.Context, own Ref) (int, error) {
+	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	if err != nil {
+		return 0, err
 	}
 	busy := 0
 	for _, p := range paths {
@@ -315,7 +361,7 @@ func (s *Server) room(ctx context.Context, own Ref) error {
 		}
 		var j Journal
 		if err := readJSON(p, &j); err != nil {
-			return errors.New("cannot establish execution host capacity")
+			return 0, errors.New("cannot establish execution host capacity")
 		}
 		if j.Handle.Ref == own || j.StopAcknowledged {
 			continue
@@ -323,7 +369,7 @@ func (s *Server) room(ctx context.Context, own Ref) error {
 		if j.Phase == Exited || j.Phase == Failed {
 			o, err := s.Inspect(ctx, j.Handle.Ref)
 			if err != nil {
-				return errors.New("cannot establish owned unit state")
+				return 0, errors.New("cannot establish owned unit state")
 			}
 			if o.ProcessState == Exited || o.ProcessState == Failed {
 				continue
@@ -331,10 +377,7 @@ func (s *Server) room(ctx context.Context, own Ref) error {
 		}
 		busy++
 	}
-	if busy >= s.Config.MaxBusy {
-		return errors.New("execution host maxBusy reached")
-	}
-	return nil
+	return busy, nil
 }
 
 func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
@@ -371,6 +414,7 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 			}); err != nil {
 				return Observation{}, err
 			}
+			s.cleanWorkspace(r)
 			o.StopAcknowledged, o.ProcessState = true, Exited
 			return o, nil
 		}
@@ -405,6 +449,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
+		s.cleanWorkspace(r)
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -430,7 +475,29 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
+	s.cleanWorkspace(r)
 	return Ack{ID: q.ID, Stage: Applied}, nil
+}
+
+func (s *Server) cleanWorkspace(r Ref) {
+	if s.Config.WorkspaceRoot != "" {
+		if root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot); err == nil && root == filepath.Clean(s.Config.WorkspaceRoot) {
+			parent := filepath.Join(root, string(r.Execution))
+			if within(root, parent) {
+				_ = worktrees.RemoveAll(parent)
+			}
+		}
+	}
+	if s.Root != "" {
+		srcDir := filepath.Dir(s.sourcePath(r))
+		if within(s.Root, srcDir) {
+			_ = worktrees.RemoveAll(srcDir)
+		}
+		mcpHome := s.agyMCPHomeDir(r)
+		if within(s.Root, mcpHome) {
+			_ = worktrees.RemoveAll(mcpHome)
+		}
+	}
 }
 
 func (s *Server) Logs(_ context.Context, r Ref, q LogRequest) (LogPage, error) {

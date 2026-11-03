@@ -70,7 +70,7 @@ func TestExecutionStartsCodexOnAHostThatOffersIt(t *testing.T) {
 	}
 	// The one codex subscription now counts the remote worker: its single
 	// slot is busy, while claude's own slot stays free.
-	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now)
+	counts := countProviderAgents(st, nil, a.cfg.Capacity, a.now, a.cfg)
 	if len(counts[codex.Harness].Busy) != 1 || len(counts[claudeComm].Busy) != 0 {
 		t.Fatalf("remote codex is not counted against its subscription: %+v", counts)
 	}
@@ -106,12 +106,12 @@ func TestExecutionAutoPicksRemoteCodex(t *testing.T) {
 
 func TestExecutionHarnessAcceptsCodexOnly(t *testing.T) {
 	o := executionStartOptions{Host: sshTestSelector}
-	for _, base := range []Harness{claudeHarness{}, codexHarness{}} {
+	for _, base := range []Harness{claudeHarness{}, codexHarness{}, agyHarness{}} {
 		if _, err := executionHarness(base, o, "brief.md"); err != nil {
 			t.Fatalf("%q: %v", base.Name(), err)
 		}
 	}
-	for _, base := range []Harness{ompHarness{}, agyHarness{}} {
+	for _, base := range []Harness{ompHarness{}} {
 		if _, err := executionHarness(base, o, "brief.md"); err == nil {
 			t.Fatalf("%q has no remote adapter yet", base.Name())
 		}
@@ -185,8 +185,8 @@ func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 	if v := a.executionCapacity(&state.State{}, nil, k, host, resources, a.executionReadings(context.Background(), k), nil, false, nil, forWorker, harnessAuto, ""); v.Room == 0 || v.Choice == nil || v.Choice.Harness != codex.Harness {
 		t.Fatalf("a codex host does not offer the codex choice: room %d, %+v, %v", v.Room, v.Choice, v.Blocks)
 	}
-	// The check's verdict narrows the catalogue: a codex the host failed is no choice.
-	if got := hostUnoffered(execution.Capabilities{Harnesses: map[string]string{claudeComm: codexTestClaudeVer}}); len(got) != 1 || got[0] != codex.Harness {
+	// The check's verdict narrows the catalogue: a codex or agy the host failed is no choice.
+	if got := hostUnoffered(execution.Capabilities{Harnesses: map[string]string{claudeComm: codexTestClaudeVer}}); len(got) != 2 || got[0] != codex.Harness || got[1] != harnessAgy {
 		t.Fatalf("unoffered harnesses: %v", got)
 	}
 

@@ -39,12 +39,27 @@ import (
 
 func (a *app) watchCmd() *cobra.Command {
 	var once, notifyDesktop, standby bool
+	var tick time.Duration
 	c := &cobra.Command{
 		Use:   watchName,
 		Short: "Stay silent until something needs a look, then say it in one line",
 		Long: `Poll the machine every watch.interval (30s) and print one line per event,
 silent otherwise: made to be the source of a Monitor, so the supervisor
 wakes only when something needs a look.
+
+Routine lines (doctor chores, session changes, load/pressure recovery and
+other teams' notify alerts) are retained as individual durable events and
+printed together every watch.batchInterval (5m). Each BATCH is one physical
+stdout line with a JSON array of timestamped items, so a line-oriented
+Monitor receives one event. Empty ticks print nothing. --tick <duration>
+overrides that interval; a negative watch.batchInterval disables batching.
+--once prints immediately. Action lines, including unknown event types,
+OOM kills, memory thresholds, pages, due timers, reports, runaways, leases
+and grants, never wait for the batch. Parks needing a person's answer and
+resumes needing action remain immediate: they have no recorded provenance
+proving that they merely echo an earlier supervisor command.
+Buffered items are already in beekeeper log under their watch.* verb,
+including if the watch exits or restarts before its next tick.
 
 Threshold breaches (RAM, swap, desktop scope, load, CPU and memory
 pressure, tmpfs, disk, the GitHub budget) and unreadable sources are one line when they
@@ -276,6 +291,9 @@ it reads a watch on the host, and stopping it stops the watch.`,
 			if os.Getenv(restartedEnv) == "" {
 				ownScope("watch", brokeredWatchCap)
 			}
+			if cmd.Flags().Changed("tick") && tick <= 0 {
+				return fmt.Errorf("--tick must be positive")
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			var restart *restartWatch
@@ -285,6 +303,9 @@ it reads a watch on the host, and stopping it stops the watch.`,
 			for {
 				w := a.newWatcher(standby, !once)
 				w.restart = restart
+				if tick > 0 {
+					w.batchEvery = tick
+				}
 				if standby && a.explicitConfig() == "" {
 					// The standby restarts the machine's own loop service
 					// while the loop is down; a scratch configuration's
@@ -305,6 +326,7 @@ it reads a watch on the host, and stopping it stops the watch.`,
 	c.Flags().BoolVar(&once, "once", false, "poll once and exit")
 	c.Flags().BoolVar(&notifyDesktop, "notify", false, "send the events that need a person to the desktop too (notify.kinds)")
 	c.Flags().BoolVar(&standby, "standby", false, "while a supervisor runs, leave its events to its watch and never read the alerts")
+	c.Flags().DurationVar(&tick, "tick", 0, "Batch routine events at this interval; action events remain immediate")
 	return c
 }
 
@@ -321,6 +343,9 @@ func (a *app) runWatcher(ctx context.Context, w *watcher, once, notifyDesktop bo
 
 type watcher struct {
 	*app
+	// batchEvery is immutable once the loops start; batch is guarded by mu.
+	batchEvery time.Duration
+	batch      []string
 	// loopOwned leaves event actions to the deterministic supervisor.
 	loopOwned bool
 	mu        sync.Mutex
@@ -520,9 +545,11 @@ type watcher struct {
 	answersSince time.Time
 	// replaced says whether a process's binary was replaced, and its path;
 	// nil is platform.ProcessBinary. versionOf is the version a binary file
-	// reports; nil runs it.
-	replaced  func(pid int) (string, bool)
-	versionOf func(ctx context.Context, file string) string
+	// reports; nil runs it. gateOf runs budget --gate on an installed binary.
+	replaced    func(pid int) (string, bool)
+	versionOf   func(ctx context.Context, file string) string
+	gateOf      func(ctx context.Context, file string) error
+	gateChecked map[string]bool
 }
 
 // unavailable reports whether err is a platform part this build does not
@@ -578,6 +605,11 @@ func (w *watcher) clk() watchClock {
 }
 
 func (w *watcher) run(ctx context.Context, once bool) error {
+	if once {
+		w.batchEvery = 0
+	} else if w.batchEvery == 0 {
+		w.batchEvery = w.cfg.Watch.BatchInterval.Duration
+	}
 	w.lastPoll = w.clk().Now().Add(-w.cfg.Watch.Interval.Duration)
 	s, err := plat.Machine.DesktopScope()
 	if s != nil {
@@ -614,6 +646,9 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	defer cancel(nil)
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	if w.batchEvery > 0 {
+		wg.Go(func() { w.batchLoop(ctx) })
+	}
 	wg.Go(func() {
 		fire, stop := w.clk().Timer(interval)
 		defer stop()
@@ -643,6 +678,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.loop(ctx, interval, false, func(ctx context.Context) {
 		w.poll(ctx)
 		if req := w.restartDue(); req != nil {
+			w.checkInstalledGate(ctx, req.Binary)
 			w.restartFor = req
 			cancel(errRestart)
 		}
@@ -1096,20 +1132,13 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 	w.check("modelserver", len(bs) > 0, "MODEL SERVER: %s", modelServerLine(bs, unloaded))
 }
 
-// emitNow prints an event that is never folded away.
+// emitNow records every event immediately, then batches only known routine lines.
 func (w *watcher) emitNow(key string, format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	if w.store != nil {
 		_ = w.store.Record(event(watchParty, "watch."+key, "%s", line))
 	}
-	w.emitLine(time.Now().Format("15:04:05") + " " + line)
-}
-
-// emitLine prints one complete line.
-func (w *watcher) emitLine(line string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	_, _ = fmt.Fprintln(w.out, line)
+	w.outputEvent(line)
 }
 
 // sample reads the machine's numbers (memory, swap, load, pressure, disk,
@@ -1323,7 +1352,7 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 // pollSessions does what the process table and the sessions in it tell.
 func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Table) {
 	w.table = t
-	sessions := claude.Discover(w.cfg, t, w.now)
+	sessions := discover(w.cfg, t, w.now)
 	owners := make(map[int]string, len(sessions))
 	for _, s := range sessions {
 		owners[s.PID] = s.Name
@@ -1571,20 +1600,32 @@ func (w *watcher) exposures() {
 // budget probes the GitHub budget and says when it is under the floor and
 // when GitHub refuses GraphQL calls, with the callers drawing on it.
 func (w *watcher) budget(ctx context.Context, now time.Time) {
-	b, err := w.probeBudget(ctx)
+	b, err := readBudget(w.app, ctx)
 	if ctx.Err() == nil {
-		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
+		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
 		w.publishBudget(held)
 	}
 	switch {
 	case err != nil && ctx.Err() != nil:
 	case err != nil:
-		w.fail("budget-error", "GitHub budget unknown: %v", err)
+		if l := w.fail("budget-error", "GitHub budget unknown: %v", err); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget unknown", l+"\nbeekeeper budget")
+		}
 	default:
 		w.clear("budget-error")
 		if l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
 			b.Remaining, b.Limit, b.Reset.Local().Format("15:04")); l != "" {
 			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
+		}
+		graphqlLow := b.GraphQL != nil && !b.GraphQL.Blocks(now) && b.GraphQL.Remaining < w.cfg.GitHub.Floor
+		var gqlRemaining, gqlLimit int
+		var gqlReset string
+		if b.GraphQL != nil {
+			gqlRemaining, gqlLimit, gqlReset = b.GraphQL.Remaining, b.GraphQL.Limit, b.GraphQL.Reset.Local().Format("15:04")
+		}
+		if l := w.check("graphql-budget", graphqlLow, "GITHUB GRAPHQL BUDGET %d of %d: hold GitHub work until %s",
+			gqlRemaining, gqlLimit, gqlReset); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub GraphQL budget under the floor", l+"\nbeekeeper budget")
 		}
 		refused := b.GraphQL.Blocks(now)
 		var callers string
@@ -1909,13 +1950,32 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
-	over, kept := w.overtakenNow(ctx, st)
+	var over, kept []overtake
+	if len(overtakeRefs(st)) > 0 {
+		readRefs := func() error {
+			over, kept = w.overtakenNow(ctx, st)
+			return nil
+		}
+		if w.loopOwned {
+			if err := w.loopGitHub(ctx, "watch", readRefs); err != nil {
+				over, kept = nil, nil
+			}
+		} else {
+			_ = readRefs()
+		}
+	}
 	parks := w.settledParks(ctx, st)
 	if !w.chores {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st))
+	githubHeld := boardBudgetLow(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st)
+	var found map[int]checkResult
+	if w.loopOwned {
+		found = w.loopTimerChecks(ctx, st.Timers, w.now, githubHeld)
+	} else {
+		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
+	}
 	var settles func(state.Timer) bool // nil: a running watch settles every timer
 	if !w.chores {
 		w.wouldFireTimers(st, found)
@@ -2065,6 +2125,10 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 			continue // parked on purpose: a person or its timer brings it back
 		}
 		k := cmp.Or(ag.Session, ag.Name)
+		last, gone := goneAgent(w.cfg, st, sessions, ag, w.cfg.Agents.StaleAfter.Duration, w.now)
+		if gone {
+			k += "/gone"
+		}
 		stopped[k] = true
 		if !w.stopped[k] {
 			hint := resumeHint(ag)
@@ -2077,6 +2141,9 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 				hint = fmt.Sprintf("parked on a person: %s; their answer resumes it", on)
 			case resumedForTask(ag):
 				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", clock(w.now, ag.ResumedWait), ag.ResumedOn, hint)
+			}
+			if gone {
+				hint = goneActivityPrefix + last.UTC().Format(time.RFC3339) + "; doctor retires it; " + hint
 			}
 			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, hint))
 		}

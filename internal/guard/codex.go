@@ -143,6 +143,10 @@ func extractCodexShellCommand(toolInput map[string]any) (cmd, key string, ok boo
 // object, and required tool arguments, and contains no NUL bytes. Returns a
 // non-empty refusal reason when invalid.
 func ValidateCodexInput(input []byte) string {
+	return validateCodexInput(input, false)
+}
+
+func validateCodexInput(input []byte, coordinatorMCP bool) string {
 	if len(bytes.TrimSpace(input)) == 0 {
 		return codexFailClosedMsg
 	}
@@ -170,9 +174,16 @@ func ValidateCodexInput(input []byte) string {
 		}
 	}
 	switch {
+	case coordinatorMCP && strings.HasPrefix(toolName, coordinatorMCPPrefix):
+		return ""
 	case isCodexShellTool(toolName):
 		if _, _, ok := extractCodexShellCommand(toolInput); !ok {
 			return "Refused: " + toolName + " call is missing a string `command` in tool_input; failing closed."
+		}
+		if rawWD, exists := toolInput[codexWorkdirKey]; exists && rawWD != nil {
+			if _, isStr := rawWD.(string); !isStr {
+				return codexFailClosedMsg
+			}
 		}
 	case toolName == codexApplyPatchTool:
 		patch, ok := extractCodexPatch(toolInput)
@@ -255,11 +266,18 @@ func CodexPaths(input []byte) []string {
 		return nil
 	}
 	var out []string
+	baseCWD := ""
 	if ev.CWD != "" {
-		out = append(out, expandHome(ev.CWD))
+		baseCWD = expandHome(ev.CWD)
+		out = append(out, baseCWD)
 	}
 	if ev.ToolInput == nil {
 		return out
+	}
+	if isCodexShellTool(ev.ToolName) {
+		if wd := codexShellWorkdir(baseCWD, ev.ToolInput); wd != "" && wd != baseCWD {
+			out = append(out, wd)
+		}
 	}
 	for _, k := range []string{filePathKey, pathKey, notebookPathKey} {
 		if s, ok := ev.ToolInput[k].(string); ok && s != "" {
@@ -328,16 +346,19 @@ func (h Hook) DecideSandboxCodex(input []byte) (out []byte) {
 	if json.Unmarshal(input, &ev) != nil {
 		return DenyCodex(codexFailClosedMsg)
 	}
-	ev.CWD = codexCWD(ev.CWD)
+	ev.CWD = h.codexCWD(ev.CWD)
 	if r := h.codexSandboxCheck(ev); r != "" {
 		return DenyCodex(r)
 	}
 	return PassCodex()
 }
 
-func codexCWD(rawCWD string) string {
+func (h Hook) codexCWD(rawCWD string) string {
 	if s := strings.TrimSpace(rawCWD); s != "" {
 		return expandHome(s)
+	}
+	if h.Project != "" {
+		return h.Project
 	}
 	if wd, err := os.Getwd(); err == nil {
 		return wd
@@ -345,11 +366,25 @@ func codexCWD(rawCWD string) string {
 	return ""
 }
 
+func codexShellWorkdir(baseCWD string, toolInput map[string]any) string {
+	if s, ok := toolInput[codexWorkdirKey].(string); ok {
+		if s = strings.TrimSpace(s); s != "" {
+			dir := expandHome(s)
+			if !filepath.IsAbs(dir) && baseCWD != "" {
+				dir = filepath.Join(baseCWD, dir)
+			}
+			return filepath.Clean(dir)
+		}
+	}
+	return baseCWD
+}
+
 func (h Hook) codexSandboxCheck(ev event) string {
 	switch {
 	case isCodexShellTool(ev.ToolName):
 		cmd, _, _ := extractCodexShellCommand(ev.ToolInput)
 		synth := ev
+		synth.CWD = codexShellWorkdir(ev.CWD, ev.ToolInput)
 		synth.ToolName = bashTool
 		synth.ToolInput = map[string]any{commandKey: cmd}
 		return h.sandboxRefusal(synth)
@@ -395,22 +430,22 @@ func (h Hook) codexSandboxCheck(ev event) string {
 // Every internal error, malformed payload, or unrecognized tool argument shape
 // fails closed with DenyCodex.
 func (h Hook) DecideCodex(input []byte) (out []byte) {
-	defer func() {
-		if r := recover(); r != nil {
-			out = DenyCodex(fmt.Sprintf("Refused: internal panic in PreToolUse guard (%v); failing closed.", r))
-		}
-	}()
+	h.beginCheck("codex adapter")
+	defer h.recoverDecision(&out, DenyCodex)
 	if h.ConfigErr != nil {
 		return DenyCodex("Refused: cannot load beekeeper configuration (" + h.ConfigErr.Error() + "); failing closed.")
 	}
-	if reason := ValidateCodexInput(input); reason != "" {
+	if reason := validateCodexInput(input, h.ExecutionMCP); reason != "" {
 		return DenyCodex(reason)
 	}
 	var ev event
 	if err := json.Unmarshal(input, &ev); err != nil {
 		return DenyCodex(codexFailClosedMsg)
 	}
-	ev.CWD = codexCWD(ev.CWD)
+	ev.CWD = h.codexCWD(ev.CWD)
+	if h.Project == "" {
+		h.Project = ev.CWD
+	}
 
 	switch {
 	case ev.ToolName == codexApplyPatchTool:
@@ -452,10 +487,12 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 
 	case isCodexShellTool(ev.ToolName):
 		origCmd, cmdKey, _ := extractCodexShellCommand(ev.ToolInput)
+		shellCWD := codexShellWorkdir(ev.CWD, ev.ToolInput)
 		synth := ev
+		synth.CWD = shellCWD
 		synth.ToolName = bashTool
 		synth.ToolInput = map[string]any{commandKey: origCmd}
-		if isPatch, patchReason, patchCtx := h.codexBashPureApplyPatch(synth, origCmd, ev.CWD); isPatch {
+		if isPatch, patchReason, patchCtx := h.codexBashPureApplyPatch(synth, origCmd, shellCWD); isPatch {
 			if patchReason != "" {
 				return DenyCodex(patchReason)
 			}
@@ -464,7 +501,7 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 			}
 			return PassCodex()
 		}
-		bashReason, bashCtx := h.codexBashRefusal(synth, origCmd, ev.CWD)
+		bashReason, bashCtx := h.codexBashRefusal(synth, origCmd, shellCWD)
 		if bashReason != "" {
 			return DenyCodex(bashReason)
 		}
@@ -479,8 +516,11 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 }
 
 func (h Hook) decideCodexEvent(ev event, origCmd, cmdKey, extraContext string) []byte {
+	h.beginCheck("freshLabs")
 	h.freshLabs(ev)
-	raw := h.labProxy(ev, h.decide(ev))
+	raw := h.decide(ev)
+	h.beginCheck("labProxy")
+	raw = h.labProxy(ev, raw)
 	var out hookOutput
 	if len(raw) > 0 {
 		var wrapper struct {
@@ -494,6 +534,7 @@ func (h Hook) decideCodexEvent(ev event, origCmd, cmdKey, extraContext string) [
 			return DenyCodex(out.Reason)
 		}
 	}
+	h.beginCheck("repoReads")
 	reads := h.repoReads(ev)
 	ctx := out.AdditionalContext
 	for _, add := range []string{extraContext, reads} {
@@ -928,7 +969,7 @@ var (
 	anyRedirRe   = regexp.MustCompile(`(?:^|[\s;|&()])((?:\d+)?(?:>>|\|>|>\||<>|<<-|<<<|<<|>|<)|&>>|&>)\s*([^\s;|&()<>]+)`)
 	writeCmdsMap = map[string]bool{
 		"cp": true, "mv": true, "ln": true, "ins" + "tall": true, "dd": true,
-		"rm": true, "rmdir": true, "unlink": true, "shred": true, "trash": true, "trash-put": true,
+		"rm": true, "rmdir": true, "unlink": true, "shred": true, trashCmd: true, trashPutCmd: true,
 		teeCmd: true, "trun" + "cate": true, "touch": true, "mkdir": true, "chmod": true, "chown": true,
 		codexPatchKey: true,
 	}
@@ -1055,6 +1096,16 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 			return leak{what: "a find that runs a reader on " + file + ", a file that holds secret values", safe: fileReadSafe(file)}.reason(), ""
 		}
 		isMeta = isMeta && !findReads(args)
+	}
+	isQuietGrep := grepCmds[name] && slices.ContainsFunc(args, grepQuiet.MatchString)
+	isJQ := name == "jq" || name == gojqCmd || name == "yq"
+	// A command-line helper can concatenate or join its path arguments.
+	if !isMeta && !isQuietGrep && !isJQ && !isBeekeeperTextSubcommand(name, args) && len(args) > 1 {
+		for _, joined := range []string{strings.Join(args, ""), strings.Join(args, "/")} {
+			if isGuardedCodexHomePath(joined, dir) || containsGuardedCodexHomeRef(joined) {
+				return codexHomeRefusalMsg, ""
+			}
+		}
 	}
 	// A function defined on the command line has an unchecked body: what it
 	// is handed may be written, so a guarded Codex home path is refused.
@@ -1190,8 +1241,6 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	}
 
 	// Check every argument of non-metadata commands for secret files (e.g. symlinked auth.json).
-	isQuietGrep := grepCmds[name] && slices.ContainsFunc(args, grepQuiet.MatchString)
-	isJQ := name == "jq" || name == gojqCmd || name == "yq"
 	if !isMeta && !isQuietGrep && !isJQ && !isBeekeeperTextSubcommand(name, args) {
 		for _, a := range args {
 			if _, v, ok := strings.Cut(a, "="); ok {
@@ -1244,7 +1293,7 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 		return false
 	}
 	switch sub[0] + " " + sub[1] {
-	case "note add", "log add", "agents idle", "agents park", "agents note":
+	case "note add", "log add", "agents idle", "agents park", "agents note", "agents problem":
 		return true
 	}
 	return false

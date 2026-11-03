@@ -20,11 +20,13 @@ import (
 const (
 	HarnessClaude    = "claude"
 	HarnessCodex     = "codex"
+	HarnessAgy       = "agy"
 	Preparing        = "preparing"
 	Activating       = "activating"
 	Applied          = "applied"
 	ControlNote      = "note"
 	ControlPark      = "park"
+	ControlResume    = "resume"
 	ControlReport    = "report"
 	unitActive       = "active"
 	unitInactive     = "inactive"
@@ -34,6 +36,7 @@ const (
 	Protocol         = 1
 	EnvID            = "BEEKEEPER_EXECUTION_ID"
 	EnvCoordinator   = "BEEKEEPER_EXECUTION_COORDINATOR"
+	EnvHome          = "BEEKEEPER_EXECUTION_HOME"
 	MaxWire          = 1 << 20
 	MaxLog           = 256 << 10
 	Prepared         = "prepared"
@@ -66,7 +69,9 @@ var refPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_./-]*$`)
 
 // SupportedHarness names the harnesses with a remote adapter. Every other
 // harness starts on the coordinating machine only.
-func SupportedHarness(h string) bool { return h == HarnessClaude || h == HarnessCodex }
+func SupportedHarness(h string) bool {
+	return h == HarnessClaude || h == HarnessCodex || h == HarnessAgy
+}
 
 func ValidIdentity(s string) bool { return identityPattern.MatchString(s) && s != "." && s != ".." }
 
@@ -83,6 +88,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	MCP            bool   `json:"mcp,omitempty"`
 	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
 	Messaging      bool   `json:"messaging,omitempty"`
 	Builds         bool   `json:"builds"`
@@ -125,7 +131,7 @@ func (r StartRequest) Validate() error {
 		return errors.New("invalid pinned execution source")
 	}
 	if !SupportedHarness(r.Harness) || !refPattern.MatchString(r.Model) || len(r.Model) > 256 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 256 || strings.ContainsAny(r.Name, "\x00\r\n") {
-		return errors.New("remote starts require harness claude or codex, an explicit model and a name")
+		return errors.New("remote starts require harness claude, codex or agy, an explicit model and a name")
 	}
 	if strings.TrimSpace(r.Prompt) == "" || len(r.Prompt) > 256<<10 || len(r.Task) > 1024 || !ValidDigest(r.PolicyDigest) {
 		return errors.New("invalid prompt, task or policy digest")
@@ -286,7 +292,9 @@ type Capabilities struct {
 	// Unavailable names each configured harness that failed its version,
 	// login or guard probe. The host advertises only the passing ones.
 	Unavailable map[string]string `json:"unavailable,omitempty"`
-	Resources   Resources         `json:"resources"`
+	// Tools names each provisioned worker tool and its pinned version.
+	Tools     map[string]string `json:"tools,omitempty"`
+	Resources Resources         `json:"resources"`
 }
 
 // ControlRequest is a host-to-coordinator mutation. Its sequence and receipt
