@@ -2238,6 +2238,12 @@ and a crash both start a fresh session.
 The command-line send is one headless `claude -p` turn whose only tool is SendMessage, addressed
 by the name ListAgents shows (the session's title): Claude Code has no send command, and its
 peer messaging is not a documented interface, so it is isolated in `internal/peer`.
+Its turn's peer socket (`uds:…`) ends with the turn, so `agents wake` heads a message from a
+roster agent or a role's holder with the name it is answered by (`[from "<name>": reply by
+SendMessage to "<name>", …]`), and the PreToolUse hook refuses a `SendMessage` to a peer socket
+that no longer exists with that hint. A `SendMessage` by the roster name of an omp, agy or codex
+agent, which no SendMessage reaches, is written to that agent's inbox by the hook, which then
+refuses the call itself with where the message went.
 
 `beekeeper status --bar` prints one row for a desktop bar (waybar, polybar, i3blocks), the same
 shape as the rows of `free --summary`, so one bar module reads both. The contract is fixed: six
