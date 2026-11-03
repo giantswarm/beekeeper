@@ -31,6 +31,13 @@ func ghMergeNeedsBranchRepair(reason string) bool {
 	return strings.Contains(lower, "conflict") || strings.Contains(lower, "behind") || strings.Contains(lower, "out of date") || strings.Contains(lower, "out-of-date") || strings.Contains(lower, "cannot be cleanly created")
 }
 
+// An admin suggestion is a desk configuration refusal, even when GitHub's
+// merge state also says BEHIND. It cannot be repaired by changing the branch.
+func ghMergeNeedsAdmin(reason string) bool {
+	lower := strings.ToLower(reason)
+	return strings.Contains(lower, "base branch policy") && strings.Contains(lower, "--admin")
+}
+
 // mergePull executes the planner's exact-head decision in the coordinator,
 // including for workers on an execution host. Failed or unreadable validation
 // never delegates a direct merge around the required server-side queue.
@@ -90,6 +97,17 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", errLoopLater
 	}
 	for _, f := range st.Failed {
+		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && ghMergeNeedsAdmin(f.Reason) {
+			// An older gate may have recorded this as a branch failure.
+			// Drop only that failed attempt so the unchanged head can rejoin.
+			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+				merge.Retry(current, ref.Repo, ref.N)
+				return nil, nil
+			}); err != nil {
+				return "", err
+			}
+			continue
+		}
 		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && (f.Exit == github.SquashNotApplicable || f.Exit == github.SquashRed) {
 			return repair(f.Exit, cmp.Or(f.Reason, "merge failed in lane"))
 		}
@@ -138,6 +156,27 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	var reply github.SquashDoc
 	mutationResult := err == nil && json.NewDecoder(strings.NewReader(out)).Decode(&reply) == nil && reply.Route == reviewedMergeRoute && reply.Repo == ref.Repo && reply.Number == ref.N && reply.HeadSha == act.Head
+	policyReason := out
+	if mutationResult {
+		policyReason = reply.Reason
+	}
+	if ghMergeNeedsAdmin(policyReason) {
+		stage := act.Key + " admin configuration"
+		l.mu.Lock()
+		reported := l.stages[stage]
+		l.mu.Unlock()
+		if !reported {
+			message := fmt.Sprintf("SUPERVISOR MERGE CONFIGURATION REFUSED %s: check merge.admin for %s; retrying next round: %s", act.URL, ref.Repo, oneLine(policyReason))
+			if err := a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s", stage, message), act.Ref)); err != nil {
+				return "", err
+			}
+			l.mu.Lock()
+			l.stages[stage] = true
+			l.mu.Unlock()
+			_, _ = fmt.Fprintln(a.out, message)
+		}
+		return "", errLoopLater
+	}
 	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
 		return "", errLoopLater
 	}
@@ -178,6 +217,39 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		out = reply.Reason
 	}
 	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
+}
+
+// dropAdminRepairs undoes a branch repair an older loop requested for a
+// merge refused by base branch policy with an admin suggestion: no branch
+// change repairs that refusal. Its repair stage and the go it completed are
+// closed durably, so the unchanged approved head is merged again on this
+// pass without a new review or the worker's action. A repair stage for any
+// other reason stands.
+func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
+	for stage, detail := range stageDetail {
+		key, ok := strings.CutSuffix(stage, " repair")
+		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") || !ghMergeNeedsAdmin(detail) {
+			continue
+		}
+		ref := strings.TrimPrefix(key, superloop.KindGo+" ")
+		if i := strings.LastIndex(ref, "@"); i >= 0 {
+			ref = ref[:i]
+		}
+		why := "base branch policy refusal is merge configuration, not branch repair"
+		if err := l.a.store.Record(about(event(loopParty, loopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
+			return taken, err
+		}
+		delete(stages, stage)
+		delete(stageDetail, stage)
+		if slices.ContainsFunc(taken, func(t superloop.Taken) bool { return t.Key == key }) {
+			if err := l.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
+				return taken, err
+			}
+			taken = slices.DeleteFunc(taken, func(t superloop.Taken) bool { return t.Key == key })
+		}
+		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; check merge.admin for its repository\n", key, why)
+	}
+	return taken, nil
 }
 
 // repairPull hands an open pull request whose merge was not applicable or red
@@ -253,6 +325,10 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; post-merge work requested", nil
 		}
+		if l.otherReviewParks(rp.Party, act.Ref) {
+			clearReviewPark()
+			return "merged; other pull requests still await review or merge", nil
+		}
 		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
 			act.Agent = rp.Agent
 			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
@@ -269,6 +345,15 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			// The last completed ref may differ from the worker's current
+			// park when its PRs merge out of order. Finish that parked owner too.
+			for i := range current.Agents {
+				worker := &current.Agents[i]
+				if worker.Is(rp.Party) && worker.Park != nil && worker.Park.ReviewHead != "" {
+					reportIdle(worker, l.a.timeNow())
+					worker.Done = true
+				}
+			}
 			endNotes(current, rp.Party, l.a.timeNow())
 			clearRecords(current, rp.Party)
 			report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
@@ -303,6 +388,9 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			return "", err
 		}
 		return "merged; post-merge work requested", nil
+	}
+	if l.otherReviewParks(ag.Party, act.Ref) {
+		return "merged; other pull requests still await review or merge", nil
 	}
 	// Do not finish a task serving other open work merely because one PR merged.
 	serves := loopServes(st, ag)
@@ -416,7 +504,9 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if !ok {
 			continue
 		}
-		if key == "go "+ref+"@"+head {
+		// The sweep's go again for a head whose go was never carried out
+		// is the same authority, keyed by its stretch without an owner.
+		if key == "go "+ref+"@"+head || superloop.IsSweep(key) && strings.HasPrefix(key, "go "+ref+"@"+head+" ") {
 			if e.Verb == loopClaimVerb {
 				claimed = true
 				claimAgent = rest
@@ -552,6 +642,8 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if doc.Reason == "" {
 			doc.Reason = "merge head moved or current CI is not green"
 		}
+	case ghMergeNeedsAdmin(doc.Reason):
+		doc.ExitCode = github.SquashRefused
 	case pullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
 		doc.ExitCode = github.SquashNotApplicable
 		if doc.Reason == "" {

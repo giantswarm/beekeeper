@@ -55,7 +55,7 @@ func TestShortLivedSessionsAreQuiet(t *testing.T) {
 	w.sessions = map[string]*claude.Session{"local_1": {ID: "s1", HostID: "local_1", Name: "test: wake-target"}}
 	w.sessionChanges([]*claude.Session{
 		{ID: "s2", HostID: "local_2", Name: "test: beekeeper#54 probe sender 3"},
-		{ID: "s3", HostID: "local_3", Name: "Agent eleven"},
+		{ID: "s3", HostID: "local_3", Name: agentEleven},
 	})
 	if got := out.String(); !strings.Contains(got, `SESSIONS started: "Agent eleven"`) || strings.Contains(got, "test:") || strings.Contains(got, "ended") {
 		t.Errorf("watch lines:\n%s", got)

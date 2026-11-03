@@ -268,7 +268,7 @@ func TestModelPolicyOmpVaultAndScratchArgvHonorAgentsModels(t *testing.T) {
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: pickOpus},
-			{Harness: config.OmpHarness, Model: loopQwen, Provider: sparkProvider},
+			{Harness: config.OmpHarness, Model: loopQwen, Provider: sparkProvider, Kinds: []string{workerRole}},
 		},
 	}
 	if !a.ompStartNeedsVault([]string{agentStartName, workerRole, briefMD, testHarnessFlag, config.OmpHarness}) {

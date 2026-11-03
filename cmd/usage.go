@@ -29,6 +29,8 @@ const (
 	// usageFile is the state's side file holding the latest subscription
 	// usage reading, shared by watch, capacity, snapshot and agents start/resume.
 	usageFile = "usage.json"
+	// codexAccountUsageFile shares the last account probe across provider aliases.
+	codexAccountUsageFile = "codex-account-usage.json"
 	// usageHighFile records the busy workers already told to park in the
 	// current USAGE HIGH episode, so watch restarts never tell a worker twice.
 	usageHighFile = "usage-high.json"
@@ -156,8 +158,7 @@ func (a *app) recordAgyQuotaExhaustedForID(id, model string, qerr *agy.QuotaErro
 	}
 	base := now
 	if !qerr.At.IsZero() {
-		diff := now.Sub(qerr.At)
-		if diff >= -10*time.Minute && diff <= 10*time.Minute {
+		if !qerr.At.After(now.Add(10 * time.Minute)) {
 			base = qerr.At
 		}
 	}
@@ -629,7 +630,10 @@ func validateReadingAt(r usageReading, u config.Usage, now time.Time) error {
 		if r.SourceAt.After(now.Add(time.Minute)) {
 			return fmt.Errorf("usage reading timestamp %s is in the future", r.SourceAt.Format(time.RFC3339))
 		}
-		if now.Sub(r.SourceAt) > maxAge {
+		// Codex rollout events advance only while a model runs. Their age
+		// alone must not deadlock starts; the built-in reader probes the
+		// account and labels its last-reading fallback when unavailable.
+		if now.Sub(r.SourceAt) > maxAge && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
 			return fmt.Errorf("usage reading is stale (%s old, max %s)", dur(now.Sub(r.SourceAt)), dur(maxAge))
 		}
 	}
@@ -805,7 +809,7 @@ func (a *app) execUsage(ctx context.Context, u config.Usage) (usageReading, erro
 		return a.readUsage(ctx, u.Command, u.EffectiveTimeout())
 	}
 	if slices.Equal(u.Command, config.DefaultCodexUsageCommand) {
-		return a.readCodexUsage()
+		return a.readCodexUsage(ctx, u)
 	}
 	// A built-in local probe runs in a directory of its own under the state,
 	// never in a worktree whose project settings it could pick up.
@@ -900,17 +904,71 @@ func (a *app) runServeMode(ctx context.Context, p config.Provider) (config.Serve
 	return config.ServeModeReading{Mode: fields[0]}, nil
 }
 
-func (a *app) readCodexUsage() (usageReading, error) {
+func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading, error) {
 	var stateDir, sessionsDir string
 	if a.cfg != nil {
 		stateDir = a.cfg.StateDir
 		sessionsDir = a.cfg.Codex.SessionsDir
 	}
 	cr, err := codex.ReadUsage(stateDir, sessionsDir)
-	if err != nil {
+	now := a.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	// Fresh explicit local errors remain authoritative. Once old, probe the
+	// account so an idle desk can recover after its quota resets.
+	if err != nil && !errors.Is(err, codex.ErrNoUsage) && (cr.At.IsZero() || now.Sub(cr.At) <= u.EffectiveEvery()) {
 		return usageReading{}, err
 	}
-	return codexUsageToReading(cr), nil
+	if err == nil && now.Sub(cr.At) <= u.EffectiveEvery() {
+		return codexUsageToReading(cr), nil
+	}
+	// Prefer a fresh account snapshot over an older rollout. Still read local
+	// events first so a new explicit stop cannot hide behind the snapshot.
+	var cached usageReading
+	haveCached := false
+	if a.store != nil {
+		found, e := a.store.ReadFile(codexAccountUsageFile, &cached)
+		haveCached = e == nil && found && !cached.SourceAt.IsZero()
+		if haveCached && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() && usageFresh(cached, u, now) {
+			return cached, nil
+		}
+	}
+	dir := filepath.Join(stateDir, "usage", "codex")
+	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
+		return usageReading{}, mkdirErr
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, u.EffectiveTimeout())
+	defer cancel()
+	home := ""
+	if _, statErr := os.Stat(filepath.Join(codex.HomeDir(stateDir), "auth.json")); statErr == nil {
+		home = codex.HomeDir(stateDir)
+	}
+	fresh, probeErr := codex.ProbeUsage(probeCtx, dir, home, now)
+	if probeErr == nil {
+		r := codexUsageToReading(fresh)
+		r.At = now.UTC()
+		if a.store != nil {
+			_ = a.store.WriteFile(codexAccountUsageFile, r)
+		}
+		return r, nil
+	}
+	if errors.Is(probeErr, codex.ErrUsageStopped) {
+		return usageReading{}, probeErr
+	}
+	if haveCached && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
+		cached.At = now.UTC()
+		if validateReadingAt(cached, u, now) == nil {
+			cached.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
+			return cached, nil
+		}
+	}
+	if err != nil {
+		return usageReading{}, probeErr
+	}
+	r := codexUsageToReading(cr)
+	r.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
+	return r, nil
 }
 
 func (a *app) useCodexRolloutUsage(u config.Usage, cached usageReading) bool {
@@ -1402,7 +1460,7 @@ func (w *watcher) currentUsage(k config.Capacity, now time.Time) (config.Capacit
 	}
 	var r usageReading
 	if found, err := w.store.ReadFile(usageFile, &r); err == nil && found && validateReadingAt(r, k.Usage, now) == nil {
-		r.Fallback = uerr
+		r.Fallback = cmp.Or(uerr, r.Fallback)
 		return deriveUsageView(r, k, now)
 	}
 	if uerr != "" {
@@ -1526,7 +1584,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 					if verr := validateReadingAt(r, p.Usage, w.now); verr != nil {
 						readings[name] = providerReadingResult{err: verr}
 					} else {
-						r.Fallback = uerr
+						r.Fallback = cmp.Or(uerr, r.Fallback)
 						applyQuotaForUsageFile(w.store, usageProviderFile(name), &r, w.now)
 						readings[name] = providerReadingResult{reading: r, ok: true}
 					}
@@ -1556,7 +1614,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 	} else {
 		h = w.app.readHeadroom(ctx, k, swap)
 	}
-	v := buildProvidersCapacity(c, pa, k, readings, h, false, nil, forWorker, w.now).stopped(w.app, st.Stop)
+	v := buildProvidersCapacity(c, pa, k, readings, h, false, nil, forWorker, w.now).stopped(w.app, st)
 
 	var parts []string
 	allHigh := len(k.Providers) > 0

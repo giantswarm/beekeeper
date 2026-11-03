@@ -58,11 +58,15 @@ type capacityView struct {
 	// without memory pressure, the busy build slot a start without builds
 	// does not wait for.
 	Notes []string `json:"notes,omitempty"`
-	// Stopped says the standing beekeeper stop, which no --force passes.
+	// Stopped says the standing beekeeper stop or "starts" hold, which no
+	// --force passes.
 	Stopped string `json:"stopped,omitempty"`
 	// Local is capacity.local.ceiling against the busy agents this machine
 	// runs; nil while it is unset or the verdict is an execution host's.
 	Local *localView `json:"local,omitempty"`
+	// KindBlocks are the task kinds (agents.kinds) at a cap: a start of
+	// one of their agents is refused whatever the verdict.
+	KindBlocks []kindBlock `json:"kindBlocks,omitempty"`
 }
 
 // localView is the coordinator machine's own cap (capacity.local.ceiling):
@@ -1500,7 +1504,7 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 				cv.TaskKind = taskKindReview
 			}
 		}
-		cv.Decision = "task " + cv.TaskKind + ": eligible provider furthest behind weekly pace, lower configured cost breaks equal pace"
+		cv.Decision = "task " + cv.TaskKind + ": " + choiceRule
 	}
 	var reasons []string
 	bestSubscription := false
@@ -1751,10 +1755,11 @@ func (v *capacityView) withUsage(u *usageView, now time.Time) *capacityView {
 	return v
 }
 
-// stopped makes the verdict "no start" while the stop s stands.
-func (v *capacityView) stopped(a *app, s *state.Stop) *capacityView {
-	if s != nil {
-		v.Stopped = a.stopText(s)
+// stopped makes the verdict "no start" while st's stop or "starts" hold
+// stands (noStart).
+func (v *capacityView) stopped(a *app, st *state.State) *capacityView {
+	if why := a.noStart(st); why != "" {
+		v.Stopped = why
 		v.Blocks, v.Room = append([]string{v.Stopped}, v.Blocks...), 0
 		for _, pv := range v.Providers {
 			pv.Room = 0
@@ -1951,6 +1956,13 @@ the ceiling, or what blocks one, each guard that refuses named; while
 beekeeper stop stands it is "no start: beekeeper is stopped …" with the
 stop's reason. agents
 start judges its start the same way, --builds marking one that builds.
+
+A task kind of agents.kinds (agents by name regexp) at a cap gets a line
+after the verdict, "no start <kind>: <reason>": as many of its agents
+busy as its maxBusy, or its last recorded start less than its
+minInterval ago. agents start refuses a start of one of its agents with
+that reason, exit 3, whatever the verdict and --force; a name several
+kinds match is held by each. --json has them in "kindBlocks".
 capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
@@ -1991,12 +2003,13 @@ nothing; it makes no GitHub call.`,
 				}
 				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-				v = a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap).stopped(a, st.Stop)
+				v = a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap).stopped(a, st)
 			} else {
 				c := countAgents(st, sessions, a.now, a.cfg)
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
-				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop)
+				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
+			v.KindBlocks = kindBlocks(a.cfg, st, sessions, a.cfg.Agents.Kinds, a.now)
 			if a.json {
 				return a.printJSON(struct {
 					*capacityView
@@ -2035,6 +2048,9 @@ nothing; it makes no GitHub call.`,
 			}
 			p("%s", v.Headroom.line())
 			p("%s", v.verdict())
+			for _, b := range v.KindBlocks {
+				p("%s", b.line())
+			}
 			return nil
 		},
 	}
@@ -2108,7 +2124,8 @@ or "none". The decision is the one agents start without --harness, the
 supervisor loop's reviewers and its next starts take: the eligible subscription
 with the most 7-day budget left per hour until its reset (remaining percent /
 hours to reset), with configured order breaking ties and self-hosted choices
-used when no subscription is eligible. Each eligible choice
+used when no subscription is eligible; a self-hosted choice takes the worker
+kind (code changes) only when its kinds list it. Each eligible choice
 has a configured provider and a free slot under its running-session ceiling,
 5-hour and 7-day windows under their stop percent, and 7-day use not ahead of
 the even pace of its window, with the
@@ -2408,11 +2425,11 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	}
 	liveCap := a.liveCapacity()
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st.Stop), nil
+		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st), nil
 	}
 	c := countAgents(st, sessions, a.now, a.cfg)
 	k, u := a.resolveUsage(ctx, liveCap)
-	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop), nil
+	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st), nil
 }
 
 func choicesHaveModel(choices []config.Choice, model string) bool {
@@ -2471,7 +2488,7 @@ func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*cla
 	// the derived ceiling is positive (a self-hosted provider's own ceiling
 	// rides in the derived total).
 	w.clear("capacity-low")
-	if (u != nil && u.Error != "") || k.Ceiling == 0 || live.Ceiling == 0 || busy < k.Ceiling || st.Stop != nil {
+	if (u != nil && u.Error != "") || k.Ceiling == 0 || live.Ceiling == 0 || busy < k.Ceiling || st.Stop != nil || startsHold(st, w.now) != nil {
 		w.clear("capacity-full")
 		return
 	}
