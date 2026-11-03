@@ -57,7 +57,7 @@ const AgyVersions = ">= 1.4.7, < 2.0.0"
 
 func (c HostConfig) Validate() error {
 	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 && len(c.RepositoryOrgs) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
-		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex or agy")
+		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex, agy or omp")
 	}
 	if err := validateRepositoryOrgs(c.RepositoryOrgs); err != nil {
 		return err
@@ -95,9 +95,9 @@ func (c HostConfig) Validate() error {
 }
 
 func (h HarnessConfig) validate(name string) error {
-	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions, HarnessAgy: AgyVersions}[name]
+	constraint := map[string]string{HarnessClaude: ClaudeVersions, HarnessCodex: CodexVersions, HarnessAgy: AgyVersions, HarnessOmp: OmpVersions}[name]
 	if constraint == "" {
-		return errors.New("execution host harnesses must be claude, codex or agy")
+		return errors.New("execution host harnesses must be claude, codex, agy or omp")
 	}
 	v, err := semver.StrictNewVersion(h.Version)
 	rangeOK, _ := semver.NewConstraint(constraint)
@@ -106,8 +106,8 @@ func (h HarnessConfig) validate(name string) error {
 	}
 	// Codex keeps its login in the person's own CODEX_HOME on the host; the
 	// managed home links only that file and never receives a copied credential.
-	if name == HarnessCodex && h.ConfigDir == "" {
-		return errors.New("codex requires configDir, the host CODEX_HOME holding its own login")
+	if (name == HarnessCodex || name == HarnessOmp) && h.ConfigDir == "" {
+		return errors.New(name + " requires configDir holding its independently provisioned host login")
 	}
 	// Agy keeps its OAuth login in the host's own agy configuration directory;
 	// the managed home links only the token file and never copies credentials.
@@ -134,6 +134,7 @@ type Policy struct {
 	// CodexDigest binds the managed CODEX_HOME's config, hooks and rules. It
 	// is empty on a host that runs no codex, leaving its policy unchanged.
 	CodexDigest string `json:"codexDigest,omitempty"`
+	OmpDigest   string `json:"ompDigest,omitempty"`
 	// AgyDigest binds the managed agy home's config, hooks and rules. It is
 	// empty on a host that runs no agy, leaving its policy unchanged.
 	AgyDigest string `json:"agyDigest,omitempty"`
@@ -151,6 +152,9 @@ func (s *Server) Policy() Policy {
 	p := Policy{Protocol: Protocol, Version: s.Version, ConfigurationDigest: Digest(b), RulesDigest: Digest(s.Rules), SettingsDigest: Digest(s.settings())}
 	if _, ok := s.Config.Harnesses[HarnessCodex]; ok {
 		p.CodexDigest = Digest(mustJSON(s.codexFiles()))
+	}
+	if _, ok := s.Config.Harnesses[HarnessOmp]; ok {
+		p.OmpDigest = Digest(s.ompGuardBytes())
 	}
 	if _, ok := s.Config.Harnesses[HarnessAgy]; ok {
 		p.AgyDigest = Digest(mustJSON(s.agyFiles()))
@@ -355,6 +359,11 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 	}
+	if p.OmpDigest != "" {
+		if err := atomicFile(s.ompGuardFile(), s.ompGuardBytes()); err != nil {
+			return "", err
+		}
+	}
 	if p.AgyDigest != "" {
 		if err := ownedDirectory(s.agyHomeDir()); err != nil {
 			return "", err
@@ -409,6 +418,12 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 			}
 		}
 	}
+	if p.OmpDigest != "" {
+		b, err := readRegular(s.ompGuardFile(), MaxWire)
+		if err != nil || Digest(b) != p.OmpDigest {
+			return p, errors.New("installed omp guard does not match the policy")
+		}
+	}
 	if p.AgyDigest != "" {
 		for name, want := range s.agyFiles() {
 			b, err := readRegular(filepath.Join(s.agyConfigDir(), name), MaxWire)
@@ -453,6 +468,9 @@ func (s *Server) probe(ctx context.Context, name string, h HarnessConfig) error 
 		return s.probeCodex(ctx, h)
 	case HarnessAgy:
 		return s.probeAgy(ctx, h)
+	}
+	if name == HarnessOmp {
+		return s.probeOmp(ctx, h)
 	}
 	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))
