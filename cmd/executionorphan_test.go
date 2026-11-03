@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/giantswarm/beekeeper/internal/execution"
-	"github.com/giantswarm/beekeeper/internal/state"
-	"github.com/google/uuid"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 func TestHostsDrainNamesRecordedExecutions(t *testing.T) {

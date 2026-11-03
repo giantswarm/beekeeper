@@ -10,6 +10,12 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	inventoryOperation   = "inventory"
+	missingOperation     = "missing"
+	syncControlOperation = "sync-control"
+)
+
 // InventoryReader lists only journal-backed executions of one coordinator.
 // Missing confirms both journal absence and an inactive owned unit; a missing
 // journal alone never proves that a process ended.
@@ -20,13 +26,13 @@ type InventoryReader interface {
 
 func (t SSHTransport) Inventory(ctx context.Context, coordinator string) ([]Ref, error) {
 	var refs []Ref
-	err := t.Call(ctx, "inventory", Ref{}, coordinator, &refs)
+	err := t.Call(ctx, inventoryOperation, Ref{}, coordinator, &refs)
 	return refs, err
 }
 
 func (t SSHTransport) Missing(ctx context.Context, ref Ref) (bool, error) {
 	var absent bool
-	err := t.Call(ctx, "missing", ref, nil, &absent)
+	err := t.Call(ctx, missingOperation, ref, nil, &absent)
 	return absent, err
 }
 

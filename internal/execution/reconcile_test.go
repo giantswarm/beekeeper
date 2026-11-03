@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/google/uuid"
 	"os"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestInventorySeparatesCoordinatorsAndStoppedJournals(t *testing.T) {

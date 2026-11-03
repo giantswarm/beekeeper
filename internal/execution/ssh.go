@@ -196,7 +196,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 	if err := t.Host.Validate(); err != nil {
 		return err
 	}
-	if op != "check" && op != "inventory" {
+	if op != "check" && op != inventoryOperation {
 		if err := ref.Validate(); err != nil {
 			return err
 		}
@@ -236,10 +236,10 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
-		if (op == inspectOperation || op == "sync-control") && reply.Code == "not-found" {
+		if (op == inspectOperation || op == syncControlOperation) && reply.Code == "not-found" {
 			return ErrNotFound
 		}
-		if reply.Code == "unsupported" || ((op == "inventory" || op == "missing") && reply.Error == "unknown execution operation") {
+		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation) && reply.Error == "unknown execution operation") {
 			return ErrUnsupported
 		}
 		return errors.New(reply.Error)
@@ -258,7 +258,7 @@ func (t SSHTransport) Check(ctx context.Context) (Capabilities, error) {
 
 func (t SSHTransport) SyncControl(ctx context.Context, r Ref) (ControlResult, error) {
 	var result ControlResult
-	err := t.Call(ctx, "sync-control", r, nil, &result)
+	err := t.Call(ctx, syncControlOperation, r, nil, &result)
 	return result, err
 }
 func (t SSHTransport) Start(ctx context.Context, r StartRequest) (Handle, error) {
