@@ -2,10 +2,44 @@ package execution
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestWorkerGitHubDispatchPreservesClientArguments(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "fixture beekeeper")
+	config := filepath.Join(root, "host's config.yaml")
+	// The actual dispatch script must select its config without inserting
+	// root flags into a command that deliberately disables flag parsing.
+	script := "#!/bin/sh\n[ \"$BEEKEEPER_CONFIG\" = \"$EXPECTED_CONFIG\" ] || exit 9\nprintf '%s\\n' \"$@\"\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil { //nolint:gosec // test-owned executable fixture
+		t.Fatal(err)
+	}
+	s := &Server{Root: root, Executable: binary, ConfigPath: config}
+	j := Journal{Request: StartRequest{GitHub: true}, Handle: Handle{Ref: Ref{Execution: "fixture"}}}
+	if _, err := s.GitHubEnvironment(j, []string{workerGitHubTestPath}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gh", GitHubGitTool} {
+		verb, args := "github-cli", []string{"issue", "view", "1", "--repo", workerGitHubPrivateRepo}
+		if name == GitHubGitTool {
+			verb, args = "github-git", []string{"push", "origin", "HEAD:refs/heads/beekeeper-execution/fixture/1"}
+		}
+		c := exec.Command(filepath.Join(root, workerGitHubBinDir, "fixture", name), args...) //nolint:gosec // test-owned generated adapter
+		c.Env = append(os.Environ(), "BEEKEEPER_CONFIG=unrelated-fixture", "EXPECTED_CONFIG="+config)
+		output, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s adapter failed: %v, %s", name, err, output)
+		}
+		want := strings.Join(append([]string{"agents", verb, "--"}, args...), "\n") + "\n"
+		if string(output) != want {
+			t.Fatalf("%s client argv changed: got %q, want %q", name, output, want)
+		}
+	}
+}
 
 const (
 	workerGitHubView        = "view"
