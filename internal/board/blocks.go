@@ -190,3 +190,76 @@ func notIssue(x resolved, ref, rule string) string {
 	}
 	return ""
 }
+
+// MoveHeld is Move guarded for a move to the blocked Status, the one
+// HeldStatus resolves to: the board says what holds every blocked item.
+// With by such a move records by, an open issue, as the item's blocker first
+// (Block); without by it is refused unless the item has an open recorded
+// blocker already. A move to any other Status with by is refused, and a
+// board without a blocked Status moves as Move does. Every refusal comes
+// before anything is written. Held is the item's blockers read or recorded
+// for a move to the blocked Status, nil for any other.
+func (c *Client) MoveHeld(ctx context.Context, ref, in, by string) (*Moved, *Held, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	m, err := c.meta(github.ActingOn(ctx, owner+"/"+repo))
+	if err != nil {
+		return nil, nil, err
+	}
+	names := m.Fields[StatusField].names()
+	to, err := Resolve(StatusField, names, in)
+	if err != nil {
+		return nil, nil, &Refusal{err.Error()}
+	}
+	if blocked, berr := Resolve(StatusField, names, HeldStatus); berr != nil || to != blocked {
+		if by != "" {
+			return nil, nil, &Refusal{fmt.Sprintf("--by records what holds an item moved to the blocked Status; %s is none", to)}
+		}
+		mv, err := c.Move(ctx, ref, in)
+		return mv, nil, err
+	}
+	var h *Held
+	if by == "" {
+		if h, err = c.blockers(ctx, owner, repo, n); err != nil {
+			return nil, nil, err
+		}
+		if h.OpenBlockers == 0 {
+			return nil, h, &Refusal{fmt.Sprintf("%s has no open recorded blocker: a move to %s names what holds it, --by <owner/repo#n> (an open issue, recorded as with board block). "+
+				"A wait on a pull request, a review, a hold or the GitHub gate is a park (beekeeper agents park --on <owner/repo#n|hold:<target>>) with the item left in its Status; "+
+				"a person's decision that holds it is note add --holds; a defect is a problem report (beekeeper agents problem)", h.Ref, to)}
+		}
+	} else {
+		bo, br, bn, err := Ref(by)
+		if err != nil {
+			return nil, nil, err
+		}
+		b, err := c.depNode(github.ActingOn(ctx, bo+"/"+br), bo, br, bn, "")
+		if err != nil {
+			return nil, nil, err
+		}
+		if b.node != nil && b.node.Type == "Issue" && b.node.State != stateOpen {
+			return nil, nil, &Refusal{fmt.Sprintf("%s/%s#%d is closed: it holds nothing, and %s is not blocked by it", bo, br, bn, ref)}
+		}
+		if h, err = c.Block(ctx, ref, by); err != nil {
+			return nil, nil, err
+		}
+	}
+	mv, err := c.Move(ctx, ref, in)
+	return mv, h, err
+}
+
+// blockers reads the recorded blockers of the issue owner/repo#n.
+func (c *Client) blockers(ctx context.Context, owner, repo string, n int) (*Held, error) {
+	h := &Held{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n)}
+	it, err := c.depNode(github.ActingOn(ctx, owner+"/"+repo), owner, repo, n, blockersField)
+	if err != nil {
+		return nil, err
+	}
+	if why := notIssue(it, h.Ref, "a hold is recorded on an issue"); why != "" {
+		return nil, &Refusal{why}
+	}
+	h.Blockers, h.OpenBlockers = it.node.counts()
+	return h, nil
+}

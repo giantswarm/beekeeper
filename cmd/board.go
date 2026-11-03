@@ -1136,8 +1136,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 
 func (a *app) boardMoveCmd() *cobra.Command {
 	var intake bool
+	var by string
 	c := &cobra.Command{
-		Use:   "move <owner/repo#n|URL> <status>",
+		Use:   "move <owner/repo#n|URL> <status> [--by <owner/repo#n|URL>]",
 		Short: "Set a board item's Status by its canonical name, adding the issue to the board when it is missing",
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
 board is added first (addProjectV2ItemById, the issue's own mutation: the
@@ -1163,21 +1164,43 @@ that head. The private thread is the epic itself in a private repository,
 else the plan pull request in a private one. With neither an open nor a
 merged plan naming the epic, the move records no go and says so. An epic of a public repository
 whose plan is public too has no private thread: the move is refused before
-anything is written. Exit 3 when refused.`,
+anything is written.
+
+A move to the blocked Status (Blocked / Waiting) says what holds the item:
+--by names the open issue that does, recorded first as board block records
+it, and without --by the move is refused unless the item has an open
+recorded blocker already. A wait on a pull request, a review, a hold or the
+GitHub gate is no blocked item: the worker parks on it (agents park) and
+leaves the item in its Status; a person's decision that holds it is note add
+--holds. Exit 3 when refused.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, _, _, err := board.Ref(args[0]); err != nil {
 				return usageErr("%v", err)
 			}
+			if by != "" {
+				if intake {
+					return usageErr("--by records what holds a move to the blocked Status; --intake puts an issue on the board")
+				}
+				if _, _, _, err := board.Ref(by); err != nil {
+					return usageErr("--by: %v", err)
+				}
+			}
 			me, _ := a.caller()
 			cl := a.boardClient()
-			move := cl.Move
+			var mv *board.Moved
+			var held *board.Held
+			var err error
 			if intake {
-				move = cl.Intake
+				mv, err = cl.Intake(cmd.Context(), args[0], args[1])
+			} else {
+				mv, held, err = cl.MoveHeld(cmd.Context(), args[0], args[1], by)
 			}
-			mv, err := move(cmd.Context(), args[0], args[1])
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
+			}
+			if held != nil && held.Changed {
+				_ = a.store.Log(event(me, "board.block", "%s: by %s (%s), %s", held.Ref, held.By, openWord(held.ByOpen), holdState(held)))
 			}
 			if err != nil {
 				return err
@@ -1216,6 +1239,9 @@ anything is written. Exit 3 when refused.`,
 			default:
 				_, err = fmt.Fprintf(a.out, "moved %s: %s → %s%s\n", mv.Ref, from, mv.To, team)
 			}
+			if err == nil && held != nil && held.Changed {
+				_, err = fmt.Fprintln(a.out, holdText(held, true))
+			}
 			if g := mv.Go; err == nil && g != nil {
 				if g.Plan == nil {
 					_, err = fmt.Fprintf(a.out, "the go of %s: neither an open nor a merged plan pull request names it, no go recorded\n", mv.Ref)
@@ -1227,6 +1253,7 @@ anything is written. Exit 3 when refused.`,
 		},
 	}
 	c.Flags().BoolVar(&intake, "intake", false, "put the issue in this intake status only when it has no Status yet and is not being worked on another board")
+	c.Flags().StringVar(&by, "by", "", "a move to the blocked Status: the open issue that holds the item, owner/repo#n or its URL, recorded as board block records it")
 	return c
 }
 

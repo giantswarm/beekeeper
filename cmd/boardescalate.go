@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -138,15 +140,73 @@ func stateOf(it board.Item, last *github.Comment) string {
 	return hex.EncodeToString(sum[:6])
 }
 
-// agentsParkedOn are the agents parked on ref (owner/repo#n or its URL).
-func agentsParkedOn(agents []state.Agent, ref, url string) []state.Agent {
+// agentsParkedOn are the agents parked on ref (owner/repo#n or its URL),
+// and the parked agents whose task is ref: their sessions serve it, or their
+// task names its URL. A worker parked on its pull request, a hold or the
+// GitHub gate waits on its own item.
+func agentsParkedOn(st *state.State, ref, url string) []state.Agent {
 	var out []state.Agent
-	for _, ag := range agents {
-		if ag.Park != nil && (strings.EqualFold(ag.Park.On, ref) || strings.EqualFold(ag.Park.On, url)) {
+	for _, ag := range st.Agents {
+		if ag.Park == nil {
+			continue
+		}
+		if strings.EqualFold(ag.Park.On, ref) || strings.EqualFold(ag.Park.On, url) ||
+			strings.EqualFold(loopServes(st, ag), ref) || namesURL(ag.Task, url) {
 			out = append(out, ag)
 		}
 	}
 	return out
+}
+
+// namesURL reports whether text names url whole: …/issues/2 is not named by
+// …/issues/21.
+func namesURL(text, url string) bool {
+	if url == "" {
+		return false
+	}
+	lower, u := strings.ToLower(text), strings.ToLower(url)
+	for i := 0; ; {
+		j := strings.Index(lower[i:], u)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(u)
+		if end == len(lower) || !(lower[end] >= '0' && lower[end] <= '9') {
+			return true
+		}
+		i = end
+	}
+}
+
+// explainSlack is how long before an item's Status was set a comment still
+// explains it: a worker writes what holds the item, then moves it.
+const explainSlack = 24 * time.Hour
+
+// threadNamed is an issue or pull request a comment names: its URL or
+// owner/repo#n.
+var threadNamed = regexp.MustCompile(`(?i)https?://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)|(?:^|[^\w/.#-])([\w.-]+/[\w.-]+)#(\d+)\b`)
+
+// explaining is the newest of cs, written since its item's Status was set
+// (less explainSlack; any when unknown), that names an issue or pull request
+// other than ref, the item itself: the comment says what holds it. It
+// returns the comment and the thread it names, nil for none.
+func explaining(cs []github.Comment, ref string, since time.Time) (*github.Comment, string) {
+	for i := len(cs) - 1; i >= 0; i-- {
+		c := &cs[i]
+		if !since.IsZero() && c.At.Before(since.Add(-explainSlack)) {
+			break
+		}
+		for _, m := range threadNamed.FindAllStringSubmatch(c.Body, -1) {
+			named := m[1] + "#" + m[2]
+			if m[1] == "" {
+				named = m[3] + "#" + m[4]
+			}
+			if !strings.EqualFold(named, ref) {
+				return c, strings.ToLower(named)
+			}
+		}
+	}
+	return nil, ""
 }
 
 // notesOn are person's open notes on ref: linked to it (--ref) or holding
@@ -168,8 +228,10 @@ func notesOn(notes []state.Note, person, ref string) []state.Note {
 // State, and whether it is asked about. It is not when a teammate is
 // assigned to it, the person's queue holds a note on it, the person
 // answered on its thread since it was blocked, the newest comment by a
-// person comes from outside the organisation (a customer's), or its note
-// was filed on the same State.
+// person comes from outside the organisation (a customer's), something
+// explains the block (an open recorded blocker, a worker parked on it or on
+// its task, a comment since it was blocked naming another issue or pull
+// request), or its note was filed on the same State.
 func (a *app) judge(e escalation, f escalateFacts) escalation {
 	it := e.item
 	linked := func(s string) string {
@@ -221,6 +283,8 @@ func (a *app) judge(e escalation, f escalateFacts) escalation {
 		e.Who = "nobody named: no assignee, no parked worker"
 	}
 
+	explainer, named := explaining(f.Comments, e.Ref, it.StatusSet)
+
 	// Whether to ask.
 	answeredOn := func() *answered {
 		for i := len(f.Answers) - 1; i >= 0; i-- {
@@ -241,6 +305,13 @@ func (a *app) judge(e escalation, f escalateFacts) escalation {
 		e.Skip = fmt.Sprintf("%s answered on its thread %s: %q", an.For, an.At.UTC().Format(time.DateOnly), truncate(oneLine(an.Answer), 160))
 	case last != nil && !last.Member && !board.ContainsFold(f.People, last.Login):
 		e.Skip = fmt.Sprintf("its newest comment by a person is %s's, outside the organisation (GitHub's association %s; a teammate's login belongs in board.people) (%s): the wait is on them", last.Login, last.Association, last.URL)
+	case it.OpenBlockers > 0:
+		e.Skip = linked(it.HeldText()) + ": its recorded blockers explain it, board next offers it once they close"
+	case len(f.Parked) > 0:
+		ag := f.Parked[0]
+		e.Skip = fmt.Sprintf("worker %s is parked on it (%s): the wait is the worker's", ag.Name, cmp.Or(ag.Park.On, oneLine(ag.Park.Waits)))
+	case explainer != nil:
+		e.Skip = fmt.Sprintf("its comment %s (%s, %s) names what holds it, %s", explainer.URL, explainer.Login, explainer.At.UTC().Format(time.DateOnly), linked(named))
 	case f.Asked != "" && f.Asked == e.State:
 		e.Unchanged = true
 	}
@@ -403,7 +474,7 @@ func (a *app) judgeAll(ctx context.Context, st *state.State, es []escalation, as
 	out := make([]escalation, 0, len(es))
 	for _, e := range es {
 		f := escalateFacts{People: a.cfg.Board.People, Person: a.cfg.Guide.Person, Asked: asked,
-			Parked: agentsParkedOn(st.Agents, e.Ref, e.URL), Notes: st.Notes, Answers: answers}
+			Parked: agentsParkedOn(st, e.Ref, e.URL), Notes: st.Notes, Answers: answers}
 		f.Comments, f.CommentsErr = readEscalateComments(ctx, e.Ref)
 		out = append(out, a.judge(e, f))
 	}
@@ -428,7 +499,14 @@ its thread. It files no note, and prints why (skipped), for an item
   - with an open note for guide.person on it (--ref or --holds);
   - whose thread guide.person answered since its Status was set;
   - whose newest comment by a person comes from outside the organisation
-    (a customer's): the wait is on them.
+    (a customer's): the wait is on them;
+  - with an open recorded blocker (board block): board next offers it once
+    its blockers close;
+  - with a worker parked on it or on its task (a worker whose session
+    serves it, or whose task names its URL, parked on its pull request, a
+    hold or the GitHub gate): the wait is the worker's;
+  - with a comment, written since its Status was set (or the day before),
+    that names another issue or pull request: what holds it is recorded.
 
 Any other gets one note for guide.person naming what it waits on, who, since
 when and the evidence read. Every item looked at gets a timer
@@ -446,7 +524,9 @@ those items are looked at.
 
 The supervisor loop runs it every board.tidyEvery after board tidy; a
 negative board.escalateEvery escalates nothing. A worker that finds its item
-blocked moves it there (board move <item> blocked) and reports what holds it.
+blocked records what holds it as it moves it there (board move <item>
+blocked --by <issue>); a wait on a pull request, a hold or the GitHub gate is
+a park, the item left where it is.
 Prints one line per item looked at.`,
 		RunE: func(cmd *cobra.Command, refs []string) error {
 			every := a.cfg.Board.EscalateEvery.Duration

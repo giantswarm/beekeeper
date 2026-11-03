@@ -177,11 +177,11 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
-// judgedItem is a blocked item since two days with one open blocker, its
-// note's facts read with nothing that holds it from the person.
+// judgedItem is a blocked item since two days that only its Status holds,
+// its note's facts read with nothing that holds it from the person or
+// explains the block.
 func judgedItem(r *loopRig) (escalation, escalateFacts) {
 	it := blockedItem(refOne, blockedName)
-	it.Blockers, it.OpenBlockers, it.OpenBlockedBy = 1, 1, []string{"o/r#19"}
 	it.StatusSet = r.a.now.Add(-48 * time.Hour)
 	it.Assignees = []string{"Me"}
 	e := escalations([]board.Item{it}, blockedName, nil, nil)[0]
@@ -197,10 +197,12 @@ func judgedItem(r *loopRig) (escalation, escalateFacts) {
 func TestJudgeNamesWhatWhoSinceAndEvidence(t *testing.T) {
 	r := newLoopRig(t)
 	e, f := judgedItem(r)
+	e.item.Blockers, e.item.OpenBlockers, e.item.OpenBlockedBy = 1, 1, []string{"o/r#19"}
 	f.Parked = []state.Agent{{Party: state.Party{Name: "worker-3"}, Park: &state.Park{At: r.a.now, Waits: "decision on the API"}}}
 	got := r.a.judge(e, f)
-	if got.Skip != "" || got.Unchanged || got.State == "" {
-		t.Fatalf("judged %+v, want it asked with a state", got)
+	// Its open blocker explains it: no note, the evidence read all the same.
+	if !strings.Contains(got.Skip, "its recorded blockers explain it") || got.Unchanged || got.State == "" {
+		t.Fatalf("judged %+v, want it skipped for its blocker with a state", got)
 	}
 	ev := strings.Join(got.Evidence, "; ")
 	for _, want := range []string{
@@ -370,5 +372,89 @@ func TestEscalateSkipKeepsTheAskedState(t *testing.T) {
 	}
 	if len(r.calls) != 1 || r.calls[0][0] != loopTimer {
 		t.Errorf("calls %q, want only the timer and no note", r.calls)
+	}
+}
+
+// The blocks of https://github.com/giantswarm/beekeeper/issues/2142: an
+// item with an open recorded blocker, one whose worker parked on the GitHub
+// gate or on its pull request, and one whose own comment named its blocker
+// are explained, and no note reaches the person. What explains nothing (a
+// comment naming only the item, one older than the block, a worker parked
+// on another item, an unparked worker) leaves it asked.
+func TestJudgeSkipsWhatExplainsTheBlock(t *testing.T) {
+	r := newLoopRig(t)
+	const workerName = "worker-7"
+	worker := func(task, on string) state.Agent {
+		return state.Agent{Party: state.Party{Name: workerName, Session: "s-7"}, Task: task, Park: &state.Park{At: r.a.now, On: on, Waits: "the GitHub gate"}}
+	}
+	comment := func(e escalation, body string, before time.Duration) github.Comment {
+		return github.Comment{Login: "desk-bot", Automation: true, At: e.item.StatusSet.Add(-before), URL: issueOneURL + "#issuecomment-12", Body: body}
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*escalation, *escalateFacts, *state.State)
+		skip string
+	}{
+		{"open blocker", func(e *escalation, _ *escalateFacts, _ *state.State) {
+			e.item.Blockers, e.item.OpenBlockers, e.item.OpenBlockedBy = 1, 1, []string{"o/r#20"}
+		}, "held: blocked by [r#20](https://github.com/o/r/issues/20); 1 of 1 blockers open: its recorded blockers explain it"},
+		{"worker on the gate, its task names the item", func(_ *escalation, _ *escalateFacts, st *state.State) {
+			st.Agents = []state.Agent{worker("Work the board item "+issueOneURL+" in o/r.", "hold:github")}
+		}, "worker " + workerName + " is parked on it (hold:github)"},
+		{"worker on its pull request, its session serves the item", func(_ *escalation, _ *escalateFacts, st *state.State) {
+			st.Agents = []state.Agent{worker("another task", "o/r#30")}
+			st.Records = []state.Record{{Session: state.Party{Session: "s-7"}, Issue: issueOneURL}}
+		}, "worker " + workerName + " is parked on it (o/r#30)"},
+		{"worker parked on the item", func(_ *escalation, _ *escalateFacts, st *state.State) {
+			st.Agents = []state.Agent{worker("", refOne)}
+		}, "is parked on it (" + refOne + ")"},
+		{"its comment names its blocker", func(e *escalation, f *escalateFacts, _ *state.State) {
+			f.Comments = append(f.Comments, comment(*e, "Blocked until https://github.com/o/s/issues/1348 lands (closed since).", time.Hour))
+		}, "its comment " + issueOneURL + "#issuecomment-12 (desk-bot, "},
+		{"its comment names a pull request by its ref", func(e *escalation, f *escalateFacts, _ *state.State) {
+			f.Comments = append(f.Comments, comment(*e, "waits on o/r#30 and "+refOne, -time.Hour))
+		}, "names what holds it, [r#30](https://github.com/o/r/issues/30)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, f := judgedItem(r)
+			st := &state.State{}
+			tc.edit(&e, &f, st)
+			if f.Parked == nil {
+				f.Parked = agentsParkedOn(st, e.Ref, e.URL)
+			}
+			got := r.a.judge(e, f)
+			if !strings.Contains(got.Skip, tc.skip) {
+				t.Errorf("skip %q, want %q", got.Skip, tc.skip)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*escalation, *escalateFacts, *state.State)
+	}{
+		{"comment naming only the item", func(e *escalation, f *escalateFacts, _ *state.State) {
+			f.Comments = append(f.Comments, comment(*e, "still blocked: "+issueOneURL+" and "+refOne, 0))
+		}},
+		{"comment older than the block", func(e *escalation, f *escalateFacts, _ *state.State) {
+			f.Comments = append([]github.Comment{comment(*e, "waits on o/r#30", 48*time.Hour)}, f.Comments...)
+		}},
+		{"worker parked on another item", func(_ *escalation, _ *escalateFacts, st *state.State) {
+			st.Agents = []state.Agent{worker("Work the board item "+issueOneURL+"0 in o/r.", "hold:github")}
+		}},
+		{"worker on the item, not parked", func(_ *escalation, _ *escalateFacts, st *state.State) {
+			ag := worker("Work the board item "+issueOneURL+" in o/r.", "")
+			ag.Park = nil
+			st.Agents = []state.Agent{ag}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, f := judgedItem(r)
+			st := &state.State{}
+			tc.edit(&e, &f, st)
+			f.Parked = agentsParkedOn(st, e.Ref, e.URL)
+			if got := r.a.judge(e, f); got.Skip != "" {
+				t.Errorf("skipped %q, want it asked", got.Skip)
+			}
+		})
 	}
 }
