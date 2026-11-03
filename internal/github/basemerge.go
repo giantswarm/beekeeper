@@ -1,6 +1,7 @@
 package github
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -200,23 +201,27 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 // between approved's change to it and the base's since (moved), "" when it
 // is: every line head's patch adds or removes beyond approved's is a line
 // approved's or the base's patch of the file adds or removes, whichever
-// side the resolution kept. A file without a patch on either side, or one
-// the base left alone, had no conflict to resolve.
+// side the resolution kept, or combines both sides' edits on that line in
+// order. A file without a patch on either side, or one the base left alone,
+// had no conflict to resolve.
 func resolved(approved, head compareFile, moved []compareFile) string {
-	i := slices.IndexFunc(moved, func(f compareFile) bool { return f.Name == head.Name || f.Previous == head.Name })
+	name := cmp.Or(head.Name, approved.Name)
+	i := slices.IndexFunc(moved, func(f compareFile) bool { return f.Name == name || f.Previous == name })
 	switch {
 	case i < 0:
-		return head.Name + " adds or removes other lines, and the base did not change it since"
-	case approved.Patch == "" || head.Patch == "" || moved[i].Patch == "":
-		return head.Name + " has no patch to compare, and the base changed it since"
+		return name + " adds or removes other lines, and the base did not change it since"
+	case approved.Patch == "" || head.Name != "" && head.Patch == "" || moved[i].Patch == "":
+		return name + " has no patch to compare, and the base changed it since"
 	}
+	approvedLines := lineChanges(approved.Patch)
+	baseLines := lineChanges(moved[i].Patch)
 	sides := map[string]bool{}
 	left := map[string]int{}
-	for _, l := range lineChanges(approved.Patch) {
+	for _, l := range approvedLines {
 		sides[l[1:]] = true
 		left[l]++
 	}
-	for _, l := range lineChanges(moved[i].Patch) {
+	for _, l := range baseLines {
 		sides[l[1:]] = true
 	}
 	for _, l := range lineChanges(head.Patch) {
@@ -224,11 +229,125 @@ func resolved(approved, head compareFile, moved []compareFile) string {
 			left[l]--
 			continue
 		}
-		if !sides[l[1:]] {
-			return fmt.Sprintf("%s adds or removes %q, a line neither the approved head nor the base changed", head.Name, strings.TrimSpace(l))
+		if !sides[l[1:]] && !mergedLine(l[1:], approvedLines, baseLines) {
+			return fmt.Sprintf("%s adds or removes %q, a line neither the approved head nor the base changed", name, strings.TrimSpace(l))
 		}
 	}
 	return ""
+}
+
+// mergedLine reports whether line is an ordered token merge of a changed
+// line in approved and a changed line in base that edit the same statement.
+func mergedLine(line string, approved, base []string) bool {
+	target := lineTokens(line)
+	if len(target) == 0 {
+		return false
+	}
+	for _, al := range approved {
+		a := lineTokens(al[1:])
+		if len(a) == 0 {
+			continue
+		}
+		for _, bl := range base {
+			b := lineTokens(bl[1:])
+			if len(b) == 0 || !sameStatement(a, b) {
+				continue
+			}
+			if orderedTokenCover(target, a, b) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lineTokens splits a line into identifier/number tokens and single
+// non-whitespace punctuation characters.
+func lineTokens(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '\r' {
+			i++
+			continue
+		}
+		if isWordByte(c) {
+			j := i + 1
+			for j < len(s) && isWordByte(s[j]) {
+				j++
+			}
+			out = append(out, s[i:j])
+			i = j
+			continue
+		}
+		out = append(out, s[i:i+1])
+		i++
+	}
+	return out
+}
+
+func isWordByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// sameStatement reports whether a and b share at least half of their tokens
+// in order, so only two versions of the same line can be merged.
+func sameStatement(a, b []string) bool {
+	shared, j := 0, 0
+	for _, tok := range a {
+		for k := j; k < len(b); k++ {
+			if b[k] == tok {
+				shared++
+				j = k + 1
+				break
+			}
+		}
+	}
+	return shared*2 >= max(len(a), len(b))
+}
+
+// orderedTokenCover reports whether target is formed in order from tokens
+// of a and b.
+func orderedTokenCover(target, a, b []string) bool {
+	inf := len(b) + 1
+	dp := make([]int, len(a)+1)
+	for i := range dp {
+		dp[i] = inf
+	}
+	dp[0] = 0
+	for _, tok := range target {
+		next := make([]int, len(a)+1)
+		for i := range next {
+			next[i] = inf
+		}
+		for ia, ib := range dp {
+			if ib > len(b) {
+				continue
+			}
+			na := indexFrom(a, ia, tok)
+			nb := indexFrom(b, ib, tok)
+			if na >= 0 {
+				next[na+1] = min(next[na+1], ib)
+			}
+			if nb >= 0 {
+				next[ia] = min(next[ia], nb+1)
+			}
+			if na >= 0 && nb >= 0 {
+				next[na+1] = min(next[na+1], nb+1)
+			}
+		}
+		dp = next
+	}
+	return slices.ContainsFunc(dp, func(ib int) bool { return ib <= len(b) })
+}
+
+func indexFrom(tokens []string, start int, want string) int {
+	for i := start; i < len(tokens); i++ {
+		if tokens[i] == want {
+			return i
+		}
+	}
+	return -1
 }
 
 // lineChanges are a patch's added and removed lines, each with its sign.
@@ -268,14 +387,16 @@ func sameChange(was, now []compareFile) (unpatched, differ []string, why string)
 	if len(was) >= compareFiles || len(now) >= compareFiles {
 		return nil, nil, fmt.Sprintf("%d files, at the comparison's cap", max(len(was), len(now)))
 	}
-	if len(was) != len(now) {
+	if len(now) > len(was) {
 		return nil, nil, fmt.Sprintf("%d changed files, not %d", len(now), len(was))
 	}
 	byName := map[string]compareFile{}
 	for _, f := range was {
 		byName[f.Name] = f
 	}
+	seen := map[string]bool{}
 	for _, f := range now {
+		seen[f.Name] = true
 		w, ok := byName[f.Name]
 		switch {
 		case !ok:
@@ -286,6 +407,11 @@ func sameChange(was, now []compareFile) (unpatched, differ []string, why string)
 			unpatched = append(unpatched, f.Name)
 		case w.Patch == "" || f.Patch == "" || !slices.Equal(changedLines(w.Patch), changedLines(f.Patch)):
 			differ = append(differ, f.Name)
+		}
+	}
+	for _, w := range was {
+		if !seen[w.Name] {
+			differ = append(differ, w.Name)
 		}
 	}
 	return unpatched, differ, ""

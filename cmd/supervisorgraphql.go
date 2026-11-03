@@ -197,9 +197,18 @@ func loopPullChanged(in superloop.Input, ref string) time.Time {
 			changed = at
 		}
 	}
+	var worker string
 	for _, w := range in.Workers {
 		if w.ParkedOn == ref {
 			mark(w.ParkedAt)
+			if worker == "" {
+				worker = w.Name
+			}
+		}
+	}
+	for _, t := range in.Taken {
+		if t.Ref == ref && t.Agent != "" {
+			worker = t.Agent
 		}
 	}
 	for _, a := range in.Answers {
@@ -208,6 +217,9 @@ func loopPullChanged(in superloop.Input, ref string) time.Time {
 		}
 	}
 	for _, e := range in.Events {
+		if worker != "" && e.Agent == worker {
+			mark(e.At)
+		}
 		for round := 1; round <= superloop.MaxReviews; round++ {
 			if e.Agent == superloop.ReviewerName(ref, round) {
 				mark(e.At)

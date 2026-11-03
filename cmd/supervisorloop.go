@@ -1366,11 +1366,14 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	case superloop.KindReview, superloop.KindNext:
 		done = logged(verbStart, opens)
 	case superloop.KindGo:
-		p, err := readLoopPull(ctx, act.Ref)
-		if err != nil {
-			return "", false, err
+		if !l.stages[act.Key+" repair"] {
+			p, err := readLoopPull(ctx, act.Ref)
+			if err != nil {
+				return "", false, err
+			}
+			done = p.State == superloop.Merged && p.Head == act.Head
 		}
-		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens) || logged(verbStart, opens)
+		done = done || logged("agents.wake", opens) || logged(verbStart, opens)
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		done = logged("agents.wake", opens) || logged(verbStart, opens)
 	case superloop.KindEnd:
@@ -1956,6 +1959,15 @@ Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/b
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
+const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{{else}}Repair{{end}} the branch for {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
+
+{{.Task}}
+
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
+If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
+`
+
 const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
 
 {{.Task}}
@@ -1990,6 +2002,9 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		return err
 	}
 	tmpl := defaultFixerBrief
+	if act.Kind == superloop.KindGo {
+		tmpl = defaultRepairBrief
+	}
 	branch := ""
 	head := act.Head
 	if act.Kind == superloop.KindEnd {

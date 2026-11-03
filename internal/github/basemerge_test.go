@@ -18,10 +18,11 @@ const (
 	statusKey   = "status"
 	png         = "c.png"
 	otherLines  = "a.go adds or removes other lines"
-	aGo         = "a.go"
-	bGo         = "b.go"
-	dGo         = "d.go"
-	statusAdded = "added"
+	aGo                = "a.go"
+	bGo                = "b.go"
+	dGo                = "d.go"
+	statusAdded        = "added"
+	resolvingConflictA = "resolving its conflicts in a.go"
 )
 
 // bmCommit is a commit of a comparison with its parents.
@@ -99,6 +100,7 @@ func TestApprovalCovers(t *testing.T) {
 	}
 	for name, c := range map[string]struct {
 		added map[string]any
+		was   []compareFile
 		now   []compareFile
 		// base is what main changed between the approved head's merge
 		// base (bmFork) and the head's (bmMain); nil: z.go alone.
@@ -117,7 +119,7 @@ func TestApprovalCovers(t *testing.T) {
 		"a merge of main and an unchanged blob without a patch": {added: merge, now: approvedChange(), want: true},
 		"a merge resolving a conflict with main's change": {
 			added: merge, now: resolved(), base: mainChangedA, holds: true,
-			want: true, why: "resolving its conflicts in a.go",
+			want: true, why: resolvingConflictA,
 		},
 		// The worker kept the approved a.go (git checkout --ours): a
 		// conflict resolved its way.
@@ -128,7 +130,7 @@ func TestApprovalCovers(t *testing.T) {
 				f[0].Patch = "@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n ctx\n@@ -50,3 +50,3 @@\n ctx\n-y\n+x\n ctx"
 				return f
 			}(),
-			base: mainChangedA, holds: true, want: true, why: "resolving its conflicts in a.go",
+			base: mainChangedA, holds: true, want: true, why: resolvingConflictA,
 		},
 		"a resolved conflict of a merge of another branch": {
 			added: merge, now: resolved(), base: mainChangedA,
@@ -180,6 +182,25 @@ func TestApprovalCovers(t *testing.T) {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: resolved(), base: mainChangedA,
 			want: true, why: "rebases the approved head aaaaaaa onto main, resolving its conflicts in a.go",
 		},
+		"a rebase resolving a conflict by combining both sides of a line": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
+			was: append([]compareFile{
+				{Name: aGo, Status: modified, SHA: "a1", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", source, workspace); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", cloneSource, workspace); err != nil {\n ctx"},
+			}, approvedChange()[1:]...),
+			now: append([]compareFile{
+				{Name: aGo, Status: modified, SHA: "a3", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--bare\", \"--no-local\", source, repository); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--bare\", \"--no-local\", cloneSource, repository); err != nil {\n ctx"},
+			}, approvedChange()[1:]...),
+			base: []compareFile{
+				{Name: aGo, Status: modified, SHA: "a9", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", source, workspace); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--bare\", \"--no-local\", source, repository); err != nil {\n ctx"},
+			},
+			want: true, why: resolvingConflictA,
+		},
+		"a rebase resolving a conflict by keeping main's version of a file": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
+			now:   approvedChange()[1:],
+			base:  mainChangedA,
+			want:  true, why: resolvingConflictA,
+		},
 		"a rebase with another change": {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: unreviewed(), base: mainChangedA,
 			why: "a line neither the approved head nor the base changed",
@@ -225,8 +246,12 @@ func TestApprovalCovers(t *testing.T) {
 			if own == nil {
 				own, _ = c.added["commits"].([]bmCommit)
 			}
+			wasFiles := c.was
+			if wasFiles == nil {
+				wasFiles = approvedChange()
+			}
 			approvedCommit := commitOf(bmApproved, bmFork)
-			was := filesOf(bmFork, approvedChange())
+			was := filesOf(bmFork, wasFiles)
 			was["commits"], was["ahead_by"] = []bmCommit{approvedCommit}, 1
 			now := filesOf(bmMain, c.now)
 			now["commits"], now["ahead_by"] = append([]bmCommit{approvedCommit}, own...), 1+len(own)
