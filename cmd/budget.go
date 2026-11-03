@@ -69,6 +69,9 @@ unread core budget:
 ` + "`beekeeper budget --gate --bucket code_search && gh search code …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if a.managedExecutionID() != "" {
+				return a.remoteGitHubBudget(cmd.Context(), workerBudgetRequest{Gate: gate, Buckets: buckets, JSON: a.json})
+			}
 			if floor > 0 {
 				a.cfg.GitHub.Floor = floor
 			}

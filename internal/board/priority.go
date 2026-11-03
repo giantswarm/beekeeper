@@ -740,6 +740,60 @@ func (c *Client) RankAnchor(ctx context.Context, ref, from string) (string, erro
 	return "", nil
 }
 
+// IssueRank returns the board priority rank (1 is highest, 0 is unranked) of
+// ref from p: its own or inherited from its nearest ranked ancestor through
+// parent, or from a ranked epic in p that ref blocks.
+func (p Priorities) IssueRank(ref string, parent func(string) string) int {
+	ranks := p.Ranks()
+	for _, e := range p {
+		if e.Rank <= 0 {
+			continue
+		}
+		for _, b := range e.BlockedBy {
+			key := strings.ToLower(b)
+			if cur := ranks[key]; cur <= 0 || e.Rank < cur {
+				ranks[key] = e.Rank
+			}
+		}
+	}
+	rank, _ := ranks.Of(ref, parent)
+	return rank
+}
+
+// IssueParent reads the native sub-issue parent (owner/repo#n) of issue ref,
+// "" when it has none.
+func (c *Client) IssueParent(ctx context.Context, ref string) (string, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return "", err
+	}
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
+	var r struct {
+		Repository struct {
+			Issue *struct {
+				Parent *struct {
+					Number     int `json:"number"`
+					Repository struct {
+						NameWithOwner string `json:"nameWithOwner"`
+					} `json:"repository"`
+				} `json:"parent"`
+			} `json:"issue"`
+		} `json:"repository"`
+	}
+	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){parent{number repository{nameWithOwner}}}}}`,
+		vars{"o": owner, "r": repo, "n": n})
+	if err != nil {
+		if _, ok := partialOf(err); !ok {
+			return "", err
+		}
+	}
+	is := r.Repository.Issue
+	if is == nil || is.Parent == nil || is.Parent.Number == 0 || is.Parent.Repository.NameWithOwner == "" {
+		return "", nil
+	}
+	return fmt.Sprintf("%s#%d", is.Parent.Repository.NameWithOwner, is.Parent.Number), nil
+}
+
 // RankOf returns the priority rank of ref on the board (1 the top, 0 when
 // unranked): its own rank, the rank of the first issue it closes when ref is a
 // pull request, or the rank inherited from its nearest ranked ancestor epic.

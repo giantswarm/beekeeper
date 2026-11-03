@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -109,16 +110,20 @@ type app struct {
 	cfgPath            string
 	// loadedCfg is the configuration file loadConfig read; liveCapacity
 	// reloads Capacity from cfgPath or loadedCfg without mutating cfg.
-	loadedCfg string
-	as        string
-	json      bool
+	loadedCfg    string
+	as           string
+	gatePriority int
+	json         bool
 	// hook says a hook runs, for a session whose environment it keeps.
 	hook bool
 
 	cfg   *config.Config
 	store state.Store
 	now   time.Time
-	out   io.Writer
+	// loopNow advances the long-running supervisor clock without mutating now
+	// while actions from earlier passes still use the app.
+	loopNow *atomic.Pointer[time.Time]
+	out     io.Writer
 
 	// kindClusters lists the running kind clusters; nil asks docker.
 	kindClusters func() ([]string, error)
@@ -365,7 +370,7 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return discover(a.cfg, t, a.now), t, nil
+	return discover(a.cfg, t, a.timeNow()), t, nil
 }
 
 // discover returns the running sessions of every harness.
@@ -512,4 +517,23 @@ func (a *app) versionCmd() *cobra.Command {
 			return err
 		},
 	}
+}
+
+// timeNow returns the supervisor clock, or the command's fixed observation time.
+func (a *app) timeNow() time.Time {
+	if a.loopNow != nil {
+		if now := a.loopNow.Load(); now != nil {
+			return *now
+		}
+	}
+	return a.now
+}
+
+// snapshotAtNow gives helpers that use a command's fixed time an observation
+// that stays stable while subsequent supervisor passes advance their clock.
+func (a *app) snapshotAtNow() *app {
+	snapshot := *a
+	snapshot.now = a.timeNow()
+	snapshot.loopNow = nil
+	return &snapshot
 }
