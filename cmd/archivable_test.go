@@ -49,7 +49,7 @@ func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 func TestArchivable(t *testing.T) {
 	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	busy := state.Party{Session: "busy", HostSession: busyHost, Name: "Board pull 902"}
-	run := state.Party{Session: "run9", HostSession: runHost, Name: "Guide run 9"}
+	run := state.Party{Session: "run9", HostSession: runHost, Name: guideNine}
 	a, out := archiveApp(t, func(st *state.State) {
 		for _, p := range []state.Party{worker, busy, run} {
 			st.Starts = append(st.Starts, state.Start{Party: p})
@@ -173,7 +173,7 @@ func (noCLIMachine) Processes() (*proc.Table, error) {
 // counts no try and leaves the archive archiveAgain, so the doctor does not
 // ask again on every run.
 func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
-	run := state.Party{Session: "run9", HostSession: runHost, Name: "Guide run 9"}
+	run := state.Party{Session: "run9", HostSession: runHost, Name: guideNine}
 	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	for _, c := range []struct {
 		desc     string

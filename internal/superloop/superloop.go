@@ -18,6 +18,9 @@ import (
 
 // The kinds of action, each logged as "supervisor.<kind>".
 const (
+	mergeableConflicting = "CONFLICTING"
+	mergeStateDirty      = "DIRTY"
+
 	KindReview = "review"
 	KindGo     = "go"
 	// KindMerge records a coordinator mutation, never a worker grant.
@@ -1189,7 +1192,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		v := p.verdict(rs[len(rs)-1], l.pushed(p))
 		approved = v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head)
 	}
-	if isParked && !approved && (p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY") {
+	if isParked && !approved && (p.Mergeable == mergeableConflicting || p.MergeState == mergeStateDirty) {
 		if sameHead(w.ParkedHead, p.Head) {
 			a := base
 			a.Key = fmt.Sprintf("conflict %s@%s %s", ref, p.Head, w.ParkedAt.UTC().Format(time.RFC3339Nano))
@@ -1482,7 +1485,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		}
 		hasActiveUnparkedOwner := liveOwner != nil && liveOwner.ParkedOn == ""
 		ownerGone := !hasActiveUnparkedOwner && (!isParked && !roundRunning ||
-			p.Draft || p.Mergeable == "CONFLICTING" ||
+			p.Draft || p.Mergeable == mergeableConflicting ||
 			(lastVerdict != nil && lastVerdict.Verdict == ChangesRequested && l.has(forwardKey(ref, lastVerdict.ID)) && (!isParked || !w.ParkedAt.After(l.keys[forwardKey(ref, lastVerdict.ID)].At))))
 		stalled := false
 		if !in.Now.IsZero() && !waiter.ParkedAt.IsZero() && !in.Now.Before(waiter.ParkedAt.Add(OverlapWait)) {

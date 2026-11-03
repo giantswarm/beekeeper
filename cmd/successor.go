@@ -62,22 +62,31 @@ func (rl role) lastRun(r state.Role) int {
 // resumes it in its desktop CLI. It opens with the role skill's slash
 // command (roleSlash), which loads the skill into the session for good.
 func (rl role) successorBrief(cfg config.Role, name, from string) string {
-	return fmt.Sprintf(`%sYou are %q, the next %s run, a fresh session beekeeper started to take over %s from %q.
+	return fmt.Sprintf(`%sYou are %q, the next %s run, a fresh session beekeeper started to take over %s%s.
 
 This first turn runs headless from the command line. In it, only take the role: run `+"`beekeeper %s start`"+`, then end the turn. Arm no Monitor, watch or background task in it: the desktop gets this session's CLI only once this turn has ended.
 
 Once the desktop runs your CLI, a message tells you so there: then run `+"`%s`"+` and follow it. Peers message you as %q.`,
-		roleSlash(cfg), name, rl.name, rl.duty, from, rl.name, rl.handover, name)
+		roleSlash(cfg), name, rl.name, rl.duty, fromText(from), rl.name, rl.handover, name)
+}
+
+// fromText names the holder a run takes over from, "" when none is
+// recorded.
+func fromText(from string) string {
+	if from == "" {
+		return ", which no session holds"
+	}
+	return fmt.Sprintf(" from %q", from)
 }
 
 // backgroundSuccessorBrief is successorBrief for a background session
 // (agents.mode background): its turns all run in the one CLI the claude
 // daemon keeps, so its first turn takes the role and goes on with it.
 func (rl role) backgroundSuccessorBrief(cfg config.Role, name, from string) string {
-	return fmt.Sprintf(`%sYou are %q, the next %s run, a fresh background session beekeeper started to take over %s from %q.
+	return fmt.Sprintf(`%sYou are %q, the next %s run, a fresh background session beekeeper started to take over %s%s.
 
 Take the role: run `+"`beekeeper %s start`"+`, then run `+"`%s`"+` and follow it. Peers message you as %q.`,
-		roleSlash(cfg), name, rl.name, rl.duty, from, rl.name, rl.handover, name)
+		roleSlash(cfg), name, rl.name, rl.duty, fromText(from), rl.name, rl.handover, name)
 }
 
 // takesRelay reports whether me is the session a relay to to names: by its
@@ -94,7 +103,16 @@ func takesRelay(to, me state.Party) bool {
 // that fails withdraws the relay. It returns the successor and the relay's
 // line.
 func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party, dir string) (state.Party, string, error) {
+	return a.startRun(ctx, rl, from, by, dir, nil)
+}
+
+// startRun is startSuccessor, where from may be the zero party: no holder is
+// recorded, so no relay opens and the run's `<role> start` takes the role
+// as a start of beekeeper's (role.mayTake). check, when set, refuses the
+// run under the state's lock before anything starts.
+func (a *app) startRun(ctx context.Context, rl role, from, by state.Party, dir string, check func(*state.State) error) (state.Party, string, error) {
 	id := uuid.NewString()
+	holder := from != (state.Party{})
 	// A background successor's id is the claude daemon's: its relay names
 	// its run until the start records the id.
 	background := a.cfg.Agents.Mode == config.ModeBackground
@@ -104,7 +122,12 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	// A machine without a process table shows no session carrying the title.
 	sessions, _, _ := a.sessions()
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		if s, ok := st.BypassStartOf(from); ok {
+		if check != nil {
+			if err := check(st); err != nil {
+				return nil, err
+			}
+		}
+		if s, ok := st.BypassStartOf(from); holder && ok {
 			startDir, startModel = s.Dir, s.Model
 		}
 		r := rl.get(st)
@@ -119,6 +142,10 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 		if r.Run > 0 && r.Holder != nil && rl.runName(r.Run) != from.Name {
 			fromLabel = fmt.Sprintf("%s (%s)", from.Name, rl.runName(r.Run))
 		}
+		if !holder {
+			msg = fmt.Sprintf("no %s is recorded: %q's `beekeeper %s start` takes the role", rl.name, to.Name, rl.name)
+			return []state.Event{event(by, rl.name+".run", "starting %s: no %s is recorded", to.Name, rl.name)}, nil
+		}
 		var evs []state.Event
 		var err error
 		msg, evs, err = rl.relay(st, from, to, a.now, rl.cfg(a.cfg).RelayTTL.Duration)
@@ -130,7 +157,10 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	if err != nil {
 		return state.Party{}, "", err
 	}
-	rec, _ := claude.ReadRecord(a.cfg, desktopID(from))
+	var rec *claude.Record
+	if holder {
+		rec, _ = claude.ReadRecord(a.cfg, desktopID(from))
+	}
 	model := strings.TrimSpace(rl.cfg(a.cfg).Model)
 	if rec != nil {
 		model = cmp.Or(model, rec.Model)

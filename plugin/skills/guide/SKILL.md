@@ -39,7 +39,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   `guide.instructions` names) say which roadmap board this is, its statuses and how ideas and
   plans enter it. They apply on top of this skill.
 - **beekeeper** (its `--help` the reference) holds the role and the queue. `beekeeper guide start`
-  makes this session the guide or takes a relayed role; `beekeeper guide watch` is the `Monitor`
+  takes the role in a run beekeeper started (`guide start --new` starts one); `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
   the person (`GUIDE WAITING`), each unfiled finding (`GUIDE PROBLEM`, the full report
   to file in its owning repository, put on the board in `Backlog` with `beekeeper board move <issue> backlog --intake` and place on the board with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),

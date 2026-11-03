@@ -200,7 +200,7 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 	}
 	reviewedHere := slices.ContainsFunc(rs, func(rd round) bool { return sameHead(rd.head, p.Head) })
 	switch {
-	case p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY":
+	case p.Mergeable == mergeableConflicting || p.MergeState == mergeStateDirty:
 		fix(fmt.Sprintf("head %s conflicts with %s: merge %s into the branch and resolve the conflicts", short(p.Head), baseName(p), baseName(p)))
 	case len(p.Red) > 0:
 		var names []string
