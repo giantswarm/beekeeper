@@ -213,6 +213,8 @@ A builder holding its per-worktree run lock is busy and stays until a later
 sweep. Dry runs make no cluster changes. A failed deletion retains its journal
 for retry; each journal records the original explicit cluster connection so
 changing desk configuration does not redirect cleanup to a different cluster.
+A worktree built through several connections keeps one journal per connection,
+and each retires, or retries, on its own.
 Ownership records stay in the machine's state directory; neither hostnames nor
 worktree paths are uploaded to Kubernetes. Other machines' builders stay.
 Builders created before this journal was introduced retire through their idle

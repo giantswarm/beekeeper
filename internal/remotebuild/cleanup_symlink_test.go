@@ -52,7 +52,7 @@ func TestSweepFinishedSymlinkAliases(t *testing.T) {
 			if err := runner.remember(recorded, host, builder); err != nil {
 				t.Fatal(err)
 			}
-			record := filepath.Join(dir, builder+".json")
+			record := filepath.Join(dir, builderRecord{Kubeconfig: runner.Config.Kubeconfig, Context: runner.Config.Context, Namespace: runner.Config.Namespace}.file(builder))
 			for _, step := range []struct {
 				finished []string
 				dry      bool

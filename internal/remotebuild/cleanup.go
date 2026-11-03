@@ -30,6 +30,14 @@ func builderName(host, root string) string {
 	return "bkb-" + hex.EncodeToString(sum[:12])
 }
 
+// file names the record of builder name. The name leaves out the connection,
+// so a worktree built through two connections owns a Job in each: every
+// connection keeps its own record, and retries, under the one worktree lock.
+func (rec builderRecord) file(name string) string {
+	sum := sha256.Sum256([]byte(rec.Kubeconfig + "\x00" + rec.Context + "\x00" + rec.Namespace))
+	return name + "." + hex.EncodeToString(sum[:12]) + ".json"
+}
+
 func (r Runner) remember(root, host, name string) error {
 	dir := filepath.Join(r.StateDir, "remote-build")
 	record := builderRecord{root, host, r.Config.Kubeconfig, r.Config.Context, r.Config.Namespace}
@@ -38,7 +46,7 @@ func (r Runner) remember(root, host, name string) error {
 		return err
 	}
 	// The worktree lock serializes readers and writers of this record.
-	return os.WriteFile(filepath.Join(dir, name+".json"), raw, 0o600)
+	return os.WriteFile(filepath.Join(dir, record.file(name)), raw, 0o600)
 }
 
 // physicalRoot is root cleaned and, where it exists, with its symlinks
@@ -74,7 +82,8 @@ func (r Runner) Sweep(ctx context.Context, finished []string, dryRun bool) error
 	}
 	var errs []error
 	for _, entry := range entries {
-		name, ok := strings.CutSuffix(entry.Name(), ".json")
+		stem, ok := strings.CutSuffix(entry.Name(), ".json")
+		name, _, _ := strings.Cut(stem, ".")
 		if !ok || !strings.HasPrefix(name, "bkb-") || entry.IsDir() {
 			continue
 		}
@@ -106,7 +115,7 @@ func (r Runner) Sweep(ctx context.Context, finished []string, dryRun bool) error
 			if rec.Host != host {
 				return nil
 			}
-			if !filepath.IsAbs(rec.Root) || builderName(host, rec.Root) != name {
+			if !filepath.IsAbs(rec.Root) || builderName(host, rec.Root) != name || rec.file(name) != entry.Name() {
 				return fmt.Errorf("invalid builder ownership record %s", name)
 			}
 			_, statErr := os.Stat(rec.Root)
