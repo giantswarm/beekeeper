@@ -14,12 +14,13 @@ const (
 	testEffortHigh = "high"
 	testEffortLow  = "low"
 	testEffortMax  = "max"
+	testEffortX    = "xhigh"
 	testScanRule   = "^scan"
 	testScanName   = "scan deps"
 )
 
 func TestEffortBackgroundLaunchAndRecord(t *testing.T) {
-	for _, level := range []string{"", testEffortLow, "medium", testEffortHigh, "xhigh", testEffortMax} {
+	for _, level := range []string{"", testEffortLow, "medium", testEffortHigh, testEffortX, testEffortMax} {
 		t.Run("level="+level, func(t *testing.T) {
 			a, _ := stubApp(t)
 			plat.Machine = tableMachine{plat.Machine}
@@ -105,12 +106,12 @@ func TestEffortLoopStartDefault(t *testing.T) {
 func TestEffortRulePrecedence(t *testing.T) {
 	a, _ := stubApp(t)
 	a.cfg.Agents.Models = []config.AgentModelRule{
-		{Match: testScanRule, Kind: taskKindReview, Effort: "xhigh"},
+		{Match: testScanRule, Kind: taskKindReview, Effort: testEffortX},
 		{Match: testScanRule, Effort: testEffortHigh},
 	}
 	for _, tc := range []struct{ name, kind, flag, want string }{
 		{testScanName, workerRole, "", testEffortHigh},
-		{testScanName, taskKindReview, "", "xhigh"},
+		{testScanName, taskKindReview, "", testEffortX},
 		{testScanName, workerRole, testEffortLow, testEffortLow},
 		{"fix", workerRole, "", ""},
 	} {
