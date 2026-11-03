@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -245,11 +246,28 @@ func TestSSHCompletedReportClosesOwnedStream(t *testing.T) {
 	}
 	f := testFixture(t)
 	f.r.Messaging = true
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if _, err := f.s.Start(ctx, f.r); err != nil {
+	// Provisioning can exceed the stream-close deadline on a busy runner.
+	// Keep the real Git isolation check, with a bounded slow response.
+	run := f.s.Command
+	f.s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+		if bin == "git" && slices.Contains(args, "--git-common-dir") {
+			timer := time.NewTimer(1100 * time.Millisecond)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		return run(ctx, dir, env, bin, args...)
+	}
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer startupCancel()
+	if _, err := f.s.Start(startupCtx, f.r); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(startupCtx, time.Second)
+	defer cancel()
 	stream, err := f.s.openMessageStream(ctx, f.r.Ref)
 	if err != nil {
 		t.Fatal(err)

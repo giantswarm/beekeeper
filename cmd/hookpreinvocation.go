@@ -29,10 +29,15 @@ agents wake <name> <message>" while a turn runs reaches the model before its
 next model call inside the running turn; when the session is idle, the unit's
 runner delivers the message on stdin as the next turn.
 
-Register it in ~/.gemini/config/hooks.json:
+Register it in ~/.gemini/config/hooks.json, as beekeeper install does, next
+to the PreToolUse guard: PreInvocation lists the commands themselves, not
+matchers (agy rejects the whole entry for one):
 
-  {"beekeeper": {"PreInvocation": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook preinvocation", "timeout": 30}]}}`,
+  {"beekeeper": {
+    "PreInvocation": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook preinvocation", "timeout": 30}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			defer func() { _ = recover() }() // a broken hook must not block the model call

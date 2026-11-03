@@ -41,15 +41,16 @@ const (
 
 var brokeredAgentsOps = []string{agentStartName, agentWakeName, agentResumeName}
 
-// The lab operations of lease up and lease down, and the lease command's
+// The lab operations of lease up, down and resume, and the lease command's
 // name.
 const (
 	labUp     = "up"
 	labDown   = "down"
+	labResume = "resume"
 	leaseName = "lease"
 )
 
-var labOps = []string{labUp, labDown}
+var labOps = []string{labUp, labDown, labResume}
 
 // inSandbox reports whether this process runs in the agent sandbox and is
 // not the broker's call itself.
@@ -134,6 +135,29 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if cmd.Name() == agentStartName && !cmd.Flags().Changed("model") {
+		name, _ := cmd.Flags().GetString("name")
+		if strings.TrimSpace(name) == "" && len(args) >= 2 {
+			name = strings.TrimSpace(args[0])
+		}
+		kind, _ := cmd.Flags().GetString("kind")
+		kind = strings.TrimSpace(kind)
+		if kind == "" {
+			rev, _ := cmd.Flags().GetBool(reviewFlag)
+			ofSH, _ := cmd.Flags().GetBool(reviewOfSelfHostedFlag)
+			if rev || ofSH {
+				kind = taskKindReview
+			} else {
+				kind = workerRole
+			}
+		}
+		if m := a.ruleModel(name, kind); m != "" {
+			if h, _ := cmd.Flags().GetString("harness"); h == config.OmpHarness {
+				m = a.ompQualified(m)
+			}
+			argv = append(argv, "--model="+m)
+		}
 	}
 	if scratch != "" {
 		abs, err := filepath.Abs(scratch)
@@ -299,11 +323,11 @@ func brokeredPersonArgv(req sandbox.Request, _ bool) ([]string, error) {
 	return req.Args, nil
 }
 
-// brokeredLabArgv is the command line of a brokered lab creation or
-// teardown: lease up or lease down of the lab.
+// brokeredLabArgv is the command line of a brokered lab creation,
+// teardown or restart: lease up, down or resume of the lab.
 func brokeredLabArgv(req sandbox.Request, _ bool) ([]string, error) {
 	if len(req.Args) != 1 || !slices.Contains(labOps, req.Args[0]) {
-		return nil, errors.New("the sandbox broker runs beekeeper lease up and lease down only")
+		return nil, errors.New("the sandbox broker runs beekeeper lease up, down and resume only")
 	}
 	if !resourceName.MatchString(req.Resource) {
 		return nil, fmt.Errorf("%q is not a resource", req.Resource)

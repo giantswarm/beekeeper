@@ -115,16 +115,29 @@ var readDeskReview = func(ctx context.Context, repository string, pr int, id str
 
 // This runs in the coordinating state transaction, so its authenticated result
 // survives report delivery/pruning and is rechecked immediately before use.
-func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUse, pull superloop.Pull) error {
+// The review authenticates the head its round reviewed; a merge head past it
+// is admitted only when it merely merges the base into that head
+// (readBaseMerge), as the reviewed merge's own branch update does.
+func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, use execution.MergeUse, pull superloop.Pull) error {
 	round := executionReviewRound(st, use)
 	_, workerIndex := executionRecord(st, use.Ref)
+	reviewed := use.Head
+	if round != nil && round.Head != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
+		covered, err := readBaseMerge(ctx, pull, round.Head)
+		if err != nil {
+			return err
+		}
+		if covered {
+			reviewed = round.Head
+		}
+	}
 	workerOK := workerIndex >= 0 && round != nil && sameReviewSession(round.Worker, st.Starts[workerIndex].Party)
 	if !workerOK && use.ID == "" && workerIndex >= 0 && round != nil {
 		workerOK = slices.ContainsFunc(st.Starts, func(s state.Start) bool {
 			return s.Execution != nil && s.Execution.Request.Repository == use.Repository && sameReviewSession(round.Worker, s.Party)
 		})
 	}
-	if round == nil || round.Head != use.Head || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
+	if round == nil || round.Head != reviewed || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
 		return refused("no assigned independent review round for this execution and head")
 	}
 	result := round.Result
@@ -136,7 +149,7 @@ func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUs
 		return refused("authenticated independent review no longer exists")
 	}
 	current := pull.Reviews[currentIndex]
-	if current.Author != result.Author || current.Head != use.Head || current.Commit != use.Head || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
+	if current.Author != result.Author || current.Head != reviewed || current.Commit != reviewed || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
 		return refused("authenticated independent review changed; new supervisor approval required")
 	}
 	// The loop's own merge presents no grant: it is the merge authority, so
