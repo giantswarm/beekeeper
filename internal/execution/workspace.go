@@ -51,23 +51,29 @@ func (s *Server) git(ctx context.Context, dir string, args ...string) ([]byte, e
 }
 
 func (s *Server) workspace(ctx context.Context, j *Journal) error {
-	source, ok := s.Config.Repositories[j.Request.Repository]
-	if !ok {
-		return errors.New("repository is not mapped on the execution host")
+	source, mapped := s.Config.Repositories[j.Request.Repository]
+	if !repositoryAllowed(s.Config.Repositories, s.Config.RepositoryOrgs, j.Request.Repository) {
+		return errors.New("repository is not admitted by execution host policy")
 	}
-	source, err := filepath.EvalSymlinks(source)
-	if err != nil {
-		return errors.New("execution host checkout is unavailable")
-	}
-	origin, err := s.git(ctx, source, "remote", "get-url", "origin")
-	if err != nil || RepositoryIdentity(string(origin)) != strings.ToLower(j.Request.Repository) {
-		return errors.New("execution host checkout origin does not match the repository allowlist")
+	origin := []byte("https://github.com/" + j.Request.Repository + ".git")
+	if mapped {
+		resolved, err := filepath.EvalSymlinks(source)
+		if err != nil {
+			return errors.New("execution host checkout is unavailable")
+		}
+		source = resolved
+		origin, err = s.git(ctx, source, "remote", "get-url", "origin")
+		if err != nil || RepositoryIdentity(string(origin)) != strings.ToLower(j.Request.Repository) {
+			return errors.New("execution host checkout origin does not match the repository allowlist")
+		}
+	} else if j.Request.SourceDigest == "" {
+		return errors.New("unmapped repository requires a coordinator-pinned source bundle")
 	}
 	root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot)
 	if err != nil || root != filepath.Clean(s.Config.WorkspaceRoot) {
 		return errors.New("workspace root is missing or resolves through a symlink")
 	}
-	if within(root, source) || within(source, root) {
+	if mapped && (within(root, source) || within(source, root)) {
 		return errors.New("resolved source checkout and workspace root must be disjoint")
 	}
 	parent := filepath.Join(root, string(j.Request.Ref.Execution))
@@ -92,12 +98,6 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	} else {
-		if _, err := s.git(ctx, "", "clone", "--bare", "--no-local", "--no-hardlinks", "--", source, repository); err != nil {
-			return errors.New("isolated workspace clone failed; partial work is preserved")
-		}
-		if _, err := s.git(ctx, repository, "remote", "set-url", "origin", strings.TrimSpace(string(origin))); err != nil {
-			return errors.New("cannot establish workspace repository identity")
-		}
 		fetchSource, fetchRef := source, j.Request.GitRef
 		if j.Request.SourceDigest != "" {
 			fetchSource = s.sourcePath(j.Request.Ref)
@@ -106,6 +106,16 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 				return errors.New("pinned source bundle is missing or corrupt")
 			}
 			fetchRef = "refs/heads/execution-source"
+		}
+		cloneSource := source
+		if !mapped {
+			cloneSource = fetchSource
+		}
+		if _, err := s.git(ctx, "", "clone", "--bare", "--no-local", "--no-hardlinks", "--", cloneSource, repository); err != nil {
+			return errors.New("isolated workspace clone failed; partial work is preserved")
+		}
+		if _, err := s.git(ctx, repository, "remote", "set-url", "origin", strings.TrimSpace(string(origin))); err != nil {
+			return errors.New("cannot establish workspace repository identity")
 		}
 		if _, err := s.git(ctx, repository, "fetch", "--no-tags", "--", fetchSource, fetchRef); err != nil {
 			return errors.New("cannot resolve the requested ref on the execution host")
@@ -165,6 +175,11 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		if err := atomicFile(exclude, append(contents, []byte("\n/.beekeeper-scratch/\n")...)); err != nil {
 			return err
 		}
+	}
+	// Validate the actual pinned source, including Go requirements absent from
+	// a stale host checkout or from an organization-admitted repository.
+	if err := s.checkWorkspaceTools(ctx, workspace); err != nil {
+		return err
 	}
 	// The harness loads the same embedded rules independently of project
 	// instructions, including repositories that supply no CLAUDE.md.
