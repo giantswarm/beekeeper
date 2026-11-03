@@ -23,19 +23,19 @@ import (
 )
 
 type executionStartOptions struct {
-	Host, Repository, GitRef, Harness, Model, Mode, Dir, Task  string
-	Desktop, Builds, Force, Review, ReviewOfSelfHosted, DryRun bool
-	Exclude                                                    []string
+	Host, Repository, GitRef, Harness, Model, Effort, Mode, Dir, Task string
+	Desktop, Builds, Force, Review, ReviewOfSelfHosted, DryRun        bool
+	Exclude                                                           []string
 }
 
 func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o executionStartOptions) error {
 	if err := a.cfg.GitHub.WorkerApp.Validate(); err != nil {
 		return err
 	}
-	if w := a.cfg.GitHub.WorkerApp; w != nil {
+	if a.cfg.GitHub.WorkerApp != nil {
 		owner, _, _ := strings.Cut(strings.ToLower(o.Repository), "/")
-		if w.Installations[owner] <= 0 || !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
-			return refused("task owner needs a github.workerApp installation and github.allowedOrgs entry")
+		if !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
+			return refused("task owner needs a github.allowedOrgs entry")
 		}
 	}
 	host, err := a.executionHost(o.Host)
@@ -114,6 +114,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if !execution.SupportedHarness(o.Harness) || slices.Contains(exclude, o.Harness) || o.Model == "" {
 		return usageErr("remote %s requires an explicit --model or a configured auto choice this host offers", o.Harness)
 	}
+	if o.Harness == execution.HarnessAgy {
+		if err := refuseAgyEffort(o.Effort); err != nil {
+			return err
+		}
+	}
 	if _, err := gateStart(verdict, o.Force); err != nil {
 		return err
 	}
@@ -129,17 +134,17 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
 	if a.cfg.GitHub.WorkerApp != nil {
-		prompt += "\n\nWorker GitHub access: use gh for issues, PRs and checks. Cross-repository reads name --repo owner/repo; gh api uses repos/owner/repo/.... Commit in the owned workspace and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open the PR with gh pr create, then park on its URL for independent review. Merges stay on the coordinator. Never expose credential environment values.\n"
+		prompt += "\n\nWorker GitHub access: use gh for issues, PRs and checks across repositories you can reach. Cross-repository calls name --repo owner/repo; gh api uses repos/owner/repo/.... Commit in the owned workspace (or a cloned repository under .beekeeper-scratch) and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open each PR with gh pr create, then park on its URL for independent review. Merges stay on the coordinator. Never expose credential environment values.\n"
 	} else {
 		prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. Before the desk review approves the PR, merge upstream changes without a GitHub credential on this host with `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again; after approval only the merge moves the head (it updates a behind branch itself), so sync the base then only to resolve a conflict the supervisor reports. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
 	}
 
-	r := execution.StartRequest{GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	r := execution.StartRequest{GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Effort: o.Effort, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
 	if o.DryRun {
-		_, err := fmt.Fprintf(a.out, "dry run: %s, host %s, %s at %s, harness %s on %s; no reservation, workspace or process created\n", name, host.Identity, o.Repository, o.GitRef, o.Harness, o.Model)
+		_, err := fmt.Fprintf(a.out, "dry run: %s, host %s, %s at %s, harness %s on %s; no reservation, workspace or process created\n", name, host.Identity, o.Repository, o.GitRef, o.Harness, o.Model+effortText(o.Effort))
 		return err
 	}
 	provider, bucket := resolveAgentProviderBucket(k, r.Harness, r.Model)
@@ -166,7 +171,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 			return nil, refused("execution host maxBusy reached")
 		}
 		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
-		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Execution: rec}
+		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
 		if _, err := recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
 		}
@@ -428,7 +433,7 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 			if a.json {
 				return a.printJSON(observation)
 			}
-			_, err := fmt.Fprintf(a.out, "started %s: execution %s on %s, workspace %s, unit %s, conversation %s, process %s\n", r.Name, ref.Execution, ref.Host, observation.Handle.Workspace, observation.Handle.Unit, observation.Handle.ConversationID, observation.ProcessState)
+			_, err := fmt.Fprintf(a.out, "started %s: execution %s on %s, workspace %s, unit %s, conversation %s, process %s%s\n", r.Name, ref.Execution, ref.Host, observation.Handle.Workspace, observation.Handle.Unit, observation.Handle.ConversationID, observation.ProcessState, effortText(r.Effort))
 			return err
 		}
 		if observation.ProcessState == execution.Failed || observation.ProcessState == execution.Unknown || observation.StopRequested {
@@ -523,7 +528,7 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 				// loop reads a claimed next start back from it and takes no
 				// second one after a restart. Logged once, on the first
 				// observation that confirms the run, start or recovery alike.
-				evs = append(evs, event(st.Starts[i].By, "agents.start", "%s: SSH execution %s on %s, workspace %s, %s", st.Starts[i].Name, ref.Execution, ref.Host, o.Handle.Workspace, o.ProcessState))
+				evs = append(evs, event(st.Starts[i].By, "agents.start", "%s: SSH execution %s on %s, workspace %s, %s%s", st.Starts[i].Name, ref.Execution, ref.Host, o.Handle.Workspace, o.ProcessState, effortText(st.Starts[i].Effort)))
 				r.Phase = execution.Running
 			}
 		}

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/agyhooks"
 )
 
 const fixtureAgyVersion = "1.4.7"
@@ -132,6 +134,37 @@ func TestPrepareInstallsManagedAgyHome(t *testing.T) {
 	}
 	if _, err := f.s.InstalledPolicy(); err == nil {
 		t.Fatal("tampered agy hooks still match the policy")
+	}
+}
+
+// The managed hooks.json is in the shape agy accepts, and the agy probe of
+// `agents hosts check` and of every start refuses agy while agy would reject
+// that file: agy drops the whole file for one bad entry and runs unguarded.
+func TestAgyProbeRefusesHooksAgyRejects(t *testing.T) {
+	f, _ := agyFixture(t)
+	ctx := context.Background()
+	if why := agyhooks.Rejects(f.s.agyFiles()[hooksJSONFile]); why != "" {
+		t.Fatalf("agy rejects the managed hooks.json: %s", why)
+	}
+	h := f.s.Config.Harnesses[HarnessAgy]
+	if err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{}); err != nil {
+		t.Fatalf("probe of the prepared home: %v", err)
+	}
+	path := filepath.Join(f.s.agyConfigDir(), hooksJSONFile)
+	stale := `{"beekeeper":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/bin/beekeeper agents execution-guard --format agy"}]}]},` +
+		`"stale":{"PreInvocation":[{"matcher":"*","hooks":[{"type":"command","command":"/usr/local/bin/stale"}]}]}}`
+	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{})
+	if err == nil || !strings.Contains(err.Error(), "agy would reject the managed hooks.json and run unguarded") || !strings.Contains(err.Error(), `the "stale" entry`) {
+		t.Fatalf("probe of a rejected hooks.json: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{}); err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Fatalf("probe without hooks.json: %v", err)
 	}
 }
 

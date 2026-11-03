@@ -358,3 +358,45 @@ func TestTranscriptReviewReplacementVariable(t *testing.T) {
 		t.Errorf("replacement variable refused: %+v", d)
 	}
 }
+
+func TestTranscriptRuntimeRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	for _, command := range []string{
+		`python3 -c 'from pathlib import Path; p = Path.home(); print([f.read_text() for f in p.rglob("*.jsonl")])'`,
+		`python3 -c 'from pathlib import Path; name = ".cl" + "aude"; print(list((Path.home()/name).rglob("*.jsonl")))'`,
+		`python3 -c 'import os; print(open(os.path.join(os.environ["HOME"], ".cl" + "aude", "history.jsonl")).read())'`,
+		`python3 -c 'import os; print(open(os.path.join(os.getenv("CLAUDE_CONFIG_DIR"), "history.jsonl")).read())'`,
+		`python3 -c 'import os; print(open(os.path.expanduser("~") + "/.cl" + "aude/history.jsonl").read())'`,
+		`node -e 'const os = require("os"); console.log(require("fs").readdirSync(os.homedir()))'`,
+		`node -e 'console.log(require("fs").readFileSync(process.env.HOME + "/.cl" + "aude/history.jsonl", "utf8"))'`,
+		`ruby -e 'puts File.read(ENV["HOME"] + "/.cl" + "aude/history.jsonl")'`,
+		`perl -e 'open(my $fh, "<", $ENV{HOME} . "/.cl" . "aude/history.jsonl"); print <$fh>;'`,
+		"python3 <<'PY'\nfrom pathlib import Path\nprint(list(Path.home().rglob('*.jsonl')))\nPY",
+		`python3 <<< 'from pathlib import Path; print(list(Path.home().rglob("*.jsonl")))'`,
+	} {
+		if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot resolve") {
+			t.Errorf("runtime root passed: %s: %+v", command, d)
+		}
+	}
+	// An explicit grant cannot authorize a target that cannot be resolved.
+	h.Transcripts.Grants = map[string][]string{transcriptOwner: {home}}
+	ev := toolEvent(bashTool, map[string]any{commandKey: `python3 -c 'from pathlib import Path; print(list(Path.home().rglob("*.jsonl")))'`})
+	ev[sessionKey] = transcriptOwner
+	if d := decideEvent(t, h, ev); d == nil || d.PermissionDecision != decisionDeny {
+		t.Fatal("grant authorized unresolved target")
+	}
+	for _, code := range []string{
+		`p = Path("fixture.jsonl"); print(p.read_text())`,
+		`p = Path("config.yaml"); p.write_text(p.read_text().replace("Path.home()", "process.env.HOME"))`,
+	} {
+		command := "python3 -c '" + code + "'"
+		if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("literal fixture/data refused: %s: %+v", command, d)
+		}
+	}
+	if d := decide(t, h, home, "cat <<'DATA'\nPath.home()\nprocess.env.HOME\nDATA", nil); d != nil && d.PermissionDecision == decisionDeny {
+		t.Errorf("here-document data refused: %+v", d)
+	}
+}

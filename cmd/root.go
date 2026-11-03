@@ -105,7 +105,7 @@ type app struct {
 	executionTransport func(execution.Host) execution.Transport
 	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
 	executionRuntime   func() (*execution.Server, error)
-	executionUpdate    func(context.Context, execution.Host, string) (execution.HostUpdate, error)
+	executionUpdate    func(context.Context, execution.Host, string, []byte) (execution.HostUpdate, error)
 	executionRequestID string
 	cfgPath            string
 	// loadedCfg is the configuration file loadConfig read; liveCapacity
@@ -238,7 +238,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		&cobra.Group{ID: supervisorGroup, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.transcriptsCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}

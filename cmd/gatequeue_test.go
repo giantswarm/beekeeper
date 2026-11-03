@@ -277,7 +277,7 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 	if d := lastEventOf(t, a, "merge.dropped"); d != "o/r#1: closed without a merge, its place in lane o/r is dropped" {
 		t.Errorf("dropped %q", d)
 	}
-	if d := lastEventOf(t, a, "merged"); !strings.HasPrefix(d, "o/r#2 outside the gate at ") {
+	if d := lastEventOf(t, a, testMergedWord); !strings.HasPrefix(d, "o/r#2 outside the gate at ") {
 		t.Errorf("merged %q", d)
 	}
 }

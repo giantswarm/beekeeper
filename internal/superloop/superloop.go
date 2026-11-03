@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 // The kinds of action, each logged as "supervisor.<kind>".
@@ -1258,6 +1260,11 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	last := rs[len(rs)-1]
+	// A head past the last round's asks for a park since that round
+	// opened, or for a verified park of that very head: a worker stopped
+	// on such a park cannot repeat it. A park of any other head from
+	// before the round is stale.
+	requested := w.ParkedAt.After(last.at) || sameHead(w.ParkedHead, p.Head)
 	v := p.verdict(last, l.pushed(p))
 	if v != nil && v.Verdict == Approved {
 		for i := len(p.Reviews) - 1; i >= 0; i-- {
@@ -1279,7 +1286,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		done := slices.ContainsFunc(in.Events, func(e Event) bool {
 			return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
 		})
-		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !w.ParkedAt.After(last.at) {
+		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !requested {
 			return
 		}
 		review()
@@ -1304,8 +1311,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// --update-branch, the worker's merge of the base and its
 		// conflicts' resolution, a rebase onto it); any other change
 		// gets its own review. A base merge needs no new park: it brings no
-		// change of the worker's. Any other head asks for a park
-		// since the round opened.
+		// change of the worker's. Any other head asks for its park.
 		if !p.Green {
 			return
 		}
@@ -1320,7 +1326,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !isParked {
 			return
 		}
-		if !w.ParkedAt.After(last.at) {
+		if !requested {
 			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 			return
 		}
@@ -1374,8 +1380,16 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 	// Normalize issue-based serve records to the observed pull request. Keep
 	// the PR identity for tie-breaking, action keys and progress tracking.
 	pullRef := func(r string) string {
+		if r == "" {
+			return ""
+		}
 		if _, ok := in.Pulls[r]; ok {
 			return r
+		}
+		for key := range in.Pulls {
+			if strings.EqualFold(key, r) {
+				return key
+			}
 		}
 		var matches []string
 		for key, pull := range in.Pulls {
@@ -1390,6 +1404,14 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		return r
 	}
 	w, isParked := parked[ref]
+	if !isParked {
+		for k, parkedWorker := range parked {
+			if strings.EqualFold(k, ref) {
+				w, isParked = parkedWorker, true
+				break
+			}
+		}
+	}
 	rs := l.rounds[ref]
 	for _, waiter := range in.Workers {
 		if !strings.EqualFold(waiter.ParkedOn, ref) || waiter.ReviewRequested || !waitsOnOtherPull(waiter, l) {
@@ -1447,7 +1469,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 			}
 			if strings.EqualFold(o.Name, owner) || strings.EqualFold(o.Name, PullWorkerName(ref)) || strings.EqualFold(pullRef(o.Serves), ref) {
 				liveOwner = o
-				if owner == "" || owner == PullWorkerName(ref) {
+				if owner == "" || strings.EqualFold(owner, PullWorkerName(ref)) {
 					owner = o.Name
 				}
 				break
@@ -1833,14 +1855,8 @@ func Verdict(state, body string) string {
 	case "CHANGES_REQUESTED":
 		return ChangesRequested
 	case stateCommented:
-		first, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
-		first = strings.ToLower(strings.TrimRight(strings.TrimSpace(first), ".!"))
-		switch {
-		case strings.HasSuffix(first, ": "+Approved):
-			return Approved
-		case strings.HasSuffix(first, ": "+ChangesRequested):
-			return ChangesRequested
-		}
+		// The review guard reads the same line: one parser keeps them alike.
+		return Verdict(github.DeskVerdict(body), "")
 	}
 	return ""
 }

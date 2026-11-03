@@ -113,9 +113,12 @@ update runs it for that, and a binary installed by a release without the
 sync (or by hand) syncs on the first command it runs. Only the beekeeper
 on PATH syncs: a binary run from elsewhere (a downloaded release candidate)
 leaves the plugin as it is. A plugin that stays
-is said with the command that updates it. GitHub is asked
-anonymously, apart from the budget gh and devctl share, unless GITHUB_TOKEN
-is set. A development build (version dev) is refused.`,
+is said with the command that updates it. GitHub is asked as the person,
+with GH_TOKEN, GITHUB_TOKEN or the gh login's token, so the lookup counts in
+the budget gh and devctl share (beekeeper budget); without any token the
+command says so and stops, never asking anonymously, whose limit the
+machine's IP shares. A refused lookup names GitHub's rate limit with its
+reset. A development build (version dev) is refused.`,
 		Args: cobra.NoArgs,
 		// Needs neither the configuration nor the state.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

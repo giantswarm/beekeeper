@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -43,11 +44,12 @@ var (
 	tagExists = func(ctx context.Context, repo, tag string) (bool, error) {
 		return github.TagExists(ctx, github.RunGH, repo, tag)
 	}
-	// releaseWait runs devctl release wait for repo's version, its progress
-	// on the gate's stderr, and returns its document.
-	releaseWait = func(ctx context.Context, repo, version string) []byte {
+	// releaseWait runs devctl release wait for repo's release named by
+	// target (a version, or --pr and a number), its progress on the gate's
+	// stderr, and returns its document.
+	releaseWait = func(ctx context.Context, repo string, target ...string) []byte {
 		var out bytes.Buffer
-		c := exec.CommandContext(ctx, merge.Tool, "release", "wait", repo, version) //nolint:gosec // the merge tool, a checked repository and version
+		c := exec.CommandContext(ctx, merge.Tool, append([]string{"release", "wait", repo}, target...)...) //nolint:gosec // the merge tool, a checked repository and release
 		c.Stdout, c.Stderr = &out, os.Stderr
 		_ = c.Run() // its exit code is the document's verdict
 		return out.Bytes()
@@ -70,8 +72,21 @@ var (
 		why, _, err := github.ReviewGuard(ctx, github.RunGH, repo, n)
 		return why, err
 	}
-	updateRebase = func(ctx context.Context, repo string, n int) error {
+	// mergeAuthority verifies that the pull request head being merged has an
+	// approved desk review or an explicit exact-head supervisor go.
+	mergeAuthority = gateMergeHeadAuthority
+	updateRebase   = func(ctx context.Context, repo string, n int) error {
 		return github.UpdateByRebase(ctx, github.RunGH, repo, n)
+	}
+	updateBranch = func(ctx context.Context, repo string, n int) error {
+		return github.UpdateBranch(ctx, github.RunGH, repo, n)
+	}
+	// prWarmWait runs devctl pr wait for repo#n, its progress on the gate's
+	// stderr: a warm-up whose verdict the merge's own devctl run judges.
+	prWarmWait = func(ctx context.Context, repo string, n int) {
+		c := exec.CommandContext(ctx, merge.Tool, "pr", "wait", repo, strconv.Itoa(n)) //nolint:gosec // the merge tool, a checked repository and number
+		c.Stdout, c.Stderr = io.Discard, os.Stderr
+		_ = c.Run()
 	}
 	// rebaseRetry is how long the gate waits for GitHub to compute whether a
 	// pull request rebases before it reads again.
@@ -220,12 +235,49 @@ func keepOutput(base string, doc []byte, now time.Time) string {
 	if len(stderr) == 0 && len(doc) == 0 {
 		return ""
 	}
+	header := keepOutputHeader(base, doc)
 	path := filepath.Join(dir, filepath.Base(base)+"-"+now.UTC().Format("20060102T150405Z")+".log")
-	out := append(append(stderr, []byte("--- document ---\n")...), doc...)
+	out := append(append(append(header, stderr...), []byte("--- document ---\n")...), doc...)
 	if os.WriteFile(path, out, 0o600) != nil { //nolint:gosec // under the state directory, named by the gate
 		return ""
 	}
 	return path
+}
+
+func keepOutputHeader(base string, doc []byte) []byte {
+	var requestedBy string
+	if len(doc) > 0 {
+		var meta struct {
+			RequestedBy string `json:"requestedBy"`
+		}
+		if json.Unmarshal(doc, &meta) == nil && meta.RequestedBy != "" {
+			requestedBy = meta.RequestedBy
+		}
+	}
+	info, ok := readRunInfo(base)
+	owner := requestedBy
+	if owner == "" && ok {
+		owner = cmp.Or(info.Owner.Name, info.Owner.Session, info.Owner.HostSession)
+	}
+	if owner == "" {
+		return nil
+	}
+	var details []string
+	if ok {
+		if s := cmp.Or(info.Owner.Session, info.Owner.HostSession); s != "" && s != owner {
+			details = append(details, "session "+s)
+		}
+		if info.Owner.Host != "" {
+			details = append(details, "host "+info.Owner.Host)
+		}
+		if info.Gate > 0 {
+			details = append(details, fmt.Sprintf("gate pid %d", info.Gate))
+		}
+	}
+	if len(details) > 0 {
+		return []byte(fmt.Sprintf("requested by: %s (%s)\n", owner, strings.Join(details, ", ")))
+	}
+	return []byte(fmt.Sprintf("requested by: %s\n", owner))
 }
 
 // finishedRun reads how a merge's run ended from its files once its runner
@@ -691,7 +743,7 @@ func (r childResult) command() string {
 		argv = r.spec.Command
 	}
 	if len(argv) == 0 {
-		return "devctl"
+		return devctlBinary
 	}
 	return strings.Join(append([]string{filepath.Base(argv[0])}, argv[1:]...), " ")
 }
@@ -731,9 +783,10 @@ func unitExit(rc int) int {
 
 // devctl pr merge's exit codes the unit's exit tells apart.
 const (
-	devctlUsage       = 7
-	devctlAuth        = 8
-	devctlUnconfirmed = 9
+	devctlReleaseFailed = 6
+	devctlUsage         = 7
+	devctlAuth          = 8
+	devctlUnconfirmed   = 9
 )
 
 // childResult is how one merge-child run ended: its spec, the base of its

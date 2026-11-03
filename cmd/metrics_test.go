@@ -28,7 +28,7 @@ func TestWatchSaysARunawayOnce(t *testing.T) {
 	}
 	one := state.Party{Session: "s1", Name: sessionOne}
 	if err := w.store.Update(func(*state.State) ([]state.Event, error) {
-		return []state.Event{event(one, "merge.queued", "o/r#1 in lane l"), event(one, "merged", "o/r#1 exit 0, release v1")}, nil
+		return []state.Event{event(one, "merge.queued", "o/r#1 in lane l"), event(one, testMergedWord, "o/r#1 exit 0, release v1")}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

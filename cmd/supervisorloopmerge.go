@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -139,7 +140,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
-	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
+	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.
@@ -522,11 +523,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 				claimed = true
 				claimAgent = rest
 			}
-			if e.Verb == "supervisor.merge" || e.Verb == "supervisor.go" {
+			if e.Verb == loopMergeVerb || e.Verb == loopGoVerb {
 				claimed = false
 			}
 		}
-		if e.Verb == "supervisor.end" && key == "end "+ref {
+		if e.Verb == loopEndVerb && key == "end "+ref {
 			claimed = false
 		}
 	}
@@ -567,6 +568,22 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if !claimed {
 		doc.ExitCode = github.SquashTooling
 		doc.Reason = "no pending exact-head supervisor merge claim"
+		return doc
+	}
+	if claimAgent != "" {
+		doc.RequestedBy = fmt.Sprintf("%s (for %s)", loopParty.Name, claimAgent)
+	} else if a.as != "" {
+		doc.RequestedBy = a.as
+	} else {
+		doc.RequestedBy = loopParty.Name
+	}
+	if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, p, head); authErr != nil {
+		doc.ExitCode = github.SquashTooling
+		doc.Reason = authErr.Error()
+		return doc
+	} else if why != "" {
+		doc.ExitCode = github.SquashRefused
+		doc.Reason = why
 		return doc
 	}
 	if st.Stop != nil {
@@ -708,6 +725,235 @@ func latestReviewRequestsChanges(p superloop.Pull) bool {
 		}
 	}
 	return found && latest.Verdict == superloop.ChangesRequested
+}
+
+// checkMergeHeadAuthority verifies that merging p at targetHead is backed by
+// an approved desk review covering that head (or a base merge into it) or an
+// explicit exact-head supervisor go: the loop's own go for that head
+// (supervisor.go, or the supervisor.claim the loop logs right before its own
+// merge of a planned go, which is the same decision), merge.authorized,
+// execution.merge-issued, or an escalation release answer. A verdict counts
+// only from a login the desk trusts (trustedReview): on a public repository
+// anyone can post "Review: approved".
+func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p superloop.Pull, targetHead string) (why string, hasExplicitGo bool, err error) {
+	head := cmp.Or(targetHead, p.Head)
+	if head == "" {
+		return "pull request has no head commit", false, nil
+	}
+	if p.Head != "" && targetHead != "" && !sameCommit(p.Head, targetHead) {
+		return fmt.Sprintf("pull request head is %s, not %s", shortSHA(p.Head), shortSHA(targetHead)), false, nil
+	}
+	reviews, err := a.trustedReviews(ctx, p)
+	if err != nil {
+		return "", false, err
+	}
+	var latest *superloop.Review
+	for i := range reviews {
+		r := &reviews[i]
+		if latest == nil || !r.At.Before(latest.At) {
+			latest = r
+		}
+	}
+	approvedHead := ""
+	if latest != nil && latest.Verdict == superloop.Approved {
+		approvedHead = cmp.Or(latest.Head, latest.Commit)
+		if sameCommit(approvedHead, head) {
+			return "", false, nil
+		}
+	}
+
+	type goRecord struct {
+		head string
+		at   time.Time
+	}
+	var goes []goRecord
+	if a != nil && a.store != nil {
+		// execution.merge-issued is logged without a subject: its detail
+		// names the pull request's URL.
+		issued := ""
+		if r, ok := parseRef(p.Ref); ok {
+			issued = strings.ToLower(fmt.Sprintf(" for https://github.com/%s/pull/%d at ", r.Repo, r.N))
+		}
+		forPull := func(e state.Event) bool {
+			if e.Verb == "execution.merge-issued" {
+				return issued != "" && strings.Contains(strings.ToLower(e.Detail), issued)
+			}
+			return strings.EqualFold(e.Subject, p.Ref)
+		}
+		evs, err := a.store.Events(0, func(e state.Event) bool {
+			return forPull(e) || e.Verb == answerRecorded
+		})
+		if err != nil {
+			return "", false, err
+		}
+		activeGo := map[string]goRecord{}
+		for _, e := range evs {
+			if e.By == loopParty && strings.EqualFold(e.Subject, p.Ref) {
+				if key, _, ok := keyed(e.Detail); ok {
+					if after, ok := strings.CutPrefix(key, "go "+p.Ref+"@"); ok && after != "" {
+						switch e.Verb {
+						case loopGoVerb, loopClaimVerb:
+							activeGo[after] = goRecord{head: after, at: e.At}
+						case loopMergeVerb, loopClaimEndVerb:
+							delete(activeGo, after)
+						}
+					}
+					if e.Verb == loopEndVerb && strings.EqualFold(key, "end "+p.Ref) {
+						clear(activeGo)
+					}
+				}
+			}
+			if (e.Verb == "merge.authorized" || e.Verb == "execution.merge-issued") && forPull(e) {
+				if h := headAfterAt(e.Detail); h != "" {
+					goes = append(goes, goRecord{head: h, at: e.At})
+				}
+			}
+			if e.Verb == answerRecorded {
+				if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.About, p.Ref) && superloop.Releases(an.Answer) {
+					if h := headAfterAt(an.Question); h != "" {
+						goes = append(goes, goRecord{head: h, at: e.At})
+					}
+				}
+			}
+		}
+		for _, g := range activeGo {
+			goes = append(goes, g)
+		}
+	}
+	goes = slices.DeleteFunc(goes, func(g goRecord) bool {
+		return g.head == "" || slices.ContainsFunc(reviews, func(r superloop.Review) bool {
+			if r.Verdict != superloop.ChangesRequested {
+				return false
+			}
+			revHead := cmp.Or(r.Head, r.Commit)
+			return sameCommit(revHead, head) || (!g.at.IsZero() && !r.At.Before(g.at))
+		})
+	})
+	// An exact head first: only then are base merges read, one GitHub
+	// compare each.
+	if slices.ContainsFunc(goes, func(g goRecord) bool { return sameCommit(g.head, head) }) {
+		return "", true, nil
+	}
+	if approvedHead != "" {
+		ok, err := readBaseMerge(ctx, p, approvedHead)
+		if err != nil {
+			return "", false, err
+		}
+		if ok {
+			return "", false, nil
+		}
+	}
+	for _, g := range goes {
+		ok, err := readBaseMerge(ctx, p, g.head)
+		if err != nil {
+			return "", false, err
+		}
+		if ok {
+			return "", true, nil
+		}
+	}
+
+	if latest != nil && latest.Verdict == superloop.ChangesRequested {
+		return fmt.Sprintf("head %s has no approved desk review (latest desk review on %s requested changes) and no supervisor go for that exact head", shortSHA(head), shortSHA(cmp.Or(latest.Head, latest.Commit))), false, nil
+	}
+	if latest != nil && latest.Verdict == superloop.Approved {
+		return fmt.Sprintf("head %s moved past approved head %s without a new approved desk review or supervisor go for %s", shortSHA(head), shortSHA(cmp.Or(latest.Head, latest.Commit)), shortSHA(head)), false, nil
+	}
+	return fmt.Sprintf("head %s has no approved desk review and no supervisor go for that exact head", shortSHA(head)), false, nil
+}
+
+// trustedReviews are p's reviews with a verdict the desk trusts
+// (deskVerdicts): the authors are supervisor.ownership.authors, else the
+// login gh acts as, read only when a verdict comes from a non-member.
+func (a *app) trustedReviews(ctx context.Context, p superloop.Pull) ([]superloop.Review, error) {
+	var authors []string
+	if a != nil && a.cfg != nil {
+		authors = a.cfg.Supervisor.Ownership.Authors
+	}
+	if len(authors) == 0 && slices.ContainsFunc(p.Reviews, func(r superloop.Review) bool { return r.Verdict != "" && !r.Member }) {
+		login, err := readDeskLogin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		authors = []string{login}
+	}
+	var out []superloop.Review
+	for _, r := range deskVerdicts(p.Reviews, authors) {
+		if r.Verdict != "" {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// deskVerdicts is reviews with the verdict of each one the desk does not
+// trust cleared: a verdict counts only from a member or collaborator of the
+// repository's owner or from one of authors, the logins the desk opens and
+// reviews its pull requests as. On a public repository anyone can post
+// "Review: approved": the planner and the merge gate both read verdicts
+// through this, so neither merges nor holds on an outsider's word.
+func deskVerdicts(reviews []superloop.Review, authors []string) []superloop.Review {
+	out := slices.Clone(reviews)
+	for i := range out {
+		if !out[i].Member && !board.ContainsFold(authors, out[i].Author) {
+			out[i].Verdict = ""
+		}
+	}
+	return out
+}
+
+// gateMergeHeadAuthority checks merge head authority for a gated pull request
+// merge across all gate routes.
+func gateMergeHeadAuthority(ctx context.Context, a *app, repo string, pr int, targetHead string) (why string, hasExplicitGo bool, err error) {
+	if pr <= 0 {
+		return "", false, nil
+	}
+	ref := fmt.Sprintf("%s#%d", repo, pr)
+	p, err := readLoopPull(ctx, ref)
+	if err != nil {
+		return "", false, err
+	}
+	var st *state.State
+	if a != nil && a.store != nil {
+		st, err = a.store.Read()
+		if err != nil {
+			return "", false, err
+		}
+	}
+	return a.checkMergeHeadAuthority(ctx, st, p, targetHead)
+}
+
+// headAfterAt is the commit an exact-head go names right after " at "
+// (optionally " at head "): execution.merge-issued's "<grant> for <url> at
+// <head>", merge.authorized's "<url> at <head>: …" and an escalation's
+// "Merge <url> at head <head> …". "" when no 7 to 40 hex digits stand
+// there: a grant id or timestamp elsewhere in the text is never a head.
+func headAfterAt(text string) string {
+	_, rest, ok := strings.Cut(text, " at ")
+	if !ok {
+		return ""
+	}
+	rest = strings.TrimPrefix(rest, "head ")
+	n := 0
+	for n < len(rest) && isHexDigit(rest[n]) {
+		n++
+	}
+	if n < 7 || n > 40 || n < len(rest) && (rest[n] == '-' || rest[n] == '_' || 'a' <= rest[n]|0x20 && rest[n]|0x20 <= 'z') {
+		return ""
+	}
+	return strings.ToLower(rest[:n])
+}
+
+func isHexDigit(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+func sameCommit(a, b string) bool {
+	a, b = strings.ToLower(strings.TrimSpace(a)), strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
 // readReviewedMergeQueue reads whether p's base branch has a GitHub merge

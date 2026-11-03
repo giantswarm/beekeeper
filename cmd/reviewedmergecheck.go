@@ -101,7 +101,7 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	}
 	mbOut, err := runGit(ctx, repoDir, "merge-base", baseSHA, head)
 	if err != nil {
-		return true, "branch conflicts with its base", github.SquashNotApplicable
+		return true, mergeValidationUnavailable("reading merge base: %v", err), github.SquashTooling
 	}
 	mb := strings.TrimSpace(string(mbOut))
 
@@ -130,7 +130,13 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 		return true, "creating merge-check worktree: " + err.Error(), github.SquashTooling
 	}
 	if _, err := runGit(ctx, tmpDir, "-c", "user.name=Beekeeper", "-c", "user.email=beekeeper@giantswarm.io", gitMerge, "--no-ff", "--no-edit", head); err != nil {
-		return true, "branch conflicts with its base", github.SquashNotApplicable
+		// Only unmerged index entries prove a branch conflict. Git can fail
+		// because the checker cannot write, start a hook or create a commit.
+		unmerged, readErr := runGit(ctx, tmpDir, "diff", "--name-only", "--diff-filter=U")
+		if readErr == nil && strings.TrimSpace(string(unmerged)) != "" {
+			return true, "branch conflicts with its base", github.SquashNotApplicable
+		}
+		return true, mergeValidationUnavailable("creating merge result: %v", err), github.SquashTooling
 	}
 	reason, code := runReviewedMergeChecks(ctx, tmpDir, mb, p.Base, head)
 	return true, reason, code
@@ -214,7 +220,7 @@ func fetchReviewedMergeRefs(ctx context.Context, repoDir, base, head string, prN
 
 func runFetchGit(ctx context.Context, dir string, args ...string) error {
 	c := proc.Command(proc.Background(ctx), "git", append([]string{"-C", dir, "-c", "credential.interactive=never"}, args...)...)
-	c.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -oBatchMode=yes -oConnectTimeout=5")
+	c.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -oBatchMode=yes -oConnectTimeout=5", "LC_ALL=C", "LANGUAGE=C")
 	return c.Run()
 }
 
@@ -252,13 +258,13 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 	}
 	lintArgs = append(lintArgs, pkgs...)
 	if out, err := runMergeCheckCmd(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
-		if errors.Is(err, errMergeCheckTimeout) {
+		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
 		return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
 	if out, err := runMergeCheckCmd(ctx, worktreeDir, "go", goTestSubcmd, "./..."); err != nil {
-		if errors.Is(err, errMergeCheckTimeout) {
+		if errors.Is(err, errMergeCheckEnvironment) {
 			return mergeValidationUnavailable("%v", err), github.SquashTooling
 		}
 		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
@@ -470,6 +476,8 @@ func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (st
 	var buf bytes.Buffer
 	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed toolchain command in temporary worktree
 	c.Dir = dir
+	// Git diagnostics and tests must not inherit the desk's language.
+	c.Env = append(os.Environ(), "LC_ALL=C", "LANGUAGE=C")
 	c.Stdout, c.Stderr = &buf, &buf
 	mergeCheckGroup(c)
 	c.WaitDelay = 5 * time.Second
@@ -477,10 +485,36 @@ func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (st
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		err = fmt.Errorf("%w: %s after %s", errMergeCheckTimeout, name, mergeCheckTimeout)
 	}
+	if err != nil {
+		var exit *exec.ExitError
+		// Starting a missing/unusable tool, cancellation and a killed process
+		// describe this checker, not a defect in the reviewed branch.
+		if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() < 0 || mergeCheckHostFailure(buf.String()) {
+			err = fmt.Errorf("%w: %w: %s", errMergeCheckEnvironment, err, summarizeMergeCheckOutput(buf.String()))
+		}
+	}
 	return buf.String(), err
 }
 
-var errMergeCheckTimeout = errors.New("merge-result check timed out")
+// These toolchain diagnostics identify host resource failures even when the
+// top-level go/lint command exits normally with status 1 or 2.
+func mergeCheckHostFailure(out string) bool {
+	for _, diagnostic := range []string{
+		"no space left on device", "disk quota exceeded",
+		"resource temporarily unavailable", "too many open files",
+		"runtime: failed to create new OS thread",
+	} {
+		if strings.Contains(out, diagnostic) {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	errMergeCheckTimeout     = errors.New("merge-result check timed out")
+	errMergeCheckEnvironment = errors.New("merge-result check environment failed")
+)
 
 func summarizeMergeCheckOutput(out string) string {
 	var kept []string

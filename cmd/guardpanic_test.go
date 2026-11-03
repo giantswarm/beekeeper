@@ -45,7 +45,7 @@ func TestHookWorktreeMoveColdState(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			raw, _ := json.Marshal(map[string]any{"hook_event_name": guard.PreToolUseEvent, panicCWDKey: source, transcriptToolName: tToolBash, transcriptInputKey: map[string]any{hookTypeCommand: "git worktree move " + source + " " + filepath.Join(dir, "aside")}})
+			raw, _ := json.Marshal(map[string]any{transcriptHookEventKey: guard.PreToolUseEvent, panicCWDKey: source, transcriptToolName: tToolBash, transcriptInputKey: map[string]any{hookTypeCommand: "git worktree move " + source + " " + filepath.Join(dir, "aside")}})
 			result := runHook(t, a, &out, "pretooluse", string(raw))
 			if strings.Contains(result, "panic") {
 				t.Fatalf("panic: %s", result)

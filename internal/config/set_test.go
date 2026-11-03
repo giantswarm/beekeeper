@@ -137,3 +137,35 @@ func TestSetCreatesAndFollowsLinks(t *testing.T) {
 		t.Errorf("linked file not written:\n%s", raw)
 	}
 }
+
+// Get reads a key's value as YAML without its comments, and whether the file
+// has it; Change sets and removes keys in one write, a mapping left empty
+// removed with its last key.
+func TestGetAndChange(t *testing.T) {
+	p := writeConfig(t, storeConfig)
+	if v, ok, err := Get(p, keyGrantTTL); err != nil || !ok || v != "20m" {
+		t.Errorf("Get grantTTL = %q, %v, %v", v, ok, err)
+	}
+	if v, ok, err := Get(p, "secret.ageIdentities"); err != nil || !ok || !SameValue(v, "[{recipient: age1x, ref: op://V/i/f}]") {
+		t.Errorf("Get ageIdentities = %q, %v, %v", v, ok, err)
+	}
+	if _, ok, err := Get(p, "secret.vault.x"); err != nil || ok {
+		t.Errorf("Get under a scalar = %v, %v", ok, err)
+	}
+	if _, ok, err := Get(filepath.Join(t.TempDir(), "none.yaml"), keyGrantTTL); err != nil || ok {
+		t.Errorf("Get of a missing file = %v, %v", ok, err)
+	}
+	if _, err := Change(p, []Setting{{keyGrantTTL, "5m"}}, []string{"secret.vault", "secret.ageIdentities", "github.floor"}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := Get(p, keyGrantTTL); v != "5m" {
+		t.Errorf("grantTTL = %q", v)
+	}
+	if _, ok, _ := Get(p, "secret"); ok {
+		raw, _ := os.ReadFile(filepath.Clean(p))
+		t.Errorf("secret kept empty:\n%s", raw)
+	}
+	if _, err := Change(p, nil, []string{"a..b"}); err == nil {
+		t.Error("an empty key unset")
+	}
+}

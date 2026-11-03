@@ -19,6 +19,10 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 	if !c.Disk.Auto() || c.Disk.Every.Duration != time.Hour || len(c.Disk.TrashDirs) != 2 || c.Disk.SccacheMaxGiB != 10 {
 		t.Fatalf("defaults=%+v", c.Disk)
 	}
+	if h := c.Disk.Holders; h.Root != base || h.StaleAfter.Duration != 72*time.Hour || h.AsideRetention.Duration != 7*24*time.Hour ||
+		len(h.AsideDirs) != 2 || h.WarnGiB != 10 || h.Every.Duration != 6*time.Hour {
+		t.Fatalf("holders defaults=%+v", h)
+	}
 	for _, tc := range []struct {
 		raw   string
 		valid bool
@@ -31,6 +35,15 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		{"disk: {buildDirs: [.git]}", false},
 		{"disk: {buildOutputs: [{path: /scratch, worktree: /scratch/worktree}]}", false},
 		{"disk: {buildOutputs: [{path: relative, worktree: /scratch/worktree}]}", false},
+		{"disk: {holders: {keep: [hf-cache], asideDirs: [aside], warnGiB: -1}}", true},
+		{"disk: {holders: {root: /}}", false},
+		{"disk: {holders: {staleAfter: -1h}}", false},
+		{"disk: {holders: {asideRetention: -1h}}", false},
+		{"disk: {holders: {every: -1h}}", false},
+		{"disk: {holders: {every: 0s}}", true},
+		{"disk: {holders: {root: relative}}", false},
+		{"disk: {holders: {keep: [a/b]}}", false},
+		{"disk: {holders: {asideDirs: [..]}}", false},
 		{"disk: {buildDirs: [artifacts], buildOutputs: [{path: /scratch/output, worktree: /scratch/worktree}]}", true},
 		{"disk: {caches: [{path: ~/.cache/app, olderThan: 7d}, {path: '/cache/*-dev', maxGiB: 1.5, mode: files}]}", true},
 		{"disk: {caches: [{name: go-build, maxGiB: 5}, {name: sccache, mode: off}, {name: beekeeper-tmp, olderThan: 2h}]}", true},
@@ -54,6 +67,9 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		got, err := Load(p)
 		if (err == nil) != tc.valid {
 			t.Errorf("config %s: %v", tc.raw, err)
+		}
+		if err == nil && tc.raw == "disk: {holders: {every: 0s}}" && got.Disk.Holders.Every.Duration != 6*time.Hour {
+			t.Fatalf("every 0s = %s, want the 6h default", got.Disk.Holders.Every.Duration)
 		}
 		if err == nil && strings.Contains(tc.raw, "~/.cache/app") {
 			if e := got.Disk.Caches[0]; e.Name != e.Path || !filepath.IsAbs(e.Path) || e.OlderThan.Duration != 7*24*time.Hour {
