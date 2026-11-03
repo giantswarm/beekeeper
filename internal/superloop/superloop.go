@@ -1392,8 +1392,16 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 	// Normalize issue-based serve records to the observed pull request. Keep
 	// the PR identity for tie-breaking, action keys and progress tracking.
 	pullRef := func(r string) string {
+		if r == "" {
+			return ""
+		}
 		if _, ok := in.Pulls[r]; ok {
 			return r
+		}
+		for key := range in.Pulls {
+			if strings.EqualFold(key, r) {
+				return key
+			}
 		}
 		var matches []string
 		for key, pull := range in.Pulls {
@@ -1408,6 +1416,14 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		return r
 	}
 	w, isParked := parked[ref]
+	if !isParked {
+		for k, parkedWorker := range parked {
+			if strings.EqualFold(k, ref) {
+				w, isParked = parkedWorker, true
+				break
+			}
+		}
+	}
 	rs := l.rounds[ref]
 	for _, waiter := range in.Workers {
 		if !strings.EqualFold(waiter.ParkedOn, ref) || waiter.ReviewRequested || !waitsOnOtherPull(waiter, l) {
@@ -1471,7 +1487,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 			}
 			if strings.EqualFold(o.Name, owner) || strings.EqualFold(o.Name, PullWorkerName(ref)) || strings.EqualFold(pullRef(o.Serves), ref) {
 				liveOwner = o
-				if owner == "" || owner == PullWorkerName(ref) {
+				if owner == "" || strings.EqualFold(owner, PullWorkerName(ref)) {
 					owner = o.Name
 				}
 				break

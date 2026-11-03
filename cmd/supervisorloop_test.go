@@ -3331,3 +3331,45 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 		})
 	}
 }
+
+// Regression test for after-the-fact review of https://github.com/giantswarm/beekeeper/pull/2164:
+// when ownOverlap records the board dependency and wakeOrStartFixer defers on
+// capacity (errLoopLater), the next pass must not repeat board unblock/block.
+func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
+	r.sshLoopHost(t, true)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: "Work https://github.com/o/r/issues/10", Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	capOut, capCode := "no room", 1
+	boardCalls := 0
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 0 && args[0] == loopBoard {
+			boardCalls++
+			return "", 0
+		}
+		if len(args) > 0 && args[0] == loopCapacity {
+			return capOut, capCode
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if boardCalls != 2 {
+		t.Fatalf("pass 1 board calls = %d, want 2 (unblock + block)", boardCalls)
+	}
+	if len(r.logged(t, "supervisor.owner")) != 0 {
+		t.Fatal("owner recorded before fixer started")
+	}
+	capOut, capCode = `{"room":1}`, 0
+	r.pass(t)
+	if boardCalls != 2 {
+		t.Fatalf("pass 2 repeated board calls: total = %d, want 2", boardCalls)
+	}
+	if len(r.logged(t, "supervisor.owner")) != 1 {
+		t.Fatalf("pass 2 did not finish owner assignment: %+v", r.logged(t, "supervisor.owner"))
+	}
+}

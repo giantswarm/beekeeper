@@ -151,6 +151,7 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 
 func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
@@ -879,5 +880,46 @@ func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
 	}
 	if starts != 1 {
 		t.Fatalf("started %d reviewers from the same snapshot, want 1", starts)
+	}
+}
+
+// Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
+// reviewedMerge refuses a head whose only desk review requested changes on an
+// older head and has no explicit exact-head supervisor go, even if a
+// supervisor.claim is present.
+func TestReviewedMergeRefusesChangesRequestedHeadWithoutSupervisorGo(t *testing.T) {
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix planOverlap case matching")
+	r.pull.Head = loopFixed
+	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
+	if doc.ExitCode != github.SquashRefused || len(r.cmds) != 0 {
+		t.Fatalf("expected refusal with no merge command, got %+v cmds=%v", doc, r.cmds)
+	}
+	if !strings.Contains(doc.Reason, "no approved desk review") || !strings.Contains(doc.Reason, "no supervisor go") {
+		t.Fatalf("unexpected refusal reason: %q", doc.Reason)
+	}
+	if doc.RequestedBy != "supervisor loop (for "+loopWorker+")" {
+		t.Fatalf("RequestedBy = %q", doc.RequestedBy)
+	}
+}
+
+// An explicit exact-head supervisor.go authorizes reviewedMerge when no later
+// desk review requested changes on that head.
+func TestReviewedMergeAdmitsExplicitExactHeadSupervisorGo(t *testing.T) {
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix handler")
+	r.pull.Head = loopFixed
+	if err := r.a.store.Record(about(event(loopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loopWorkerMergeGo), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
+	if doc.ExitCode != 0 || len(r.cmds) != 1 {
+		t.Fatalf("expected merge with explicit supervisor.go, got %+v cmds=%v", doc, r.cmds)
 	}
 }

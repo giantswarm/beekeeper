@@ -1710,24 +1710,36 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 // no: the new head gets its review.
 func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
 	key := p.Ref + " " + approved + " " + p.Head
-	l.mu.Lock()
-	if ok, read := l.baseMerges[key]; read {
-		l.mu.Unlock()
-		return ok
-	}
-	l.mu.Unlock()
-	ok, err := readBaseMerge(ctx, p, approved)
+	ok, err := l.a.baseMerged(ctx, p, approved)
 	if err != nil {
 		l.sayOnce("base merge "+key, "SUPERVISOR LOOP cannot tell whether %s's head only merges its base: %v", p.Ref, err)
 		return false
 	}
-	l.mu.Lock()
-	if l.baseMerges == nil {
-		l.baseMerges = map[string]bool{}
-	}
-	l.baseMerges[key] = ok
-	l.mu.Unlock()
 	return ok
+}
+
+// baseMerged reports whether p's head only merges its base into approved,
+// caching successful reads on the app so the loop and the merge gate share
+// them.
+func (a *app) baseMerged(ctx context.Context, p superloop.Pull, approved string) (bool, error) {
+	key := p.Ref + " " + approved + " " + p.Head
+	a.baseMergesMu.Lock()
+	if ok, read := a.baseMerges[key]; read {
+		a.baseMergesMu.Unlock()
+		return ok, nil
+	}
+	a.baseMergesMu.Unlock()
+	ok, err := readBaseMerge(ctx, p, approved)
+	if err != nil {
+		return false, err
+	}
+	a.baseMergesMu.Lock()
+	if a.baseMerges == nil {
+		a.baseMerges = map[string]bool{}
+	}
+	a.baseMerges[key] = ok
+	a.baseMergesMu.Unlock()
+	return ok, nil
 }
 
 // changed lists the files p's head changes past the change of reviewed,
@@ -3509,13 +3521,18 @@ var readBoardRank = func(ctx context.Context, a *app, ref string) (int, error) {
 }
 
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+	blockStage := act.Key + " blocked"
+	if act.Block != "" && !l.stages[blockStage] && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
 		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
 			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
 		}
 		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
 			return "", fmt.Errorf("record overlap dependency: %w", err)
 		}
+		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
+			return "", err
+		}
+		l.stages[blockStage] = true
 	}
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err

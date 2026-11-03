@@ -19,10 +19,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -377,10 +381,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
-	me, err := a.caller()
-	if err != nil {
-		me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
-	}
+	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		priority: a.gatePriority, bin: runningBinary(), output: gateOutput()}
 	if len(reviewedHead) > 0 {
@@ -411,7 +412,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		case pin != "":
 			g.candidate, g.candidateRead, g.pinned = pin, true, true
 		case !queued:
-			if err = g.readRetrying("the release candidate of "+repo, func() (err error) {
+			if err := g.readRetrying("the release candidate of "+repo, func() (err error) {
 				g.candidate, err = promoteCandidate(ctx, repo)
 				return err
 			}); err != nil {
@@ -739,6 +740,9 @@ func (g *gateRun) step() (string, error) {
 		merge.Retry(st, g.repo, g.pr)
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			m := &st.Merges[i]
+			if strings.HasPrefix(g.me.Name, "pid ") && m.By.Name != "" && !strings.HasPrefix(m.By.Name, "pid ") {
+				g.me = m.By
+			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
 			if g.priority > 0 {
 				m.Priority = g.priority
@@ -1084,10 +1088,129 @@ func (g *gateRun) reviewHold() (string, error) {
 	err := g.readRetrying("the reviews of "+g.key(), func() (err error) {
 		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
 		defer cancel()
+		authWhy, hasExplicitGo, err := mergeAuthority(ctx, g.app, g.repo, g.pr, g.mergeTargetHead())
+		if err != nil {
+			return err
+		}
+		if authWhy != "" {
+			why = authWhy
+			return nil
+		}
 		why, err = reviewGuard(ctx, g.repo, g.pr)
-		return err
+		if err != nil {
+			return err
+		}
+		if why != "" && hasExplicitGo {
+			why = ""
+		}
+		return nil
 	})
 	return why, err
+}
+
+func (g *gateRun) mergeTargetHead() string {
+	if g.reviewedHead != "" {
+		return g.reviewedHead
+	}
+	for i, arg := range g.argv {
+		if (arg == "--head" || arg == "--match-head-commit") && i+1 < len(g.argv) {
+			return g.argv[i+1]
+		}
+		if v, ok := strings.CutPrefix(arg, "--head="); ok && v != "" {
+			return v
+		}
+		if v, ok := strings.CutPrefix(arg, "--match-head-commit="); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// gateCaller resolves the session or agent asking for a gated command when
+// standard caller env vars are absent (for example in a detached or queued
+// child or a subprocess whose environment was stripped).
+func (a *app) gateCaller(repo string, pr int, argv []string, queued bool) state.Party {
+	if me, err := a.caller(); err == nil {
+		return me
+	}
+	if a.store != nil {
+		if queued {
+			if from, err := strconv.Atoi(os.Getenv(gateFromEnv)); err == nil && from > 0 {
+				if info, ok := readRunInfo(ownedBase(a.store.Dir(), argv, from)); ok && info.Owner.Name != "" && !strings.HasPrefix(info.Owner.Name, "pid ") {
+					return info.Owner
+				}
+			}
+		}
+		if st, err := a.store.Read(); err == nil {
+			if repo != "" {
+				for _, m := range st.Merges {
+					if m.Repo == repo && m.PR == pr && m.By.Name != "" && !strings.HasPrefix(m.By.Name, "pid ") {
+						return m.By
+					}
+				}
+			}
+			if loopPID := a.loopPID(); loopPID > 0 && os.Getppid() == loopPID {
+				return state.Party{Name: loopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
+			}
+			sessions, t, serr := a.sessions()
+			if serr == nil && t != nil {
+				loopPID := a.loopPID()
+				byPID := make(map[int]*claude.Session, len(sessions))
+				for _, s := range sessions {
+					byPID[s.PID] = s
+				}
+				envKeys := []string{
+					"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME",
+					omp.EnvAgent, omp.EnvName,
+					agy.EnvAgent, agy.EnvName,
+					codex.EnvAgent, codex.EnvName,
+				}
+				for _, anc := range t.Ancestors(os.Getpid()) {
+					if loopPID > 0 && anc.PID == loopPID {
+						return state.Party{Name: loopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
+					}
+					if s, ok := byPID[anc.PID]; ok {
+						p := s.Party()
+						p.Person, p.Team, p.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
+						return p
+					}
+					if _, env, err := a.requesterOrigin(anc.PID, envKeys); err == nil && len(env) > 0 {
+						getenv := func(k string) string {
+							prefix := k + "="
+							for _, kv := range env {
+								if v, ok := strings.CutPrefix(kv, prefix); ok {
+									return v
+								}
+							}
+							return ""
+						}
+						p := envParty(getenv)
+						if p.Name != "" || p.Session != "" || p.HostSession != "" {
+							if p.Name == "" && p.HostSession != "" {
+								if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok && r.Title != "" {
+									p.Name = r.Title
+								}
+							}
+							if p.Name == "" {
+								for _, ag := range st.Agents {
+									if ag.Is(p) && ag.Name != "" {
+										p.Name = ag.Name
+										break
+									}
+								}
+							}
+							if p.Name == "" {
+								p.Name = cmp.Or(p.Session, p.HostSession)
+							}
+							p.Person, p.Team, p.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
+							return p
+						}
+					}
+				}
+			}
+		}
+	}
+	return state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
 }
 
 // checkReviews refuses a pull request merge a reviewer holds, through

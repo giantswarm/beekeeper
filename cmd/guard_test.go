@@ -65,6 +65,7 @@ func TestMain(m *testing.M) {
 	// Nor does a gated merge read its reviews: nothing holds it; a test
 	// that wants a reviewer stubs its own.
 	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
 	}

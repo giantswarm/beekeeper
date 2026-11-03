@@ -63,9 +63,29 @@ func (u ghUser) automation() bool {
 type ghReview struct {
 	User        ghUser    `json:"user"`
 	State       string    `json:"state"`
+	Body        string    `json:"body"`
 	SubmittedAt time.Time `json:"submitted_at"`
 	CommitID    string    `json:"commit_id"`
 	HTMLURL     string    `json:"html_url"`
+}
+
+// deskReviewVerdict reads the verdict line of a desk review posted as a
+// COMMENTED review (which happens when the reviewer shares the PR author's
+// GitHub login and GitHub forbids native APPROVED / CHANGES_REQUESTED).
+func deskReviewVerdict(state, body string) (string, bool) {
+	if state != "COMMENTED" {
+		return "", false
+	}
+	line, _, _ := strings.Cut(strings.TrimLeft(body, "\r\n"), "\n")
+	line = strings.ToLower(strings.TrimSpace(line))
+	switch {
+	case strings.HasSuffix(line, ": approved"):
+		return "APPROVED", true
+	case strings.HasSuffix(line, ": changes requested"):
+		return changesRequested, true
+	default:
+		return "", false
+	}
 }
 
 type ghComment struct {
@@ -192,9 +212,29 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 	// verdict is each reviewer's latest review that decides: APPROVED,
 	// CHANGES_REQUESTED or DISMISSED, as GitHub's own review state counts.
 	verdict := map[string]ghReview{}
+	var deskVerdict ghReview
 
 	var items []UnansweredReview
 	for _, r := range f.reviews {
+		if vState, ok := deskReviewVerdict(r.State, r.Body); ok && !r.User.automation() {
+			login := strings.ToLower(r.User.Login)
+			r.State = vState
+			if deskVerdict.State == "" || !r.SubmittedAt.Before(deskVerdict.SubmittedAt) {
+				deskVerdict = r
+			}
+			if vState == "APPROVED" {
+				if v, ok := verdict[login]; ok && !r.SubmittedAt.Before(v.SubmittedAt) {
+					verdict[login] = r
+				}
+				if r.SubmittedAt.After(approved[login]) {
+					approved[login] = r.SubmittedAt
+				}
+			}
+			continue
+		}
+		if r.State == "APPROVED" && !r.User.automation() && deskVerdict.State != "" && !r.SubmittedAt.Before(deskVerdict.SubmittedAt) {
+			deskVerdict = r
+		}
 		answered(r.User, r.SubmittedAt)
 		if !reviewer(r.User) {
 			continue
@@ -244,6 +284,9 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 		if r.State == changesRequested {
 			open = append(open, UnansweredReview{Kind: FeedbackReview, Login: r.User.Login, State: r.State, At: r.SubmittedAt, URL: r.HTMLURL})
 		}
+	}
+	if deskVerdict.State == changesRequested {
+		open = append(open, UnansweredReview{Kind: FeedbackReview, Login: deskVerdict.User.Login, State: deskVerdict.State, At: deskVerdict.SubmittedAt, URL: deskVerdict.HTMLURL})
 	}
 	slices.SortStableFunc(open, func(a, b UnansweredReview) int { return a.At.Compare(b.At) })
 	return open

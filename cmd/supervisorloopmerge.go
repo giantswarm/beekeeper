@@ -471,6 +471,22 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "no pending exact-head supervisor merge claim"
 		return doc
 	}
+	if claimAgent != "" {
+		doc.RequestedBy = fmt.Sprintf("%s (for %s)", loopParty.Name, claimAgent)
+	} else if a.as != "" {
+		doc.RequestedBy = a.as
+	} else {
+		doc.RequestedBy = loopParty.Name
+	}
+	if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, p, head); authErr != nil {
+		doc.ExitCode = github.SquashTooling
+		doc.Reason = authErr.Error()
+		return doc
+	} else if why != "" {
+		doc.ExitCode = github.SquashRefused
+		doc.Reason = why
+		return doc
+	}
 	if st.Stop != nil {
 		doc.ExitCode = github.SquashRefused
 		doc.Reason = reasonDeskStopped
@@ -562,4 +578,173 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// checkMergeHeadAuthority verifies that merging p at targetHead is backed by
+// an approved desk review covering that head (or a base merge into it) or an
+// explicit exact-head supervisor go (supervisor.go, merge.authorized,
+// execution.merge-issued, or an escalation release answer). A supervisor.claim
+// or supervisor.merge alone is never a supervisor go.
+func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p superloop.Pull, targetHead string) (why string, hasExplicitGo bool, err error) {
+	head := cmp.Or(targetHead, p.Head)
+	if head == "" {
+		return "pull request has no head commit", false, nil
+	}
+	if p.Head != "" && targetHead != "" && !sameCommit(p.Head, targetHead) {
+		return fmt.Sprintf("pull request head is %s, not %s", shortSHA(p.Head), shortSHA(targetHead)), false, nil
+	}
+	var latest *superloop.Review
+	for i := range p.Reviews {
+		r := &p.Reviews[i]
+		if r.Verdict == "" {
+			continue
+		}
+		if latest == nil || !r.At.Before(latest.At) {
+			latest = r
+		}
+	}
+	if latest != nil && latest.Verdict == superloop.Approved {
+		revHead := cmp.Or(latest.Head, latest.Commit)
+		if sameCommit(revHead, head) {
+			return "", false, nil
+		}
+		if revHead != "" {
+			ok, err := a.baseMerged(ctx, p, revHead)
+			if err != nil {
+				return "", false, err
+			}
+			if ok {
+				return "", false, nil
+			}
+		}
+	}
+
+	type goRecord struct {
+		head string
+		at   time.Time
+	}
+	var goes []goRecord
+	if a != nil && a.store != nil {
+		evs, err := a.store.Events(0, func(e state.Event) bool {
+			return strings.EqualFold(e.Subject, p.Ref) || e.Verb == answerRecorded || strings.Contains(e.Detail, p.Ref)
+		})
+		if err != nil {
+			return "", false, err
+		}
+		activeGo := map[string]goRecord{}
+		for _, e := range evs {
+			if e.By == loopParty && strings.EqualFold(e.Subject, p.Ref) {
+				if key, _, ok := keyed(e.Detail); ok {
+					if after, ok := strings.CutPrefix(key, "go "+p.Ref+"@"); ok && after != "" {
+						switch e.Verb {
+						case "supervisor.go":
+							activeGo[after] = goRecord{head: after, at: e.At}
+						case "supervisor.merge", loopClaimEndVerb:
+							delete(activeGo, after)
+						}
+					}
+					if e.Verb == "supervisor.end" && strings.EqualFold(key, "end "+p.Ref) {
+						clear(activeGo)
+					}
+				}
+			}
+			if (e.Verb == "merge.authorized" || e.Verb == "execution.merge-issued") && strings.EqualFold(e.Subject, p.Ref) {
+				if h := extractSupervisorGoHead(e.Detail); h != "" {
+					goes = append(goes, goRecord{head: h, at: e.At})
+				}
+			}
+			if e.Verb == answerRecorded {
+				if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.About, p.Ref) && superloop.Releases(an.Answer) {
+					if h := extractSupervisorGoHead(an.Question); h != "" {
+						goes = append(goes, goRecord{head: h, at: e.At})
+					}
+				}
+			}
+		}
+		for _, g := range activeGo {
+			goes = append(goes, g)
+		}
+	}
+	for _, g := range goes {
+		laterChangesRequested := slices.ContainsFunc(p.Reviews, func(r superloop.Review) bool {
+			if r.Verdict != superloop.ChangesRequested {
+				return false
+			}
+			revHead := cmp.Or(r.Head, r.Commit)
+			return sameCommit(revHead, head) || (!g.at.IsZero() && !r.At.Before(g.at))
+		})
+		if laterChangesRequested {
+			continue
+		}
+		if sameCommit(g.head, head) {
+			return "", true, nil
+		}
+		if g.head != "" {
+			ok, err := a.baseMerged(ctx, p, g.head)
+			if err != nil {
+				return "", false, err
+			}
+			if ok {
+				return "", true, nil
+			}
+		}
+	}
+
+	if latest != nil && latest.Verdict == superloop.ChangesRequested {
+		return fmt.Sprintf("head %s has no approved desk review (latest desk review on %s requested changes) and no supervisor go for that exact head", shortSHA(head), shortSHA(cmp.Or(latest.Head, latest.Commit))), false, nil
+	}
+	if latest != nil && latest.Verdict == superloop.Approved {
+		return fmt.Sprintf("head %s moved past approved head %s without a new approved desk review or supervisor go for %s", shortSHA(head), shortSHA(cmp.Or(latest.Head, latest.Commit)), shortSHA(head)), false, nil
+	}
+	return fmt.Sprintf("head %s has no approved desk review and no supervisor go for that exact head", shortSHA(head)), false, nil
+}
+
+// gateMergeHeadAuthority checks merge head authority for a gated pull request
+// merge across all gate routes.
+func gateMergeHeadAuthority(ctx context.Context, a *app, repo string, pr int, targetHead string) (why string, hasExplicitGo bool, err error) {
+	if pr <= 0 {
+		return "", false, nil
+	}
+	ref := fmt.Sprintf("%s#%d", repo, pr)
+	p, err := readLoopPull(ctx, ref)
+	if err != nil {
+		return "", false, err
+	}
+	var st *state.State
+	if a != nil && a.store != nil {
+		st, err = a.store.Read()
+		if err != nil {
+			return "", false, err
+		}
+	}
+	return a.checkMergeHeadAuthority(ctx, st, p, targetHead)
+}
+
+func extractSupervisorGoHead(text string) string {
+	for _, field := range strings.FieldsFunc(text, func(r rune) bool {
+		return (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F')
+	}) {
+		if len(field) >= 7 && len(field) <= 40 && isHexCommit(field) {
+			return strings.ToLower(field)
+		}
+	}
+	return ""
+}
+
+func isHexCommit(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func sameCommit(a, b string) bool {
+	a, b = strings.ToLower(strings.TrimSpace(a)), strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }

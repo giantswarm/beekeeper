@@ -36,6 +36,7 @@ func newBehindRig(t *testing.T) *behindRig {
 	r.pull.Base = mainBranch
 	r.pull.MergeState = mergeStateBehind
 	r.pull.Checks = []string{behindBuild, behindUnit}
+	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
 		return approved == loopHead && p.Head == loopFixed, nil
 	}

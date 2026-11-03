@@ -1550,3 +1550,47 @@ func TestPlanOrdersPullActionsByBoardPriority(t *testing.T) {
 		t.Fatalf("go priorities = %v, want %v", prios, want)
 	}
 }
+
+// Regression test for after-the-fact review of https://github.com/giantswarm/beekeeper/pull/2164:
+// planOverlap matches pull request refs and default pull worker names
+// case-insensitively.
+func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
+	t0 := time.Date(2026, 11, 3, 2, 0, 0, 0, time.UTC)
+	const (
+		prRef  = "GiantSwarm/Beekeeper#42"
+		prLow  = "giantswarm/beekeeper#42"
+		waitPR = "GiantSwarm/Beekeeper#43"
+	)
+	in := Input{
+		Now:  t0.Add(OverlapWait + time.Minute),
+		Desk: Desk{Authors: []string{"alice"}},
+		Workers: []Worker{
+			{Name: "beekeeper 42", Serves: prLow},
+			{Name: "beekeeper 43", Serves: "giantswarm/beekeeper#43", ParkedOn: prLow, ParkedAt: t0, Waits: "waiting on #42"},
+		},
+		Pulls: map[string]Pull{
+			prRef:  {Ref: prRef, URL: "https://github.com/GiantSwarm/Beekeeper/pull/42", Author: "alice", State: Open, Head: head1},
+			waitPR: {Ref: waitPR, URL: "https://github.com/GiantSwarm/Beekeeper/pull/43", Author: "alice", State: Open, Head: head2},
+		},
+		Rank: func(ref string) int {
+			if strings.EqualFold(ref, waitPR) {
+				return 1
+			}
+			return 2
+		},
+	}
+	acts := Plan(in)
+	var ownerAct *Action
+	for i := range acts {
+		if acts[i].Kind == KindOwner {
+			ownerAct = &acts[i]
+			break
+		}
+	}
+	if ownerAct == nil {
+		t.Fatalf("expected KindOwner action, got %+v", acts)
+	}
+	if ownerAct.Ref != waitPR || ownerAct.Head != head2 || ownerAct.Block != prRef {
+		t.Fatalf("unexpected KindOwner action: %+v", *ownerAct)
+	}
+}
