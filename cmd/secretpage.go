@@ -28,10 +28,20 @@ const pageOp = "page"
 
 // pageCapture is one value a page makes: the steps that make it, the click
 // that creates it (the turn's declared create), and where it shows up: a
-// match of pattern on the page, or a download glob matches.
+// match of pattern on the page, or a download glob matches. rule is a
+// preset's auto mode allow rule for the capture, built from names beekeeper
+// checked; a capture the caller words itself has none.
 type pageCapture struct {
-	steps, create, match, download string
+	steps, create, match, download, rule string
 }
+
+// The names a preset puts into its steps and its allow rule: a GitHub
+// organisation or App slug, and an Anthropic key or workspace name (one
+// line of printable characters, no quote).
+var (
+	githubName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,99}$`)
+	consoleName = regexp.MustCompile(`^[^"\\\x00-\x1f\x7f]{1,100}$`)
+)
 
 // The presets' patterns: a GitHub App's client secret (40 hex digits) and
 // an Anthropic API key (the console shows the whole key once; its list
@@ -157,29 +167,37 @@ func pagePreset(clientSecret, privateKey, anthropicKey, workspace string, generi
 	case clientSecret != "" || privateKey != "":
 		app := clientSecret + privateKey
 		org, slug, ok := strings.Cut(app, "/")
-		if !ok || org == "" || slug == "" || strings.Contains(slug, "/") {
-			return pageCapture{}, usageErr("a GitHub App is named <org>/<app>, not %q", app)
+		if !ok || !githubName.MatchString(org) || !githubName.MatchString(slug) {
+			return pageCapture{}, usageErr("a GitHub App is named <org>/<app> (letters, digits and -), not %q", app)
 		}
-		page := "Open https://github.com/organizations/" + org + "/settings/apps/" + slug + "."
+		url := "https://github.com/organizations/" + org + "/settings/apps/" + slug
+		page := "Open " + url + "."
 		if clientSecret != "" {
+			create := "a new client secret of the GitHub App " + app
 			return pageCapture{
 				steps:  page + ` Under "Client secrets" click "Generate a new client secret" once.` + readerStep,
-				create: "a new client secret of the GitHub App " + app, match: githubAppMatch,
+				create: create, match: githubAppMatch, rule: captureRule(create, url, `"Generate a new client secret"`),
 			}, nil
 		}
+		create := "a new private key of the GitHub App " + app
 		return pageCapture{
 			steps:  page + ` Under "Private keys" click "Generate a private key" once: the browser downloads the key.`,
-			create: "a new private key of the GitHub App " + app, download: slug + ".*.private-key.pem",
+			create: create, download: slug + ".*.private-key.pem", rule: captureRule(create, url, `"Generate a private key"`),
 		}, nil
 	case anthropicKey != "":
+		if !consoleName.MatchString(anthropicKey) || workspace != "" && !consoleName.MatchString(workspace) {
+			return pageCapture{}, usageErr("a key or workspace name is one line of at most 100 characters without quotes or backslashes")
+		}
 		in := ""
 		if workspace != "" {
 			in = fmt.Sprintf(" choose the workspace %q,", workspace)
 		}
+		create := fmt.Sprintf("a new API key named %q on the Anthropic console", anthropicKey)
 		return pageCapture{
 			steps: fmt.Sprintf("Open %s. Click \"Create Key\" once. In its dialog%s type %q into the key's name field and click the dialog's "+
 				"create button (\"Add\" or \"Create Key\") once.", anthropicKeys, in, anthropicKey) + readerStep,
-			create: fmt.Sprintf("a new API key named %q on the Anthropic console", anthropicKey), match: anthropicKeyMatch,
+			create: create, match: anthropicKeyMatch,
+			rule: captureRule(create, anthropicKeys, `"Create Key", the dialog's create button ("Add" or "Create Key") after the name typed into it`),
 		}, nil
 	}
 	switch {
@@ -206,7 +224,7 @@ func pagePreset(clientSecret, privateKey, anthropicKey, workspace string, generi
 // written.
 func (a *app) secretPage(ctx context.Context, ref secret.Ref, pc pageCapture, wait time.Duration) error {
 	start := time.Now()
-	blind := &blindTurn{match: pc.match}
+	blind := &blindTurn{match: pc.match, rule: pc.rule}
 	var taken *pageValues
 	if pc.match != "" {
 		var stop func()
@@ -454,8 +472,8 @@ func scrubTranscript(path, match string, values []string) int {
 // delivering the reader's match on socket. out collects what browse would
 // print; id is the turn's session.
 type blindTurn struct {
-	match, socket, id string
-	out               strings.Builder
+	match, socket, id, rule string
+	out                     strings.Builder
 }
 
 // shape is a browse turn's argv made blind: the read tools disallowed, the
@@ -513,6 +531,20 @@ func (b *blindTurn) settings(base, self string) string {
 	s[hooksKey] = hooks
 	out, _ := json.Marshal(s)
 	return string(out)
+}
+
+// captureRule is a preset's auto mode allow rule for its capture turn: the
+// one credential beekeeper words from checked names, on the one page it
+// names, is no exfiltration for the calls that capture it; beekeeper's hook
+// keeps the value from the turn. Every other call stays under the rules.
+func captureRule(create, page, clicks string) string {
+	return fmt.Sprintf("Covered Credential Capture: beekeeper secret page creates exactly one credential, %q, on %s, in the "+
+		"person's signed-in browser session, and stores it in the person's password vault on this machine through beekeeper's "+
+		"own process. On that page these calls are pre-authorized and are no Data Exfiltration or credential disclosure: reading the "+
+		"tab context, navigating to that page, find, clicking %s once, closing the dialog that shows the value, and beekeeper's "+
+		"reader script, verbatim; the value never reaches the agent, whose results beekeeper's hook masks. Not covered: any other "+
+		"page or credential, typing, copying, reporting or sending the value anywhere, and every call not named here. Every other "+
+		"rule applies in full.", create, page, clicks)
 }
 
 // blindPreamble opens a capture turn's prompt in place of browse's.
