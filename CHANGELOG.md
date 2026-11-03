@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Run merge-result checks and Git diagnostics with `LC_ALL=C`, and keep checker launch, cancellation and host-resource failures out of pull-request branch repair (https://github.com/giantswarm/beekeeper/issues/2240).
 
+- Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
 - A rebound SSH execution keeps its coordinator MCP on resumed turns: the host-side MCP proxy checks the host policy against the execution's bound policy, as publication, merge and capped runs do, instead of refusing against the start request's original digest.
 
 - The hook's refusal of work in the guide's session no longer tells the guide to `SendMessage` the supervisor, which is the supervisor loop and no session a message reaches: it names the route that arrives, an issue in the work's owning repository put on the board with `beekeeper board move` (https://github.com/giantswarm/beekeeper/issues/1776).
