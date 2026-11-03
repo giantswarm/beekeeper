@@ -54,9 +54,12 @@ func (a *app) executionCIRerun(ctx context.Context, host string, req execution.C
 	return runExecutionCIRerun(ctx, a.cfg.Sandbox.Devctl, repository, request.PR)
 }
 
+// devctlBinary is devctl's default command name.
+const devctlBinary = "devctl"
+
 var runExecutionCIRerun = func(ctx context.Context, binary, repository string, pr int) (executionRerunResult, error) {
 	if binary == "" {
-		binary = "devctl"
+		binary = devctlBinary
 	}
 	child := exec.CommandContext(ctx, binary, "pr", "rerun", repository, strconv.Itoa(pr)) //nolint:gosec // configured coordinator devctl, fixed verb and validated repository/PR
 	var out, errOut bytes.Buffer

@@ -743,7 +743,7 @@ func (r childResult) command() string {
 		argv = r.spec.Command
 	}
 	if len(argv) == 0 {
-		return "devctl"
+		return devctlBinary
 	}
 	return strings.Join(append([]string{filepath.Base(argv[0])}, argv[1:]...), " ")
 }

@@ -168,7 +168,7 @@ func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 					t.Errorf("devctl ran in its caller's cgroup %s", mine)
 				}
 			}
-			if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+			if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 				t.Errorf("merged event: %q", d)
 			}
 			if st := gateState(t, g); len(st.Merges) != 0 {
@@ -188,7 +188,7 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	if err := g.runMerge(); Code(err) != 137 {
 		t.Fatalf("exit %d, want 137", Code(err))
 	}
-	if d := lastEvent(t, g, "merged"); !strings.Contains(d, "exit 137, release unconfirmed") {
+	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "exit 137, release unconfirmed") {
 		t.Errorf("merged event: %q", d)
 	}
 }
@@ -214,7 +214,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling {
 				t.Errorf("want one settling merge: %+v", st.Merges)
 			}
-			if d := lastEvent(t, g, "merged"); !strings.Contains(d, "exit 143, release unconfirmed (merged per GitHub)") {
+			if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "exit 143, release unconfirmed (merged per GitHub)") {
 				t.Errorf("merged event: %q", d)
 			}
 			if lastEvent(t, g, "merge.failed") != "" {
@@ -277,7 +277,7 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 		lifted, merged      bool
 	}{
 		{"not merged", github.Open, devctlFrom, true, false},
-		{"closed", github.Closed, "", true, false},
+		{overrideClosed, github.Closed, "", true, false},
 		{"merged, devctl not updated", github.Merged, devctlFrom, false, true},
 		{"devctl updated", github.Merged, devctlTo, true, false},
 	} {
@@ -607,7 +607,7 @@ func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 	if got := strings.TrimSpace(string(raw)); got != "squash-merge teemow/lab 7" {
 		t.Errorf("ran %q", got)
 	}
-	d := lastEvent(t, g, "merged")
+	d := lastEvent(t, g, testMergedWord)
 	if !strings.Contains(d, "teemow/lab#7 exit 0") || !strings.Contains(d, github.SquashRoute) || !strings.Contains(d, "output in ") {
 		t.Errorf("merged event: %q", d)
 	}
@@ -651,7 +651,7 @@ func TestAnUnansweredReviewRefusesEveryRoute(t *testing.T) {
 			if !strings.Contains(out, GatePrefix+"nothing merged (exit 5: refused: unanswered review: 1 item(s)") || !strings.Contains(out, "COMMENTED by pat") {
 				t.Errorf("no gate line names the unanswered review:\n%s", out)
 			}
-			if d := lastEvent(t, g, "merged"); d != "" {
+			if d := lastEvent(t, g, testMergedWord); d != "" {
 				t.Errorf("merged: %q", d)
 			}
 		})

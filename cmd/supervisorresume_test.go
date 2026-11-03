@@ -196,7 +196,7 @@ func TestLoopRecoveryRequiresHarnessGone(t *testing.T) {
 }
 
 func TestRestartPullParkKeepsTaskAndPostMergeWork(t *testing.T) {
-	for _, outcome := range []string{"merged", "closed"} {
+	for _, outcome := range []string{testMergedWord, overrideClosed} {
 		t.Run(outcome, func(t *testing.T) {
 			r, _ := fillRig(t)
 			work := "release and prove the deployment"

@@ -26,7 +26,7 @@ func TestManagedSupervisorStatusRefusesInsteadOfListingAgents(t *testing.T) {
 	}
 	s.OwnUnit = func() string { return j.Handle.Unit }
 	t.Setenv(execution.EnvID, string(request.Ref.Execution))
-	for _, args := range [][]string{{"supervisor", "status"}, {"supervisor"}} {
+	for _, args := range [][]string{{"supervisor", testStatusWord}, {"supervisor"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out bytes.Buffer
 			a.out = &out

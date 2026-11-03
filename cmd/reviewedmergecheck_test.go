@@ -593,3 +593,7 @@ const (
 	testAgyVersion = "1.4.7"
 	testExpiresIn  = "expires_in"
 )
+
+const testMergedWord = "merged"
+
+const testStatusWord = "status"

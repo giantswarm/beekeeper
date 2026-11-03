@@ -94,7 +94,7 @@ func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 			t.Errorf("the refused merge keeps its running place")
 		}
 	}
-	if d := lastEvent(t, g, "merged"); d != "" {
+	if d := lastEvent(t, g, testMergedWord); d != "" {
 		t.Errorf("merged: %q", d)
 	}
 }

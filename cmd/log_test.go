@@ -175,7 +175,7 @@ func TestLogAddRefusesUnlinkedRefs(t *testing.T) {
 	if err := run(ok); err != nil {
 		t.Fatalf("log add(%q): %v", ok, err)
 	}
-	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == "status" })
+	evs, err := a.store.Events(1, func(e state.Event) bool { return e.Verb == testStatusWord })
 	if err != nil || len(evs) != 1 || evs[0].Detail != ok {
 		t.Fatalf("events = %+v, %v", evs, err)
 	}
