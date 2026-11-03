@@ -181,13 +181,22 @@ is not the coordinator's release, so a coordinator self-update carries the
 hosts with it. A coordinator that runs a release starts nothing on a host
 until the host runs that release:
 
-- a host with running executions drains: no new start there, and it updates
-  once they end;
+- a host with an execution in a turn drains: no new start there, and it
+  updates once no execution is in a turn. An execution between turns (a
+  parked worker waiting for its wake: ready, no turn running, no wake
+  stored, no delivery uncertain) does not hold the update back. The host
+  holds its admission through the install, so the next turn begins only
+  after it, on the updated host, and the coordinator then rebinds that
+  execution to the pinned policy as `agents recover` does; an execution it
+  cannot rebind is named in the update's line with that retry;
 - a host whose update fails (unreachable, no signed release, a prepare or
   check that fails) is held: no start there until an update succeeds. The
   loop hands the hold on once as a finding (`supervisor.file`, delivered by
   `guide watch`) and tries the host again hourly; the other hosts keep
-  running. `beekeeper agents hosts update <host>` retries it at once.
+  running. `beekeeper agents hosts update <host>` retries it at once;
+- a host that drains or waits past more than one coordinator release (it did
+  not follow one release and does not follow the next either) is handed on
+  once as a finding, with the executions or the error that keep it behind.
 
 A host first needs a release with `agents hosts self-update` installed by
 hand; from then on it follows the coordinator. A development build of the
@@ -244,6 +253,45 @@ memcap's slot location and hold bound (`slotDir`, `holdBound`). `hosts check`
 reports the host's live resource observation (available memory, load, disk, slot
 and lab pressure), so a coordinator can compare what the host runs with against
 its own view of the machine.
+
+## omp on an execution host
+
+The host catalogue may list `omp` alongside `claude`, `codex` and `agy`. Configure
+`agents.execution.harnesses.omp` on the host with an absolute `executable`, an
+exact installed `version` in `>= 18.14.2, < 19.0.0`, and `configDir` naming
+that host's own `PI_CODING_AGENT_DIR`. Never copy a coordinator credential
+store. For a provider requiring login, the operator signs in once on that
+host with `PI_CODING_AGENT_DIR=<configDir> omp login`; follow that provider's
+device/browser flow. A keyless self-hosted provider needs its host-local model
+configuration instead. Provider credentials and model configuration remain on
+that host.
+
+Prepare and pin a matching policy bundle before running `agents hosts check`.
+The bundle binds an explicit omp extension. The check validates the pinned
+version, asks `omp models --json --no-extensions` for available model metadata
+without a model call, and starts a bounded RPC session without sending a
+prompt to verify the extension starts. A missing login/model, extension error
+or absent readiness event leaves omp unavailable. No credential value is
+returned. As with other adapters, a passing check advertises the version;
+`unavailable.omp` explains a refused check.
+
+The runner disables ambient extensions, explicitly installs the prepared
+guard and enables only `bash`, `read` and `write`. Use foreground bash for
+edits and searches; PTYs, services, asynchronous bash, URL reads and every
+other tool are refused. The extension blocks on command failure, timeout,
+invalid JSON and guard rewrites it cannot apply. Each allowed call passes the
+shared workspace and execution guards and live coordinator authority check.
+Hooks are not an OS sandbox for arbitrary code executed inside an allowed
+shell command.
+
+No task prompt is sent until the guard extension starts and the runner binds
+its actual conversation identifier. A wake uses the same RPC process and
+message id; an admission response, rather than a successful pipe write,
+commits its receipt. Lost admission evidence remains uncertain for explicit
+recovery. Prompt failures end the execution as failed. Inspect, logs, stop,
+leases, publication and exact-head merge authorization use the shared
+execution lifecycle. Provider usage readers and ceilings stay on the
+coordinator; the host contributes machine room only.
 
 ## Codex on an execution host
 
@@ -377,7 +425,9 @@ where configured and offered). `hostsFirst` prefers
 hosts only for what a host can run: without room on any host a supported start
 waits, while a repository no host maps, or a choice of a harness no host has
 an adapter for (`omp`), starts on the coordinator within its local
-room; for the latter the local start excludes the choices a host runs. A desk
+room; for the latter the local start excludes the choices a host runs, and
+waits instead when that exclusion alone would make a self-hosted choice the pick
+while a subscription is eligible. A desk
 without `capacity.choices` never places remotely. Reviewers stay on the
 coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
 read-and-review path. A review waits when coordinator review capacity is full.

@@ -79,7 +79,7 @@ const blockerFields = `...on Issue{blockedBy(first:100){totalCount nodes{closedA
 // itemFields is what a move takes of an item: its id, its board and the
 // board fields with the Team. ProjectV2Owner declares no login: the
 // board's owner names it as the User or Organization it is.
-const itemFields = `id project{id number owner{...on User{login} ...on Organization{login}}} ` + boardFields + `
+const itemFields = `id isArchived project{id number owner{...on User{login} ...on Organization{login}}} ` + boardFields + `
 team:fieldValueByName(name:"` + TeamField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
 type issueJSON struct {
@@ -1078,7 +1078,9 @@ type Ranked struct {
 // After issue is found by that issue's projectItems and must be on the
 // board already; Before is two moves, the item after the other one and the
 // other one after the item, so nothing reads the board's items to find the
-// other one's predecessor. Each call acts on the repository of the issue it
+// other one's predecessor. An archived After anchor is replaced by its
+// nearest unarchived predecessor, or the board's end when none precedes it.
+// Each call acts on the repository of the issue it
 // asks about. No issue, a reference without an item on the board and an
 // item placed against itself are refused before anything is written.
 func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error) {
@@ -1101,6 +1103,7 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 	}
 	rk := &Ranked{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n), Top: at.Top}
 	var otherID string
+	var archivedAnchor bool
 	if other != "" {
 		oo, or, on, err := Ref(other)
 		if err != nil {
@@ -1118,6 +1121,7 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 			return nil, &Refusal{fmt.Sprintf("%s is not on the board %s/%d", oref, c.Board.Owner, c.Board.Project)}
 		}
 		otherID = found.ID
+		archivedAnchor = found.Archived && at.After != ""
 		if at.Before != "" {
 			rk.Below = oref
 		} else {
@@ -1128,6 +1132,12 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 	item, err := c.item(ctx, m, mv, owner, repo, n)
 	if err != nil {
 		return nil, err
+	}
+	if archivedAnchor {
+		otherID, err = c.unarchivedPredecessor(ctx, m.ID, otherID, item.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rk.Added = mv.Added
 	if item.Team == nil && team != nil {
@@ -1149,6 +1159,54 @@ func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error
 		}
 	}
 	return rk, nil
+}
+
+// unarchivedPredecessor walks board order only when an after anchor has
+// been archived. Archived items cannot be used in a position mutation.
+func (c *Client) unarchivedPredecessor(ctx context.Context, project, anchor, moving string) (string, error) {
+	previous := ""
+	found := false
+	for cursor := ""; ; {
+		var r struct {
+			Node struct {
+				Items struct {
+					Nodes []struct {
+						ID       string `json:"id"`
+						Archived bool   `json:"isArchived"`
+					} `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"items"`
+			} `json:"node"`
+		}
+		vs := vars{"p": project}
+		if cursor != "" {
+			vs["c"] = cursor
+		}
+		if err := c.graphql(ctx, &r, `query($p:ID!,$c:String){node(id:$p){...on ProjectV2{items(first:100,after:$c){nodes{id isArchived} pageInfo{hasNextPage endCursor}}}}}`, vs); err != nil {
+			return "", err
+		}
+		for _, item := range r.Node.Items.Nodes {
+			if item.ID == anchor {
+				if previous != "" {
+					return previous, nil
+				}
+				found = true
+			}
+			if !item.Archived && item.ID != moving {
+				previous = item.ID
+			}
+		}
+		if !r.Node.Items.PageInfo.HasNextPage {
+			if found {
+				return previous, nil
+			}
+			return "", fmt.Errorf("archived position anchor %s is no longer on the board", anchor)
+		}
+		cursor = r.Node.Items.PageInfo.EndCursor
+	}
 }
 
 // position moves the item of the project right after the item after, to
@@ -1229,8 +1287,9 @@ func (c *Client) set(ctx context.Context, project, item, f, o string) error {
 
 // projectItem is an issue's item on a board.
 type projectItem struct {
-	ID      string `json:"id"`
-	Project struct {
+	Archived bool   `json:"isArchived"`
+	ID       string `json:"id"`
+	Project  struct {
 		ID     string `json:"id"`
 		Number int    `json:"number"`
 		Owner  *struct {
