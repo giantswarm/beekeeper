@@ -377,7 +377,9 @@ where configured and offered). `hostsFirst` prefers
 hosts only for what a host can run: without room on any host a supported start
 waits, while a repository no host maps, or a choice of a harness no host has
 an adapter for (`omp`), starts on the coordinator within its local
-room; for the latter the local start excludes the choices a host runs. A desk
+room; for the latter the local start excludes the choices a host runs, and
+waits instead when that exclusion alone would make a self-hosted choice the pick
+while a subscription is eligible. A desk
 without `capacity.choices` never places remotely. Reviewers stay on the
 coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
 read-and-review path. A review waits when coordinator review capacity is full.

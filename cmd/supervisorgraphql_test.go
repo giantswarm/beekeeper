@@ -306,9 +306,13 @@ func TestLoopPullInvalidationIsSpecificToItsThread(t *testing.T) {
 	if got := loopPullChanged(in, loopPR); !got.Equal(now) {
 		t.Fatalf("unrelated PR invalidated cache: %s", got)
 	}
-	in.Events = append(in.Events, superloop.Event{Agent: superloop.ReviewerName(loopPR, 1), At: now.Add(2 * time.Minute)})
-	if got := loopPullChanged(in, loopPR); !got.Equal(now.Add(2 * time.Minute)) {
-		t.Fatalf("reviewer completion missed: %s", got)
+	for round := 1; round <= 4; round++ {
+		in.Taken = append(in.Taken, superloop.Taken{Ref: loopPR, Kind: superloop.KindReview})
+		at := now.Add(time.Duration(round+1) * time.Minute)
+		in.Events = append(in.Events, superloop.Event{Agent: superloop.ReviewerName(loopPR, round), At: at})
+		if got := loopPullChanged(in, loopPR); !got.Equal(at) {
+			t.Fatalf("reviewer round %d completion missed: %s", round, got)
+		}
 	}
 }
 

@@ -23,6 +23,8 @@ type Comment struct {
 	// Automation says its author is a bot, a GitHub App or one of the
 	// pinned automation accounts.
 	Automation bool `json:"automation,omitempty"`
+	// Body is the comment's text.
+	Body string `json:"body,omitempty"`
 }
 
 // latestCommentsQuery reads the newest comments of an issue or a pull
@@ -36,7 +38,7 @@ const latestCommentsQuery = `query($owner:String!,$name:String!,$number:Int!,$la
     }
   }
 }
-fragment c on IssueComment{author{login __typename ... on User{databaseId}} authorAssociation createdAt url}`
+fragment c on IssueComment{author{login __typename ... on User{databaseId}} authorAssociation createdAt url body}`
 
 // LatestComments reads the last n comments of ref (owner/repo#n), oldest
 // first.
@@ -66,6 +68,7 @@ func LatestComments(ctx context.Context, gh GH, ref string, n int) ([]Comment, e
 							Association string    `json:"authorAssociation"`
 							CreatedAt   time.Time `json:"createdAt"`
 							URL         string    `json:"url"`
+							Body        string    `json:"body"`
 						} `json:"nodes"`
 					} `json:"comments"`
 				} `json:"issueOrPullRequest"`
@@ -80,7 +83,7 @@ func LatestComments(ctx context.Context, gh GH, ref string, n int) ([]Comment, e
 	}
 	var out []Comment
 	for _, c := range doc.Data.Repository.Item.Comments.Nodes {
-		cm := Comment{At: c.CreatedAt, URL: c.URL, Association: c.Association,
+		cm := Comment{At: c.CreatedAt, URL: c.URL, Association: c.Association, Body: c.Body,
 			Member: c.Association == "MEMBER" || c.Association == "OWNER" || c.Association == "COLLABORATOR"}
 		if c.Author == nil {
 			// A deleted account: GitHub's ghost, no person to wait on.
