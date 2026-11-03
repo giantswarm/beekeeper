@@ -1236,10 +1236,9 @@ func (a *app) boardRankCmd() *cobra.Command {
 	var at board.Place
 	c := &cobra.Command{
 		Use:   "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
-		Short: "Set a board item's priority: move it to the top, or before or after another item",
-		Long: `An item's position on the board orders it within its rank of the person's
-priority list (beekeeper priority): board next walks the items of each
-board.order step in the board's position order, the order a view
+		Short: "Change a board item's position: move it to the top, or before or after another item",
+		Long: `An item's position on the board orders work within each board.order step.
+board next walks the items in the board's position order, the order a view
 without a sort shows and a drag in it changes (the roadmap board's Epics and
 Backlogs views). rank moves the issue's item to the top of the board, right
 before or right after the item of another issue (updateProjectV2ItemPosition),
@@ -1250,7 +1249,11 @@ be added).
 The other issue must be on the board already. Only the items named are read,
 never the board's items. Every GitHub call acts on the repository of the
 issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
-exist, another issue that has no item on the board, an item placed against itself.`,
+exist, another issue that has no item on the board, an item placed against itself.
+Any session may change positions; every move logs board.rank naming the caller.
+Outside a session, --as <name> identifies the caller; an anonymous call is refused.
+This command never writes epic Priority numbers. Only priority set and unset
+change those numbers, with --as naming a configured person.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, r := range []string{args[0], at.Before, at.After} {
@@ -1261,7 +1264,11 @@ exist, another issue that has no item on the board, an item placed against itsel
 					return usageErr("%v", err)
 				}
 			}
-			me, _ := a.caller()
+			me, err := a.caller()
+			if err != nil || (me.Name == "" && me.Session == "" && me.HostSession == "") {
+				return refused("board rank requires an identified caller: use a session or --as <name>")
+			}
+			me.Name = cmp.Or(me.Name, me.Session, me.HostSession)
 			cl := a.boardClient()
 			rk, err := cl.Rank(cmd.Context(), args[0], at)
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
