@@ -21,6 +21,12 @@ import (
 )
 
 const (
+	transcriptListCommand   = "list"
+	transcriptStatusEnded   = "ended"
+	transcriptStatusRunning = "running"
+)
+
+const (
 	transcriptsListOp    = "transcripts.list"
 	transcriptsSearchOp  = "transcripts.search"
 	transcriptsReadOp    = "transcripts.read"
@@ -114,7 +120,7 @@ Access rules:
 	c.Flags().StringVar(&host, "host", "", "filter by host")
 
 	list := &cobra.Command{
-		Use:   "list",
+		Use:   transcriptListCommand,
 		Short: "List stored transcripts accessible to the caller",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -219,9 +225,9 @@ func (a *app) transcriptsReadCmd() *cobra.Command {
 				return a.printJSON(resp)
 			}
 			m := resp.Meta
-			status := "ended"
+			status := transcriptStatusEnded
 			if m.Running {
-				status = "running"
+				status = transcriptStatusRunning
 			}
 			_, _ = fmt.Fprintf(a.out, "# %s (%s, %s on %s, %s)\n", m.DisplayName(), cmp.Or(m.ID, m.Execution, m.Key), m.Harness, m.Host, status)
 			if m.Repo != "" || m.Ref != "" {
@@ -498,9 +504,9 @@ func (a *app) runTranscriptsList(ctx context.Context, repo, harness, host string
 	w := a.table()
 	_, _ = fmt.Fprintln(w, "SESSION\tROSTER\tROLE\tHARNESS\tHOST\tREPO / REF\tTURNS\tACTIVE\tSTATUS")
 	for _, m := range metas {
-		status := "ended"
+		status := transcriptStatusEnded
 		if m.Running {
-			status = "running"
+			status = transcriptStatusRunning
 		}
 		repoRef := cmp.Or(m.Ref, m.Repo, "-")
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
@@ -828,7 +834,7 @@ func (a *app) syncLocalTranscripts(st *state.State) {
 		}
 		cleanPath := filepath.Clean(s.Transcript)
 		seenPaths[cleanPath] = true
-		harness := cmp.Or(s.Harness, "claude")
+		harness := cmp.Or(s.Harness, claudeComm)
 		id := cmp.Or(s.ID, s.HostID, strings.TrimSuffix(filepath.Base(cleanPath), filepath.Ext(cleanPath)))
 		key := transcripts.SafeKey(harness, host, id)
 		if isRunning {
@@ -881,11 +887,11 @@ func (a *app) syncLocalTranscripts(st *state.State) {
 		seenPaths[filepath.Clean(tp)] = true
 		repo, _ := claude.GitInfo(cmp.Or(r.Cwd, r.OriginCwd))
 		meta := transcripts.Meta{
-			Key:         transcripts.SafeKey("claude", host, r.CLISessionID),
+			Key:         transcripts.SafeKey(claudeComm, host, r.CLISessionID),
 			ID:          r.CLISessionID,
 			HostSession: r.SessionID,
 			Name:        r.Title,
-			Harness:     "claude",
+			Harness:     claudeComm,
 			Host:        host,
 			Cwd:         cmp.Or(r.Cwd, r.OriginCwd),
 			Model:       r.Model,
@@ -918,9 +924,9 @@ func (a *app) syncLocalTranscripts(st *state.State) {
 				seenPaths[tp] = true
 				sid := strings.TrimSuffix(f.Name(), ".jsonl")
 				meta := transcripts.Meta{
-					Key:     transcripts.SafeKey("claude", host, sid),
+					Key:     transcripts.SafeKey(claudeComm, host, sid),
 					ID:      sid,
-					Harness: "claude",
+					Harness: claudeComm,
 					Host:    host,
 					Running: false,
 				}
@@ -1062,7 +1068,7 @@ func (a *app) enrichMetaFromState(st *state.State, meta *transcripts.Meta, p sta
 func (a *app) executionTranscriptMeta(st *state.State, start state.Start, r *state.ExecutionRecord) (transcripts.Meta, []transcripts.Turn) {
 	execID := string(r.Handle.Ref.Execution)
 	host := cmp.Or(string(r.Handle.Ref.Host), r.Selector, "remote")
-	harness := cmp.Or(r.Request.Harness, "claude")
+	harness := cmp.Or(r.Request.Harness, claudeComm)
 	running := !r.Terminal() && !r.Completed
 	meta := transcripts.Meta{
 		Key:        transcripts.SafeKey(harness, host, execID),

@@ -445,6 +445,7 @@ func (s Store) AppendRemoteLog(meta Meta, chunk []byte, nextCursor string, promp
 	rawFile := s.rawPath(meta.Key)
 	if len(chunk) > 0 {
 		redacted := s.redact(string(chunk))
+		// #nosec G304 -- rawPath confines the sanitized transcript key to the store root.
 		f, err := os.OpenFile(rawFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			return Meta{}, err
@@ -458,6 +459,7 @@ func (s Store) AppendRemoteLog(meta Meta, chunk []byte, nextCursor string, promp
 			return Meta{}, closeErr
 		}
 	}
+	// #nosec G304 -- rawPath confines the sanitized transcript key to the store root.
 	raw, err := os.ReadFile(rawFile)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Meta{}, err

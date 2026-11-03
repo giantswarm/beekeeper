@@ -17,6 +17,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 )
 
+const (
+	contentTypeText    = "text"
+	contentTypeMessage = "message"
+)
+
 // maxResultBytes bounds the stored text of a single tool result so large file
 // reads or command outputs do not bloat the transcript index.
 const maxResultBytes = 4096
@@ -264,7 +269,7 @@ func parseClaude(r io.Reader) Parsed {
 			var askParts []string
 			for _, b := range blocks {
 				switch b.Type {
-				case "text":
+				case contentTypeText:
 					if strings.TrimSpace(b.Text) != "" {
 						textParts = append(textParts, b.Text)
 					}
@@ -340,7 +345,7 @@ func extractToolResultText(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &blocks) == nil {
 		var parts []string
 		for _, b := range blocks {
-			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			if b.Type == contentTypeText && strings.TrimSpace(b.Text) != "" {
 				parts = append(parts, b.Text)
 			}
 		}
@@ -442,7 +447,7 @@ func parseAgy(r io.Reader) Parsed {
 					ToolCalls: ev.StepUpdate.ToolCalls,
 				}, ev.Timestamp)
 			}
-		case "message":
+		case contentTypeMessage:
 			role := RoleAssistant
 			if ev.Role == "user" {
 				role = RoleUser
@@ -603,7 +608,7 @@ func parseCodex(r io.Reader) Parsed {
 			}
 		case "response_item":
 			switch ev.Payload.Type {
-			case "message":
+			case contentTypeMessage:
 				role := ev.Payload.Role
 				if role != RoleUser && role != RoleAssistant {
 					return
@@ -613,7 +618,7 @@ func parseCodex(r io.Reader) Parsed {
 				}
 				var parts []string
 				for _, c := range ev.Payload.Content {
-					if (c.Type == "input_text" || c.Type == "output_text" || c.Type == "text") && isCodexUserOrAssistantTurn(role, c.Text) {
+					if (c.Type == "input_text" || c.Type == "output_text" || c.Type == contentTypeText) && isCodexUserOrAssistantTurn(role, c.Text) {
 						parts = append(parts, strings.TrimSpace(c.Text))
 					}
 				}
@@ -730,7 +735,7 @@ func parseOmp(r io.Reader) Parsed {
 			if strings.TrimSpace(e.Title) != "" {
 				p.Title = strings.TrimSpace(e.Title)
 			}
-		case "message":
+		case contentTypeMessage:
 			if e.Message.Model != "" {
 				m := e.Message.Model
 				if e.Message.Provider != "" && !strings.Contains(m, "/") {
@@ -742,7 +747,7 @@ func parseOmp(r io.Reader) Parsed {
 			if role == "toolResult" {
 				var parts []string
 				for _, b := range e.Message.Content {
-					if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+					if b.Type == contentTypeText && strings.TrimSpace(b.Text) != "" {
 						parts = append(parts, b.Text)
 					}
 				}
@@ -759,7 +764,7 @@ func parseOmp(r io.Reader) Parsed {
 			var toolIDs []string
 			for _, b := range e.Message.Content {
 				switch b.Type {
-				case "text":
+				case contentTypeText:
 					if strings.TrimSpace(b.Text) != "" {
 						texts = append(texts, b.Text)
 					}

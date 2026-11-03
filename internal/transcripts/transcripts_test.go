@@ -10,6 +10,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	testGuide         = "guide"
+	testBeekeeperRepo = "giantswarm/beekeeper"
+	testLocalHost     = "local"
+	testWorker        = "worker"
+	testDevctlRepo    = "giantswarm/devctl"
+	testExecution     = "exec-1"
+	testRosterWorker  = "worker-bk-1"
+)
+
 func TestStoreHarnessesAndRedaction(t *testing.T) {
 	dir := t.TempDir()
 	store := Store{
@@ -32,14 +42,14 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	mClaude, changed, err := store.IngestFile(Meta{
-		Key:        SafeKey("claude", "local", "s1"),
+		Key:        SafeKey("claude", testLocalHost, "s1"),
 		ID:         "s1",
-		RosterName: "guide",
-		Role:       "guide",
-		Repo:       "giantswarm/beekeeper",
+		RosterName: testGuide,
+		Role:       testGuide,
+		Repo:       testBeekeeperRepo,
 		Ref:        "giantswarm/beekeeper#2183",
 		Harness:    "claude",
-		Host:       "local",
+		Host:       testLocalHost,
 		Running:    true,
 	}, claudeFile)
 	if err != nil || !changed {
@@ -71,7 +81,7 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mClaudeEnded.RosterName != "guide" || mClaudeEnded.Repo != "giantswarm/beekeeper" || !mClaudeEnded.EndedAt.Equal(endedAt) {
+	if mClaudeEnded.RosterName != testGuide || mClaudeEnded.Repo != testBeekeeperRepo || !mClaudeEnded.EndedAt.Equal(endedAt) {
 		t.Fatalf("ended meta lost fields: %+v", mClaudeEnded)
 	}
 
@@ -85,13 +95,13 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := store.IngestFile(Meta{
-		Key:        SafeKey("agy", "local", "agy-1"),
+		Key:        SafeKey("agy", testLocalHost, "agy-1"),
 		ID:         "agy-1",
 		RosterName: "worker-agy",
-		Role:       "worker",
-		Repo:       "giantswarm/beekeeper",
+		Role:       testWorker,
+		Repo:       testBeekeeperRepo,
 		Harness:    "agy",
-		Host:       "local",
+		Host:       testLocalHost,
 	}, agyFile); err != nil {
 		t.Fatal(err)
 	}
@@ -108,14 +118,14 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := store.IngestFile(Meta{
-		Key:        SafeKey("codex", "local", "codex-1"),
+		Key:        SafeKey("codex", testLocalHost, "codex-1"),
 		ID:         "codex-1",
 		RosterName: "worker-codex",
-		Role:       "worker",
-		Repo:       "giantswarm/devctl",
+		Role:       testWorker,
+		Repo:       testDevctlRepo,
 		Ref:        "giantswarm/devctl#99",
 		Harness:    "codex",
-		Host:       "local",
+		Host:       testLocalHost,
 	}, codexFile); err != nil {
 		t.Fatal(err)
 	}
@@ -132,13 +142,13 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := store.IngestFile(Meta{
-		Key:        SafeKey("omp", "local", "omp-1"),
+		Key:        SafeKey("omp", testLocalHost, "omp-1"),
 		ID:         "omp-1",
 		RosterName: "worker-omp",
-		Role:       "worker",
-		Repo:       "giantswarm/beekeeper",
+		Role:       testWorker,
+		Repo:       testBeekeeperRepo,
 		Harness:    "omp",
-		Host:       "local",
+		Host:       testLocalHost,
 	}, ompFile); err != nil {
 		t.Fatal(err)
 	}
@@ -150,11 +160,11 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 		`{"type":"item.completed","timestamp":"2026-10-05T13:00:10Z","item":{"id":"i2","type":"agent_message","text":"Remote execution finished https://github.com/giantswarm/beekeeper/pull/2200"}}`,
 	}, "\n") + "\n"
 	if _, err := store.AppendRemoteLog(Meta{
-		Key:        SafeKey("codex", "worker-host-1", "exec-1"),
-		Execution:  "exec-1",
+		Key:        SafeKey("codex", "worker-host-1", testExecution),
+		Execution:  testExecution,
 		RosterName: "remote-worker",
-		Role:       "worker",
-		Repo:       "giantswarm/beekeeper",
+		Role:       testWorker,
+		Repo:       testBeekeeperRepo,
 		Ref:        "giantswarm/beekeeper#2183",
 		Harness:    "codex",
 		Host:       "worker-host-1",
@@ -177,7 +187,7 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].Meta.RosterName != "guide" {
+	if len(hits) != 1 || hits[0].Meta.RosterName != testGuide {
 		t.Fatalf("Search AskUserQuestion answer = %+v", hits)
 	}
 
@@ -186,12 +196,12 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(remoteHits) != 1 || remoteHits[0].Meta.Execution != "exec-1" {
+	if len(remoteHits) != 1 || remoteHits[0].Meta.Execution != testExecution {
 		t.Fatalf("Search remote host = %+v", remoteHits)
 	}
 
 	// Resolve by roster name, session ID, and GitHub ref URL.
-	for _, q := range []string{"remote-worker", "exec-1", "https://github.com/giantswarm/beekeeper/pull/2200", "giantswarm/devctl#99"} {
+	for _, q := range []string{"remote-worker", testExecution, "https://github.com/giantswarm/beekeeper/pull/2200", "giantswarm/devctl#99"} {
 		if _, err := Resolve(metas, q); err != nil {
 			t.Errorf("Resolve(%q) failed: %v", q, err)
 		}
@@ -201,17 +211,17 @@ func TestStoreHarnessesAndRedaction(t *testing.T) {
 func TestAccessControl(t *testing.T) {
 	now := time.Date(2026, 10, 5, 14, 0, 0, 0, time.UTC)
 	metas := []Meta{
-		{Key: "guide-1", ID: "g1", RosterName: "guide", Role: "guide", Repo: "giantswarm/beekeeper"},
-		{Key: "bk-1", ID: "w1", RosterName: "worker-bk-1", Role: "worker", Repo: "giantswarm/beekeeper"},
-		{Key: "bk-2", ID: "w2", RosterName: "worker-bk-2", Role: "worker", Repo: "giantswarm/beekeeper"},
-		{Key: "dc-1", ID: "w3", RosterName: "worker-dc-1", Role: "worker", Repo: "giantswarm/devctl"},
+		{Key: "guide-1", ID: "g1", RosterName: testGuide, Role: testGuide, Repo: testBeekeeperRepo},
+		{Key: "bk-1", ID: "w1", RosterName: testRosterWorker, Role: testWorker, Repo: testBeekeeperRepo},
+		{Key: "bk-2", ID: "w2", RosterName: "worker-bk-2", Role: testWorker, Repo: testBeekeeperRepo},
+		{Key: "dc-1", ID: "w3", RosterName: "worker-dc-1", Role: testWorker, Repo: testDevctlRepo},
 	}
 
 	// 1. Guide reads and searches all transcripts.
 	guideCaller := Caller{
-		Party:      state.Party{Session: "g1", Name: "guide"},
-		RosterName: "guide",
-		Role:       "guide",
+		Party:      state.Party{Session: "g1", Name: testGuide},
+		RosterName: testGuide,
+		Role:       testGuide,
 		IsGuide:    true,
 	}
 	if got := Filter(metas, guideCaller, nil, now); len(got) != 4 {
@@ -221,10 +231,10 @@ func TestAccessControl(t *testing.T) {
 	// 2. Worker on giantswarm/beekeeper reads its own and same-repo worker transcripts,
 	// but NOT the guide's transcript or giantswarm/devctl's transcript by default.
 	workerCaller := Caller{
-		Party:      state.Party{Session: "w1", Name: "worker-bk-1"},
-		RosterName: "worker-bk-1",
-		Role:       "worker",
-		Repo:       "giantswarm/beekeeper",
+		Party:      state.Party{Session: "w1", Name: testRosterWorker},
+		RosterName: testRosterWorker,
+		Role:       testWorker,
+		Repo:       testBeekeeperRepo,
 	}
 	gotDefault := Filter(metas, workerCaller, nil, now)
 	if len(gotDefault) != 2 || gotDefault[0].Key != "bk-1" || gotDefault[1].Key != "bk-2" {
@@ -235,14 +245,14 @@ func TestAccessControl(t *testing.T) {
 	grants := []state.TranscriptGrant{
 		{
 			ID:      1,
-			To:      state.Party{Name: "worker-bk-1"},
-			Repo:    "giantswarm/devctl",
+			To:      state.Party{Name: testRosterWorker},
+			Repo:    testDevctlRepo,
 			Expires: now.Add(time.Hour),
 		},
 		{
 			ID:      2,
-			To:      state.Party{Name: "worker-bk-1"},
-			Session: "guide",
+			To:      state.Party{Name: testRosterWorker},
+			Session: testGuide,
 			Expires: now.Add(time.Hour),
 		},
 	}

@@ -17,8 +17,25 @@ import (
 	"github.com/giantswarm/beekeeper/internal/transcripts"
 )
 
+const (
+	transcriptTestGrantCommand = "grant"
+	transcriptTestGuideSession = "guide-sess-1"
+	transcriptTestRPCWorker    = "w-rpc-1"
+
+	transcriptTestWorkerBox    = "worker-box"
+	transcriptTestWorker       = "w-bk-1"
+	transcriptTestDevctlWorker = "w-devctl-1"
+	transcriptTestRemoteWorker = "w-bk-remote"
+	transcriptTestIssue        = "https://github.com/giantswarm/beekeeper/issues/2183"
+	transcriptTestRPCSession   = "s-rpc-1"
+	transcriptTestCodex        = "codex"
+)
+
 func newTranscriptTestApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
+	was := plat.Machine
+	plat.Machine = tableMachine{was}
+	t.Cleanup(func() { plat.Machine = was })
 	dir := t.TempDir()
 	store, err := state.Open(dir)
 	if err != nil {
@@ -69,7 +86,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 
 	// 1. Create a Claude guide session with an AskUserQuestion dialog turn and a secret.
 	projDir := filepath.Join(a.cfg.Claude.ProjectsDir, "-workspace-beekeeper")
-	if err := os.MkdirAll(projDir, 0o755); err != nil {
+	if err := os.MkdirAll(projDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	guideTranscript := filepath.Join(projDir, "guide-sess-1.jsonl")
@@ -104,19 +121,19 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	}
 
 	// 4. Populate state with the guide, local workers, and a remote SSH execution on agy.
-	execRef := execution.Ref{Host: "worker-box", Execution: "exec-agy-2183"}
+	execRef := execution.Ref{Host: transcriptTestWorkerBox, Execution: "exec-agy-2183"}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		guideParty := state.Party{Session: "guide-sess-1", Name: "guide"}
+		guideParty := state.Party{Session: transcriptTestGuideSession, Name: guideName}
 		st.Guide = &state.Role{
 			Holder: &state.Supervisor{Party: guideParty, Since: a.now.Add(-time.Hour)},
 		}
-		bkParty := state.Party{Session: "worker-bk-1", Name: "w-bk-1"}
-		devctlParty := state.Party{Session: "worker-devctl-1", Name: "w-devctl-1"}
-		remoteParty := state.Party{Session: "agy-conv-1", Name: "w-bk-remote"}
+		bkParty := state.Party{Session: "worker-bk-1", Name: transcriptTestWorker}
+		devctlParty := state.Party{Session: "worker-devctl-1", Name: transcriptTestDevctlWorker}
+		remoteParty := state.Party{Session: "agy-conv-1", Name: transcriptTestRemoteWorker}
 		st.Agents = []state.Agent{
-			{Party: bkParty, Task: "https://github.com/giantswarm/beekeeper/issues/2183"},
+			{Party: bkParty, Task: transcriptTestIssue},
 			{Party: devctlParty, Task: "https://github.com/giantswarm/devctl/issues/400"},
-			{Party: remoteParty, Task: "https://github.com/giantswarm/beekeeper/issues/2183", Execution: &execRef},
+			{Party: remoteParty, Task: transcriptTestIssue, Execution: &execRef},
 		}
 		st.Starts = []state.Start{
 			{Party: bkParty, At: a.now.Add(-40 * time.Minute)},
@@ -131,9 +148,9 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 					Phase:      execution.Applied,
 					Completed:  true,
 					Request: execution.StartRequest{
-						Name:       "w-bk-remote",
+						Name:       transcriptTestRemoteWorker,
 						Harness:    "agy",
-						Repository: "giantswarm/beekeeper",
+						Repository: sshTestRepository,
 						Prompt:     "Verify Agy remote transcript on https://github.com/giantswarm/beekeeper/issues/2183",
 						ControlKey: "ctrl-secret-key",
 					},
@@ -163,7 +180,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	}
 
 	// Guide sees all 4 transcripts.
-	a.as = "guide"
+	a.as = guideName
 	metas, err := a.listTranscriptsLocal(ctx, remoteTranscriptListReq{})
 	if err != nil {
 		t.Fatalf("guide list: %v", err)
@@ -189,7 +206,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	if len(secretHits) != 0 {
 		t.Fatalf("secret value was not redacted from search index: %+v", secretHits)
 	}
-	guideRead, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: "guide-sess-1"})
+	guideRead, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: transcriptTestGuideSession})
 	if err != nil {
 		t.Fatalf("guide read: %v", err)
 	}
@@ -201,7 +218,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 
 	// Worker on giantswarm/beekeeper (w-bk-1) sees its own transcript and w-bk-remote's transcript,
 	// but NOT the guide's transcript and NOT giantswarm/devctl's transcript.
-	a.as = "w-bk-1"
+	a.as = transcriptTestWorker
 	workerMetas, err := a.listTranscriptsLocal(ctx, remoteTranscriptListReq{})
 	if err != nil {
 		t.Fatalf("worker list: %v", err)
@@ -210,13 +227,13 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 		t.Fatalf("worker saw %d transcripts, want 2 (same repo only): %+v", len(workerMetas), workerMetas)
 	}
 	for _, m := range workerMetas {
-		if m.Repo != "giantswarm/beekeeper" || m.Role == guideRole.name {
+		if m.Repo != sshTestRepository || m.Role == guideRole.name {
 			t.Fatalf("worker saw unauthorized transcript: %+v", m)
 		}
 	}
 
 	// Worker can read the remote Agy worker's transcript on the same repository even after it ended.
-	remoteRead, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: "w-bk-remote"})
+	remoteRead, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: transcriptTestRemoteWorker})
 	if err != nil {
 		t.Fatalf("worker read same-repo remote transcript: %v", err)
 	}
@@ -225,19 +242,19 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	}
 
 	// Worker is refused when reading the guide's transcript or another repository's transcript.
-	if _, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: "guide-sess-1"}); Code(err) != ExitRefused {
+	if _, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: transcriptTestGuideSession}); Code(err) != ExitRefused {
 		t.Fatalf("worker reading guide transcript: got %v, want ExitRefused", err)
 	}
-	if _, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: "w-devctl-1"}); Code(err) != ExitRefused {
+	if _, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: transcriptTestDevctlWorker}); Code(err) != ExitRefused {
 		t.Fatalf("worker reading devctl transcript: got %v, want ExitRefused", err)
 	}
-	if _, err := a.searchTranscriptsLocal(ctx, remoteTranscriptSearchReq{Repo: "giantswarm/devctl", Query: "promote"}); Code(err) != ExitRefused {
+	if _, err := a.searchTranscriptsLocal(ctx, remoteTranscriptSearchReq{Repo: devctlRepo, Query: "promote"}); Code(err) != ExitRefused {
 		t.Fatalf("worker searching devctl repo: got %v, want ExitRefused", err)
 	}
 
 	// Worker cannot grant access to itself.
 	cmd := a.transcriptsCmd()
-	cmd.SetArgs([]string{"grant", "w-bk-1", "--repo", "giantswarm/devctl"})
+	cmd.SetArgs([]string{transcriptTestGrantCommand, transcriptTestWorker, loopRepoFlag, devctlRepo})
 	if err := cmd.Execute(); Code(err) != ExitRefused {
 		t.Fatalf("worker self-grant: got %v, want ExitRefused", err)
 	}
@@ -245,7 +262,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	// Worker requests access to giantswarm/devctl.
 	out.Reset()
 	cmd = a.transcriptsCmd()
-	cmd.SetArgs([]string{"request", "--repo", "giantswarm/devctl", "--reason", "check release promote flag"})
+	cmd.SetArgs([]string{"request", loopRepoFlag, devctlRepo, "--reason", "check release promote flag"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("worker request: %v", err)
 	}
@@ -254,10 +271,10 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	}
 
 	// Guide fulfills the open request with `beekeeper transcripts grant w-bk-1`.
-	a.as = "guide"
+	a.as = guideName
 	out.Reset()
 	cmd = a.transcriptsCmd()
-	cmd.SetArgs([]string{"grant", "w-bk-1", "--ttl", "1h"})
+	cmd.SetArgs([]string{transcriptTestGrantCommand, transcriptTestWorker, "--ttl", "1h"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("guide grant: %v", err)
 	}
@@ -266,7 +283,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 	}
 
 	// Worker can now read and search giantswarm/devctl transcripts!
-	a.as = "w-bk-1"
+	a.as = transcriptTestWorker
 	devctlRead, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: "https://github.com/giantswarm/devctl/issues/400"})
 	if err != nil {
 		t.Fatalf("worker read devctl after grant: %v", err)
@@ -277,7 +294,7 @@ func TestTranscriptsMultiHarnessAccessGrantAndAskUserQuestion(t *testing.T) {
 
 	// Once the grant expires, worker is refused again.
 	a.now = a.now.Add(2 * time.Hour)
-	if _, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: "w-devctl-1"}); Code(err) != ExitRefused {
+	if _, err := a.readTranscriptLocal(ctx, remoteTranscriptReadReq{Target: transcriptTestDevctlWorker}); Code(err) != ExitRefused {
 		t.Fatalf("worker read devctl after grant expiry: got %v, want ExitRefused", err)
 	}
 
@@ -294,7 +311,7 @@ func TestExecutionTranscriptRPC(t *testing.T) {
 	ctx := context.Background()
 
 	execRef := execution.Ref{
-		Host:       "worker-box",
+		Host:       transcriptTestWorkerBox,
 		Execution:  "11111111-2222-3333-4444-555555555555",
 		Generation: 1,
 	}
@@ -303,10 +320,10 @@ func TestExecutionTranscriptRPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		p := state.Party{Session: "s-rpc-1", Name: "w-rpc-1"}
+		p := state.Party{Session: transcriptTestRPCSession, Name: transcriptTestRPCWorker}
 		st.Agents = []state.Agent{{
 			Party:     p,
-			Task:      "https://github.com/giantswarm/beekeeper/issues/2183",
+			Task:      transcriptTestIssue,
 			Execution: &execRef,
 		}}
 		st.Starts = []state.Start{{
@@ -318,13 +335,13 @@ func TestExecutionTranscriptRPC(t *testing.T) {
 				LastActive: a.now.Add(-2 * time.Minute),
 				Phase:      execution.Running,
 				Request: execution.StartRequest{
-					Name:       "w-rpc-1",
-					Harness:    "codex",
-					Repository: "giantswarm/beekeeper",
+					Name:       transcriptTestRPCWorker,
+					Harness:    transcriptTestCodex,
+					Repository: sshTestRepository,
 					Prompt:     "Work https://github.com/giantswarm/beekeeper/issues/2183",
 					ControlKey: ctrlKey,
 				},
-				Handle: execution.Handle{Ref: execRef, ConversationID: "s-rpc-1"},
+				Handle: execution.Handle{Ref: execRef, ConversationID: transcriptTestRPCSession},
 			},
 		}}
 		return nil, nil
@@ -335,44 +352,44 @@ func TestExecutionTranscriptRPC(t *testing.T) {
 	// Seed a same-repo transcript and a different-repo transcript in the store.
 	store := a.transcriptStore()
 	if _, err := store.Save(transcripts.Meta{
-		Key:        transcripts.SafeKey("codex", "worker-box", string(execRef.Execution)),
-		ID:         "s-rpc-1",
+		Key:        transcripts.SafeKey(transcriptTestCodex, transcriptTestWorkerBox, string(execRef.Execution)),
+		ID:         transcriptTestRPCSession,
 		Execution:  string(execRef.Execution),
-		Name:       "w-rpc-1",
-		RosterName: "w-rpc-1",
+		Name:       transcriptTestRPCWorker,
+		RosterName: transcriptTestRPCWorker,
 		Role:       workerRole,
-		Repo:       "giantswarm/beekeeper",
+		Repo:       sshTestRepository,
 		Ref:        "giantswarm/beekeeper#2183",
-		Harness:    "codex",
-		Host:       "worker-box",
+		Harness:    transcriptTestCodex,
+		Host:       transcriptTestWorkerBox,
 		Running:    true,
 	}, []transcripts.Turn{{At: a.now, Role: transcripts.RoleAssistant, Text: "Codex remote turn searchable text"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Save(transcripts.Meta{
-		Key:        transcripts.SafeKey("claude", "coord-1", "other-repo-1"),
+		Key:        transcripts.SafeKey(claudeComm, "coord-1", "other-repo-1"),
 		ID:         "other-repo-1",
 		Name:       "w-other",
 		RosterName: "w-other",
 		Role:       workerRole,
-		Repo:       "giantswarm/devctl",
-		Harness:    "claude",
+		Repo:       devctlRepo,
+		Harness:    claudeComm,
 		Host:       "coord-1",
 	}, []transcripts.Turn{{At: a.now, Role: transcripts.RoleAssistant, Text: "Other repo secret context"}}); err != nil {
 		t.Fatal(err)
 	}
 
-	endpoint := execution.Endpoint{SSH: "coord.example.com", Executable: "/usr/local/bin/beekeeper", Config: "/etc/beekeeper/config.yaml"}
+	endpoint := execution.Endpoint{SSH: "coord.example.com", Executable: sshTestExecutable, Config: "/etc/beekeeper/config.yaml"}
 	runner := func(ctx context.Context, _ []string, stdin []byte) ([]byte, error) {
 		var reply bytes.Buffer
-		if err := a.serveExecutionCoordinator(ctx, "worker-box", bytes.NewReader(stdin), &reply); err != nil {
+		if err := a.serveExecutionCoordinator(ctx, transcriptTestWorkerBox, bytes.NewReader(stdin), &reply); err != nil {
 			return nil, err
 		}
 		return reply.Bytes(), nil
 	}
 
 	var hits []transcripts.SearchHit
-	if err := execution.CoordinatorCall(ctx, endpoint, "worker-box", transcriptsSearchOp, execRef, remoteTranscriptSearchReq{Query: "searchable text"}, ctrlKey, &hits, runner); err != nil {
+	if err := execution.CoordinatorCall(ctx, endpoint, transcriptTestWorkerBox, transcriptsSearchOp, execRef, remoteTranscriptSearchReq{Query: "searchable text"}, ctrlKey, &hits, runner); err != nil {
 		t.Fatalf("CoordinatorCall transcripts.search: %v", err)
 	}
 	if len(hits) != 1 || !strings.Contains(hits[0].Snippet, "Codex remote turn searchable text") {

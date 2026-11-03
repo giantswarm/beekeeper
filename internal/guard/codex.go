@@ -1278,7 +1278,7 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 		}
 		if a == flagConfig || a == flagAs || a == "--for" || a == "--ref" || a == "--due" ||
 			a == "--default" || a == "--status-quo" || a == "--why" || a == "--on" || a == "--report" ||
-			a == "--repo" || a == "--harness" || a == "--host" || a == "--session" || a == "--since" ||
+			a == flagRepo || a == "--harness" || a == "--host" || a == "--session" || a == "--since" ||
 			a == "--ttl" || a == "--reason" || a == "-n" || a == "--turns" {
 			i++
 			continue
