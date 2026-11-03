@@ -25,6 +25,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	if j.Phase != Activating || j.StopRequest != nil {
 		return errors.New("execution is not awaiting its first managed turn")
 	}
+	defer func() { runErr = errors.Join(runErr, s.RevokeGitHub(j)) }()
 	p, err := s.InstalledPolicy()
 	if err != nil || p.Digest() != j.BoundPolicy() {
 		return errors.New("execution rules or guards changed before launch")
@@ -111,6 +112,10 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	}
 	h := s.Config.Harnesses[j.Request.Harness]
 	env := append(s.toolPath(cleanEnvironment(h.ConfigDir, s.Executable)), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
+	env, err = s.GitHubEnvironment(j, env)
+	if err != nil {
+		return err
+	}
 	tools := "Bash,Read,Write,Edit,Grep,Glob"
 	args := []string{"--restricted", "--print", "--session-id", j.Handle.ConversationID, "--model", j.Request.Model, "--name", j.Request.Name, "--permission-mode", "acceptEdits", "--tools", tools, "--allowedTools", tools, "--settings", filepath.Join(s.Root, "settings.json"), "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--output-format", streamJSONMode, "--verbose", "--append-system-prompt-file", filepath.Join(s.Root, "CLAUDE.md")}
 	if j.Request.MCP {
