@@ -480,3 +480,26 @@ func TestMergeResultValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
 		t.Fatalf("unsafe merge delegated: %v", call)
 	}
 }
+
+func TestMergeResultUnreadableGateCannotDelegateAnUnsafeMerge(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 0 && args[0] == gateCmdName {
+			return "unreadable gate result", github.SquashTooling
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if len(r.cmds) != 0 {
+		t.Fatalf("merge submitted without validation: %v", r.cmds)
+	}
+	if call := r.called(agentsName, agentWakeName, loopWorker); call != nil {
+		t.Fatalf("unvalidated gate delegated a worker merge: %v", call)
+	}
+	if evs := r.logged(t, "supervisor.go"); len(evs) != 0 {
+		t.Fatalf("unsafe merge go: %+v", evs)
+	}
+}

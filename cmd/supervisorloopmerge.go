@@ -32,10 +32,8 @@ func ghMergeNeedsBranchRepair(reason string) bool {
 }
 
 // mergePull executes the planner's exact-head decision in the coordinator,
-// including for workers on an execution host. When the coordinator's pinned
-// merge step is broken on an open, green, approved head, it falls back
-// automatically to directing the worker session to merge that exact head,
-// never asking the person.
+// including for workers on an execution host. Failed or unreadable validation
+// never delegates a direct merge around the required server-side queue.
 func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act superloop.Action) (string, error) {
 	a := l.a
 	ref, ok := parseRef(act.Ref)
@@ -168,16 +166,9 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		}
 		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, oneLine(out)))
 	}
-	if !pullNeedsBranchRepair(p) && act.Agent != "" && execRef == nil {
-		if err := l.record(act, loopWorkerMergeGo); err != nil {
-			return "", err
-		}
-		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
-			_ = a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", act.Key, err.Error()), act.Ref))
-			return "", err
-		}
-		return loopWorkerMergeGo, nil
-	}
+	// An unreadable gate result supplies no merge-result proof either.
+	// Never grant a direct worker merge as a fallback around validation.
+
 	if err != nil {
 		return "", err
 	}
