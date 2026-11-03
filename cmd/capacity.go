@@ -58,7 +58,8 @@ type capacityView struct {
 	// without memory pressure, the busy build slot a start without builds
 	// does not wait for.
 	Notes []string `json:"notes,omitempty"`
-	// Stopped says the standing beekeeper stop, which no --force passes.
+	// Stopped says the standing beekeeper stop or "starts" hold, which no
+	// --force passes.
 	Stopped string `json:"stopped,omitempty"`
 	// Local is capacity.local.ceiling against the busy agents this machine
 	// runs; nil while it is unset or the verdict is an execution host's.
@@ -1730,10 +1731,11 @@ func (v *capacityView) withUsage(u *usageView, now time.Time) *capacityView {
 	return v
 }
 
-// stopped makes the verdict "no start" while the stop s stands.
-func (v *capacityView) stopped(a *app, s *state.Stop) *capacityView {
-	if s != nil {
-		v.Stopped = a.stopText(s)
+// stopped makes the verdict "no start" while st's stop or "starts" hold
+// stands (noStart).
+func (v *capacityView) stopped(a *app, st *state.State) *capacityView {
+	if why := a.noStart(st); why != "" {
+		v.Stopped = why
 		v.Blocks, v.Room = append([]string{v.Stopped}, v.Blocks...), 0
 		for _, pv := range v.Providers {
 			pv.Room = 0
@@ -1970,11 +1972,11 @@ nothing; it makes no GitHub call.`,
 				}
 				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-				v = a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap).stopped(a, st.Stop)
+				v = a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap).stopped(a, st)
 			} else {
 				c := countAgents(st, sessions, a.now, a.cfg)
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
-				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop)
+				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st)
 			}
 			if a.json {
 				return a.printJSON(struct {
@@ -2388,11 +2390,11 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	}
 	liveCap := a.liveCapacity()
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st.Stop), nil
+		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st), nil
 	}
 	c := countAgents(st, sessions, a.now, a.cfg)
 	k, u := a.resolveUsage(ctx, liveCap)
-	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop), nil
+	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st), nil
 }
 
 func choicesHaveModel(choices []config.Choice, model string) bool {
@@ -2451,7 +2453,7 @@ func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*cla
 	// the derived ceiling is positive (a self-hosted provider's own ceiling
 	// rides in the derived total).
 	w.clear("capacity-low")
-	if (u != nil && u.Error != "") || k.Ceiling == 0 || live.Ceiling == 0 || busy < k.Ceiling || st.Stop != nil {
+	if (u != nil && u.Error != "") || k.Ceiling == 0 || live.Ceiling == 0 || busy < k.Ceiling || st.Stop != nil || startsHold(st, w.now) != nil {
 		w.clear("capacity-full")
 		return
 	}

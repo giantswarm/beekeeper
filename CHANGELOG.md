@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper hold set starts --reason …` pauses new starts only: every start of a worker or reviewer (`--force` included, locally, on an SSH host and the supervisor loop's fill) and a done agent's wake are refused, and `capacity` and `capacity pick` say no start, while running and parked workers, the loop's merges, the guide and role successors go on; `beekeeper status` starts with STARTS HELD and who set it; `beekeeper hold lift starts` ends it (https://github.com/giantswarm/beekeeper/issues/2208).
+
 - Issue repository-scoped, short-lived GitHub App credentials for SSH workers,
   with host-side GitHub clients and lifecycle revocation on the coordinator.
 
@@ -27,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Only beekeeper starts a guide run: `guide start` refuses a session beekeeper did not start as a guide run, `guide start --new` starts the next run from a terminal (in `guide.dir`, with the configured skill, model and mode) when the guide's session is gone or none is recorded, and `beekeeper resume` starts one when the guide's session runs no CLI. The standby watch and `guide status` record when the guide's CLI was first seen gone, so its restart grace runs out after a reboot or crash instead of starting anew on every read (https://github.com/giantswarm/beekeeper/issues/2205).
+- Start one independent review for each new unapproved pull-request head even after historical review rounds are exhausted; fixes no longer receive a merge go the exact-head execution gate cannot accept (https://github.com/giantswarm/beekeeper/issues/2247).
 
 - Report local leases held past their purpose’s duration (or `leaseRound`, default `1h`) in the watch and queued claims, with the holder, claim time and overrun.
 - Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
